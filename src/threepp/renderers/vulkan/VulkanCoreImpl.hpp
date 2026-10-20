@@ -945,6 +945,12 @@ namespace threepp {
         // Object3D::resident when recorded. The expansion decides which hidden
         // meshes have entries, so a change re-expands.
         static constexpr uint32_t kSnapResident   = 16384u;
+        // A node the edit-proportional path (diffSceneWalk, trySlotDelta) does
+        // not add or remove: a line or points with an overlay entry, a LOD, a
+        // Sky, a ParticleField, an overlay or particle-billboard mesh (none of
+        // which a snapshot node's spanIndex names). A change at or under one
+        // takes the full expansion.
+        static constexpr uint32_t kSnapNoDelta    = 32768u;
         std::vector<SnapNode> sceneSnapshot_;
         // The full expansion's reuse of the last one (VulkanCoreScene.cpp,
         // reuseNode): the last walk's nodes, and their index by object (built
@@ -975,6 +981,73 @@ namespace threepp {
         // entries that was hidden or shown (Object3D::visible, material
         // visible) is no divergence: its span flips MeshEntry::hidden in place.
         bool sceneSnapshotMatches(Object3D& scene, Camera& camera);
+        // The replay's test of one node against its record: false = the node
+        // changed. A mesh with entries hidden or shown is no change: `flip`
+        // says so, applied once the walk is accepted.
+        struct SnapFlip {
+            size_t snIdx = 0;
+            bool hidden = false;   // Object3D-hidden (own flag or an ancestor's)
+            bool matHidden = false;// material()->visible == false
+        };
+        bool snapNodeUnchanged(const SnapNode& sn, Object3D& o, bool vis, bool underLod, Camera& camera,
+                               bool& flip, SnapFlip& f);
+
+        // The expansion walk's record of one node (VulkanCoreScene.cpp), shared
+        // by the full expansion and the edit-proportional diff walk, so both
+        // derive a node, its span and its entries the same way.
+        struct SceneWalkOut {
+            std::vector<MeshEntry>& built;
+            std::vector<vulkan::impl::LineEntry>& lines;
+            std::vector<vulkan::impl::EntrySpan>& spans;
+            std::vector<std::pair<ParticleField*, uint32_t>>& fields;
+            std::vector<SnapNode>& snap;
+            // Lazy rows: an InstancedMesh that had entries gets its first only
+            // (the slot path derives the rest).
+            bool lazyRows = false;
+            bool anyRowsDeferred = false;
+            // The meshes with spans before this walk (by address and id),
+            // built at the first question.
+            std::unordered_map<const Mesh*, unsigned int> shownBefore;
+            bool shownBeforeBuilt = false;
+        };
+        bool hadEntriesBefore(SceneWalkOut& w, const Mesh& m);
+        void recordSceneNode(SceneWalkOut& w, Object3D& o, bool vis, bool underLod, Camera& camera);
+
+        // ── The edit-proportional path ──────────────────────────────────
+        // A frame whose replay walk fails used to walk the whole scene again
+        // (the full expansion) and match every span of it to the live ones
+        // (trySlotEdit): ~6 ms an edit frame on the pine forest's ~13k nodes,
+        // whether the edit added one cell or several. diffSceneWalk walks once
+        // more against the last snapshot, matching each node among its old
+        // parent's old children by subtree range (SnapNode::subtreeEnd): kept
+        // nodes are copied, new or changed ones recorded anew, removed
+        // subtrees collected. trySlotDelta then frees the removed spans in
+        // place and places the new ones, with no copy, match or sort of the
+        // spans that stay. Anything else (a line, a LOD, a field, a Sky, an
+        // overlay, an instanced count change) takes the full path as before.
+        // THREEPP_VULKAN_NO_DELTA=1 turns it off (the A/B lane).
+        struct SceneDelta {
+            std::vector<SnapNode> snap;      // the new snapshot; kept nodes keep their live spanIndex
+            std::vector<MeshEntry> built;    // the entries of the spans recorded anew
+            std::vector<vulkan::impl::EntrySpan> spans;    // those spans (first: into built)
+            std::vector<vulkan::impl::LineEntry> lines;    // stays empty (a line takes the full path)
+            std::vector<std::pair<ParticleField*, uint32_t>> fields;// stays empty
+            std::vector<uint32_t> spanSnap;  // per new span: its node in snap
+            std::vector<uint32_t> removed;   // live spans whose nodes are gone or recorded anew
+            std::vector<SnapFlip> flips;     // in-place visibility flips (snIdx into snap)
+            uint32_t swaps = 0;              // meshes placed again with a geometry, material or map swapped
+            bool changed = false;
+            bool fallback = false;
+        };
+        static bool deltaDisabled();
+        bool diffSceneWalk(Object3D& scene, Camera& camera, SceneDelta& d);
+        void diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3D& o, bool parentVis, bool underLod,
+                           int64_t oldIdx, Camera& camera);
+        void diffSceneRemoved(SceneDelta& d, size_t first, size_t end);
+        bool trySlotDelta(SceneDelta& d);
+        // THREEPP_VULKAN_WALK_CHECK=1: after a delta, a full recording compared
+        // node for node (mismatches to walkCheckMismatches_ and stderr).
+        void deltaWalkCheck(Object3D& scene, Camera& camera);
         // Hide or show span `spanIndex`'s entries in place (MeshEntry::hidden),
         // flag their pixels' history and set hiddenFlippedThisFrame_.
         void setSpanHidden(size_t spanIndex, bool hidden);
@@ -1341,6 +1414,13 @@ namespace threepp {
         // spans first and touch individual entries only for spans that changed.
         using EntrySpan = vulkan::impl::EntrySpan;
         std::vector<EntrySpan> entrySpans_;
+        // Bumped wherever entrySpans_ is laid out anew (the rebuild, a slot
+        // edit): VulkanRenderer::admitted's mesh-id index is rebuilt from it
+        // only when it moved, so a streamer asking about every pending mesh
+        // every frame pays a lookup each, not a scan of every span.
+        uint64_t spansVersion_ = 0;
+        std::unordered_map<unsigned int, uint32_t> admitIndex_;
+        uint64_t admitIndexVersion_ = ~0ull;
         // Entry-aligned previous-frame world matrices for the motion-matrix
         // build (replaces the per-entry (Mesh*, instanceIndex) hash lookups —
         // ~11 ms/frame at 115k entries). Remapped by EntryKey identity across
@@ -1435,6 +1515,18 @@ namespace threepp {
         // and returns false (the change is structural: the caller rebuilds).
         bool trySlotEdit(std::vector<MeshEntry>& built, std::vector<EntrySpan>& builtSpans,
                          const std::vector<std::pair<ParticleField*, uint32_t>>& builtFields);
+        // The rows both slot paths (trySlotEdit, trySlotDelta) write: a span's
+        // record (its geometry's in blasCache, or a grass field's own), the
+        // fingerprint the full path's slow branch derives for a mesh, the
+        // tombstone's row, the row arrays grown to `newSize`, and one entry's
+        // row written as new or as a tombstone.
+        const BlasRecord* slotRecordOf(const MeshEntry& e);
+        MeshFingerprint slotFingerprintOf(Mesh& m);
+        void slotTombRows(MeshEntry& e, MeshFingerprint& fp);
+        void slotGrowRows(size_t oldSize, size_t newSize, const MeshEntry& tombEntry, const MeshFingerprint& tombFp);
+        void slotFillRow(size_t i, const MeshEntry& be, const MeshFingerprint& fp0, const BlasRecord* rec,
+                         const GeometryDesc& gd, const MaterialDesc& md0, uint32_t stableId);
+        void slotTombRow(size_t i, const MeshEntry& tombEntry, const MeshFingerprint& tombFp);
         // The lean path's per-span world-matrix refresh (scene.3), shared with
         // the frame trySlotEdit edited.
         void refreshSpanMatrices();

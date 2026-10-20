@@ -27,6 +27,17 @@ namespace {
         for (Object3D* c : o.children) walkSceneGraph(*c, vis, underLod || isLod, f);
     }
 
+    // The same walk, calling post(node) once its subtree is done (the
+    // expansion stamps SnapNode::subtreeEnd with it).
+    template<class F, class P>
+    void walkSceneGraph(Object3D& o, bool parentVisible, bool underLod, F& f, P& post) {
+        const bool vis = parentVisible && o.visible;
+        const bool isLod = f(o, vis, underLod);
+        if (vis || !(underLod || isLod))
+            for (Object3D* c : o.children) walkSceneGraph(*c, vis, underLod || isLod, f, post);
+        post(o);
+    }
+
     // The casts the expansion walk asks of a node and of its material, answered
     // once per dynamic type: typeid is a vtable read, while a dynamic_cast
     // through Object3D's virtual base that fails walks the whole hierarchy
@@ -129,6 +140,511 @@ uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWirefram
             return fl;
         }
 
+bool VulkanRenderer::Impl::hadEntriesBefore(SceneWalkOut& w, const Mesh& mesh) {
+            // Meshes that had entries before this walk, by address and id
+            // (eligible spans only, see MeshEntry::hidden): hidden now, they
+            // keep their entries, hidden, so a visibility toggle is no
+            // structural change. Built when the walk meets the first hidden mesh.
+            if (!w.shownBeforeBuilt) {
+                w.shownBeforeBuilt = true;
+                for (const auto& s : entrySpans_) {
+                    const MeshEntry& e0 = lastVisibleEntries_[s.first];
+                    if (e0.isOverlay || e0.isParticleField) continue;
+                    w.shownBefore.emplace(s.mesh, s.meshId);
+                }
+            }
+            const auto it = w.shownBefore.find(&mesh);
+            return it != w.shownBefore.end() && it->second == mesh.id;
+        }
+
+// An invisible parent hides its whole subtree: no entry under it except a
+// mesh that keeps its own hidden ones (walkSceneGraph), matching three.js /
+// GLRenderer. Plain `traverse` would leak children of hidden groups into the
+// scene/overlay passes. Pushes exactly one SnapNode.
+void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vis, bool underLod,
+                                           Camera& camera) {
+            // A hidden mesh has entries, hidden, when it had them before or
+            // Object3D::resident asks for them up front (so its first show is
+            // the same in-place flip as any later one). Never under a LOD.
+            const auto entriesWhileHidden = [&](const Mesh& mesh, bool ul) {
+                return !ul && (mesh.resident || hadEntriesBefore(w, mesh));
+            };
+            SnapNode sn{};
+            sn.obj = &o;
+            sn.objId = o.id;
+            sn.parent = o.parent;
+            // three.js parity — LOD level selection (GLRenderer::
+            // projectObject runs lod.update(camera) as it projects).
+            // traverseVisible is PRE-ORDER: this LOD's children are
+            // visited after this callback, so the rest of this walk
+            // already sees the level picked for this frame's camera.
+            // Recorded with a typed view + kSnapLod so the replay walk
+            // re-runs the selection cast-free (Object3D is a virtual
+            // base — the replay cannot static_cast down).
+            const uint32_t kind = nodeKind(o);
+            if (kind & kNodeLod) {
+                auto* lod = dynamic_cast<LOD*>(&o);
+                if (lod->autoUpdate && vis) lod->update(camera);
+                sn.lod   = lod;
+                sn.flags = kSnapKindOther | kSnapLod | kSnapNoDelta;
+                w.snap.push_back(sn);
+                // Auto-LOD exemption: every level object under a manual
+                // LOD node is author-selected already; don't let auto-LOD
+                // swap index buffers underneath that choice.
+                for (Object3D* child : lod->children) manualLodLevelRoots_.insert(child);
+                return;
+            }
+            // Line / LineSegments: never part of the traced/rasterized
+            // scene, always overlay.
+            // Collected before the Mesh dispatch so subclasses don't
+            // accidentally route through the Mesh path.
+            if ((kind & kNodeLine) && vis) {
+                auto* line = dynamic_cast<Line*>(&o);
+                auto geom = line->geometry();
+                sn.flags = kSnapKindLine | kSnapNoDelta;
+                sn.line  = line;
+                sn.geom  = geom.get();
+                sn.geomB = geom.get();
+                if (geom) sn.geomId = geom->id;
+                if (geom) sn.attrVer = geom->attributesVersion();
+                const bool matHidden = line->material() && !line->material()->visible;
+                if (matHidden) sn.flags |= kSnapMatHidden;
+                if (!matHidden && geom && geom->hasAttribute("position")) {
+                    sn.flags |= kSnapHasPos;
+                    LineEntry le{};
+                    le.line       = line;
+                    le.points     = nullptr;
+                    le.isSegments = (kind & kNodeLineSegments) != 0u;
+                    le.isPoints   = false;
+                    std::memcpy(le.worldMatrix.data(),
+                                line->matrixWorld->elements.data(), 64);
+                    w.lines.push_back(le);
+                }
+                w.snap.push_back(sn);
+                return;// Lines aren't Meshes; nothing more to do
+            }
+            // Points (point clouds) — never part of the traced/rasterized
+            // scene, always rasterise as POINT_LIST in the overlay pass.
+            // Shares the same geometry cache as Line via the
+            // BufferGeometry* key.
+            if ((kind & kNodePoints) && vis) {
+                auto* pts = dynamic_cast<Points*>(&o);
+                auto geom = pts->geometry();
+                sn.flags = kSnapKindPoints | kSnapNoDelta;
+                sn.pts   = pts;
+                sn.geom  = geom.get();
+                sn.geomB = geom.get();
+                if (geom) sn.geomId = geom->id;
+                if (geom) sn.attrVer = geom->attributesVersion();
+                const bool matHidden = pts->material() && !pts->material()->visible;
+                if (matHidden) sn.flags |= kSnapMatHidden;
+                if (!matHidden && geom && geom->hasAttribute("position")) {
+                    sn.flags |= kSnapHasPos;
+                    LineEntry le{};
+                    le.line       = nullptr;
+                    le.points     = pts;
+                    le.isSegments = false;
+                    le.isPoints   = true;
+                    std::memcpy(le.worldMatrix.data(),
+                                pts->matrixWorld->elements.data(), 64);
+                    w.lines.push_back(le);
+                }
+                w.snap.push_back(sn);
+                return;
+            }
+            auto* m = (kind & kNodeMesh) ? dynamic_cast<Mesh*>(&o) : nullptr;
+            // Hidden: kind Other, pointer identity only, unless it has
+            // entries while hidden (see entriesWhileHidden above).
+            if (!m || (!vis && !entriesWhileHidden(*m, underLod))) {
+                w.snap.push_back(sn);// kind Other: pointer identity only
+                return;
+            }
+            // Hybrid overlay (raster-only) classification. Wireframe-
+            // flagged materials and overlay-layer membership both route
+            // the mesh to the post-TAA raster overlay pass and exclude
+            // it from the traced/rasterized scene (TLAS, raster G-buffer,
+            // emissive NEE). The scene render can't see/shadow overlay
+            // meshes — they're pure debug visuals.
+            const MaterialWithWireframe* wf = nullptr;
+            if (auto mat = m->material(); mat && (materialKind(*mat) & kMatWireframe)) {
+                wf = dynamic_cast<MaterialWithWireframe*>(mat.get());
+            }
+            auto* inst = (kind & kNodeInstanced) ? dynamic_cast<InstancedMesh*>(m) : nullptr;
+            sn.mesh      = m;
+            sn.inst      = inst;
+            sn.geom      = m->geometry().get();
+            sn.geomB     = m->geometry().get();
+            sn.mat       = m->material().get();
+            sn.geomId    = sn.geomB ? sn.geomB->id : 0u;
+            sn.matId     = sn.mat ? sn.mat->id : 0u;
+            sn.wf        = wf;
+            sn.basic     = sn.mat && (materialKind(*sn.mat) & kMatBasic)
+                                   ? dynamic_cast<const MeshBasicMaterial*>(sn.mat)
+                                   : nullptr;
+            sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
+            sn.flags     = snapMeshFlags(*m, wf);
+            // material()->visible == false: record the full mesh node (so a
+            // re-show is caught by the replay walk) but build no entries, so
+            // the TLAS / raster G-buffer / overlay / emissive NEE never see it.
+            // Unless it has entries while hidden (entriesWhileHidden):
+            // hidden either way, it has them, hidden (MeshEntry::hidden).
+            // [[#mat-visible]]
+            const bool matHidden = m->material() && !m->material()->visible;
+            if (matHidden) sn.flags |= kSnapMatHidden;
+            if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
+            w.snap.push_back(sn);
+            const size_t snIdx = w.snap.size() - 1;
+            const bool hidden = !vis || matHidden;
+            if (hidden && !entriesWhileHidden(*m, underLod)) return;
+            // SplatClouds are composited by the compute tile rasterizer
+            // (SplatPass), not by the G-buffer. The unit quad they carry is
+            // a GL-backend implementation detail — it has no normals and
+            // describes no surface — so it is recorded in the snapshot (an
+            // add/remove still invalidates the scene) and then dropped
+            // before any entry, BLAS or TLAS instance is built from it.
+            // The missing "normal" attribute would exclude it two lines
+            // below anyway; saying so out loud is the difference between an
+            // invariant and a coincidence.
+            if (kind & kNodeSplat) return;
+            // A threepp::Sky is the environment, not a mesh. Its dome is a
+            // 1000 m box carrying a ShaderMaterial no deferred path shades;
+            // as a mesh it sealed the scene in a dark room — the box's
+            // inside on every pixel, every sun and GI ray stopped by it.
+            // Noted for the env refresh (refreshEnvTextureFromScene bakes
+            // it, vulkan/SkyBake) and dropped here, as a SplatCloud is.
+            if (kind & kNodeSky) {
+                w.snap[snIdx].flags |= kSnapNoDelta;
+                if (!hidden) skySeen_ = dynamic_cast<Sky*>(m);// a resident hidden one gets this far
+                return;
+            }
+            auto geom = m->geometry();
+            if (!geom || !geom->hasAttribute("position")) return;
+            if (!geom->hasAttribute("normal")) return;
+            // Particle billboard meshes are excluded from the traced/
+            // rasterized scene exactly like overlays (kSnapParticle folds
+            // into isOverlay so every
+            // `if (en.isOverlay) continue;` guard applies) but carry their
+            // own isParticle flag so the billboard pass claims them and the
+            // overlay-mesh loop skips them.
+            const bool isParticle = (sn.flags & kSnapParticle) != 0u;
+            const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay | kSnapParticle | kSnapUiBlend)) != 0u;
+            // Sensor-only geometry (kSensorOnlyLayer): still a full scene
+            // entry — BLAS, descs, TLAS instance — because the lidar reads
+            // those tables. Only the raster views it reaches and the ray
+            // masks that include it differ.
+            const bool sensorOnly = (sn.flags & kSnapSensorOnly) != 0u;
+            // One-shot type probes: an N-instance InstancedMesh pays them
+            // once (nodeKind), not N times — and on snapshot-match frames
+            // not at all (the cached entry flags are reused). Consumed by
+            // raster pass loops, resolveBlasForEntry, TLAS refit, and
+            // dirty-detection.
+            const bool isSkinned   = (kind & kNodeSkinned) != 0u;
+            const bool isDisplaced = (kind & kNodeDisplaced) != 0u;
+            const bool isGrass     = (kind & kNodeGrass) != 0u;
+            // A ParticleField expands to exactly one entry whatever its
+            // capacity — the property the type exists to provide. It is
+            // classified here rather than dropped like SplatCloud because it
+            // must reach the entry list: it is the field's one entry that
+            // carries the world matrix, the entry index the FieldDesc
+            // publishes as instanceCustomIndex, and (from phase 1) the one
+            // indirect draw. Its Mesh geometry is a zero-area placeholder
+            // (see ParticleField.cpp), so the machinery below builds it a
+            // harmless one-triangle BLAS and one desc slot apiece, and the
+            // field draws no pixels until a representation is switched on.
+            ParticleField* particleField = (kind & kNodeField) ? dynamic_cast<ParticleField*>(m) : nullptr;
+            const bool isParticleField = (particleField != nullptr);
+            // Their passes read no MeshEntry::hidden: hidden, they have no
+            // entries, as before.
+            if (isOverlay || isParticleField) w.snap[snIdx].flags |= kSnapNoDelta;
+            if (hidden && (isOverlay || isParticleField)) return;
+            const bool isMorphed   = isMorphedMesh(*m);
+            // Tet-skinned PhysX soft body — detected via the material flag set by
+            // SoftBody::enableGpuSkinning() (which also carries the per-frame tet
+            // texture and the static tetIndex/tetWeight/tetRestInv* attributes).
+            // Mutually exclusive with the other deformers.
+            const bool isTet = !isSkinned && !isDisplaced && !isGrass && !isMorphed &&
+                               m->material() && m->material()->tetSkinning &&
+                               m->material()->tetTexture != nullptr;
+            // Zero-copy vertex interop (enableVertexInterop). One blasCache
+            // probe per MESH, not per instance — the same budget the type
+            // probes above spend, and for the same payoff: the two
+            // CPU-bounds culls read a bool instead of hashing per entry.
+            bool isVertexInterop = false;
+            if (!isSkinned && !isDisplaced && !isGrass && !isMorphed && !isTet &&
+                !isParticleField) {
+                if (auto ig = m->geometry()) {
+                    auto ic = blasCache.find(ig.get());
+                    isVertexInterop = (ic != blasCache.end() && ic->second->interop);
+                }
+            }
+            // Auto-LOD selection caches — once per Mesh, shared by every
+            // instance entry (see the MeshEntry field doc). manualLodLevelRoots_
+            // is complete for this mesh's ancestors: traverseVisible is
+            // pre-order, so an enclosing LOD node registered its level
+            // objects before we got here.
+            bool lodExempt = !m->autoLod;// per-object opt-out (self-managed LOD, e.g. terrain tiles)
+            for (Object3D* p = m->parent; !lodExempt && p; p = p->parent) {
+                if (manualLodLevelRoots_.count(p)) lodExempt = true;
+            }
+            const MaterialWithEmissive* lodEmissive = nullptr;
+            if (auto mat = m->material(); mat && (materialKind(*mat) & kMatEmissive)) {
+                lodEmissive = dynamic_cast<MaterialWithEmissive*>(mat.get());
+            }
+            if (!geom->boundingBox) geom->computeBoundingBox();
+            Vector3 lodCenter;
+            float lodRadius = 0.f;
+            if (geom->boundingBox) {
+                lodCenter = geom->boundingBox->getCenter();
+                lodRadius = geom->boundingBox->getSize().length() * 0.5f;
+            }
+            // First-person viewmodel probe: is this mesh parented under a
+            // Camera? Such geometry sits at the eye and must not occlude
+            // (see MeshEntry::camAttached / kRayMaskNoShadow). One ancestor
+            // walk per Mesh per full expansion.
+            bool camAttached = false;
+            for (auto* p = m->parent; p; p = p->parent) {
+                if (nodeKind(*p) & kNodeCamera) {
+                    camAttached = true;
+                    break;
+                }
+            }
+            auto setLodCaches = [&](MeshEntry& e) {
+                e.lodExemptStatic = lodExempt;
+                e.lodEmissive       = lodEmissive;
+                e.lodGeomKey        = geom.get();
+                e.lodCenter[0]      = lodCenter.x;
+                e.lodCenter[1]      = lodCenter.y;
+                e.lodCenter[2]      = lodCenter.z;
+                e.lodRadius         = lodRadius;
+            };
+            // Per-mesh span over the entries pushed below. Caches the
+            // matrix-change-detection inputs and the object-space bounds
+            // so the per-frame loops can gate whole spans (see EntrySpan).
+            EntrySpan sp{};
+            sp.mesh  = m;
+            sp.first = static_cast<uint32_t>(w.built.size());
+            sp.meshId = m->id;
+            sp.hidden = hidden;
+            // Expansion frames hand every span fresh matrices; leaving the
+            // flag set keeps the motion-matrix build computing real deltas
+            // (vs the remapped prev worlds) on rebuild frames — a spawn
+            // burst must not blank the movers' motion vectors for a frame.
+            sp.movedThisFrame = true;
+            sp.meshWorld = {};
+            std::memcpy(sp.meshWorld.data(), m->matrixWorld->elements.data(), 64);
+            sp.localRadius = lodRadius;
+            if (geom->boundingBox) {
+                const Vector3 half = geom->boundingBox->getSize() * 0.5f;
+                sp.localCenter[0] = lodCenter.x;
+                sp.localCenter[1] = lodCenter.y;
+                sp.localCenter[2] = lodCenter.z;
+                sp.localHalf[0]   = half.x;
+                sp.localHalf[1]   = half.y;
+                sp.localHalf[2]   = half.z;
+                sp.localBoundsValid = true;
+            }
+            bool deferRows = false;
+            if (inst && inst->count() > 0) {
+                sp.inst           = inst;
+                sp.instMatVersion = inst->instanceMatrix()->version;
+                deferRows = w.lazyRows && hadEntriesBefore(w, *m);
+                // Read the instance matrices straight off the attribute
+                // rather than through getMatrixAt. The loop stops at
+                // count(), and setCount() clamps count() to the buffer
+                // capacity that getMatrixAt range-checks against, so that
+                // check can only ever pass here; the assert keeps it in
+                // debug builds in case the invariant is ever broken
+                // upstream. Hoisting *m->matrixWorld likewise pulls a
+                // shared_ptr dereference out of the per-instance loop.
+                const auto& instArr = inst->instanceMatrix()->array();
+                THREEPP_ASSERT(instArr.size() >= inst->count() * 16u);
+                const Matrix4& meshWorld = *m->matrixWorld;
+                Matrix4 instMat;
+                Matrix4 world;
+                const size_t jEnd = deferRows ? size_t(1) : inst->count();
+                for (size_t j = 0; j < jEnd; ++j) {
+                    std::memcpy(instMat.elements.data(), instArr.data() + j * 16u, 64);
+                    world.multiplyMatrices(meshWorld, instMat);
+                    MeshEntry e{};
+                    e.mesh = m;
+                    e.instanceIndex = static_cast<uint32_t>(j);
+                    e.isOverlay    = isOverlay;
+                    e.isParticle   = isParticle;
+                    e.isSkinned    = isSkinned;
+                    e.isDisplaced  = isDisplaced;
+                    e.isGrass      = isGrass;
+                    e.isMorphed    = isMorphed;
+                    e.isTet        = isTet;
+                    e.isVertexInterop = isVertexInterop;
+                    e.isInstanced  = true;
+                    e.camAttached  = camAttached;
+                    e.sensorOnly   = sensorOnly;
+                    e.hidden       = hidden;
+                    setLodCaches(e);
+                    std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
+                    w.built.push_back(e);
+                }
+            } else {
+                MeshEntry e{};
+                e.mesh = m;
+                e.instanceIndex = 0u;
+                e.isOverlay    = isOverlay;
+                e.isParticle   = isParticle;
+                e.isSkinned    = isSkinned;
+                e.isDisplaced  = isDisplaced;
+                e.isGrass      = isGrass;
+                e.isMorphed    = isMorphed;
+                e.isTet        = isTet;
+                e.isVertexInterop = isVertexInterop;
+                e.isParticleField = isParticleField;
+                e.camAttached  = camAttached;
+                e.sensorOnly   = sensorOnly;
+                e.hidden       = hidden;
+                setLodCaches(e);
+                std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
+                w.built.push_back(e);
+            }
+            sp.count = static_cast<uint32_t>(w.built.size()) - sp.first;
+            if (deferRows) {
+                sp.count = static_cast<uint32_t>(inst->count());
+                sp.rowsDeferred = true;
+                w.anyRowsDeferred = true;
+            }
+            if (isParticleField) {
+                // The placeholder geometry's bounds describe a point at the
+                // field's origin and say nothing about where the particles
+                // are, so publish "no bounds" rather than a wrong box. The
+                // frustum cull default-includes the span on the same flag.
+                sp.localBoundsValid = false;
+                sp.localRadius      = 0.f;
+                sp.aabbValid        = false;
+                w.fields.emplace_back(particleField, sp.first);
+            }
+            // A visibility flip of this mesh is applied in place by the
+            // replay walk (setSpanHidden); overlays and fields re-expand.
+            if (!isOverlay && !isParticleField) {
+                w.snap[snIdx].spanIndex = static_cast<int32_t>(w.spans.size());
+            }
+            w.spans.push_back(sp);
+            // Room to grow (VulkanCoreSlots.cpp): an InstancedMesh whose
+            // count can rise is laid out with free slots after it, so a
+            // setCount is a slot edit in place and not a move.
+            if (!slotsDisabled() && !w.lazyRows && !isOverlay && !isParticle) {
+                const uint32_t slack = slotSlackFor(sp, sp.count);
+                if (slack > 0u) {
+                    const uint32_t first = static_cast<uint32_t>(w.built.size());
+                    w.built.resize(w.built.size() + slack, slotFreeEntry());
+                    w.spans.push_back(slotFreeSpan(first, slack, 0u));
+                }
+            }
+        }
+
+bool VulkanRenderer::Impl::snapNodeUnchanged(const SnapNode& sn, Object3D& o, bool vis, bool underLod,
+                                             Camera& camera, bool& flip, SnapFlip& f) {
+            flip = false;
+            const uint32_t kind = sn.flags & kSnapKindMask;
+            const bool isLod = (sn.flags & kSnapLod) != 0u;
+            // Recorded under a LOD or not: the walk enters the same subtrees.
+            // Object3D::resident changed: the expansion decides which
+            // hidden meshes have entries.
+            if (((sn.flags & kSnapUnderLod) != 0u) != underLod ||
+                ((sn.flags & kSnapResident) != 0u) != o.resident)
+                return false;
+            // Its effective visibility flipped. Only a mesh with entries
+            // flips in place (below); any other node re-expands: a group's
+            // own flip, a line, a mesh hidden before it was ever shown (no
+            // entries yet, unless Object3D::resident), anything under a
+            // LOD.
+            const bool visFlip = ((sn.flags & kSnapHidden) != 0u) == vis;
+            if (kind == kSnapKindOther) {
+                if (visFlip) return false;
+                // LOD parity (see the full pass): re-run level selection
+                // every frame. Pre-order walk ⇒ the mutation lands before
+                // this LOD's children are visited, so a level switch flips
+                // a child's visibility under the LOD ⇒ a changed child ⇒ the
+                // re-expansion picks up the new level's meshes.
+                if (isLod && vis && sn.lod->autoUpdate) sn.lod->update(camera);
+                return true;// otherwise pointer identity is all we need
+            }
+            // Same object at the same address ⇒ same dynamic type — the
+            // typed pointers recorded by the full pass are still valid, so
+            // the walk pays zero dynamic_casts. attributesVersion()
+            // unchanged ⇒ the hasPos/hasNorm flag bits are still valid
+            // without re-doing the string-keyed attribute lookups.
+            if (kind == kSnapKindLine || kind == kSnapKindPoints) {
+                auto geom = sn.line ? sn.line->geometry() : sn.pts->geometry();
+                auto matL = sn.line ? sn.line->material() : sn.pts->material();
+                const bool matHidden = matL && !matL->visible;
+                return !(visFlip || geom.get() != sn.geom || (geom && geom->id != sn.geomId) ||
+                         (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) ||
+                         matHidden != ((sn.flags & kSnapMatHidden) != 0u));
+            }
+            Mesh* m = sn.mesh;
+            {
+                const auto geomNow = m->geometry();
+                const auto matNow = m->material();
+                if (geomNow.get() != sn.geom || matNow.get() != sn.mat ||
+                    (geomNow && geomNow->id != sn.geomId) ||
+                    (matNow && matNow->id != sn.matId))
+                    return false;
+            }
+            // An attribute added/replaced/removed: the full pass re-derives.
+            if (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) return false;
+            // A texture swapped on its material (a bumped version and a map
+            // that is not the one its rows hold): the full pass, whose slot
+            // edit places the mesh again. Only read on a version bump; a
+            // values-only change stays on this path (the lean diff).
+            if (sn.spanIndex >= 0 && sn.mat && static_cast<size_t>(sn.spanIndex) < entrySpans_.size()) {
+                const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
+                if (sn.mat->version() != fp0.matVersion &&
+                    (albedoTexOf(*m) != fp0.albedoTex || roughnessTexOf(*m) != fp0.roughnessTex ||
+                     metalnessTexOf(*m) != fp0.metalnessTex || normalTexOf(*m) != fp0.normalTex ||
+                     transmissionTexOf(*m) != fp0.transmissionTex || clearcoatTexOf(*m) != fp0.clearcoatTex ||
+                     clearcoatRoughnessTexOf(*m) != fp0.clearcoatRoughnessTex ||
+                     emissiveTexOf(*m) != fp0.emissiveTex || occlusionTexOf(*m) != fp0.occlusionTex))
+                    return false;
+            }
+            // Dynamic routing bits — plain bool reads, no lookups. The
+            // pointed-to material is alive (the mesh holding it just
+            // compared equal) and its dynamic type is fixed.
+            const bool wire = sn.wf && sn.wf->wireframe;
+            const bool over = overlayLayer_ >= 0 &&
+                              o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
+            const bool sensor = o.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer);
+            const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
+            const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
+            const bool uiBlend = !wire && sn.basic && sn.basic->transparent &&
+                                 !sn.basic->map;
+            if (wire != ((sn.flags & kSnapWire) != 0u) ||
+                over != ((sn.flags & kSnapOverlay) != 0u) ||
+                sensor != ((sn.flags & kSnapSensorOnly) != 0u) ||
+                tet != ((sn.flags & kSnapTet) != 0u) ||
+                particle != ((sn.flags & kSnapParticle) != 0u) ||
+                uiBlend != ((sn.flags & kSnapUiBlend) != 0u))
+                return false;
+            if (sn.instCount >= 0 &&
+                sn.inst->count() != static_cast<size_t>(sn.instCount))
+                return false;
+            // sn.mat compared equal above, so it's alive and dereferenceable
+            // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
+            const bool matHidden = sn.mat && !sn.mat->visible;
+            if (visFlip || matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
+                if (sn.spanIndex < 0) return false;
+                // A span whose hidden admission has not landed has no record
+                // and default rows: flipped visible in place it would draw
+                // nothing until the pump lands it (a hole where a staged
+                // terrain tile swaps in). Its first show takes the full
+                // path, whose slot edit admits it as a visible mesh.
+                if (vis && !matHidden && static_cast<size_t>(sn.spanIndex) < entrySpans_.size() &&
+                    entrySpans_[sn.spanIndex].admitPending)
+                    return false;
+                flip = true;
+                f.hidden = !vis;
+                f.matHidden = matHidden;
+            }
+            return true;
+        }
+
 bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera) {
             if (!sceneBuilt_ || sceneSnapshot_.empty()) return false;
             if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
@@ -137,12 +653,7 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
             // Visibility flips of meshes that have entries, applied in place once
             // the WHOLE walk matched: a mismatch further on takes the full
             // re-expansion, which must see the entries as they were.
-            struct VisFlip {
-                size_t snIdx;
-                bool hidden;   // Object3D-hidden (own flag or an ancestor's)
-                bool matHidden;// material()->visible == false
-            };
-            static thread_local std::vector<VisFlip> flips;
+            static thread_local std::vector<SnapFlip> flips;
             flips.clear();
             auto visit = [&](Object3D& o, bool vis, bool underLod) -> bool {
                 if (!ok) return false;
@@ -155,131 +666,22 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 }
                 const size_t snIdx = cur;
                 const SnapNode& sn = sceneSnapshot_[cur++];
-                const uint32_t kind = sn.flags & kSnapKindMask;
-                const bool isLod = (sn.flags & kSnapLod) != 0u;
-                // Recorded under a LOD or not: the walk enters the same subtrees.
-                // Object3D::resident changed: the expansion decides which
-                // hidden meshes have entries.
-                if (((sn.flags & kSnapUnderLod) != 0u) != underLod ||
-                    ((sn.flags & kSnapResident) != 0u) != o.resident) {
+                bool flip = false;
+                SnapFlip f;
+                if (!snapNodeUnchanged(sn, o, vis, underLod, camera, flip, f)) {
                     ok = false;
                     return false;
                 }
-                // Its effective visibility flipped. Only a mesh with entries
-                // flips in place (below); any other node re-expands: a group's
-                // own flip, a line, a mesh hidden before it was ever shown (no
-                // entries yet, unless Object3D::resident), anything under a
-                // LOD.
-                const bool visFlip = ((sn.flags & kSnapHidden) != 0u) == vis;
-                if (kind == kSnapKindOther) {
-                    if (visFlip) {
-                        ok = false;
-                        return false;
-                    }
-                    // LOD parity (see the full pass): re-run level selection
-                    // every frame. Pre-order walk ⇒ the mutation lands before
-                    // this LOD's children are visited, so a level switch flips
-                    // a child's visibility under the LOD ⇒ ok=false ⇒ full
-                    // re-expansion picks up the new level's meshes.
-                    if (isLod && vis && sn.lod->autoUpdate) sn.lod->update(camera);
-                    return isLod;// otherwise pointer identity is all we need
+                if (flip) {
+                    f.snIdx = snIdx;
+                    flips.push_back(f);
                 }
-                // Same object at the same address ⇒ same dynamic type — the
-                // typed pointers recorded by the full pass are still valid, so
-                // the walk pays zero dynamic_casts. attributesVersion()
-                // unchanged ⇒ the hasPos/hasNorm flag bits are still valid
-                // without re-doing the string-keyed attribute lookups.
-                if (kind == kSnapKindLine || kind == kSnapKindPoints) {
-                    auto geom = sn.line ? sn.line->geometry() : sn.pts->geometry();
-                    auto matL = sn.line ? sn.line->material() : sn.pts->material();
-                    const bool matHidden = matL && !matL->visible;
-                    if (visFlip || geom.get() != sn.geom || (geom && geom->id != sn.geomId) ||
-                        (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) ||
-                        matHidden != ((sn.flags & kSnapMatHidden) != 0u)) ok = false;
-                    return false;
-                }
-                Mesh* m = sn.mesh;
-                {
-                    const auto geomNow = m->geometry();
-                    const auto matNow = m->material();
-                    if (geomNow.get() != sn.geom || matNow.get() != sn.mat ||
-                        (geomNow && geomNow->id != sn.geomId) ||
-                        (matNow && matNow->id != sn.matId)) {
-                        ok = false;
-                        return false;
-                    }
-                }
-                if (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) {
-                    ok = false;// attribute added/replaced/removed → full pass re-derives
-                    return false;
-                }
-                // A texture swapped on its material (a bumped version and a map
-                // that is not the one its rows hold): the full pass, whose slot
-                // edit places the mesh again. Only read on a version bump; a
-                // values-only change stays on this path (the lean diff).
-                if (sn.spanIndex >= 0 && sn.mat && static_cast<size_t>(sn.spanIndex) < entrySpans_.size()) {
-                    const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
-                    if (sn.mat->version() != fp0.matVersion &&
-                        (albedoTexOf(*m) != fp0.albedoTex || roughnessTexOf(*m) != fp0.roughnessTex ||
-                         metalnessTexOf(*m) != fp0.metalnessTex || normalTexOf(*m) != fp0.normalTex ||
-                         transmissionTexOf(*m) != fp0.transmissionTex || clearcoatTexOf(*m) != fp0.clearcoatTex ||
-                         clearcoatRoughnessTexOf(*m) != fp0.clearcoatRoughnessTex ||
-                         emissiveTexOf(*m) != fp0.emissiveTex || occlusionTexOf(*m) != fp0.occlusionTex)) {
-                        ok = false;
-                        return false;
-                    }
-                }
-                // Dynamic routing bits — plain bool reads, no lookups. The
-                // pointed-to material is alive (the mesh holding it just
-                // compared equal) and its dynamic type is fixed.
-                const bool wire = sn.wf && sn.wf->wireframe;
-                const bool over = overlayLayer_ >= 0 &&
-                                  o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
-                const bool sensor = o.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer);
-                const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
-                const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
-                const bool uiBlend = !wire && sn.basic && sn.basic->transparent &&
-                                     !sn.basic->map;
-                if (wire != ((sn.flags & kSnapWire) != 0u) ||
-                    over != ((sn.flags & kSnapOverlay) != 0u) ||
-                    sensor != ((sn.flags & kSnapSensorOnly) != 0u) ||
-                    tet != ((sn.flags & kSnapTet) != 0u) ||
-                    particle != ((sn.flags & kSnapParticle) != 0u) ||
-                    uiBlend != ((sn.flags & kSnapUiBlend) != 0u)) {
-                    ok = false;
-                    return false;
-                }
-                if (sn.instCount >= 0 &&
-                    sn.inst->count() != static_cast<size_t>(sn.instCount)) {
-                    ok = false;
-                    return false;
-                }
-                // sn.mat compared equal above, so it's alive and dereferenceable
-                // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
-                const bool matHidden = sn.mat && !sn.mat->visible;
-                if (visFlip || matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
-                    if (sn.spanIndex < 0) {
-                        ok = false;
-                        return false;
-                    }
-                    // A span whose hidden admission has not landed has no record
-                    // and default rows: flipped visible in place it would draw
-                    // nothing until the pump lands it (a hole where a staged
-                    // terrain tile swaps in). Its first show takes the full
-                    // path, whose slot edit admits it as a visible mesh.
-                    if (vis && !matHidden && static_cast<size_t>(sn.spanIndex) < entrySpans_.size() &&
-                        entrySpans_[sn.spanIndex].admitPending) {
-                        ok = false;
-                        return false;
-                    }
-                    flips.push_back({snIdx, !vis, matHidden});
-                }
-                return false;
+                return (sn.flags & kSnapKindMask) == kSnapKindOther && (sn.flags & kSnapLod) != 0u;
             };
             walkSceneGraph(scene, true, false, visit);
             ok = ok && cur == sceneSnapshot_.size();
             if (ok) {
-                for (const VisFlip& f : flips) {
+                for (const SnapFlip& f : flips) {
                     SnapNode& sn = sceneSnapshot_[f.snIdx];
                     sn.flags = (sn.flags & ~(kSnapHidden | kSnapMatHidden)) |
                                (f.hidden ? kSnapHidden : 0u) | (f.matHidden ? kSnapMatHidden : 0u);
@@ -287,6 +689,205 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 }
             }
             return ok;
+        }
+
+bool VulkanRenderer::Impl::diffSceneWalk(Object3D& scene, Camera& camera, SceneDelta& d) {
+            THREEPP_CPUPROF("scene.3a_diffWalk");
+            const auto& old = sceneSnapshot_;
+            // A snapshot whose subtree ranges were not recorded, or of another
+            // scene, or fingerprints not of the entries (the replay walk's own
+            // precondition: snapNodeUnchanged reads them): the full expansion.
+            if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
+            if (old.empty() || old[0].obj != &scene || old[0].objId != scene.id ||
+                old[0].subtreeEnd != static_cast<uint32_t>(old.size()))
+                return false;
+            d.snap.reserve(old.size() + 64u);
+            SceneWalkOut w{d.built, d.lines, d.spans, d.fields, d.snap};
+            w.lazyRows = false;// a span recorded anew has every row
+            diffSceneNode(d, w, scene, true, false, 0, camera);
+            return !d.fallback && d.changed && d.lines.empty() && d.fields.empty();
+        }
+
+void VulkanRenderer::Impl::diffSceneRemoved(SceneDelta& d, size_t first, size_t end) {
+            const auto& old = sceneSnapshot_;
+            for (size_t k = first; k < end && !d.fallback; ++k) {
+                const SnapNode& sn = old[k];
+                // Under a LOD the expansion keeps no hidden level's entries: the
+                // full path decides what a level switch leaves.
+                if (sn.flags & (kSnapNoDelta | kSnapUnderLod)) {
+                    d.fallback = true;
+                    return;
+                }
+                if (sn.spanIndex >= 0) d.removed.push_back(static_cast<uint32_t>(sn.spanIndex));
+            }
+            if (end > first) d.changed = true;
+        }
+
+void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3D& o, bool parentVis,
+                                         bool underLod, int64_t oldIdx, Camera& camera) {
+            if (d.fallback) return;
+            const auto& old = sceneSnapshot_;
+            const bool vis = parentVis && o.visible;
+            const size_t newIdx = d.snap.size();
+            bool isLod = false;
+            bool kept = false;
+            if (oldIdx >= 0) {
+                const SnapNode& sn = old[static_cast<size_t>(oldIdx)];
+                bool flip = false;
+                SnapFlip f;
+                // Under the parent it was recorded under (a moved node is a new
+                // one here and a removed one there), and unchanged by the replay's
+                // own test.
+                if (sn.parent == o.parent && snapNodeUnchanged(sn, o, vis, underLod, camera, flip, f)) {
+                    if (flip && underLod) {
+                        d.fallback = true;// see diffSceneRemoved
+                        return;
+                    }
+                    d.snap.push_back(sn);
+                    if (flip) {
+                        f.snIdx = newIdx;
+                        d.flips.push_back(f);
+                    }
+                    isLod = (sn.flags & kSnapKindMask) == kSnapKindOther && (sn.flags & kSnapLod) != 0u;
+                    kept = true;
+                } else {
+                    // Changed: recorded anew below; its span (if any) goes.
+                    if ((sn.flags & kSnapNoDelta) || underLod) {
+                        d.fallback = true;
+                        return;
+                    }
+                    if (sn.spanIndex >= 0) d.removed.push_back(static_cast<uint32_t>(sn.spanIndex));
+                }
+            }
+            if (!kept) {
+                if (underLod) {
+                    d.fallback = true;
+                    return;
+                }
+                d.changed = true;
+                const size_t spans0 = d.spans.size();
+                recordSceneNode(w, o, vis, underLod, camera);
+                SnapNode& rec = d.snap[newIdx];
+                if (rec.flags & kSnapNoDelta) {
+                    d.fallback = true;
+                    return;
+                }
+                // The bits the expansion's visitRecord adds.
+                if (!vis) rec.flags |= kSnapHidden;
+                if (underLod) rec.flags |= kSnapUnderLod;
+                if (o.resident) rec.flags |= kSnapResident;
+                if (d.spans.size() != spans0) {
+                    // One span, named by its node (an overlay's is not: kSnapNoDelta).
+                    if (d.spans.size() != spans0 + 1u || rec.spanIndex != static_cast<int32_t>(spans0)) {
+                        d.fallback = true;
+                        return;
+                    }
+                    d.spanSnap.push_back(static_cast<uint32_t>(newIdx));
+                }
+                // A mesh with a span placed again with as many instances: what it
+                // holds changed (a geometry, material or map swapped).
+                if (oldIdx >= 0 && rec.spanIndex >= 0) {
+                    const SnapNode& sn = old[static_cast<size_t>(oldIdx)];
+                    if (sn.spanIndex >= 0 && sn.instCount == rec.instCount) ++d.swaps;
+                }
+            }
+            const bool entered = vis || !(underLod || isLod);
+            // Its old children: the nodes after it up to its subtree's end, each
+            // child's subtree skipped by its own range.
+            size_t oc = 0, oend = 0;
+            if (oldIdx >= 0) {
+                oc = static_cast<size_t>(oldIdx) + 1u;
+                oend = old[static_cast<size_t>(oldIdx)].subtreeEnd;
+            }
+            if (entered) {
+                const bool childUnderLod = underLod || isLod;
+                for (Object3D* c : o.children) {
+                    int64_t m = -1;
+                    if (oc < oend) {
+                        if (old[oc].obj == c && old[oc].objId == c->id) {
+                            m = static_cast<int64_t>(oc);
+                        } else {
+                            // Further along: the old children before it are gone.
+                            for (size_t k = old[oc].subtreeEnd; k < oend; k = old[k].subtreeEnd) {
+                                if (old[k].subtreeEnd <= k) {
+                                    d.fallback = true;
+                                    return;
+                                }
+                                if (old[k].obj == c && old[k].objId == c->id) {
+                                    m = static_cast<int64_t>(k);
+                                    break;
+                                }
+                            }
+                            if (m >= 0) diffSceneRemoved(d, oc, static_cast<size_t>(m));
+                        }
+                    }
+                    if (m >= 0) oc = old[static_cast<size_t>(m)].subtreeEnd;
+                    diffSceneNode(d, w, *c, vis, childUnderLod, m, camera);
+                    if (d.fallback) return;
+                }
+            }
+            // The old children this walk did not meet (all of them when it does
+            // not enter the node).
+            if (oc < oend) diffSceneRemoved(d, oc, oend);
+            d.snap[newIdx].subtreeEnd = static_cast<uint32_t>(d.snap.size());
+        }
+
+void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
+            // A full recording of the scene as it is now, every node anew,
+            // compared node for node with the snapshot and spans the delta left.
+            std::vector<MeshEntry> built;
+            std::vector<LineEntry> lines;
+            std::vector<EntrySpan> spans;
+            std::vector<std::pair<ParticleField*, uint32_t>> fields;
+            std::vector<SnapNode> snap;
+            SceneWalkOut w{built, lines, spans, fields, snap};
+            w.lazyRows = false;
+            std::vector<size_t> open;
+            auto visit = [&](Object3D& o, bool vis, bool underLod) -> bool {
+                recordSceneNode(w, o, vis, underLod, camera);
+                SnapNode& rec = snap.back();
+                if (!vis) rec.flags |= kSnapHidden;
+                if (underLod) rec.flags |= kSnapUnderLod;
+                if (o.resident) rec.flags |= kSnapResident;
+                open.push_back(snap.size() - 1);
+                return (rec.flags & kSnapLod) != 0u;
+            };
+            auto post = [&](Object3D&) {
+                snap[open.back()].subtreeEnd = static_cast<uint32_t>(snap.size());
+                open.pop_back();
+            };
+            walkSceneGraph(scene, true, false, visit, post);
+            uint64_t bad = 0;
+            const auto mismatch = [&](const char* what, size_t k) {
+                if (bad++ < 8) std::fprintf(stderr, "[VulkanRenderer] slot delta differs from a full walk: %s %zu\n", what, k);
+            };
+            if (snap.size() != sceneSnapshot_.size()) mismatch("node count", snap.size());
+            for (size_t k = 0; k < std::min(snap.size(), sceneSnapshot_.size()); ++k) {
+                const SnapNode& a = snap[k];
+                const SnapNode& b = sceneSnapshot_[k];
+                if (a.obj != b.obj || a.objId != b.objId || a.parent != b.parent || a.subtreeEnd != b.subtreeEnd ||
+                    a.flags != b.flags || a.geom != b.geom || a.mat != b.mat || a.instCount != b.instCount) {
+                    mismatch("node", k);
+                    continue;
+                }
+                if ((a.spanIndex < 0) != (b.spanIndex < 0)) {
+                    mismatch("node's span", k);
+                    continue;
+                }
+                if (a.spanIndex < 0) continue;
+                const EntrySpan& sa = spans[static_cast<size_t>(a.spanIndex)];
+                if (static_cast<size_t>(b.spanIndex) >= entrySpans_.size()) {
+                    mismatch("span index", k);
+                    continue;
+                }
+                const EntrySpan& sb = entrySpans_[static_cast<size_t>(b.spanIndex)];
+                if (sb.isFree || sa.mesh != sb.mesh || sa.meshId != sb.meshId || sa.count != sb.count ||
+                    sa.hidden != sb.hidden || sa.inst != sb.inst)
+                    mismatch("span", k);
+                else if (lastVisibleEntries_[sb.first].mesh != sb.mesh || lastVisibleEntries_[sb.first].hidden != sb.hidden)
+                    mismatch("span's first row", k);
+            }
+            walkCheckMismatches_ += bad;
         }
 
 void VulkanRenderer::Impl::setSpanHidden(size_t spanIndex, bool hidden) {
@@ -652,6 +1253,9 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
         }
 
 void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
+            // The whole scene build, every phase below included (the profiler
+            // is flat: a nested phase adds to this key too).
+            THREEPP_CPUPROF("scene.0_total");
             // Deform work is queued here and recorded by the same frame. A frame
             // that never recorded (beginDeferredFrame gave up on an out-of-date
             // swapchain, a resize or a minimised window) leaves its queue behind,
@@ -725,6 +1329,19 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     std::memcpy(le.worldMatrix.data(), src->matrixWorld->elements.data(), 64);
                 }
             } else {
+            // The edit-proportional path first (diffSceneWalk, trySlotDelta):
+            // when it takes the change, the full expansion below is skipped.
+            bool deltaApplied = false;
+            if (sceneBuilt_ && !slotsDisabled() && !deltaDisabled()) {
+                SceneDelta delta;
+                deltaApplied = diffSceneWalk(scene, camera, delta) && trySlotDelta(delta);
+                static const bool deltaCheck = [] {
+                    const char* v = std::getenv("THREEPP_VULKAN_WALK_CHECK");
+                    return v && v[0] == '1';
+                }();
+                if (deltaApplied && deltaCheck) deltaWalkCheck(scene, camera);
+            }
+            if (!deltaApplied) {
             THREEPP_CPUPROF_NAMED(profExpand, "scene.3b_fullExpansion");
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
@@ -760,408 +1377,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // mesh entry whose parent chain hits one of these is exempt from
             // auto-LOD (see the selection pass just after this expansion).
             manualLodLevelRoots_.clear();
-            // Meshes that had entries before this expansion, by address and id
-            // (eligible spans only, see MeshEntry::hidden): hidden now, they
-            // keep their entries, hidden, so a visibility toggle is no
-            // structural change. Built when the walk meets the first hidden mesh.
-            std::unordered_map<const Mesh*, unsigned int> shownBefore;
-            bool shownBeforeBuilt = false;
-            const auto hadEntries = [&](const Mesh& mesh) {
-                if (!shownBeforeBuilt) {
-                    shownBeforeBuilt = true;
-                    for (const auto& s : entrySpans_) {
-                        const MeshEntry& e0 = lastVisibleEntries_[s.first];
-                        if (e0.isOverlay || e0.isParticleField) continue;
-                        shownBefore.emplace(s.mesh, s.meshId);
-                    }
-                }
-                const auto it = shownBefore.find(&mesh);
-                return it != shownBefore.end() && it->second == mesh.id;
-            };
+            // The walk's outputs, and its record of a node (recordSceneNode).
+            SceneWalkOut w{built, builtLines, builtSpans, builtFields, sceneSnapshot_};
             // Lazy rows (VulkanCoreSlots.cpp): an InstancedMesh that already
             // has slots gets its first entry only, the one the slot path reads
             // its per-mesh facts from (the slot path derives any entry it adds
             // itself). A walk the structural rebuild consumes is never lazy: if
             // the slot path declines, the walk runs again in full below.
-            bool lazyRows = sceneBuilt_ && !slotsDisabled();
-            bool anyRowsDeferred = false;
-            // A hidden mesh has entries, hidden, when it had them before or
-            // Object3D::resident asks for them up front (so its first show is
-            // the same in-place flip as any later one). Never under a LOD.
-            const auto entriesWhileHidden = [&](const Mesh& mesh, bool underLod) {
-                return !underLod && (mesh.resident || hadEntries(mesh));
-            };
-            // An invisible parent hides its whole subtree: no entry under it
-            // except a mesh that keeps its own hidden ones (walkSceneGraph),
-            // matching three.js / GLRenderer. Plain `traverse` would leak
-            // children of hidden groups into the scene/overlay passes.
-            auto recordNode = [&](Object3D& o, bool vis, bool underLod) {
-                SnapNode sn{};
-                sn.obj = &o;
-                sn.objId = o.id;
-                sn.parent = o.parent;
-                // three.js parity — LOD level selection (GLRenderer::
-                // projectObject runs lod.update(camera) as it projects).
-                // traverseVisible is PRE-ORDER: this LOD's children are
-                // visited after this callback, so the rest of this walk
-                // already sees the level picked for this frame's camera.
-                // Recorded with a typed view + kSnapLod so the replay walk
-                // re-runs the selection cast-free (Object3D is a virtual
-                // base — the replay cannot static_cast down).
-                const uint32_t kind = nodeKind(o);
-                if (kind & kNodeLod) {
-                    auto* lod = dynamic_cast<LOD*>(&o);
-                    if (lod->autoUpdate && vis) lod->update(camera);
-                    sn.lod   = lod;
-                    sn.flags = kSnapKindOther | kSnapLod;
-                    sceneSnapshot_.push_back(sn);
-                    // Auto-LOD exemption: every level object under a manual
-                    // LOD node is author-selected already; don't let auto-LOD
-                    // swap index buffers underneath that choice.
-                    for (Object3D* child : lod->children) manualLodLevelRoots_.insert(child);
-                    return;
-                }
-                // Line / LineSegments: never part of the traced/rasterized
-                // scene, always overlay.
-                // Collected before the Mesh dispatch so subclasses don't
-                // accidentally route through the Mesh path.
-                if ((kind & kNodeLine) && vis) {
-                    auto* line = dynamic_cast<Line*>(&o);
-                    auto geom = line->geometry();
-                    sn.flags = kSnapKindLine;
-                    sn.line  = line;
-                    sn.geom  = geom.get();
-                    sn.geomB = geom.get();
-                    if (geom) sn.geomId = geom->id;
-                    if (geom) sn.attrVer = geom->attributesVersion();
-                    const bool matHidden = line->material() && !line->material()->visible;
-                    if (matHidden) sn.flags |= kSnapMatHidden;
-                    if (!matHidden && geom && geom->hasAttribute("position")) {
-                        sn.flags |= kSnapHasPos;
-                        LineEntry le{};
-                        le.line       = line;
-                        le.points     = nullptr;
-                        le.isSegments = (kind & kNodeLineSegments) != 0u;
-                        le.isPoints   = false;
-                        std::memcpy(le.worldMatrix.data(),
-                                    line->matrixWorld->elements.data(), 64);
-                        builtLines.push_back(le);
-                    }
-                    sceneSnapshot_.push_back(sn);
-                    return;// Lines aren't Meshes; nothing more to do
-                }
-                // Points (point clouds) — never part of the traced/rasterized
-                // scene, always rasterise as POINT_LIST in the overlay pass.
-                // Shares the same geometry cache as Line via the
-                // BufferGeometry* key.
-                if ((kind & kNodePoints) && vis) {
-                    auto* pts = dynamic_cast<Points*>(&o);
-                    auto geom = pts->geometry();
-                    sn.flags = kSnapKindPoints;
-                    sn.pts   = pts;
-                    sn.geom  = geom.get();
-                    sn.geomB = geom.get();
-                    if (geom) sn.geomId = geom->id;
-                    if (geom) sn.attrVer = geom->attributesVersion();
-                    const bool matHidden = pts->material() && !pts->material()->visible;
-                    if (matHidden) sn.flags |= kSnapMatHidden;
-                    if (!matHidden && geom && geom->hasAttribute("position")) {
-                        sn.flags |= kSnapHasPos;
-                        LineEntry le{};
-                        le.line       = nullptr;
-                        le.points     = pts;
-                        le.isSegments = false;
-                        le.isPoints   = true;
-                        std::memcpy(le.worldMatrix.data(),
-                                    pts->matrixWorld->elements.data(), 64);
-                        builtLines.push_back(le);
-                    }
-                    sceneSnapshot_.push_back(sn);
-                    return;
-                }
-                auto* m = (kind & kNodeMesh) ? dynamic_cast<Mesh*>(&o) : nullptr;
-                // Hidden: kind Other, pointer identity only, unless it has
-                // entries while hidden (see entriesWhileHidden above).
-                if (!m || (!vis && !entriesWhileHidden(*m, underLod))) {
-                    sceneSnapshot_.push_back(sn);// kind Other: pointer identity only
-                    return;
-                }
-                // Hybrid overlay (raster-only) classification. Wireframe-
-                // flagged materials and overlay-layer membership both route
-                // the mesh to the post-TAA raster overlay pass and exclude
-                // it from the traced/rasterized scene (TLAS, raster G-buffer,
-                // emissive NEE). The scene render can't see/shadow overlay
-                // meshes — they're pure debug visuals.
-                const MaterialWithWireframe* wf = nullptr;
-                if (auto mat = m->material(); mat && (materialKind(*mat) & kMatWireframe)) {
-                    wf = dynamic_cast<MaterialWithWireframe*>(mat.get());
-                }
-                auto* inst = (kind & kNodeInstanced) ? dynamic_cast<InstancedMesh*>(m) : nullptr;
-                sn.mesh      = m;
-                sn.inst      = inst;
-                sn.geom      = m->geometry().get();
-                sn.geomB     = m->geometry().get();
-                sn.mat       = m->material().get();
-                sn.geomId    = sn.geomB ? sn.geomB->id : 0u;
-                sn.matId     = sn.mat ? sn.mat->id : 0u;
-                sn.wf        = wf;
-                sn.basic     = sn.mat && (materialKind(*sn.mat) & kMatBasic)
-                                       ? dynamic_cast<const MeshBasicMaterial*>(sn.mat)
-                                       : nullptr;
-                sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
-                sn.flags     = snapMeshFlags(*m, wf);
-                // material()->visible == false: record the full mesh node (so a
-                // re-show is caught by the replay walk) but build no entries, so
-                // the TLAS / raster G-buffer / overlay / emissive NEE never see it.
-                // Unless it has entries while hidden (entriesWhileHidden):
-                // hidden either way, it has them, hidden (MeshEntry::hidden).
-                // [[#mat-visible]]
-                const bool matHidden = m->material() && !m->material()->visible;
-                if (matHidden) sn.flags |= kSnapMatHidden;
-                if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
-                sceneSnapshot_.push_back(sn);
-                const size_t snIdx = sceneSnapshot_.size() - 1;
-                const bool hidden = !vis || matHidden;
-                if (hidden && !entriesWhileHidden(*m, underLod)) return;
-                // SplatClouds are composited by the compute tile rasterizer
-                // (SplatPass), not by the G-buffer. The unit quad they carry is
-                // a GL-backend implementation detail — it has no normals and
-                // describes no surface — so it is recorded in the snapshot (an
-                // add/remove still invalidates the scene) and then dropped
-                // before any entry, BLAS or TLAS instance is built from it.
-                // The missing "normal" attribute would exclude it two lines
-                // below anyway; saying so out loud is the difference between an
-                // invariant and a coincidence.
-                if (kind & kNodeSplat) return;
-                // A threepp::Sky is the environment, not a mesh. Its dome is a
-                // 1000 m box carrying a ShaderMaterial no deferred path shades;
-                // as a mesh it sealed the scene in a dark room — the box's
-                // inside on every pixel, every sun and GI ray stopped by it.
-                // Noted for the env refresh (refreshEnvTextureFromScene bakes
-                // it, vulkan/SkyBake) and dropped here, as a SplatCloud is.
-                if (kind & kNodeSky) {
-                    if (!hidden) skySeen_ = dynamic_cast<Sky*>(m);// a resident hidden one gets this far
-                    return;
-                }
-                auto geom = m->geometry();
-                if (!geom || !geom->hasAttribute("position")) return;
-                if (!geom->hasAttribute("normal")) return;
-                // Particle billboard meshes are excluded from the traced/
-                // rasterized scene exactly like overlays (kSnapParticle folds
-                // into isOverlay so every
-                // `if (en.isOverlay) continue;` guard applies) but carry their
-                // own isParticle flag so the billboard pass claims them and the
-                // overlay-mesh loop skips them.
-                const bool isParticle = (sn.flags & kSnapParticle) != 0u;
-                const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay | kSnapParticle | kSnapUiBlend)) != 0u;
-                // Sensor-only geometry (kSensorOnlyLayer): still a full scene
-                // entry — BLAS, descs, TLAS instance — because the lidar reads
-                // those tables. Only the raster views it reaches and the ray
-                // masks that include it differ.
-                const bool sensorOnly = (sn.flags & kSnapSensorOnly) != 0u;
-                // One-shot type probes: an N-instance InstancedMesh pays them
-                // once (nodeKind), not N times — and on snapshot-match frames
-                // not at all (the cached entry flags are reused). Consumed by
-                // raster pass loops, resolveBlasForEntry, TLAS refit, and
-                // dirty-detection.
-                const bool isSkinned   = (kind & kNodeSkinned) != 0u;
-                const bool isDisplaced = (kind & kNodeDisplaced) != 0u;
-                const bool isGrass     = (kind & kNodeGrass) != 0u;
-                // A ParticleField expands to exactly one entry whatever its
-                // capacity — the property the type exists to provide. It is
-                // classified here rather than dropped like SplatCloud because it
-                // must reach the entry list: it is the field's one entry that
-                // carries the world matrix, the entry index the FieldDesc
-                // publishes as instanceCustomIndex, and (from phase 1) the one
-                // indirect draw. Its Mesh geometry is a zero-area placeholder
-                // (see ParticleField.cpp), so the machinery below builds it a
-                // harmless one-triangle BLAS and one desc slot apiece, and the
-                // field draws no pixels until a representation is switched on.
-                ParticleField* particleField = (kind & kNodeField) ? dynamic_cast<ParticleField*>(m) : nullptr;
-                const bool isParticleField = (particleField != nullptr);
-                // Their passes read no MeshEntry::hidden: hidden, they have no
-                // entries, as before.
-                if (hidden && (isOverlay || isParticleField)) return;
-                const bool isMorphed   = isMorphedMesh(*m);
-                // Tet-skinned PhysX soft body — detected via the material flag set by
-                // SoftBody::enableGpuSkinning() (which also carries the per-frame tet
-                // texture and the static tetIndex/tetWeight/tetRestInv* attributes).
-                // Mutually exclusive with the other deformers.
-                const bool isTet = !isSkinned && !isDisplaced && !isGrass && !isMorphed &&
-                                   m->material() && m->material()->tetSkinning &&
-                                   m->material()->tetTexture != nullptr;
-                // Zero-copy vertex interop (enableVertexInterop). One blasCache
-                // probe per MESH, not per instance — the same budget the type
-                // probes above spend, and for the same payoff: the two
-                // CPU-bounds culls read a bool instead of hashing per entry.
-                bool isVertexInterop = false;
-                if (!isSkinned && !isDisplaced && !isGrass && !isMorphed && !isTet &&
-                    !isParticleField) {
-                    if (auto ig = m->geometry()) {
-                        auto ic = blasCache.find(ig.get());
-                        isVertexInterop = (ic != blasCache.end() && ic->second->interop);
-                    }
-                }
-                // Auto-LOD selection caches — once per Mesh, shared by every
-                // instance entry (see the MeshEntry field doc). manualLodLevelRoots_
-                // is complete for this mesh's ancestors: traverseVisible is
-                // pre-order, so an enclosing LOD node registered its level
-                // objects before we got here.
-                bool lodExempt = !m->autoLod;// per-object opt-out (self-managed LOD, e.g. terrain tiles)
-                for (Object3D* p = m->parent; !lodExempt && p; p = p->parent) {
-                    if (manualLodLevelRoots_.count(p)) lodExempt = true;
-                }
-                const MaterialWithEmissive* lodEmissive = nullptr;
-                if (auto mat = m->material(); mat && (materialKind(*mat) & kMatEmissive)) {
-                    lodEmissive = dynamic_cast<MaterialWithEmissive*>(mat.get());
-                }
-                if (!geom->boundingBox) geom->computeBoundingBox();
-                Vector3 lodCenter;
-                float lodRadius = 0.f;
-                if (geom->boundingBox) {
-                    lodCenter = geom->boundingBox->getCenter();
-                    lodRadius = geom->boundingBox->getSize().length() * 0.5f;
-                }
-                // First-person viewmodel probe: is this mesh parented under a
-                // Camera? Such geometry sits at the eye and must not occlude
-                // (see MeshEntry::camAttached / kRayMaskNoShadow). One ancestor
-                // walk per Mesh per full expansion.
-                bool camAttached = false;
-                for (auto* p = m->parent; p; p = p->parent) {
-                    if (nodeKind(*p) & kNodeCamera) {
-                        camAttached = true;
-                        break;
-                    }
-                }
-                auto setLodCaches = [&](MeshEntry& e) {
-                    e.lodExemptStatic = lodExempt;
-                    e.lodEmissive       = lodEmissive;
-                    e.lodGeomKey        = geom.get();
-                    e.lodCenter[0]      = lodCenter.x;
-                    e.lodCenter[1]      = lodCenter.y;
-                    e.lodCenter[2]      = lodCenter.z;
-                    e.lodRadius         = lodRadius;
-                };
-                // Per-mesh span over the entries pushed below. Caches the
-                // matrix-change-detection inputs and the object-space bounds
-                // so the per-frame loops can gate whole spans (see EntrySpan).
-                EntrySpan sp{};
-                sp.mesh  = m;
-                sp.first = static_cast<uint32_t>(built.size());
-                sp.meshId = m->id;
-                sp.hidden = hidden;
-                // Expansion frames hand every span fresh matrices; leaving the
-                // flag set keeps the motion-matrix build computing real deltas
-                // (vs the remapped prev worlds) on rebuild frames — a spawn
-                // burst must not blank the movers' motion vectors for a frame.
-                sp.movedThisFrame = true;
-                sp.meshWorld = {};
-                std::memcpy(sp.meshWorld.data(), m->matrixWorld->elements.data(), 64);
-                sp.localRadius = lodRadius;
-                if (geom->boundingBox) {
-                    const Vector3 half = geom->boundingBox->getSize() * 0.5f;
-                    sp.localCenter[0] = lodCenter.x;
-                    sp.localCenter[1] = lodCenter.y;
-                    sp.localCenter[2] = lodCenter.z;
-                    sp.localHalf[0]   = half.x;
-                    sp.localHalf[1]   = half.y;
-                    sp.localHalf[2]   = half.z;
-                    sp.localBoundsValid = true;
-                }
-                bool deferRows = false;
-                if (inst && inst->count() > 0) {
-                    sp.inst           = inst;
-                    sp.instMatVersion = inst->instanceMatrix()->version;
-                    deferRows = lazyRows && hadEntries(*m);
-                    // Read the instance matrices straight off the attribute
-                    // rather than through getMatrixAt. The loop stops at
-                    // count(), and setCount() clamps count() to the buffer
-                    // capacity that getMatrixAt range-checks against, so that
-                    // check can only ever pass here; the assert keeps it in
-                    // debug builds in case the invariant is ever broken
-                    // upstream. Hoisting *m->matrixWorld likewise pulls a
-                    // shared_ptr dereference out of the per-instance loop.
-                    const auto& instArr = inst->instanceMatrix()->array();
-                    THREEPP_ASSERT(instArr.size() >= inst->count() * 16u);
-                    const Matrix4& meshWorld = *m->matrixWorld;
-                    Matrix4 instMat;
-                    Matrix4 world;
-                    const size_t jEnd = deferRows ? size_t(1) : inst->count();
-                    for (size_t j = 0; j < jEnd; ++j) {
-                        std::memcpy(instMat.elements.data(), instArr.data() + j * 16u, 64);
-                        world.multiplyMatrices(meshWorld, instMat);
-                        MeshEntry e{};
-                        e.mesh = m;
-                        e.instanceIndex = static_cast<uint32_t>(j);
-                        e.isOverlay    = isOverlay;
-                        e.isParticle   = isParticle;
-                        e.isSkinned    = isSkinned;
-                        e.isDisplaced  = isDisplaced;
-                        e.isGrass      = isGrass;
-                        e.isMorphed    = isMorphed;
-                        e.isTet        = isTet;
-                        e.isVertexInterop = isVertexInterop;
-                        e.isInstanced  = true;
-                        e.camAttached  = camAttached;
-                        e.sensorOnly   = sensorOnly;
-                        e.hidden       = hidden;
-                        setLodCaches(e);
-                        std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
-                        built.push_back(e);
-                    }
-                } else {
-                    MeshEntry e{};
-                    e.mesh = m;
-                    e.instanceIndex = 0u;
-                    e.isOverlay    = isOverlay;
-                    e.isParticle   = isParticle;
-                    e.isSkinned    = isSkinned;
-                    e.isDisplaced  = isDisplaced;
-                    e.isGrass      = isGrass;
-                    e.isMorphed    = isMorphed;
-                    e.isTet        = isTet;
-                    e.isVertexInterop = isVertexInterop;
-                    e.isParticleField = isParticleField;
-                    e.camAttached  = camAttached;
-                    e.sensorOnly   = sensorOnly;
-                    e.hidden       = hidden;
-                    setLodCaches(e);
-                    std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
-                    built.push_back(e);
-                }
-                sp.count = static_cast<uint32_t>(built.size()) - sp.first;
-                if (deferRows) {
-                    sp.count = static_cast<uint32_t>(inst->count());
-                    sp.rowsDeferred = true;
-                    anyRowsDeferred = true;
-                }
-                if (isParticleField) {
-                    // The placeholder geometry's bounds describe a point at the
-                    // field's origin and say nothing about where the particles
-                    // are, so publish "no bounds" rather than a wrong box. The
-                    // frustum cull default-includes the span on the same flag.
-                    sp.localBoundsValid = false;
-                    sp.localRadius      = 0.f;
-                    sp.aabbValid        = false;
-                    builtFields.emplace_back(particleField, sp.first);
-                }
-                // A visibility flip of this mesh is applied in place by the
-                // replay walk (setSpanHidden); overlays and fields re-expand.
-                if (!isOverlay && !isParticleField) {
-                    sceneSnapshot_[snIdx].spanIndex = static_cast<int32_t>(builtSpans.size());
-                }
-                builtSpans.push_back(sp);
-                // Room to grow (VulkanCoreSlots.cpp): an InstancedMesh whose
-                // count can rise is laid out with free slots after it, so a
-                // setCount is a slot edit in place and not a move.
-                if (!slotsDisabled() && !lazyRows && !isOverlay && !isParticle) {
-                    const uint32_t slack = slotSlackFor(sp, sp.count);
-                    if (slack > 0u) {
-                        const uint32_t first = static_cast<uint32_t>(built.size());
-                        built.resize(built.size() + slack, slotFreeEntry());
-                        builtSpans.push_back(slotFreeSpan(first, slack, 0u));
-                    }
-                }
+            w.lazyRows = sceneBuilt_ && !slotsDisabled();
+            bool& lazyRows = w.lazyRows;
+            bool& anyRowsDeferred = w.anyRowsDeferred;
+            const auto recordNode = [&](Object3D& o, bool vis, bool underLod) {
+                recordSceneNode(w, o, vis, underLod, camera);
             };
             // Reuse. A mesh node the last walk recorded, under the parent chain
             // it had, that passes the replay walk's unchanged-node test, gives
@@ -1329,6 +1556,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 builtSpans.push_back(sp);
                 return true;
             };
+            // Each node's subtree end (SnapNode::subtreeEnd): the walk's stack of
+            // the nodes whose subtrees are open.
+            std::vector<size_t> snapOpen;
+            const auto postRecord = [&](Object3D&) {
+                sceneSnapshot_[snapOpen.back()].subtreeEnd = static_cast<uint32_t>(sceneSnapshot_.size());
+                snapOpen.pop_back();
+            };
             auto visitRecord = [&](Object3D& o, bool vis, bool underLod) -> bool {
                 bool reused = false;
                 if (reuseNodes) {
@@ -1342,13 +1576,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     walkChain.push_back({&o, stable});
                 }
                 if (!reused) recordNode(o, vis, underLod);// pushes exactly one SnapNode
+                snapOpen.push_back(sceneSnapshot_.size() - 1);
                 SnapNode& rec = sceneSnapshot_.back();
                 if (!vis) rec.flags |= kSnapHidden;
                 if (underLod) rec.flags |= kSnapUnderLod;
                 if (o.resident) rec.flags |= kSnapResident;
                 return (rec.flags & kSnapLod) != 0u;
             };
-            walkSceneGraph(scene, true, false, visitRecord);
+            walkSceneGraph(scene, true, false, visitRecord, postRecord);
             profExpand.stop();
             if (reuseNodes && walkCheck) {
                 // The same walk without reuse, compared node for node.
@@ -1369,7 +1604,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 manualLodLevelRoots_.clear();
                 anyRowsDeferred = false;
                 reuseNodes = false;
-                walkSceneGraph(scene, true, false, visitRecord);
+                walkSceneGraph(scene, true, false, visitRecord, postRecord);
                 uint64_t bad = 0;
                 const auto mismatch = [&](const char* what, size_t k) {
                     if (bad++ < 8) std::fprintf(stderr, "[VulkanRenderer] walk reuse differs: %s %zu\n", what, k);
@@ -1452,7 +1687,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 sceneSnapshot_.clear();
                 skySeen_ = nullptr;
                 manualLodLevelRoots_.clear();
-                walkSceneGraph(scene, true, false, visitRecord);
+                walkSceneGraph(scene, true, false, visitRecord, postRecord);
             }
             // The same entries as before with some hidden or shown is no
             // structural change (the fingerprints match), but the TLAS masks,
@@ -1470,8 +1705,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             lastVisibleEntries_ = std::move(built);
             lastVisibleLines_   = std::move(builtLines);
             entrySpans_         = std::move(builtSpans);
+            ++spansVersion_;
             particleFields_     = std::move(builtFields);
             }
+            }// !deltaApplied
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             ++lodLevelVersion_;// the entries are laid out anew
             // ...and re-bake every ParticleField surface height map (F5). The

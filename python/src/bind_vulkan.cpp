@@ -1901,6 +1901,7 @@ namespace threepp_py {
                                            d["swap_edits"]          = s.swapEdits;
                                            d["slot_pool_growths"]   = s.slotPoolGrowths;
                                            d["slot_capacity"]       = s.slotCapacity;
+                                           d["slot_deltas"]         = s.slotDeltas;
                                            return d;
                                        },
                                        "Scene build counters since the renderer was made: TLAS full builds and "
@@ -1921,8 +1922,10 @@ namespace threepp_py {
                                        "landed while still hidden), swap_edits (a geometry, material or "
                                        "texture swapped on a mesh, taken by a slot edit), "
                                        "slot_pool_growths (slot edits that outgrew the slot pool and grew "
-                                       "it in place, no device wait) and slot_capacity (the entries the "
-                                       "pool holds now, see reserve_entry_slots).")
+                                       "it in place, no device wait), slot_capacity (the entries the "
+                                       "pool holds now, see reserve_entry_slots) and slot_deltas (slot edits "
+                                       "taken edit-proportionally: only the nodes and spans that changed "
+                                       "found and placed).")
                 .def("reserve_entry_slots",
                      [](PyVulkanRenderer& r, uint32_t entries) { r.native().reserveEntrySlots(entries); },
                      py::arg("entries"),

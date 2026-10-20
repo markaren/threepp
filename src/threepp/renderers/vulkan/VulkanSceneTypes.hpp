@@ -240,6 +240,11 @@ namespace threepp::vulkan::impl {
         // flag bits are still valid WITHOUT re-doing the string-keyed
         // hasAttribute lookups (2/mesh/frame — ~1 ms on Bistro).
         unsigned int attrVer = 0;
+        // One past the last node of this node's subtree, in the snapshot's
+        // pre-order: the edit-proportional walk (diffSceneWalk) finds a child
+        // among its parent's old children, and skips a removed subtree, by
+        // these ranges. 0 = not recorded (a snapshot the diff walk declines).
+        uint32_t subtreeEnd = 0;
     };
 
     // One contiguous run of entries sharing a single source Mesh: an

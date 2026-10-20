@@ -3009,11 +3009,25 @@ namespace threepp {
     }
 
     bool VulkanRenderer::admitted(const Object3D& mesh) const {
-        // One span per mesh; spans are a few per thousand entries, so a scan
-        // is cheaper than a map kept in step with every slot edit.
-        for (const auto& sp : core()->entrySpans_)
-            if (!sp.isFree && sp.meshId == mesh.id) return !sp.admitPending;
-        return false;
+        // One span per mesh. A streamer asks about every pending mesh every
+        // frame (the pine forest: a hundred or more against ~13k spans), so the
+        // spans are indexed by mesh id, the index rebuilt only after the span
+        // list was laid out anew; admitPending is read live (the landings
+        // between do not move a span).
+        auto* c = core();
+        if (c->admitIndexVersion_ != c->spansVersion_) {
+            c->admitIndex_.clear();
+            c->admitIndex_.reserve(c->entrySpans_.size());
+            for (uint32_t s = 0; s < c->entrySpans_.size(); ++s) {
+                const auto& sp = c->entrySpans_[s];
+                if (!sp.isFree) c->admitIndex_.emplace(sp.meshId, s);
+            }
+            c->admitIndexVersion_ = c->spansVersion_;
+        }
+        const auto it = c->admitIndex_.find(mesh.id);
+        if (it == c->admitIndex_.end() || it->second >= c->entrySpans_.size()) return false;
+        const auto& sp = c->entrySpans_[it->second];
+        return !sp.isFree && sp.meshId == mesh.id && !sp.admitPending;
     }
 
     void VulkanRenderer::reserveEntrySlots(uint32_t entries) {

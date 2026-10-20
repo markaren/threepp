@@ -1141,6 +1141,20 @@ int main() {
                 check("removing everything and adding back: no structural rebuild",
                       s2.structuralRebuilds == s0.structuralRebuilds);
         }
+        {
+            // The edit-proportional path (VulkanCoreScene.cpp, diffSceneWalk and
+            // trySlotDelta) takes the adds, removes, swaps and first shows;
+            // THREEPP_VULKAN_NO_DELTA=1 is the lane without it.
+            const char* noDeltaEnv = std::getenv("THREEPP_VULKAN_NO_DELTA");
+            const bool noDelta = noDeltaEnv && *noDeltaEnv == '1';
+            const auto t = renderer.tlasStats();
+            std::printf("\nslot edits %llu, of them taken edit-proportionally %llu (%llu moving no span)\n",
+                        static_cast<unsigned long long>(t.slotEdits), static_cast<unsigned long long>(t.slotDeltas),
+                        static_cast<unsigned long long>(t.slotDeltasInPlace));
+            if (!slotsOff && !noDelta)
+                check("the edit-proportional path took the slot edits it can", t.slotDeltas * 2u > t.slotEdits);
+            if (noDelta) check("THREEPP_VULKAN_NO_DELTA=1: no edit-proportional edit", t.slotDeltas == 0u);
+        }
         if (vulkan::validationActive()) {
             check("no validation errors", vulkan::validationErrorCount() == 0u);
         }

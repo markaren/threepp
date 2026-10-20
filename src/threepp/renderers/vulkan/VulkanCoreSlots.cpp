@@ -137,6 +137,165 @@ uint32_t VulkanRenderer::Impl::slotMaterialAssetIdx(const Material* mat) {
             return it->second.second;
         }
 
+namespace {
+
+    VkCullModeFlags slotCullOf(const threepp::vulkan_pt::MaterialDesc& md) {
+        switch (md.sideMode) {
+            case 0: return VK_CULL_MODE_BACK_BIT;
+            case 1: return VK_CULL_MODE_FRONT_BIT;
+            default: return VK_CULL_MODE_NONE;
+        }
+    }
+
+}// namespace
+
+const VulkanRenderer::Impl::BlasRecord* VulkanRenderer::Impl::slotRecordOf(const MeshEntry& e) {
+            // (A field's state only for the geometry it draws now: one left from
+            // a swapped geometry waits for its admission.)
+            if (e.isGrass) {
+                const auto it = grassStates.find(static_cast<GrassMesh*>(e.mesh));
+                if (it == grassStates.end() || it->second->liveCheck.lock() != e.mesh->geometry()) return nullptr;
+                return it->second->blas.get();
+            }
+            const auto g = e.mesh->geometry();
+            const auto it = g ? blasCache.find(g.get()) : blasCache.end();
+            return it != blasCache.end() ? it->second.get() : nullptr;
+        }
+
+VulkanRenderer::Impl::MeshFingerprint VulkanRenderer::Impl::slotFingerprintOf(Mesh& m) {
+            const auto geom = m.geometry();
+            const auto mat = m.material();
+            MeshFingerprint fp{};
+            fp.mesh = &m;
+            fp.geom = geom.get();
+            fp.mat = mat.get();
+            fp.meshId = m.id;
+            fp.geomId = geom->id;
+            fp.matId = mat ? mat->id : 0u;
+            fp.matVersion = mat ? mat->version() : 0u;
+            fp.geomVersion = geomVersionOf(*geom);
+            fp.matTyped = mat.get();
+            fp.geomTyped = geom.get();
+            fp.attrVersion = geom->attributesVersion();
+            fp.posAttr = geom->getAttribute("position");
+            fp.normAttr = geom->getAttribute("normal");
+            fp.uvAttr = geom->getAttribute("uv");
+            fp.idxAttr = geom->getIndex();
+            fp.colAttr = geom->getAttribute("color");
+            fp.albedoTex = albedoTexOf(m);
+            fp.roughnessTex = roughnessTexOf(m);
+            fp.metalnessTex = metalnessTexOf(m);
+            fp.normalTex = normalTexOf(m);
+            fp.transmissionTex = transmissionTexOf(m);
+            fp.clearcoatTex = clearcoatTexOf(m);
+            fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(m);
+            fp.emissiveTex = emissiveTexOf(m);
+            fp.occlusionTex = occlusionTexOf(m);
+            const MaterialDesc pd = materialFromMesh(m);
+            fp.pbr = {pd.albedo[0], pd.albedo[1], pd.albedo[2],
+                      pd.roughness, pd.metalness,
+                      pd.emissive[0], pd.emissive[1], pd.emissive[2],
+                      pd.emissiveIntensity,
+                      pd.normalScale[0], pd.normalScale[1],
+                      pd.transmission, pd.ior,
+                      pd.clearcoat, pd.clearcoatRoughness};
+            fp.overlay = false;
+            return fp;
+        }
+
+void VulkanRenderer::Impl::slotTombRows(MeshEntry& e, MeshFingerprint& fp) {
+            Mesh& tomb = slotTombstone();
+            e = slotFreeEntry();
+            fp = MeshFingerprint{};
+            const auto g = tomb.geometry();
+            const auto mt = tomb.material();
+            fp.mesh = &tomb;
+            fp.geom = g.get();
+            fp.mat = mt.get();
+            fp.meshId = tomb.id;
+            fp.geomId = g->id;
+            fp.matId = mt->id;
+            fp.instanceIndex = 0u;
+            fp.matVersion = mt->version();
+            fp.geomVersion = geomVersionOf(*g);
+            std::memcpy(fp.matrix.data(), kIdentity16, 64);
+            fp.matTyped = mt.get();
+            fp.geomTyped = g.get();
+            fp.attrVersion = g->attributesVersion();
+            fp.posAttr = g->getAttribute("position");
+            fp.normAttr = g->getAttribute("normal");
+        }
+
+void VulkanRenderer::Impl::slotGrowRows(size_t oldSize, size_t newSize, const MeshEntry& tombEntry,
+                                        const MeshFingerprint& tombFp) {
+            std::array<float, 16> identity{};
+            std::memcpy(identity.data(), kIdentity16, 64);
+            auto& entries = lastVisibleEntries_;
+            if (newSize > oldSize) {
+                entries.resize(newSize, tombEntry);
+                prevSceneFingerprint.resize(newSize, tombFp);
+                geomDescsCached_.resize(newSize);
+                matDescsCached_.resize(newSize);
+                prevWorldByEntry_.resize(newSize, identity);
+                prevWorldValidByEntry_.resize(newSize, 1u);
+                motionScratch_.resize(newSize * 16u);
+                for (size_t i = oldSize; i < newSize; ++i) std::memcpy(&motionScratch_[i * 16u], kIdentity16, 64);
+            }
+            // The arrays below are not always entries-sized (an empty sticky
+            // after a reset, ids before their first assignment): grow them to
+            // the list, never shrink.
+            if (entryStableIds_.size() < newSize) entryStableIds_.resize(newSize, 0u);
+            if (meshMovedSticky_.size() < newSize) meshMovedSticky_.resize(newSize, 0u);
+            if (entryLodFade_.size() < newSize) entryLodFade_.resize(newSize, 0u);
+            if (lastVisibleCullMode_.size() < newSize) lastVisibleCullMode_.resize(newSize, VK_CULL_MODE_BACK_BIT);
+            if (meshMovedBits_.size() < (newSize + 31u) / 32u) meshMovedBits_.resize((newSize + 31u) / 32u, 0u);
+        }
+
+void VulkanRenderer::Impl::slotFillRow(size_t i, const MeshEntry& be, const MeshFingerprint& fp0,
+                                       const BlasRecord* rec, const GeometryDesc& gd, const MaterialDesc& md0,
+                                       uint32_t stableId) {
+            lastVisibleEntries_[i] = be;
+            MeshFingerprint& fp = prevSceneFingerprint[i];
+            fp = fp0;
+            fp.instanceIndex = be.instanceIndex;
+            fp.matrix = be.worldMatrix;
+            if (rec) {
+                geomDescsCached_[i] = gd;
+                MaterialDesc md = md0;
+                applyInstanceColor(md, be);
+                matDescsCached_[i] = md;
+                lastVisibleCullMode_[i] = slotCullOf(md);
+            } else {
+                geomDescsCached_[i] = GeometryDesc{};
+                matDescsCached_[i] = MaterialDesc{};
+                lastVisibleCullMode_[i] = VK_CULL_MODE_BACK_BIT;
+            }
+            entryStableIds_[i] = stableId;
+            // Prev = current: a new entry has no motion (seedMotionState's rule
+            // for the structural rebuild's new entries).
+            prevWorldByEntry_[i] = be.worldMatrix;
+            prevWorldValidByEntry_[i] = 1u;
+            std::memcpy(&motionScratch_[i * 16u], kIdentity16, 64);
+            meshMovedSticky_[i] = 0u;
+            entryLodFade_[i] = 0u;
+        }
+
+void VulkanRenderer::Impl::slotTombRow(size_t i, const MeshEntry& tombEntry, const MeshFingerprint& tombFp) {
+            std::array<float, 16> identity{};
+            std::memcpy(identity.data(), kIdentity16, 64);
+            lastVisibleEntries_[i] = tombEntry;
+            prevSceneFingerprint[i] = tombFp;
+            geomDescsCached_[i] = GeometryDesc{};
+            matDescsCached_[i] = MaterialDesc{};
+            entryStableIds_[i] = 0u;
+            prevWorldByEntry_[i] = identity;
+            prevWorldValidByEntry_[i] = 1u;
+            std::memcpy(&motionScratch_[i * 16u], kIdentity16, 64);
+            meshMovedSticky_[i] = 0u;
+            entryLodFade_[i] = 0u;
+            lastVisibleCullMode_[i] = VK_CULL_MODE_BACK_BIT;
+        }
+
 bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vector<EntrySpan>& builtSpans,
                                        const std::vector<std::pair<ParticleField*, uint32_t>>& builtFields) {
             THREEPP_CPUPROF("scene.3c_slotEdit");
@@ -168,7 +327,6 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // Only the meshes this edit removes refer to it, and the retire
             // queue keeps it for the frames in flight.
             pruneFreedAssets();
-            Mesh& tomb = slotTombstone();
             const bool rq = ctx->rayQuerySupported();
 
             const auto texturesChanged = [&](const Mesh& m, const MeshFingerprint& f) {
@@ -498,16 +656,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // A span's record: its geometry's in blasCache, or a grass field's own.
             // (A field's state only for the geometry it draws now: one left from
             // a swapped geometry waits for its admission.)
-            const auto recordOf = [&](const MeshEntry& e) -> const BlasRecord* {
-                if (e.isGrass) {
-                    const auto it = grassStates.find(static_cast<GrassMesh*>(e.mesh));
-                    if (it == grassStates.end() || it->second->liveCheck.lock() != e.mesh->geometry()) return nullptr;
-                    return it->second->blas.get();
-                }
-                const auto g = e.mesh->geometry();
-                const auto it = g ? blasCache.find(g.get()) : blasCache.end();
-                return it != blasCache.end() ? it->second.get() : nullptr;
-            };
+            const auto recordOf = [&](const MeshEntry& e) { return slotRecordOf(e); };
             if (!syncAdmission()) {
                 for (const RowFill& fl : fills) {
                     const MeshEntry& e0 = built[builtSpans[fl.builtSpan].first];
@@ -538,41 +687,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     r.md.materialAssetIdx = slotMaterialAssetIdx(mat.get());
                 }
                 // The fingerprint the full path's slow branch derives.
-                MeshFingerprint& fp = r.fp;
-                fp.mesh = &m;
-                fp.geom = geom.get();
-                fp.mat = mat.get();
-                fp.meshId = m.id;
-                fp.geomId = geom->id;
-                fp.matId = mat ? mat->id : 0u;
-                fp.matVersion = mat ? mat->version() : 0u;
-                fp.geomVersion = geomVersionOf(*geom);
-                fp.matTyped = mat.get();
-                fp.geomTyped = geom.get();
-                fp.attrVersion = geom->attributesVersion();
-                fp.posAttr = geom->getAttribute("position");
-                fp.normAttr = geom->getAttribute("normal");
-                fp.uvAttr = geom->getAttribute("uv");
-                fp.idxAttr = geom->getIndex();
-                fp.colAttr = geom->getAttribute("color");
-                fp.albedoTex = albedoTexOf(m);
-                fp.roughnessTex = roughnessTexOf(m);
-                fp.metalnessTex = metalnessTexOf(m);
-                fp.normalTex = normalTexOf(m);
-                fp.transmissionTex = transmissionTexOf(m);
-                fp.clearcoatTex = clearcoatTexOf(m);
-                fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(m);
-                fp.emissiveTex = emissiveTexOf(m);
-                fp.occlusionTex = occlusionTexOf(m);
-                const MaterialDesc pd = materialFromMesh(m);
-                fp.pbr = {pd.albedo[0], pd.albedo[1], pd.albedo[2],
-                          pd.roughness, pd.metalness,
-                          pd.emissive[0], pd.emissive[1], pd.emissive[2],
-                          pd.emissiveIntensity,
-                          pd.normalScale[0], pd.normalScale[1],
-                          pd.transmission, pd.ior,
-                          pd.clearcoat, pd.clearcoatRoughness};
-                fp.overlay = false;
+                r.fp = slotFingerprintOf(m);
                 r.stableId = stableIdIfAssigned(m);
                 meshRows.emplace(&m, std::move(r));
             }
@@ -597,59 +712,13 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             THREEPP_CPUPROF_NAMED(seRows, "scene.S4_slotRows");
             // ── 4. The rows ────────────────────────────────────────────────────
             const uint32_t newSize = highWater;
-            const MeshEntry tombEntry = slotFreeEntry();
-            MeshFingerprint tombFp{};
-            {
-                const auto g = tomb.geometry();
-                const auto mt = tomb.material();
-                tombFp.mesh = &tomb;
-                tombFp.geom = g.get();
-                tombFp.mat = mt.get();
-                tombFp.meshId = tomb.id;
-                tombFp.geomId = g->id;
-                tombFp.matId = mt->id;
-                tombFp.instanceIndex = 0u;
-                tombFp.matVersion = mt->version();
-                tombFp.geomVersion = geomVersionOf(*g);
-                std::memcpy(tombFp.matrix.data(), kIdentity16, 64);
-                tombFp.matTyped = mt.get();
-                tombFp.geomTyped = g.get();
-                tombFp.attrVersion = g->attributesVersion();
-                tombFp.posAttr = g->getAttribute("position");
-                tombFp.normAttr = g->getAttribute("normal");
-            }
-            std::array<float, 16> identity{};
-            std::memcpy(identity.data(), kIdentity16, 64);
-
-            if (newSize > oldSize) {
-                entries.resize(newSize, tombEntry);
-                prevSceneFingerprint.resize(newSize, tombFp);
-                geomDescsCached_.resize(newSize);
-                matDescsCached_.resize(newSize);
-                prevWorldByEntry_.resize(newSize, identity);
-                prevWorldValidByEntry_.resize(newSize, 1u);
-                motionScratch_.resize(size_t(newSize) * 16u);
-                for (size_t i = oldSize; i < newSize; ++i) std::memcpy(&motionScratch_[i * 16u], kIdentity16, 64);
-            }
-            // The arrays below are not always entries-sized (an empty sticky
-            // after a reset, ids before their first assignment): grow them to
-            // the list, never shrink.
-            if (entryStableIds_.size() < newSize) entryStableIds_.resize(newSize, 0u);
-            if (meshMovedSticky_.size() < newSize) meshMovedSticky_.resize(newSize, 0u);
-            if (entryLodFade_.size() < newSize) entryLodFade_.resize(newSize, 0u);
-            if (lastVisibleCullMode_.size() < newSize) lastVisibleCullMode_.resize(newSize, VK_CULL_MODE_BACK_BIT);
-            if (meshMovedBits_.size() < (newSize + 31u) / 32u) meshMovedBits_.resize((newSize + 31u) / 32u, 0u);
+            MeshEntry tombEntry;
+            MeshFingerprint tombFp;
+            slotTombRows(tombEntry, tombFp);
+            slotGrowRows(oldSize, newSize, tombEntry, tombFp);
             const auto setMoved = [&](uint32_t first, uint32_t count) {
                 for (uint32_t i = first; i < first + count; ++i) meshMovedBits_[i >> 5] |= (1u << (i & 31u));
             };
-            const auto cullOf = [](const MaterialDesc& md) -> VkCullModeFlags {
-                switch (md.sideMode) {
-                    case 0: return VK_CULL_MODE_BACK_BIT;
-                    case 1: return VK_CULL_MODE_FRONT_BIT;
-                    default: return VK_CULL_MODE_NONE;
-                }
-            };
-
             // Copies first: their sources are tombstoned below, their
             // destinations are free space no fill or tombstone touches.
             for (const RowCopy& c : copies) {
@@ -697,49 +766,13 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                         std::memcpy(derived.worldMatrix.data(), world.elements.data(), 64);
                     }
                     const MeshEntry& be = instArr ? derived : built[size_t(fl.builtFirst) + j];
-                    entries[i] = be;
-                    MeshFingerprint& fp = prevSceneFingerprint[i];
-                    fp = r.fp;
-                    fp.instanceIndex = be.instanceIndex;
-                    fp.matrix = be.worldMatrix;
-                    if (r.rec) {
-                        geomDescsCached_[i] = gd;
-                        MaterialDesc md = r.md;
-                        applyInstanceColor(md, be);
-                        matDescsCached_[i] = md;
-                        lastVisibleCullMode_[i] = cullOf(md);
-                    } else {
-                        geomDescsCached_[i] = GeometryDesc{};
-                        matDescsCached_[i] = MaterialDesc{};
-                        lastVisibleCullMode_[i] = VK_CULL_MODE_BACK_BIT;
-                    }
-                    entryStableIds_[i] = r.stableId;
-                    // Prev = current: a new entry has no motion (seedMotionState's
-                    // rule for the structural rebuild's new entries).
-                    prevWorldByEntry_[i] = be.worldMatrix;
-                    prevWorldValidByEntry_[i] = 1u;
-                    std::memcpy(&motionScratch_[i * 16u], kIdentity16, 64);
-                    meshMovedSticky_[i] = 0u;
-                    entryLodFade_[i] = 0u;
+                    slotFillRow(i, be, r.fp, r.rec, gd, r.md, r.stableId);
                 }
                 markGeomDescsDirty(fl.dst, fl.count);
                 markMatDescsDirty(fl.dst, fl.count);
             }
             for (const RowRange& t : tombs) {
-                for (uint32_t j = 0; j < t.count; ++j) {
-                    const size_t i = size_t(t.first) + j;
-                    entries[i] = tombEntry;
-                    prevSceneFingerprint[i] = tombFp;
-                    geomDescsCached_[i] = GeometryDesc{};
-                    matDescsCached_[i] = MaterialDesc{};
-                    entryStableIds_[i] = 0u;
-                    prevWorldByEntry_[i] = identity;
-                    prevWorldValidByEntry_[i] = 1u;
-                    std::memcpy(&motionScratch_[i * 16u], kIdentity16, 64);
-                    meshMovedSticky_[i] = 0u;
-                    entryLodFade_[i] = 0u;
-                    lastVisibleCullMode_[i] = VK_CULL_MODE_BACK_BIT;
-                }
+                for (uint32_t j = 0; j < t.count; ++j) slotTombRow(size_t(t.first) + j, tombEntry, tombFp);
                 markGeomDescsDirty(t.first, t.count);
                 markMatDescsDirty(t.first, t.count);
             }
@@ -785,6 +818,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             }
 #endif
             entrySpans_ = std::move(sorted);
+            ++spansVersion_;
             // The fields at their spans' places, in the walk's order (the order
             // the rebuild gives them).
             if (!builtFields.empty()) {
@@ -835,6 +869,403 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             stableIdsPending_ = true;
             slotsEditedThisFrame_ = true;
             if (edited || !hiddenFlips.empty()) ++tlasStats_.slotEdits;
+            return true;
+        }
+
+bool VulkanRenderer::Impl::deltaDisabled() {
+            static const bool off = [] {
+                const char* e = std::getenv("THREEPP_VULKAN_NO_DELTA");
+                return e && e[0] == '1';
+            }();
+            return off;
+        }
+
+bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
+            THREEPP_CPUPROF("scene.3c_slotDelta");
+            if (slotsDisabled() || deltaDisabled() || !sceneBuilt_ || slotCapacity_ == 0u) return false;
+            static const bool logDeclines = [] {
+                const char* v = std::getenv("THREEPP_VULKAN_SLOTS_LOG");
+                return v && v[0] == '1';
+            }();
+            const auto decline = [&](const char* why) {
+                if (logDeclines) std::fprintf(stderr, "[VulkanRenderer] slot delta declined: %s\n", why);
+                return false;
+            };
+            auto& entries = lastVisibleEntries_;
+            const size_t oldSize = entries.size();
+            if (prevSceneFingerprint.size() != oldSize || geomDescsCached_.size() != oldSize ||
+                matDescsCached_.size() != oldSize || prevWorldByEntry_.size() != oldSize ||
+                prevWorldValidByEntry_.size() != oldSize || motionScratch_.size() != oldSize * 16u)
+                return decline("entry-indexed arrays out of step");
+            // What died since the last edit goes first (trySlotEdit's reason).
+            pruneFreedAssets();
+            const bool rq = ctx->rayQuerySupported();
+
+            THREEPP_CPUPROF_NAMED(dDecide, "scene.D1_deltaDecide");
+            // ── 1. Decide, before anything is edited ───────────────────────────
+            std::vector<uint8_t> removedMark(entrySpans_.size(), 0u);
+            for (const uint32_t r : d.removed) {
+                if (r >= entrySpans_.size() || entrySpans_[r].isFree || removedMark[r]) return decline("a removed span not live");
+                removedMark[r] = 1u;
+                // trySlotEdit's rule: a skinned, displaced, morphed or tet mesh's
+                // state owns what the retire queue does not model.
+                const MeshEntry& e0 = entries[entrySpans_[r].first];
+                if ((isDeformer(e0) && !e0.isGrass) || e0.isParticleField || e0.isVertexInterop)
+                    return decline("a deformer, ParticleField or interop mesh removed");
+            }
+            std::vector<std::pair<const BufferGeometry*, Mesh*>> toBuild;
+            std::unordered_set<const BufferGeometry*> shownNeeds;
+            std::vector<std::pair<GrassMesh*, bool>> newGrass;
+            for (const EntrySpan& bs : d.spans) {
+                if (bs.isFree || bs.count == 0u || bs.rowsDeferred) return decline("an empty or unexpanded new span");
+                const MeshEntry& be = d.built[bs.first];
+                Mesh& m = *bs.mesh;
+                if (be.isOverlay || be.isParticle || be.isParticleField || be.isVertexInterop ||
+                    (isDeformer(be) && !be.isGrass))
+                    return decline("a new overlay, particle, deformer or interop mesh");
+                const auto geomSp = m.geometry();
+                if (!geomSp) return decline("a new mesh without geometry");
+                if (be.isGrass) {
+                    if (!grassInputsValid(*geomSp)) return decline("a grass field without heightFrac");
+                    newGrass.emplace_back(static_cast<GrassMesh*>(&m), !bs.hidden);
+                    continue;
+                }
+                const BufferGeometry* gk = geomSp.get();
+                if (const auto rit = blasCache.find(gk); rit != blasCache.end()) {
+                    const BlasRecord& rec = *rit->second;
+                    const auto live = rec.liveCheck.lock();
+                    if (!live || live.get() != gk) return decline("a stale record at a new geometry's address");
+                    if (rec.interop || rec.vertex.handle == VK_NULL_HANDLE) return decline("an interop or empty record");
+                    if (rec.geomVersion != geomVersionOf(*gk)) return decline("a new mesh's geometry was edited");
+                    if (rec.packedMask != 0u && forceUnpackedGeoms_.count(gk) != 0u)
+                        return decline("a packed record marked for unpacking");
+                    if (rq && rec.as == VK_NULL_HANDLE) return decline("a record built for overlays only");
+                } else {
+                    if (std::none_of(toBuild.begin(), toBuild.end(), [&](const auto& p) { return p.first == gk; }))
+                        toBuild.emplace_back(gk, &m);
+                    if (!bs.hidden) shownNeeds.insert(gk);
+                }
+            }
+            // Hidden new content is admitted over the frames after (trySlotEdit).
+            std::unordered_set<const BufferGeometry*> deferredGeoms;
+            std::unordered_set<const Mesh*> deferredGrass;
+            if (!syncAdmission()) {
+                for (auto t = toBuild.begin(); t != toBuild.end();) {
+                    if (shownNeeds.count(t->first) == 0u) {
+                        deferredGeoms.insert(t->first);
+                        t = toBuild.erase(t);
+                    } else {
+                        ++t;
+                    }
+                }
+                for (const auto& [gm, shown] : newGrass) {
+                    if (shown) continue;
+                    const auto it = grassStates.find(gm);
+                    if (it == grassStates.end() || it->second->liveCheck.lock() != gm->geometry())
+                        deferredGrass.insert(gm);
+                }
+            }
+
+            dDecide.stop();
+            THREEPP_CPUPROF_NAMED(dPlace, "scene.D2_deltaPlace");
+            // ── 2. Place the new spans ─────────────────────────────────────────
+            // Into the free runs the frames in flight no longer read (best fit,
+            // carved off a run's back, as trySlotEdit does), else at the end.
+            // A span the edit removes is freed in place, parked for the frames
+            // in flight.
+            const uint64_t serial = frameSerial_;
+            const uint64_t parkUntil = serial + kFramesInFlight + 1u;
+            struct Run {
+                uint32_t span, first, count;
+            };
+            std::vector<Run> runs;
+            for (uint32_t s = 0; s < entrySpans_.size(); ++s) {
+                const EntrySpan& sp = entrySpans_[s];
+                if (sp.isFree && sp.parkedUntil <= serial && sp.count > 0u) runs.push_back({s, sp.first, sp.count});
+            }
+            struct Place {
+                uint32_t dst, slack;
+                int32_t run;// index into runs, -1: at the end
+            };
+            std::vector<Place> places(d.spans.size());
+            uint32_t highWater = static_cast<uint32_t>(oldSize);
+            for (size_t b = 0; b < d.spans.size(); ++b) {
+                const EntrySpan& bs = d.spans[b];
+                const uint32_t slack = slotSlackFor(bs, bs.count);
+                const uint32_t need = bs.count + slack;
+                int32_t best = -1;
+                for (int32_t k = 0; k < static_cast<int32_t>(runs.size()); ++k)
+                    if (runs[k].count >= need && (best < 0 || runs[k].count < runs[best].count)) best = k;
+                if (best >= 0) {
+                    runs[best].count -= need;
+                    places[b] = {runs[best].first + runs[best].count, slack, best};
+                } else {
+                    places[b] = {highWater, slack, -1};
+                    highWater += need;
+                }
+            }
+            if (highWater > slotCapacity_ || reservedSlots_ > slotCapacity_)
+                growSlotPool(std::max<uint32_t>({1024u, highWater > slotCapacity_ ? highWater + highWater / 2u : 0u,
+                                                 reservedSlots_, slotCapacity_}));
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                if (highWater > motionMatBufferCapacity[f] ||
+                    (highWater + 31u) / 32u > meshMovedBitsBufferCapacity[f])
+                    return decline("a motion buffer smaller than the pool");
+            }
+
+            dPlace.stop();
+            THREEPP_CPUPROF_NAMED(dAssets, "scene.D3_deltaAssets");
+            // ── 3. The new spans' records and maps (trySlotEdit's step 3) ──────
+            beginOneShotBatch();
+            for (const auto& [gk, mesh] : toBuild) {
+                const auto geomSp = mesh->geometry();
+                auto rec = buildBlasFor(*geomSp, /*allowPacked=*/true, /*updatable=*/false, nullptr,
+                                        VertexWriter::Host, /*traced=*/rq);
+                if (!rec) continue;// degenerate: default rows and no instance, as in a rebuild
+                rec->liveCheck = geomSp;
+                blasCache.emplace(gk, std::move(rec));
+            }
+            for (const auto& [gm, shown] : newGrass) {
+                if (deferredGrass.count(gm) == 0u) admitGrassState(*gm);
+                grassPlacedThisFrame_.push_back(gm);
+            }
+            std::vector<uint8_t> pending(d.spans.size(), 0u);
+            std::vector<Mesh*> admitNow;
+            for (size_t b = 0; b < d.spans.size(); ++b) {
+                Mesh* m = d.spans[b].mesh;
+                pending[b] = (!deferredGeoms.empty() && deferredGeoms.count(m->geometry().get()) != 0u) ||
+                             deferredGrass.count(m) != 0u;
+                if (pending[b]) admitNow.push_back(m);
+            }
+            for (Mesh* m : admitNow) beginHiddenAdmission(*m);
+            admitPendingSpans_ += static_cast<uint32_t>(admitNow.size());
+            tlasStats_.admissionsDeferred += admitNow.size();
+            if (!syncAdmission()) {
+                for (const EntrySpan& bs : d.spans) {
+                    const MeshEntry& e0 = d.built[bs.first];
+                    if (slotRecordOf(e0)) prepareTexturesAsync(*e0.mesh);
+                }
+            }
+            const size_t texCount0 = materialTextures.size();
+            const size_t texFree0 = freeTextureSlots.size();
+            struct MeshRows {
+                MaterialDesc md{};
+                MeshFingerprint fp{};
+                uint32_t stableId = 0;
+            };
+            std::vector<MeshRows> rows(d.spans.size());
+            for (size_t b = 0; b < d.spans.size(); ++b) {
+                const MeshEntry& proto = d.built[d.spans[b].first];
+                Mesh& m = *proto.mesh;
+                if (slotRecordOf(proto)) {
+                    rows[b].md = buildMaterialDesc(m);
+                    rows[b].md.materialAssetIdx = slotMaterialAssetIdx(m.material().get());
+                }
+                rows[b].fp = slotFingerprintOf(m);
+                rows[b].stableId = stableIdIfAssigned(m);
+            }
+            if (asyncPilot_) {
+                flushOneShotBatch();
+                std::vector<VkAccelerationStructureInstanceKHR> none;
+                applyBlasCompactionRemap(none);
+            } else {
+                flushOneShotBatchAsync();
+            }
+            const bool texturesAdded = materialTextures.size() != texCount0 || freeTextureSlots.size() != texFree0;
+
+            dAssets.stop();
+            THREEPP_CPUPROF_NAMED(dRows, "scene.D4_deltaRows");
+            // ── 4. The rows ────────────────────────────────────────────────────
+            const uint32_t newSize = highWater;
+            MeshEntry tombEntry;
+            MeshFingerprint tombFp;
+            slotTombRows(tombEntry, tombFp);
+            slotGrowRows(oldSize, newSize, tombEntry, tombFp);
+            for (size_t b = 0; b < d.spans.size(); ++b) {
+                const EntrySpan& bs = d.spans[b];
+                const MeshEntry& proto = d.built[bs.first];
+                const BlasRecord* rec = slotRecordOf(proto);
+                const LodGeomSel lodSel0 = rec ? selectLodGeom(*rec, 0) : LodGeomSel{};
+                const GeometryDesc gd = rec ? buildGeometryDesc(proto, *rec, lodSel0) : GeometryDesc{};
+                for (uint32_t j = 0; j < bs.count; ++j)
+                    slotFillRow(size_t(places[b].dst) + j, d.built[size_t(bs.first) + j], rows[b].fp, rec, gd,
+                                rows[b].md, rows[b].stableId);
+                markGeomDescsDirty(places[b].dst, bs.count);
+                markMatDescsDirty(places[b].dst, bs.count);
+                markMotionDirty(places[b].dst, bs.count);
+                markLodFadeDirty(places[b].dst, bs.count);
+            }
+            for (const uint32_t r : d.removed) {
+                const EntrySpan& sp = entrySpans_[r];
+                for (uint32_t j = 0; j < sp.count; ++j) {
+                    const size_t i = size_t(sp.first) + j;
+                    if (meshMovedSticky_[i] > 0u && stickyActiveCount_ > 0u) --stickyActiveCount_;
+                    slotTombRow(i, tombEntry, tombFp);
+                }
+                markGeomDescsDirty(sp.first, sp.count);
+                markMatDescsDirty(sp.first, sp.count);
+                markMotionDirty(sp.first, sp.count);
+                markLodFadeDirty(sp.first, sp.count);
+            }
+            if (newSize > oldSize) {
+                markMotionDirty(static_cast<uint32_t>(oldSize), newSize - static_cast<uint32_t>(oldSize));
+                markLodFadeDirty(static_cast<uint32_t>(oldSize), newSize - static_cast<uint32_t>(oldSize));
+            }
+
+            dRows.stop();
+            THREEPP_CPUPROF_NAMED(dSpans, "scene.D5_deltaSpans");
+            // ── 5. The span list, one pass ─────────────────────────────────────
+            // Kept spans move over as they are; a removed one becomes a parked
+            // free run; a carved run keeps its front and is followed by the spans
+            // carved off its back (address order); spans placed at the end are
+            // appended. Adjacent free runs merge, as trySlotEdit's sort does.
+            std::vector<std::vector<uint32_t>> carvedOf(runs.size());
+            std::vector<uint32_t> atEnd;
+            for (uint32_t b = 0; b < places.size(); ++b) {
+                if (places[b].run >= 0) carvedOf[static_cast<size_t>(places[b].run)].push_back(b);
+                else atEnd.push_back(b);
+            }
+            std::vector<int32_t> newOfSpan(d.spans.size(), -1);
+            const auto newSpanOf = [&](uint32_t b) {
+                EntrySpan ns = d.spans[b];
+                ns.first = places[b].dst;
+                ns.isFree = false;
+                ns.parkedUntil = 0u;
+                ns.fadeKnown = false;
+                ns.admitPending = pending[b] != 0u;
+                if (ns.inst) {
+                    ns.instColorAttr    = ns.inst->instanceColor();
+                    ns.instColorVersion = ns.instColorAttr ? ns.instColorAttr->version : ~0u;
+                }
+                return ns;
+            };
+            // In place when nothing has to move: every carve an exact fit with
+            // no room to grow after it (the run becomes the span), the rest at
+            // the end, a removed span freed where it is (merged with its free
+            // neighbours by the next edit that moves spans). Every span keeps its
+            // index, the snapshot's included.
+            bool inPlace = true;
+            for (size_t k = 0; k < runs.size() && inPlace; ++k)
+                if (!carvedOf[k].empty() &&
+                    (carvedOf[k].size() != 1u || runs[k].count != 0u || places[carvedOf[k][0]].slack != 0u))
+                    inPlace = false;
+            if (inPlace) {
+                for (const uint32_t r : d.removed) {
+                    const uint32_t first = entrySpans_[r].first, count = entrySpans_[r].count;
+                    entrySpans_[r] = slotFreeSpan(first, count, parkUntil);
+                }
+                for (size_t k = 0; k < runs.size(); ++k) {
+                    if (carvedOf[k].empty()) continue;
+                    const uint32_t b = carvedOf[k][0];
+                    entrySpans_[runs[k].span] = newSpanOf(b);
+                    newOfSpan[b] = static_cast<int32_t>(runs[k].span);
+                }
+                for (const uint32_t b : atEnd) {
+                    newOfSpan[b] = static_cast<int32_t>(entrySpans_.size());
+                    entrySpans_.push_back(newSpanOf(b));
+                    if (places[b].slack > 0u)
+                        entrySpans_.push_back(slotFreeSpan(places[b].dst + d.spans[b].count, places[b].slack, 0u));
+                }
+                ++tlasStats_.slotDeltasInPlace;
+            } else {
+                // Kept spans move over as they are; a removed one becomes a parked
+                // free run; a carved run keeps its front and is followed by the
+                // spans carved off its back (address order); spans placed at the
+                // end are appended. Adjacent free runs merge, as trySlotEdit's
+                // sort does.
+                std::vector<int32_t> runOfSpan(entrySpans_.size(), -1);
+                for (size_t k = 0; k < runs.size(); ++k)
+                    if (!carvedOf[k].empty()) runOfSpan[runs[k].span] = static_cast<int32_t>(k);
+                std::vector<EntrySpan> next;
+                next.reserve(entrySpans_.size() + 2u * d.spans.size() + 2u);
+                std::vector<int32_t> oldToNew(entrySpans_.size(), -1);
+                const auto pushFree = [&](uint32_t first, uint32_t count, uint64_t until) {
+                    if (count == 0u) return;
+                    if (!next.empty() && next.back().isFree && next.back().first + next.back().count == first) {
+                        next.back().count += count;
+                        next.back().parkedUntil = std::max(next.back().parkedUntil, until);
+                        return;
+                    }
+                    next.push_back(slotFreeSpan(first, count, until));
+                };
+                const auto pushNew = [&](uint32_t b) {
+                    newOfSpan[b] = static_cast<int32_t>(next.size());
+                    next.push_back(newSpanOf(b));
+                    pushFree(places[b].dst + d.spans[b].count, places[b].slack, 0u);
+                };
+                for (uint32_t s = 0; s < entrySpans_.size(); ++s) {
+                    EntrySpan& sp = entrySpans_[s];
+                    if (removedMark[s]) {
+                        pushFree(sp.first, sp.count, parkUntil);
+                        continue;
+                    }
+                    if (sp.isFree) {
+                        const int32_t k = runOfSpan[s];
+                        if (k < 0) {
+                            pushFree(sp.first, sp.count, sp.parkedUntil);
+                            continue;
+                        }
+                        auto& carved = carvedOf[static_cast<size_t>(k)];
+                        pushFree(sp.first, runs[static_cast<size_t>(k)].count, sp.parkedUntil);
+                        std::sort(carved.begin(), carved.end(),
+                                  [&](uint32_t x, uint32_t y) { return places[x].dst < places[y].dst; });
+                        for (const uint32_t b : carved) pushNew(b);
+                        continue;
+                    }
+                    oldToNew[s] = static_cast<int32_t>(next.size());
+                    next.push_back(std::move(sp));
+                }
+                for (const uint32_t b : atEnd) pushNew(b);
+                entrySpans_ = std::move(next);
+                // The snapshot's kept nodes at their spans' new places.
+                std::vector<uint8_t> isNew(d.snap.size(), 0u);
+                for (const uint32_t k : d.spanSnap) isNew[k] = 1u;
+                for (size_t k = 0; k < d.snap.size(); ++k) {
+                    SnapNode& sn = d.snap[k];
+                    if (sn.spanIndex < 0 || isNew[k]) continue;
+                    const auto o = static_cast<size_t>(sn.spanIndex);
+                    sn.spanIndex = o < oldToNew.size() ? oldToNew[o] : -1;
+                }
+            }
+#ifndef NDEBUG
+            {
+                uint32_t at = 0;
+                for (const auto& sp : entrySpans_) {
+                    THREEPP_ASSERT(sp.first == at);
+                    at += sp.count;
+                }
+                THREEPP_ASSERT(at == newSize);
+            }
+#endif
+            ++spansVersion_;
+            // The new nodes at their spans; then the in-place visibility flips.
+            for (size_t b = 0; b < d.spanSnap.size(); ++b) d.snap[d.spanSnap[b]].spanIndex = newOfSpan[b];
+            sceneSnapshot_.swap(d.snap);
+            for (const SnapFlip& f : d.flips) {
+                SnapNode& sn = sceneSnapshot_[f.snIdx];
+                sn.flags = (sn.flags & ~(kSnapHidden | kSnapMatHidden)) | (f.hidden ? kSnapHidden : 0u) |
+                           (f.matHidden ? kSnapMatHidden : 0u);
+                if (sn.spanIndex >= 0) setSpanHidden(static_cast<size_t>(sn.spanIndex), f.hidden || f.matHidden);
+            }
+
+            dSpans.stop();
+            ++motionScratchVersion_;
+            ++lodFadeVersion_;
+            cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+            ++drawInputsVersion_;
+            if (texturesAdded) {
+                deferredDescDirty_.fill(true);
+                for (auto& v : views_) {
+                    v->rasterMatTexValid_.fill(0);
+                    v->shadowMatTexValid_.fill(0);
+                }
+            }
+            pruneFreedAssets();
+            stableIdsPending_ = true;
+            slotsEditedThisFrame_ = true;
+            ++tlasStats_.slotEdits;
+            ++tlasStats_.slotDeltas;
+            tlasStats_.swapEdits += d.swaps;
             return true;
         }
 

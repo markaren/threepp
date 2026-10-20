@@ -917,6 +917,13 @@ namespace threepp {
             // removed, a mesh changing class) is still a structural rebuild; a
             // GrassMesh added, removed or swapped is a slot edit.
             uint64_t slotEdits = 0;
+            // Of those, the edits the edit-proportional path took: the nodes
+            // and spans that changed found and placed without walking or
+            // matching the rest of the scene (THREEPP_VULKAN_NO_DELTA=1: none).
+            uint64_t slotDeltas = 0;
+            // Of those, the ones that moved no span (every new span an exact fit
+            // or at the end): no pass over the span list at all.
+            uint64_t slotDeltasInPlace = 0;
             // BLASes a slot edit built (its new geometries) and compacted once
             // their build had completed, a frame or two later, without a host
             // wait; the rebuild compacts its own in place.
