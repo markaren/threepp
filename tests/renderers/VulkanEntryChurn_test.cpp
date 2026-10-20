@@ -912,8 +912,7 @@ int main() {
             auto grassMat = paint(Color(1, 1, 1));
             grassMat->vertexColors = true;
             grassMat->side = Side::Double;
-            const auto fieldGeometry = [](float cx, float cz, uint32_t seed) {
-                constexpr int kBlades = 2400;
+            const auto fieldGeometry = [](float cx, float cz, uint32_t seed, int kBlades = 2400) {
                 std::vector<vegetation::GrassBlade> blades;
                 blades.reserve(kBlades);
                 for (int b = 0; b < kBlades; ++b) {
@@ -1007,6 +1006,57 @@ int main() {
             const auto a1 = renderer.tlasStats();
             ahead->visible = true;
             settle("the hidden field shown");
+
+            // Four hidden wind fields landing on one frame, shown later (a
+            // streamed near cell's wind fields; these 120k vertices each).
+            // Their states are prepared on a worker from the slot edit on
+            // (beginGrassPrep): the add frame pays their placement, the frames
+            // until the show the recording of their copies and builds. Shown,
+            // each takes a prime. THREEPP_VULKAN_SYNC_ADMIT=1 builds them on
+            // the add frame: the frames after the show (churn_grass4_*) compare
+            // across the lanes.
+            std::vector<std::shared_ptr<GrassMesh>> four;
+            for (int k = 0; k < 4; ++k) {
+                auto g = GrassMesh::create(
+                        fieldGeometry(-12.f + 6.f * static_cast<float>(k), 2.f, 301u + static_cast<uint32_t>(k), 12000),
+                        grassMat);
+                g->params.windStrength = 0.35f;
+                g->visible = false;
+                g->resident = true;
+                grassFields.push_back(g);
+                four.push_back(g);
+            }
+            std::vector<double> quiet4;
+            for (int f = 0; f < 12; ++f) quiet4.push_back(frame(-1, kGap).wallMs);
+            const double q4 = percentile(quiet4, 0.5);
+            for (const auto& g : four) scene.add(g);
+            const double addMs = frame(-1, 0).wallMs;
+            double landMax = 0.0;
+            for (int f = 0; f < 30; ++f) landMax = std::max(landMax, frame(-1, kGap).wallMs);
+            bool fourAdmitted = true;
+            for (const auto& g : four) fourAdmitted = fourAdmitted && renderer.admitted(*g);
+            const uint64_t primes0 = renderer.dynamicGeomStats().grassPrimes;
+            for (const auto& g : four) g->visible = true;
+            const double showMs = frame(-1, 0).wallMs;
+            const uint64_t primesAtShow = renderer.dynamicGeomStats().grassPrimes - primes0;
+            for (int f = 1; f < kGap; ++f) {
+                frame(-1, kGap);
+                if (dump && (f == 1 || f == kGap - 1)) dumpFrame("churn_grass4", 0, 0, f);
+            }
+            std::printf("four hidden wind fields: add frame %.2f ms (quiet %.2f), worst frame while they land %.2f, "
+                        "show frame %.2f; admitted before the show: %s; primes on the show frame %llu\n",
+                        addMs, q4, landMax, showMs, fourAdmitted ? "yes" : "no",
+                        static_cast<unsigned long long>(primesAtShow));
+            if (!slotsOff) {
+                // (The frames they land on carry their uploads and builds on the
+                // GPU, which the synchronous lane pays on its add frame: printed.)
+                if (!syncAdmit)
+                    check("four hidden wind fields: the add frame within 1 ms of quiet", addMs <= q4 + 1.0);
+                check("four hidden wind fields: admitted before the show", fourAdmitted);
+            }
+            check("four hidden wind fields: each primed on its show frame", primesAtShow == 4u);
+            for (const auto& g : four) live.push_back(g);
+            four.clear();// dropped with the rest below
             for (auto& g : live) scene.remove(*g);
             scene.remove(*ahead);
             live.clear();

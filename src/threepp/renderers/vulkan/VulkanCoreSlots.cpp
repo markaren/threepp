@@ -1428,7 +1428,12 @@ bool VulkanRenderer::Impl::syncAdmission() {
             return sync;
         }
 
-void VulkanRenderer::Impl::beginHiddenAdmission(Mesh& m) { prepareTexturesAsync(m); }
+void VulkanRenderer::Impl::beginHiddenAdmission(Mesh& m) {
+            prepareTexturesAsync(m);
+            // A field's state, prepared on a worker (its bytes are most of an
+            // admission: ~10 ms a forest wind field on the render thread).
+            if (auto* gm = dynamic_cast<GrassMesh*>(&m)) beginGrassPrep(*gm);
+        }
 
 void VulkanRenderer::Impl::prepareTexturesAsync(Mesh& m) {
             const bool bc7 = bc7SampledSupported();
@@ -1452,13 +1457,18 @@ void VulkanRenderer::Impl::prepareTexturesAsync(Mesh& m) {
         }
 
 void VulkanRenderer::Impl::pumpHiddenAdmissions() {
+            if (!grassPreps_.empty()) sweepGrassPreps(false);
             if (admitPendingSpans_ == 0u) return;
             THREEPP_CPUPROF("scene.3e_hiddenAdmission");
-            // A few spans a frame, and no more once this frame's share of the
-            // work has been spent: a landing costs the BLAS build input and the
-            // upload of encoded images, not the encode.
+            // A few spans a frame, and no more than this frame's share of the
+            // work: a landing costs the BLAS build input and the upload of
+            // encoded images, not the encode, and a field's whole state is
+            // prepared on a worker (beginGrassPrep). Each span's cost is
+            // estimated before it is taken; the first of a frame is taken
+            // whatever it costs (a mesh's record is still staged here).
             constexpr uint32_t kSpansPerFrame = 4u;
             constexpr double kBudgetMs = 2.0;
+            constexpr double kMsPerStagedVertex = 1.0e-5;// ~10 ms a million vertices, measured on the forest
             const auto t0 = std::chrono::steady_clock::now();
             const auto spentMs = [&] {
                 return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -1473,6 +1483,17 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                 for (const auto& t : texturesOf(m))
                     if (!ready(t)) return false;
                 return true;
+            };
+            // A prepared field's landing is its copies and its build on the GPU
+            // (~7 ms for four 240k-vertex fields in one frame): bounded too.
+            constexpr double kMsPerLandedGrassVertex = 6.0e-6;
+            const auto estimateMs = [&](const EntrySpan& sp) -> double {
+                const auto g = sp.mesh->geometry();
+                const auto* pos = g ? g->getAttribute<float>("position") : nullptr;
+                const double verts = pos ? static_cast<double>(pos->count()) : 0.0;
+                if (lastVisibleEntries_[sp.first].isGrass) return 0.2 + verts * kMsPerLandedGrassVertex;
+                if (!g || blasCache.count(g.get()) != 0u) return 0.2;
+                return 0.2 + verts * kMsPerStagedVertex;
             };
             const auto cullOf = [](const MaterialDesc& md) -> VkCullModeFlags {
                 switch (md.sideMode) {
@@ -1491,7 +1512,9 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
             // edit took the change): every live span's mesh is alive.
             for (EntrySpan& sp : entrySpans_) {
                 if (sp.isFree || !sp.admitPending) continue;
-                if (landed >= kSpansPerFrame || spentMs() > kBudgetMs || !texturesReady(*sp.mesh)) {
+                if (landed >= kSpansPerFrame || (landed > 0u && spentMs() + estimateMs(sp) > kBudgetMs) ||
+                    !texturesReady(*sp.mesh) ||
+                    (entries[sp.first].isGrass && grassPrepPending(static_cast<const GrassMesh&>(*sp.mesh)))) {
                     ++pending;
                     continue;
                 }
@@ -1504,9 +1527,11 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                 const BlasRecord* recp = nullptr;
                 if (entries[sp.first].isGrass) {
                     // A field's own record and inputs, primed by its first deform.
+                    THREEPP_CPUPROF("scene.E1_admitGrass");
                     auto* st = admitGrassState(static_cast<GrassMesh&>(m));
                     recp = st ? st->blas.get() : nullptr;
                 } else {
+                    THREEPP_CPUPROF("scene.E2_admitBlas");
                     auto rit = geom ? blasCache.find(geom.get()) : blasCache.end();
                     if (geom && rit == blasCache.end()) {
                         auto rec = buildBlasFor(*geom, /*allowPacked=*/true, /*updatable=*/false, nullptr,
@@ -1521,6 +1546,7 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                 sp.admitPending = false;
                 if (!recp) continue;// degenerate: default rows and no instance, as in a rebuild
                 const BlasRecord& rec = *recp;
+                THREEPP_CPUPROF("scene.E3_admitRows");
                 MaterialDesc md = buildMaterialDesc(m);// takes the prepared images
                 md.materialAssetIdx = slotMaterialAssetIdx(m.material().get());
                 const GeometryDesc gd = buildGeometryDesc(entries[sp.first], rec, selectLodGeom(rec, 0));
@@ -1537,6 +1563,7 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                 ++tlasStats_.admissionsLanded;
             }
             if (batch) {
+                THREEPP_CPUPROF("scene.E4_admitFlush");
                 // As the slot edit's batch: ahead of this frame on the queue,
                 // never waited for (the async-compute pilot waits).
                 if (asyncPilot_) {

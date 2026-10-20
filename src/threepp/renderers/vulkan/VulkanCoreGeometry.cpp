@@ -262,6 +262,12 @@ bool VulkanRenderer::Impl::stageChangedSideAttributes(StagedUploads& up, const B
         }
 
 Buffer VulkanRenderer::Impl::recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched) {
+            Buffer staging = makeStaging(up);
+            recordStagedCopies(up, staging, cb, dstUntouched);
+            return staging;
+        }
+
+Buffer VulkanRenderer::Impl::makeStaging(StagedUploads& up) {
             Buffer staging;
             if (up.copies.empty()) {
                 up.data.clear();
@@ -271,6 +277,14 @@ Buffer VulkanRenderer::Impl::recordStagedUploads(StagedUploads& up, VkCommandBuf
                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             uploadHostVisible(ctx->allocator(), staging, up.data.data(), up.data.size());
+            up.data.clear();
+            up.data.shrink_to_fit();
+            return staging;
+        }
+
+void VulkanRenderer::Impl::recordStagedCopies(StagedUploads& up, const Buffer& staging, VkCommandBuffer cb,
+                                              bool dstUntouched) {
+            if (up.copies.empty()) return;
             if (!dstUntouched) {
                 // Earlier commands (a prevVertex snapshot copy, earlier frames'
                 // reads and writes) finish before the copies overwrite.
@@ -297,8 +311,6 @@ Buffer VulkanRenderer::Impl::recordStagedUploads(StagedUploads& up, VkCommandBuf
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                  0, 1, &post, 0, nullptr, 0, nullptr);
             up.copies.clear();
-            up.data.clear();
-            return staging;
         }
 
 void VulkanRenderer::Impl::submitStagedUploads(StagedUploads& up, const char* label) {
@@ -315,10 +327,6 @@ void VulkanRenderer::Impl::submitStagedUploads(StagedUploads& up, const char* la
 std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
                                                                                      const std::vector<uint32_t>* rtIndices,
                                                                                      VertexWriter writer, bool traced) {
-            // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
-            // attribute buffer back to tightly-packed float, same binary.
-            static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
-            allowPacked = allowPacked && !noPack;
             // Per-geometry override, and deliberately HERE rather than at the
             // call sites: this is the one funnel every record passes through, so
             // a future caller cannot forget it. A geometry marked by
@@ -327,10 +335,27 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // to write — see forceUnpackedGeoms_ for the packed→unpacked handoff
             // this closes. Scoped to that one geometry: the rest of the scene
             // keeps its packed normals/uv/color, so this is NOT THREEPP_NO_PACK
-            // by another name.
+            // by another name. (A preparing worker gets it from its caller.)
+            const bool interopTarget = forceUnpackedGeoms_.count(&geom) != 0;
+            BlasPrep p;
+            if (!prepareBlas(geom, allowPacked, updatable, rtIndices, writer, traced, interopTarget, p)) {
+                discardBlasPrep(p);
+                return nullptr;
+            }
+            return finishBlas(geom, p);
+        }
+
+bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPacked, bool updatable,
+                                       const std::vector<uint32_t>* rtIndices, VertexWriter writer, bool traced,
+                                       bool interopTarget, BlasPrep& p) {
+            // Any thread: the geometry's arrays, the allocator and nothing of
+            // the renderer's state (forceUnpackedGeoms_ is read by the caller).
+            // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
+            // attribute buffer back to tightly-packed float, same binary.
+            static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
+            allowPacked = allowPacked && !noPack;
             // (Also read below: an interop-marked geometry's BLAS storage is
             // sized for both build-flag lineages, not just FAST_TRACE.)
-            const bool interopTarget = forceUnpackedGeoms_.count(&geom) != 0;
             if (allowPacked && interopTarget) allowPacked = false;
             // Interop records are rebuilt every frame (recordDynamicGeomRefits)
             // into the storage sized below for both lineages: never compacted.
@@ -349,28 +374,28 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // fresh record.
             const bool deviceLocal = !updatable || (writer == VertexWriter::Gpu && !interopTarget);
             constexpr bool sideDeviceLocal = true;
-            StagedUploads up;
+            StagedUploads& up = p.up;
 
             auto* posAttr = geom.getAttribute<float>("position");
-            if (!posAttr) return nullptr;
+            if (!posAttr) return false;
             // Normal/uv/color may be narrowed (compressAttributes); the view
             // widens them once here, at upload, so the device buffers — which
             // the shaders index as tightly-packed float and the raster prepass
             // binds as float vertex input — keep their layout. Positions are
             // never narrowed and stay a direct typed read.
             FloatAttributeView normals(geom.getAttribute("normal"));
-            if (!normals) return nullptr;// the RT path requires per-vertex normals
+            if (!normals) return false;// the RT path requires per-vertex normals
             const auto& positions = posAttr->array();
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
-            if (vertexCount < 3) return nullptr;
-            if (normals.count() != static_cast<int>(vertexCount)) return nullptr;
+            if (vertexCount < 3) return false;
+            if (normals.count() != static_cast<int>(vertexCount)) return false;
 
             const auto* idxAttr = geom.getIndex();
             const bool indexed = idxAttr != nullptr;
             const uint32_t primitiveCount = indexed
                     ? static_cast<uint32_t>(idxAttr->count() / 3)
                     : vertexCount / 3;
-            if (primitiveCount == 0) return nullptr;
+            if (primitiveCount == 0) return false;
 
             // BLAS build is undefined behavior on NaN/Inf positions or
             // out-of-bounds indices — drivers respond with device-lost
@@ -383,7 +408,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                     std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry - "
                               << "position[" << i << "] is non-finite ("
                               << positions[i] << "), vertexCount=" << vertexCount << '\n';
-                    return nullptr;
+                    return false;
                 }
             }
             if (indexed) {
@@ -393,7 +418,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                         std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry - "
                                   << "index[" << i << "]=" << indices[i]
                                   << " >= vertexCount=" << vertexCount << '\n';
-                        return nullptr;
+                        return false;
                     }
                 }
             }
@@ -420,7 +445,8 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-            auto rec = std::make_unique<BlasRecord>();
+            p.rec = std::make_unique<BlasRecord>();
+            auto& rec = p.rec;
 
             const VkDeviceSize vbBytes = positions.size() * sizeof(float);
             rec->vertex = createGeomBuffer(vbBytes, geomUsage, deviceLocal);
@@ -592,29 +618,201 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 stageUpload(up, rec->rtIndex, rtIndices->data(), ibBytes);
                 rec->rtIndexCount = static_cast<uint32_t>(rtIndices->size() - rtIndices->size() % 3u);
             }
-            // No ray query, or a geometry no ray meets: the record is its
-            // buffers. The raster draws and the shaders' buffer fetches need
-            // nothing else; as stays null and address 0, and no instance of it
-            // is ever traced.
-            if (!rt) {
+            // The structure's sizes, storage, scratch and the prevVertex buffer:
+            // allocations, made here too (any thread; the AS registry locks).
+            const bool rt0 = rt;
+            if (!rt0) {
                 rec->prevVertex = createBuffer(
                         ctx->allocator(), ctx->device(), vbBytes,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                         VMA_MEMORY_USAGE_AUTO);
+            } else {
+                // What the AS is built over: the proxy's triangles, else the
+                // geometry's (the draw-range span below only applies to the latter).
+                const uint32_t buildPrims = rec->rtIndexCount ? rec->rtIndexCount / 3u : primitiveCount;
+
+                VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+                triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                triData.vertexData.deviceAddress = rec->vertex.address;
+                triData.vertexStride = 3 * sizeof(float);
+                triData.maxVertex = vertexCount - 1;
+                if (rec->rtIndexCount) {
+                    triData.indexType = VK_INDEX_TYPE_UINT32;
+                    triData.indexData.deviceAddress = rec->rtIndex.address;
+                } else if (indexed) {
+                    triData.indexType = packIdx ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+                    triData.indexData.deviceAddress = rec->index.address;
+                } else {
+                    triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+                }
+
+                VkAccelerationStructureGeometryKHR blasGeom{};
+                blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                blasGeom.geometry.triangles = triData;
+                // No OPAQUE flag — that would suppress any-hit invocation per
+                // geometry regardless of the ray flags, breaking alpha-test. The
+                // any-hit shader short-circuits cheaply for materials with
+                // alphaCutoff <= 0, so the cost on truly opaque meshes is one
+                // buffer read + compare per hit candidate.
+                blasGeom.flags = 0;
+
+                VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+                blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                // A deformer's record is refit in place every frame, so it is built
+                // ALLOW_UPDATE. A static record is built once and traced for its
+                // lifetime: no ALLOW_UPDATE (an updatable BVH is laid out loosely
+                // enough for a refit to move leaves, which costs traversal), and
+                // ALLOW_COMPACTION, after which it is copied into storage of its
+                // compacted size below. If a static record later turns dynamic
+                // (needsUpdate), refreshGeomBlasBatch rebuilds it updatable into
+                // fresh storage. PREFER_FAST_TRACE in both cases: even a deformer
+                // is traced many times per build.
+                const bool compactThis = !updatable && blasCompact_;
+                blasBuild.flags = updatable
+                        ? (VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                           VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)
+                        : staticBlasBuildFlags();
+                blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+                blasBuild.geometryCount = 1;
+                blasBuild.pGeometries = &blasGeom;
+
+                VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+                blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+                ctx->rt().getAccelerationStructureBuildSizes(
+                        ctx->device(),
+                        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                        &blasBuild, &buildPrims, &blasSizes);
+
+                // An interop record's per-frame rebuilds take PREFER_FAST_BUILD
+                // (recordDynamicGeomRefits), and the two flag lineages are
+                // different BVH formats with different footprints: on NVIDIA a
+                // FAST_BUILD structure over the same geometry is ~5% LARGER
+                // (measured 345856 vs 329600 B for a 5120-triangle indexed
+                // mesh). Building the larger lineage into storage sized for the
+                // smaller overruns the structure — VUID-vkCmdBuildAcceleration-
+                // StructuresKHR-pInfos-10126 with the layers on, heap corruption
+                // surfacing as VK_ERROR_DEVICE_LOST without — so size the
+                // storage for the max of both lineages up front. Scoped to
+                // interop-marked geometries: everything else builds FAST_TRACE
+                // for life and should not pay the padding.
+                VkDeviceSize asBytes = blasSizes.accelerationStructureSize;
+                if (interopTarget) {
+                    VkAccelerationStructureBuildGeometryInfoKHR fbBuild = blasBuild;
+                    fbBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR |
+                                    VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                    VkAccelerationStructureBuildSizesInfoKHR fbSizes{};
+                    fbSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+                    ctx->rt().getAccelerationStructureBuildSizes(
+                            ctx->device(),
+                            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                            &fbBuild, &primitiveCount, &fbSizes);
+                    asBytes = std::max(asBytes, fbSizes.accelerationStructureSize);
+                    rec->storageFitsFastBuild = true;
+                }
+
+                rec->storage = createBuffer(
+                        ctx->allocator(), ctx->device(), asBytes,
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO);
+
+                VkAccelerationStructureCreateInfoKHR blasCreate{};
+                blasCreate.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+                blasCreate.buffer = rec->storage.handle;
+                blasCreate.size = asBytes;
+                blasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &rec->as),
+                      "vkCreateAccelerationStructureKHR(BLAS)");
+                vulkan::registerAccelerationStructure(rec->as, blasCreate.buffer);
+
+                Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
+
+                blasBuild.dstAccelerationStructure = rec->as;
+                blasBuild.scratchData.deviceAddress = scratch.address;
+
+                // Per-vertex previous-pose buffer for the chit's per-vertex motion
+                // vector path. Skinned / displaced / morphed meshes own their own
+                // prev buffer in their state struct; plain meshes that go through
+                // refreshGeomBlas (PhysX soft bodies, ParticleSystems updating
+                // vertices in place) need one here too — without it, the chit reads
+                // gdesc.prevVertexAddress == vertexAddress, motion is zero, and
+                // freshly-spawned dynamic bodies look noisy because the temporal
+                // accumulator blends mismatched history. Static meshes get a free
+                // copy (prev == current forever) — chit motion vector resolves to
+                // zero, matching the previous fallback behavior.
+                rec->prevVertex = createBuffer(
+                        ctx->allocator(), ctx->device(), vbBytes,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO);
+                p.blasGeom    = blasGeom;
+                p.blasBuild   = blasBuild;
+                p.blasBuild.pGeometries = nullptr;// finishBlas points it at p.blasGeom
+                p.buildPrims  = buildPrims;
+                p.compactThis = compactThis;
+                p.scratch     = scratch;
+            }
+            p.vbBytes        = vbBytes;
+            p.vertexCount    = vertexCount;
+            p.primitiveCount = primitiveCount;
+            p.indexCount     = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+            p.indexed        = indexed;
+            p.packIdx        = packIdx;
+            p.rt             = rt;
+            p.updatable      = updatable;
+            p.interopTarget  = interopTarget;
+            return true;
+        }
+
+void VulkanRenderer::Impl::discardBlasPrep(BlasPrep& p) {
+            // Nothing recorded yet: no frame or batch has seen these buffers.
+            if (p.rec) destroyBlasRecord(*p.rec);
+            p.rec.reset();
+            destroyBuffer(ctx->allocator(), p.staging);
+            destroyBuffer(ctx->allocator(), p.scratch);
+            p.up = {};
+        }
+
+std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::finishBlas(const BufferGeometry& geom, BlasPrep& p) {
+            // The render thread: the copies from staging and the build, into the
+            // open one-shot (or the batch).
+            auto rec = std::move(p.rec);
+            StagedUploads& up = p.up;
+            const VkDeviceSize vbBytes = p.vbBytes;
+            const uint32_t vertexCount = p.vertexCount;
+            const bool indexed = p.indexed;
+            const bool rt = p.rt;
+            const bool interopTarget = p.interopTarget;
+            const auto takeStaging = [&](VkCommandBuffer cb) {
+                if (p.staging.handle == VK_NULL_HANDLE) return recordStagedUploads(up, cb, /*dstUntouched=*/true);
+                recordStagedCopies(up, p.staging, cb, /*dstUntouched=*/true);
+                Buffer staging = p.staging;
+                p.staging = {};
+                return staging;
+            };
+            // No ray query, or a geometry no ray meets: the record is its
+            // buffers. The raster draws and the shaders' buffer fetches need
+            // nothing else; as stays null and address 0, and no instance of it
+            // is ever traced.
+            if (!rt) {
                 VkCommandBuffer cb = beginOneShot();
-                Buffer staging = recordStagedUploads(up, cb, /*dstUntouched=*/true);
+                Buffer staging = takeStaging(cb);
                 VkBufferCopy seedCopy{};
                 seedCopy.size = vbBytes;
                 vkCmdCopyBuffer(cb, rec->vertex.handle, rec->prevVertex.handle, 1, &seedCopy);
                 endAndSubmitOneShot(cb, "buildBlasFor");
                 if (staging.handle != VK_NULL_HANDLE) destroyBufferMaybeBatched(staging);
                 const DrawSpan span = drawSpanOf(
-                        geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
+                        geom, indexed ? p.indexCount : vertexCount);
                 stampVersions(*rec, geom);
                 rec->vertexCount    = vertexCount;
-                rec->indexCount     = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+                rec->indexCount     = indexed ? p.indexCount : 0u;
                 rec->vbBytes        = vbBytes;
                 rec->blasBuiltPrims = (span.first + span.elems) / 3u;
                 rec->lastDrawStart  = geom.drawRange.start;
@@ -626,111 +824,12 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 return rec;
             }
 
-            // What the AS is built over: the proxy's triangles, else the
-            // geometry's (the draw-range span below only applies to the latter).
-            const uint32_t buildPrims = rec->rtIndexCount ? rec->rtIndexCount / 3u : primitiveCount;
-
-            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
-            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-            triData.vertexData.deviceAddress = rec->vertex.address;
-            triData.vertexStride = 3 * sizeof(float);
-            triData.maxVertex = vertexCount - 1;
-            if (rec->rtIndexCount) {
-                triData.indexType = VK_INDEX_TYPE_UINT32;
-                triData.indexData.deviceAddress = rec->rtIndex.address;
-            } else if (indexed) {
-                triData.indexType = packIdx ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-                triData.indexData.deviceAddress = rec->index.address;
-            } else {
-                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
-            }
-
-            VkAccelerationStructureGeometryKHR blasGeom{};
-            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-            blasGeom.geometry.triangles = triData;
-            // No OPAQUE flag — that would suppress any-hit invocation per
-            // geometry regardless of the ray flags, breaking alpha-test. The
-            // any-hit shader short-circuits cheaply for materials with
-            // alphaCutoff <= 0, so the cost on truly opaque meshes is one
-            // buffer read + compare per hit candidate.
-            blasGeom.flags = 0;
-
-            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
-            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-            blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-            // A deformer's record is refit in place every frame, so it is built
-            // ALLOW_UPDATE. A static record is built once and traced for its
-            // lifetime: no ALLOW_UPDATE (an updatable BVH is laid out loosely
-            // enough for a refit to move leaves, which costs traversal), and
-            // ALLOW_COMPACTION, after which it is copied into storage of its
-            // compacted size below. If a static record later turns dynamic
-            // (needsUpdate), refreshGeomBlasBatch rebuilds it updatable into
-            // fresh storage. PREFER_FAST_TRACE in both cases: even a deformer
-            // is traced many times per build.
-            const bool compactThis = !updatable && blasCompact_;
-            blasBuild.flags = updatable
-                    ? (VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                       VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)
-                    : staticBlasBuildFlags();
-            blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-            blasBuild.geometryCount = 1;
-            blasBuild.pGeometries = &blasGeom;
-
-            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
-            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-            ctx->rt().getAccelerationStructureBuildSizes(
-                    ctx->device(),
-                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    &blasBuild, &buildPrims, &blasSizes);
-
-            // An interop record's per-frame rebuilds take PREFER_FAST_BUILD
-            // (recordDynamicGeomRefits), and the two flag lineages are
-            // different BVH formats with different footprints: on NVIDIA a
-            // FAST_BUILD structure over the same geometry is ~5% LARGER
-            // (measured 345856 vs 329600 B for a 5120-triangle indexed
-            // mesh). Building the larger lineage into storage sized for the
-            // smaller overruns the structure — VUID-vkCmdBuildAcceleration-
-            // StructuresKHR-pInfos-10126 with the layers on, heap corruption
-            // surfacing as VK_ERROR_DEVICE_LOST without — so size the
-            // storage for the max of both lineages up front. Scoped to
-            // interop-marked geometries: everything else builds FAST_TRACE
-            // for life and should not pay the padding.
-            VkDeviceSize asBytes = blasSizes.accelerationStructureSize;
-            if (interopTarget) {
-                VkAccelerationStructureBuildGeometryInfoKHR fbBuild = blasBuild;
-                fbBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR |
-                                VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-                VkAccelerationStructureBuildSizesInfoKHR fbSizes{};
-                fbSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-                ctx->rt().getAccelerationStructureBuildSizes(
-                        ctx->device(),
-                        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                        &fbBuild, &primitiveCount, &fbSizes);
-                asBytes = std::max(asBytes, fbSizes.accelerationStructureSize);
-                rec->storageFitsFastBuild = true;
-            }
-
-            rec->storage = createBuffer(
-                    ctx->allocator(), ctx->device(), asBytes,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
-
-            VkAccelerationStructureCreateInfoKHR blasCreate{};
-            blasCreate.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-            blasCreate.buffer = rec->storage.handle;
-            blasCreate.size = asBytes;
-            blasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-            check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &rec->as),
-                  "vkCreateAccelerationStructureKHR(BLAS)");
-            vulkan::registerAccelerationStructure(rec->as, blasCreate.buffer);
-
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-
-            blasBuild.dstAccelerationStructure = rec->as;
-            blasBuild.scratchData.deviceAddress = scratch.address;
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild = p.blasBuild;
+            blasBuild.pGeometries = &p.blasGeom;
+            const uint32_t buildPrims = p.buildPrims;
+            const bool compactThis = p.compactThis;
+            Buffer scratch = p.scratch;
+            p.scratch = {};
 
             // The initial build honours BufferGeometry::drawRange: the AS and
             // scratch above were sized for FULL capacity (the size query used
@@ -745,32 +844,15 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // MODE_BUILD when the count moves (updating with a different
             // count is invalid).
             const DrawSpan span = drawSpanOf(
-                    geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
+                    geom, indexed ? p.indexCount : vertexCount);
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = rec->rtIndexCount ? buildPrims : (span.first + span.elems) / 3u;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
-            // Per-vertex previous-pose buffer for the chit's per-vertex motion
-            // vector path. Skinned / displaced / morphed meshes own their own
-            // prev buffer in their state struct; plain meshes that go through
-            // refreshGeomBlas (PhysX soft bodies, ParticleSystems updating
-            // vertices in place) need one here too — without it, the chit reads
-            // gdesc.prevVertexAddress == vertexAddress, motion is zero, and
-            // freshly-spawned dynamic bodies look noisy because the temporal
-            // accumulator blends mismatched history. Static meshes get a free
-            // copy (prev == current forever) — chit motion vector resolves to
-            // zero, matching the previous fallback behavior.
-            rec->prevVertex = createBuffer(
-                    ctx->allocator(), ctx->device(), vbBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
-
             VkCommandBuffer cb = beginOneShot();
             // A static record's buffers fill first, from staging, in the same
             // one-shot (or the open batch) as the build that reads them.
-            Buffer staging = recordStagedUploads(up, cb, /*dstUntouched=*/true);
+            Buffer staging = takeStaging(cb);
             // Seed prevVertex with the initial (current) vertex data — first
             // refresh would otherwise copy garbage into prev. Fold into the
             // same one-shot as the BLAS build to avoid an extra submit.
@@ -808,7 +890,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
 
             stampVersions(*rec, geom);
             rec->vertexCount = vertexCount;
-            rec->indexCount  = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+            rec->indexCount  = indexed ? p.indexCount : 0u;
             rec->vbBytes     = vbBytes;// for the prevVertex re-sync copy
             rec->blasBuiltPrims = range.primitiveCount;
             rec->blasBuiltFlags = blasBuild.flags;
@@ -5042,39 +5124,44 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             auto it = grassStates.find(&gm);
             if (it != grassStates.end()) return it->second.get();
 
-            auto* posAttr = gm.geometry()->getAttribute<float>("position");
-            auto* hfAttr  = gm.geometry()->getAttribute<float>("heightFrac");
-            if (!posAttr || !hfAttr) return nullptr;
-            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
-            if (vertexCount == 0 || static_cast<uint32_t>(hfAttr->count()) != vertexCount) return nullptr;
+            const auto geom = gm.geometry();
+            if (!geom) return nullptr;
+            // Its prep, when a worker has one for this geometry (a hidden field's
+            // slot edit started it): waited for only when the field is wanted
+            // before it is ready (shown before its admission landed, or a
+            // structural rebuild); otherwise everything is prepared here.
+            std::unique_ptr<GrassPrepData> data;
+            if (const auto pit = grassPreps_.find(&gm); pit != grassPreps_.end()) {
+                THREEPP_CPUPROF("scene.G0_grassPrepWait");
+                auto prepared = pit->second.job.get();
+                const bool same = pit->second.geom == geom;
+                grassPreps_.erase(pit);
+                if (prepared && same) data = std::move(prepared);
+                else if (prepared) discardGrassPrep(*prepared);
+            }
+            if (!data) {
+                THREEPP_CPUPROF("scene.G1_grassPrepare");
+                data = prepareGrassData(*geom, forceUnpackedGeoms_.count(geom.get()) != 0);
+            }
+            if (!data->ok) {
+                discardGrassPrep(*data);
+                return nullptr;
+            }
 
-            auto blas = buildBlasFor(*gm.geometry(), /*allowPacked=*/false, /*updatable=*/true,
-                                     /*rtIndices=*/nullptr, VertexWriter::Gpu);
-            if (!blas) return nullptr;
-            blas->liveCheck = gm.geometry();
-
+            THREEPP_CPUPROF("scene.G2_grassFinish");
             auto state = std::make_unique<GrassMeshState>();
-            state->vertexCount = vertexCount;
-            state->liveCheck = gm.geometry();
+            state->vertexCount = data->vertexCount;
+            state->liveCheck = geom;
             state->owner.bind(gm);
-
-            // Immutable rest positions — the shader reads these and writes the
-            // displaced result into the (separate) BLAS vertex buffer. Both
-            // inputs are device-local, filled from staging: host-visible, a
-            // field allocated while another was still alive (a GrassMesh
-            // replacement) spilled out of the BAR window into system memory
-            // and its deform pass crossed PCIe every frame.
-            StagedUploads inputs;
-            const VkBufferUsageFlags inputUsage =
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            const VkDeviceSize posBytes = VkDeviceSize(vertexCount) * 3u * sizeof(float);
-            state->restPos = createGeomBuffer(posBytes, inputUsage, /*deviceLocal=*/true);
-            stageUpload(inputs, state->restPos, posAttr->array().data(), posBytes);
-
-            const VkDeviceSize hfBytes = VkDeviceSize(vertexCount) * sizeof(float);
-            state->heightFrac = createGeomBuffer(hfBytes, inputUsage, /*deviceLocal=*/true);
-            stageUpload(inputs, state->heightFrac, hfAttr->array().data(), hfBytes);
-            submitStagedUploads(inputs, "ensureGrassState (inputs)");
+            // The record's buffers and the rest-pose and height-fraction inputs
+            // fill from the one staging buffer, ahead of the build, in the same
+            // one-shot (or the open batch).
+            state->restPos = data->restPos;
+            state->heightFrac = data->heightFrac;
+            data->restPos = {};
+            data->heightFrac = {};
+            auto blas = finishBlas(*geom, data->blas);
+            blas->liveCheck = geom;
             noteDeformPlacement(state->restPos);
             noteDeformPlacement(state->heightFrac);
             noteDeformPlacement(blas->vertex);
@@ -5085,6 +5172,86 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             auto* raw = state.get();
             grassStates.emplace(&gm, std::move(state));
             return raw;
+        }
+
+std::unique_ptr<VulkanRenderer::Impl::GrassPrepData> VulkanRenderer::Impl::prepareGrassData(const BufferGeometry& geom,
+                                                                                             bool interopTarget) {
+            // Any thread (see prepareBlas): every byte a field's state starts
+            // from, in one staging buffer.
+            auto d = std::make_unique<GrassPrepData>();
+            auto* posAttr = geom.getAttribute<float>("position");
+            auto* hfAttr  = geom.getAttribute<float>("heightFrac");
+            if (!posAttr || !hfAttr) return d;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            if (vertexCount == 0 || static_cast<uint32_t>(hfAttr->count()) != vertexCount) return d;
+            if (!prepareBlas(geom, /*allowPacked=*/false, /*updatable=*/true, /*rtIndices=*/nullptr, VertexWriter::Gpu,
+                             /*traced=*/true, interopTarget, d->blas))
+                return d;
+            d->vertexCount = vertexCount;
+            // Immutable rest positions — the shader reads these and writes the
+            // displaced result into the (separate) BLAS vertex buffer. Both
+            // inputs are device-local, filled from staging: host-visible, a
+            // field allocated while another was still alive (a GrassMesh
+            // replacement) spilled out of the BAR window into system memory
+            // and its deform pass crossed PCIe every frame.
+            const VkBufferUsageFlags inputUsage =
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            const VkDeviceSize posBytes = VkDeviceSize(vertexCount) * 3u * sizeof(float);
+            d->restPos = createGeomBuffer(posBytes, inputUsage, /*deviceLocal=*/true);
+            stageUpload(d->blas.up, d->restPos, posAttr->array().data(), posBytes);
+            const VkDeviceSize hfBytes = VkDeviceSize(vertexCount) * sizeof(float);
+            d->heightFrac = createGeomBuffer(hfBytes, inputUsage, /*deviceLocal=*/true);
+            stageUpload(d->blas.up, d->heightFrac, hfAttr->array().data(), hfBytes);
+            d->blas.staging = makeStaging(d->blas.up);
+            d->ok = true;
+            return d;
+        }
+
+void VulkanRenderer::Impl::discardGrassPrep(GrassPrepData& d) {
+            discardBlasPrep(d.blas);
+            destroyBuffer(ctx->allocator(), d.restPos);
+            destroyBuffer(ctx->allocator(), d.heightFrac);
+        }
+
+void VulkanRenderer::Impl::beginGrassPrep(GrassMesh& gm) {
+            const auto geom = gm.geometry();
+            if (!geom) return;
+            if (const auto it = grassStates.find(&gm);
+                it != grassStates.end() && it->second->liveCheck.lock() == geom && !it->second->owner.gone())
+                return;// its own state, cached
+            if (const auto it = grassPreps_.find(&gm); it != grassPreps_.end()) {
+                if (it->second.geom == geom) return;// on its way
+                if (auto stale = it->second.job.get()) discardGrassPrep(*stale);
+                grassPreps_.erase(it);
+            }
+            GrassPrep gp;
+            gp.geom = geom;
+            gp.owner.bind(gm);
+            const bool interop = forceUnpackedGeoms_.count(geom.get()) != 0;
+            gp.job = std::async(std::launch::async,
+                                [this, geom, interop] { return prepareGrassData(*geom, interop); });
+            grassPreps_.emplace(&gm, std::move(gp));
+        }
+
+bool VulkanRenderer::Impl::grassPrepPending(const GrassMesh& gm) const {
+            const auto it = grassPreps_.find(&gm);
+            return it != grassPreps_.end() &&
+                   it->second.job.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+        }
+
+void VulkanRenderer::Impl::sweepGrassPreps(bool all) {
+            for (auto it = grassPreps_.begin(); it != grassPreps_.end();) {
+                // A live field's key is its address: its geometry is read only
+                // while it is alive.
+                const bool drop = all || it->second.owner.gone() ||
+                                  static_cast<const GrassMesh*>(it->first)->geometry() != it->second.geom;
+                if (!drop) {
+                    ++it;
+                    continue;
+                }
+                if (auto d = it->second.job.get()) discardGrassPrep(*d);
+                it = grassPreps_.erase(it);
+            }
         }
 
 bool VulkanRenderer::Impl::enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom,

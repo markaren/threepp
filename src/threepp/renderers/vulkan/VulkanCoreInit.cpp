@@ -395,6 +395,7 @@ VulkanRenderer::Impl::~Impl() {
             }
             displacedStates.clear();
 
+            sweepGrassPreps(/*all=*/true);
             for (auto& [_, st] : grassStates) {
                 if (st->blas) destroyBlasRecord(*st->blas);
                 destroyBuffer(ctx->allocator(), st->restPos);

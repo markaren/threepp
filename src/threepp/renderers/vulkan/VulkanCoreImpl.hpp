@@ -3442,6 +3442,13 @@ namespace threepp {
         // the caller frees it once cb has executed (destroyBufferMaybeBatched
         // right after endAndSubmitOneShot). Clears `up`.
         Buffer recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched);
+        // recordStagedUploads in two halves, the first for any thread:
+        // makeStaging copies up's bytes into a new host-visible staging buffer
+        // (clears up.data, keeps up.copies; the allocator and nothing of the
+        // renderer's state), recordStagedCopies records the copies and their
+        // barriers from it into cb (clears up.copies).
+        Buffer makeStaging(StagedUploads& up);
+        void recordStagedCopies(StagedUploads& up, const Buffer& staging, VkCommandBuffer cb, bool dstUntouched);
         // The one-shot form: begin, record, submit (or join the open batch),
         // release the staging buffer.
         void submitStagedUploads(StagedUploads& up, const char* label);
@@ -3529,6 +3536,57 @@ namespace threepp {
                                                  const std::vector<uint32_t>* rtIndices = nullptr,
                                                  VertexWriter writer = VertexWriter::Host,
                                                  bool traced = true);
+        // buildBlasFor in two halves. prepareBlas validates the geometry, makes
+        // the record's buffers and queues their bytes in p.up: any thread (the
+        // geometry's arrays and the allocator; the caller reads interopTarget
+        // from forceUnpackedGeoms_). finishBlas records the copies (from
+        // p.staging when the preparing thread made it) and the acceleration
+        // structure's build into the open one-shot or batch: the render thread.
+        // discardBlasPrep frees a prepared record nothing has recorded yet.
+        struct BlasPrep {
+            std::unique_ptr<BlasRecord> rec;
+            StagedUploads up;
+            Buffer staging;
+            VkDeviceSize vbBytes = 0;
+            uint32_t vertexCount = 0, primitiveCount = 0, indexCount = 0;
+            bool indexed = false, packIdx = false, rt = false, updatable = false, interopTarget = false;
+            // With ray query: the structure, created, and what its build needs.
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            Buffer scratch;
+            uint32_t buildPrims = 0;
+            bool compactThis = false;
+        };
+        bool prepareBlas(const BufferGeometry& geom, bool allowPacked, bool updatable,
+                         const std::vector<uint32_t>* rtIndices, VertexWriter writer, bool traced,
+                         bool interopTarget, BlasPrep& p);
+        std::unique_ptr<BlasRecord> finishBlas(const BufferGeometry& geom, BlasPrep& p);
+        void discardBlasPrep(BlasPrep& p);
+        // A hidden GrassMesh field's state prepared on a worker thread from its
+        // slot edit on (beginGrassPrep, from beginHiddenAdmission): its record's
+        // buffers and its rest-pose and height-fraction inputs, every byte in
+        // one filled staging buffer. ensureGrassState takes it (waiting for it
+        // only when the field is shown before it is ready) and records just the
+        // copies and the build; the pump admits a field once it is ready.
+        struct GrassPrepData {
+            BlasPrep blas;
+            Buffer restPos, heightFrac;
+            uint32_t vertexCount = 0;
+            bool ok = false;
+        };
+        struct GrassPrep {
+            std::shared_ptr<BufferGeometry> geom;// alive while the worker reads it
+            vulkan::impl::MeshOwner owner;
+            std::future<std::unique_ptr<GrassPrepData>> job;
+        };
+        std::unordered_map<const GrassMesh*, GrassPrep> grassPreps_;
+        std::unique_ptr<GrassPrepData> prepareGrassData(const BufferGeometry& geom, bool interopTarget);
+        void beginGrassPrep(GrassMesh& gm);
+        [[nodiscard]] bool grassPrepPending(const GrassMesh& gm) const;
+        void discardGrassPrep(GrassPrepData& d);
+        // Drops preps whose field died or changed geometry (all: every one,
+        // at shutdown); waits for a worker still on one.
+        void sweepGrassPreps(bool all);
 
         // Allocate or look up the per-SkinnedMesh BLAS state. Builds the BLAS
         // once with the current pose; subsequent dirty frames go through
