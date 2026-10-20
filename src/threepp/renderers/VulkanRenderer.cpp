@@ -3032,8 +3032,22 @@ namespace threepp {
 
     void VulkanRenderer::reserveEntrySlots(uint32_t entries) {
         // Taken by the next scene build (the first lays the pool out at it,
-        // a slot edit grows it there): never mid-frame.
-        core()->reservedSlots_ = std::max(core()->reservedSlots_, entries);
+        // a slot edit grows it there): never mid-frame. The pool sizes the
+        // TLAS, so no more than its instance limit (the spec's floor, 2^24,
+        // where the device has no ray tracing to ask).
+        uint32_t limit = 1u << 24;
+        auto* ctx = core()->ctx.get();
+        if (ctx->rayQuerySupported()) {
+            VkPhysicalDeviceAccelerationStructurePropertiesKHR as{};
+            as.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+            VkPhysicalDeviceProperties2 p2{};
+            p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            p2.pNext = &as;
+            vkGetPhysicalDeviceProperties2(ctx->physicalDevice(), &p2);
+            if (as.maxInstanceCount > 0u && as.maxInstanceCount < (1ull << 32))
+                limit = static_cast<uint32_t>(as.maxInstanceCount);
+        }
+        core()->reservedSlots_ = std::max(core()->reservedSlots_, std::min(entries, limit));
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {

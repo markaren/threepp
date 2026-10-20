@@ -970,7 +970,10 @@ namespace threepp {
         // laid out at that size by the first scene build, or grown to it by
         // the next slot edit, instead of growing as it fills. A growth costs
         // no device wait, but makes those buffers and the TLAS anew. Never
-        // shrinks the pool.
+        // shrinks the pool. A slot costs GPU memory whether used or not:
+        // about 1 KB per frame in flight (chiefly its 624 B material
+        // descriptor) plus its TLAS instance. Clamped to the device's TLAS
+        // instance limit.
         void reserveEntrySlots(uint32_t entries);
 
         // Whether a mesh's admission has landed: it has renderer entries (its
