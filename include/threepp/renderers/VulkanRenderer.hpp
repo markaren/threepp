@@ -884,6 +884,10 @@ namespace threepp {
             // shown field per frame within its distance gate; a hidden field
             // takes none, and its first frame shown again one (a prime).
             uint64_t grassDeforms = 0;
+            // Of those, primes: the deform whose pose is also the field's
+            // previous one (no motion drawn), taken by a field placed anew
+            // (added, re-attached, its geometry swapped) or shown again.
+            uint64_t grassPrimes = 0;
         };
         [[nodiscard]] DynamicGeomStats dynamicGeomStats() const;
 

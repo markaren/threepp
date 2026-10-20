@@ -3777,6 +3777,7 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
             // A prime's own pose is the field's first previous pose: without
             // this its first frame reports the sway offset from the rest pose.
             if (st.primePending) {
+                ++dynGeomStats_.grassPrimes;
                 if (st.blas->prevVertex.handle != VK_NULL_HANDLE) copyGrassPose(cb, *ctx, *st.blas, st.vertexCount);
                 st.prevResyncPending = false;
                 st.primePending = false;

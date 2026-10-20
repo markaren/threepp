@@ -956,7 +956,15 @@ int main() {
             scene.remove(*live[0]);
             settle("a field detached");
             scene.add(live[0]);
-            settle("the field attached again");
+            // Its cached state comes back primed: nothing deformed it while it
+            // was away, so its last pose is no previous pose for this frame.
+            uint64_t primesAtAttach = 0;
+            {
+                const uint64_t p = renderer.dynamicGeomStats().grassPrimes;
+                settle("the field attached again",
+                       [&] { primesAtAttach = renderer.dynamicGeomStats().grassPrimes - p; });
+            }
+            if (!slotsOff) check("grass: a field attached again is primed on its first frame", primesAtAttach == 1u);
             const auto keepGeom = live[1]->geometry();
             live[1]->setGeometry(fieldGeometry(-6.f, -4.f, 97u));
             settle("a field's geometry swapped");

@@ -1402,8 +1402,14 @@ void VulkanRenderer::Impl::retireGrassState(GrassMeshState& st) {
 VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::admitGrassState(GrassMesh& gm) {
             if (const auto it = grassStates.find(&gm); it != grassStates.end()) {
                 // Its own state, for the geometry it draws: a cached field back.
-                if (it->second->liveCheck.lock() == gm.geometry() && !it->second->owner.gone())
+                // Primed like a new one: it had no entries, so no scan deformed
+                // it (or remembered skipping it) while it was away, and its
+                // last pose would be its previous one, the wind change since
+                // it left drawn as motion.
+                if (it->second->liveCheck.lock() == gm.geometry() && !it->second->owner.gone()) {
+                    it->second->primePending = true;
                     return it->second.get();
+                }
                 // A geometry swapped while the old one lives on elsewhere.
                 retireGrassState(*it->second);
                 grassStates.erase(it);
