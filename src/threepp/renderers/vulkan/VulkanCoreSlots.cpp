@@ -1241,6 +1241,7 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
             // The new nodes at their spans; then the in-place visibility flips.
             for (size_t b = 0; b < d.spanSnap.size(); ++b) d.snap[d.spanSnap[b]].spanIndex = newOfSpan[b];
             sceneSnapshot_.swap(d.snap);
+            ++snapshotGen_;
             for (const SnapFlip& f : d.flips) {
                 SnapNode& sn = sceneSnapshot_[f.snIdx];
                 sn.flags = (sn.flags & ~(kSnapHidden | kSnapMatHidden)) | (f.hidden ? kSnapHidden : 0u) |

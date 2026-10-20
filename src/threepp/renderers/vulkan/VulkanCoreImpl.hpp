@@ -1040,9 +1040,40 @@ namespace threepp {
             bool fallback = false;
         };
         static bool deltaDisabled();
-        bool diffSceneWalk(Object3D& scene, Camera& camera, SceneDelta& d);
+        // useVersions: a child whose Object3D::structureVersion is the one its
+        // node recorded is copied with its whole subtree, unvisited (its flags
+        // are then settled by flatSnapshotCheck).
+        bool diffSceneWalk(Object3D& scene, Camera& camera, SceneDelta& d, bool useVersions);
         void diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3D& o, bool parentVis, bool underLod,
-                           int64_t oldIdx, Camera& camera);
+                           int64_t oldIdx, int32_t parentNewIdx, bool useVersions, Camera& camera);
+        // ── Walks proportional to the edit (Object3D::structureVersion) ─────
+        // A frame whose scene's structure version is the snapshot's had nothing
+        // added, removed or swapped anywhere in it, so every node the snapshot
+        // names is alive and in place: flatSnapshotCheck tests only the nodes
+        // whose state a plain field can change (meshes, lines, points and LOD
+        // nodes; flatWatch_), in pre-order, each with its effective visibility
+        // from its ancestors (memoised; flatVis_), by the replay's own per-node
+        // test, and applies the visibility flips. Anything else returns false
+        // and the replay walk decides. THREEPP_VULKAN_NO_VERSIONS=1: never.
+        static bool versionsDisabled();
+        bool flatSnapshotCheck(Object3D& scene, Camera& camera);
+        uint64_t snapshotGen_ = 1;           // bumped whenever sceneSnapshot_ is rebuilt or replaced
+        uint64_t flatWatchGen_ = 0;
+        std::vector<uint32_t> flatWatch_;
+        // Per distinct material of the watched meshes: its routing bits and
+        // version as recorded, and its meshes with spans (a version that moved
+        // has their maps compared, as the replay does); per distinct geometry,
+        // its attribute set's version.
+        struct FlatMaterial {
+            const Material* mat = nullptr;
+            uint32_t first = 0;// a node with it, for its routing reads
+            uint32_t bits = 0;
+            unsigned int version = 0;
+            std::vector<uint32_t> nodes;
+        };
+        std::vector<FlatMaterial> flatMats_;
+        std::vector<std::pair<BufferGeometry*, unsigned int>> flatGeoms_;
+        std::vector<int8_t> flatVis_;         // per node: -1 unknown, else effective visibility this frame
         void diffSceneRemoved(SceneDelta& d, size_t first, size_t end);
         bool trySlotDelta(SceneDelta& d);
         // THREEPP_VULKAN_WALK_CHECK=1: after a delta, a full recording compared

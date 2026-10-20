@@ -84,6 +84,7 @@
 #include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -1097,6 +1098,59 @@ int main() {
             check("grass fields: device memory back within 8 MiB of where it started",
                   mem1 <= mem0 + static_cast<uint64_t>(8 * MiB));
             check("grass fields: no temporal history reset", r1.historyResets == r0.historyResets);
+        }
+
+        // ── A LOD: its levels switched, the whole LOD dropped and back ──────
+        // A LOD is a subtree like any other (since 2026-10-20): its hidden
+        // levels are walked and a level that had entries keeps them, hidden,
+        // so switching back to it is a flip; only a level's first show places
+        // it. A LOD added or removed is a slot delta like a cell.
+        {
+            auto lod = LOD::create();
+            auto nearLevel = Mesh::create(SphereGeometry::create(3.f, 48, 24), paint(Color(0.9f, 0.25f, 0.2f)));
+            auto farLevel = Mesh::create(BoxGeometry::create(4.f, 4.f, 4.f), paint(Color(0.2f, 0.3f, 0.9f)));
+            lod->addLevel(nearLevel, 0.f);
+            lod->addLevel(farLevel, 50.f);
+            // The camera orbits ~75 m from the origin: at the origin the LOD
+            // shows its far level, half way to the camera its near one.
+            const auto place = [&](bool near) {
+                if (near) lod->position.copy(camera.position).multiplyScalar(0.5f);
+                else lod->position.set(0.f, 0.f, 0.f);
+            };
+            const auto t0 = renderer.tlasStats();
+            place(false);
+            scene.add(lod);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            const auto t1 = renderer.tlasStats();
+            for (int sw = 0; sw < 6; ++sw) {
+                for (int f = 0; f < kGap; ++f) {
+                    place(sw % 2 == 0);
+                    frame(-1, f);
+                    if (dump && f == kGap - 1) dumpFrame("churn_lod", sw, 0, f);
+                }
+            }
+            const auto t2 = renderer.tlasStats();
+            scene.remove(*lod);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            const auto t3 = renderer.tlasStats();
+            std::printf("\na LOD: added in %llu slot edits (%llu deltas), six level switches in %llu slot edits, "
+                        "removed in %llu (%llu deltas); %llu structural rebuilds\n",
+                        static_cast<unsigned long long>(t1.slotEdits - t0.slotEdits),
+                        static_cast<unsigned long long>(t1.slotDeltas - t0.slotDeltas),
+                        static_cast<unsigned long long>(t2.slotEdits - t1.slotEdits),
+                        static_cast<unsigned long long>(t3.slotEdits - t2.slotEdits),
+                        static_cast<unsigned long long>(t3.slotDeltas - t2.slotDeltas),
+                        static_cast<unsigned long long>(t3.structuralRebuilds - t0.structuralRebuilds));
+            if (!slotsOff) {
+                check("a LOD: no structural rebuild", t3.structuralRebuilds == t0.structuralRebuilds);
+                check("a LOD: switching levels places only the near level's first show",
+                      t2.slotEdits - t1.slotEdits == 1u);
+                const char* noDeltaEnv = std::getenv("THREEPP_VULKAN_NO_DELTA");
+                if (!(noDeltaEnv && *noDeltaEnv == '1')) {
+                    check("a LOD: added and removed as slot deltas",
+                          t1.slotDeltas > t0.slotDeltas && t3.slotDeltas > t2.slotDeltas);
+                }
+            }
         }
 
         // ── A streamed world frees what it drops ─────────────────────────────

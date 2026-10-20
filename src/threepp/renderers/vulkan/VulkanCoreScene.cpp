@@ -14,16 +14,15 @@ namespace threepp {
 namespace {
 
     // Pre-order walk over the scene graph, as Object3D::traverseVisible, but a
-    // hidden node's subtree is entered too, unless the node is or sits under a
-    // LOD (the LOD's level selection owns those children's visibility). A mesh
-    // hidden at run time keeps its entries (MeshEntry::hidden), and the walk
-    // must reach it, under a hidden group too. f(node, effectivelyVisible,
-    // underLod) returns whether the node is a LOD.
+    // hidden node's subtree is entered too, a LOD's hidden levels included: a
+    // mesh hidden at run time keeps its entries (MeshEntry::hidden), and the
+    // walk must reach it, under a hidden group or level too (a LOD's level
+    // switch is then a flip). f(node, effectivelyVisible, underLod) returns
+    // whether the node is a LOD.
     template<class F>
     void walkSceneGraph(Object3D& o, bool parentVisible, bool underLod, F& f) {
         const bool vis = parentVisible && o.visible;
         const bool isLod = f(o, vis, underLod);
-        if (!vis && (underLod || isLod)) return;
         for (Object3D* c : o.children) walkSceneGraph(*c, vis, underLod || isLod, f);
     }
 
@@ -33,8 +32,7 @@ namespace {
     void walkSceneGraph(Object3D& o, bool parentVisible, bool underLod, F& f, P& post) {
         const bool vis = parentVisible && o.visible;
         const bool isLod = f(o, vis, underLod);
-        if (vis || !(underLod || isLod))
-            for (Object3D* c : o.children) walkSceneGraph(*c, vis, underLod || isLod, f, post);
+        for (Object3D* c : o.children) walkSceneGraph(*c, vis, underLod || isLod, f, post);
         post(o);
     }
 
@@ -165,9 +163,11 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
                                            Camera& camera) {
             // A hidden mesh has entries, hidden, when it had them before or
             // Object3D::resident asks for them up front (so its first show is
-            // the same in-place flip as any later one). Never under a LOD.
+            // the same in-place flip as any later one). A LOD's level keeps the
+            // entries it had (a switch back is a flip); resident does not apply
+            // under a LOD.
             const auto entriesWhileHidden = [&](const Mesh& mesh, bool ul) {
-                return !ul && (mesh.resident || hadEntriesBefore(w, mesh));
+                return (!ul && mesh.resident) || hadEntriesBefore(w, mesh);
             };
             SnapNode sn{};
             sn.obj = &o;
@@ -186,7 +186,7 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
                 auto* lod = dynamic_cast<LOD*>(&o);
                 if (lod->autoUpdate && vis) lod->update(camera);
                 sn.lod   = lod;
-                sn.flags = kSnapKindOther | kSnapLod | kSnapNoDelta;
+                sn.flags = kSnapKindOther | kSnapLod;
                 w.snap.push_back(sn);
                 // Auto-LOD exemption: every level object under a manual
                 // LOD node is author-selected already; don't let auto-LOD
@@ -383,8 +383,11 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
             // pre-order, so an enclosing LOD node registered its level
             // objects before we got here.
             bool lodExempt = !m->autoLod;// per-object opt-out (self-managed LOD, e.g. terrain tiles)
+            // Under a level object of a manual LOD (manualLodLevelRoots_ holds
+            // them; asked of the parents themselves, so a node recorded by the
+            // edit-proportional walk, which keeps no such set, gets the same).
             for (Object3D* p = m->parent; !lodExempt && p; p = p->parent) {
-                if (manualLodLevelRoots_.count(p)) lodExempt = true;
+                if (p->parent && (nodeKind(*p->parent) & kNodeLod)) lodExempt = true;
             }
             const MaterialWithEmissive* lodEmissive = nullptr;
             if (auto mat = m->material(); mat && (materialKind(*mat) & kMatEmissive)) {
@@ -691,7 +694,7 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
             return ok;
         }
 
-bool VulkanRenderer::Impl::diffSceneWalk(Object3D& scene, Camera& camera, SceneDelta& d) {
+bool VulkanRenderer::Impl::diffSceneWalk(Object3D& scene, Camera& camera, SceneDelta& d, bool useVersions) {
             THREEPP_CPUPROF("scene.3a_diffWalk");
             const auto& old = sceneSnapshot_;
             // A snapshot whose subtree ranges were not recorded, or of another
@@ -704,7 +707,7 @@ bool VulkanRenderer::Impl::diffSceneWalk(Object3D& scene, Camera& camera, SceneD
             d.snap.reserve(old.size() + 64u);
             SceneWalkOut w{d.built, d.lines, d.spans, d.fields, d.snap};
             w.lazyRows = false;// a span recorded anew has every row
-            diffSceneNode(d, w, scene, true, false, 0, camera);
+            diffSceneNode(d, w, scene, true, false, 0, -1, useVersions, camera);
             return !d.fallback && d.changed && d.lines.empty() && d.fields.empty();
         }
 
@@ -714,7 +717,7 @@ void VulkanRenderer::Impl::diffSceneRemoved(SceneDelta& d, size_t first, size_t 
                 const SnapNode& sn = old[k];
                 // Under a LOD the expansion keeps no hidden level's entries: the
                 // full path decides what a level switch leaves.
-                if (sn.flags & (kSnapNoDelta | kSnapUnderLod)) {
+                if (sn.flags & kSnapNoDelta) {
                     d.fallback = true;
                     return;
                 }
@@ -724,7 +727,8 @@ void VulkanRenderer::Impl::diffSceneRemoved(SceneDelta& d, size_t first, size_t 
         }
 
 void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3D& o, bool parentVis,
-                                         bool underLod, int64_t oldIdx, Camera& camera) {
+                                         bool underLod, int64_t oldIdx, int32_t parentNewIdx, bool useVersions,
+                                         Camera& camera) {
             if (d.fallback) return;
             const auto& old = sceneSnapshot_;
             const bool vis = parentVis && o.visible;
@@ -739,10 +743,6 @@ void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3
                 // one here and a removed one there), and unchanged by the replay's
                 // own test.
                 if (sn.parent == o.parent && snapNodeUnchanged(sn, o, vis, underLod, camera, flip, f)) {
-                    if (flip && underLod) {
-                        d.fallback = true;// see diffSceneRemoved
-                        return;
-                    }
                     d.snap.push_back(sn);
                     if (flip) {
                         f.snIdx = newIdx;
@@ -752,7 +752,7 @@ void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3
                     kept = true;
                 } else {
                     // Changed: recorded anew below; its span (if any) goes.
-                    if ((sn.flags & kSnapNoDelta) || underLod) {
+                    if (sn.flags & kSnapNoDelta) {
                         d.fallback = true;
                         return;
                     }
@@ -760,10 +760,6 @@ void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3
                 }
             }
             if (!kept) {
-                if (underLod) {
-                    d.fallback = true;
-                    return;
-                }
                 d.changed = true;
                 const size_t spans0 = d.spans.size();
                 recordSceneNode(w, o, vis, underLod, camera);
@@ -776,6 +772,7 @@ void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3
                 if (!vis) rec.flags |= kSnapHidden;
                 if (underLod) rec.flags |= kSnapUnderLod;
                 if (o.resident) rec.flags |= kSnapResident;
+                isLod = (rec.flags & kSnapLod) != 0u;// its children sit under it
                 if (d.spans.size() != spans0) {
                     // One span, named by its node (an overlay's is not: kSnapNoDelta).
                     if (d.spans.size() != spans0 + 1u || rec.spanIndex != static_cast<int32_t>(spans0)) {
@@ -791,7 +788,9 @@ void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3
                     if (sn.spanIndex >= 0 && sn.instCount == rec.instCount) ++d.swaps;
                 }
             }
-            const bool entered = vis || !(underLod || isLod);
+            d.snap[newIdx].ver = o.structureVersion();
+            d.snap[newIdx].parentIdx = parentNewIdx;
+            const bool entered = true;// a LOD's hidden levels too (walkSceneGraph)
             // Its old children: the nodes after it up to its subtree's end, each
             // child's subtree skipped by its own range.
             size_t oc = 0, oend = 0;
@@ -822,7 +821,26 @@ void VulkanRenderer::Impl::diffSceneNode(SceneDelta& d, SceneWalkOut& w, Object3
                         }
                     }
                     if (m >= 0) oc = old[static_cast<size_t>(m)].subtreeEnd;
-                    diffSceneNode(d, w, *c, vis, childUnderLod, m, camera);
+                    if (useVersions && m >= 0 && c->structureVersion() == old[static_cast<size_t>(m)].ver) {
+                        // Nothing added, removed or swapped below it since: its
+                        // nodes as they were, at their new place (indices
+                        // shifted). Flags a plain field changes are settled by
+                        // flatSnapshotCheck once the delta is applied.
+                        const auto from = static_cast<size_t>(m), end = static_cast<size_t>(old[from].subtreeEnd);
+                        const auto at = static_cast<int64_t>(d.snap.size());
+                        const int64_t shift = at - static_cast<int64_t>(from);
+                        d.snap.insert(d.snap.end(), old.begin() + static_cast<std::ptrdiff_t>(from),
+                                      old.begin() + static_cast<std::ptrdiff_t>(end));
+                        for (size_t k = static_cast<size_t>(at); k < d.snap.size(); ++k) {
+                            SnapNode& cp = d.snap[k];
+                            cp.subtreeEnd = static_cast<uint32_t>(static_cast<int64_t>(cp.subtreeEnd) + shift);
+                            cp.parentIdx = k == static_cast<size_t>(at)
+                                                   ? static_cast<int32_t>(newIdx)
+                                                   : static_cast<int32_t>(cp.parentIdx + shift);
+                        }
+                        continue;
+                    }
+                    diffSceneNode(d, w, *c, vis, childUnderLod, m, static_cast<int32_t>(newIdx), useVersions, camera);
                     if (d.fallback) return;
                 }
             }
@@ -846,6 +864,8 @@ void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
             auto visit = [&](Object3D& o, bool vis, bool underLod) -> bool {
                 recordSceneNode(w, o, vis, underLod, camera);
                 SnapNode& rec = snap.back();
+                rec.ver = o.structureVersion();
+                rec.parentIdx = open.empty() ? -1 : static_cast<int32_t>(open.back());
                 if (!vis) rec.flags |= kSnapHidden;
                 if (underLod) rec.flags |= kSnapUnderLod;
                 if (o.resident) rec.flags |= kSnapResident;
@@ -865,8 +885,21 @@ void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
             for (size_t k = 0; k < std::min(snap.size(), sceneSnapshot_.size()); ++k) {
                 const SnapNode& a = snap[k];
                 const SnapNode& b = sceneSnapshot_[k];
+                // A plain node's own hidden bit is only the replay's (its
+                // descendants' flips are what draw): flatSnapshotCheck leaves it
+                // for a node no mesh, line or LOD sits under.
+                const uint32_t mask =
+                        ((a.flags & kSnapKindMask) == kSnapKindOther && (a.flags & kSnapLod) == 0u) ? ~kSnapHidden : ~0u;
                 if (a.obj != b.obj || a.objId != b.objId || a.parent != b.parent || a.subtreeEnd != b.subtreeEnd ||
-                    a.flags != b.flags || a.geom != b.geom || a.mat != b.mat || a.instCount != b.instCount) {
+                    (a.flags & mask) != (b.flags & mask) || a.geom != b.geom || a.mat != b.mat ||
+                    a.instCount != b.instCount || a.ver != b.ver || a.parentIdx != b.parentIdx) {
+                    if (bad < 8)
+                        std::fprintf(stderr,
+                                     "[VulkanRenderer]   node %zu: obj %d flags %x/%x ver %llu/%llu parent %d/%d "
+                                     "end %u/%u span %d/%d\n",
+                                     k, int(a.obj == b.obj), a.flags, b.flags, static_cast<unsigned long long>(a.ver),
+                                     static_cast<unsigned long long>(b.ver), a.parentIdx, b.parentIdx, a.subtreeEnd,
+                                     b.subtreeEnd, a.spanIndex, b.spanIndex);
                     mismatch("node", k);
                     continue;
                 }
@@ -888,6 +921,164 @@ void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
                     mismatch("span's first row", k);
             }
             walkCheckMismatches_ += bad;
+        }
+
+bool VulkanRenderer::Impl::versionsDisabled() {
+            static const bool off = [] {
+                const char* e = std::getenv("THREEPP_VULKAN_NO_VERSIONS");
+                return e && e[0] == '1';
+            }();
+            return off;
+        }
+
+bool VulkanRenderer::Impl::flatSnapshotCheck(Object3D& scene, Camera& camera) {
+            if (versionsDisabled()) return false;
+            auto& snap = sceneSnapshot_;
+            if (!sceneBuilt_ || snap.empty() || snap[0].obj != &scene || snap[0].objId != scene.id ||
+                snap[0].ver != scene.structureVersion())
+                return false;
+            if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
+            THREEPP_CPUPROF("scene.2b_flatCheck");
+            constexpr uint32_t kMatBits = kSnapWire | kSnapTet | kSnapParticle | kSnapUiBlend;
+            const auto routingOf = [](const SnapNode& sn) {
+                const bool wire = sn.wf && sn.wf->wireframe;
+                uint32_t bits = wire ? kSnapWire : 0u;
+                if (sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr) bits |= kSnapTet;
+                if (sn.mat && sn.mat->name == kParticleMaterialName) bits |= kSnapParticle;
+                if (!wire && sn.basic && sn.basic->transparent && !sn.basic->map) bits |= kSnapUiBlend;
+                return bits;
+            };
+            if (flatWatchGen_ != snapshotGen_) {
+                // Meshes, lines, points, LOD nodes, and every node recorded
+                // hidden: a mesh hidden before it was ever shown is recorded as
+                // a plain node (no entries), and its show is a placement.
+                flatWatch_.clear();
+                flatMats_.clear();
+                flatGeoms_.clear();
+                std::unordered_map<const Material*, size_t> matAt;
+                std::unordered_set<const BufferGeometry*> geomSeen;
+                for (uint32_t k = 0; k < snap.size(); ++k) {
+                    const SnapNode& sn = snap[k];
+                    const uint32_t kind = sn.flags & kSnapKindMask;
+                    if (kind == kSnapKindOther && (sn.flags & (kSnapLod | kSnapHidden)) == 0u) continue;
+                    flatWatch_.push_back(k);
+                    if (sn.geomB && geomSeen.insert(sn.geomB).second) flatGeoms_.emplace_back(sn.geomB, sn.attrVer);
+                    if (kind != kSnapKindMesh || !sn.mat) continue;
+                    auto [it, fresh] = matAt.emplace(sn.mat, flatMats_.size());
+                    if (fresh) flatMats_.push_back({sn.mat, k, sn.flags & kMatBits, sn.mat->version(), {}});
+                    if (sn.spanIndex >= 0) flatMats_[it->second].nodes.push_back(k);
+                }
+                flatWatchGen_ = snapshotGen_;
+            }
+            // Per geometry: an attribute added, replaced or removed.
+            for (const auto& [g, ver] : flatGeoms_)
+                if (g->attributesVersion() != ver) return false;
+            // Per material: its routing, and a map swapped (a moved version,
+            // then the replay's own test on each of its meshes).
+            for (FlatMaterial& fm : flatMats_) {
+                if (routingOf(snap[fm.first]) != fm.bits) return false;
+                const unsigned int v = fm.mat->version();
+                if (v == fm.version) continue;
+                for (const uint32_t k : fm.nodes) {
+                    const SnapNode& sn = snap[k];
+                    if (static_cast<size_t>(sn.spanIndex) >= entrySpans_.size()) return false;
+                    const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
+                    const Mesh& m = *sn.mesh;
+                    if (v != fp0.matVersion &&
+                        (albedoTexOf(m) != fp0.albedoTex || roughnessTexOf(m) != fp0.roughnessTex ||
+                         metalnessTexOf(m) != fp0.metalnessTex || normalTexOf(m) != fp0.normalTex ||
+                         transmissionTexOf(m) != fp0.transmissionTex || clearcoatTexOf(m) != fp0.clearcoatTex ||
+                         clearcoatRoughnessTexOf(m) != fp0.clearcoatRoughnessTex ||
+                         emissiveTexOf(m) != fp0.emissiveTex || occlusionTexOf(m) != fp0.occlusionTex))
+                        return false;
+                }
+                fm.version = v;
+            }
+            flatVis_.assign(snap.size(), int8_t(-1));
+            // The plain nodes whose hidden bit moved (applied with the flips).
+            static thread_local std::vector<std::pair<uint32_t, bool>> groupFlips;
+            static thread_local std::vector<SnapFlip> flips;
+            static thread_local std::vector<uint32_t> chain;
+            groupFlips.clear();
+            flips.clear();
+            // A node's effective visibility: its own flag and its ancestors',
+            // each ancestor read once a frame.
+            const auto effVis = [&](uint32_t k) -> bool {
+                chain.clear();
+                int32_t j = static_cast<int32_t>(k);
+                while (j >= 0 && flatVis_[static_cast<size_t>(j)] < 0) {
+                    chain.push_back(static_cast<uint32_t>(j));
+                    j = snap[static_cast<size_t>(j)].parentIdx;
+                }
+                bool v = j < 0 ? true : flatVis_[static_cast<size_t>(j)] != 0;
+                for (size_t c = chain.size(); c-- > 0;) {
+                    const uint32_t n = chain[c];
+                    v = v && snap[n].obj->visible;
+                    flatVis_[n] = v ? 1 : 0;
+                    const SnapNode& sn = snap[n];
+                    if (n != k && (sn.flags & kSnapKindMask) == kSnapKindOther && (sn.flags & kSnapLod) == 0u &&
+                        ((sn.flags & kSnapHidden) != 0u) == v)
+                        groupFlips.emplace_back(n, !v);
+                }
+                return v;
+            };
+            const bool overlayOn = overlayLayer_ >= 0;
+            for (const uint32_t k : flatWatch_) {
+                const SnapNode& sn = snap[k];
+                Object3D& o = *sn.obj;
+                const bool vis = effVis(k);
+                const uint32_t kind = sn.flags & kSnapKindMask;
+                if (((sn.flags & kSnapResident) != 0u) != o.resident) return false;
+                const bool visFlip = ((sn.flags & kSnapHidden) != 0u) == vis;
+                if (kind == kSnapKindOther) {
+                    // A node recorded hidden, or a LOD. A group (a LOD's level)
+                    // shown or hidden is its descendants' flips, which their own
+                    // nodes carry; a mesh recorded with no entries, or a LOD,
+                    // takes the replay.
+                    if (visFlip) {
+                        if ((sn.flags & kSnapLod) != 0u || (nodeKind(o) & ~kNodeCamera) != 0u) return false;
+                        groupFlips.emplace_back(k, !vis);
+                    }
+                    if ((sn.flags & kSnapLod) != 0u && vis && sn.lod->autoUpdate) sn.lod->update(camera);
+                    continue;
+                }
+                if (kind != kSnapKindMesh) {
+                    // A line or points (few): the replay's own test.
+                    bool flip = false;
+                    SnapFlip f;
+                    if (!snapNodeUnchanged(sn, o, vis, (sn.flags & kSnapUnderLod) != 0u, camera, flip, f) || flip)
+                        return false;
+                    continue;
+                }
+                const bool over = overlayOn && o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
+                const bool sensor = o.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer);
+                if (over != ((sn.flags & kSnapOverlay) != 0u) || sensor != ((sn.flags & kSnapSensorOnly) != 0u))
+                    return false;
+                if (sn.instCount >= 0 && sn.inst->count() != static_cast<size_t>(sn.instCount)) return false;
+                const bool matHidden = sn.mat && !sn.mat->visible;
+                if (!visFlip && matHidden == ((sn.flags & kSnapMatHidden) != 0u)) continue;
+                // Hidden or shown: a flip of its span, as the replay's (a LOD's
+                // level switch too); a span whose admission has not landed is
+                // shown by a placement.
+                if (sn.spanIndex < 0) return false;
+                if (vis && !matHidden && static_cast<size_t>(sn.spanIndex) < entrySpans_.size() &&
+                    entrySpans_[sn.spanIndex].admitPending)
+                    return false;
+                SnapFlip f;
+                f.snIdx = k;
+                f.hidden = !vis;
+                f.matHidden = matHidden;
+                flips.push_back(f);
+            }
+            for (const auto& [n, hidden] : groupFlips)
+                snap[n].flags = hidden ? (snap[n].flags | kSnapHidden) : (snap[n].flags & ~kSnapHidden);
+            for (const SnapFlip& f : flips) {
+                SnapNode& sn = snap[f.snIdx];
+                sn.flags = (sn.flags & ~(kSnapHidden | kSnapMatHidden)) | (f.hidden ? kSnapHidden : 0u) |
+                           (f.matHidden ? kSnapMatHidden : 0u);
+                setSpanHidden(static_cast<size_t>(sn.spanIndex), f.hidden || f.matHidden);
+            }
+            return true;
         }
 
 void VulkanRenderer::Impl::setSpanHidden(size_t spanIndex, bool hidden) {
@@ -1305,8 +1496,22 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // caught: matrices by the memcmp diff, material/geometry edits by
             // their version reads, structure/visibility/texture-routing
             // changes by the snapshot walk itself (mismatch ⇒ full path).
-            bool snapLean;
-            {
+            // Ahead of it, when nothing in the scene was added, removed or
+            // swapped (Object3D::structureVersion): no walk at all, only the
+            // nodes a plain field can change (flatSnapshotCheck).
+            bool snapLean = flatSnapshotCheck(scene, camera);
+            if (snapLean) ++tlasStats_.flatChecks;
+            static const bool flatCheck = [] {
+                const char* v = std::getenv("THREEPP_VULKAN_WALK_CHECK");
+                return v && v[0] == '1';
+            }();
+            if (snapLean && flatCheck) deltaWalkCheck(scene, camera);
+            // A moved structure version: something was added, removed or
+            // swapped, which the replay walk can only find to fail on.
+            const bool structureMoved = !versionsDisabled() && sceneBuilt_ && !sceneSnapshot_.empty() &&
+                                        sceneSnapshot_[0].obj == &scene &&
+                                        sceneSnapshot_[0].ver != scene.structureVersion();
+            if (!snapLean && !structureMoved) {
                 THREEPP_CPUPROF("scene.2_snapshotMatch");
                 snapLean = sceneSnapshotMatches(scene, camera);
             }
@@ -1333,8 +1538,23 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // when it takes the change, the full expansion below is skipped.
             bool deltaApplied = false;
             if (sceneBuilt_ && !slotsDisabled() && !deltaDisabled()) {
+                // Only the subtrees whose structure version moved are visited
+                // (when the scene's own did: otherwise the change is in a node's
+                // state, which only a complete diff finds).
+                const bool useVersions = !versionsDisabled() && !sceneSnapshot_.empty() &&
+                                         sceneSnapshot_[0].obj == &scene &&
+                                         sceneSnapshot_[0].ver != scene.structureVersion();
                 SceneDelta delta;
-                deltaApplied = diffSceneWalk(scene, camera, delta) && trySlotDelta(delta);
+                deltaApplied = diffSceneWalk(scene, camera, delta, useVersions) && trySlotDelta(delta);
+                if (deltaApplied && useVersions) ++tlasStats_.versionedDeltas;
+                if (deltaApplied && useVersions && !flatSnapshotCheck(scene, camera)) {
+                    // A state change inside a subtree the versions skipped: the
+                    // replay (flips) or one complete diff.
+                    if (!sceneSnapshotMatches(scene, camera)) {
+                        SceneDelta again;
+                        deltaApplied = diffSceneWalk(scene, camera, again, false) && trySlotDelta(again);
+                    }
+                }
                 static const bool deltaCheck = [] {
                     const char* v = std::getenv("THREEPP_VULKAN_WALK_CHECK");
                     return v && v[0] == '1';
@@ -1576,8 +1796,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     walkChain.push_back({&o, stable});
                 }
                 if (!reused) recordNode(o, vis, underLod);// pushes exactly one SnapNode
-                snapOpen.push_back(sceneSnapshot_.size() - 1);
                 SnapNode& rec = sceneSnapshot_.back();
+                rec.ver = o.structureVersion();
+                rec.parentIdx = snapOpen.empty() ? -1 : static_cast<int32_t>(snapOpen.back());
+                snapOpen.push_back(sceneSnapshot_.size() - 1);
                 if (!vis) rec.flags |= kSnapHidden;
                 if (underLod) rec.flags |= kSnapUnderLod;
                 if (o.resident) rec.flags |= kSnapResident;
@@ -1709,6 +1931,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             particleFields_     = std::move(builtFields);
             }
             }// !deltaApplied
+            ++snapshotGen_;
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             ++lodLevelVersion_;// the entries are laid out anew
             // ...and re-bake every ParticleField surface height map (F5). The

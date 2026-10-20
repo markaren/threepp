@@ -928,6 +928,12 @@ namespace threepp {
             // Of those, the ones that moved no span (every new span an exact fit
             // or at the end): no pass over the span list at all.
             uint64_t slotDeltasInPlace = 0;
+            // Frames whose scene had nothing added, removed or swapped
+            // (Object3D::structureVersion) settled with no walk of the scene
+            // graph, only its meshes' state; and slot deltas whose diff walk
+            // visited only the subtrees whose structure version moved.
+            uint64_t flatChecks = 0;
+            uint64_t versionedDeltas = 0;
             // BLASes a slot edit built (its new geometries) and compacted once
             // their build had completed, a frame or two later, without a host
             // wait; the rebuild compacts its own in place.

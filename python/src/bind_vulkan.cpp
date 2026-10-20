@@ -1902,6 +1902,8 @@ namespace threepp_py {
                                            d["slot_pool_growths"]   = s.slotPoolGrowths;
                                            d["slot_capacity"]       = s.slotCapacity;
                                            d["slot_deltas"]         = s.slotDeltas;
+                                           d["flat_checks"]         = s.flatChecks;
+                                           d["versioned_deltas"]    = s.versionedDeltas;
                                            return d;
                                        },
                                        "Scene build counters since the renderer was made: TLAS full builds and "
@@ -1923,7 +1925,9 @@ namespace threepp_py {
                                        "texture swapped on a mesh, taken by a slot edit), "
                                        "slot_pool_growths (slot edits that outgrew the slot pool and grew "
                                        "it in place, no device wait), slot_capacity (the entries the "
-                                       "pool holds now, see reserve_entry_slots) and slot_deltas (slot edits "
+                                       "pool holds now, see reserve_entry_slots), flat_checks (frames with nothing added, removed or "
+                                       "swapped settled with no walk of the scene graph), versioned_deltas (slot deltas "
+                                       "that visited only the subtrees whose structure moved) and slot_deltas (slot edits "
                                        "taken edit-proportionally: only the nodes and spans that changed "
                                        "found and placed).")
                 .def("reserve_entry_slots",

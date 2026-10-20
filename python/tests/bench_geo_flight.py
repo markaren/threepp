@@ -192,6 +192,12 @@ def main(argv=None):
             "f_builds", "f_adds", "f_removes", "f_pending", "c_builds", "c_adds", "c_removes",
             "f_active", "f_cached", "mem_alloc", "mem_reserved", "still", "deferred", "shows"]
     summary = summarise(rows, cols, ts0, frames, period)
+    # How the scene's edits were taken: edit-proportionally (slot_deltas, of them
+    # versioned_deltas visiting only the subtrees that moved), and the frames
+    # settled with no walk of the scene graph (flat_checks).
+    ts1 = dict(renderer.tlas_stats)
+    for key in ("slot_deltas", "versioned_deltas", "flat_checks"):
+        summary[key] = int(ts1.get(key, 0)) - int(ts0.get(key, 0))
     summary.update({"tag": args.tag, "pack": os.path.basename(os.path.normpath(args.pack)),
                     "no_slots": os.environ.get("THREEPP_VULKAN_NO_SLOTS", ""),
                     "replayable_lod": bool(args.replayable_lod), "prefetch": args.prefetch, "tile_stage": args.tile_stage, "size": [w, h],

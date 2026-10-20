@@ -245,6 +245,11 @@ namespace threepp::vulkan::impl {
         // among its parent's old children, and skips a removed subtree, by
         // these ranges. 0 = not recorded (a snapshot the diff walk declines).
         uint32_t subtreeEnd = 0;
+        // obj->structureVersion() when recorded (diffSceneWalk copies a subtree
+        // whose version has not moved), and the parent's index in the snapshot
+        // (-1: the root), for flatSnapshotCheck's effective visibility.
+        uint64_t ver = 0;
+        int32_t parentIdx = -1;
     };
 
     // One contiguous run of entries sharing a single source Mesh: an
