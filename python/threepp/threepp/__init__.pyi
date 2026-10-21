@@ -11989,6 +11989,7 @@ HAS_EGL: bool
 HAS_FSR: bool
 HAS_IMGUI: bool
 HAS_PHYSX: bool
+HAS_PHYSX_GPU: bool
 HAS_VULKAN: bool
 Hemisphere: CrownShape  # value = <CrownShape.Hemisphere: 3>
 Hop: Gait  # value = <Gait.Hop: 0>

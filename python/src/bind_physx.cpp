@@ -140,6 +140,7 @@ inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) 
     };
 
 
+#if THREEPP_PHYSX_GPU
 // Thin handle over a threepp::SoftBody (a PxDeformableVolume). The body is owned by
 // the PhysxWorld's softBodies_ vector and dies with the world (or with
 // remove_soft_body), so this only holds pointers — keep_alive on the adder ties the
@@ -249,6 +250,7 @@ public:
 private:
     ::physx::PxDeformableVolumeMaterial* mat_;
 };
+#endif// THREEPP_PHYSX_GPU
 
 
 }// namespace
@@ -741,6 +743,7 @@ namespace threepp_py {
                      py::arg("static_friction"), py::arg("dynamic_friction"), py::arg("restitution"),
                      "Set all three coefficients at once (the domain-randomization hot path).");
 
+#if THREEPP_PHYSX_GPU
         py::class_<PhysxSoftBodyMaterial>(m, "PhysxSoftBodyMaterial",
                                           "A deformable-volume material: Young's modulus (Pa), Poisson's ratio and "
                                           "surface friction. Create via world.create_soft_body_material(...) and pass "
@@ -780,6 +783,7 @@ namespace threepp_py {
                      "after add_soft_body. Also the cheap option when the visual mesh is NOT drawn at all "
                      "(an external skinner owns the render surface): it reduces the per-step cost to one "
                      "few-hundred-texel texture write.");
+#endif// THREEPP_PHYSX_GPU
 
         py::class_<PhysxWorld>(m, "PhysxWorld",
                                "A PhysX rigid-body world wired to the threepp scene graph. Add meshes as "
@@ -796,7 +800,15 @@ namespace threepp_py {
                          s.enableGpuDynamics = gpu_dynamics;
                          s.enableDirectGpu = direct_gpu;
                          s.enableTgsPcm = tgs_pcm;
+#if THREEPP_PHYSX_GPU
                          s.cudaContext = reinterpret_cast<CUcontext>(cuda_context);
+#else
+                         if (cuda_context) {
+                             throw std::runtime_error(
+                                     "PhysxWorld: cuda_context needs a PhysX build with a CUDA "
+                                     "backend, which this platform's SDK does not have");
+                         }
+#endif
                          // PhysxWorld's own error says "destroy it"; from Python that
                          // is the collector's doing, so say how.
                          if (::PxIsFoundationValid()) {
@@ -877,6 +889,7 @@ namespace threepp_py {
                      "('average'|'min'|'multiply'|'max') control how two contacting materials' coefficients "
                      "mix — use 'min' so a clean material governs a contact against a different one. The "
                      "returned PhysxMaterial is mutable (per-env friction randomization). Keeps the world alive.")
+#if THREEPP_PHYSX_GPU
                 .def("create_soft_body_material",
                      [](PhysxWorld& w, float young, float poisson, float friction, const py::object& damping) {
                          auto* m = w.createSoftBodyMaterial(young, poisson, friction);
@@ -921,6 +934,7 @@ namespace threepp_py {
                      "Destroy a soft body: releases the PhysX actor and its GPU/pinned buffers, and (for "
                      "bodies added from a Mesh) detaches that mesh from its parent. The SoftBody handle is "
                      "INVALID afterwards.")
+#endif// THREEPP_PHYSX_GPU
                 .def("add_dynamic_convex",
                      [](PhysxWorld& w, Mesh& mesh, float density) {
                          auto* a = w.addDynamicConvex(mesh, density);
@@ -1121,6 +1135,7 @@ namespace threepp_py {
                      "parameterised description built without them expands to the FILE's defaults, "
                      "which for many robots names config paths that do not exist.");
 
+#if THREEPP_PHYSX_GPU
         // GPU-resident batched articulation state I/O (the direct-GPU API). Build one
         // over many identical finalized articulations in a PhysxWorld(direct_gpu=True),
         // then drive the whole swarm with read_*/write_* + step — no CPU readback.
@@ -1286,6 +1301,7 @@ namespace threepp_py {
                          return reshape(b.readHost(Read::eLINK_LINEAR_VELOCITY), b.count(), b.maxLinks() * 3); })
                 .def("read_link_angvel_host", [reshape](threepp::PhysxGpuBatch& b) {
                          return reshape(b.readHost(Read::eLINK_ANGULAR_VELOCITY), b.count(), b.maxLinks() * 3); });
+#endif// THREEPP_PHYSX_GPU
 
         // ---- PxVehicle2 direct-drive vehicle ----
         //
@@ -1590,6 +1606,9 @@ namespace threepp_py {
                         "force is zero is skipped (pad the K slots with zeros).");
 
         m.attr("HAS_PHYSX") = true;
+        // False where the PhysX SDK has no CUDA backend (macOS): gpu_dynamics,
+        // soft bodies, PBD particles and PhysxGpuBatch are compiled out there.
+        m.attr("HAS_PHYSX_GPU") = THREEPP_PHYSX_GPU != 0;
     }
 
 }// namespace threepp_py
@@ -1600,6 +1619,7 @@ namespace threepp_py {
 
     void init_physx(py::module_& m) {
         m.attr("HAS_PHYSX") = false;// Python can check availability: threepp.HAS_PHYSX
+        m.attr("HAS_PHYSX_GPU") = false;
     }
 
 }// namespace threepp_py

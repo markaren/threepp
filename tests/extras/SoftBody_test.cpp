@@ -24,6 +24,16 @@
 
 using namespace threepp;
 
+// Where the SDK has no CUDA backend (macOS) PhysxSoftBody.hpp is empty; one case
+// says so rather than leaving Catch2 with nothing to run.
+#if !THREEPP_PHYSX_GPU
+
+TEST_CASE("soft bodies need a PhysX build with a CUDA backend", "[physx][gpu]") {
+    SUCCEED("PX_SUPPORT_GPU_PHYSX is 0 on this platform - soft bodies are compiled out");
+}
+
+#else
+
 namespace {
 
     // World-space positions of a mesh's vertices, before anything touches it.
@@ -237,3 +247,5 @@ TEST_CASE("a GPU-skinned soft body is drawn from PhysX's device positions on GL"
 }
 
 #endif// THREEPP_PHYSX_CUDA_GL_INTEROP
+
+#endif// THREEPP_PHYSX_GPU

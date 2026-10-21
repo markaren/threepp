@@ -236,6 +236,7 @@ namespace {
     // "push this" to expose. What a script does want is where the thing IS now
     // that it is not a rigid transform any more — the object's own position is
     // zero for the whole of Play, because the mesh carries world-space vertices.
+#if THREEPP_PHYSX_GPU
     class SoftBodyHandle {
 
     public:
@@ -295,6 +296,7 @@ namespace {
             return body_->actor()->getWorldBounds(1.f);
         }
     };
+#endif// THREEPP_PHYSX_GPU
 
 
     // A robot the play session simulates as a reduced-coordinate articulation,
@@ -856,6 +858,7 @@ namespace threepp_py {
                 .def("wake_up", &RigidBody::wakeUp, "Take the body out of sleep.")
                 .def("__repr__", &RigidBody::repr);
 
+#if THREEPP_PHYSX_GPU
         py::class_<SoftBodyHandle, std::shared_ptr<SoftBodyHandle>>(sub, "SoftBody")
                 .def_property_readonly("object", &SoftBodyHandle::object,
                                        "The scene object whose mesh this body deforms.")
@@ -873,6 +876,7 @@ namespace threepp_py {
                               "Recompute vertex normals every step (on by default). The bulk of a "
                               "soft body's CPU cost, and pointless for a flat-shaded body.")
                 .def("__repr__", &SoftBodyHandle::repr);
+#endif// THREEPP_PHYSX_GPU
 
         py::class_<ArticulationHandle, std::shared_ptr<ArticulationHandle>>(sub, "Articulation")
                 .def_property_readonly("object", &ArticulationHandle::object,
@@ -1036,6 +1040,11 @@ namespace threepp_py {
 
         sub.def(
                 "soft_body_from_object", [](const py::handle& h) -> py::object {
+#if !THREEPP_PHYSX_GPU
+                    // No soft body is ever simulated where the SDK has no CUDA backend.
+                    (void) h;
+                    return py::none();
+#else
                     auto object = as_object3d(h);
                     auto* session = playing();
                     if (!object || !session) return py::none();
@@ -1043,6 +1052,7 @@ namespace threepp_py {
                     if (!body) return py::none();
                     return py::cast(std::make_shared<SoftBodyHandle>(
                             std::move(object), body, Lifetime{session->lifetime()}));
+#endif
                 },
                 py::arg("object"),
                 "The SoftBody PhysX is simulating for `object`, or None when Play is not running "

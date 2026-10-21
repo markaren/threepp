@@ -5,9 +5,10 @@
 // Header-only and PhysX-dependent, exactly like PhysxWorld and ConveyorPhysics
 // — the threepp library proper never links PhysX, so this file is included only
 // by builds that found the SDK. The headers ship with PhysX 5.5 whether or not
-// the machine has CUDA, so this COMPILES everywhere; only construction needs a
-// GPU (see the throw below), which is why the demo checks
-// PhysxWorld::cudaContextManager() first.
+// the machine has CUDA, so this COMPILES on every platform whose SDK has a CUDA
+// backend (THREEPP_PHYSX_GPU, see PhysxWorld.hpp; the file is empty elsewhere,
+// macOS included). Only construction needs a GPU (see the throw below), which is
+// why the demo checks PhysxWorld::cudaContextManager() first.
 //
 // Shape of the binding, and why:
 //
@@ -40,6 +41,8 @@
 #define THREEPP_PHYSX_PARTICLES_HPP
 
 #include "threepp/extras/physx/PhysxWorld.hpp"
+
+#if THREEPP_PHYSX_GPU
 
 #include <PxPhysicsAPI.h>
 #include <extensions/PxCudaHelpersExt.h>
@@ -505,5 +508,7 @@ namespace threepp {
     };
 
 }// namespace threepp
+
+#endif// THREEPP_PHYSX_GPU
 
 #endif// THREEPP_PHYSX_PARTICLES_HPP

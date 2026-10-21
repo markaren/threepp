@@ -76,6 +76,19 @@
 using namespace threepp;
 namespace cv = threepp::conveyor;
 
+// Where the SDK has no CUDA backend (macOS) PhysxParticles.hpp is empty, and so
+// is this demo.
+#if !THREEPP_PHYSX_GPU
+
+int main() {
+    std::cout << "physx_granular_conveyor: this platform's PhysX has no CUDA backend "
+                 "(PX_SUPPORT_GPU_PHYSX is 0), and PBD particles run on the GPU solver only."
+              << std::endl;
+    return 0;
+}
+
+#else
+
 namespace {
 
     // ── Scene dimensions, in one place ───────────────────────────────────────
@@ -1835,3 +1848,5 @@ int main(int argc, char** argv) {
     particles.reset();
     return ok ? 0 : 1;
 }
+
+#endif// THREEPP_PHYSX_GPU

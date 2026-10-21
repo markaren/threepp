@@ -1599,7 +1599,13 @@ namespace threepp::editor {
         // the world matrix into the geometry and zeroes the local transform —
         // the play snapshot puts both back on Stop.
         bool createSoftBody(Object3D& object, const PhysicsConfig& config) {
-
+#if !THREEPP_PHYSX_GPU
+            // gpu_ is never set here: PhysxWorld refuses enableGpuDynamics where
+            // the SDK has no CUDA backend, and createWorld logged that fallback.
+            (void) object;
+            (void) config;
+            return false;
+#else
             auto* mesh = object.as<Mesh>();
             if (!mesh) {
                 log("physics: \"" + object.name + "\" is not a mesh - a soft body needs geometry to deform");
@@ -1654,6 +1660,7 @@ namespace threepp::editor {
 
             ++softBodyCount_;
             return true;
+#endif
         }
 
         // --- Compound / decomposed convex colliders --------------------------
