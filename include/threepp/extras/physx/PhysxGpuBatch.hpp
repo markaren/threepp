@@ -4,6 +4,10 @@
 
 #include "threepp/extras/physx/PhysxWorld.hpp"
 
+// Empty where the SDK has no CUDA backend (THREEPP_PHYSX_GPU, see PhysxWorld.hpp):
+// the direct-GPU API reads and writes CUDA device buffers.
+#if THREEPP_PHYSX_GPU
+
 #include <PxPhysicsAPI.h>
 #include <PxDirectGPUAPI.h>
 
@@ -262,5 +266,7 @@ namespace threepp {
     };
 
 }// namespace threepp
+
+#endif// THREEPP_PHYSX_GPU
 
 #endif//THREEPP_PHYSX_GPU_BATCH_HPP

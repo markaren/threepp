@@ -4,7 +4,9 @@
 //
 // Header-only and PhysX-dependent, exactly like ConveyorPlaySession — included
 // only by builds that found the SDK (the apps set THREEPP_EDITOR_WITH_PHYSX,
-// and the registration sites carry the guard).
+// and the registration sites carry the guard). Where that SDK has no CUDA
+// backend (THREEPP_PHYSX_GPU is 0: macOS) the solver half is compiled out and
+// start() declines the way it does on a machine without a GPU.
 //
 // The world is BORROWED, with the conveyor's contract verbatim: on the normal
 // Stop it is still alive here (PlayController stops sessions in reverse
@@ -104,7 +106,11 @@ namespace threepp::editor {
 
         // Live grains across every group, right now.
         [[nodiscard]] unsigned activeGrainCount() const {
+#if THREEPP_PHYSX_GPU
             return particles_ ? particles_->active() : 0u;
+#else
+            return 0u;
+#endif
         }
 
         // The scene had chutes and this session did not simulate them. `reason`
@@ -161,6 +167,10 @@ namespace threepp::editor {
                 decline("granular: no physics this play - grains stay decorative");
                 return;
             }
+#if !THREEPP_PHYSX_GPU
+            decline("granular: grains need PhysX GPU dynamics, which this platform's PhysX "
+                    "has no CUDA backend for - skipping");
+#else
             if (!world->cudaContextManager()) {
                 // The documented guard. PhysicsPlaySession escalates to GPU
                 // dynamics for exactly this scene, so arriving here means the
@@ -237,10 +247,13 @@ namespace threepp::editor {
                 }
                 entries_.push_back(std::move(entry));
             }
+#endif
         }
 
         void update(float dt) override {
-
+#if !THREEPP_PHYSX_GPU
+            (void) dt;
+#else
             if (!particles_) return;
 
             // Emitting is a device write to the buffer the solver owns, so it
@@ -283,6 +296,7 @@ namespace threepp::editor {
                     entry.visual->update(entry.group->positions(), entry.group->active());
                 }
             }
+#endif
         }
 
         void stop() override { release(); }
@@ -295,7 +309,9 @@ namespace threepp::editor {
             std::string uuid;
             Object3D* node = nullptr;
             GranularConfig config;
+#if THREEPP_PHYSX_GPU
             PbdParticles::Group* group = nullptr;// owned by particles_
+#endif
             std::unique_ptr<ChuteEmitter> emitter;
             std::unique_ptr<IGrainVisual> visual;
         };
@@ -333,14 +349,18 @@ namespace threepp::editor {
             // controller (the app closed mid-Play, destructor order): then the
             // actor, the buffers and the CUDA context died with it, and the
             // particle system must not free through any of them.
+#if THREEPP_PHYSX_GPU
             if (particles_ && worldLife_.expired()) particles_->abandon();
+#endif
 
             for (auto& entry : entries_) {
                 if (entry.visual) entry.visual->object()->removeFromParent();
             }
             // Before the solver: an Entry holds a Group that belongs to it.
             entries_.clear();
+#if THREEPP_PHYSX_GPU
             particles_.reset();
+#endif
             worldLife_.reset();
             t_ = 0.f;
         }
@@ -362,7 +382,9 @@ namespace threepp::editor {
         std::function<void(const std::string&)> logger_;
 
         std::weak_ptr<const void> worldLife_;
+#if THREEPP_PHYSX_GPU
         std::unique_ptr<PbdParticles> particles_;
+#endif
         std::vector<Entry> entries_;
 
         std::size_t granularNodeCount_ = 0;

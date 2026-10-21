@@ -4,7 +4,10 @@ add_example(NAME "physx_softbody" SOURCES softbody.cpp LINK_IMGUI LINK_PHYSX)
 
 # GPU PBD granular material (PxPBDParticleSystem). Builds everywhere PhysX is
 # found — the PBD headers ship with the SDK whether or not CUDA does — and
-# reports + exits 0 at runtime when GPU dynamics is unavailable.
+# reports + exits 0 at runtime when GPU dynamics is unavailable. Where the SDK
+# has no CUDA backend at all (PX_SUPPORT_GPU_PHYSX is 0: macOS) this demo and
+# physx_softbody compile to a main() that says so; see THREEPP_PHYSX_GPU in
+# PhysxWorld.hpp.
 add_example(NAME "physx_granular_conveyor" SOURCES granular_conveyor.cpp LINK_IMGUI LINK_PHYSX)
 
 # This demo reaches VulkanRenderer's own knobs (pin auto-exposure for a

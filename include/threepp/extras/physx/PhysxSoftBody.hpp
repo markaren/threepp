@@ -15,6 +15,12 @@
 
 #include "threepp/extras/physx/PhysxWorld.hpp"
 
+// Empty where the SDK has no CUDA backend (THREEPP_PHYSX_GPU, defined in
+// PhysxWorld.hpp): a deformable volume is created through a PxCudaContextManager,
+// which the SDK only forward-declares there. PhysxWorld's soft-body API is
+// absent on the same condition.
+#if THREEPP_PHYSX_GPU
+
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -1271,5 +1277,7 @@ namespace threepp {
     }
 
 }// namespace threepp
+
+#endif// THREEPP_PHYSX_GPU
 
 #endif//THREEPP_PHYSX_SOFT_BODY_HPP

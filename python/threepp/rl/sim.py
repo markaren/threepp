@@ -63,6 +63,9 @@ class GpuSim:
                  device="cuda", read_root=False, read_links=False, build_world=None):
         if not tp.HAS_PHYSX:
             raise RuntimeError("GpuSim needs a PhysX-enabled threepp build (threepp.HAS_PHYSX is False)")
+        if not tp.HAS_PHYSX_GPU:
+            raise RuntimeError("GpuSim needs PhysX GPU dynamics, which this platform's PhysX "
+                               "has no CUDA backend for (threepp.HAS_PHYSX_GPU is False)")
         self.K = num_envs
         self.device = torch.device(device)
         self.read_root = read_root   # also read the floating base each step (free-base robots)

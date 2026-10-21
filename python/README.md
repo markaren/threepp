@@ -77,7 +77,10 @@ paths need the two GPU DLLs (`PhysXGpu_64.dll` + `PhysXDevice64.dll`) dropped
 next to the installed module (they are loaded lazily by name, never linked):
 that alone enables `PhysxWorld(gpu_dynamics=True)` and the direct-GPU RL batch
 (verified). Soft bodies (`PhysxWorld.add_soft_body`) run only on the GPU solver,
-so they need the same two DLLs.
+so they need the same two DLLs. Where the PhysX SDK itself has no CUDA backend
+(macOS) that whole half is compiled out: `threepp.HAS_PHYSX_GPU` is `False`,
+`gpu_dynamics=True` raises, and `SoftBody`, `PhysxSoftBodyMaterial`,
+`PhysxGpuBatch` and the `*_soft_body*` methods are absent.
 
 ## Build
 

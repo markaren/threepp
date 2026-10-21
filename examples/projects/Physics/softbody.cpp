@@ -31,6 +31,19 @@
 using namespace threepp;
 using namespace ::physx;
 
+// Where the SDK has no CUDA backend (macOS) PhysxWorld's soft-body API is
+// compiled out, and so is this demo.
+#if !THREEPP_PHYSX_GPU
+
+int main() {
+    std::cout << "physx_softbody: this platform's PhysX has no CUDA backend "
+                 "(PX_SUPPORT_GPU_PHYSX is 0), and soft bodies run on the GPU solver only."
+              << std::endl;
+    return 0;
+}
+
+#else
+
 namespace {
 
     // Drop a random soft shape (sphere/torus/cone) at the given world position.
@@ -247,3 +260,5 @@ int main() {
 #endif
     });
 }
+
+#endif// THREEPP_PHYSX_GPU

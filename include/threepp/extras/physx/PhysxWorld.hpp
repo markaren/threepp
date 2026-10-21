@@ -3,8 +3,27 @@
 #define THREEPP_PHYSX_WORLD_HPP
 
 #include <PxPhysicsAPI.h>
+
+// PhysX runs soft bodies, PBD particles and the direct-GPU API on CUDA, and has
+// no CUDA backend where PX_SUPPORT_GPU_PHYSX (foundation/PxPreprocessor.h, pulled
+// in by PxPhysicsAPI.h) is 0: macOS, and every target other than x86_64
+// Windows/Linux and arm64 Linux. A PhysX built for such a platform does not even
+// install the cudamanager/, gpu/ and PxDirectGPUAPI.h headers, so every include
+// of them sits behind this switch, and so does the GPU half of this header
+// family. Where it is 0, PhysxSoftBody.hpp, PhysxParticles.hpp and
+// PhysxGpuBatch.hpp are empty, Settings::enableGpuDynamics throws at construction
+// and Settings::cudaContext does not exist; the rigid-body world is unchanged.
+// Code outside these headers tests THREEPP_PHYSX_GPU.
+#if PX_SUPPORT_GPU_PHYSX
+#define THREEPP_PHYSX_GPU 1
+#else
+#define THREEPP_PHYSX_GPU 0
+#endif
+
+#if THREEPP_PHYSX_GPU
 #include <cudamanager/PxCudaContext.h>
 #include <cudamanager/PxCudaContextManager.h>
+#endif
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/sensors/Sensor.hpp"
@@ -570,7 +589,10 @@ namespace threepp {
             // when both run CUDA work on the same device (a separate PhysX context leaves
             // cuBLAS/cuDNN unable to launch: CUBLAS_STATUS_INTERNAL_ERROR). Must be the
             // current context on this thread when the world is constructed.
+            // Absent where the SDK has no CUDA backend (THREEPP_PHYSX_GPU is 0).
+#if THREEPP_PHYSX_GPU
             CUcontext cudaContext = nullptr;
+#endif
             // GPU solver memory sizing (only used when enableGpuDynamics). The
             // defaults are tuned for a handful of bodies; thousands of articulations
             // need bigger pools or the GPU pipeline silently drops contacts / errors.
@@ -633,6 +655,11 @@ namespace threepp {
             extensionsInitialized_ = true;
 
             if (settings_.enableGpuDynamics) {
+#if !THREEPP_PHYSX_GPU
+                throw std::runtime_error(
+                        "PhysxWorld: GPU dynamics needs a PhysX build with a CUDA backend "
+                        "(PX_SUPPORT_GPU_PHYSX), which this platform's SDK does not have");
+#else
                 PxCudaContextManagerDesc cudaDesc;
                 // Adopt the caller's context (e.g. PyTorch's) when provided, so both
                 // share a single CUDA context on the device.
@@ -648,6 +675,7 @@ namespace threepp {
                     PxScopedCudaLock _lock(*cuda_);
                     cuda_->getCudaContext()->streamCreate(&cudaCopyStream_, 0);
                 }
+#endif
             }
 
             dispatcher_ = PxDefaultCpuDispatcherCreate(settings_.numThreads);
@@ -709,20 +737,24 @@ namespace threepp {
                 dispatcher_->release();
                 dispatcher_ = nullptr;
             }
+#if THREEPP_PHYSX_GPU
             if (cuda_ && cudaCopyStream_) {
                 PxScopedCudaLock _lock(*cuda_);
                 cuda_->getCudaContext()->streamDestroy(cudaCopyStream_);
                 cudaCopyStream_ = nullptr;
             }
+#endif
             if (physics_) {
                 if (extensionsInitialized_) PxCloseExtensions();
                 physics_->release();
                 physics_ = nullptr;
             }
+#if THREEPP_PHYSX_GPU
             if (cuda_) {
                 cuda_->release();
                 cuda_ = nullptr;
             }
+#endif
             if (foundation_) {
                 foundation_->release();
                 foundation_ = nullptr;
@@ -741,6 +773,7 @@ namespace threepp {
             // unwatchContacts).
             for (auto* s: sensors_) s->onUnregister();
             sensors_.clear();
+#if THREEPP_PHYSX_GPU
             // Soft bodies must be released BEFORE the scene/physics/cuda context;
             // their destructor releases the PxDeformableVolume actor and frees pinned
             // host memory through the CUDA context.
@@ -749,6 +782,7 @@ namespace threepp {
                 if (entry.mesh) entry.mesh->release();
             }
             cookCache_.clear();
+#endif
             releaseCore();
         }
 
@@ -782,9 +816,11 @@ namespace threepp {
             if (steps >= settings_.maxSubSteps) {
                 accumulator_ = 0;// avoid spiral of death on hitches
             }
+#if THREEPP_PHYSX_GPU
             if (steps > 0) {
                 syncSoftBodies();
             }
+#endif
             // alpha = how far past the last completed substep we are. Always sync
             // rigid bindings, even on frames with 0 substeps — that's exactly when
             // alpha advancing produces the smoothing benefit.
@@ -1602,7 +1638,8 @@ namespace threepp {
         ::physx::PxCpuDispatcher& dispatcher() { return *dispatcher_; }
 
         // CUDA context — non-null only when Settings::enableGpuDynamics was set.
-        // Required for soft bodies, particle systems, and GPU broadphase.
+        // Required for soft bodies, particle systems, and GPU broadphase. Always
+        // null where THREEPP_PHYSX_GPU is 0 (the class is only forward-declared there).
         ::physx::PxCudaContextManager* cudaContextManager() const { return cuda_; }
 
         const Settings& settings() const { return settings_; }
@@ -1621,8 +1658,10 @@ namespace threepp {
             scene_->setGravity(toPxVec3(g));
         }
 
+#if THREEPP_PHYSX_GPU
         // --- Soft body API (requires Settings::enableGpuDynamics). Implementations
         // live in PhysxSoftBody.hpp because they depend on the full SoftBody type.
+        // Absent where the SDK has no CUDA backend (THREEPP_PHYSX_GPU is 0).
 
         // Create a deformable-volume material. Owned by PxPhysics; no manual release.
         ::physx::PxDeformableVolumeMaterial* createSoftBodyMaterial(
@@ -1670,6 +1709,7 @@ namespace threepp {
         // visual Mesh from its parent in the scene graph (single-call cleanup).
         // Soft bodies created from a bare BufferGeometry leave the scene graph alone.
         void removeSoftBody(SoftBody* softBody);
+#endif
 
     private:
         // Bindings carry a `prevPose` snapshot taken right before each substep so
@@ -1705,11 +1745,13 @@ namespace threepp {
             for (auto* s : sensors_) s->tick(static_cast<double>(dt), simTime_);
         }
 
+#if THREEPP_PHYSX_GPU
         // Pull deformed positions GPU->CPU for every soft body, then write them into
         // the bound BufferGeometry's position attribute. Defined in PhysxSoftBody.hpp.
         void syncSoftBodies();
 
         ::physx::PxDeformableVolumeMaterial* defaultSoftBodyMaterial();
+#endif
 
         // Snapshot every bound actor's current pose as the "before this substep"
         // state. Called once per substep iteration so prev = pose just before the
@@ -1785,7 +1827,9 @@ namespace threepp {
         ::physx::PxDefaultCpuDispatcher* dispatcher_ = nullptr;
         ::physx::PxScene* scene_ = nullptr;
         ::physx::PxMaterial* defaultMat_ = nullptr;
+        // Null where THREEPP_PHYSX_GPU is 0; the GPU-only state below is absent there.
         ::physx::PxCudaContextManager* cuda_ = nullptr;
+#if THREEPP_PHYSX_GPU
         CUstream cudaCopyStream_ = nullptr;
         ::physx::PxDeformableVolumeMaterial* defaultSoftBodyMat_ = nullptr;
         struct CookCacheEntry {
@@ -1795,6 +1839,7 @@ namespace threepp {
         };
         std::unordered_map<std::string, CookCacheEntry> cookCache_;
         std::vector<std::unique_ptr<SoftBody>> softBodies_;
+#endif
         float accumulator_ = 0.f;
         float dtEma_ = 0.f;// smoothed timestep (see Settings::smoothTimestep); 0 = uninitialised
         double simTime_ = 0.0;// accumulated fixed-substep sim time; stamps sensor samples

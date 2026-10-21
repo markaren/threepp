@@ -11,6 +11,16 @@
 
 using namespace threepp;
 
+// Where the SDK has no CUDA backend (macOS) PhysxParticles.hpp is empty; one case
+// says so rather than leaving Catch2 with nothing to run.
+#if !THREEPP_PHYSX_GPU
+
+TEST_CASE("PBD particles need a PhysX build with a CUDA backend", "[physx][gpu]") {
+    SUCCEED("PX_SUPPORT_GPU_PHYSX is 0 on this platform - PBD particles are compiled out");
+}
+
+#else
+
 namespace {
 
     // PBD particles are CUDA-only with no CPU path, so on a machine without a
@@ -198,3 +208,5 @@ TEST_CASE("a PBD granular bed is carried by a conveyor belt", "[physx][gpu]") {
     CHECK(idle.carried < 0.30f);
     CHECK(driven.carried > 4.f * std::abs(idle.carried));
 }
+
+#endif// THREEPP_PHYSX_GPU
