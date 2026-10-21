@@ -912,9 +912,10 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             // per-frame gbuffer. Without a defined starting layout that read
             // finds the image in UNDEFINED and trips VUID-vkCmdDraw-None-09600 /
             // -vkCmdDispatch-None-09600. This only sets the LAYOUT; the contents
-            // are defined by clearGbufImages, which runs right after creation
-            // and on every temporal reset and zeroes these attachments in every
-            // slot. (Until 2026-09-06 the contents stayed undefined on the
+            // are defined by clearGbufImages, which every caller of this
+            // function runs after it (init, a new view, a render-extent
+            // reallocation) and on every temporal reset, and which zeroes these
+            // attachments in every slot. (Until 2026-09-06 the contents stayed undefined on the
             // assumption that the temporal logic discards previous data on the
             // first frame. It did not: the deferred shade's disocclusion test
             // read them, and under GPU load they were another process's

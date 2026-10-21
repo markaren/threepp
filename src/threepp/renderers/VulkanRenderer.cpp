@@ -183,13 +183,16 @@ namespace threepp {
                                     clusterLightCountThisFrame_ > 0) ||
                                    densityActive;
         if (froxelsActive && asyncPart) {
-            auto pass = g.addPass("froxels", [this, f](VkCommandBuffer c) {
+            // Read now: the flag is consumed (cleared) further down this
+            // function, before the graph runs the pass.
+            const bool historyStale = view().shadeHistoryStale;
+            auto pass = g.addPass("froxels", [this, f, historyStale](VkCommandBuffer c) {
                 gpuTimings_->begin(c, TP_Froxel, f);
                 view().deferredShade_->recordFroxels(c, f, regionRenderExt_.width, regionRenderExt_.height,
                                                      deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
                                                      sampleIndex,
                                                      view().deferredCamDeltaLen_, deferredCamRotAngle_,
-                                                     clusterLightCountThisFrame_);
+                                                     clusterLightCountThisFrame_, historyStale);
                 gpuTimings_->end(c, TP_Froxel, f);
             });
             shade.declare(g, pass, Stage::Froxels, f);

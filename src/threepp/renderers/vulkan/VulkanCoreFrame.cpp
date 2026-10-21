@@ -399,10 +399,15 @@ void VulkanRenderer::Impl::createReservoirImages() {
                         ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT,
                         0, i == 0 ? "reservoirWImagePP[0]" : "reservoirWImagePP[1]");
             }
-            // Storage memory contents are undefined after vmaCreateImage — clear
-            // both reservoir slots to 0 so the first frame's temporal-reuse read
-            // sees M=0 (no prior history) instead of garbage.
-            clearGbufImages();
+            // Storage memory contents are undefined after vmaCreateImage. NO
+            // clear here: clearGbufImages skips the G-buffer slots that do not
+            // exist yet, and every caller creates them next (ensureHybridResources).
+            // Clearing here zeroed only the reservoirs and left a new view's
+            // froxel fog history, indirect/reflect/shadow histories and raster
+            // attachments as recycled memory, which the froxel EMA accepted as
+            // history (a secondary view's fog blobs, 2026-10-21,
+            // plans/vulkan-secondary-view-froxel-history.md). Each caller runs
+            // clearGbufImages once, after ensureHybridResources.
             sampleIndex = 0;
             view().prevCameraValid = false;
             seedMotionState(lastVisibleEntries_);// forget motion history (identity next frame)
@@ -659,12 +664,15 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             invalidateFrameInterop(view().id, "a render-target reallocation");
             for (auto& img : view().reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : view().reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            createReservoirImages();// reallocates the reservoir images + clears them
+            createReservoirImages();// reallocates the reservoir images
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
             // bindings point at rasterGbufs[f].*.view, so stale views from the
             // old extent need to be replaced before the new descriptor sets
             // capture them.
             ensureHybridResources();
+            // Now that every slot exists: zero the reservoirs and every
+            // per-view history (device idle, see above).
+            clearGbufImages();
             // TAA + upscale intermediates live at the render extent too;
             // rebuild before any descriptor write captures their views.
             {
@@ -949,15 +957,18 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                     pendingProbeCascades_ = -1;
                     applyProbeCascades(count);
                 }
+                // Views added / removed since the last frame. Same reasoning as
+                // the two above: the caller asked mid-frame, we act here. Ahead
+                // of the reset below, so a reset asked in the same gap as an
+                // add_view reaches the new view (forEachLiveView skips a view
+                // still pending creation).
+                if (pendingViewChanges_) applyPendingViewChanges();
                 if (pendingAccumulationReset_) {
                     // Every live view: the reset is a per-view act (each view
                     // owns its histories) and the device is idle here.
                     forEachLiveView([&] { clearGbufImages(); });
                     pendingAccumulationReset_ = false;
                 }
-                // Views added / removed since the last frame. Same reasoning as
-                // the two above: the caller asked mid-frame, we act here.
-                if (pendingViewChanges_) applyPendingViewChanges();
             }
 
             uint32_t imageIndex = 0;
@@ -1887,6 +1898,10 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
             // G-buffer, raster camera UBOs, raster descriptor pool + sets — all
             // sized from renderExtent(), which now answers with v.renderExt.
             ensureHybridResources();
+            // Zero the reservoirs and every history of the new view, now that
+            // its G-buffer slots exist. Without it the froxel fog history held
+            // recycled memory that passed as history (the drone feed's blobs).
+            clearGbufImages();
 
             // This view's own post chain. TaaResolve gets imageCount = 1: its
             // "swapchain" is v.colorTarget, and recordResolve is always called

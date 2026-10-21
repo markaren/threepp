@@ -1378,14 +1378,16 @@ namespace threepp::vulkan {
                                       bool volFog, float volDensity, float volAniso,
                                       uint32_t frameCounter,
                                       float camDeltaLen, float camRotAngle,
-                                      uint32_t clusterLightCount) {
+                                      uint32_t clusterLightCount, bool historyStale) {
         // Shared ShadePush block — the froxel passes consume width/height
-        // (cluster-cell mapping), the volFog flag, frame, the beam density/
-        // anisotropy, the camera-motion history gates and the cluster count.
+        // (cluster-cell mapping), the volFog flag, the stale-history flag,
+        // frame, the beam density/anisotropy, the camera-motion history gates
+        // and the cluster count.
         ShadePush push{};
         push.width             = width;
         push.height            = height;
-        push.flags             = volFog ? 16u : 0u;
+        push.flags             = (volFog ? 16u : 0u)
+                               | (historyStale ? 8192u : 0u);// bit 13, as the shade's
         push.frame             = frameCounter;
         push.volDensity        = volDensity;
         push.volAniso          = volAniso;

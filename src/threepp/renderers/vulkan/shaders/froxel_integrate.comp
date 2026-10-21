@@ -151,7 +151,9 @@ void main() {
         // use the same closed form. Dust is the opposite case — it is neither
         // smooth nor analytic, and the LUT's front-to-back walk is already the
         // exact integral of it — so the dead channel is where it belongs.
-        imageStore(froxelLutImage, ivec3(col, k), vec4(L, Tp));
+        // Finite in fp16 whatever the inject pass handed us: one bad froxel
+        // must not become Inf for the rest of the column (and the sky).
+        imageStore(froxelLutImage, ivec3(col, k), vec4(min(L, vec3(6e4)), Tp));
         z0 = z1;
     }
 }

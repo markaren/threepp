@@ -88,6 +88,8 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // Hybrid raster G-buffer infrastructure. Costs a few hundred MB
             // at 1080p for six attachments × kFramesInFlight.
             ensureHybridResources();
+            // Zero the reservoirs and every history, now that the slots exist.
+            clearGbufImages();
             // TAA pipeline + images. The deferred shade's descriptor binding 1
             // (shade output target) always points at the TAA input view.
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());

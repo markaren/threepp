@@ -345,7 +345,7 @@ namespace threepp::vulkan {
                            bool volFog, float volDensity, float volAniso,
                            uint32_t frameCounter,
                            float camDeltaLen, float camRotAngle,
-                           uint32_t clusterLightCount);
+                           uint32_t clusterLightCount, bool historyStale);
 
         // Half-resolution volumetric cloud march (cloud_march.comp). One
         // dispatch over the HALF render extent that writes the cloud

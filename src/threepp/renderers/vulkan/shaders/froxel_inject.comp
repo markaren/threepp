@@ -292,7 +292,15 @@ void main() {
     const vec4  prev   = texelFetch(froxelScatterPrevTex, fi, 0);
     const float motion = pc.camRot * 3.0 + pc.camDelta * 0.5;
     const float cap    = mix(16.0, 2.0, smoothstep(0.001, 0.02, motion));
-    const bool  valid  = prev.a > 0.5 && prev.a < 4096.0 && all(lessThan(abs(prev.rgb), vec3(1e6)));
+    // History is only what this pass wrote: .a never exceeds the cap of 16,
+    // and a stale-history frame (flags bit 13: the histories were just
+    // cleared) starts fresh whatever the image holds. The old test (.a < 4096,
+    // |rgb| < 1e6) passed any finite fp16 value, so a slot holding recycled
+    // memory became history and integrated to Inf down the column (a new
+    // secondary view's fog blobs, plans/vulkan-secondary-view-froxel-history.md).
+    const bool  stale  = (pc.flags & 8192u) != 0u;
+    const bool  valid  = !stale && prev.a > 0.5 && prev.a <= 16.5 &&
+                         all(lessThan(abs(prev.rgb), vec3(1e6)));
     const float hist   = valid ? min(prev.a + 1.0, cap) : 1.0;
     const vec3  acc    = valid ? mix(prev.rgb, S, 1.0 / hist) : S;
     imageStore(froxelScatterImage, fi, vec4(acc, hist));
