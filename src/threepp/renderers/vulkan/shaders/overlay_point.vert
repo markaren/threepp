@@ -27,6 +27,11 @@
 // viewport height and the "is this projection perspective" answer live, and an
 // ortho camera never attenuates (again matching points_vert.glsl, which gates
 // on isPerspectiveMatrix).
+//
+// params.y says whether binding 1 holds the geometry's color attribute (1) or
+// not (0). Without one the host binds the positions there again, any valid
+// vec3 stream, and the point takes the material color alone, as GL's
+// PointsMaterial does on a geometry without colors.
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inColor;
@@ -34,7 +39,7 @@ layout(location = 1) in vec3 inColor;
 layout(push_constant) uniform Pc {
     mat4 mvp;
     vec4 color; // .rgb = material color tint, .w = point size (world units or px)
-    vec4 params;// .x = attenuation scale, 0 = color.w is already in pixels
+    vec4 params;// .x = attenuation scale, 0 = color.w is already in pixels; .y = has vertex colors
 } pc;
 
 layout(location = 0) out vec3 vColor;
@@ -57,5 +62,5 @@ void main() {
     // from the near plane can ask for thousands of pixels, and exceeding the
     // device range is undefined rather than merely large.
     gl_PointSize = clamp(px, 1.0, 64.0);
-    vColor       = inColor;
+    vColor       = pc.params.y > 0.5 ? inColor : vec3(1.0);
 }

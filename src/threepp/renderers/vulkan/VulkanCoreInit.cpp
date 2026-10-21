@@ -603,6 +603,12 @@ VulkanRenderer::Impl::~Impl() {
                 if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
             }
             lineGeomCache_.clear();
+            for (auto& [p, rec] : morphedPointsCache_) {
+                for (auto& b : rec.vertex) {
+                    if (b.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), b);
+                }
+            }
+            morphedPointsCache_.clear();
             overlayPass_.reset();// destroy sprite/line pipelines + caches while device is alive
             et.mark("particle and line caches, overlay pass");
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);

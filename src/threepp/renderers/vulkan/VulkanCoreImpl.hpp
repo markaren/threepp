@@ -3779,6 +3779,12 @@ namespace threepp {
         static void cpuMorphBlend(Mesh& mesh,
                                   std::vector<float>& outPos,
                                   std::vector<float>& outNorm);
+        // The blend itself, for any object's influences; outNorm == nullptr
+        // skips the normals (Points).
+        static void cpuMorphBlend(const BufferGeometry& geom,
+                                  const std::vector<float>& influences,
+                                  std::vector<float>& outPos,
+                                  std::vector<float>* outNorm);
 
         MorphedMeshState* ensureMorphedBlas(Mesh& mesh) {
             auto it = morphedMeshStates.find(&mesh);
@@ -5104,6 +5110,31 @@ namespace threepp {
         std::unordered_map<const BufferGeometry*, vulkan::LineRec> lineGeomCache_;
         uint64_t overlayFrameCounter_ = 0;// lastTouch reference for lineGeomCache_ entries
 
+        // A Points whose material sets morphTargets: GL blends the geometry's
+        // morph targets in the vertex shader (morphtargets_sphere rides its
+        // points on the morphing sphere that way); the overlay point pipeline
+        // reads plain positions, so the blend happens here. Per OBJECT, not per
+        // geometry: the geometry, and so its LineRec, is typically shared with
+        // the morphing Mesh, and the two need not carry the same influences.
+        // One buffer per frame in flight, written while recording slot
+        // currentFrame, i.e. past that slot's fence wait, so the frame that
+        // last read it has finished. Swept with lineGeomCache_.
+        struct MorphedPointsRec {
+            std::array<Buffer, kFramesInFlight>             vertex{};
+            std::array<std::vector<float>, kFramesInFlight> influences{};// what each slot holds
+            std::array<uint32_t, kFramesInFlight>           posVersion{};
+            unsigned int       geomId    = 0;
+            uint64_t           lastTouch = 0;
+            std::vector<float> blended;
+        };
+        std::unordered_map<const Points*, MorphedPointsRec> morphedPointsCache_;
+
+        // The vertex buffer holding `points`' blended positions for this
+        // frame, or VK_NULL_HANDLE when it does not morph (no morphTargets on
+        // its material, no position targets, or every influence zero), and
+        // the caller draws the geometry's rest positions.
+        VkBuffer ensureMorphedPointsUploaded(Points& points, const BufferGeometry& geom);
+
         // Evict entries untouched for longer than the in-flight window. The
         // margin (> kFramesInFlight) guarantees no evicted buffer is still
         // referenced by an in-flight command buffer; the retire queue then holds
@@ -5111,7 +5142,7 @@ namespace threepp {
         // call from endFrame while earlier frames are still executing.
         static constexpr uint64_t kLineGeomEvictAge = 8;
         void sweepLineGeomCache() {
-            if (lineGeomCache_.empty()) return;
+            if (lineGeomCache_.empty() && morphedPointsCache_.empty()) return;
             if (overlayFrameCounter_ <= kLineGeomEvictAge) return;
             const uint64_t cutoff = overlayFrameCounter_ - kLineGeomEvictAge;
             for (auto it = lineGeomCache_.begin(); it != lineGeomCache_.end();) {
@@ -5120,6 +5151,14 @@ namespace threepp {
                     retire(std::move(it->second.index));
                     retire(std::move(it->second.color));
                     it = lineGeomCache_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = morphedPointsCache_.begin(); it != morphedPointsCache_.end();) {
+                if (it->second.lastTouch < cutoff) {
+                    for (auto& b : it->second.vertex) retire(std::move(b));
+                    it = morphedPointsCache_.erase(it);
                 } else {
                     ++it;
                 }

@@ -1736,8 +1736,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // Collect Points objects (point clouds). POINT_LIST topology; the push
     // constant's color.w carries PointsMaterial::size, in world units or in
     // pixels depending on the material's sizeAttenuation (see
-    // overlay_point.vert). Requires a per-vertex "color" attribute — the point
-    // pipeline always reads binding 1.
+    // overlay_point.vert). Without a per-vertex "color" attribute the points
+    // take the material color (params.y).
     // Same ortho/HUD gating as lines/meshes (never the perspective
     // screen-space auto-pass).
     auto& pointDraws = scratch_->points;
@@ -1748,7 +1748,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             if (!p) return;
             if (auto mat = p->material(); mat && !mat->visible) return;
             auto g = p->geometry();
-            if (!g || !g->hasAttribute("position") || !g->hasAttribute("color")) return;
+            if (!g || !g->hasAttribute("position")) return;
             OrthoPointDraw pd;
             pd.points = p;
             std::memcpy(pd.world.elements.data(), p->matrixWorld->elements.data(), 64);
@@ -2422,7 +2422,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             auto g = pd.points->geometry();
             const LineRec* prec = ensureLineGeometryUploaded(g.get());
             if (!prec || prec->vertex.handle == VK_NULL_HANDLE) continue;
-            if (prec->color.handle == VK_NULL_HANDLE) continue;// pipeline reads binding 1
+            const bool hasColor = prec->color.handle != VK_NULL_HANDLE;
 
             Matrix4 mvp;
             mvp.multiplyMatrices(cvp, pd.world);
@@ -2433,11 +2433,13 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             pc.color[2]  = pd.color.b;
             pc.color[3]  = pd.size;
             pc.params[0] = pd.attenuate ? attenScale : 0.f;
+            pc.params[1] = hasColor ? 1.f : 0.f;
             vkCmdPushConstants(cb, orthoLinePipelineLayout_,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(pc), &pc);
 
-            VkBuffer     vb[2] = {prec->vertex.handle, prec->color.handle};
+            // Colorless: the positions again as binding 1, ignored per params.y.
+            VkBuffer     vb[2] = {prec->vertex.handle, hasColor ? prec->color.handle : prec->vertex.handle};
             VkDeviceSize vo[2] = {0, 0};
             vkCmdBindVertexBuffers(cb, 0, 2, vb, vo);
 

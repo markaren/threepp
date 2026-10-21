@@ -3060,6 +3060,19 @@ void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) 
             cpuMorphBlend(mesh, st.blendedPositions, st.blendedNormals);
             if (st.blendedPositions.empty() || !st.blas) return;
 
+            // Drain before the host write. The raster and the BLAS read these
+            // same host-visible buffers, and this runs in ensureSceneBuilt,
+            // ahead of the frame's fence wait, so the previous frame may still
+            // be on the GPU. Writing under it drew that frame's raster with
+            // THIS pose while its rays traced the BLAS of the pose before: the
+            // drawn surface one blend step ahead of the traced one. While the
+            // morph contracts, every lit pixel then sits just inside its own
+            // BLAS and its shadow ray hits it, so the surface turns black in
+            // triangle-stepped blotches (morphtargets_sphere). Next to free:
+            // the one-shot below waits the queue idle anyway, so this moves
+            // that stall ahead of the write rather than adding one.
+            check(vkQueueWaitIdle(ctx->graphicsQueue()), "wait idle (refreshMorphedBlas)");
+
             uploadHostVisible(ctx->allocator(), st.blas->vertex, st.blendedPositions.data(),
                               st.blendedPositions.size() * sizeof(float));
             uploadHostVisible(ctx->allocator(), st.blas->normal, st.blendedNormals.data(),
@@ -5303,7 +5316,16 @@ bool VulkanRenderer::Impl::enqueueLodJob(const BufferGeometry* geomPtr, unsigned
 void VulkanRenderer::Impl::cpuMorphBlend(Mesh& mesh,
                                   std::vector<float>& outPos,
                                   std::vector<float>& outNorm) {
-            const auto& geom = *mesh.geometry();
+            static const std::vector<float> none;
+            auto* morphObj = mesh.as<ObjectWithMorphTargetInfluences>();
+            cpuMorphBlend(*mesh.geometry(), morphObj ? morphObj->morphTargetInfluences() : none,
+                          outPos, &outNorm);
+        }
+
+void VulkanRenderer::Impl::cpuMorphBlend(const BufferGeometry& geom,
+                                  const std::vector<float>& influences,
+                                  std::vector<float>& outPos,
+                                  std::vector<float>* outNorm) {
             auto* posAttr = geom.getAttribute<float>("position");
             auto* nrmAttr = geom.getAttribute<float>("normal");
             if (!posAttr) return;
@@ -5312,11 +5334,13 @@ void VulkanRenderer::Impl::cpuMorphBlend(Mesh& mesh,
             const auto& basePos = posAttr->array();
             outPos.assign(basePos.begin(), basePos.end());
 
-            if (nrmAttr) {
-                const auto& baseNrm = nrmAttr->array();
-                outNorm.assign(baseNrm.begin(), baseNrm.end());
-            } else {
-                outNorm.assign(vtxCount * 3, 0.f);
+            if (outNorm) {
+                if (nrmAttr) {
+                    const auto& baseNrm = nrmAttr->array();
+                    outNorm->assign(baseNrm.begin(), baseNrm.end());
+                } else {
+                    outNorm->assign(vtxCount * 3, 0.f);
+                }
             }
 
             const auto& morphAttrsMap = geom.getMorphAttributes();
@@ -5326,11 +5350,7 @@ void VulkanRenderer::Impl::cpuMorphBlend(Mesh& mesh,
 
             const std::vector<std::shared_ptr<BufferAttribute>>* morphNrm = nullptr;
             auto nrmIt = morphAttrsMap.find("normal");
-            if (nrmIt != morphAttrsMap.end()) morphNrm = &nrmIt->second;
-
-            auto* morphObj = mesh.as<ObjectWithMorphTargetInfluences>();
-            if (!morphObj) return;
-            const auto& influences = morphObj->morphTargetInfluences();
+            if (outNorm && nrmIt != morphAttrsMap.end()) morphNrm = &nrmIt->second;
 
             const bool relative = geom.morphTargetsRelative;
             const size_t numTargets = morphPos.size();
@@ -5361,18 +5381,19 @@ void VulkanRenderer::Impl::cpuMorphBlend(Mesh& mesh,
                     auto* nAttr = dynamic_cast<TypedBufferAttribute<float>*>((*morphNrm)[t].get());
                     if (nAttr && nAttr->count() == vtxCount) {
                         const auto& nData = nAttr->array();
+                        auto& on = *outNorm;
                         if (relative) {
                             for (int v = 0; v < vtxCount; ++v) {
-                                outNorm[v * 3 + 0] += w * nData[v * 3 + 0];
-                                outNorm[v * 3 + 1] += w * nData[v * 3 + 1];
-                                outNorm[v * 3 + 2] += w * nData[v * 3 + 2];
+                                on[v * 3 + 0] += w * nData[v * 3 + 0];
+                                on[v * 3 + 1] += w * nData[v * 3 + 1];
+                                on[v * 3 + 2] += w * nData[v * 3 + 2];
                             }
                         } else if (nrmAttr) {
                             const auto& baseNrm = nrmAttr->array();
                             for (int v = 0; v < vtxCount; ++v) {
-                                outNorm[v * 3 + 0] += w * (nData[v * 3 + 0] - baseNrm[v * 3 + 0]);
-                                outNorm[v * 3 + 1] += w * (nData[v * 3 + 1] - baseNrm[v * 3 + 1]);
-                                outNorm[v * 3 + 2] += w * (nData[v * 3 + 2] - baseNrm[v * 3 + 2]);
+                                on[v * 3 + 0] += w * (nData[v * 3 + 0] - baseNrm[v * 3 + 0]);
+                                on[v * 3 + 1] += w * (nData[v * 3 + 1] - baseNrm[v * 3 + 1]);
+                                on[v * 3 + 2] += w * (nData[v * 3 + 2] - baseNrm[v * 3 + 2]);
                             }
                         }
                     }
@@ -5380,12 +5401,64 @@ void VulkanRenderer::Impl::cpuMorphBlend(Mesh& mesh,
             }
 
             // Renormalize normals.
+            if (!outNorm) return;
+            auto& on = *outNorm;
             for (int v = 0; v < vtxCount; ++v) {
-                float& nx = outNorm[v * 3 + 0];
-                float& ny = outNorm[v * 3 + 1];
-                float& nz = outNorm[v * 3 + 2];
+                float& nx = on[v * 3 + 0];
+                float& ny = on[v * 3 + 1];
+                float& nz = on[v * 3 + 2];
                 const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
                 if (len > 0.f) { const float inv = 1.f / len; nx *= inv; ny *= inv; nz *= inv; }
             }
+        }
+
+VkBuffer VulkanRenderer::Impl::ensureMorphedPointsUploaded(Points& points, const BufferGeometry& geom) {
+            // GL's rule (GLMorphTargets): the material's flag turns the blend on.
+            auto* mm = dynamic_cast<MaterialWithMorphTargets*>(points.material().get());
+            if (!mm || !mm->morphTargets) return VK_NULL_HANDLE;
+            auto* posAttr = geom.getAttribute<float>("position");
+            if (!posAttr || posAttr->count() == 0) return VK_NULL_HANDLE;
+            const auto& morphAttrsMap = geom.getMorphAttributes();
+            if (morphAttrsMap.find("position") == morphAttrsMap.end()) return VK_NULL_HANDLE;
+            const auto& influences = points.morphTargetInfluences();
+            if (std::all_of(influences.begin(), influences.end(), [](float w) { return w == 0.f; })) {
+                return VK_NULL_HANDLE;// the rest positions, which the LineRec already holds
+            }
+
+            auto it = morphedPointsCache_.find(&points);
+            if (it != morphedPointsCache_.end() && it->second.geomId != geom.id) {
+                // A recycled Points address, or the object's geometry was
+                // swapped: start over. Retired, not destroyed: the frame
+                // before may still be drawing from these.
+                for (auto& b : it->second.vertex) retire(std::move(b));
+                morphedPointsCache_.erase(it);
+                it = morphedPointsCache_.end();
+            }
+            if (it == morphedPointsCache_.end()) {
+                it = morphedPointsCache_.emplace(&points, MorphedPointsRec{}).first;
+                it->second.geomId = geom.id;
+            }
+            auto& rec = it->second;
+            rec.lastTouch = overlayFrameCounter_;
+
+            const uint32_t slot = currentFrame;
+            const VkDeviceSize bytes = posAttr->array().size() * sizeof(float);
+            Buffer& buf = rec.vertex[slot];
+            if (buf.handle != VK_NULL_HANDLE && buf.size >= bytes &&
+                rec.posVersion[slot] == posAttr->version && rec.influences[slot] == influences) {
+                return buf.handle;// this slot already holds this blend
+            }
+            if (buf.handle == VK_NULL_HANDLE || buf.size < bytes) {
+                retire(std::move(buf));
+                buf = createBuffer(ctx->allocator(), ctx->device(), bytes,
+                                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                   VMA_MEMORY_USAGE_AUTO,
+                                   VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+            cpuMorphBlend(geom, influences, rec.blended, nullptr);
+            uploadHostVisible(ctx->allocator(), buf, rec.blended.data(), bytes);
+            rec.posVersion[slot] = posAttr->version;
+            rec.influences[slot] = influences;
+            return buf.handle;
         }
 }// namespace threepp

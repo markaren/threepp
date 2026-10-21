@@ -2804,6 +2804,15 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         if (!geomPtr) return;
                         const vulkan::LineRec* lrec = ensureLineGeometryUploaded(geomPtr.get());
                         if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) return;
+                        // A morphing Points draws its own blend; index and color
+                        // still come from the shared LineRec.
+                        VkBuffer posBuf = lrec->vertex.handle;
+                        if (le.isPoints) {
+                            if (const VkBuffer mb = ensureMorphedPointsUploaded(*le.points, *geomPtr);
+                                mb != VK_NULL_HANDLE) {
+                                posBuf = mb;
+                            }
+                        }
 
                         Color color(1.f, 1.f, 1.f);
                         float pcW           = 1.0f;// opacity for lines, point-size for points
@@ -2833,9 +2842,10 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
 
                         VkPipeline want;
                         if (le.isPoints) {
-                            // Point pipeline always reads the color binding;
-                            // skip the draw if the geometry has none.
-                            if (lrec->color.handle == VK_NULL_HANDLE) return;
+                            // Geometry without a color attribute draws in the
+                            // material color (params.y below); it used to be
+                            // skipped outright, so a plain PointsMaterial cloud
+                            // never appeared on Vulkan.
                             want = overlayPointListPipeline;
                         } else if (const int blendMode = matPtr ? overlayBlendMode(*matPtr) : 0;
                                    blendMode > 0) {
@@ -2868,7 +2878,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         struct OverlayPC {
                             float mvp[16];
                             float color[4];
-                            float params[4];// .x = point attenuation scale
+                            float params[4];// .x = point attenuation scale, .y = points: has vertex colors
                         } pcL{};
                         std::memcpy(pcL.mvp, mvpL.elements.data(), 64);
                         pcL.color[0]  = color.r;
@@ -2876,6 +2886,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         pcL.color[2]  = color.b;
                         pcL.color[3]  = pcW;
                         pcL.params[0] = pcAtten;
+                        pcL.params[1] = lrec->color.handle != VK_NULL_HANDLE ? 1.f : 0.f;
                         vkCmdPushConstants(cb, overlayPipelineLayout,
                                            VK_SHADER_STAGE_VERTEX_BIT |
                                                    VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -2883,11 +2894,15 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
 
                         const bool twoBindings = le.isPoints || useVertexColors;
                         if (twoBindings) {
-                            VkBuffer     vbufsL[2] = {lrec->vertex.handle, lrec->color.handle};
+                            // Colorless Points bind their positions again as
+                            // binding 1: a valid vec3 stream params.y says to ignore.
+                            const VkBuffer colBuf = lrec->color.handle != VK_NULL_HANDLE ? lrec->color.handle
+                                                                                         : posBuf;
+                            VkBuffer     vbufsL[2] = {posBuf, colBuf};
                             VkDeviceSize voffsL[2] = {0, 0};
                             vkCmdBindVertexBuffers(cb, 0, 2, vbufsL, voffsL);
                         } else {
-                            VkBuffer     vbufsL[1] = {lrec->vertex.handle};
+                            VkBuffer     vbufsL[1] = {posBuf};
                             VkDeviceSize voffsL[1] = {0};
                             vkCmdBindVertexBuffers(cb, 0, 1, vbufsL, voffsL);
                         }
