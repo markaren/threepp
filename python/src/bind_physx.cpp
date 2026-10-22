@@ -281,7 +281,9 @@ public:
     }
 
     // Overwrite the simulation-mesh velocities, (M, 3); they take effect at the
-    // next simulate. A force over a step is an added velocity F dt / m.
+    // next simulate. A force over a step is an added velocity F dt / m. Wakes
+    // the body, as addForce does a rigid one: a sleeping volume is not
+    // simulated, so velocities written to it would do nothing.
     void setSimMeshVelocities(const py::array_t<float, py::array::c_style | py::array::forcecast>& v) {
         auto* vol = live()->actor();
         auto host = readSimVelocities();
@@ -296,7 +298,10 @@ public:
                                                 host.data(), host.size() * sizeof(PxVec4));
         }
         vol->markDirty(PxDeformableVolumeDataFlag::eSIM_VELOCITY);
+        vol->setWakeCounter(std::max(vol->getWakeCounter(), 0.4f));// PhysX's default wake counter
     }
+
+    bool isSleeping() const { return live()->actor()->isSleeping(); }
 
     // Hold simulation-mesh vertices `indices` to world points: `points` (K, 3),
     // or where those vertices are now when None.
@@ -927,7 +932,11 @@ namespace threepp_py {
                      "The simulation mesh's vertex velocities, (M, 3) float32.")
                 .def("set_sim_mesh_velocities", &PySoftBody::setSimMeshVelocities, py::arg("velocities"),
                      "Overwrite the simulation mesh's vertex velocities, (M, 3); they take effect at the next "
-                     "simulate. A force F on a vertex of mass m over a step dt is an added F dt / m.")
+                     "simulate. A force F on a vertex of mass m over a step dt is an added F dt / m. Wakes the "
+                     "body (a sleeping volume is not simulated).")
+                .def_property_readonly("is_sleeping", &PySoftBody::isSleeping,
+                                       "True while PhysX has put the body to sleep (still, and nothing awake "
+                                       "touching it).")
                 .def("attach_to_world", &PySoftBody::attachToWorld, py::arg("indices"),
                      py::arg("points") = py::none(), py::keep_alive<0, 1>(),
                      "Hold simulation-mesh vertices `indices` to world points `points` (K, 3) -- where those "
