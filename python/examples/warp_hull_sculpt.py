@@ -274,17 +274,10 @@ SUBDIV = int(cli_arg("--subdiv", 4, float))   # 4 = 2562 verts / 5120 faces,
                                  # every per-vertex and per-edge normaliser --
                                  # is derived from the mesh, so this is the one
                                  # number that has to change.
-# One overall size knob, off by default (1.0 leaves every number below exactly
-# what it was). It exists so the SAME sculpt can be flown at a different scale
-# by a caller that imports this module -- the sea-drone co-design wants a ~3 m
-# body, not a 7 m one -- without a second copy of the geometry. Only the two
-# length triples scale: GZ_FLOOR, --cargo-y and --u-ref are absolute and the
-# caller passes its own.
-BLOB_SCALE = cli_arg("--blob-scale", 1.0, float)
-BLOB = tuple(BLOB_SCALE * v for v in (3.6, 2.4, 2.0))
+BLOB = (3.6, 2.4, 2.0)
                                  # semi-axes: 7.2 m long, 4.8 m deep, 4.0 m beam
                                  # deeper than wide, so GM < 0: it WILL roll over
-BOX_HALF = tuple(BLOB_SCALE * v for v in (5.2, 2.6, 2.2))
+BOX_HALF = (5.2, 2.6, 2.2)
                                  # the soft envelope the shape may not leave
 DENSITY = 0.5                    # of water: it floats at half its own volume
 RHO_W = 1025.0
