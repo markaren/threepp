@@ -141,6 +141,36 @@ inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) 
 
 
 #if THREEPP_PHYSX_GPU
+// A PxDeformableAttachment: simulation-mesh vertices of one volume held to points
+// in the world. The world frame those points are given in can be moved
+// (update_pose), which carries the held vertices with it; the set of vertices is
+// fixed once made. Released with the handle, or by release() — before its
+// volume is removed (the handle keeps the volume's handle, and so its world, alive).
+class PyDeformableAttachment {
+public:
+    explicit PyDeformableAttachment(PxDeformableAttachment* a, int count) : a_(a), count_(count) {}
+    ~PyDeformableAttachment() { release(); }
+    PyDeformableAttachment(const PyDeformableAttachment&) = delete;
+    PyDeformableAttachment& operator=(const PyDeformableAttachment&) = delete;
+
+    void updatePose(const Vector3& p, const Quaternion& q) {
+        if (!a_) throw std::runtime_error("DeformableAttachment: already released");
+        a_->updatePose(toPxTransform(p, q));
+    }
+    void release() {
+        if (a_) {
+            a_->release();
+            a_ = nullptr;
+        }
+    }
+    bool released() const { return a_ == nullptr; }
+    int count() const { return count_; }
+
+private:
+    PxDeformableAttachment* a_;
+    int count_;
+};
+
 // Thin handle over a threepp::SoftBody (a PxDeformableVolume). The body is owned by
 // the PhysxWorld's softBodies_ vector and dies with the world (or with
 // remove_soft_body), so this only holds pointers — keep_alive on the adder ties the
@@ -222,7 +252,114 @@ public:
     void setRecomputeNormals(bool v) { live()->setRecomputeNormals(v); }
     void enableGpuSkinning() { live()->enableGpuSkinning(); }
 
+    // The SIMULATION (voxel) mesh the solver integrates, beside the collision
+    // mesh above: (M, 4) float32, world-space x, y, z and inverse mass.
+    py::array_t<float> simMeshState() const {
+        auto* vol = live()->actor();
+        const auto n = vol->getSimulationMesh()->getNbVertices();
+        py::array_t<float> out({static_cast<py::ssize_t>(n), py::ssize_t(4)});
+        {
+            PxScopedCudaLock _lock(*cuda_);
+            cuda_->getCudaContext()->memcpyDtoH(out.mutable_data(),
+                                                reinterpret_cast<CUdeviceptr>(vol->getSimPositionInvMassBufferD()),
+                                                static_cast<size_t>(n) * sizeof(PxVec4));
+        }
+        return out;
+    }
+
+    // Simulation-mesh velocities, (M, 3) float32.
+    py::array_t<float> simMeshVelocities() const {
+        const auto host = readSimVelocities();
+        py::array_t<float> out({static_cast<py::ssize_t>(host.size()), py::ssize_t(3)});
+        float* dst = out.mutable_data();
+        for (size_t i = 0; i < host.size(); ++i) {
+            dst[i * 3 + 0] = host[i].x;
+            dst[i * 3 + 1] = host[i].y;
+            dst[i * 3 + 2] = host[i].z;
+        }
+        return out;
+    }
+
+    // Overwrite the simulation-mesh velocities, (M, 3); they take effect at the
+    // next simulate. A force over a step is an added velocity F dt / m.
+    void setSimMeshVelocities(const py::array_t<float, py::array::c_style | py::array::forcecast>& v) {
+        auto* vol = live()->actor();
+        auto host = readSimVelocities();
+        if (v.ndim() != 2 || v.shape(1) != 3 || static_cast<size_t>(v.shape(0)) != host.size())
+            throw std::runtime_error("set_sim_mesh_velocities: expected an (M, 3) array, M = the "
+                                     "simulation mesh's vertex count (" + std::to_string(host.size()) + ")");
+        const float* src = v.data();
+        for (size_t i = 0; i < host.size(); ++i) host[i] = PxVec4(src[i * 3], src[i * 3 + 1], src[i * 3 + 2], host[i].w);
+        {
+            PxScopedCudaLock _lock(*cuda_);
+            cuda_->getCudaContext()->memcpyHtoD(reinterpret_cast<CUdeviceptr>(vol->getSimVelocityBufferD()),
+                                                host.data(), host.size() * sizeof(PxVec4));
+        }
+        vol->markDirty(PxDeformableVolumeDataFlag::eSIM_VELOCITY);
+    }
+
+    // Hold simulation-mesh vertices `indices` to world points: `points` (K, 3),
+    // or where those vertices are now when None.
+    std::unique_ptr<PyDeformableAttachment> attachToWorld(
+            const py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>& indices,
+            const py::object& points) {
+        auto* vol = live()->actor();
+        const PxU32 n = vol->getSimulationMesh()->getNbVertices();
+        const auto k = static_cast<size_t>(indices.size());
+        if (k == 0) throw std::runtime_error("attach_to_world: no vertices given");
+        std::vector<PxU32> ind(k);
+        for (size_t i = 0; i < k; ++i) {
+            const auto j = indices.data()[i];
+            if (j < 0 || j >= static_cast<std::int64_t>(n))
+                throw std::runtime_error("attach_to_world: vertex " + std::to_string(j) +
+                                         " is not on the simulation mesh (" + std::to_string(n) + " vertices)");
+            ind[i] = static_cast<PxU32>(j);
+        }
+        std::vector<PxVec4> pts(k);
+        if (points.is_none()) {
+            std::vector<PxVec4> all(n);
+            {
+                PxScopedCudaLock _lock(*cuda_);
+                cuda_->getCudaContext()->memcpyDtoH(all.data(),
+                                                    reinterpret_cast<CUdeviceptr>(vol->getSimPositionInvMassBufferD()),
+                                                    static_cast<size_t>(n) * sizeof(PxVec4));
+            }
+            for (size_t i = 0; i < k; ++i) pts[i] = PxVec4(all[ind[i]].getXYZ(), 0.0f);
+        } else {
+            auto p = points.cast<py::array_t<float, py::array::c_style | py::array::forcecast>>();
+            if (p.ndim() != 2 || p.shape(1) != 3 || static_cast<size_t>(p.shape(0)) != k)
+                throw std::runtime_error("attach_to_world: points must be (K, 3), one per index");
+            for (size_t i = 0; i < k; ++i)
+                pts[i] = PxVec4(p.data()[i * 3], p.data()[i * 3 + 1], p.data()[i * 3 + 2], 0.0f);
+        }
+        PxDeformableAttachmentData d;
+        d.actor[0] = vol;
+        d.type[0] = PxDeformableAttachmentTargetType::eVERTEX;
+        d.indices[0].data = ind.data();
+        d.indices[0].stride = sizeof(PxU32);
+        d.indices[0].count = static_cast<PxU32>(k);
+        d.actor[1] = nullptr;
+        d.type[1] = PxDeformableAttachmentTargetType::eWORLD;
+        d.coords[1].data = pts.data();
+        d.coords[1].stride = sizeof(PxVec4);
+        d.coords[1].count = static_cast<PxU32>(k);
+        d.pose[1] = PxTransform(PxIdentity);
+        PxDeformableAttachment* a = PxGetPhysics().createDeformableAttachment(d);
+        if (!a) throw std::runtime_error("attach_to_world: PhysX refused the attachment (see its error output)");
+        return std::make_unique<PyDeformableAttachment>(a, static_cast<int>(k));
+    }
+
 private:
+    std::vector<PxVec4> readSimVelocities() const {
+        auto* vol = live()->actor();
+        std::vector<PxVec4> host(vol->getSimulationMesh()->getNbVertices());
+        PxScopedCudaLock _lock(*cuda_);
+        cuda_->getCudaContext()->memcpyDtoH(host.data(), reinterpret_cast<CUdeviceptr>(vol->getSimVelocityBufferD()),
+                                            host.size() * sizeof(PxVec4));
+        return host;
+    }
+
+
     threepp::SoftBody* live() const {
         if (!sb_) throw std::runtime_error("SoftBody: handle was invalidated by remove_soft_body");
         return sb_;
@@ -782,7 +919,32 @@ namespace threepp_py {
                      "CPU-skinning and re-uploading the full-resolution mesh every step. Call once, right "
                      "after add_soft_body. Also the cheap option when the visual mesh is NOT drawn at all "
                      "(an external skinner owns the render surface): it reduces the per-step cost to one "
-                     "few-hundred-texel texture write.");
+                     "few-hundred-texel texture write.")
+                .def("sim_mesh_state", &PySoftBody::simMeshState,
+                     "The SIMULATION (voxel) mesh's vertices as an (M, 4) float32 array: world-space x, y, z "
+                     "and inverse mass. The indices attach_to_world and set_sim_mesh_velocities take.")
+                .def("sim_mesh_velocities", &PySoftBody::simMeshVelocities,
+                     "The simulation mesh's vertex velocities, (M, 3) float32.")
+                .def("set_sim_mesh_velocities", &PySoftBody::setSimMeshVelocities, py::arg("velocities"),
+                     "Overwrite the simulation mesh's vertex velocities, (M, 3); they take effect at the next "
+                     "simulate. A force F on a vertex of mass m over a step dt is an added F dt / m.")
+                .def("attach_to_world", &PySoftBody::attachToWorld, py::arg("indices"),
+                     py::arg("points") = py::none(), py::keep_alive<0, 1>(),
+                     "Hold simulation-mesh vertices `indices` to world points `points` (K, 3) -- where those "
+                     "vertices are now when None -- with a PxDeformableAttachment. Returns its handle; "
+                     "update_pose moves the frame the points are given in. Release it before removing "
+                     "the body.");
+
+        py::class_<PyDeformableAttachment>(m, "DeformableAttachment",
+                                           "Simulation-mesh vertices of a soft body held to points in a world "
+                                           "frame (SoftBody.attach_to_world).")
+                .def("update_pose", &PyDeformableAttachment::updatePose, py::arg("position"),
+                     py::arg("rotation") = Quaternion(),
+                     "Move the frame the held points were given in (world space, identity at creation): "
+                     "the held vertices follow.")
+                .def("release", &PyDeformableAttachment::release, "Let go. Idempotent.")
+                .def_property_readonly("released", &PyDeformableAttachment::released)
+                .def_property_readonly("count", &PyDeformableAttachment::count, "How many vertices it holds.");
 #endif// THREEPP_PHYSX_GPU
 
         py::class_<PhysxWorld>(m, "PhysxWorld",
