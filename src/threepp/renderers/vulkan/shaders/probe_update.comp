@@ -361,6 +361,29 @@ void main() {
 
     const float alpha = 1.0 / min(sHist + 1.0, 32.0);
 
+    // This update's own probe state (see "DDGI-style probe state" below).
+    // Every thread needs it: the depth blend is weighted by it too.
+    float backFrac = 0.0;
+    float sealedFrac = 0.0;
+    for (uint i = 0u; i < kRays; ++i) {
+        backFrac += sBack[i];
+        sealedFrac += max(sBack[i], sSealedDark[i]);
+    }
+    backFrac /= float(kRays);
+    sealedFrac /= float(kRays);
+    const float validity = (1.0 - smoothstep(0.25, 0.6, backFrac))
+                         * (1.0 - smoothstep(0.85, 0.98, sealedFrac));
+    // TRUST: an update measured from inside geometry says nothing about the
+    // light at the probe, so it is blended in only as far as it is valid. A
+    // MOVING mesh that swallows a probe (glTF sample AnimatedColorsCube) made
+    // every ray black for a few updates: the radiance took the fast blend
+    // below at once, the validity followed at 1/32, and for that window the
+    // mesh sampled a trusted black probe and went dark as it moved. Now the
+    // buried updates leave the radiance and depth as they were, so the probe
+    // is whole again the moment the mesh moves on. A fresh probe (no
+    // history) adopts its first update outright, as before.
+    const float trust = (sHist > 0.0) ? validity : 1.0;
+
     // ── Chebyshev depth blend — one thread = one octahedral texel (8×8=64) ──
     // Power-cosine gather over this update's ray fan (the paper's per-texel
     // filter, done in shared memory instead of an atlas pass), EMA-blended
@@ -387,22 +410,16 @@ void main() {
             // SH's α=1 bootstrap; blending against the sentinel would smear
             // "all clear" into real walls for a whole EMA tail.
             const vec2 dOld = (bits == 0u) ? dNew : unpackHalf2x16(bits);
-            probeDepthOut[di] = packHalf2x16(mix(dOld, dNew, alpha));
+            probeDepthOut[di] = packHalf2x16(mix(dOld, dNew, alpha * trust));
         }
     }
 
     if (ri != 0u) return;
 
     vec3 a00 = vec3(0.0), aX = vec3(0.0), aY = vec3(0.0), aZ = vec3(0.0);
-    float backFrac = 0.0;
-    float sealedFrac = 0.0;
     for (uint i = 0u; i < kRays; ++i) {
         a00 += s00[i]; aX += sX[i]; aY += sY[i]; aZ += sZ[i];
-        backFrac += sBack[i];
-        sealedFrac += max(sBack[i], sSealedDark[i]);
     }
-    backFrac /= float(kRays);
-    sealedFrac /= float(kRays);
     // Monte-Carlo SH projection over the uniform sphere (pdf = 1/4π):
     // L_lm = (4π/N)·Σ L_i·Y_lm(ω_i);  Y00 = 0.282095, Y1c = 0.488603·comp.
     const float w00 = (4.0 * PI / float(kRays)) * 0.28209479;
@@ -430,8 +447,15 @@ void main() {
     // tells the two apart is that light gets into a room. The cost is a
     // double-sided space lit ONLY by bounce, which loses its probes and falls back
     // to the env fill its own sky visibility has already closed.
-    const float validity = (1.0 - smoothstep(0.25, 0.6, backFrac))
-                         * (1.0 - smoothstep(0.85, 0.98, sealedFrac));
+    // (validity itself is computed above, before the depth blend.)
+    //
+    // The validity follows a GEOMETRY step at the fast rate: a mesh moving onto
+    // or off the probe takes it from one end of its range to the other. A probe
+    // at a wall hovers mid-range (one update's σ ≈ 0.25 there), and its
+    // running value stays away from the ends, so its noise does not trip this.
+    const float vOld       = probeSh[pIdx * 4u + 0u].a;
+    const bool  geomStep   = (validity < 0.1 && vOld > 0.6) || (validity > 0.9 && vOld < 0.4);
+    const float alphaValid = geomStep ? max(alpha, 0.75) : alpha;
 
     // EMA blend: 1/(count+1) bootstraps a cleared grid in one update, then
     // settles at 1/32 — enough hysteresis to hide the 64-ray estimate's noise
@@ -496,7 +520,7 @@ void main() {
     // switch-off in vulkan_lights put the median probe at 19 .. 55.
     const float kAlphaRun = 0.3;
     const float mRunOld = (hist > 0.0) ? o3.a : mNew;
-    const float mRun    = mix(mRunOld, mNew, kAlphaRun);
+    const float mRun    = mix(mRunOld, mNew, kAlphaRun * trust);
     const float zSingle = abs(mNew - mOld) / semDen;
     const float zRun    = abs(mRun - mOld) / (semDen * sqrt(kAlphaRun / (2.0 - kAlphaRun)));
     const float kAlphaFast = 0.75;
@@ -507,9 +531,9 @@ void main() {
     const float fastW   = ((pc.flags & 2u) != 0u)
                               ? 1.0
                               : max(smoothstep(2.0, 3.5, zSingle), smoothstep(4.0, 7.0, zRun));
-    const float alphaSh = max(alpha, mix(alpha, kAlphaFast, fastW));
+    const float alphaSh = max(alpha, mix(alpha, kAlphaFast, fastW)) * trust;
 
-    probeShOut[pIdx * 4u + 0u] = vec4(mix(o0.rgb, c0, alphaSh), mix(o0.a, validity, alpha));
+    probeShOut[pIdx * 4u + 0u] = vec4(mix(o0.rgb, c0, alphaSh), mix(o0.a, validity, alphaValid));
     probeShOut[pIdx * 4u + 1u] = vec4(mix(o1.rgb, cx, alphaSh), min(hist + 1.0, 4096.0));
     probeShOut[pIdx * 4u + 2u] = vec4(mix(o2.rgb, cy, alphaSh), mix(semSqOld, semSq, alphaSh));
     probeShOut[pIdx * 4u + 3u] = vec4(mix(o3.rgb, cz, alphaSh), mRun);
