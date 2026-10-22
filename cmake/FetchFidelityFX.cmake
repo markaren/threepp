@@ -41,8 +41,7 @@ FetchContent_Declare(
 # Populate the source only — do NOT add_subdirectory(). The SDK ships a root
 # CMakeLists that builds the whole Cauldron sample framework; we only want the
 # ffx-api headers + the prebuilt signed Vulkan runtime out of the archive.
-# CMP0169 OLD lets us call FetchContent_Populate directly on CMake 4.x (same
-# pattern as the RLtools fetch in FetchOptionalDeps.cmake).
+# CMP0169 OLD lets us call FetchContent_Populate directly on CMake 4.x.
 cmake_policy(SET CMP0169 OLD)
 FetchContent_GetProperties(fidelityfx_sdk)
 if (NOT fidelityfx_sdk_POPULATED)

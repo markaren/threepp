@@ -60,7 +60,7 @@ def lerp_color(c0, c1, t):
     return out
 
 
-# ---- scene / camera / lighting (dark studio, RLtools-style) --------------------
+# ---- scene / camera / lighting (dark studio) --------------------
 canvas = tp.Canvas("threepp — cart-pole swing-up (GPU-trained)", width=1200, height=760)
 renderer = tp.GLRenderer(canvas)
 scene = tp.Scene()

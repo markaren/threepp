@@ -11,7 +11,6 @@ option(THREEPP_BUILD_TESTS "Build test suite" ${PROJECT_IS_TOP_LEVEL})
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 
 option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
-option(THREEPP_WITH_RLTOOLS "Fetch RLtools (header-only deep RL) for the reinforcement-learning example" OFF)
 
 option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)" OFF)
 

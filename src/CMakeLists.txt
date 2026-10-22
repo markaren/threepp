@@ -1841,8 +1841,8 @@ if (MSVC)
     #
     # This is the config every CPU-phase A/B in this tree is measured in, so
     # leaving it at /Ob1 does not just cost time — it measures the wrong
-    # inliner. The same trap cost the RLtools examples 10x until they forced
-    # /Ob2 (examples/projects/RLtools/CMakeLists.txt).
+    # inliner. The same trap once cost a template-heavy RL example 10x until
+    # it forced /Ob2.
     #
     # No float results move: /fp:precise on x64 has no x87 excess precision to
     # spill and the SSE2 baseline offers nothing to contract into, so an

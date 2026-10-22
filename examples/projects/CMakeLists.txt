@@ -16,7 +16,3 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
     add_subdirectory(Spot)
     add_subdirectory(ArduPilotSitl)
 endif ()
-
-if (TARGET rltools)
-    add_subdirectory(RLtools)
-endif ()
