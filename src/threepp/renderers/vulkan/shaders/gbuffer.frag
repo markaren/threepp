@@ -51,6 +51,10 @@ layout(location = 8) flat in uint vStableId;// stable per-object id (host-assign
 // non-zero value; both mesh vertex stages write 0, which is what the channel
 // held when it was reserved.
 layout(location = 9) flat in uint vParticleId;
+// Second UV set: "uv2" (glTF TEXCOORD_1) where the geometry has one, else vUv.
+// Read by the aoMap only, as three.js does (an aoMap samples uv2 when it is
+// there): the Khronos chairs bake their occlusion into a TEXCOORD_1 atlas.
+layout(location = 10) in vec2 vUv2;
 
 // Attachment 0: world-space normal (rgba16f). .xyz = n*0.5+0.5 encoded world
 // normal, .w = linear roughness (the deferred_shade.comp shading pass reads
@@ -809,7 +813,7 @@ void main() {
     float occlusion = 0.0;
     if (m.occlusionTexIndex >= 0) {
         const int  oi    = clamp(m.occlusionTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        const vec2 uvOcc = (m.uvTransformOcclusion * vec3(vUv, 1.0)).xy;
+        const vec2 uvOcc = (m.uvTransformOcclusion * vec3(vUv2, 1.0)).xy;
         const float aoR  = texture(gbufAlbedoMaps[nonuniformEXT(oi)], uvOcc).r;
         occlusion = clamp((1.0 - aoR) * m.aoMapIntensity, 0.0, 1.0);
     }

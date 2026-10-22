@@ -1368,6 +1368,7 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), rec.rtIndex);
             destroyBuffer(ctx->allocator(), rec.normal);
             destroyBuffer(ctx->allocator(), rec.uv);
+            destroyBuffer(ctx->allocator(), rec.uv2);
             destroyBuffer(ctx->allocator(), rec.color);
             destroyBuffer(ctx->allocator(), rec.prevVertex);
             destroyBuffer(ctx->allocator(), rec.blasScratch);
@@ -3509,6 +3510,7 @@ namespace threepp {
             if (auto* a = g.getAttribute("normal"))   v += a->version;
             if (auto* idx = g.getIndex())              v += idx->version;
             if (auto* a = g.getAttribute("uv"))        v += a->version;
+            if (auto* a = g.getAttribute("uv2"))       v += a->version;
             if (auto* a = g.getAttribute("color"))     v += a->version;
             return v;
         }
@@ -3519,6 +3521,7 @@ namespace threepp {
             if (auto* a = g.getAttribute("position")) v.position = a->version;
             if (auto* a = g.getAttribute("normal"))   v.normal = a->version;
             if (auto* a = g.getAttribute("uv"))       v.uv = a->version;
+            if (auto* a = g.getAttribute("uv2"))      v.uv2 = a->version;
             if (auto* a = g.getAttribute("color"))    v.color = a->version;
             if (auto* idx = g.getIndex())             v.index = idx->version;
             return v;
@@ -5258,7 +5261,9 @@ namespace threepp {
 
         // Upload `tex` to the next bindless slot if not already cached. Returns
         // the slot index; -1 if upload fails or capacity is exhausted.
-        int32_t ensureMaterialTexture(const std::shared_ptr<Texture>& texSp);
+        // uv2Ok: the caller samples it with the second UV set (the aoMap), so
+        // a Texture.channel of 1 is honoured and not warned about.
+        int32_t ensureMaterialTexture(const std::shared_ptr<Texture>& texSp, bool uv2Ok = false);
 
         // Build a tightly-packed RGBA8 sampled image from a material texture's
         // CPU image (BCn decompress / channel pad / float quantize). Returns a

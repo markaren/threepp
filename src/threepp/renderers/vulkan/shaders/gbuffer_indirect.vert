@@ -41,6 +41,7 @@ struct DrawInfo {
     uint64_t prevPosAddr;
     uint64_t indexAddr;        // 0 → non-indexed (gl_VertexIndex IS the vertex ID)
     uint64_t colorAddr;        // 0 → no per-vertex color (material.vertexColors off / geometry has no "color")
+    uint64_t uv2Addr;          // 0 → no "uv2" (TEXCOORD_1); always float. vUv2 then repeats vUv
     uint     instanceCustomIndex;
     uint     flags;            // bits 0..7 render flags | bits 8..15 semantic class id
     uint     indexed;          // 0 / 1
@@ -66,6 +67,9 @@ layout(location = 8) flat out uint vStableId;// stable per-object id -> outIds.y
 // Per-particle identity -> outIds.w. Zero here: only particlefield_gbuf.vert
 // draws particles. Declared because gbuffer.frag is shared between the two.
 layout(location = 9) flat out uint vParticleId;
+// Second UV set ("uv2", glTF TEXCOORD_1), for the aoMap as three.js samples
+// it: uv2 where the geometry has one, uv otherwise.
+layout(location = 10) out vec2 vUv2;
 
 #include "vertex_fetch.glsl"// fetchNormal / fetchUv / fetchColor by device address, kPacked*
 
@@ -109,6 +113,7 @@ void main() {
     vStableId      = d.stableId;
     vParticleId    = 0u;
     vUv            = inUv;
+    vUv2           = (d.uv2Addr != 0ul) ? fetchVec2(d.uv2Addr, vid) : inUv;
     vWorldPos      = worldPos.xyz;
     // Per-vertex color (material.vertexColors). gbuffer.frag multiplies albedo
     // by this; white when the mesh has no "color" attribute so the multiply is

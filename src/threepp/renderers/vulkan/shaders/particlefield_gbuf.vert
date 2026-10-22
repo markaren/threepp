@@ -52,6 +52,7 @@ struct DrawInfo {
     uint64_t prevPosAddr;
     uint64_t indexAddr;
     uint64_t colorAddr;
+    uint64_t uv2Addr;// "uv2" (TEXCOORD_1), float; 0 → none, the aoMap then reads uv
     uint     instanceCustomIndex;
     uint     flags;
     uint     indexed;
@@ -94,6 +95,7 @@ layout(location = 8) flat out uint vStableId;
 // Per-PARTICLE identity → outIds.w. Every other vertex stage writes 0 there
 // (the channel was reserved); this is the only producer.
 layout(location = 9) flat out uint vParticleId;
+layout(location = 10) out vec2 vUv2;// second UV set for the aoMap (gbuffer_indirect.vert)
 
 #include "vertex_fetch.glsl"// fetchNormal / fetchUv / fetchColor by device address, kPacked*
 
@@ -209,6 +211,7 @@ void main() {
     vStableId      = d.stableId;
     vParticleId    = pi;
     vUv            = inUv;
+    vUv2           = (d.uv2Addr != 0ul) ? fetchVec2(d.uv2Addr, vid) : inUv;
     vWorldPos      = worldPos.xyz;
     vColor         = (d.colorAddr != 0ul) ? fetchColor(d.colorAddr, d.packedAttrs, vid) : vec3(1.0);
 

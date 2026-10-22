@@ -32,7 +32,7 @@
 
 layout(local_size_x = 64) in;
 
-// Matches DrawGen::SpanDesc (scalar, 120 B).
+// Matches DrawGen::SpanDesc (scalar, 128 B).
 struct DrawSpan {
     uint64_t posAddr;
     uint64_t nrmAddr;
@@ -40,6 +40,7 @@ struct DrawSpan {
     uint64_t prevPosAddr;
     uint64_t indexAddr;
     uint64_t colorAddr;
+    uint64_t uv2Addr;// "uv2" (TEXCOORD_1), float; 0 → none, the aoMap then reads uv
     uint     firstEntry; // entry index of instance 0 (== instanceCustomIndex base)
     uint     count;      // instances (records) in the span
     uint     recordBase; // record index of instance 0 in the concatenated buckets
@@ -65,7 +66,7 @@ struct LodRow {
     uint     indexed;
 };
 
-// The vertex shader's DrawInfo (gbuffer_indirect.vert), scalar, 136 B.
+// The vertex shader's DrawInfo (gbuffer_indirect.vert), scalar, 144 B.
 struct DrawInfo {
     mat4     model;
     uint64_t posAddr;
@@ -74,6 +75,7 @@ struct DrawInfo {
     uint64_t prevPosAddr;
     uint64_t indexAddr;
     uint64_t colorAddr;
+    uint64_t uv2Addr;// "uv2" (TEXCOORD_1), float; 0 → none, the aoMap then reads uv
     uint     instanceCustomIndex;
     uint     flags;
     uint     indexed;
@@ -167,6 +169,7 @@ void main() {
     d.prevPosAddr = spans[lo].prevPosAddr;
     d.indexAddr   = indexAddr;
     d.colorAddr   = spans[lo].colorAddr;
+    d.uv2Addr     = spans[lo].uv2Addr;
     d.instanceCustomIndex = e;
     d.flags = spans[lo].flagsBase | ((gflags & kGeomFlagMoved) != 0u ? kInstFlagMoving : 0u) | lodFades[e];
     d.indexed       = indexed;

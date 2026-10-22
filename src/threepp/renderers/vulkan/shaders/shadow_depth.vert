@@ -21,6 +21,7 @@ struct DrawInfo {
     uint64_t prevPosAddr;
     uint64_t indexAddr;
     uint64_t colorAddr;
+    uint64_t uv2Addr;// "uv2" (TEXCOORD_1), float; 0 → none, the aoMap then reads uv
     uint     instanceCustomIndex;
     uint     flags;
     uint     indexed;

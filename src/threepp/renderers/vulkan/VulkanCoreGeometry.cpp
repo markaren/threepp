@@ -218,6 +218,13 @@ bool VulkanRenderer::Impl::stageChangedSideAttributes(StagedUploads& up, const B
                 }
             }
 
+            if (now.uv2 != rec.attrVersions.uv2 && rec.uv2.handle != VK_NULL_HANDLE) {
+                FloatAttributeView uv2s{geom.getAttribute("uv2")};
+                if (uv2s && uv2s.count() == static_cast<int>(vtxCount) && uv2s.size() == size_t(vtxCount) * 2u) {
+                    put(rec.uv2, uv2s.data(), uv2s.size() * sizeof(float));
+                }
+            }
+
             if (now.color != rec.attrVersions.color && rec.color.handle != VK_NULL_HANDLE) {
                 FloatAttributeView cols{geom.getAttribute("color")};
                 const int itemSize = cols ? cols.itemSize() : 0;
@@ -511,6 +518,22 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                             sideDeviceLocal);
                     stageUpload(up, rec->uv, uvSrc, uvBytes);
+                }
+            }
+
+            // Optional second UV set ("uv2", TEXCOORD_1): the aoMap's, as in
+            // three.js. Raster only (the G-buffer reads it; no ray hit does),
+            // and rare enough to stay float rather than take a packed bit.
+            if (FloatAttributeView uv2s{geom.getAttribute("uv2")}) {
+                if (uv2s.count() == static_cast<int>(vertexCount) &&
+                    uv2s.size() == vertexCount * 2) {
+                    const VkDeviceSize uv2Bytes = uv2s.size() * sizeof(float);
+                    rec->uv2 = createGeomBuffer(
+                            uv2Bytes,
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                            sideDeviceLocal);
+                    stageUpload(up, rec->uv2, uv2s.data(), uv2Bytes);
                 }
             }
 

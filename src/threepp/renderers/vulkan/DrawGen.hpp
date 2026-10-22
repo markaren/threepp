@@ -37,7 +37,7 @@ namespace threepp::vulkan {
 
     class DrawGen {
     public:
-        // Matches draw_gen.comp's DrawSpan (scalar, 120 B).
+        // Matches draw_gen.comp's DrawSpan (scalar, 128 B).
         struct SpanDesc {
             uint64_t posAddr;
             uint64_t nrmAddr;
@@ -45,6 +45,7 @@ namespace threepp::vulkan {
             uint64_t prevPosAddr;
             uint64_t indexAddr;
             uint64_t colorAddr;
+            uint64_t uv2Addr;// "uv2" (TEXCOORD_1), float; 0 → none
             uint32_t firstEntry;
             uint32_t count;
             uint32_t recordBase;
@@ -62,7 +63,7 @@ namespace threepp::vulkan {
             uint32_t lodRowCount;// an auto-LOD chain's levels 1..n and the fallback row; 0: no chain
             uint32_t pad0;
         };
-        static_assert(sizeof(SpanDesc) == 120, "draw_gen SpanDesc drift");
+        static_assert(sizeof(SpanDesc) == 128, "draw_gen SpanDesc drift");
 
         // Matches draw_gen.comp's LodRow (scalar, 16 B): what the record of an
         // entry at level k >= 1 draws, selectLodGeom(rec, k) with no drawRange

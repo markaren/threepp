@@ -2793,6 +2793,7 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
                 add(g + ".vertex", r.vertex);
                 add(g + ".normal", r.normal);
                 add(g + ".uv", r.uv);
+                add(g + ".uv2", r.uv2);
                 add(g + ".color", r.color);
                 add(g + ".index", r.index);
                 add(g + ".rtIndex", r.rtIndex);

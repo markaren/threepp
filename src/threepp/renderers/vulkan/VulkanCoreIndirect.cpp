@@ -273,6 +273,7 @@ namespace threepp {
                                         : rec->vertex.address;
                 d.indexAddr   = sel.indexed ? sel.indexAddress : 0ull;
                 d.colorAddr   = (rec->color.handle != VK_NULL_HANDLE && vtxColor) ? rec->color.address : 0ull;
+                d.uv2Addr     = (rec->uv2.handle != VK_NULL_HANDLE) ? rec->uv2.address : 0ull;
                 d.firstEntry  = sp.first;
                 d.count       = sp.count;
                 d.flagsBase   = matFlags;// | class id, at the reservation (entry order)
@@ -480,6 +481,7 @@ namespace threepp {
             di.posAddr     = rec->vertex.address;
             di.nrmAddr     = rec->normal.address;
             di.uvAddr      = (rec->uv.handle != VK_NULL_HANDLE) ? rec->uv.address : 0ull;
+            di.uv2Addr     = (rec->uv2.handle != VK_NULL_HANDLE) ? rec->uv2.address : 0ull;
             // Warp-enabled DisplacedMesh: vertices reflow every frame, so
             // prevVertex can't track a stable world point — point the
             // motion-vector source at the current buffer so the ocean

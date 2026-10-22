@@ -3385,7 +3385,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 copyTexUvTransform(md.uvTransformEmissive, tex);
                             }
                             if (auto tex = occlusionTexOf(*m)) {
-                                md.occlusionTexIndex = ensureMaterialTexture(tex);
+                                md.occlusionTexIndex = ensureMaterialTexture(tex, true);
                                 copyTexUvTransform(md.uvTransformOcclusion, tex);
                             }
                             if (auto tex = detailTexOf(*m)) {
@@ -4657,7 +4657,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::buildMaterialDesc(Mesh&
                 copyTexUvTransform(md.uvTransformEmissive, tex);
             }
             if (auto tex = occlusionTexOf(m)) {
-                md.occlusionTexIndex = ensureMaterialTexture(tex);
+                md.occlusionTexIndex = ensureMaterialTexture(tex, true);
                 copyTexUvTransform(md.uvTransformOcclusion, tex);
             }
             if (auto tex = detailTexOf(m)) {

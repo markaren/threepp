@@ -136,7 +136,7 @@ void VulkanRenderer::Impl::createDefaultMaterialTexture() {
             materialTextures.push_back(tex);
         }
 
-int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Texture>& texSp) {
+int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Texture>& texSp, bool uv2Ok) {
             if (!texSp) return -1;
             const Texture* tex = texSp.get();
             if (auto it = textureCache.find(tex); it != textureCache.end()) {
@@ -153,14 +153,15 @@ int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Textur
                 retiredTextureSlots_.push_back(it->second.slot);
                 textureCache.erase(it);
             }
-            if (tex->channel != 0) {
-                // The G-buffer carries one UV set; Texture.channel (glTF
-                // TEXCOORD_1, a lightMap on uv2) is not honoured here.
+            if (tex->channel != 0 && !(uv2Ok && tex->channel == 1)) {
+                // The G-buffer carries a second UV set ("uv2") for the aoMap
+                // only; any other map's Texture.channel (glTF TEXCOORD_1) is
+                // not honoured here.
                 static bool warned = false;
                 if (!warned) {
                     warned = true;
                     std::cerr << "[VulkanRenderer] a material map has Texture.channel = " << tex->channel
-                              << ": the Vulkan renderer samples every map with UV set 0.\n";
+                              << ": the Vulkan renderer samples every map but the aoMap with UV set 0.\n";
                 }
             }
             if (freeTextureSlots.empty() && materialTextures.size() >= kMaxMaterialTextures) {

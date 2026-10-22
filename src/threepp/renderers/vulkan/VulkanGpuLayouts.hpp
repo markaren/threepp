@@ -233,7 +233,7 @@ namespace threepp::vulkan::impl {
     static_assert(sizeof(GpuOverlayFogUbo) == 96);
 
     // Host mirror of gbuffer_indirect.vert's DrawInfo struct. Tight-
-    // packed (136 bytes — the static_assert below is the authority — all
+    // packed (144 bytes — the static_assert below is the authority — all
     // members naturally aligned to ≤ 8) so it matches the GLSL `scalar`
     // block layout used in the shader.
     struct DrawInfoGpu {
@@ -244,6 +244,7 @@ namespace threepp::vulkan::impl {
         uint64_t prevPosAddr;      // 8
         uint64_t indexAddr;        // 8 (0 → non-indexed)
         uint64_t colorAddr;        // 8 (0 → no per-vertex color / vertexColors off)
+        uint64_t uv2Addr;          // 8 ("uv2", TEXCOORD_1, float; 0 → none, the aoMap reads uv)
         uint32_t instanceCustomIndex;
         uint32_t flags;            // bits 0..7 render flags | bits 8..15 semantic class id
         uint32_t indexed;
@@ -251,7 +252,7 @@ namespace threepp::vulkan::impl {
         uint32_t stableId;         // stable per-object instance id (-> outIds.y)
         uint32_t packedAttrs;      // BlasRecord::packedMask (also keeps 8-byte array stride)
     };
-    static_assert(sizeof(DrawInfoGpu) == 136,
+    static_assert(sizeof(DrawInfoGpu) == 144,
                   "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
 
 }// namespace threepp::vulkan::impl

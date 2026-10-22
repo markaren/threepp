@@ -64,6 +64,7 @@ layout(location = 8) flat out uint vStableId;// stable per-object id — matches
 // matching vertex output is an interface mismatch, so this path publishes the
 // same "no particle" zero the channel always carried.
 layout(location = 9) flat out uint vParticleId;
+layout(location = 10) out vec2 vUv2;// second UV set for the aoMap (gbuffer_indirect.vert)
 
 void main() {
     vec4 worldPos     = pc.model * vec4(inPos, 1.0);
@@ -88,6 +89,7 @@ void main() {
     vInstanceIdx   = pc.instanceCustomIndex;
     vFlags         = pc.flags;
     vUv            = inUv;
+    vUv2           = inUv;
     vWorldPos      = worldPos.xyz;
     vColor         = vec3(1.0);// interface filler — this pipeline never draws (see decl)
     vStableId      = pc.instanceCustomIndex + 1u;// fixed path: mirror .x (unused for ids)

@@ -43,6 +43,7 @@ namespace threepp::vulkan::impl {
         unsigned int position = 0;
         unsigned int normal = 0;
         unsigned int uv = 0;
+        unsigned int uv2 = 0;
         unsigned int color = 0;
         unsigned int index = 0;
     };
@@ -67,6 +68,10 @@ namespace threepp::vulkan::impl {
         uint32_t rtIndexCount = 0;
         Buffer normal;
         Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
+        // Second UV set ("uv2", glTF TEXCOORD_1), tightly-packed float, read
+        // by the G-buffer's aoMap lookup only (DrawInfo::uv2Addr). .handle ==
+        // VK_NULL_HANDLE when the geometry has no "uv2".
+        Buffer uv2;
         // Per-vertex RGB color (BufferGeometry "color" attribute, itemSize 3).
         // .handle == VK_NULL_HANDLE when the geometry has no usable "color".
         // Surfaced to the shaders via GeometryDesc::colorAddress / DrawInfo::
