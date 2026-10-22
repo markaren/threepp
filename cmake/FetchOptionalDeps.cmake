@@ -78,22 +78,3 @@ if (THREEPP_WITH_RLTOOLS)
     target_compile_features(rltools INTERFACE cxx_std_17)
     add_library(RLtools::headers ALIAS rltools)
 endif ()
-
-if (THREEPP_WITH_FBX)
-    message(STATUS "Fetching OpenFBX...")
-    FetchContent_Declare(
-        openfbx
-        GIT_REPOSITORY https://github.com/nem0/OpenFBX.git
-        GIT_TAG        4d4a45a0ed8f357d11ff83904b087530547a4071
-        GIT_SHALLOW    TRUE
-    )
-    # Populate source only — do NOT call add_subdirectory (OpenFBX's CMakeLists
-    # has an unresolvable install-export dependency on libdeflate_static).
-    # CMP0169 OLD lets us call FetchContent_Populate directly without CMake 4.x
-    # routing through add_subdirectory.
-    cmake_policy(SET CMP0169 OLD)
-    FetchContent_GetProperties(openfbx)
-    if (NOT openfbx_POPULATED)
-        FetchContent_Populate(openfbx)
-    endif ()
-endif ()

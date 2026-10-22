@@ -397,6 +397,73 @@ TEST_CASE("GLTFLoader maps a NEAREST sampler to Filter::Nearest") {
     CHECK(mat->map->generateMipmaps == false);
 }
 
+// MSFT_texture_dds: the DDS stays block-compressed, and its rows keep the
+// top-down order the file stores them in (glTF's UV origin is the top-left),
+// where DDSLoader on its own flips them for the bottom-up convention.
+TEST_CASE("GLTFLoader reads a block-compressed image from MSFT_texture_dds") {
+    // 4x8 DXT1: two block rows, told apart by their bytes.
+    std::vector<uint8_t> dds(4 + 124, 0);
+    auto put32 = [&dds](size_t offset, uint32_t v) { std::memcpy(dds.data() + offset, &v, 4); };
+    put32(0, 0x20534444u);// "DDS "
+    put32(4, 124);
+    put32(12, 8);// height
+    put32(16, 4);// width
+    put32(28, 1);
+    put32(76, 32);
+    put32(80, 0x00000004u);// DDPF_FOURCC
+    put32(84, 0x31545844u);// "DXT1"
+    const std::vector<uint8_t> top{1, 0, 2, 0, 0x00, 0x55, 0xAA, 0xFF};
+    const std::vector<uint8_t> bottom{3, 0, 4, 0, 0x1B, 0x1B, 0x1B, 0x1B};
+    dds.insert(dds.end(), top.begin(), top.end());
+    dds.insert(dds.end(), bottom.begin(), bottom.end());
+
+    Bin bin;
+    size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+    size_t uvOff = bin.put<float>({0.f, 0.f, 1.f, 0.f, 0.f, 1.f});
+    size_t ddsOff = bin.putBytes(dds);
+
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "extensionsUsed":["MSFT_texture_dds"],
+      "extensionsRequired":["MSFT_texture_dds"],
+      "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36},
+        {"buffer":0,"byteOffset":)" + std::to_string(uvOff) + R"(,"byteLength":24},
+        {"buffer":0,"byteOffset":)" + std::to_string(ddsOff) + R"(,"byteLength":)" + std::to_string(dds.size()) + R"(}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}],
+      "images":[{"bufferView":2,"mimeType":"image/vnd-ms.dds"}],
+      "samplers":[{"minFilter":9987}],
+      "textures":[{"sampler":0,"extensions":{"MSFT_texture_dds":{"source":0}}}],
+      "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+      "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}]}],
+      "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}]})";
+
+    auto path = writeTempGlb(makeGlb(json, bin.data));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    auto* mesh = firstMesh(res->scene.get());
+    REQUIRE(mesh);
+    auto mat = std::dynamic_pointer_cast<MeshStandardMaterial>(mesh->material());
+    REQUIRE(mat);
+    REQUIRE(mat->map);
+    const auto& img = mat->map->image();
+    CHECK(img.compressedFormat.has_value());
+    CHECK(img.width() == 4);
+    CHECK(img.height() == 8);
+    const auto& data = img.data();
+    REQUIRE(data.size() == 16);
+    CHECK(std::vector<uint8_t>(data.begin(), data.begin() + 8) == top);
+    CHECK(mat->map->colorSpace == ColorSpace::sRGB);
+    // A mipmap filter must not ask for mips the compressed blocks cannot make.
+    CHECK(mat->map->generateMipmaps == false);
+}
+
 // EXT_texture_webp keeps the image index INSIDE the extension, and an asset that
 // lists the extension as required has no top-level `source` at all. Read only from
 // the top level, such a texture had no image and the model came up untextured

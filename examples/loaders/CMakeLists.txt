@@ -18,7 +18,3 @@ add_example(NAME "svg_loader" LINK_IMGUI)
 if (THREEPP_WITH_USD)
     add_example(NAME "usd_loader")
 endif ()
-
-if (THREEPP_WITH_FBX)
-    add_example(NAME "fbx_loader")
-endif ()

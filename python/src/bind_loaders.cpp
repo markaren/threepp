@@ -11,9 +11,6 @@
 #include "threepp/animation/AnimationClip.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
-#ifdef THREEPP_PY_HAS_FBX
-#include "threepp/loaders/FBXLoader.hpp"
-#endif
 #include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/OBJLoader.hpp"
@@ -188,25 +185,6 @@ namespace threepp_py {
                     return std::move(*result);
                 }, py::arg("path"));
 
-#ifdef THREEPP_PY_HAS_FBX
-        // ---- FBXLoader (OpenFBX-backed) --------------------------------------
-        // Only present when the threepp lib was built with -DTHREEPP_WITH_FBX=ON.
-        // Returns a Group, like the other model loaders.
-        {
-            py::class_<FBXLoader> fbx(m, "FBXLoader");
-            py::enum_<FBXLoader::MaterialMode>(fbx, "MaterialMode")
-                    .value("Auto", FBXLoader::MaterialMode::Auto)
-                    .value("Phong", FBXLoader::MaterialMode::Phong)
-                    .value("PBR", FBXLoader::MaterialMode::PBR);
-            fbx.def(py::init<>())
-                    .def_readwrite("material_mode", &FBXLoader::materialMode,
-                                   "How the FBX SPECULAR slot is interpreted (Auto/Phong/PBR).")
-                    .def_readwrite("emissive_scale", &FBXLoader::emissiveScale,
-                                   "Multiplier on every emissive material's intensity (1.0 = file values).")
-                    .def("load", [](FBXLoader& l, const std::string& path) { return l.load(path); },
-                         py::arg("path"), "Load an .fbx file as a Group.");
-        }
-#endif
     }
 
 }// namespace threepp_py

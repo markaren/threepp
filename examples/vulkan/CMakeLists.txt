@@ -39,9 +39,7 @@ foreach (_scratch_src ${_scratch_examples})
     add_example(NAME "${_scratch_name}" SOURCES "scratch/${_scratch_name}.cpp" LINK_IMGUI)
 endforeach ()
 
-if (THREEPP_WITH_FBX)
-    add_example(NAME "vulkan_bistro" LINK_IMGUI)
-endif ()
+add_example(NAME "vulkan_bistro" LINK_IMGUI)
 
 if (THREEPP_WITH_INFERENCE)
     include(${PROJECT_SOURCE_DIR}/cmake/CompileVulkanShaders.cmake)

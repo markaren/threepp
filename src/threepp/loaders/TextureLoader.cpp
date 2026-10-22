@@ -39,10 +39,9 @@ struct TextureLoader::Impl {
     bool useCache_;
     ImageLoader imageLoader_;
     std::unordered_map<std::string, std::weak_ptr<Texture>> cache_;
-    // Guards cache_. A TextureLoader is shared across concurrent loads (FBXLoader
-    // keeps one instance, the app may drive several loadAsync threads, and
-    // FBXLoader now warms the cache from a decode thread pool), so every cache
-    // access must be serialised. The slow decode runs OUTSIDE this lock.
+    // Guards cache_. A TextureLoader is shared across concurrent loads (the app
+    // may drive several loadAsync threads), so every cache access must be
+    // serialised. The slow decode runs OUTSIDE this lock.
     std::mutex mutex_;
 
     explicit Impl(bool useCache): useCache_(useCache) {}

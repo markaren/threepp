@@ -2,8 +2,8 @@
 //
 // This list used to be written out three times — the Import dialog's filter,
 // the drag-and-drop handler and the asset browser — and they drifted: USD was
-// supported by ModelLoader but offered nowhere, and FBX was accepted by a drop
-// but hidden in the file dialog. One definition, no drift.
+// supported by ModelLoader but offered nowhere, and FBX (since dropped) was
+// accepted by a drop but hidden in the file dialog. One definition, no drift.
 
 #ifndef THREEPP_EDITOR_IMPORTFORMATS_HPP
 #define THREEPP_EDITOR_IMPORTFORMATS_HPP
@@ -28,7 +28,7 @@ namespace threepp::editor::formats {
     inline const std::vector<std::string>& meshes() {
 
         static const std::vector<std::string> list{
-                ".obj", ".dae", ".gltf", ".glb", ".stl", ".fbx",
+                ".obj", ".dae", ".gltf", ".glb", ".stl",
                 ".usd", ".usda", ".usdc", ".usdz"};
         return list;
     }

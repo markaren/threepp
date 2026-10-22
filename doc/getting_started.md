@@ -612,7 +612,7 @@ Built-in controls, all taking the event source as their last argument:
 ## Loading models
 
 The generic front door dispatches on file extension (`.obj`, `.dae`, `.gltf`, `.glb`, `.stl` —
-plus `.usd*` and `.fbx` when the opt-in USD/FBX loaders are compiled in):
+plus `.usd*` when the opt-in USD loader is compiled in):
 
 ```cpp
 ModelLoader loader;
@@ -640,10 +640,12 @@ scene.add(result->scene);
 auto& clips = result->animations;
 ```
 
-Also available: `OBJLoader` + `MTLLoader`, `STLLoader`, `ColladaLoader`, `FBXLoader`
-(`-DTHREEPP_WITH_FBX=ON`), `USDLoader` (`-DTHREEPP_WITH_USD=ON`), `SVGLoader`, `URDFLoader` (robot
+Also available: `OBJLoader` + `MTLLoader`, `STLLoader`, `ColladaLoader`,
+`USDLoader` (`-DTHREEPP_WITH_USD=ON`), `SVGLoader`, `URDFLoader` (robot
 descriptions → a `Robot` with joints), `FontLoader` (typeface.json / TTF), and `AssimpLoader` as
-a catch-all if you link assimp yourself.
+a catch-all if you link assimp yourself. FBX has no loader of its own: convert it to glTF with
+Blender and [scripts/fbx_to_gltf.py](../scripts/fbx_to_gltf.py), which keeps PBR (ORM) materials
+and leaves DDS textures block-compressed.
 
 ### URDF and xacro
 

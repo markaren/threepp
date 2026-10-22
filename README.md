@@ -32,7 +32,7 @@ controls, material fixes, the newer post-processing passes).
 * Physical materials with transmission, alpha hash and alpha-to-coverage; PMREM environment maps and `RoomEnvironment`
 * Shadows, Water and Sky shaders, and Orbit, Trackball, Fly, Drag and Transform controls
 * `EffectComposer` with bloom, depth of field, GTAO, outline, FXAA and output passes
-* Loaders: glTF/GLB (with meshopt), OBJ/MTL, STL, COLLADA, SVG, URDF/xacro (no ROS needed), PNG/JPEG, DDS, WebP, HDR and EXR; opt-in USD, FBX and [Assimp](https://github.com/assimp/assimp)
+* Loaders: glTF/GLB (with meshopt), OBJ/MTL, STL, COLLADA, SVG, URDF/xacro (no ROS needed), PNG/JPEG, DDS, WebP, HDR and EXR; opt-in USD and [Assimp](https://github.com/assimp/assimp)
 * Scene serialization as three.js Object JSON or a single-file `.tpz` archive; three.js editor documents load as-is
 
 **Rendering beyond three.js**

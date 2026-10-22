@@ -196,7 +196,7 @@ namespace threepp {
             }
         }
 
-        std::shared_ptr<Texture> parseDDS(const uint8_t* raw, size_t size) {
+        std::shared_ptr<Texture> parseDDS(const uint8_t* raw, size_t size, bool flipY) {
             if (size < 4 + sizeof(DDSHeader)) {
                 std::cerr << "[DDSLoader] File too small\n";
                 return nullptr;
@@ -281,7 +281,7 @@ namespace threepp {
 
                 // Flip Y to match stb_image's flipY=true convention so DDS
                 // textures are consistent with all other texture formats.
-                flipMipY(buf.data(), w, h, glFmt);
+                if (flipY) flipMipY(buf.data(), w, h, glFmt);
 
                 Image::CompressedFormat cf{};
                 cf.format = glFmt;
@@ -308,7 +308,7 @@ namespace threepp {
     DDSLoader::DDSLoader() : pimpl_(std::make_unique<Impl>()) {}
     DDSLoader::~DDSLoader() = default;
 
-    std::shared_ptr<Texture> DDSLoader::load(const std::filesystem::path& path) {
+    std::shared_ptr<Texture> DDSLoader::load(const std::filesystem::path& path, bool flipY) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file) {
             std::cerr << "[DDSLoader] Cannot open: " << path << "\n";
@@ -320,57 +320,13 @@ namespace threepp {
         file.read(reinterpret_cast<char*>(data.data()), fileSize);
         file.close();
 
-        auto tex = parseDDS(data.data(), data.size());
+        auto tex = parseDDS(data.data(), data.size(), flipY);
         if (tex) tex->name = path.stem().string();
         return tex;
     }
 
-    std::shared_ptr<Texture> DDSLoader::loadFromMemory(const std::vector<unsigned char>& data) {
-        return parseDDS(data.data(), data.size());
-    }
-
-    bool ddsHasCutoutAlpha(const std::filesystem::path& path) {
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file) return false;
-        const auto fileSize = static_cast<size_t>(file.tellg());
-        if (fileSize < 4 + sizeof(DDSHeader)) return false;
-        file.seekg(0);
-        std::vector<uint8_t> data(fileSize);
-        file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(fileSize));
-        file.close();
-
-        uint32_t magic = 0;
-        std::memcpy(&magic, data.data(), 4);
-        if (magic != DDS_MAGIC) return false;
-
-        DDSHeader hdr{};
-        std::memcpy(&hdr, data.data() + 4, sizeof(DDSHeader));
-        if (hdr.dwSize != 124) return false;
-        if (!(hdr.ddspf.dwFlags & DDPF_FOURCC) || hdr.ddspf.dwFourCC != makeFourCC('D', 'X', 'T', '1'))
-            return false;// only BC1 is ambiguous; other compressed formats carry explicit alpha
-
-        // Base mip only -- a cutout pattern is scale-invariant, no need to scan mips.
-        const uint32_t blocksX = (std::max(1u, hdr.dwWidth) + 3u) / 4u;
-        const uint32_t blocksY = (std::max(1u, hdr.dwHeight) + 3u) / 4u;
-        const uint64_t totalBlocks = static_cast<uint64_t>(blocksX) * blocksY;
-        const size_t dataOffset = 4 + sizeof(DDSHeader);
-        if (totalBlocks == 0 || dataOffset + totalBlocks * 8 > fileSize) return false;
-
-        uint64_t alphaBlocks = 0;
-        for (uint64_t i = 0; i < totalBlocks; ++i) {
-            const uint8_t* blk = data.data() + dataOffset + i * 8;
-            uint16_t c0, c1;
-            std::memcpy(&c0, blk, 2);
-            std::memcpy(&c1, blk + 2, 2);
-            if (c0 <= c1) ++alphaBlocks;
-        }
-
-        // Empirically measured against the Bistro asset (2026-07-01): opaque DXT1
-        // textures land under ~2% from incidental colour-endpoint ties (Concrete
-        // 0.05%, Pavement_Cobblestone 0.14%, MASTER_Building_Details 1.93%); real
-        // cutout textures (Paris_Chair_01 24%, Sidewalkbarrier 31%, Balcony_Trims
-        // 12%, Streetlight_Chains 14%) land far above it. 5% gives a wide margin.
-        return static_cast<double>(alphaBlocks) / static_cast<double>(totalBlocks) > 0.05;
+    std::shared_ptr<Texture> DDSLoader::loadFromMemory(const std::vector<unsigned char>& data, bool flipY) {
+        return parseDDS(data.data(), data.size(), flipY);
     }
 
 }// namespace threepp

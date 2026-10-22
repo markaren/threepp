@@ -171,7 +171,7 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
             # binds Texture with no constructor from data either. So the ONLY way to light a
             # scene with an HDRI was File > Set Environment, a UI action: not scriptable, and
             # unreachable from a headless --screenshot run. Costs no new dependency; every
-            # loader in here is part of threepp already, and FBX stays behind its own guard.
+            # loader in here is part of threepp already.
             "${PROJECT_SOURCE_DIR}/python/src/bind_loaders.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_robot.cpp")
 

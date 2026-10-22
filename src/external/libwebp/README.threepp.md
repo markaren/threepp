@@ -58,7 +58,7 @@ and pugixml — upstream's CMake is not used, since `add_subdirectory` would dra
 rules, pkg-config generation and package config exports.
 
 - **No `WEBP_USE_THREAD`**: decoding is single-threaded per image. Callers that decode many
-  images at once (FBXLoader) already parallelize across images.
+  images at once parallelize across images.
 - **No per-file SIMD flags.** SSE2 is baseline on x64 and NEON on aarch64, so those kernels
   compile and are picked by runtime dispatch. The SSE4.1/AVX2 files compile everywhere but
   self-disable without `-msse4.1`/`-mavx2` on GCC/Clang, and dispatch then skips them —

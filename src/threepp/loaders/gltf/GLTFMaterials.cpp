@@ -4,15 +4,13 @@
 
 namespace threepp::gltf {
 
-    // `embedded`, when given, receives the encoded bytes for an image
-    // the .glb carries INSIDE itself (a bufferView, or a data: uri) —
-    // the ones with no file anywhere for an exporter to point at. An
-    // image referenced by path keeps having a file, so it gets nothing
-    // and the caller stays on the path it always had.
-    std::optional<Image> GLTFParser::loadImageData(int imageIdx, std::vector<uint8_t>* embedded) {
+    // The encoded bytes of an image, from a bufferView, a data: uri or a
+    // file beside the document. `isEmbedded` says which: false only for
+    // the file.
+    std::vector<uint8_t> GLTFParser::loadImageBytes(int imageIdx, bool& isEmbedded) {
         const auto& imgDef = gltf["images"][imageIdx];
         std::vector<uint8_t> raw;
-        bool isEmbedded = true;
+        isEmbedded = true;
 
         if (imgDef.contains("bufferView")) {
             int bvIdx = imgDef["bufferView"].get<int>();
@@ -37,6 +35,17 @@ namespace threepp::gltf {
         } else {
             throw std::runtime_error("Image " + std::to_string(imageIdx) + " has no source");
         }
+        return raw;
+    }
+
+    // `embedded`, when given, receives the encoded bytes for an image
+    // the .glb carries INSIDE itself (a bufferView, or a data: uri) —
+    // the ones with no file anywhere for an exporter to point at. An
+    // image referenced by path keeps having a file, so it gets nothing
+    // and the caller stays on the path it always had.
+    std::optional<Image> GLTFParser::loadImageData(int imageIdx, std::vector<uint8_t>* embedded) {
+        bool isEmbedded = true;
+        auto raw = loadImageBytes(imageIdx, isEmbedded);
 
         ImageLoader loader;
         // flipY false: glTF's UV origin is the top-left corner, so the
@@ -72,25 +81,48 @@ namespace threepp::gltf {
                 imageIdx = (*webp)["source"].get<int>();
             }
         }
+        // MSFT_texture_dds: a block-compressed DDS image, its mip chain
+        // included, which stays compressed on the way to the GPU.
+        // scripts/fbx_to_gltf.py writes it for assets that ship DDS maps
+        // (the Amazon Bistro), so they need no PNG re-encode.
+        bool dds = false;
+        if (const auto ext = texDef.find("extensions"); ext != texDef.end()) {
+            if (const auto msft = ext->find("MSFT_texture_dds");
+                msft != ext->end() && msft->contains("source")) {
+                imageIdx = (*msft)["source"].get<int>();
+                dds = true;
+            }
+        }
         if (imageIdx < 0) return nullptr;
 
-        std::vector<uint8_t> encoded;
-        auto image = loadImageData(imageIdx, &encoded);
-        if (!image) return nullptr;
+        std::shared_ptr<Texture> tex;
+        if (dds) {
+            bool isEmbedded = true;
+            const auto raw = loadImageBytes(imageIdx, isEmbedded);
+            // flipY false, as for every glTF image: rows stay in the
+            // top-down order the DDS stores them.
+            tex = DDSLoader().loadFromMemory(raw, false);
+            if (!tex) return nullptr;
+            tex->colorSpace = cs;
+        } else {
+            std::vector<uint8_t> encoded;
+            auto image = loadImageData(imageIdx, &encoded);
+            if (!image) return nullptr;
 
-        // Move the decoded pixels straight into the texture — no copy and
-        // no lingering decode buffer. The (texIdx, colorSpace) texture
-        // cache above means each variant is built exactly once, so the
-        // rare second colour-space role of one texture re-decodes rather
-        // than retaining every decoded image for the whole load (which
-        // would inflate peak memory on texture-heavy scenes).
-        auto tex = Texture::create(std::vector<Image>{std::move(*image)});
-        tex->colorSpace = cs;
-        // The bytes this came in as, for a texture the .glb keeps inside
-        // itself and that therefore has no sourceFile. Carries the same
-        // flipY the decode above used (see Texture::encodedSource).
-        tex->encodedSource = Texture::EncodedImage::from(std::move(encoded), false);
-        tex->needsUpdate();
+            // Move the decoded pixels straight into the texture — no copy and
+            // no lingering decode buffer. The (texIdx, colorSpace) texture
+            // cache above means each variant is built exactly once, so the
+            // rare second colour-space role of one texture re-decodes rather
+            // than retaining every decoded image for the whole load (which
+            // would inflate peak memory on texture-heavy scenes).
+            tex = Texture::create(std::vector<Image>{std::move(*image)});
+            tex->colorSpace = cs;
+            // The bytes this came in as, for a texture the .glb keeps inside
+            // itself and that therefore has no sourceFile. Carries the same
+            // flipY the decode above used (see Texture::encodedSource).
+            tex->encodedSource = Texture::EncodedImage::from(std::move(encoded), false);
+            tex->needsUpdate();
+        }
 
         // glTF 2.0 §3.8.4: when sampler is undefined, repeat wrapping
         // and auto filtering must be used. Texture's C++ default is
@@ -133,9 +165,11 @@ namespace threepp::gltf {
                 // A non-mipmap min filter samples only the base level, so
                 // mipmap generation is pointless (and the GL renderer keys
                 // its glGenerateMipmap on this flag).
+                // A DDS brings its own mips, and compressed blocks cannot
+                // be filtered into new ones.
                 const int mf = samp["minFilter"].get<int>();
                 tex->generateMipmaps =
-                        (mf != FILTER_NEAREST && mf != FILTER_LINEAR);
+                        !dds && (mf != FILTER_NEAREST && mf != FILTER_LINEAR);
             }
         }
 

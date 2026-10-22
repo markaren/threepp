@@ -8,7 +8,7 @@
 //
 // Usage: SceneSerialize_bench <model file> [more model files...]
 //
-//   SceneSerialize_bench "path/to/Bistro.fbx"
+//   SceneSerialize_bench "path/to/BistroExterior.gltf"
 //
 // Phases, per storage mode:
 //   export     — Object3D graph -> JSON text

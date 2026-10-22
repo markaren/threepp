@@ -67,7 +67,7 @@ set_languages("c++20")
 ## What you do not get this way
 
 The Conan package builds the library. The optional halves that need an external SDK or a
-build-time choice are not part of it — the Vulkan renderer, PhysX physics, the FBX and USD
-loaders, the Python bindings, and the editor and player applications. Those need a CMake
+build-time choice are not part of it — the Vulkan renderer, PhysX physics, the USD
+loader, the Python bindings, and the editor and player applications. Those need a CMake
 build of the repository; see [How to build](../README.md#how-to-build) and the preset table
 there.

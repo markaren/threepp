@@ -34,6 +34,7 @@
 #include <threepp/lights/DirectionalLight.hpp>
 #include <threepp/lights/PointLight.hpp>
 #include <threepp/lights/SpotLight.hpp>
+#include <threepp/loaders/DDSLoader.hpp>
 #include <threepp/loaders/ImageLoader.hpp>
 #include <threepp/materials/MeshBasicMaterial.hpp>
 #include <threepp/materials/MeshPhysicalMaterial.hpp>
@@ -434,6 +435,8 @@ namespace threepp::gltf {
         // -----------------------------------------------------------------------
         //  Image / Texture loading
         // -----------------------------------------------------------------------
+
+        std::vector<uint8_t> loadImageBytes(int imageIdx, bool& isEmbedded);
 
         std::optional<Image> loadImageData(int imageIdx, std::vector<uint8_t>* embedded = nullptr);
 

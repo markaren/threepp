@@ -255,7 +255,7 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
 - **Model loaders**: `ModelLoader` (`load(path)` → `Group`, dispatches by
   extension: `.obj` / `.gltf` / `.glb` / `.stl` / `.dae`), plus `OBJLoader`,
   `STLLoader`, and `GLTFLoader` (`load(path)` → `GLTFResult` with `.scene` and
-  `.animations`). All first-party — no Assimp/FBX/USD needed.
+  `.animations`). All first-party — no Assimp/USD needed.
 - **Animation**: `AnimationMixer`, `AnimationClip`, `AnimationAction`, the
   `KeyframeTrack` family (`Vector`/`Quaternion`/`Number`/`Color`), and the `Loop`
   / `AnimationBlendMode` / `Interpolation` enums — three.js' animation system.

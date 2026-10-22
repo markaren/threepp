@@ -123,7 +123,6 @@ license text.
 |---|---|---|
 | [threepp_data](https://github.com/markaren/threepp_data) | examples or tests | **per-directory** — fonts under the MAGENTA license above, models under their own terms (including CC-BY, CC-BY-**ND** and CC0 entries), and `urdf/spot/` under the **Boston Dynamics SDK License** (see the `LICENSE` and `NOTICE.md` in that directory; simulation use only, not MIT) |
 | [tinyusdz](https://github.com/lighttransport/tinyusdz) | `THREEPP_WITH_USD` | Apache-2.0, © Syoyo Fujita / Light Transport Entertainment Inc. Note: `install()` copies its headers and static lib alongside threepp, so an installed tree redistributes it |
-| [OpenFBX](https://github.com/nem0/OpenFBX) | FBX loader | MIT, © 2017 Mikulas Florek |
 | [pybind11](https://github.com/pybind/pybind11) | `THREEPP_WITH_PYTHON` / editor scripting | BSD-3, © Wenzel Jakob |
 | [Catch2](https://github.com/catchorg/Catch2) | tests only | Boost Software License 1.0 |
 | [RLtools](https://github.com/rl-tools/rl-tools) | `THREEPP_WITH_RLTOOLS` (opt-in example) | MIT, © 2023 Jonas Eschmann |

@@ -1,7 +1,6 @@
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
-#include "threepp/loaders/FBXLoader.hpp"
-#include "threepp/loaders/GLTFLoader.hpp"
+#include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
 #include "threepp/utils/BufferGeometryUtils.hpp"
@@ -9,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <unordered_set>
 
 using namespace threepp;
 namespace fs = std::filesystem;
@@ -56,16 +56,34 @@ int main(int argc, char** argv) {
     controls.update();
 
     // ---- Async model loading ----
-    FBXLoader loader;
-    // Bistro emissives (lamps, signs, string lights) are authored at low factors;
-    // the official Falcor scene multiplies every emissive factor by 1000 to get a
-    // well-exposed image, so do the same here for interior lighting to read.
-    loader.emissiveScale = 100.0f;
-    auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
-    auto exterior = loadAsync(loader, modelFolder / "BistroExterior.fbx");
+    // The .gltf files come from the Bistro FBXs through scripts/fbx_to_gltf.py
+    // (written next to them, so their DDS textures resolve):
+    //   blender --background --python scripts/fbx_to_gltf.py -- BistroExterior.fbx BistroExterior.gltf
+    //   blender --background --python scripts/fbx_to_gltf.py -- BistroInterior_Wine.fbx BistroInterior_Wine.gltf
+    ModelLoader loader;
+    auto interior = loader.loadAsync(modelFolder / "BistroInterior_Wine.gltf");
+    auto exterior = loader.loadAsync(modelFolder / "BistroExterior.gltf");
 
     scene.add(interior);
     scene.add(exterior);
+
+    // Two things glTF cannot say about these materials, applied once per
+    // material as each half arrives:
+    //  - Bistro's normal maps are DirectX convention (green down).
+    //  - Its emissives (lamps, signs, string lights) are authored at low
+    //    factors; the official Falcor scene multiplies every one by 1000 to
+    //    get a well-exposed image, so scale them here for the interior to read.
+    auto fixMaterials = [](Object3D& part) {
+        std::unordered_set<Material*> seen;
+        part.traverseType<Mesh>([&](Mesh& mesh) {
+            for (const auto& m : mesh.materials()) {
+                auto* pbr = dynamic_cast<MeshStandardMaterial*>(m.get());
+                if (!pbr || !seen.insert(pbr).second) continue;
+                if (pbr->normalMap) pbr->normalScale.y = -pbr->normalScale.y;
+                pbr->emissiveIntensity *= 100.f;
+            }
+        });
+    };
 
     // Narrow the static vertex attributes (normal snorm16 / uv unorm16 /
     // color unorm8) as soon as each half arrives — onLoaded fires on the main
@@ -73,7 +91,8 @@ int main(int argc, char** argv) {
     // sees the compressed arrays. Bistro is all static geometry; skinned or
     // deforming meshes would be skipped automatically.
     for (auto& part : {interior, exterior}) {
-        part->onLoaded([](AsyncGroup& grp) {
+        part->onLoaded([fixMaterials](AsyncGroup& grp) {
+            fixMaterials(grp);
             const size_t saved = compressSceneAttributes(grp);
             std::cout << "[bistro] compressed vertex attributes: "
                       << saved / (1024.0 * 1024.0) << " MiB reclaimed" << std::endl;

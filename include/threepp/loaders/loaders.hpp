@@ -17,8 +17,4 @@
 #include "threepp/loaders/USDLoader.hpp"
 #endif
 
-#ifdef THREEPP_WITH_FBX
-#include "threepp/loaders/FBXLoader.hpp"
-#endif
-
 #endif//THREEPP_LOADERS_HPP

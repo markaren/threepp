@@ -756,18 +756,6 @@ if (THREEPP_WITH_USD)
     )
 endif ()
 
-if (THREEPP_WITH_FBX)
-    list(APPEND publicHeaders
-            "threepp/loaders/FBXLoader.hpp"
-    )
-
-    list(APPEND sources
-            "threepp/loaders/FBXLoader.cpp"
-            "${openfbx_SOURCE_DIR}/src/ofbx.cpp"
-            "${openfbx_SOURCE_DIR}/src/libdeflate.c"
-    )
-endif ()
-
 if (THREEPP_WITH_AUDIO)
     list(APPEND publicHeaders
             "threepp/audio/Acoustics.hpp"
@@ -1046,11 +1034,6 @@ if (THREEPP_WITH_USD)
             "${tinyusdz_SOURCE_DIR}/src"
     )
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_USD)
-endif ()
-
-if (THREEPP_WITH_FBX)
-    target_include_directories(threepp PRIVATE "${openfbx_SOURCE_DIR}/src")
-    target_compile_definitions(threepp PRIVATE THREEPP_WITH_FBX)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
