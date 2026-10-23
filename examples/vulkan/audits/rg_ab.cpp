@@ -68,7 +68,12 @@
 //                    RG_AUDIT_END probeSh/probeDepth hashes differed, so
 //                    --compare cannot see it. To catch one: RG_AUDIT_END +
 //                    RG_PROBE_DUMP per run where it is frequent, then diff two
-//                    dumps' stores probe by probe.
+//                    dumps' stores probe by probe. Re-measured 2026-10-23 on
+//                    the same RTX 4060 laptop under driver 617.14 (installed
+//                    2026-09-28): one outcome in 250 runs, the September and
+//                    October exes included, so the split followed the driver,
+//                    not the code (branch wip/probe-gi-determinism). The RTX
+//                    4070 rate is not re-measured.
 //   --occl 1         occlusion culling          --msaa N   G-buffer MSAA
 //   --aa N           overlay pass sample count (the Canvas antialiasing; default 4)
 //   --noviews 1      skip addView (the primary alone)
