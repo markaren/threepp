@@ -414,26 +414,38 @@ namespace {
             : UniformObject(std::move(id)),
               activeInfo(std::move(activeInfo)) {}
 
-        void setValue(const UniformValue& value, GLTextures* textures) override {
-            //            std::cout << "StructuredUniform '" << id << "', index=" << value.index() << std::endl;
+        using Fields = std::unordered_map<std::string, NestedUniformValue>;
 
+        // The struct's members, by name. A member the caller did not supply
+        // is skipped (three.js loads `undefined` there): a struct uniform of
+        // a user ShaderMaterial need not fill every field, and `at` threw
+        // out of render() when one was missing.
+        void setFields(const Fields& fields, GLTextures* textures) {
+
+            for (auto& u : seq) {
+                const auto it = fields.find(u->id);
+                if (it == fields.end()) continue;
+                std::visit(overloaded{
+                                   [&](const auto&) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
+                                   [&](int arg) { u->setValue(arg, textures); },
+                                   [&](float arg) { u->setValue(arg, textures); },
+                                   [&](const Vector2& arg) { u->setValue(arg, textures); },
+                                   [&](const Vector3& arg) { u->setValue(arg, textures); },
+                                   [&](const Color& arg) { u->setValue(arg, textures); }},
+                           it->second);
+            }
+        }
+
+        void setValue(const UniformValue& value, GLTextures* textures) override {
+
+            // The map alternatives are taken by reference: by value, each
+            // light's map was deep-copied, string keys and all, on every
+            // material refresh.
             std::visit(
                     overloaded{
-                            [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
-                            [&](std::unordered_map<std::string, NestedUniformValue> args) {
-                                for (auto& u : seq) {
-                                    NestedUniformValue& v = args.at(u->id);
-                                    std::visit(overloaded{
-                                                       [&](auto) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
-                                                       [&](int arg) { u->setValue(arg, textures); },
-                                                       [&](float arg) { u->setValue(arg, textures); },
-                                                       [&](Vector2 arg) { u->setValue(arg, textures); },
-                                                       [&](Vector3 arg) { u->setValue(arg, textures); },
-                                                       [&](Color arg) { u->setValue(arg, textures); }},
-                                               v);
-                                }
-                            },
-                            [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
+                            [&](const auto&) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
+                            [&](const Fields& fields) { setFields(fields, textures); },
+                            [&](const std::vector<Fields*>& arg) {
                                 for (auto& u : seq) {
                                     const auto index = utils::parseInt(u->id);
                                     // The null test below is r129's tolerance for a
@@ -446,7 +458,15 @@ namespace {
                                     if (index < 0 || static_cast<size_t>(index) >= arg.size()) continue;
                                     auto value = arg[index];
                                     if (!value) continue;
-                                    u->setValue(*value, textures);
+                                    // The elements are the structs "0", "1", ... this
+                                    // container was built from. Handing them the map
+                                    // directly avoids wrapping it in a UniformValue,
+                                    // which copied it once per element.
+                                    if (auto s = dynamic_cast<StructuredUniform*>(u.get())) {
+                                        s->setFields(*value, textures);
+                                    } else {
+                                        u->setValue(*value, textures);
+                                    }
                                 }
                             }},
                     value);
@@ -465,50 +485,67 @@ namespace {
 
     void parseUniform(ActiveUniformInfo& activeInfo, int addr, Container* container) {
 
-        static std::regex rex(R"(([\w\d_]+)(\])?(\[|\.)?)");
+        const auto path = parseUniformPath(activeInfo.name);
+        if (path.leaf.empty()) return;
 
-        const auto path = activeInfo.name;
-        const auto pathLength = path.size();
+        for (const auto& id : path.containers) {
 
-        std::sregex_iterator rex_it(path.cbegin(), path.cend(), rex);
-        std::sregex_iterator rex_end;
-
-        while (rex_it != rex_end) {
-            std::smatch match = *rex_it;
-
-            const size_t matchEnd = match.length();
-
-            std::string id = match[1];
-            bool isIndex = match[2] == "]";
-            std::string subscript = match[3];
-
-            if (isIndex) id = std::to_string(utils::parseInt(id) | 0);
-
-            if (!match[3].matched || (subscript == "[" && matchEnd + 2 == pathLength)) {
-
-                // bare name or "pure" bottom-level array "[0]" suffix
-                if (!match[3].matched) {
-                    addUniform(container, std::make_unique<SingleUniform>(id, activeInfo, addr));
-                } else {
-                    addUniform(container, std::make_unique<PureArrayUniform>(id, activeInfo, addr));
-                }
-                break;
-
-            } else {
-
-                if (!container->map.contains(id)) {
-                    addUniform(container, std::make_unique<StructuredUniform>(id, activeInfo));
-                }
-
-                container = dynamic_cast<Container*>(container->map.at(id));
+            if (!container->map.contains(id)) {
+                addUniform(container, std::make_unique<StructuredUniform>(id, activeInfo));
             }
 
-            ++rex_it;
+            container = dynamic_cast<Container*>(container->map.at(id));
+        }
+
+        if (path.leafIsArray) {
+            addUniform(container, std::make_unique<PureArrayUniform>(path.leaf, activeInfo, addr));
+        } else {
+            addUniform(container, std::make_unique<SingleUniform>(path.leaf, activeInfo, addr));
         }
     }
 
 
 }// namespace
+
+
+UniformPath gl::parseUniformPath(const std::string& path) {
+
+    // three.js r129 RePathPart: /(\w+)(\])?(\[|\.)?/g
+    static const std::regex rex(R"(([\w\d_]+)(\])?(\[|\.)?)");
+
+    const auto pathLength = path.size();
+    UniformPath r;
+
+    for (std::sregex_iterator it(path.cbegin(), path.cend(), rex), end; it != end; ++it) {
+
+        const std::smatch& match = *it;
+
+        // Where this part ends within the whole name (three.js: lastIndex).
+        // The part's length alone equals that only for the first part, and
+        // the bottom-level-array test below compares against the name's
+        // length, so with the length a nested array such as "s.pts[0]" was
+        // read as the struct "pts" holding a scalar named "0".
+        const size_t matchEnd = match.position() + match.length();
+
+        std::string id = match[1];
+        const bool isIndex = match[2] == "]";
+        const std::string subscript = match[3];
+
+        if (isIndex) id = std::to_string(utils::parseInt(id) | 0);
+
+        if (!match[3].matched || (subscript == "[" && matchEnd + 2 == pathLength)) {
+
+            // bare name or "pure" bottom-level array "[0]" suffix
+            r.leaf = std::move(id);
+            r.leafIsArray = match[3].matched;
+            break;
+        }
+
+        r.containers.emplace_back(std::move(id));
+    }
+
+    return r;
+}
 
 
 GLUniforms::GLUniforms(unsigned int program) {

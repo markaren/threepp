@@ -26,6 +26,20 @@ namespace threepp::gl {
         return false;
     }
 
+    // Where a GL uniform name leads: the containers above the leaf (a struct
+    // name, or an index into an array of structs), the leaf, and whether the
+    // leaf is a bottom-level array, which GL reports as "name[0]". The name
+    // walk is the one part of program reflection that needs no GL, so it is
+    // split out for the test.
+    struct UniformPath {
+
+        std::vector<std::string> containers;
+        std::string leaf;
+        bool leafIsArray = false;
+    };
+
+    UniformPath parseUniformPath(const std::string& name);
+
     struct UniformObject {
 
         std::string id;

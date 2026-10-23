@@ -125,3 +125,22 @@ TEST_CASE("a uniform declared without a value is skipped, then loaded once it ha
     CHECK(after.r > 240);
     CHECK(after.g > 240);
 }
+
+TEST_CASE("a struct uniform missing a member loads the members it has") {
+
+    Frame f(R"(
+        struct Light { vec3 color; float intensity; };
+        uniform Light light;
+        void main() {
+            gl_FragColor = vec4(light.color, 1.0) + vec4(0.0, 0.0, light.intensity, 0.0);
+        }
+    )");
+    // `intensity` is left out; a linked program's floats start at zero.
+    f.material->uniforms["light"] = Uniform(std::unordered_map<std::string, NestedUniformValue>{{"color", Color(1.f, 0.f, 0.f)}});
+
+    const auto c = f.centre();
+    INFO(c.r << " " << c.g << " " << c.b);
+    CHECK(c.r > 240);
+    CHECK(c.g < 8);
+    CHECK(c.b < 8);
+}
