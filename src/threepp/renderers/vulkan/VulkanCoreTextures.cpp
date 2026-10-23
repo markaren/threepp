@@ -17,11 +17,16 @@ void VulkanRenderer::Impl::ensureParticleWhiteTexture() {
         }
 
 void VulkanRenderer::Impl::destroyParticleGeomRec(ParticleGeomRec& rec) {
-            destroyBuffer(ctx->allocator(), rec.position);
-            destroyBuffer(ctx->allocator(), rec.normal);
-            destroyBuffer(ctx->allocator(), rec.uv);
-            destroyBuffer(ctx->allocator(), rec.color);
-            destroyBuffer(ctx->allocator(), rec.index);
+            auto destroy = [&](Buffer& b) {
+                if (b.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), b);
+            };
+            for (auto& a : rec.anim) {
+                destroy(a.position);
+                destroy(a.normal);
+                destroy(a.color);
+            }
+            destroy(rec.uv);
+            destroy(rec.index);
         }
 
 void VulkanRenderer::Impl::createDefaultEnvImage() {

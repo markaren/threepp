@@ -3160,8 +3160,9 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                                    0, sizeof(pc), &pc);
 
-                                VkBuffer vbufs[4] = {prec->position.handle, prec->normal.handle,
-                                                     prec->uv.handle, prec->color.handle};
+                                const auto& anim = prec->animFor(currentFrame);
+                                VkBuffer vbufs[4] = {anim.position.handle, anim.normal.handle,
+                                                     prec->uv.handle, anim.color.handle};
                                 VkDeviceSize voffs[4] = {0, 0, 0, 0};
                                 vkCmdBindVertexBuffers(cb, 0, 4, vbufs, voffs);
                                 vkCmdBindIndexBuffer(cb, prec->index.handle, 0, VK_INDEX_TYPE_UINT32);

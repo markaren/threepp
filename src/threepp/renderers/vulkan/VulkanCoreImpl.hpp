@@ -3072,11 +3072,14 @@ namespace threepp {
         // Retire (rather than inline-destroy) a particle geometry record's
         // buffers on an in-flight topology change. Mirrors destroyParticleGeomRec.
         void retireParticleGeomRec(ParticleGeomRec& rec) {
-            retire(std::move(rec.position));
-            retire(std::move(rec.normal));
+            for (auto& a : rec.anim) retireParticleAnimSet(a);
             retire(std::move(rec.uv));
-            retire(std::move(rec.color));
             retire(std::move(rec.index));
+        }
+        void retireParticleAnimSet(vulkan::impl::ParticleAnimSet& a) {
+            retire(std::move(a.position));
+            retire(std::move(a.normal));
+            retire(std::move(a.color));
         }
 
         // ImGui (or any post-render overlay) hook. When set, the swapchain

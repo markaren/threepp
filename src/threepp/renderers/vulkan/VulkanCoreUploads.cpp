@@ -1828,10 +1828,27 @@ VulkanRenderer::Impl::ParticleGeomRec* VulkanRenderer::Impl::ensureParticleGeom(
 
             const unsigned int ver = geomVersionOf(*geom);
 
-            auto uploadAnim = [&](ParticleGeomRec& rec) {
-                uploadHostVisible(ctx->allocator(), rec.position, posAttr->array().data(), vtx * 3 * sizeof(float));
-                uploadHostVisible(ctx->allocator(), rec.normal, normAttr->array().data(), vtx * 3 * sizeof(float));
-                uploadHostVisible(ctx->allocator(), rec.color, colAttr->array().data(), vtx * 3 * sizeof(float));
+            // All buffers host-visible; uv + index are written once, the
+            // animated set whenever the geometry version moves.
+            const VkBufferUsageFlags vbUsage =
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            auto mkBuf = [&](VkDeviceSize bytes) {
+                return createBuffer(ctx->allocator(), ctx->device(), bytes, vbUsage,
+                                    VMA_MEMORY_USAGE_AUTO,
+                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            };
+            // Writes the animated attributes into `a`, whose buffers no
+            // in-flight frame reads (a fresh set, or this frame slot's own).
+            auto uploadAnim = [&](vulkan::impl::ParticleAnimSet& a) {
+                if (a.position.handle == VK_NULL_HANDLE) {
+                    a.position = mkBuf(vtx * 3 * sizeof(float));
+                    a.normal   = mkBuf(vtx * 3 * sizeof(float));
+                    a.color    = mkBuf(vtx * 3 * sizeof(float));
+                }
+                uploadHostVisible(ctx->allocator(), a.position, posAttr->array().data(), vtx * 3 * sizeof(float));
+                uploadHostVisible(ctx->allocator(), a.normal, normAttr->array().data(), vtx * 3 * sizeof(float));
+                uploadHostVisible(ctx->allocator(), a.color, colAttr->array().data(), vtx * 3 * sizeof(float));
+                a.version = ver;
             };
 
             auto it = particleGeomCache_.find(geom);
@@ -1840,10 +1857,16 @@ VulkanRenderer::Impl::ParticleGeomRec* VulkanRenderer::Impl::ensureParticleGeom(
                 const bool stale = rec.vertexCount != vtx || rec.indexCount != idxCount ||
                                    rec.liveCheck.expired() || rec.liveCheck.lock().get() != geom;
                 if (!stale) {
-                    if (rec.animVersion != ver) {
-                        uploadAnim(rec);
-                        rec.animVersion = ver;
+                    if (rec.anim.size() == 1) {
+                        if (rec.anim[0].version == ver) return &rec;
+                        // First change since the first upload: every frame in
+                        // flight may be reading the shared set, so it is
+                        // retired and each frame slot gets its own.
+                        retireParticleAnimSet(rec.anim[0]);
+                        rec.anim.assign(kFramesInFlight, {});
                     }
+                    auto& a = rec.anim[currentFrame];
+                    if (a.version != ver) uploadAnim(a);
                     return &rec;
                 }
                 // Topology change / recycled address — rebuild from scratch.
@@ -1853,23 +1876,13 @@ VulkanRenderer::Impl::ParticleGeomRec* VulkanRenderer::Impl::ensureParticleGeom(
                 particleGeomCache_.erase(it);
             }
 
-            // Fresh build. All buffers host-visible; pos/normal/color re-uploaded
-            // each frame, uv + index written once here.
-            const VkBufferUsageFlags vbUsage =
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            // Fresh build: one shared animated set, uv + index written once.
             ParticleGeomRec rec{};
             rec.vertexCount = vtx;
             rec.indexCount  = idxCount;
             rec.liveCheck   = geomSp;
-            auto mkBuf = [&](VkDeviceSize bytes) {
-                return createBuffer(ctx->allocator(), ctx->device(), bytes, vbUsage,
-                                    VMA_MEMORY_USAGE_AUTO,
-                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            };
-            rec.position = mkBuf(vtx * 3 * sizeof(float));
-            rec.normal   = mkBuf(vtx * 3 * sizeof(float));
+            rec.anim.resize(1);
             rec.uv       = mkBuf(vtx * 2 * sizeof(float));
-            rec.color    = mkBuf(vtx * 3 * sizeof(float));
             rec.index    = createBuffer(ctx->allocator(), ctx->device(),
                                         idxCount * sizeof(uint32_t),
                                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1878,8 +1891,7 @@ VulkanRenderer::Impl::ParticleGeomRec* VulkanRenderer::Impl::ensureParticleGeom(
             uploadHostVisible(ctx->allocator(), rec.uv, uvAttr->array().data(), vtx * 2 * sizeof(float));
             uploadHostVisible(ctx->allocator(), rec.index, idxAttr->array().data(), idxCount * sizeof(uint32_t));
             auto [ins, _] = particleGeomCache_.emplace(geom, std::move(rec));
-            uploadAnim(ins->second);
-            ins->second.animVersion = ver;
+            uploadAnim(ins->second.anim[0]);
             return &ins->second;
         }
 

@@ -376,24 +376,36 @@ namespace threepp::vulkan::impl {
         }
     };
 
-    // Per-BufferGeometry vertex/index buffers for particle billboards. The
-    // animated attributes (position/normal/color) are re-uploaded every frame
-    // (version-gated); uv + index are static (uploaded once). Particles own
-    // these buffers directly — they never build a BLAS. Single-buffered with
-    // in-place memcpy, so the other in-flight frame can read a half-written
-    // buffer (a one-frame tear on fast-moving particles). The Line/Points
-    // cache avoids the same race with a buffer set per frame slot
-    // (vulkan::LineCacheEntry).
+    // The animated attributes of one particle geometry, as one frame slot
+    // binds them (see ParticleGeomRec).
+    struct ParticleAnimSet {
+        Buffer position;// vec3 — particle centers (all 4 quad verts equal)
+        Buffer normal;  // vec3 — {size, angle, opacity}
+        Buffer color;   // vec3 — RGB
+        unsigned int version = ~0u;// pos+normal+color composite version held
+    };
+
+    // Per-BufferGeometry vertex/index buffers for particle billboards. Particles
+    // own these buffers directly — they never build a BLAS. uv + index are
+    // static (uploaded once). The animated attributes (position/normal/color)
+    // follow the vulkan::LineCacheEntry scheme: one set while the geometry is
+    // unchanged since its first upload; on its first change that set is
+    // retired and each frame in flight gets its own, written only while that
+    // frame slot is recorded, past its fence wait. One set rewritten in place
+    // let the previous frame's draw read a half-written buffer (a tear between
+    // old and new particles when the GPU is the bottleneck).
     struct ParticleGeomRec {
-        Buffer   position;// vec3 — particle centers (all 4 quad verts equal)
-        Buffer   normal;  // vec3 — {size, angle, opacity}
-        Buffer   uv;      // vec2 — corner offset
-        Buffer   color;   // vec3 — RGB
-        Buffer   index;   // uint32
+        std::vector<ParticleAnimSet> anim;// 1 while static, frames-in-flight once changed
+        Buffer   uv;   // vec2 — corner offset
+        Buffer   index;// uint32
         uint32_t indexCount  = 0;
         uint32_t vertexCount = 0;
-        unsigned int animVersion = ~0u;// pos+normal+color composite version
         std::weak_ptr<BufferGeometry> liveCheck;
+
+        // The set frame slot `frame` binds.
+        [[nodiscard]] const ParticleAnimSet& animFor(uint32_t frame) const {
+            return anim.size() == 1 ? anim[0] : anim[frame];
+        }
     };
 
     // Per-Texture sampled image for particle textures. Keyed on the raw
