@@ -5,6 +5,7 @@
 
 #include <pybind11/stl.h>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -16,6 +17,7 @@
 #include "threepp/loaders/OBJLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/STLLoader.hpp"
+#include "threepp/materials/Material.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -168,9 +170,43 @@ namespace threepp_py {
                 .def_readonly("scene", &GLTFResult::scene, "Root Group of the loaded model.")
                 .def_readonly("scenes", &GLTFResult::scenes, "All scenes in the file.")
                 .def_readonly("animations", &GLTFResult::animations, "All AnimationClips in the file.")
+                // KHR_materials_variants: the file's named material sets (a season, a livery, a
+                // damage state). A variant swaps materials only; meshes it does not list keep
+                // their load-time material. Meshes are matched by uuid, so a variant applies to
+                // this result's own objects, not to clones of them.
+                .def_property_readonly("variant_names", [](const GLTFResult& r) { return r.variants.names; },
+                                       "Names of the file's material variants (KHR_materials_variants), in file order; empty if none.")
+                .def("apply_variant", [](GLTFResult& r, const std::string& name, Object3D* root) {
+                    if (std::find(r.variants.names.begin(), r.variants.names.end(), name) == r.variants.names.end())
+                        throw py::value_error("GLTFResult: no material variant '" + name + "'");
+                    Object3D* target = root ? root : r.scene.get();
+                    if (target) r.variants.apply(name, *target);
+                }, py::arg("name"), py::arg("root") = nullptr,
+                     "Give every mesh under root (default: scene) its material in the named variant; "
+                     "meshes the variant does not list go back to their load-time material.")
+                .def("reset_variants", [](GLTFResult& r, Object3D* root) {
+                    Object3D* target = root ? root : r.scene.get();
+                    if (target) r.variants.reset(*target);
+                }, py::arg("root") = nullptr, "Give every mesh under root (default: scene) its load-time material back.")
+                // Returned through material_to_py, never as a bare shared_ptr<Material>: concrete
+                // materials derive from Material virtually, and pybind11's own downcast of the base
+                // holder lands on the wrong address (a Mesh made from it crashed the next render).
+                .def("variant_material", [](const GLTFResult& r, const std::string& name, const Object3D& mesh) -> py::object {
+                    if (std::find(r.variants.names.begin(), r.variants.names.end(), name) == r.variants.names.end())
+                        throw py::value_error("GLTFResult: no material variant '" + name + "'");
+                    auto it = r.variants.table.find(name);
+                    if (it != r.variants.table.end())
+                        for (const auto& e : it->second)
+                            if (e.meshUuid == mesh.uuid) return material_to_py(e.material);
+                    auto d = r.variants.defaults.find(mesh.uuid);
+                    return d != r.variants.defaults.end() ? material_to_py(d->second) : py::object(py::none());
+                }, py::arg("name"), py::arg("mesh"),
+                     "The material this mesh of the result takes in the named variant (without applying it): "
+                     "its variant material, else its load-time one; None for a mesh the variants do not track.")
                 .def("__repr__", [](const GLTFResult& r) {
                     return "<threepp.GLTFResult scenes=" + std::to_string(r.scenes.size()) +
-                           " animations=" + std::to_string(r.animations.size()) + ">";
+                           " animations=" + std::to_string(r.animations.size()) +
+                           (r.variants.empty() ? std::string() : " variants=" + std::to_string(r.variants.names.size())) + ">";
                 });
 
         // ---- GLTFLoader (returns scene + animations) -------------------------

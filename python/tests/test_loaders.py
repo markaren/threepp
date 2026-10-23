@@ -157,3 +157,58 @@ def test_gltf_unhandled_material_extension_is_named(tmp_path, capfd):
     assert result.scene is not None
     err = capfd.readouterr().err
     assert "KHR_materials_anisotropy" in err
+
+
+def test_gltf_material_variants(tmp_path):
+    path = _write_tri_gltf(
+        tmp_path, "variants.gltf",
+        extensionsUsed=["KHR_materials_variants"],
+        extensions={"KHR_materials_variants": {"variants": [{"name": "summer"}, {"name": "autumn"}]}},
+        meshes=[{"primitives": [{"attributes": {"POSITION": 0}, "material": 0,
+                                 "extensions": {"KHR_materials_variants": {"mappings": [
+                                     {"material": 1, "variants": [1]}]}}}]}],
+        materials=[{"name": "leaf_green", "pbrMetallicRoughness": {"baseColorFactor": [0.1, 0.6, 0.1, 1.0]}},
+                   {"name": "leaf_gold", "pbrMetallicRoughness": {"baseColorFactor": [0.9, 0.7, 0.1, 1.0]}}],
+    )
+    result = tp.GLTFLoader().load(str(path))
+    assert result.variant_names == ["summer", "autumn"]
+    meshes = []
+    result.scene.traverse(lambda o: meshes.append(o) if isinstance(o, tp.Mesh) else None)
+    m = meshes[0]
+    assert m.material.name == "leaf_green"
+    # looked up without applying: the variant's material, the default where the variant does not list the mesh
+    assert result.variant_material("autumn", m).name == "leaf_gold"
+    assert result.variant_material("summer", m).name == "leaf_green"
+    assert m.material.name == "leaf_green"
+    result.apply_variant("autumn")
+    assert m.material.name == "leaf_gold"
+    result.reset_variants()
+    assert m.material.name == "leaf_green"
+    import pytest
+    with pytest.raises(ValueError):
+        result.apply_variant("winter")
+
+
+def test_gltf_variant_keeps_vertex_colors(tmp_path):
+    # a COLOR_0 primitive draws its material's vertexColors copy; its variant materials must too
+    path = _write_tri_gltf(
+        tmp_path, "variants_color.gltf",
+        extensionsUsed=["KHR_materials_variants"],
+        extensions={"KHR_materials_variants": {"variants": [{"name": "autumn"}]}},
+        accessors=[{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                    "min": [0, 0, 0], "max": [1, 1, 0]},
+                   {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        meshes=[{"primitives": [{"attributes": {"POSITION": 0, "COLOR_0": 1}, "material": 0,
+                                 "extensions": {"KHR_materials_variants": {"mappings": [
+                                     {"material": 1, "variants": [0]}]}}}]}],
+        materials=[{"name": "leaf_green"}, {"name": "leaf_gold"}],
+    )
+    result = tp.GLTFLoader().load(str(path))
+    meshes = []
+    result.scene.traverse(lambda o: meshes.append(o) if isinstance(o, tp.Mesh) else None)
+    m = meshes[0]
+    assert m.material.vertex_colors
+    gold = result.variant_material("autumn", m)
+    assert gold.name == "leaf_gold" and gold.vertex_colors
+    result.apply_variant("autumn")
+    assert m.material.vertex_colors

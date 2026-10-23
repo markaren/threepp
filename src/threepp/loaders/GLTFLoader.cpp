@@ -791,8 +791,20 @@ namespace threepp::gltf {
             if (meshIt == primVariantData.end()) return;
             auto primIt = meshIt->second.find(pIdx);
             if (primIt == meshIt->second.end()) return;
+            // A primitive that carries COLOR_0 draws its default material's vertexColors copy
+            // (GLTFMeshes.cpp); its variant materials take the same copy, or a variant drops the
+            // primitive's per-vertex colour (a recoloured leaf lost its per-leaf shades).
+            const bool colored = owm->material() && owm->material()->vertexColors;
             for (const auto& pvm : primIt->second) {
                 auto mat = loadMaterial(pvm.materialIdx);
+                if (colored && mat && !mat->vertexColors) {
+                    auto& copy = vertexColorMaterialCache[pvm.materialIdx];
+                    if (!copy) {
+                        copy = mat->clone();
+                        copy->vertexColors = true;
+                    }
+                    mat = copy;
+                }
                 for (int vi : pvm.variantIndices) {
                     if (vi < 0 || vi >= static_cast<int>(variantNames.size())) continue;
                     result.variants.table[variantNames[vi]].push_back({obj.uuid, mat});

@@ -3190,6 +3190,23 @@ class GLTFLoader:
 class GLTFResult:
     def __repr__(self) -> str:
         ...
+    def apply_variant(self, name: str, root: Object3D | None = None) -> None:
+        """
+        Give every mesh under root (default: scene) its material in the named variant; meshes the variant does not list go back to their load-time material.
+        """
+    def reset_variants(self, root: Object3D | None = None) -> None:
+        """
+        Give every mesh under root (default: scene) its load-time material back.
+        """
+    def variant_material(self, name: str, mesh: Object3D) -> Material | None:
+        """
+        The material this mesh of the result takes in the named variant (without applying it): its variant material, else its load-time one; None for a mesh the variants do not track.
+        """
+    @property
+    def variant_names(self) -> list[str]:
+        """
+        Names of the file's material variants (KHR_materials_variants), in file order; empty if none.
+        """
     @property
     def animations(self) -> list[AnimationClip]:
         """
