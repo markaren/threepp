@@ -1774,7 +1774,51 @@ namespace threepp_py {
                         py::arg("vehicles"), py::arg("forces"),
                         "add_force_at_pos for a field of vehicles in one call: forces[k, j] = (force xyz, "
                         "world point xyz), the j-th force on vehicles[k], applied in that order. A row whose "
-                        "force is zero is skipped (pad the K slots with zeros).");
+                        "force is zero is skipped (pad the K slots with zeros).")
+                .def_static(
+                        "write_commands",
+                        [](const std::vector<PhysxVehicle*>& vehicles,
+                           const py::array_t<double, py::array::c_style | py::array::forcecast>& cmds) {
+                            constexpr py::ssize_t W0 = 4, WN = 4;
+                            const auto n = static_cast<py::ssize_t>(vehicles.size());
+                            if (cmds.ndim() != 2 || cmds.shape(0) != n || cmds.shape(1) != W0 + 4 * WN) {
+                                throw std::invalid_argument("write_commands: cmds must be (len(vehicles), 20)");
+                            }
+                            auto c = cmds.unchecked<2>();
+                            // Check every row before writing any, so a bad row leaves the field as it was.
+                            for (py::ssize_t k = 0; k < n; ++k) {
+                                if (!vehicles[k]) throw std::invalid_argument("write_commands: a vehicle is None");
+                                const double g = c(k, 3);
+                                if (g != 0.0 && g != 1.0 && g != 2.0) {
+                                    throw std::invalid_argument("write_commands: the gear must be an int(Gear) (0, 1 or 2)");
+                                }
+                            }
+                            for (py::ssize_t k = 0; k < n; ++k) {
+                                PhysxVehicle* v = vehicles[k];
+                                const double* r = c.data(k, 0);
+                                v->setSteer(static_cast<float>(r[0]));
+                                v->setThrottle(static_cast<float>(r[1]));
+                                for (int i = 0; i < 4; ++i) {
+                                    const double* w = r + W0 + WN * i;
+                                    if (w[0] != 0.0) {
+                                        v->setWheelExternalTorque(i, static_cast<float>(w[1]), static_cast<float>(w[2]),
+                                                                  static_cast<float>(w[3]));
+                                    } else {
+                                        v->clearWheelExternalTorque(i);
+                                    }
+                                }
+                                v->setBrake(static_cast<float>(r[2]));
+                                v->setGear(static_cast<PhysxVehicle::Gear>(static_cast<int>(r[3])));
+                            }
+                        },
+                        py::arg("vehicles"), py::arg("cmds"),
+                        "A field of vehicles' commands in one call: cmds is (len(vehicles), 20) float64, row k "
+                        "for vehicles[k]: [steer, throttle, brake, gear], then 4 per wheel (wheel i at 4 + 4 i): "
+                        "[on, torque, dtorque_domega, omega_ref]. Per vehicle, in this order: set_steer, "
+                        "set_throttle, per wheel set_wheel_external_torque(i, torque, dtorque_domega, omega_ref) "
+                        "where on is nonzero and clear_wheel_external_torque(i) where it is 0, set_brake, and "
+                        "gear = Gear(int(gear)) (0 REVERSE, 1 NEUTRAL, 2 FORWARD). The same stores the "
+                        "per-vehicle setters make.");
 
         m.attr("HAS_PHYSX") = true;
         // False where the PhysX SDK has no CUDA backend (macOS): gpu_dynamics,

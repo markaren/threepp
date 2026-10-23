@@ -7776,6 +7776,11 @@ class PhysxVehicle:
         """
         Every vehicle's readouts in one call: an (N, 67) float64 array, one row per vehicle in list order. Columns 0-2 the chassis position, 3-6 its quaternion (x, y, z, w), then 15 per wheel (wheel i at 7 + 15 i): its local position (3) and quaternion (4) as wheel_local_pose, wheel_rotation_angle, wheel_grounded (1.0 / 0.0), suspension_jounce, suspension_jounce_speed, wheel_angular_speed, suspension_force, tire_longitudinal_slip, tire_lateral_slip. The same values the per-wheel getters return (each read whether the wheel is grounded or not).
         """
+    @staticmethod
+    def write_commands(vehicles: collections.abc.Sequence[PhysxVehicle], cmds: typing.Annotated[numpy.typing.ArrayLike, numpy.float64]) -> None:
+        """
+        A field of vehicles' commands in one call: cmds is (len(vehicles), 20) float64, row k for vehicles[k]: [steer, throttle, brake, gear], then 4 per wheel (wheel i at 4 + 4 i): [on, torque, dtorque_domega, omega_ref]. Per vehicle, in this order: set_steer, set_throttle, per wheel set_wheel_external_torque(i, torque, dtorque_domega, omega_ref) where on is nonzero and clear_wheel_external_torque(i) where it is 0, set_brake, and gear = Gear(int(gear)) (0 REVERSE, 1 NEUTRAL, 2 FORWARD). The same stores the per-vehicle setters make.
+        """
     def __init__(self, world: PhysxWorld, chassis_width: typing.SupportsFloat | typing.SupportsIndex = 1.9500000476837158, chassis_height: typing.SupportsFloat | typing.SupportsIndex = 1.399999976158142, chassis_length: typing.SupportsFloat | typing.SupportsIndex = 4.400000095367432, chassis_mass: typing.SupportsFloat | typing.SupportsIndex = 1500.0, wheelbase: typing.SupportsFloat | typing.SupportsIndex = 2.6600000858306885, track_width: typing.SupportsFloat | typing.SupportsIndex = 1.649999976158142, wheel_radius: typing.SupportsFloat | typing.SupportsIndex = 0.4000000059604645, wheel_half_width: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448, wheel_mass: typing.SupportsFloat | typing.SupportsIndex = 25.0, driven_wheels: typing.Annotated[collections.abc.Sequence[bool], "FixedSize(4)"] = [True, True, True, True], max_throttle_torque: typing.SupportsFloat | typing.SupportsIndex = 1500.0, max_brake_torque: typing.SupportsFloat | typing.SupportsIndex = 5000.0, max_steer_angle: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, tire_friction: typing.SupportsFloat | typing.SupportsIndex = 2.0, longitudinal_stiffness: typing.SupportsFloat | typing.SupportsIndex = 100000.0, lateral_stiffness: typing.SupportsFloat | typing.SupportsIndex = 80000.0, suspension_travel: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, suspension_stiffness: typing.SupportsFloat | typing.SupportsIndex = 35000.0, suspension_damping: typing.SupportsFloat | typing.SupportsIndex = 4500.0, suspension_attachment_y: typing.SupportsFloat | typing.SupportsIndex = -0.4000000059604645, wheel_damping_rate: typing.SupportsFloat | typing.SupportsIndex = 1.5, engine_brake_torque: typing.SupportsFloat | typing.SupportsIndex = 0.0, engine_brake_idle_speed: typing.SupportsFloat | typing.SupportsIndex = 1.5, position: Vector3 = ..., rotation: Quaternion = ..., wheels_hit_other_vehicles: bool = False) -> None:
         """
         Spawn a vehicle in `world`. Defaults are the Range Rover Evoque tuning of the C++ demo: 4WD direct drive, tire_friction 2.0 (dry asphalt). Dimensions are the chassis box PhysX simulates — match them to whatever body you draw on top. driven_wheels selects which wheels take throttle torque, in wheel-index order. engine_brake_torque (N m on each driven wheel, 0 = none) is the engine's drag with the throttle released: see the engine_brake_torque property. The wheels find road through every vehicle's chassis (chassis still collide with chassis): wheels_hit_other_vehicles=True lets them stand on another car's roof, which throws a car whose wheel comes over one.
@@ -10480,6 +10485,20 @@ class TorusGeometry(BufferGeometry):
 class TorusKnotGeometry(BufferGeometry):
     def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, tube: typing.SupportsFloat | typing.SupportsIndex = 0.4000000059604645, tubular_segments: typing.SupportsInt | typing.SupportsIndex = 64, radial_segments: typing.SupportsInt | typing.SupportsIndex = 16, p: typing.SupportsInt | typing.SupportsIndex = 2, q: typing.SupportsInt | typing.SupportsIndex = 3) -> None:
         ...
+class TransformBatch:
+    """
+    Sets the position, quaternion and (optionally) scale of a fixed list of objects from numpy arrays in one call. Build it once; call set() every frame.
+    """
+    def __init__(self, objects: collections.abc.Sequence) -> None:
+        """
+        The objects, in row order. The batch keeps them alive.
+        """
+    def __len__(self) -> int:
+        ...
+    def set(self, pq: typing.Annotated[numpy.typing.ArrayLike, numpy.float64], scale_index: typing.Annotated[numpy.typing.ArrayLike, numpy.int64] | None = None, scales: typing.Annotated[numpy.typing.ArrayLike, numpy.float64] | None = None) -> None:
+        """
+        pq: (len(batch), 7) float64, row k = [px, py, pz, qx, qy, qz, qw] for objects[k], stored the way obj.position.set(px, py, pz) and obj.quaternion.set(qx, qy, qz, qw) store them (float32, and the quaternion's Euler sync). scale_index (m,) int and scales (m, 3): objects[scale_index[j]].scale.set(*scales[j]), after every pose; rows not listed keep their scale. Releases the GIL while it writes.
+        """
 class TransformControls(Object3D):
     enabled: bool
     show_x: bool

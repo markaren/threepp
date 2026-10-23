@@ -214,6 +214,74 @@ namespace threepp_py {
                 }, py::arg("source"), py::arg("recursive") = true)
                 .def("__repr__", [](const Object3D& o) { return "<threepp." + o.type() + " name='" + o.name + "'>"; });
 
+        // ---- TransformBatch --------------------------------------------------
+        // A fixed list of objects whose local transforms are set from one array a
+        // frame: per row the same Vector3::set / Quaternion::set the per-object
+        // calls make (the float32 store, the quaternion's change callback that
+        // syncs the Euler), minus a Python call per set. Holds the objects.
+        struct TransformBatch {
+            std::vector<std::shared_ptr<Object3D>> objects;
+        };
+        using F64 = py::array_t<double, py::array::c_style | py::array::forcecast>;
+        using I64 = py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>;
+        py::class_<TransformBatch>(m, "TransformBatch",
+                                   "Sets the position, quaternion and (optionally) scale of a fixed list of "
+                                   "objects from numpy arrays in one call. Build it once; call set() every frame.")
+                .def(py::init([](const py::sequence& objects) {
+                         TransformBatch b;
+                         b.objects.reserve(py::len(objects));
+                         for (const auto& h : objects) {
+                             if (h.is_none()) throw std::invalid_argument("TransformBatch: an object is None");
+                             b.objects.push_back(as_object3d(h));
+                         }
+                         return b;
+                     }),
+                     py::arg("objects"), "The objects, in row order. The batch keeps them alive.")
+                .def("__len__", [](const TransformBatch& b) { return b.objects.size(); })
+                .def(
+                        "set",
+                        [](TransformBatch& b, const F64& pq, const std::optional<I64>& scaleIndex,
+                           const std::optional<F64>& scales) {
+                            const auto n = static_cast<py::ssize_t>(b.objects.size());
+                            if (pq.ndim() != 2 || pq.shape(0) != n || pq.shape(1) != 7) {
+                                throw std::invalid_argument("TransformBatch.set: pq must be (len(batch), 7)");
+                            }
+                            if (scaleIndex.has_value() != scales.has_value()) {
+                                throw std::invalid_argument("TransformBatch.set: pass scale_index and scales together");
+                            }
+                            py::ssize_t m = 0;
+                            if (scales) {
+                                m = scaleIndex->ndim() == 1 ? scaleIndex->shape(0) : -1;
+                                if (m < 0 || scales->ndim() != 2 || scales->shape(0) != m || scales->shape(1) != 3) {
+                                    throw std::invalid_argument("TransformBatch.set: scale_index must be (m,) and scales (m, 3)");
+                                }
+                                const std::int64_t* idx = scaleIndex->data();
+                                for (py::ssize_t j = 0; j < m; ++j) {
+                                    if (idx[j] < 0 || idx[j] >= n) throw std::out_of_range("TransformBatch.set: a scale_index is out of range");
+                                }
+                            }
+                            const double* p = pq.data();
+                            const std::int64_t* idx = scales ? scaleIndex->data() : nullptr;
+                            const double* s = scales ? scales->data() : nullptr;
+                            // The callbacks are C++ (Object3D's Euler sync): no Python runs below.
+                            py::gil_scoped_release release;
+                            const auto f = [](double v) { return static_cast<float>(v); };
+                            for (py::ssize_t k = 0; k < n; ++k, p += 7) {
+                                Object3D& o = *b.objects[k];
+                                o.position.set(f(p[0]), f(p[1]), f(p[2]));
+                                o.quaternion.set(f(p[3]), f(p[4]), f(p[5]), f(p[6]));
+                            }
+                            for (py::ssize_t j = 0; j < m; ++j, s += 3) {
+                                b.objects[idx[j]]->scale.set(f(s[0]), f(s[1]), f(s[2]));
+                            }
+                        },
+                        py::arg("pq"), py::arg("scale_index") = py::none(), py::arg("scales") = py::none(),
+                        "pq: (len(batch), 7) float64, row k = [px, py, pz, qx, qy, qz, qw] for objects[k], "
+                        "stored the way obj.position.set(px, py, pz) and obj.quaternion.set(qx, qy, qz, qw) store "
+                        "them (float32, and the quaternion's Euler sync). scale_index (m,) int and scales "
+                        "(m, 3): objects[scale_index[j]].scale.set(*scales[j]), after every pose; rows not "
+                        "listed keep their scale. Releases the GIL while it writes.");
+
         // ---- BufferGeometry --------------------------------------------------
         py::class_<BufferGeometry, std::shared_ptr<BufferGeometry>>(m, "BufferGeometry")
                 .def(py::init(&BufferGeometry::create))
