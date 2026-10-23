@@ -999,6 +999,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 updateLightsUbo(currentFrame, scene, camera);
                 updateFogUbo(currentFrame, scene, camera);
                 updateCloudUbo(currentFrame);
+                uploadDownwash(currentFrame);
             }
             // Safe to write motionMatBuffers[currentFrame] now that the
             // inFlight[currentFrame] fence has been signaled — the GPU has

@@ -124,6 +124,14 @@ namespace threepp {
             std::optional<bool> vertexTangents_;
         };
 
+        // Flat water under a rotor downwash (VulkanRenderer::setDownwash):
+        // > 0 makes the G-buffer normal take the downwash's concentric rings
+        // and its struck disc's roughness, scaled by this value (1 = as
+        // tuned). 0 (default) = off. Vulkan deferred G-buffer only; ray hits
+        // on the surface and the GL renderer see the plain normal. Changed
+        // after the first render: needsUpdate(), as for any material value.
+        float ripples = 0.f;
+
         [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<MeshStandardMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});

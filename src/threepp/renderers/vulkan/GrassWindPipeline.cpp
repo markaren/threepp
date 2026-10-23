@@ -5,10 +5,14 @@
 
 #include "threepp/renderers/vulkan/shaders/grass_wind.comp.spv.h"
 
+#include <cstddef>
+
 namespace threepp::vulkan {
 
-    static_assert(sizeof(GrassWindPipeline::PushConstants) == 48,
-                  "GrassWindPipeline::PushConstants must be 48 bytes (44 used + 4 tail pad)");
+    static_assert(sizeof(GrassWindPipeline::PushConstants) == 104,
+                  "GrassWindPipeline::PushConstants drifted from grass_wind.comp's Pc block");
+    static_assert(offsetof(GrassWindPipeline::PushConstants, downwashAddr) == 48,
+                  "GrassWindPipeline::PushConstants::downwashAddr must land at 48");
 
     GrassWindPipeline::GrassWindPipeline(VulkanContext& ctx)
         : ctx_(ctx) {

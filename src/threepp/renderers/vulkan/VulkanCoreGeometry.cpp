@@ -3865,6 +3865,31 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
             pc.windStrength = gm.params.windStrength;
             pc.windDirX     = gm.params.windDir.x;
             pc.windDirZ     = gm.params.windDir.y;
+            // The downwash (uploadDownwash): only for a field a jet reaches,
+            // so every other field pushes address 0 and runs the plain sway.
+            // A field that was bent takes one more deform without it (the
+            // gate keeps it awake through downwashBent) to stand up again.
+            pc.bladeHeight  = gm.params.bladeHeight > 0.f ? gm.params.bladeHeight : st.bladeHeight;
+            pc.downwashAddr = 0;
+            st.downwashBent = false;
+            if (downwashAddr_ != 0 && pc.bladeHeight > 0.f) {
+                Box3 rest;
+                if (auto g = gm.geometry()) {
+                    if (!g->boundingBox) g->computeBoundingBox();
+                    if (g->boundingBox) {
+                        rest = *g->boundingBox;
+                        rest.applyMatrix4(*gm.matrixWorld);
+                        if (downwashReachesBox(rest)) {
+                            pc.downwashAddr = downwashAddr_;
+                            const auto& e = gm.matrixWorld->elements;// column-major
+                            for (int row = 0; row < 3; ++row) {
+                                for (int col = 0; col < 4; ++col) pc.worldRows[row * 4 + col] = e[col * 4 + row];
+                            }
+                            st.downwashBent = true;
+                        }
+                    }
+                }
+            }
             grassWind_->recordDispatch(cb, pc);
 
             // Compute write → AS-build read (BLAS refit) + vertex-attribute read
@@ -5187,6 +5212,7 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             THREEPP_CPUPROF("scene.G2_grassFinish");
             auto state = std::make_unique<GrassMeshState>();
             state->vertexCount = data->vertexCount;
+            state->bladeHeight = data->bladeHeight;
             state->liveCheck = geom;
             state->owner.bind(gm);
             // The record's buffers and the rest-pose and height-fraction inputs
@@ -5239,6 +5265,24 @@ std::unique_ptr<VulkanRenderer::Impl::GrassPrepData> VulkanRenderer::Impl::prepa
             d->heightFrac = createGeomBuffer(hfBytes, inputUsage, /*deviceLocal=*/true);
             stageUpload(d->blas.up, d->heightFrac, hfAttr->array().data(), hfBytes);
             d->blas.staging = makeStaging(d->blas.up);
+            // The blade height for the downwash's lean: the least-squares slope
+            // of y over heightFrac (GrassMeshState::bladeHeight).
+            {
+                const float* pos = posAttr->array().data();
+                const float* hf  = hfAttr->array().data();
+                double sh = 0, sy = 0, shh = 0, shy = 0;
+                for (uint32_t i = 0; i < vertexCount; ++i) {
+                    const double h = hf[i], y = pos[3 * i + 1];
+                    sh += h;
+                    sy += y;
+                    shh += h * h;
+                    shy += h * y;
+                }
+                const double n   = double(vertexCount);
+                const double var = shh / n - (sh / n) * (sh / n);
+                const double cov = shy / n - (sh / n) * (sy / n);
+                d->bladeHeight = var > 1e-8 ? float(std::clamp(cov / var, 0.0, 50.0)) : 0.f;
+            }
             d->ok = true;
             return d;
         }

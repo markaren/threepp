@@ -1646,6 +1646,15 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 }
             }
 
+            // ── The rotor downwash: the jet's hollow (downwash.glsl, dwWarp) ──
+            if (downwashAddr_ != 0) {
+                aux.downwashAddr = downwashAddr_;
+                for (int row = 0; row < 3; ++row) {
+                    for (int col = 0; col < 4; ++col) aux.worldRows[row * 4 + col] = world[col * 4 + row];
+                }
+                needAux = true;
+            }
+
             EmitDispatch ed{};
             ed.groups = (st.capacity + kEmitLocalSize - 1u) / kEmitLocalSize;
             if (needAux) {

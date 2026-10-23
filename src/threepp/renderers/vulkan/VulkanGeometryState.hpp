@@ -672,6 +672,17 @@ namespace threepp::vulkan::impl {
         // again is then a prime: the wind of that frame, with no motion from
         // the pose it was left in.
         bool skippedHidden = false;
+        // The blades' height, field-local m, for the downwash's lean (a blade
+        // is bent about its base, and the shader sees one vertex at a time):
+        // GrassMesh::Params::bladeHeight when set, else estimated once from
+        // the rest pose as the slope of y over heightFrac (the terrain under
+        // the blades does not correlate with the height fraction, so it
+        // drops out of the slope).
+        float bladeHeight = 0.f;
+        // The last deform bent the field under a downwash jet: it deforms
+        // again whatever the distance gate says, until a deform without one
+        // has put it back.
+        bool downwashBent = false;
     };
 
     // Per-instance descriptor tables the closest-hit shader indexes by

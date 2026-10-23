@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -2265,6 +2265,285 @@ class DisplacedMesh(Mesh):
     @property
     def warp(self) -> DisplacedMesh.MeshWarp:
         ...
+class Downwash:
+    """
+    Rotor downwash and ring sources for the Vulkan renderer (renderer.downwash = dw). A JET is a rotor's wake: the centre of its rotor plane (world), a thrust (N) and an effective disc radius (m); its strength follows momentum theory, v_i = sqrt(T / (2 rho A)), relative to the reference rotor (an M350: 90 N through a 1 m disc), and fades with the rotor's height over the struck surface (full under 2 m, none from 9 m). RINGS leave a point on the water one after another at a speed (a stone, a fish, a creature surfacing). Up to 8 sources. Readers: a MeshStandardMaterial with ripples > 0 (concentric rings on its normal, a rougher struck disc), every GrassMesh (blades lean out and are pressed down), Renderer-owned ParticleField emitters (a hollow blown under the jet). Host-owned particle fields take the same warp through displace().
+    """
+    class Kind:
+        """
+        Members:
+        
+          Jet
+        
+          Rings
+        """
+        Jet: typing.ClassVar[Downwash.Kind]  # value = <Kind.Jet: 1>
+        Rings: typing.ClassVar[Downwash.Kind]  # value = <Kind.Rings: 2>
+        __members__: typing.ClassVar[dict[str, Downwash.Kind]]  # value = {'Jet': <Kind.Jet: 1>, 'Rings': <Kind.Rings: 2>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    class Source:
+        """
+        One source; a live reference into its Downwash. Jet fields: center (rotor plane centre), thrust, strength, radius, lobes, lobe_phase, surface_y. Ring fields: center, start_time, speed, spacing, count, amplitude, start_radius, wavelength.
+        """
+        enabled: bool
+        @property
+        def amplitude(self) -> float:
+            """
+            Rings: m, the first ring's height.
+            """
+        @amplitude.setter
+        def amplitude(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def center(self) -> Vector3:
+            """
+            Jet: the centre of the rotor plane, world. Rings: their centre (y unused).
+            """
+        @center.setter
+        def center(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def count(self) -> int:
+            """
+            Rings: how many.
+            """
+        @count.setter
+        def count(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def kind(self) -> Downwash.Kind:
+            ...
+        @property
+        def lobe_phase(self) -> float:
+            """
+            Jet: rad.
+            """
+        @lobe_phase.setter
+        def lobe_phase(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lobes(self) -> int:
+            """
+            Jet: the swell's lobes on the water; 0 = round.
+            """
+        @lobes.setter
+        def lobes(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def radius(self) -> float:
+            """
+            Jet: effective disc radius, m.
+            """
+        @radius.setter
+        def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def spacing(self) -> float:
+            """
+            Rings: m between successive rings.
+            """
+        @spacing.setter
+        def spacing(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def speed(self) -> float:
+            """
+            Rings: m/s outward.
+            """
+        @speed.setter
+        def speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def start_radius(self) -> float:
+            """
+            Rings: m, where a ring is born.
+            """
+        @start_radius.setter
+        def start_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def start_time(self) -> float:
+            """
+            Rings: renderer time (sim_time) the first ring leaves.
+            """
+        @start_time.setter
+        def start_time(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def strength(self) -> float:
+            """
+            Jet: >= 0 sets the share directly (1 = the reference rotor) and thrust is unused; negative (default) = from thrust.
+            """
+        @strength.setter
+        def strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def surface_y(self) -> float:
+            """
+            Jet: the struck surface's height for the particles (and displace()); NaN (default) = each particle's own height. The water and the grass use their own.
+            """
+        @surface_y.setter
+        def surface_y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def thrust(self) -> float:
+            """
+            Jet: N, all the rotors it stands for.
+            """
+        @thrust.setter
+        def thrust(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def wavelength(self) -> float:
+            """
+            Rings: m, a ring's crest train.
+            """
+        @wavelength.setter
+        def wavelength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    @staticmethod
+    def induced_velocity(thrust: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex, air_density: typing.SupportsFloat | typing.SupportsIndex = 1.225000023841858) -> float:
+        """
+        Momentum theory's induced velocity sqrt(T / (2 rho pi R^2)), m/s.
+        """
+    @staticmethod
+    def jet_share(source: Downwash.Source) -> float:
+        """
+        A jet's share before the height fade (1 = the reference rotor), clamped to [0, 3].
+        """
+    def __getitem__(self, index: typing.SupportsInt | typing.SupportsIndex) -> Downwash.Source:
+        ...
+    def __init__(self) -> None:
+        ...
+    def __len__(self) -> int:
+        ...
+    def add_jet(self, center: Vector3, thrust: typing.SupportsFloat | typing.SupportsIndex = 90.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> Downwash.Source:
+        """
+        A jet at `center` (the rotor plane's centre); returns its live Source.
+        """
+    def add_rings(self, center: Vector3, start_time: typing.SupportsFloat | typing.SupportsIndex, speed: typing.SupportsFloat | typing.SupportsIndex = 0.3199999928474426, spacing: typing.SupportsFloat | typing.SupportsIndex = 0.28999999165534973, count: typing.SupportsInt | typing.SupportsIndex = 6, amplitude: typing.SupportsFloat | typing.SupportsIndex = 0.004000000189989805) -> Downwash.Source:
+        """
+        Rings leaving `center` from `start_time` (renderer time); returns the live Source.
+        """
+    def clear(self) -> None:
+        ...
+    def displace(self, points: numpy.typing.NDArray[numpy.float32]) -> None:
+        """
+        The particle hollow over host-owned positions, in place: an (n, 3) or (n, 4) C-contiguous float32 array of WORLD points (a HostRing field's buffer before submit). The renderer warps only the particles its own emitters integrate; this is the same warp for the rest. Each row's share of the hollow is a hash of its index: keep a particle in its row.
+        """
+    def remove(self, index: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Removes source `index`; the ones after it move down a place (and so do their references).
+        """
+    def warp(self, point: Vector3, jitter: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> Vector3:
+        """
+        The particle hollow on one world point, as the Renderer-owned emitters apply it. `jitter` in [0, 1] is the particle's own share of the hollow's radius (0.45 + 0.55 jitter).
+        """
+    @property
+    def flutter(self) -> float:
+        """
+        The blades' beat in the jet, a share of the lean.
+        """
+    @flutter.setter
+    def flutter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def hollow_radius(self) -> float:
+        """
+        m, the hollow the jet blows in a particle cloud at share 1.
+        """
+    @hollow_radius.setter
+    def hollow_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lean_max(self) -> float:
+        """
+        rad, a blade's lean at the wall jet's peak.
+        """
+    @lean_max.setter
+    def lean_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def press_max(self) -> float:
+        """
+        Share of a blade's height pressed down under the jet.
+        """
+    @press_max.setter
+    def press_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rim_lift(self) -> float:
+        """
+        The hollow's rim lifted, a share of its radius.
+        """
+    @rim_lift.setter
+    def rim_lift(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ring_frequency(self) -> float:
+        """
+        Wavelengths a second the jet's rings travel outward.
+        """
+    @ring_frequency.setter
+    def ring_frequency(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ring_wavelength(self) -> float:
+        """
+        m, the jet's shortest ring.
+        """
+    @ring_wavelength.setter
+    def ring_wavelength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ring_wavelength_growth(self) -> float:
+        """
+        m of ring wavelength per m of radius.
+        """
+    @ring_wavelength_growth.setter
+    def ring_wavelength_growth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ripple_amplitude(self) -> float:
+        """
+        m, the jet's rings at share 1.
+        """
+    @ripple_amplitude.setter
+    def ripple_amplitude(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def roughness_boost(self) -> float:
+        """
+        Added to the water's roughness in the struck disc.
+        """
+    @roughness_boost.setter
+    def roughness_boost(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class EXRLoader:
     def __init__(self) -> None:
         ...
@@ -3390,6 +3669,22 @@ class GeoScene(Group):
 class GrassMesh(Mesh):
     wind_dir: Vector2
     def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
+        ...
+    @property
+    def blade_height(self) -> float:
+        """
+        The blades' height (local m) the rotor downwash bends them by (VulkanRenderer.downwash). 0 (default) = estimated from the geometry, the slope of y over heightFrac.
+        """
+    @blade_height.setter
+    def blade_height(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_anim_distance(self) -> float:
+        """
+        Vulkan: the wind and its BLAS refit freeze once the camera is farther than this (m) from the field's box; the blades hold their pose. 0 (default) = always animate. A field a downwash jet reaches is never frozen.
+        """
+    @max_anim_distance.setter
+    def max_anim_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def time(self) -> float:
@@ -5773,6 +6068,14 @@ class MeshStandardMaterial(Material):
     def dispose(self) -> None:
         ...
     def needs_update(self) -> None:
+        ...
+    @property
+    def ripples(self) -> float:
+        """
+        Flat water under a rotor downwash (renderer.downwash): > 0 gives the G-buffer normal the downwash's concentric rings and its struck disc's roughness, scaled by this value (1 = as tuned). 0 (default) = off. Vulkan deferred G-buffer only. Changed on a material already rendered, call needs_update() as for any material value.
+        """
+    @ripples.setter
+    def ripples(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def set_terrain_band(self, band: typing.SupportsInt | typing.SupportsIndex, albedo: Texture, normal_rough: Texture = None, repeat: typing.SupportsFloat | typing.SupportsIndex = 0.5, roughness: typing.SupportsFloat | typing.SupportsIndex = 0.8999999761581421) -> None:
         """
@@ -10887,6 +11190,14 @@ class VulkanRenderer:
         """
         Turn the volumetric cloud layer off (default).
         """
+    @property
+    def downwash(self) -> Downwash:
+        """
+        The rotor downwash (threepp.Downwash) the water (MeshStandardMaterial.ripples), every GrassMesh and the Renderer-owned particle emitters react to, or None (the default). Read every frame: move a jet by editing its Source.
+        """
+    @downwash.setter
+    def downwash(self, arg1: Downwash) -> None:
+        ...
     def dump_memory_stats(self, tag: str = 'python') -> None:
         """
         Print the renderer's GPU memory report to stderr, prefixed with `tag`: each heap's usage against its budget, then where the geometry buffers landed per class (device-local, the BAR window, or system memory). Deforming geometry (skinned, tet, grass) in the system-memory column means its deform pass crosses PCIe every frame. THREEPP_VK_MEMDUMP=1 prints the same report after init, after each structural scene build and at frame 8.

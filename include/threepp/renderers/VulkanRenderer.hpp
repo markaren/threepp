@@ -35,6 +35,7 @@
 
 namespace threepp {
 
+    class Downwash;
     class Mesh;
     class ParticleField;
 
@@ -1793,6 +1794,16 @@ namespace threepp {
             std::vector<PassTiming> passes;
         };
         [[nodiscard]] FrameTimings lastFrameTimings() const;
+
+        // ── Rotor downwash ────────────────────────────────────────────────────
+
+        // The jets and ring sources the water (MeshStandardMaterial::ripples),
+        // every GrassMesh and the Renderer-owned ParticleField emitters react
+        // to (scenes/Downwash.hpp). Read every frame, so moving a source is an
+        // edit of its fields, nothing more. nullptr (the default) = none, and
+        // every frame renders as it did before the feature existed.
+        void setDownwash(std::shared_ptr<Downwash> downwash);
+        [[nodiscard]] std::shared_ptr<Downwash> downwash() const;
 
         // ── Deferred shading knobs ────────────────────────────────────────────
 

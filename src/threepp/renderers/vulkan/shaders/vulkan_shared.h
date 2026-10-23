@@ -248,7 +248,10 @@ namespace threepp::vulkan_pt {
         int32_t detailNormalTexIndex;
         float detailNormalScale;  // tangent xy perturbation scale
         float detailRoughStrength;// 0..1 roughness modulation strength
-        float _padDetail;
+        // MeshStandardMaterial::ripples: > 0 = the rotor downwash's rings on
+        // this surface's G-buffer normal, scaled by it (gbuffer.frag,
+        // downwash.glsl). 0 = off. Took the old pad word: no layout change.
+        float ripples;
         // Foliage translucency / two-sided subsurface (MaterialWithTranslucency):
         // strength 0..1 + tint. Raster primary visibility only — deferred_shade
         // adds a wrap back-light + forward-scatter sun term plus a small back-N
@@ -355,7 +358,7 @@ struct MaterialDesc {
     int   detailNormalTexIndex;// detail normal+roughness; -1 = none
     float detailNormalScale;   // tangent xy perturbation scale
     float detailRoughStrength; // 0..1 roughness modulation strength
-    float _padDetail;
+    float ripples;             // downwash rings on the G-buffer normal; 0 = off
     vec3  translucencyColor;// foliage two-sided subsurface tint
     float translucency;     // 0 = off (raster primary shading only)
     int   terrainWeightTexIndex;// terrain band-weight map; -1 = not terrain

@@ -10,6 +10,9 @@
 // every lane's albedo/normal map — and the winner shifts with the TAA jitter
 // → per-frame texture flicker scaling with material diversity.
 #extension GL_EXT_nonuniform_qualifier : require
+// The rotor downwash block (downwash.glsl), reached by device address.
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 #include "vulkan_shared.h"
 
@@ -32,6 +35,7 @@
 // but here plain texture() is correct.
 
 #include "raster_camera_ubo.glsl"
+#include "downwash.glsl"
 
 layout(set = 0, binding = 2, scalar) readonly buffer GbufMatBuf {
     MaterialDesc gbufMats[];
@@ -798,6 +802,25 @@ void main() {
             const float a2 = roughness * roughness;
             roughness = sqrt(clamp(a2 + kToksvigScale * toksvigSigma2, a2, 1.0));
         }
+    }
+
+    // Rotor downwash rings (MeshStandardMaterial::ripples; threepp::Downwash):
+    // the G-buffer normal takes the analytic slope of the concentric rings
+    // round every jet and ring source, and the jet's struck disc is rougher.
+    // Never a noise: rings from a pulsing centre. The deferred shade's mirror
+    // rays leave along this normal, so the reflection carries the rings. A
+    // material without ripples, or a frame without a downwash, skips it.
+    // Derivatives in here: the branch is per material, so it only diverges on
+    // the quads where a rippled surface meets another one.
+    if (m.ripples > 0.0 && cam.downwash.z != 0u && roughness >= 0.0) {
+        const vec3  dpx       = dFdx(vWorldPos);
+        const vec3  dpy       = dFdy(vWorldPos);
+        const float footprint = max(length(dpx.xz), length(dpy.xz));
+        float       roughAdd;
+        const vec2  slope = m.ripples * dwWaterSlope(DownwashBuf(cam.downwash.xy), vWorldPos, footprint, roughAdd);
+        const vec3  g     = vec3(slope.x, 0.0, slope.y);
+        N = normalize(N - (g - dot(g, N) * N));
+        roughness = max(roughness, clamp(m.roughness + m.ripples * roughAdd, 0.04, 1.0));
     }
 
     // Material ambient occlusion (aoMap; glTF occlusionTexture): the R channel,

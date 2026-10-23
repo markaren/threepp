@@ -56,6 +56,7 @@
 #include "WakeFieldPipeline.hpp"
 #include "GrassWindPipeline.hpp"
 #include "VertexSanitizePipeline.hpp"
+#include "shaders/downwash_shared.h"// DownwashGpu (uploadDownwash)
 #include "shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures — same source the shaders read
 
 #include "threepp/cameras/Camera.hpp"
@@ -82,6 +83,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/scenes/Downwash.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/objects/GrassMesh.hpp"
@@ -2484,6 +2486,26 @@ namespace threepp {
         // setUnlitFogScatter: the unlit branch of the shade takes the volumetric
         // in-scatter too (shade flags bit 28). Off = extinction and ambient only.
         bool  unlitFogScatter_    = false;
+        // ── Rotor downwash (setDownwash; scenes/Downwash.hpp) ──────────────
+        // uploadDownwash packs the enabled sources into this slot's block once
+        // per frame, after the fence wait; downwashAddr_ is then its device
+        // address (0 = no downwash this frame) and downwashCount_ the packed
+        // count. The G-buffer (RasterCameraUbo.downwash), the grass wind push
+        // block and the particle emitters' aux records read these.
+        std::shared_ptr<Downwash> downwash_;
+        std::array<Buffer, kFramesInFlight> downwashBufs_{};
+        VkDeviceAddress downwashAddr_  = 0;
+        uint32_t        downwashCount_ = 0;
+        // Last frame's centres by source slot (the particles' motion vectors);
+        // reset whenever the list's version changes.
+        std::array<Vector3, 8> downwashPrevCenters_{};
+        uint64_t downwashPrevVersion_ = ~0ull;
+        const Downwash* downwashPrevOwner_ = nullptr;
+        void uploadDownwash(uint32_t frame);
+        // Whether a live jet of the downwash reaches a grass field whose world
+        // REST box is `box` (the wind gate and the cull bound): a conservative
+        // test against the jet's farthest reach over that box's heights.
+        [[nodiscard]] bool downwashReachesBox(const Box3& box) const;
         bool  fogShadowOpaqueCutouts_ = true; // setFogShadowOpaqueCutouts (shade flags bit 29); off = exact
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
@@ -3609,6 +3631,7 @@ namespace threepp {
             BlasPrep blas;
             Buffer restPos, heightFrac;
             uint32_t vertexCount = 0;
+            float bladeHeight = 0.f;// estimated, field-local m (GrassMeshState::bladeHeight)
             bool ok = false;
         };
         struct GrassPrep {
@@ -3863,7 +3886,10 @@ namespace threepp {
         // |gust| ≤ 0.85 and hf² ≤ 1, so the swayed vertex never leaves the rest
         // AABB dilated by windStrength (windDir is ~unit — |component| ≤ 1). That
         // makes the dilation a provably conservative bound, which is the whole
-        // reason grass can be culled at all. Returns false (→ caller treats the
+        // reason grass can be culled at all. A rotor downwash jet that reaches
+        // the field adds its lean: at most the blades' height sideways and
+        // never below the base (downwash.glsl, dwGrassOffset), so the box grows
+        // by that height. Returns false (→ caller treats the
         // field as always-visible / always-animate) if the geometry has no bounds.
         // en.mesh is known to be a GrassMesh (cached en.isGrass flag), so the
         // static_cast avoids the per-entry dynamic_cast the hot loops must not pay.
@@ -3877,7 +3903,16 @@ namespace threepp {
             Matrix4 w;
             std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
             out.applyMatrix4(w);
-            out.expandByScalar(gm->params.windStrength);
+            float grow = gm->params.windStrength;
+            if (downwash_ && !downwash_->empty() && downwashReachesBox(out)) {
+                float h = gm->params.bladeHeight;
+                if (!(h > 0.f)) {
+                    const auto it = grassStates.find(gm);
+                    h = it != grassStates.end() ? it->second->bladeHeight : 0.f;
+                }
+                grow += h * w.getMaxScaleOnAxis();
+            }
+            out.expandByScalar(grow);
             return true;
         }
 
@@ -3911,7 +3946,12 @@ namespace threepp {
             if (maxD <= 0.f) return true;
             Box3 box;
             if (!grassSwayWorldAabb(en, box)) return true;// no bounds → animate
-            return box.distanceToPoint(camPos) <= maxD;
+            if (box.distanceToPoint(camPos) <= maxD) return true;
+            // A downwash jet near the field keeps it awake, and so does the
+            // bend the last one left (one deform to stand back up).
+            if (downwash_ && !downwash_->empty() && downwashReachesBox(box)) return true;
+            const auto it = grassStates.find(gm);
+            return it != grassStates.end() && it->second->downwashBent;
         }
 
         // Lazy create the per-GrassMesh state: a BLAS over the rest geometry

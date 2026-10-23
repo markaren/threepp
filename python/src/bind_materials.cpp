@@ -222,6 +222,11 @@ namespace threepp_py {
                 .def_readwrite("wireframe_linewidth", &MeshStandardMaterial::wireframeLinewidth)
                 .def_readwrite("normal_scale", &MeshStandardMaterial::normalScale)
                 .def_readwrite("env_map_intensity", &MeshStandardMaterial::envMapIntensity)
+                .def_readwrite("ripples", &MeshStandardMaterial::ripples,
+                               "Flat water under a rotor downwash (renderer.downwash): > 0 gives the G-buffer normal "
+                               "the downwash's concentric rings and its struck disc's roughness, scaled by this value "
+                               "(1 = as tuned). 0 (default) = off. Vulkan deferred G-buffer only. Changed on a material "
+                               "already rendered, call needs_update() as for any material value.")
                 .def_readwrite("map", &MeshStandardMaterial::map)
                 .def_readwrite("normal_map", &MeshStandardMaterial::normalMap)
                 .def_readwrite("roughness_map", &MeshStandardMaterial::roughnessMap)

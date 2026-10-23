@@ -23,9 +23,9 @@ namespace threepp::vulkan {
 
     public:
         // Must match grass_wind.comp's `Pc` block (scalar layout): three
-        // 8-byte device addresses (24) + uint + four floats (20) = 44 bytes
-        // used by the shader; the C++ struct rounds up to 48 (8-byte align of
-        // the device-address members). Pushing 48 / shader reading 44 is fine.
+        // 8-byte device addresses (24) + uint + five floats (24) = 48, the
+        // downwash's address (8) and the field's world matrix rows (48):
+        // 104 bytes, inside the 128 every implementation guarantees.
         struct PushConstants {
             VkDeviceAddress posOut;   // displaced xyz out (= BLAS vertex buffer)
             VkDeviceAddress restIn;   // immutable rest xyz
@@ -35,7 +35,9 @@ namespace threepp::vulkan {
             float           windStrength;
             float           windDirX;
             float           windDirZ;
-            uint32_t        _pad = 0; // explicit tail pad → sizeof == 48
+            float           bladeHeight;  // field-local m (the downwash's lean)
+            VkDeviceAddress downwashAddr; // DownwashGpu of this frame, 0 = none
+            float           worldRows[12];// the field's world matrix, rows 0..2
         };
 
         explicit GrassWindPipeline(VulkanContext& ctx);

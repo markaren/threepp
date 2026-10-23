@@ -3,6 +3,7 @@
 #extension GL_EXT_buffer_reference                       : require
 #extension GL_EXT_buffer_reference2                      : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive               : enable
 
 // Wind sway for a merged grass-field mesh, written directly into the BLAS
 // vertex buffer (host-mapped, the same memory the AS build reads). The path
@@ -22,12 +23,20 @@
 // grassVertexShader()) so all three backends look consistent: a per-blade
 // phase from world XZ, two octaves of gust, bend weighted by heightFrac^2 so
 // the base stays planted and the tip moves most.
+//
+// The rotor downwash (threepp::Downwash, downwash.glsl) adds to the sway:
+// blades lean out from each jet and are pressed down under it. It is computed
+// in WORLD space (the jets are world points) from the field's world matrix and
+// brought back into the field's local frame; a frame without a downwash
+// pushes downwashAddr 0 and runs exactly the sway above.
 
 layout(local_size_x = 64) in;
 
 layout(buffer_reference, scalar) buffer RestBuf  { float v[]; };// rest xyz (read)
 layout(buffer_reference, scalar) buffer HFracBuf { float v[]; };// height fraction (read)
 layout(buffer_reference, scalar) buffer PosBuf   { float v[]; };// displaced xyz (write → BLAS)
+
+#include "downwash.glsl"
 
 layout(push_constant, scalar) uniform Pc {
     PosBuf   posOut;
@@ -38,6 +47,11 @@ layout(push_constant, scalar) uniform Pc {
     float    windStrength;
     float    windDirX;
     float    windDirZ;
+    float    bladeHeight; // field-local m, the blades' height (GrassMesh::Params)
+    uint64_t downwashAddr;// DownwashBuf, 0 = none
+    vec4     worldRow0;   // the field's world matrix, rows 0..2 (downwash only)
+    vec4     worldRow1;
+    vec4     worldRow2;
 } pc;
 
 void main() {
@@ -54,7 +68,18 @@ void main() {
     const float gust  = sin(phase) * 0.6 + sin(phase * 2.3 + 1.7) * 0.25;
     const float bend  = gust * pc.windStrength * hf * hf;// base planted, tip sways
 
-    pc.posOut.v[b + 0u] = rx + pc.windDirX * bend;
-    pc.posOut.v[b + 1u] = ry;
-    pc.posOut.v[b + 2u] = rz + pc.windDirZ * bend;
+    vec3 pos = vec3(rx + pc.windDirX * bend, ry, rz + pc.windDirZ * bend);
+    if (pc.downwashAddr != 0ul) {
+        const vec4 rest = vec4(rx, ry, rz, 1.0);
+        const vec3 wp   = vec3(dot(pc.worldRow0, rest), dot(pc.worldRow1, rest), dot(pc.worldRow2, rest));
+        const mat3 L    = transpose(mat3(pc.worldRow0.xyz, pc.worldRow1.xyz, pc.worldRow2.xyz));
+        // World blade height: the field's local up axis carried through L.
+        const float Hw  = pc.bladeHeight * length(L[1]);
+        const vec3 off  = dwGrassOffset(DownwashBuf(pc.downwashAddr), wp, hf, Hw, pc.time);
+        pos += inverse(L) * off;
+    }
+
+    pc.posOut.v[b + 0u] = pos.x;
+    pc.posOut.v[b + 1u] = pos.y;
+    pc.posOut.v[b + 2u] = pos.z;
 }

@@ -47,6 +47,11 @@ namespace threepp {
             // re-enters range resumes cleanly — its pose jumps straight to the
             // correct phase for the current time with no catch-up.
             float maxAnimDistance = 0.f;
+            // The blades' height (local m), which the rotor downwash bends
+            // them by (VulkanRenderer::setDownwash). 0 (default) = estimated
+            // from the geometry: the slope of y over heightFrac. A field with
+            // a downwash jet near it is never frozen by maxAnimDistance.
+            float bladeHeight = 0.f;
         };
         Params params;
 

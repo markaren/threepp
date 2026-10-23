@@ -643,6 +643,7 @@ set(sources
         "threepp/extras/environments/RoomEnvironment.cpp"
         "threepp/scenes/Fog.cpp"
         "threepp/scenes/FogExp2.cpp"
+        "threepp/scenes/Downwash.cpp"
 
         "threepp/objects/Group.cpp"
         "threepp/objects/Line.cpp"

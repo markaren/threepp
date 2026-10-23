@@ -344,6 +344,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGrassMotion_test COMMAND VulkanGrassMotion_test)
     set_tests_properties(VulkanGrassMotion_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The rotor downwash (VulkanRenderer::setDownwash): rings on a rippled
+    # water's G-buffer normal along the radius, a rougher struck disc, grass
+    # leaning out though its distance gate froze it, no motion while still,
+    # and nothing at all on a scene or a material without it.
+    add_executable(VulkanDownwash_test VulkanDownwash_test.cpp)
+    target_link_libraries(VulkanDownwash_test PRIVATE threepp)
+    add_test(NAME VulkanDownwash_test COMMAND VulkanDownwash_test)
+    set_tests_properties(VulkanDownwash_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A dithered LOD crossfade (Mesh::setFade, InstancedMesh::setFadeAt): a
     # plain fade f and a complement fade 1 - f cover every pixel of two
     # coincident quads exactly once, in shares f and 1 - f, with a pattern

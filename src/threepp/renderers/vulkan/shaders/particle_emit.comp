@@ -3,6 +3,7 @@
 #extension GL_EXT_buffer_reference    : require
 #extension GL_EXT_buffer_reference2   : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
 
 // ParticleField DEVICE EMITTER — Ownership::Renderer, plan F-C.
 //
@@ -97,7 +98,22 @@ layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer Emi
     float    splashSeconds;// 52  > 0: land as an expanding ring, not a rest
     float    splashR0;    // 56  ring radius at impact, METRES; 0 = no splash
     float    splashR1;    // 60  ring radius at the end of the splash
+    uint64_t downwashAddr;// 64  DownwashBuf (threepp::Downwash); 0 = none
+    vec4     worldRow0;   // 72  the field's world matrix, rows 0..2 (the
+    vec4     worldRow1;   // 88  jets are world points, the positions here
+    vec4     worldRow2;   // 104 field-local)
 };
+
+#include "downwash.glsl"
+
+// The rotor downwash's hollow on a field-local point: to world, dwWarp, back.
+vec3 downwashWarp(EmitAux A, vec3 p, bool prev, float jit) {
+    const vec4 q  = vec4(p, 1.0);
+    const vec3 wp = vec3(dot(A.worldRow0, q), dot(A.worldRow1, q), dot(A.worldRow2, q));
+    const vec3 wq = dwWarp(DownwashBuf(A.downwashAddr), wp, prev, jit);
+    const mat3 L  = transpose(mat3(A.worldRow0.xyz, A.worldRow1.xyz, A.worldRow2.xyz));
+    return p + inverse(L) * (wq - wp);
+}
 
 // Everything else rides in the push block and this pipeline has NO descriptor
 // set at all. Deliberate: a per-field descriptor write per frame is exactly the
@@ -493,6 +509,19 @@ void main() {
     if (follow) {
         pNow.xz  = wrapFollow(gCentre, pNow.xz);
         pPrev.xz = wrapFollow(gCentre, pPrev.xz);
+    }
+
+    // The rotor downwash, last: the jet comes down its axis and turns outward
+    // along the ground, so dust and mist are blown out of a hollow under it
+    // and pile up, lifted, round its rim — a resting flake included. The
+    // previous sample warps with last frame's jet centres (a moving drone's
+    // hollow moves); a reborn slot keeps its zero motion.
+    if (haveAux && A.downwashAddr != 0ul) {
+        // The slot's own share of the hollow; stream 14 (13 is F5's).
+        const float jit    = rnd01(i, 14u);
+        const bool  reborn = cycNow != cycPrev;
+        pNow  = downwashWarp(A, pNow, false, jit);
+        pPrev = reborn ? pNow : downwashWarp(A, pPrev, true, jit);
     }
 
     // w carries the radius when alive and the DEAD SENTINEL when not. Under

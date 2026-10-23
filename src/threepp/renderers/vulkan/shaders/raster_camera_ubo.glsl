@@ -38,6 +38,8 @@ layout(set = RASTER_CAM_SET, binding = RASTER_CAM_BINDING) uniform RasterCameraU
                           // the normal-map Toksvig toggle, bit 1 the stochastic
                           // tiling's exact lattice hash. .w = frame counter
                           // (alpha-hash decorrelation).
+    uvec4 downwash;       // .xy = this frame's DownwashGpu address (lo, hi), .z = its
+                          // source count; all 0 = no downwash (gbuffer.frag)
 } RASTER_CAM_NAME;
 
 #endif// RASTER_CAMERA_UBO_GLSL

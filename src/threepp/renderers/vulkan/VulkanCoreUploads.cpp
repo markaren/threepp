@@ -1085,6 +1085,12 @@ namespace threepp {
         // setStochasticTilingIntegerHash); off leaves .z exactly as before.
         ubo.prevJitter[2] = (normalMapToksvig_ ? 1.f : 0.f) + (stochasticTilingIntegerHash_ ? 2.f : 0.f);
         ubo.prevJitter[3] = static_cast<float>(view().haltonFrame_ & 1023u);
+        // The rotor downwash (uploadDownwash, earlier this frame): the
+        // G-buffer's rings on a `ripples` material read it by address.
+        ubo.downwash[0] = static_cast<uint32_t>(downwashAddr_ & 0xffffffffull);
+        ubo.downwash[1] = static_cast<uint32_t>(downwashAddr_ >> 32);
+        ubo.downwash[2] = downwashAddr_ != 0 ? downwashCount_ : 0u;
+        ubo.downwash[3] = 0u;
 
         uploadHostVisible(ctx->allocator(), view().rasterCameraUbos[frame], &ubo, sizeof(ubo));
 
@@ -1737,6 +1743,105 @@ namespace threepp {
     // Pack the setClouds state into the per-frame cloud UBO. timeSec is
     // wall-clock (frame-rate-independent) so wind drift + shape evolution run
     // at a fixed real-world speed. Disabled → enabled=0 → cloudMarch() no-ops.
+    // The rotor downwash's per-frame block (shaders/downwash_shared.h): the
+    // enabled sources packed in order, each jet's share from momentum theory
+    // (Downwash::jetShare), last frame's centres beside this frame's. Runs
+    // after this slot's fence wait, so the slot's buffer is free to write.
+    void VulkanRenderer::Impl::uploadDownwash(uint32_t frame) {
+        downwashAddr_  = 0;
+        downwashCount_ = 0;
+        if (!downwash_ || downwash_->empty()) {
+            downwashPrevOwner_ = nullptr;
+            return;
+        }
+        const Downwash& dw = *downwash_;
+        const bool keepPrev = downwashPrevOwner_ == &dw && downwashPrevVersion_ == dw.version();
+
+        vulkan::DownwashGpu g{};
+        g.header.time          = static_cast<float>(frameNowSec());
+        g.header.rippleAmp     = dw.rippleAmplitude;
+        g.header.ringLam0      = std::max(dw.ringWavelength, 1e-3f);
+        g.header.ringLamGrowth = std::max(dw.ringWavelengthGrowth, 0.f);
+        g.header.ringHz        = dw.ringFrequency;
+        g.header.roughBoost    = std::max(dw.roughnessBoost, 0.f);
+        g.header.leanMax       = std::clamp(dw.leanMax, 0.f, 1.4f);
+        g.header.pressMax      = std::clamp(dw.pressMax, 0.f, 1.f);
+        g.header.flutter       = std::clamp(dw.flutter, 0.f, 1.f);
+        g.header.hollow        = std::max(dw.hollowRadius, 0.f);
+        g.header.rimLift       = std::max(dw.rimLift, 0.f);
+        uint32_t n = 0;
+        for (std::size_t i = 0; i < dw.size() && i < kDownwashMaxSources; ++i) {
+            const Downwash::Source& s = dw.source(i);
+            const Vector3 prev = keepPrev ? downwashPrevCenters_[i] : s.center;
+            downwashPrevCenters_[i] = s.center;
+            if (!s.enabled) continue;
+            vulkan::DownwashSourceGpu& o = g.sources[n];
+            o.center[0] = s.center.x;
+            o.center[1] = s.center.y;
+            o.center[2] = s.center.z;
+            o.prevCenter[0] = prev.x;
+            o.prevCenter[1] = prev.y;
+            o.prevCenter[2] = prev.z;
+            if (s.kind == Downwash::Kind::Jet) {
+                o.kind      = kDownwashKindJet;
+                o.share     = Downwash::jetShare(s);
+                o.radius    = std::max(s.radius, 1e-3f);
+                o.surfaceY  = std::isnan(s.surfaceY) ? -std::numeric_limits<float>::max() : s.surfaceY;
+                o.lobes     = static_cast<float>(std::max(s.lobes, 0));
+                o.lobePhase = s.lobePhase;
+                if (o.share <= 0.f) continue;
+            } else {
+                o.kind       = kDownwashKindRings;
+                o.share      = s.amplitude;
+                o.radius     = std::max(s.startRadius, 0.f);
+                o.t0         = s.startTime;
+                o.speed      = std::max(s.speed, 0.f);
+                o.interval   = s.speed > 0.f ? std::max(s.spacing, 0.f) / s.speed : 1e9f;
+                o.count      = static_cast<float>(std::clamp(s.count, 0, 32));
+                o.wavelength = std::max(s.wavelength, 1e-3f);
+                if (s.count <= 0 || s.amplitude == 0.f) continue;
+            }
+            ++n;
+        }
+        downwashPrevOwner_   = &dw;
+        downwashPrevVersion_ = dw.version();
+        if (n == 0) return;
+        g.header.count = n;
+
+        Buffer& b = downwashBufs_[frame];
+        if (b.handle == VK_NULL_HANDLE) {
+            b = createBuffer(ctx->allocator(), ctx->device(), sizeof(vulkan::DownwashGpu),
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                             VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+        }
+        uploadHostVisible(ctx->allocator(), b, &g, sizeof(g));
+        downwashAddr_  = b.address;
+        downwashCount_ = n;
+    }
+
+    // KEEP IN SYNC with dwGrassOffset's reach (downwash.glsl): a jet leans
+    // blades out to rp + 7 rd, rp and rd growing with the rotor's height over
+    // the ground, and does nothing from 9 m up. Over a box the ground is
+    // somewhere between its min and max y, so the test takes the lowest height
+    // for the fade and the highest for the reach.
+    bool VulkanRenderer::Impl::downwashReachesBox(const Box3& box) const {
+        if (!downwash_) return false;
+        const Downwash& dw = *downwash_;
+        for (std::size_t i = 0; i < dw.size(); ++i) {
+            const Downwash::Source& s = dw.source(i);
+            if (s.kind != Downwash::Kind::Jet || Downwash::jetShare(s) <= 0.f) continue;
+            const Vector3& c = s.center;
+            const float hLo = std::max(c.y - box.max().y, 0.f);
+            if (Downwash::heightFade(hLo) <= 0.f) continue;
+            const float hHi = std::clamp(c.y - box.min().y, 0.f, 9.f);
+            const float reach = Downwash::peakRadius(s.radius, hHi) + 7.f * Downwash::decayRadius(s.radius, hHi);
+            const float dx = std::max({box.min().x - c.x, 0.f, c.x - box.max().x});
+            const float dz = std::max({box.min().z - c.z, 0.f, c.z - box.max().z});
+            if (dx * dx + dz * dz <= reach * reach) return true;
+        }
+        return false;
+    }
+
     void VulkanRenderer::Impl::updateCloudUbo(uint32_t frame) {
         GpuCloudUbo ubo{};
         ubo.enabled     = cloudsEnabled_ ? 1.0f : 0.0f;
@@ -2152,6 +2257,7 @@ void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
                 particleFieldRecs_.push_back({field, entryIndex,
                                               classIdForObject(*field), vcount});
             }
+            particleFieldPass_->setDownwash(downwashAddr_);
             particleFieldPass_->prepareFrame(frameSerial_, frame, particleFieldRecs_);
             updateParticleDensityUbo(frame);
         }

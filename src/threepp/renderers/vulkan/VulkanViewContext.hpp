@@ -443,6 +443,9 @@ namespace threepp::vulkan::impl {
                                   // was tested and rejected there); .xy is kept for the
                                   // deferred shade's hybrid reproject tap correction.
                                   // .z smuggles the normal-map Toksvig toggle.
+        uint32_t downwash[4];     // .xy = this frame's DownwashGpu address (lo, hi),
+                                  // .z = its source count; all 0 = no downwash
+                                  // (gbuffer.frag's rings, MeshStandardMaterial::ripples)
     };
 
 }// namespace threepp::vulkan::impl

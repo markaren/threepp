@@ -3,6 +3,7 @@
 #include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/core/Assert.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
 
 #include <algorithm>
 #include <cfloat>
@@ -5124,7 +5125,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             d.detailNormalTexIndex = -1;
             d.detailNormalScale = 1.f;
             d.detailRoughStrength = 0.f;
-            d._padDetail = 0.f;
+            d.ripples = 0.f;
             d.terrainWeightTexIndex = -1;
             d.terrainNormalTexIndex = -1;
             d.terrainBandStrength = 0.f;
@@ -5283,6 +5284,9 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 // surface. Negative values would flip the sign of a radiance,
                 // so the knob is clamped at zero and left open above 1.
                 d.envMapIntensity = std::max(0.f, em->envMapIntensity);
+            }
+            if (auto* st = dynamic_cast<MeshStandardMaterial*>(mat.get())) {
+                d.ripples = std::max(0.f, st->ripples);
             }
             if (auto* ao = dynamic_cast<MaterialWithAoMap*>(mat.get())) {
                 // The index is bound at the texture-index fill sites

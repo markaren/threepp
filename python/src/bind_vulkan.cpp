@@ -44,6 +44,7 @@
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/helpers/SonarSensor.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/scenes/Downwash.hpp"
 #include "threepp/renderers/vulkan/ExitPolicy.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 
@@ -1955,6 +1956,12 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },
                               "Toggle ray-traced ambient occlusion / diffuse GI. Default on.")
+                .def_property("downwash",
+                              [](PyVulkanRenderer& r) { return r.native().downwash(); },
+                              [](PyVulkanRenderer& r, std::shared_ptr<Downwash> d) { r.native().setDownwash(std::move(d)); },
+                              "The rotor downwash (threepp.Downwash) the water (MeshStandardMaterial.ripples), every "
+                              "GrassMesh and the Renderer-owned particle emitters react to, or None (the default). Read "
+                              "every frame: move a jet by editing its Source.")
                 .def_property("unlit_fog_scatter",
                               [](PyVulkanRenderer& r) { return r.native().unlitFogScatter(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setUnlitFogScatter(v); },

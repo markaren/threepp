@@ -426,6 +426,7 @@ VulkanRenderer::Impl::~Impl() {
             for (auto& b : clusterGridBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : fogUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : cloudUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : downwashBufs_) destroyBuffer(ctx->allocator(), b);
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : meshMovedBitsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);

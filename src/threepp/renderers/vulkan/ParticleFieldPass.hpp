@@ -203,8 +203,14 @@ namespace threepp::vulkan {
         // mean a splash. 0 = this field has none.
         float           splashR0;     // 56
         float           splashR1;     // 60
+        // The rotor downwash (threepp::Downwash): this frame's DownwashGpu and
+        // the field's world matrix, rows 0..2 — the jets are world points and
+        // the emitter's positions field-local. 0 = no downwash: the record
+        // is not even written for a field that needs nothing else from it.
+        VkDeviceAddress downwashAddr; // 64
+        float           worldRows[12];// 72
     };
-    static_assert(sizeof(EmitAuxGpu) == 64,
+    static_assert(sizeof(EmitAuxGpu) == 120,
                   "EmitAuxGpu drifted from the EmitAux block in particle_emit.comp");
 
     // ── F3: per-field billboard appearance (plans/particle-atmosphere.md F-D) ─
@@ -545,6 +551,11 @@ namespace threepp::vulkan {
         // frame serial being recorded; `frame` is the frame-in-flight index.
         void prepareFrame(std::uint64_t serial, std::uint32_t frame,
                           const std::vector<Rec>& fields);
+
+        // This frame's rotor downwash block (VulkanRenderer::setDownwash), set
+        // before prepareFrame: every Renderer-owned emitter warps its
+        // particles by it. 0 = none, and the emitters run as before.
+        void setDownwash(VkDeviceAddress addr) { downwashAddr_ = addr; }
 
         // ── F6: the head-of-frame device-to-device snapshot ─────────────────
         // One vkCmdCopyBuffer per Interop field, exported buffer → this frame's
@@ -1064,6 +1075,7 @@ namespace threepp::vulkan {
         // cannot bake, so surface interaction quietly does nothing there and
         // says so exactly one time.
         bool                  bakeUnsupportedLogged_ = false;
+        VkDeviceAddress       downwashAddr_ = 0;// setDownwash
 
         // Density scatter pipeline — created lazily, on the first field that
         // asks for a volume, so a scene without dust allocates nothing.

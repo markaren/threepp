@@ -29,6 +29,7 @@
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
+#include "threepp/scenes/Downwash.hpp"
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -415,7 +416,112 @@ namespace threepp_py {
                 .def_property("time",
                               [](GrassMesh& g) { return g.params.time; },
                               [](GrassMesh& g, float v) { g.params.time = v; },
-                              "Animation clock (seconds); set per frame to advance the wind.");
+                              "Animation clock (seconds); set per frame to advance the wind.")
+                .def_property("max_anim_distance",
+                              [](GrassMesh& g) { return g.params.maxAnimDistance; },
+                              [](GrassMesh& g, float v) { g.params.maxAnimDistance = v; },
+                              "Vulkan: the wind and its BLAS refit freeze once the camera is farther than this (m) "
+                              "from the field's box; the blades hold their pose. 0 (default) = always animate. A "
+                              "field a downwash jet reaches is never frozen.")
+                .def_property("blade_height",
+                              [](GrassMesh& g) { return g.params.bladeHeight; },
+                              [](GrassMesh& g, float v) { g.params.bladeHeight = v; },
+                              "The blades' height (local m) the rotor downwash bends them by (VulkanRenderer."
+                              "downwash). 0 (default) = estimated from the geometry, the slope of y over heightFrac.");
+
+        // ---- Downwash --------------------------------------------------------
+        // The rotor downwash's sources (scenes/Downwash.hpp): jets and ring
+        // sources, read by the Vulkan renderer every frame once set as
+        // renderer.downwash. A Source handed out by add_jet / add_rings / [i]
+        // is a live reference into the list: edit its fields per frame.
+        auto downwash = py::class_<Downwash, std::shared_ptr<Downwash>>(m, "Downwash",
+                "Rotor downwash and ring sources for the Vulkan renderer (renderer.downwash = dw). A JET is a rotor's "
+                "wake: the centre of its rotor plane (world), a thrust (N) and an effective disc radius (m); its "
+                "strength follows momentum theory, v_i = sqrt(T / (2 rho A)), relative to the reference rotor (an M350: "
+                "90 N through a 1 m disc), and fades with the rotor's height over the struck surface (full under 2 m, "
+                "none from 9 m). RINGS leave a point on the water one after another at a speed (a stone, a fish, a "
+                "creature surfacing). Up to 8 sources. Readers: a MeshStandardMaterial with ripples > 0 (concentric "
+                "rings on its normal, a rougher struck disc), every GrassMesh (blades lean out and are pressed down), "
+                "Renderer-owned ParticleField emitters (a hollow blown under the jet). Host-owned particle fields "
+                "take the same warp through displace().");
+        py::enum_<Downwash::Kind>(downwash, "Kind")
+                .value("Jet", Downwash::Kind::Jet)
+                .value("Rings", Downwash::Kind::Rings);
+        py::class_<Downwash::Source>(downwash, "Source",
+                                     "One source; a live reference into its Downwash. Jet fields: center (rotor plane "
+                                     "centre), thrust, strength, radius, lobes, lobe_phase, surface_y. Ring fields: "
+                                     "center, start_time, speed, spacing, count, amplitude, start_radius, wavelength.")
+                .def_readonly("kind", &Downwash::Source::kind)
+                .def_readwrite("enabled", &Downwash::Source::enabled)
+                .def_readwrite("center", &Downwash::Source::center,
+                               "Jet: the centre of the rotor plane, world. Rings: their centre (y unused).")
+                .def_readwrite("thrust", &Downwash::Source::thrust, "Jet: N, all the rotors it stands for.")
+                .def_readwrite("strength", &Downwash::Source::strength,
+                               "Jet: >= 0 sets the share directly (1 = the reference rotor) and thrust is unused; "
+                               "negative (default) = from thrust.")
+                .def_readwrite("radius", &Downwash::Source::radius, "Jet: effective disc radius, m.")
+                .def_readwrite("lobes", &Downwash::Source::lobes, "Jet: the swell's lobes on the water; 0 = round.")
+                .def_readwrite("lobe_phase", &Downwash::Source::lobePhase, "Jet: rad.")
+                .def_readwrite("surface_y", &Downwash::Source::surfaceY,
+                               "Jet: the struck surface's height for the particles (and displace()); NaN (default) "
+                               "= each particle's own height. The water and the grass use their own.")
+                .def_readwrite("start_time", &Downwash::Source::startTime,
+                               "Rings: renderer time (sim_time) the first ring leaves.")
+                .def_readwrite("speed", &Downwash::Source::speed, "Rings: m/s outward.")
+                .def_readwrite("spacing", &Downwash::Source::spacing, "Rings: m between successive rings.")
+                .def_readwrite("count", &Downwash::Source::count, "Rings: how many.")
+                .def_readwrite("amplitude", &Downwash::Source::amplitude, "Rings: m, the first ring's height.")
+                .def_readwrite("start_radius", &Downwash::Source::startRadius, "Rings: m, where a ring is born.")
+                .def_readwrite("wavelength", &Downwash::Source::wavelength, "Rings: m, a ring's crest train.");
+        downwash.def(py::init([] { return Downwash::create(); }))
+                .def("add_jet", &Downwash::addJet, py::arg("center"), py::arg("thrust") = Downwash::kReferenceThrust,
+                     py::arg("radius") = Downwash::kReferenceRadius, py::return_value_policy::reference_internal,
+                     "A jet at `center` (the rotor plane's centre); returns its live Source.")
+                .def("add_rings", &Downwash::addRings, py::arg("center"), py::arg("start_time"),
+                     py::arg("speed") = 0.32f, py::arg("spacing") = 0.29f, py::arg("count") = 6,
+                     py::arg("amplitude") = 0.004f, py::return_value_policy::reference_internal,
+                     "Rings leaving `center` from `start_time` (renderer time); returns the live Source.")
+                .def("__len__", &Downwash::size)
+                .def("__getitem__", [](Downwash& d, std::size_t i) -> Downwash::Source& { return d.source(i); },
+                     py::arg("index"), py::return_value_policy::reference_internal)
+                .def("remove", &Downwash::remove, py::arg("index"),
+                     "Removes source `index`; the ones after it move down a place (and so do their references).")
+                .def("clear", &Downwash::clear)
+                .def_readwrite("ripple_amplitude", &Downwash::rippleAmplitude, "m, the jet's rings at share 1.")
+                .def_readwrite("ring_wavelength", &Downwash::ringWavelength, "m, the jet's shortest ring.")
+                .def_readwrite("ring_wavelength_growth", &Downwash::ringWavelengthGrowth,
+                               "m of ring wavelength per m of radius.")
+                .def_readwrite("ring_frequency", &Downwash::ringFrequency,
+                               "Wavelengths a second the jet's rings travel outward.")
+                .def_readwrite("roughness_boost", &Downwash::roughnessBoost,
+                               "Added to the water's roughness in the struck disc.")
+                .def_readwrite("lean_max", &Downwash::leanMax, "rad, a blade's lean at the wall jet's peak.")
+                .def_readwrite("press_max", &Downwash::pressMax, "Share of a blade's height pressed down under the jet.")
+                .def_readwrite("flutter", &Downwash::flutter, "The blades' beat in the jet, a share of the lean.")
+                .def_readwrite("hollow_radius", &Downwash::hollowRadius,
+                               "m, the hollow the jet blows in a particle cloud at share 1.")
+                .def_readwrite("rim_lift", &Downwash::rimLift, "The hollow's rim lifted, a share of its radius.")
+                .def_static("induced_velocity", &Downwash::inducedVelocity, py::arg("thrust"), py::arg("radius"),
+                            py::arg("air_density") = Downwash::kAirDensity,
+                            "Momentum theory's induced velocity sqrt(T / (2 rho pi R^2)), m/s.")
+                .def_static("jet_share", &Downwash::jetShare, py::arg("source"),
+                            "A jet's share before the height fade (1 = the reference rotor), clamped to [0, 3].")
+                .def("warp", &Downwash::warp, py::arg("point"), py::arg("jitter") = 1.f,
+                     "The particle hollow on one world point, as the Renderer-owned emitters apply it. `jitter` in "
+                     "[0, 1] is the particle's own share of the hollow's radius (0.45 + 0.55 jitter).")
+                .def("displace",
+                     [](const Downwash& d, py::array_t<float, py::array::c_style> pts) {
+                         if (pts.ndim() != 2 || (pts.shape(1) != 3 && pts.shape(1) != 4))
+                             throw std::runtime_error("displace: expected an (n, 3) or (n, 4) float32 array");
+                         if (!pts.writeable()) throw std::runtime_error("displace: the array is read-only");
+                         d.displace(pts.mutable_data(), static_cast<std::size_t>(pts.shape(0)),
+                                    static_cast<std::size_t>(pts.shape(1)));
+                     },
+                     py::arg("points").noconvert(),
+                     "The particle hollow over host-owned positions, in place: an (n, 3) or (n, 4) C-contiguous "
+                     "float32 array of WORLD points (a HostRing field's buffer before submit). The renderer warps "
+                     "only the particles its own emitters integrate; this is the same warp for the rest. Each "
+                     "row's share of the hollow is a hash of its index: keep a particle in its row.");
 
         // ---- Points ----------------------------------------------------------
         auto points = py::class_<Points, Object3D, std::shared_ptr<Points>>(m, "Points");

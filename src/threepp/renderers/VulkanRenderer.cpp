@@ -2269,6 +2269,14 @@ namespace threepp {
         return pimpl_->fogShadowOpaqueCutouts_;
     }
 
+    void VulkanRenderer::setDownwash(std::shared_ptr<Downwash> downwash) {
+        pimpl_->downwash_ = std::move(downwash);
+    }
+
+    std::shared_ptr<Downwash> VulkanRenderer::downwash() const {
+        return pimpl_->downwash_;
+    }
+
     void VulkanRenderer::setUnlitFogScatter(bool enabled) {
         pimpl_->unlitFogScatter_ = enabled;
     }
