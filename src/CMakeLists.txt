@@ -486,6 +486,7 @@ set(sources
         "threepp/extras/uav/DownwashEffect.cpp"
         "threepp/extras/uav/MavlinkOut.cpp"
         "threepp/extras/uav/SitlBridge.cpp"
+        "threepp/extras/sensors/RealSenseL515.cpp"
         "threepp/extras/core/Curve.cpp"
         "threepp/extras/core/CurvePath.cpp"
         "threepp/extras/core/Font.cpp"
@@ -984,6 +985,9 @@ if (WIN32)
     # inside the library, so consumers of the headers need neither
     # <winsock2.h> nor this link.
     target_link_libraries(threepp PRIVATE ws2_32)
+    # extras/sensors/RealSenseL515.cpp reads the L515's UVC interfaces through
+    # Media Foundation; these are Windows system libraries.
+    target_link_libraries(threepp PRIVATE mfplat mf mfreadwrite mfuuid ole32)
 endif ()
 
 target_include_directories(threepp
