@@ -1981,6 +1981,32 @@ void main() {
             r    = r * svT + svEmis;
             rEnv = rEnv * svT;
         }
+        // THE AIR ON THE REFLECTED LEG. The shade fogs only the camera->surface
+        // leg; the recombine multiplies this channel by that leg's transmittance
+        // (deferred_refl_filter.comp) and nothing else. So a still pond in a
+        // morning fog mirrored the far shore clear and the sky blue behind it,
+        // while the same trees seen directly stood grey in the haze: the
+        // reflection read clearer than the view. The mirror ray's own leg now
+        // takes what the primary leg takes, in the same composition the opaque
+        // and water paths use: the height fog's closed form (applyHeteroSurfaceFog)
+        // and the ParticleField media (applyParticleFog) over the hit distance,
+        // plus the sun's in-scatter (volumetricDirScatter: the shafts in the
+        // mirror); an escape takes the sky pixel's fog (applySkyFog) and the
+        // sun's in-scatter over the sky leg. Only where the trace is the one
+        // mirror ray (the stochastic band takes its escapes from envLobeGGX
+        // apart, and its blur hides the leg) and only with the air medium on
+        // (heteroActive): a scene without height fog is unchanged.
+        if (clouds.heteroActive > 0.5 && roughness < kReflStochastic) {
+            if (gTraceHitT > 0.0) {
+                const vec3 Ph = shadowOrig + Rd * gTraceHitT;
+                r = applyParticleFog(applyHeteroSurfaceFog(r, vec2(0.0), gTraceHitT, shadowOrig, Ph),
+                                     shadowOrig, Rd, gTraceHitT)
+                  + volumetricDirScatter(shadowOrig, Rd, gTraceHitT, px);
+            } else {
+                r = applyParticleFog(applySkyFog(r, Rd), shadowOrig, Rd, 2000.0)
+                  + volumetricDirScatter(shadowOrig, Rd, 2000.0, px);
+            }
+        }
         // Reflected-content distance for the denoiser's gloss-blur footprint:
         // env miss → 0 (already lobe-filtered via missLod — no extra blur),
         // geometry hit → its distance.
