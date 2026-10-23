@@ -1,9 +1,10 @@
 // Live point cloud from an Intel RealSense L515, read through Media Foundation
-// (no librealsense). Depth is deprojected with the nominal intrinsics, so the
-// cloud has the right shape but is not metrically calibrated. The RGB frame is
-// shown on a plane spanning the RGB field of view, and can optionally colour
-// the points; depth and RGB are not registered, so that overlay is offset by
-// the few centimetres between the two lenses.
+// and WinUSB (no librealsense). Depth is deprojected with the unit's own
+// calibration, and "Colour from RGB" registers each point into the RGB image
+// through the depth-to-RGB extrinsics and the RGB lens distortion. The RGB
+// frame is also shown on a plane spanning the RGB field of view (the plane
+// ignores distortion and the small extrinsic rotation). Without calibration
+// (hardware monitor busy) everything falls back to nominal values.
 //
 //     l515_pointcloud [--sensor-view] [--rgb] [--snapshot out.png]
 //
@@ -56,6 +57,8 @@ int main(int argc, char** argv) {
         std::cerr << "L515: " << cam.lastError() << std::endl;
         if (!cam.depthOpen()) return 1;
     }
+    std::cout << "calibration: " << (cam.calibrated() ? "per-unit" : "nominal (hardware monitor not available)") << std::endl;
+    const auto depthToColor = cam.depthToColor();
 
     Canvas canvas("RealSense L515", {{"aa", 4}});
     auto renderer = createRenderer(canvas);
@@ -129,10 +132,11 @@ int main(int argc, char** argv) {
         ImGui::Text("depth: %s, RGB: %s", cam.depthOpen() ? "streaming" : "closed",
                     cam.colorOpen() ? "streaming" : "closed");
         if (const auto err = cam.lastError(); !err.empty()) ImGui::TextWrapped("%s", err.c_str());
-        ImGui::Text("%d points, %.1f fps", validPoints, depthFps);
+        ImGui::Text("%d points, %.1f fps, %s calibration", validPoints, depthFps,
+                    cam.calibrated() ? "per-unit" : "nominal");
         ImGui::SliderFloat("Point size", &pointsMaterial->size, 1.f, 6.f);
         ImGui::SliderFloat("Max range [m]", &maxRange, 0.5f, 9.f);
-        ImGui::Checkbox("Colour from RGB (unregistered)", &colourFromRgb);
+        ImGui::Checkbox(cam.calibrated() ? "Colour from RGB" : "Colour from RGB (unregistered)", &colourFromRgb);
         ImGui::Checkbox("Show RGB plane", &rgbPlane->visible);
         ImGui::SliderFloat("RGB plane distance [m]", &rgbDistance, 0.5f, 9.f);
         if (ImGui::Button("Sensor view")) resetView(true);
@@ -140,8 +144,14 @@ int main(int argc, char** argv) {
         if (ImGui::Button("Orbit view")) resetView(false);
     }, "L515");
 
+    auto printIntrinsics = [](const char* name, const RealSenseL515::Intrinsics& k) {
+        std::cout << name << " " << k.width << "x" << k.height << ": fx " << k.fx << " fy " << k.fy
+                  << " ppx " << k.ppx << " ppy " << k.ppy << std::endl;
+    };
+
     canvas.animate([&] {
         if (cam.pollColor(color)) {
+            if (!haveColor) printIntrinsics("RGB", color.intrinsics);
             if (colorTexture->image().width() != static_cast<unsigned>(color.width) ||
                 colorTexture->image().height() != static_cast<unsigned>(color.height)) {
                 colorTexture = DataTexture::create(4, color.width, color.height);
@@ -156,6 +166,7 @@ int main(int argc, char** argv) {
         }
 
         if (cam.pollDepth(depth)) {
+            if (lastDepthTime == 0) printIntrinsics("depth", depth.intrinsics);
             if (lastDepthTime > 0 && depth.timestamp > lastDepthTime) {
                 const float inst = static_cast<float>(1.0 / (depth.timestamp - lastDepthTime));
                 depthFps = depthFps == 0 ? inst : depthFps + 0.1f * (inst - depthFps);
@@ -180,9 +191,11 @@ int main(int argc, char** argv) {
 
                     Color c = depthColor(z / maxRange);
                     if (rgb) {
-                        const int cu = static_cast<int>(ck.fx * p[0] / z + ck.ppx);
-                        const int cv = static_cast<int>(ck.fy * p[1] / z + ck.ppy);
-                        if (cu >= 0 && cu < color.width && cv >= 0 && cv < color.height) {
+                        const auto pc = depthToColor.transform(p);
+                        const auto uv = ck.project(pc);
+                        const int cu = static_cast<int>(std::floor(uv[0]));
+                        const int cv = static_cast<int>(std::floor(uv[1]));
+                        if (pc[2] > 0 && cu >= 0 && cu < color.width && cv >= 0 && cv < color.height) {
                             const auto* px = &color.rgba[(static_cast<size_t>(cv) * color.width + cu) * 4];
                             c.setRGB(px[0] / 255.f, px[1] / 255.f, px[2] / 255.f);
                             c.convertSRGBToLinear();
@@ -201,10 +214,19 @@ int main(int argc, char** argv) {
         }
 
         if (haveColor) {
+            // Image centre at `rgbDistance` in the RGB frame, taken back to the
+            // depth frame: p = R^T (c - t).
             const auto& ck = color.intrinsics;
-            rgbPlane->position.set(0, 0, -rgbDistance);
-            rgbPlane->scale.set(rgbDistance * static_cast<float>(ck.width) / ck.fx,
-                                rgbDistance * static_cast<float>(ck.height) / ck.fy, 1);
+            const float w = static_cast<float>(ck.width), h = static_cast<float>(ck.height);
+            const std::array<float, 3> c{(0.5f * w - ck.ppx) / ck.fx * rgbDistance - depthToColor.translation[0],
+                                         (0.5f * h - ck.ppy) / ck.fy * rgbDistance - depthToColor.translation[1],
+                                         rgbDistance - depthToColor.translation[2]};
+            const auto& r = depthToColor.rotation;
+            const float x = r[0] * c[0] + r[3] * c[1] + r[6] * c[2];
+            const float y = r[1] * c[0] + r[4] * c[1] + r[7] * c[2];
+            const float z = r[2] * c[0] + r[5] * c[1] + r[8] * c[2];
+            rgbPlane->position.set(x, -y, -z);
+            rgbPlane->scale.set(rgbDistance * w / ck.fx, rgbDistance * h / ck.fy, 1);
         }
 
         renderer->render(*scene, *camera);

@@ -4,7 +4,8 @@
 // to inbox Windows drivers: depth/IR/confidence (MI_00) and RGB (MI_04) are
 // UVC cameras under usbvideo, the hardware-monitor channel (MI_06) is WinUSB
 // and the IMU (MI_07) is a HID sensor collection. This class reads the two UVC
-// interfaces through Media Foundation, so it needs only system libraries.
+// interfaces through Media Foundation and the calibration through WinUSB, so
+// it needs only system libraries.
 //
 // What the device delivers, and what this class does with it:
 //   * Depth is Z16 in 0.25 mm units (depthUnit), 0 = no return. The sensor is
@@ -12,11 +13,13 @@
 //     640x480 mode); they are turned to landscape here so that up and left
 //     match the RGB frame.
 //   * RGB is YUY2, converted to RGBA8 here.
-//   * Intrinsics are NOMINAL, derived from the datasheet field of view
-//     (depth 70 x 55 deg, RGB 70 x 43 deg). The per-unit calibration lives
-//     behind the WinUSB hardware monitor and is not read yet, so a cloud
-//     built from these is the right shape but not metrically exact, and depth
-//     and RGB are not registered to each other.
+//   * Intrinsics and the depth-to-RGB extrinsics are the unit's own
+//     calibration, read once from the hardware monitor when the camera is
+//     opened (the same tables librealsense reports). Depth has no lens
+//     distortion; RGB has Brown-Conrady coefficients. If the hardware monitor
+//     cannot be opened (another process holds it), calibrated() is false and
+//     the intrinsics fall back to the datasheet field of view (depth
+//     70 x 55 deg, RGB 70 x 43 deg) with identity extrinsics.
 //
 // Each stream runs on its own capture thread; poll*() is non-blocking and
 // hands out the newest frame once.
@@ -26,6 +29,7 @@
 //     RealSenseL515::DepthFrame depth;
 //     if (cam.pollDepth(depth)) {
 //         auto p = depth.intrinsics.deproject(u, v, depth.metres(u, v));
+//         auto rgbPixel = colorIntrinsics.project(cam.depthToColor().transform(p));
 //     }
 //
 // On platforms other than Windows the class compiles but never opens.
@@ -44,21 +48,47 @@ namespace threepp {
     class RealSenseL515 {
 
     public:
-        /// Pinhole model without distortion:
-        /// u = fx * x / z + ppx, v = fy * y / z + ppy (x right, y down, z forward).
+        /// Pinhole model with optional Brown-Conrady distortion:
+        /// u = fx * x' + ppx, v = fy * y' + ppy, where (x', y') is the distorted
+        /// (x / z, y / z) (x right, y down, z forward).
         struct Intrinsics {
             int width = 0;
             int height = 0;
             float fx = 0, fy = 0;
             float ppx = 0, ppy = 0;
+            std::array<float, 5> coeffs{};///< k1, k2, p1, p2, k3; all zero = no distortion
 
-            /// Camera-frame point (x right, y down, z forward) [m].
+            /// Camera-frame point (x right, y down, z forward) [m]. Ignores
+            /// `coeffs`, which is exact for depth (it has none).
             [[nodiscard]] std::array<float, 3> deproject(float u, float v, float z) const {
                 return {(u - ppx) / fx * z, (v - ppy) / fy * z, z};
             }
 
+            /// Pixel of a camera-frame point, applying the distortion.
+            [[nodiscard]] std::array<float, 2> project(const std::array<float, 3>& p) const {
+                float x = p[0] / p[2], y = p[1] / p[2];
+                const float r2 = x * x + y * y;
+                const float f = 1 + coeffs[0] * r2 + coeffs[1] * r2 * r2 + coeffs[4] * r2 * r2 * r2;
+                const float dx = x * f + 2 * coeffs[2] * x * y + coeffs[3] * (r2 + 2 * x * x);
+                const float dy = y * f + 2 * coeffs[3] * x * y + coeffs[2] * (r2 + 2 * y * y);
+                return {dx * fx + ppx, dy * fy + ppy};
+            }
+
             /// Nominal intrinsics for an image of the given size and field of view [deg].
             static Intrinsics fromFov(int width, int height, float hfovDeg, float vfovDeg);
+        };
+
+        /// Rigid transform between two camera frames: p' = R * p + t.
+        struct Extrinsics {
+            std::array<float, 9> rotation{1, 0, 0, 0, 1, 0, 0, 0, 1};///< row-major
+            std::array<float, 3> translation{};                      ///< [m]
+
+            [[nodiscard]] std::array<float, 3> transform(const std::array<float, 3>& p) const {
+                const auto& r = rotation;
+                return {r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + translation[0],
+                        r[3] * p[0] + r[4] * p[1] + r[5] * p[2] + translation[1],
+                        r[6] * p[0] + r[7] * p[1] + r[8] * p[2] + translation[2]};
+            }
         };
 
         struct DepthFrame {
@@ -113,6 +143,13 @@ namespace threepp {
 
         [[nodiscard]] bool depthOpen() const;
         [[nodiscard]] bool colorOpen() const;
+
+        /// True when the unit's own calibration was read; false means the
+        /// intrinsics are nominal and depthToColor() is the identity.
+        [[nodiscard]] bool calibrated() const;
+
+        /// Maps a point in the depth camera frame to the RGB camera frame.
+        [[nodiscard]] Extrinsics depthToColor() const;
 
         /// Why a stream failed to open or stopped; empty while all is well.
         [[nodiscard]] std::string lastError() const;

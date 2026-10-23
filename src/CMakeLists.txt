@@ -986,8 +986,9 @@ if (WIN32)
     # <winsock2.h> nor this link.
     target_link_libraries(threepp PRIVATE ws2_32)
     # extras/sensors/RealSenseL515.cpp reads the L515's UVC interfaces through
-    # Media Foundation; these are Windows system libraries.
-    target_link_libraries(threepp PRIVATE mfplat mf mfreadwrite mfuuid ole32)
+    # Media Foundation and its calibration through WinUSB; these are Windows
+    # system libraries.
+    target_link_libraries(threepp PRIVATE mfplat mf mfreadwrite mfuuid ole32 winusb cfgmgr32)
 endif ()
 
 target_include_directories(threepp
