@@ -597,10 +597,12 @@ VulkanRenderer::Impl::~Impl() {
             // teardown, so its vertex/index/color buffers leaked at device
             // destroy (VUID-vkDestroyDevice-device-05137) for any scene with a
             // Line/Points overlay. Mirror OverlayPass's own lineGeomCache_ cleanup.
-            for (auto& [g, rec] : lineGeomCache_) {
-                destroyBuffer(ctx->allocator(), rec.vertex);
-                if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
-                if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
+            for (auto& [g, entry] : lineGeomCache_) {
+                for (auto& rec : entry.slots) {
+                    if (rec.vertex.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.vertex);
+                    if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
+                    if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
+                }
             }
             lineGeomCache_.clear();
             for (auto& [p, rec] : morphedPointsCache_) {

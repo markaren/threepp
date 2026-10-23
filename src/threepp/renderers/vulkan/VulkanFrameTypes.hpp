@@ -9,13 +9,14 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace threepp::vulkan {
 
     // Per-BufferGeometry vertex/index/color buffer upload used by both the
     // ortho HUD overlay (OverlayPass) and the 3D hybrid overlay
-    // (recordCommandBuffer's line-draw section). Keyed on raw
-    // BufferGeometry*; geomId guards against recycled-pointer aliasing.
+    // (recordCommandBuffer's line-draw section). One LineRec is the set of
+    // buffers a draw binds; LineCacheEntry decides which set that is.
     struct LineRec {
         Buffer   vertex;
         Buffer   index;// VK_NULL_HANDLE if non-indexed
@@ -29,6 +30,18 @@ namespace threepp::vulkan {
         uint32_t indexVersion    = 0;
         uint32_t colorVersion    = 0;
         uint32_t normalVersion   = 0;
+    };
+
+    // One cached geometry, keyed on raw BufferGeometry*. While the geometry
+    // is unchanged since its first upload, `slots` holds one LineRec that
+    // every frame binds. Its first change retires that set and switches to
+    // one LineRec per frame in flight: slot i is written only while frame
+    // slot i is recorded, past that slot's fence wait, so no in-flight frame
+    // reads the buffers being written. A single set rewritten in place let
+    // the previous frame's draw read a half-written live point cloud (a
+    // horizontal tear between old and new points).
+    struct LineCacheEntry {
+        std::vector<LineRec> slots;// 1 while static, frames-in-flight once changed
         // BufferGeometry::id (monotonic per construction). Detects pointer
         // recycle — a freed geometry's address reused for a new geometry
         // would have fresh version=0 fields that match the stale record,

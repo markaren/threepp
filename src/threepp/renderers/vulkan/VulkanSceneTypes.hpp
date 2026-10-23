@@ -380,9 +380,10 @@ namespace threepp::vulkan::impl {
     // animated attributes (position/normal/color) are re-uploaded every frame
     // (version-gated); uv + index are static (uploaded once). Particles own
     // these buffers directly — they never build a BLAS. Single-buffered with
-    // in-place memcpy, exactly like ensureLineGeometryUploaded: a write-during-
-    // read race with the other in-flight frame is benign for an overlay visual
-    // (at most a sub-pixel tear on a fast-moving particle for one frame).
+    // in-place memcpy, so the other in-flight frame can read a half-written
+    // buffer (a one-frame tear on fast-moving particles). The Line/Points
+    // cache avoids the same race with a buffer set per frame slot
+    // (vulkan::LineCacheEntry).
     struct ParticleGeomRec {
         Buffer   position;// vec3 — particle centers (all 4 quad verts equal)
         Buffer   normal;  // vec3 — {size, angle, opacity}

@@ -175,11 +175,13 @@ OverlayPass::~OverlayPass() {
         if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.index);
     }
     spriteGeomCache_.clear();
-    for (auto& [g, rec] : lineGeomCache_) {
-        destroyBuffer(ctx_.allocator(), rec.vertex);
-        if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.index);
-        if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.color);
-        if (rec.normal.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.normal);
+    for (auto& [g, entry] : lineGeomCache_) {
+        for (auto& rec : entry.slots) {
+            if (rec.vertex.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.vertex);
+            if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.index);
+            if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.color);
+            if (rec.normal.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.normal);
+        }
     }
     lineGeomCache_.clear();
     for (auto& b : paneLightUbos_) destroyBuffer(ctx_.allocator(), b);
@@ -1399,38 +1401,33 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
     const uint32_t colVer = (colAttr && colAttr->count() > 0) ? colAttr->version : 0u;
     const uint32_t nrmVer = (nrmAttr && nrmAttr->count() > 0) ? nrmAttr->version : 0u;
 
-    auto it = lineGeomCache_.find(geom);
-    if (it != lineGeomCache_.end() && it->second.geomId != geom->id) {
-        // Recycled pointer: this address was a DIFFERENT geometry whose
-        // buffers we still hold. Retire them and re-upload from scratch
-        // (the version fields would otherwise alias — both at 0).
-        retireBuffer(it->second.vertex);
-        retireBuffer(it->second.index);
-        retireBuffer(it->second.color);
-        retireBuffer(it->second.normal);
-        lineGeomCache_.erase(it);
-        it = lineGeomCache_.end();
-    }
-    if (it != lineGeomCache_.end()) {
-        auto& rec = it->second;
-        rec.lastTouch = overlayFrameCounter_;
-        if (rec.positionVersion == posVer &&
-            rec.indexVersion    == idxVer &&
-            rec.colorVersion    == colVer &&
-            rec.normalVersion   == nrmVer) {
-            return &rec;
-        }
-        // Re-upload paths.
+    auto upToDate = [&](const LineRec& rec) {
+        return rec.vertex.handle != VK_NULL_HANDLE &&
+               rec.positionVersion == posVer &&
+               rec.indexVersion    == idxVer &&
+               rec.colorVersion    == colVer &&
+               rec.normalVersion   == nrmVer;
+    };
+    auto retireRec = [&](LineRec& rec) {
+        retireBuffer(rec.vertex);
+        retireBuffer(rec.index);
+        retireBuffer(rec.color);
+        retireBuffer(rec.normal);
+    };
+    // Host-visible buffer of at least `bytes`, reused when it fits.
+    auto fit = [&](Buffer& b, VkDeviceSize bytes, VkBufferUsageFlags usage) {
+        if (b.handle != VK_NULL_HANDLE && bytes <= b.size) return;
+        retireBuffer(b);
+        b = createBuffer(ctx_.allocator(), ctx_.device(), bytes, usage,
+                         VMA_MEMORY_USAGE_AUTO,
+                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+    };
+    // Writes every attribute into `rec`, whose buffers no in-flight frame
+    // reads (a fresh record, or this frame slot's own).
+    auto write = [&](LineRec& rec) {
         const auto& posArr = posAttr->array();
         const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
-        if (vbBytes > rec.vertex.size) {
-            retireBuffer(rec.vertex);
-            rec.vertex = createBuffer(
-                    ctx_.allocator(), ctx_.device(), vbBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-        }
+        fit(rec.vertex, vbBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         uploadHostVisible(ctx_.allocator(), rec.vertex, posArr.data(), vbBytes);
         rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
         rec.positionVersion = posVer;
@@ -1438,117 +1435,67 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
         if (idxAttr && idxAttr->count() > 0) {
             const auto& indices = idxAttr->array();
             const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
-            if (rec.index.handle == VK_NULL_HANDLE || ibBytes > rec.index.size) {
-                retireBuffer(rec.index);
-                rec.index = createBuffer(
-                        ctx_.allocator(), ctx_.device(), ibBytes,
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            }
+            fit(rec.index, ibBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
             uploadHostVisible(ctx_.allocator(), rec.index, indices.data(), ibBytes);
-            rec.indexCount   = static_cast<uint32_t>(indices.size());
-            rec.indexVersion = idxVer;
-        } else if (rec.index.handle != VK_NULL_HANDLE) {
+            rec.indexCount = static_cast<uint32_t>(indices.size());
+        } else {
             retireBuffer(rec.index);
-            rec.indexCount   = 0;
-            rec.indexVersion = 0;
+            rec.indexCount = 0;
         }
+        rec.indexVersion = idxVer;
 
-        // Color buffer follows the same in-place / recreate logic.
         if (colAttr && colAttr->count() > 0) {
             FloatAttributeView colView(colAttr);
             const VkDeviceSize cbBytes = colView.size() * sizeof(float);
-            if (rec.color.handle == VK_NULL_HANDLE || cbBytes > rec.color.size) {
-                retireBuffer(rec.color);
-                rec.color = createBuffer(
-                        ctx_.allocator(), ctx_.device(), cbBytes,
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            }
+            fit(rec.color, cbBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
             uploadHostVisible(ctx_.allocator(), rec.color, colView.data(), cbBytes);
-            rec.colorVersion = colVer;
-        } else if (rec.color.handle != VK_NULL_HANDLE) {
+        } else {
             retireBuffer(rec.color);
-            rec.colorVersion = 0;
         }
+        rec.colorVersion = colVer;
 
-        // Normal buffer, same in-place / recreate logic.
         if (nrmAttr && nrmAttr->count() > 0) {
             const auto& nrmArr = nrmAttr->array();
             const VkDeviceSize nbBytes = nrmArr.size() * sizeof(float);
-            if (rec.normal.handle == VK_NULL_HANDLE || nbBytes > rec.normal.size) {
-                retireBuffer(rec.normal);
-                rec.normal = createBuffer(
-                        ctx_.allocator(), ctx_.device(), nbBytes,
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            }
+            fit(rec.normal, nbBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
             uploadHostVisible(ctx_.allocator(), rec.normal, nrmArr.data(), nbBytes);
-            rec.normalVersion = nrmVer;
-        } else if (rec.normal.handle != VK_NULL_HANDLE) {
+        } else {
             retireBuffer(rec.normal);
-            rec.normalVersion = 0;
         }
-        return &rec;
-    }
-
-    // First-time upload.
-    const auto& posArr = posAttr->array();
-    LineRec rec{};
-    rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
-    rec.positionVersion = posVer;
-    rec.geomId          = geom->id;
-    rec.lastTouch       = overlayFrameCounter_;
-
-    const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
-    rec.vertex = createBuffer(
-            ctx_.allocator(), ctx_.device(), vbBytes,
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO,
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-    uploadHostVisible(ctx_.allocator(), rec.vertex, posArr.data(), vbBytes);
-
-    if (idxAttr && idxAttr->count() > 0) {
-        const auto& indices = idxAttr->array();
-        rec.indexCount   = static_cast<uint32_t>(indices.size());
-        rec.indexVersion = idxVer;
-        const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
-        rec.index = createBuffer(
-                ctx_.allocator(), ctx_.device(), ibBytes,
-                VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VMA_MEMORY_USAGE_AUTO,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-        uploadHostVisible(ctx_.allocator(), rec.index, indices.data(), ibBytes);
-    }
-
-    if (colAttr && colAttr->count() > 0) {
-        FloatAttributeView colView(colAttr);
-        rec.colorVersion = colVer;
-        const VkDeviceSize cbBytes = colView.size() * sizeof(float);
-        rec.color = createBuffer(
-                ctx_.allocator(), ctx_.device(), cbBytes,
-                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VMA_MEMORY_USAGE_AUTO,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-        uploadHostVisible(ctx_.allocator(), rec.color, colView.data(), cbBytes);
-    }
-
-    if (nrmAttr && nrmAttr->count() > 0) {
-        const auto& nrmArr = nrmAttr->array();
         rec.normalVersion = nrmVer;
-        const VkDeviceSize nbBytes = nrmArr.size() * sizeof(float);
-        rec.normal = createBuffer(
-                ctx_.allocator(), ctx_.device(), nbBytes,
-                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VMA_MEMORY_USAGE_AUTO,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-        uploadHostVisible(ctx_.allocator(), rec.normal, nrmArr.data(), nbBytes);
+    };
+
+    auto it = lineGeomCache_.find(geom);
+    if (it != lineGeomCache_.end() && it->second.geomId != geom->id) {
+        // Recycled pointer: this address was a DIFFERENT geometry whose
+        // buffers we still hold. Retire them and re-upload from scratch
+        // (the version fields would otherwise alias — both at 0).
+        for (auto& rec : it->second.slots) retireRec(rec);
+        lineGeomCache_.erase(it);
+        it = lineGeomCache_.end();
+    }
+    if (it == lineGeomCache_.end()) {
+        LineCacheEntry entry;
+        entry.geomId = geom->id;
+        entry.slots.resize(1);
+        write(entry.slots[0]);
+        entry.lastTouch = overlayFrameCounter_;
+        return &lineGeomCache_.emplace(geom, std::move(entry)).first->second.slots[0];
     }
 
-    return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;
+    auto& entry = it->second;
+    entry.lastTouch = overlayFrameCounter_;
+    if (entry.slots.size() == 1) {
+        if (upToDate(entry.slots[0])) return &entry.slots[0];
+        // First change since the first upload: every frame in flight may be
+        // reading the shared set, so it is retired and the geometry gets a
+        // set per frame slot.
+        retireRec(entry.slots[0]);
+        entry.slots.assign(framesInFlight_, {});
+    }
+    auto& rec = entry.slots[recordFrame_ % entry.slots.size()];
+    if (!upToDate(rec)) write(rec);
+    return &rec;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1587,6 +1534,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     using OrthoMeshDraw = OverlayRecordScratch::OrthoMeshDraw;
     using OrthoPointDraw = OverlayRecordScratch::OrthoPointDraw;
 
+    recordFrame_ = frame;
+
     // Advance the overlay-frame clock and evict line/mesh geometry
     // buffers untouched for longer than the in-flight window. Overlays
     // that rebuild transient geometry every frame (e.g. a detection
@@ -1599,10 +1548,12 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         const uint64_t cutoff = overlayFrameCounter_ - 8;
         for (auto it = lineGeomCache_.begin(); it != lineGeomCache_.end();) {
             if (it->second.lastTouch < cutoff) {
-                retireBuffer(it->second.vertex);
-                retireBuffer(it->second.index);
-                retireBuffer(it->second.color);
-                retireBuffer(it->second.normal);
+                for (auto& rec : it->second.slots) {
+                    retireBuffer(rec.vertex);
+                    retireBuffer(rec.index);
+                    retireBuffer(rec.color);
+                    retireBuffer(rec.normal);
+                }
                 it = lineGeomCache_.erase(it);
             } else {
                 ++it;

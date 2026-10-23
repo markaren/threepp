@@ -1897,6 +1897,58 @@ const vulkan::LineRec* VulkanRenderer::Impl::ensureLineGeometryUploaded(const Bu
             const uint32_t idxVer = (idxAttr && idxAttr->count() > 0) ? idxAttr->version : 0u;
             const uint32_t colVer = (colAttr && colAttr->count() > 0) ? colAttr->version : 0u;
 
+            auto upToDate = [&](const vulkan::LineRec& rec) {
+                return rec.vertex.handle != VK_NULL_HANDLE &&
+                       rec.positionVersion == posVer &&
+                       rec.indexVersion    == idxVer &&
+                       rec.colorVersion    == colVer;
+            };
+            auto retireRec = [&](vulkan::LineRec& rec) {
+                retire(std::move(rec.vertex));
+                retire(std::move(rec.index));
+                retire(std::move(rec.color));
+            };
+            // Host-visible buffer of at least `bytes`, reused when it fits.
+            auto fit = [&](Buffer& b, VkDeviceSize bytes, VkBufferUsageFlags usage) {
+                if (b.handle != VK_NULL_HANDLE && bytes <= b.size) return;
+                retire(std::move(b));
+                b = createBuffer(ctx->allocator(), ctx->device(), bytes, usage,
+                                 VMA_MEMORY_USAGE_AUTO,
+                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            };
+            // Writes every attribute into `rec`, whose buffers no in-flight
+            // frame reads (a fresh record, or this frame slot's own).
+            auto write = [&](vulkan::LineRec& rec) {
+                const auto& posArr = posAttr->array();
+                const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
+                fit(rec.vertex, vbBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                uploadHostVisible(ctx->allocator(), rec.vertex, posArr.data(), vbBytes);
+                rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
+                rec.positionVersion = posVer;
+
+                if (idxAttr && idxAttr->count() > 0) {
+                    const auto& indices = idxAttr->array();
+                    const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
+                    fit(rec.index, ibBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+                    uploadHostVisible(ctx->allocator(), rec.index, indices.data(), ibBytes);
+                    rec.indexCount = static_cast<uint32_t>(indices.size());
+                } else {
+                    retire(std::move(rec.index));
+                    rec.indexCount = 0;
+                }
+                rec.indexVersion = idxVer;
+
+                if (colAttr && colAttr->count() > 0) {
+                    FloatAttributeView colView(colAttr);
+                    const VkDeviceSize cbBytes = colView.size() * sizeof(float);
+                    fit(rec.color, cbBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                    uploadHostVisible(ctx->allocator(), rec.color, colView.data(), cbBytes);
+                } else {
+                    retire(std::move(rec.color));
+                }
+                rec.colorVersion = colVer;
+            };
+
             auto it = lineGeomCache_.find(geom);
             if (it != lineGeomCache_.end() && it->second.geomId != geom->id) {
                 // Recycled pointer: this address was a DIFFERENT geometry whose
@@ -1905,120 +1957,32 @@ const vulkan::LineRec* VulkanRenderer::Impl::ensureLineGeometryUploaded(const Bu
                 // Through the retire queue, not destroyBuffer: this runs during
                 // record, so the previous frame's line draw may still be reading
                 // them. retire() no-ops on null handles.
-                retire(std::move(it->second.vertex));
-                retire(std::move(it->second.index));
-                retire(std::move(it->second.color));
+                for (auto& rec : it->second.slots) retireRec(rec);
                 lineGeomCache_.erase(it);
                 it = lineGeomCache_.end();
             }
-            if (it != lineGeomCache_.end()) {
-                auto& rec = it->second;
-                rec.lastTouch = overlayFrameCounter_;
-                if (rec.positionVersion == posVer &&
-                    rec.indexVersion    == idxVer &&
-                    rec.colorVersion    == colVer) {
-                    return &rec;
-                }
-                // Re-upload paths.
-                const auto& posArr = posAttr->array();
-                const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
-                if (vbBytes > rec.vertex.size) {
-                    destroyBuffer(ctx->allocator(), rec.vertex);
-                    rec.vertex = createBuffer(
-                            ctx->allocator(), ctx->device(), vbBytes,
-                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                            VMA_MEMORY_USAGE_AUTO,
-                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                }
-                uploadHostVisible(ctx->allocator(), rec.vertex, posArr.data(), vbBytes);
-                rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
-                rec.positionVersion = posVer;
-
-                if (idxAttr && idxAttr->count() > 0) {
-                    const auto& indices = idxAttr->array();
-                    const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
-                    if (rec.index.handle == VK_NULL_HANDLE || ibBytes > rec.index.size) {
-                        if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
-                        rec.index = createBuffer(
-                                ctx->allocator(), ctx->device(), ibBytes,
-                                VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                VMA_MEMORY_USAGE_AUTO,
-                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    }
-                    uploadHostVisible(ctx->allocator(), rec.index, indices.data(), ibBytes);
-                    rec.indexCount   = static_cast<uint32_t>(indices.size());
-                    rec.indexVersion = idxVer;
-                } else if (rec.index.handle != VK_NULL_HANDLE) {
-                    destroyBuffer(ctx->allocator(), rec.index);
-                    rec.index        = {};
-                    rec.indexCount   = 0;
-                    rec.indexVersion = 0;
-                }
-
-                // Color buffer follows the same in-place / recreate logic.
-                if (colAttr && colAttr->count() > 0) {
-                    FloatAttributeView colView(colAttr);
-                    const VkDeviceSize cbBytes = colView.size() * sizeof(float);
-                    if (rec.color.handle == VK_NULL_HANDLE || cbBytes > rec.color.size) {
-                        if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
-                        rec.color = createBuffer(
-                                ctx->allocator(), ctx->device(), cbBytes,
-                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                VMA_MEMORY_USAGE_AUTO,
-                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    }
-                    uploadHostVisible(ctx->allocator(), rec.color, colView.data(), cbBytes);
-                    rec.colorVersion = colVer;
-                } else if (rec.color.handle != VK_NULL_HANDLE) {
-                    destroyBuffer(ctx->allocator(), rec.color);
-                    rec.color        = {};
-                    rec.colorVersion = 0;
-                }
-                return &rec;
+            if (it == lineGeomCache_.end()) {
+                vulkan::LineCacheEntry entry;
+                entry.geomId = geom->id;
+                entry.slots.resize(1);
+                write(entry.slots[0]);
+                entry.lastTouch = overlayFrameCounter_;
+                return &lineGeomCache_.emplace(geom, std::move(entry)).first->second.slots[0];
             }
 
-            // First-time upload.
-            const auto& posArr = posAttr->array();
-            vulkan::LineRec rec{};
-            rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
-            rec.positionVersion = posVer;
-            rec.geomId          = geom->id;
-            rec.lastTouch       = overlayFrameCounter_;
-
-            const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
-            rec.vertex = createBuffer(
-                    ctx->allocator(), ctx->device(), vbBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            uploadHostVisible(ctx->allocator(), rec.vertex, posArr.data(), vbBytes);
-
-            if (idxAttr && idxAttr->count() > 0) {
-                const auto& indices = idxAttr->array();
-                rec.indexCount   = static_cast<uint32_t>(indices.size());
-                rec.indexVersion = idxVer;
-                const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
-                rec.index = createBuffer(
-                        ctx->allocator(), ctx->device(), ibBytes,
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), rec.index, indices.data(), ibBytes);
+            auto& entry = it->second;
+            entry.lastTouch = overlayFrameCounter_;
+            if (entry.slots.size() == 1) {
+                if (upToDate(entry.slots[0])) return &entry.slots[0];
+                // First change since the first upload: every frame in flight
+                // may be reading the shared set, so it goes to the retire
+                // queue and the geometry gets a set per frame slot.
+                retireRec(entry.slots[0]);
+                entry.slots.assign(kFramesInFlight, {});
             }
-
-            if (colAttr && colAttr->count() > 0) {
-                FloatAttributeView colView(colAttr);
-                rec.colorVersion = colVer;
-                const VkDeviceSize cbBytes = colView.size() * sizeof(float);
-                rec.color = createBuffer(
-                        ctx->allocator(), ctx->device(), cbBytes,
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), rec.color, colView.data(), cbBytes);
-            }
-
-            return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;
+            auto& rec = entry.slots[currentFrame];
+            if (!upToDate(rec)) write(rec);
+            return &rec;
         }
 
 // ── GPU instance expansion (stage 1 of plans/gpu-driven-instances.md) ────────

@@ -132,7 +132,7 @@ namespace threepp::vulkan {
         };
 
         // Per-BufferGeometry vertex/index upload for Sprite quads. geomId +
-        // lastTouch mirror LineRec: the cache is keyed on a raw pointer, so a
+        // lastTouch mirror LineCacheEntry: the cache is keyed on a raw pointer, so a
         // recycled address must invalidate the record, and an entry untouched
         // for longer than the in-flight window is evicted — without that, every
         // Sprite ever constructed left two VMA allocations behind forever.
@@ -167,6 +167,8 @@ namespace threepp::vulkan {
         const SpriteAtlasRec* ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp,
                                                        VkCommandBuffer cb);
         const SpriteGeomRec*  ensureSpriteGeometryUploaded(const BufferGeometry* geom);
+        // The buffer set to bind while recording frame slot recordFrame_
+        // (see LineCacheEntry).
         const LineRec*        ensureLineGeometryUploaded(const BufferGeometry* geom);
 
         // Free a cached geometry buffer that an in-flight frame may still be
@@ -253,8 +255,9 @@ namespace threepp::vulkan {
         // Texture + geometry caches
         std::unordered_map<const Texture*,        SpriteAtlasRec> spriteAtlasCache_;
         std::unordered_map<const BufferGeometry*, SpriteGeomRec>  spriteGeomCache_;
-        std::unordered_map<const BufferGeometry*, LineRec> lineGeomCache_;
+        std::unordered_map<const BufferGeometry*, LineCacheEntry> lineGeomCache_;
         uint64_t overlayFrameCounter_ = 0;
+        uint32_t recordFrame_         = 0;// frame slot of the record() in progress
     };
 
 }// namespace threepp::vulkan

@@ -5101,8 +5101,8 @@ namespace threepp {
         void recordSplatStampDraw(VkCommandBuffer cb);
 
         // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
-        // line-draw section). Keyed on raw BufferGeometry*; geomId in LineRec
-        // guards against recycled-pointer aliasing. (OverlayPass owns a separate
+        // line-draw section). Keyed on raw BufferGeometry*; geomId in the
+        // entry guards against recycled-pointer aliasing. (OverlayPass owns a separate
         // cache of the same shape for the ortho path — these are NOT shared.)
         //
         // The counter is advanced once per submitted frame in endFrame, which
@@ -5110,7 +5110,7 @@ namespace threepp {
         // rebuild Line/Points geometry each frame (trajectory, scan and
         // detection-box overlays), which would otherwise leak a buffer set
         // per geometry.
-        std::unordered_map<const BufferGeometry*, vulkan::LineRec> lineGeomCache_;
+        std::unordered_map<const BufferGeometry*, vulkan::LineCacheEntry> lineGeomCache_;
         uint64_t overlayFrameCounter_ = 0;// lastTouch reference for lineGeomCache_ entries
 
         // A Points whose material sets morphTargets: GL blends the geometry's
@@ -5150,9 +5150,11 @@ namespace threepp {
             const uint64_t cutoff = overlayFrameCounter_ - kLineGeomEvictAge;
             for (auto it = lineGeomCache_.begin(); it != lineGeomCache_.end();) {
                 if (it->second.lastTouch < cutoff) {
-                    retire(std::move(it->second.vertex));
-                    retire(std::move(it->second.index));
-                    retire(std::move(it->second.color));
+                    for (auto& rec : it->second.slots) {
+                        retire(std::move(rec.vertex));
+                        retire(std::move(rec.index));
+                        retire(std::move(rec.color));
+                    }
                     it = lineGeomCache_.erase(it);
                 } else {
                     ++it;
@@ -5168,16 +5170,13 @@ namespace threepp {
             }
         }
 
-        // Lazy-upload Line / LineSegments geometry into a host-visible
-        // vertex (+ optional index) buffer pair. Returns nullptr if the
-        // geometry has no usable position attribute. Cached by raw pointer
-        // — first call allocates + writes, subsequent calls compare the
-        // BufferAttribute::version counters and re-upload only when the
-        // user mutated the data. In-place memcpy when the new size fits
-        // the existing buffer; full recreate when it grew (matches the
-        // refreshSkinnedBlas pattern — a write-during-read race for that
-        // one frame is benign because the per-pixel result blends sub-
-        // pixel anyway).
+        // Lazy-upload Line / LineSegments / Points geometry into host-visible
+        // vertex (+ optional index and color) buffers and return the set to
+        // bind while recording frame slot currentFrame. Returns nullptr if the
+        // geometry has no usable position attribute. Cached by raw pointer;
+        // the BufferAttribute::version counters gate re-uploads, and a
+        // geometry that changes gets one buffer set per frame in flight (see
+        // vulkan::LineCacheEntry).
         const vulkan::LineRec* ensureLineGeometryUploaded(const BufferGeometry* geom);
 
         // ── TAA resources ───────────────────────────────────────────────────
