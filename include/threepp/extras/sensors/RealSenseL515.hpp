@@ -9,8 +9,8 @@
 // What the device delivers, and what this class does with it:
 //   * Depth is Z16 in 0.25 mm units (depthUnit), 0 = no return. The sensor is
 //     mounted rotated, so the UVC frames are portrait (480x640 for the
-//     640x480 mode); they are rotated back to landscape here, matching the
-//     orientation librealsense reports.
+//     640x480 mode); they are turned to landscape here so that up and left
+//     match the RGB frame.
 //   * RGB is YUY2, converted to RGBA8 here.
 //   * Intrinsics are NOMINAL, derived from the datasheet field of view
 //     (depth 70 x 55 deg, RGB 70 x 43 deg). The per-unit calibration lives

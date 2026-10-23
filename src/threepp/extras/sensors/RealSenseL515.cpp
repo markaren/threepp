@@ -369,13 +369,14 @@ struct RealSenseL515::Impl {
             LockedSample px;
             if (!px.lock(sample.p, srcW * 2)) continue;
             if (!px.buffer2d && px.length < static_cast<DWORD>(srcW * srcH * 2)) continue;
-            // Rotate portrait -> landscape, 90 degrees clockwise:
-            // out(x, y) = src(col = y, row = srcH - 1 - x).
+            // Portrait -> landscape is a reflection across the anti-diagonal
+            // (90 degrees clockwise, then flipped vertically), checked against
+            // the RGB frame: out(x, y) = src(col = srcW - 1 - y, row = srcH - 1 - x).
             for (int y = 0; y < outH; ++y) {
                 std::uint16_t* out = rotated.data() + static_cast<size_t>(y) * outW;
                 for (int x = 0; x < outW; ++x) {
                     const BYTE* row = px.data + static_cast<ptrdiff_t>(px.pitch) * (srcH - 1 - x);
-                    out[x] = reinterpret_cast<const std::uint16_t*>(row)[y];
+                    out[x] = reinterpret_cast<const std::uint16_t*>(row)[srcW - 1 - y];
                 }
             }
 
