@@ -815,7 +815,10 @@ void main() {
     if (m.ripples > 0.0 && cam.downwash.z != 0u && roughness >= 0.0) {
         const vec3  dpx       = dFdx(vWorldPos);
         const vec3  dpy       = dFdy(vWorldPos);
-        const float footprint = max(length(dpx.xz), length(dpy.xz));
+        // The SHORT footprint axis, as the detail layer's fade above: the long one explodes at grazing incidence,
+        // and from a camera a metre over a pond it retired every ring past a few metres (the pine forest's tjern:
+        // no rings under a drone 14 m out, where the eye sees them plainly in the mirror's streaks).
+        const float footprint = min(length(dpx.xz), length(dpy.xz));
         float       roughAdd;
         const vec2  slope = m.ripples * dwWaterSlope(DownwashBuf(cam.downwash.xy), vWorldPos, footprint, roughAdd);
         const vec3  g     = vec3(slope.x, 0.0, slope.y);
