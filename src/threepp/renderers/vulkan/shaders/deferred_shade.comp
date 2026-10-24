@@ -338,8 +338,11 @@ void main() {
     // this pixel runs the gather; the Phase B branch reuses it (one tap).
     float probeConf = 0.0;
     vec3  probeE    = vec3(0.0);
+    // The probe lookups place their point and pick their visible probes by the
+    // GEOMETRIC normal, from the depth neighbours (probe_common.glsl).
+    const vec3 Ng = probesOn ? depthGeometricNormal(px, msSampleIdx, ndc, id, worldPos, V, N) : N;
     if (aoOn && probesOn && pc.shadeMode != 1u)
-        probeE = probeIrradianceConf(worldPos + N * SHADOW_EPS, N, probeConf) * (1.0 / PI);
+        probeE = probeIrradianceConf(worldPos + Ng * SHADOW_EPS, N, Ng, probeConf) * (1.0 / PI);
     // The share of the probe path's fill that its stochastic gather supplies
     // (see the UNMEASURED SHARE note in Phase B). Flags bit 14
     // (THREEPP_VK_DIAG_NOGATHER): diagnostic, never gather.
@@ -347,7 +350,7 @@ void main() {
     // Flags bit 15 (THREEPP_VK_PROBE_FAR): 1 beyond the coarsest cascade window,
     // where the probe path's fill is the ray-free sky term instead of the gather.
     const float probeFarW = (flagOn(32768u) && aoOn && probesOn && pc.shadeMode != 1u)
-                          ? probeBeyondWindows(worldPos + N * SHADOW_EPS, N) : 0.0;
+                          ? probeBeyondWindows(worldPos + Ng * SHADOW_EPS, Ng) : 0.0;
     // Checkerboard only pays off on the stochastic RT gather: always on the
     // no-probe path (Phase A), and on the probe path (Phase B) where the probes
     // measured too little and the gather fills that share (beyond the coarsest
@@ -376,7 +379,7 @@ void main() {
         diffInd = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
         if (probesEnabled()) {
             float bConf;
-            const vec3 bFill = probeIrradianceConf(worldPos, N, bConf) * (1.0 / PI);
+            const vec3 bFill = probeIrradianceConf(worldPos, N, Ng, bConf) * (1.0 / PI);
             diffInd = mix(diffInd, bFill, smoothstep(0.0, 0.25, bConf));
         }
     } else if (giSkip) {

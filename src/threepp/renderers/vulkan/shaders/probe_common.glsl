@@ -195,11 +195,20 @@ float probeChebyshev(uint pIdx, vec3 pPos, vec3 Pb, float maxDist) {
 // clamped to 0..1: 1 a full cell inside the outermost probes, 0 at or beyond
 // them (the lookup then clamps to the border probes). The cascade blend uses
 // it to hand over to the parent before a window's edge shows.
-vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, out float conf, out float edge) {
+//
+// N is the shading normal, which the SH irradiance is evaluated along. Ng is
+// the surface's GEOMETRIC normal, which decides where the lookup point sits
+// and which probes are on the visible side. The two part ways on a normal-
+// mapped or displaced surface: a displaced wall shaded with its undisplaced up
+// normal pushed the lookup point a quarter cell up, into the solid behind the
+// wall, no probe could see it, conf collapsed and those pixels fell back to
+// the 1-spp gather as dark specks. Callers without a geometric normal pass N
+// (the 3-argument probeIrradianceConf).
+vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, vec3 Ng, out float conf, out float edge) {
     conf = 0.0;
     const vec3  sp    = probeGrid.cSpacing[c].xyz;
     const float minSp = min(sp.x, min(sp.y, sp.z));
-    const vec3 Pb = P + N * (0.25 * minSp);
+    const vec3 Pb = P + Ng * (0.25 * minSp);
     vec3 g = (Pb - probeGrid.cOrigin[c].xyz) / sp;
     const vec3 dm1 = vec3(probeGrid.dims) - 1.0;
     const vec3 ein = min(g, dm1 - g);
@@ -220,8 +229,8 @@ vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, out float conf, out float
         const vec3  pPos = probeGrid.cOrigin[c].xyz + vec3(pi) * sp;
         vec3 toP = pPos - P;
         const float dLen = length(toP);
-        toP = (dLen > 1e-4) ? toP / dLen : N;
-        const float ndp  = clamp(dot(toP, N) * 0.5 + 0.5, 0.0, 1.0);
+        toP = (dLen > 1e-4) ? toP / dLen : Ng;
+        const float ndp  = clamp(dot(toP, Ng) * 0.5 + 0.5, 0.0, 1.0);
         // Shading weight = backface × Chebyshev visibility, floored (the
         // least-occluded probe should win over pure black) and crushed below
         // 0.2 (RTXGI curve: w²/0.2² — continuous fade instead of a hard cut).
@@ -267,11 +276,11 @@ vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, out float conf, out float
 //     not a lighting change. Beyond the coarsest window conf → 0 and the
 //     caller's fallback (gather / env) stands, as it did outside the scene-fit
 //     grid.
-vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
+vec3 probeIrradianceConf(vec3 P, vec3 N, vec3 Ng, out float conf) {
     conf = 0.0;
     if (PROBE_GRID_OFF) return vec3(0.0);
     float edge;
-    if (probeGrid.cascadeCount <= 1) return probeIrradianceCascadeConf(0, P, N, conf, edge);
+    if (probeGrid.cascadeCount <= 1) return probeIrradianceCascadeConf(0, P, N, Ng, conf, edge);
     int c = 0;
     for (; c < probeGrid.cascadeCount - 1; ++c) {
         const vec3 g   = (P - probeGrid.cOrigin[c].xyz) / probeGrid.cSpacing[c].xyz;
@@ -279,7 +288,7 @@ vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
         if (min(ein.x, min(ein.y, ein.z)) > 0.0) break;
     }
     float confF;
-    const vec3 eF = probeIrradianceCascadeConf(c, P, N, confF, edge);
+    const vec3 eF = probeIrradianceCascadeConf(c, P, N, Ng, confF, edge);
     if (c + 1 >= probeGrid.cascadeCount) {
         conf = confF * edge;
         return eF;
@@ -293,9 +302,13 @@ vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
         return eF;
     }
     float confP, edgeP;
-    const vec3  eP = probeIrradianceCascadeConf(c + 1, P, N, confP, edgeP);
+    const vec3  eP = probeIrradianceCascadeConf(c + 1, P, N, Ng, confP, edgeP);
     conf = mix(confP * edgeP, confF, wF);
     return mix(eP, eF, wF);
+}
+
+vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
+    return probeIrradianceConf(P, N, N, conf);
 }
 
 // How far P lies beyond the coarsest window: 0 a full cell inside its outermost

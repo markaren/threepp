@@ -385,6 +385,12 @@ layout(push_constant) uniform Pc { ShadePush pc; };
 uint effFlags() { return (pc.flags & ~kSpecMask) | (kSpecFlags & kSpecMask); }
 bool flagOn(uint bits) { return (effFlags() & bits) != 0u; }
 
+// The geometric normal for the probe lookups (depth_normal.glsl): the MSAA
+// sample the centre came from, or the resolved G-buffer.
+float dnDepth(ivec2 q, int s) { return s >= 0 ? texelFetch(gbufDepthMS, q, s).x : texelFetch(gbufDepthTex, q, 0).x; }
+uint  dnId(ivec2 q, int s) { return s >= 0 ? texelFetch(gbufIdsMS, q, s).x : texelFetch(gbufIdsTex, q, 0).x; }
+#include "depth_normal.glsl"
+
 // DEPTH-AWARE 2×2 upsample of the half-res cloud layer at this full-res pixel.
 // A plain bilinear tap bleeds across depth discontinuities: a full-res pixel
 // on a thin foreground object (a ship's mast) blends half-res texels whose
