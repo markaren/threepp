@@ -234,8 +234,8 @@ namespace threepp {
                 if (vcount == 0u) continue;// the loop draws nothing of it either
                 const VkCullModeFlags wantCull =
                         sp.first < lastVisibleCullMode_.size() ? lastVisibleCullMode_[sp.first] : VK_CULL_MODE_BACK_BIT;
-                const bool isDecal = sp.first < matDescsCached_.size() &&
-                                     matDescsCached_[sp.first].alphaCutoff == -2.0f;
+                const bool isDecal = sp.first < geomDescsCached_.size() &&
+                                     entryMat(sp.first).alphaCutoff == -2.0f;
                 GpuSpanPlan gp;
                 gp.first  = sp.first;
                 gp.count  = sp.count;
@@ -472,8 +472,8 @@ namespace threepp {
             // Blend decals (alphaCutoff == -2 sentinel from materialFromMesh)
             // go to bucket [3]: drawn last, with the albedo-blend pipeline.
             // The deferred shade reads the blended albedo attachment.
-            const bool isDecal = (i < matDescsCached_.size()) &&
-                                 (matDescsCached_[i].alphaCutoff == -2.0f);
+            const bool isDecal = (i < geomDescsCached_.size()) &&
+                                 (entryMat(i).alphaCutoff == -2.0f);
             const int b = isDecal ? 3 : bucketOf(wantCull);
 
             DrawInfoGpu di{};
@@ -499,7 +499,7 @@ namespace threepp {
             di.indexAddr   = indexed ? lodSel.indexAddress : 0ull;
             // Per-vertex color: only when the material opts in (vertexColors)
             // and the geometry uploaded a color buffer — matches the
-            // GeometryDesc::colorAddress gate. gbuffer.frag multiplies albedo
+            // GeometryDesc's kGeomFlagVertexColor. gbuffer.frag multiplies albedo
             // by the interpolated value.
             di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && memoVtxColor)
                                    ? rec->color.address

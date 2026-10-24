@@ -1051,7 +1051,10 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             //            for the indirect-drawing gbuf pipeline). Re-pointed at
             //            this frame's drawInfoBuffers slot in
             //            recordRasterGbufPass before each indirect dispatch.
-            VkDescriptorSetLayoutBinding bindings[5]{};
+            // binding 5: GeometryDesc[] storage (fragment; read as words for
+            //            the entry's material index, binding 2 being the
+            //            material table rather than one desc per entry)
+            VkDescriptorSetLayoutBinding bindings[6]{};
             bindings[0].binding         = 0;
             bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[0].descriptorCount = 1;
@@ -1072,6 +1075,10 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             bindings[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[4].descriptorCount = 1;
             bindings[4].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+            bindings[5].binding         = 5;
+            bindings[5].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[5].descriptorCount = 1;
+            bindings[5].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
             // The LAYOUT is shared by every view — one set shape, created once.
             // The POOL and SETS below are per-view (see ViewContext), so this
@@ -1080,7 +1087,7 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             if (rasterDsLayout == VK_NULL_HANDLE) {
                 VkDescriptorSetLayoutCreateInfo dlci{};
                 dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-                dlci.bindingCount = 5;
+                dlci.bindingCount = 6;
                 dlci.pBindings    = bindings;
                 check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rasterDsLayout),
                       "vkCreateDescriptorSetLayout(raster)");
@@ -1090,7 +1097,7 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             sizes[0].descriptorCount = kFramesInFlight;
             sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            sizes[1].descriptorCount = kFramesInFlight * 3;// motionMat + mats + drawInfo
+            sizes[1].descriptorCount = kFramesInFlight * 4;// motionMat + mats + drawInfo + geoms
             sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             sizes[2].descriptorCount = kFramesInFlight * kMaxMaterialTextures;
 

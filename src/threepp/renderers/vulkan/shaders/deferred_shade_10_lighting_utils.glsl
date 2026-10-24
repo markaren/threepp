@@ -545,7 +545,7 @@ vec3 evalIridescence(float outsideIOR, float eta2, float cosTheta1,
 // pass-through shadowVis counts against the cutout ray cap).
 bool shadowOccludes(int instIdx, int primId, vec2 bary, out bool cutoutMiss) {
     cutoutMiss = false;
-    const MaterialDesc m = mats[instIdx];
+    const MaterialDesc m = entryMat(instIdx);
     // STRONG emitters never occlude — an analytic light that sits INSIDE its
     // own glowing housing (a lighthouse lamp room) must shine through it. Same
     // "a light never shadows itself" rule emissiveNEE/restirOccluded apply to
@@ -831,7 +831,7 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
                                       kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), tMax);
                 while (rayQueryProceedEXT(rq)) {
                     if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
-                        const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
+                        const MaterialDesc hm = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
                         const vec3 hem = hm.emissive * hm.emissiveIntensity;
                         if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
                             rayQueryConfirmIntersectionEXT(rq);
@@ -922,7 +922,7 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
                                       kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), tMax);
                 while (rayQueryProceedEXT(rq)) {
                     if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
-                        const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
+                        const MaterialDesc hm = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
                         const vec3 hem = hm.emissive * hm.emissiveIntensity;
                         if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
                             rayQueryConfirmIntersectionEXT(rq);

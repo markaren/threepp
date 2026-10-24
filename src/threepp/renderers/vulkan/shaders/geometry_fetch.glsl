@@ -49,7 +49,7 @@ vec2 gfetchUv(in GeometryDesc g, uint vid) {
 
 // Triangle indices, honouring kGeomFlagPackedIndex16 (uint16 indices, two per word).
 uvec3 gfetchTri(in GeometryDesc g, int primId) {
-    if (g.indexed == 0u)
+    if ((g.flags & kGeomFlagIndexed) == 0u)
         return uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
     const uint base = uint(primId) * 3u;
     if ((g.flags & kGeomFlagPackedIndex16) != 0u) {

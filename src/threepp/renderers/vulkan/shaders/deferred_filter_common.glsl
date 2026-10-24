@@ -22,6 +22,9 @@ layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // rgb=albedo, a=
 // only at MSAA complex pixels).
 #include "vulkan_shared.h"// MaterialDesc
 layout(set = 0, binding = 9, scalar) readonly buffer MatBuf { MaterialDesc mats[]; };
+// The shared set's GeometryDesc array (binding 10) as words: the material
+// table is per material, and an entry's record index sits in its GeometryDesc.
+layout(set = 0, binding = 10, scalar) readonly buffer GeomWordBuf { uint geomWords[]; };
 layout(set = 0, binding = 38) uniform sampler2DMS  gbufNormalMS;
 layout(set = 0, binding = 40) uniform usampler2DMS gbufIdsMS;
 layout(set = 0, binding = 7,  rgba16f) uniform image2D outImage;            // sceneHdr (recombine: read+write)
@@ -183,7 +186,7 @@ float recombineCoverage(ivec2 q) {
     if (repIdx >= 0) {
         const uint repId = texelFetch(gbufIdsMS, q, repIdx).x;
         const bool repUnlit = texelFetch(gbufNormalMS, q, repIdx).w < 0.0;
-        if (repUnlit || mats[repId - 1u].transmission > 0.0) return skyOnly;
+        if (repUnlit || mats[geomWords[(repId - 1u) * kGeomDescWords + kGeomDescFlagsWord] >> kGeomFlagMaterialShift].transmission > 0.0) return skyOnly;
     }
     return float(bitCount(domMask)) / float(K);
 }

@@ -58,6 +58,14 @@ layout(set = 0, binding = 4, scalar) readonly buffer MatBuf { MaterialDesc mats[
 
 #include "geometry_fetch.glsl"// GeometryDesc, the vertex/index buffer references, gfetch*
 layout(set = 0, binding = 5, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+// An entry's MaterialDesc: its material's table record with the entry's
+// instance colour on the albedo (deferred_shade_00_common's entryMat).
+MaterialDesc entryMat(int entry) {
+    MaterialDesc m = mats[geoms[entry].flags >> kGeomFlagMaterialShift];
+    precise vec3 tinted = m.albedo * geoms[entry].instanceColor;
+    m.albedo = tinted;
+    return m;
+}
 
 layout(set = 0, binding = 6) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 #include "hit_fetch.glsl"// fetchUvAt / fetchHit / hitTex at a traced hit
@@ -116,7 +124,7 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
 
 // ── Shadow test (verbatim from deferred_shade.comp) ─────────────────────────
 bool shadowOccludes(int instIdx, int primId, vec2 bary) {
-    const MaterialDesc m = mats[instIdx];
+    const MaterialDesc m = entryMat(instIdx);
     const vec3 em = m.emissive * m.emissiveIntensity;
     if (max(max(em.r, em.g), em.b) >= 1.0) return false;
     if (m.transmission > 0.0) return false;
@@ -216,7 +224,7 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
         return sampleEnvLod(dir, 0.7 * float(max(pc.envMipCount, 1u) - 1u));// sky (sun-free)
 
     const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    const MaterialDesc hm     = mats[hitId];
+    const MaterialDesc hm     = entryMat(hitId);
     const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
     const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
     const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);

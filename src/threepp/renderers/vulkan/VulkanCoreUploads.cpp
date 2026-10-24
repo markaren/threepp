@@ -1152,10 +1152,11 @@ namespace threepp {
         // fixed 16. uint32 wrap is harmless — the modulo re-bases each frame.
         view().haltonFrame_ = view().haltonFrame_ + 1u;
 
-        // Refresh the per-frame descriptor set. Bindings 0-2 (UBO,
-        // motionMat, matDescs) are tiny, and motionMat/matDescs handles can
-        // grow (handle change) when the scene instance/material count
-        // increases — rewriting them every frame absorbs that automatically.
+        // Refresh the per-frame descriptor set. Bindings 0-2 and 5 (UBO,
+        // motionMat, the material table, the GeometryDescs) are tiny, and the
+        // buffer handles can change (growth) when the scene's instance or
+        // material count increases — rewriting them every frame absorbs that
+        // automatically.
         VkDescriptorBufferInfo ubInfo{};
         ubInfo.buffer = view().rasterCameraUbos[frame].handle;
         ubInfo.offset = 0;
@@ -1171,7 +1172,13 @@ namespace threepp {
         matsInfo.offset = 0;
         matsInfo.range  = VK_WHOLE_SIZE;
 
-        VkWriteDescriptorSet writes[4]{};
+        // The fragment shader's way from an entry to its material record.
+        VkDescriptorBufferInfo geomsInfo{};
+        geomsInfo.buffer = geometryDescsBuffers[frame].handle;
+        geomsInfo.offset = 0;
+        geomsInfo.range  = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet writes[5]{};
         writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet          = view().rasterDescSets[frame];
         writes[0].dstBinding      = 0;
@@ -1190,7 +1197,13 @@ namespace threepp {
         writes[2].descriptorCount = 1;
         writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[2].pBufferInfo     = &matsInfo;
-        uint32_t writeCount = 3;
+        writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet          = view().rasterDescSets[frame];
+        writes[3].dstBinding      = 5;
+        writes[3].descriptorCount = 1;
+        writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[3].pBufferInfo     = &geomsInfo;
+        uint32_t writeCount = 4;
 
         // Binding 3 — the bindless material-texture array (same VkImage/
         // VkSampler handles the deferred shade sees at its own binding 8,
@@ -1204,14 +1217,14 @@ namespace threepp {
         std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
         if (view().rasterMatTexValid_[frame] == 0) {
             fillMaterialTextureInfos(matTexInfos);
-            writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[3].dstSet          = view().rasterDescSets[frame];
-            writes[3].dstBinding      = 3;
-            writes[3].dstArrayElement = 0;
-            writes[3].descriptorCount = kMaxMaterialTextures;
-            writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[3].pImageInfo      = matTexInfos.data();
-            writeCount = 4;
+            writes[4].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[4].dstSet          = view().rasterDescSets[frame];
+            writes[4].dstBinding      = 3;
+            writes[4].dstArrayElement = 0;
+            writes[4].descriptorCount = kMaxMaterialTextures;
+            writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[4].pImageInfo      = matTexInfos.data();
+            writeCount = 5;
             view().rasterMatTexValid_[frame] = 1;
         }
         vulkan::updateDescriptorSets(ctx->device(), writeCount, writes, 0, nullptr);

@@ -86,13 +86,13 @@ namespace threepp::vulkan {
                                  TransientPool* pool, uint32_t view)
         : ctx_(ctx), transient_(pool), view_(view), slots_(framesInFlight) {
         // The raster set's shape (VulkanCorePipelines: camera UBO, motion
-        // matrices, materials, the bindless albedo maps, DrawInfo); the shadow
-        // shaders read 2, 3 and 4.
+        // matrices, materials, the bindless albedo maps, DrawInfo, the
+        // GeometryDescs); the shadow shaders read 2, 3, 4 and 5.
         VkDescriptorPoolSize sizes[3]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[1].descriptorCount = framesInFlight * 3u;
+        sizes[1].descriptorCount = framesInFlight * 4u;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[2].descriptorCount = framesInFlight * kMaxMaterialTextures;
         VkDescriptorPoolCreateInfo dpci{};
@@ -222,28 +222,37 @@ namespace threepp::vulkan {
         return true;
     }
 
-    void ShadowMapPass::writeRasterMaterials(uint32_t frame, VkBuffer materials, const VkDescriptorImageInfo* matTex,
-                                             uint32_t matTexCount) {
+    void ShadowMapPass::writeRasterMaterials(uint32_t frame, VkBuffer materials, VkBuffer geometryDescs,
+                                             const VkDescriptorImageInfo* matTex, uint32_t matTexCount) {
         Slot&                  s = slots_[frame];
         VkDescriptorBufferInfo mats{};
         mats.buffer = materials;
         mats.range  = VK_WHOLE_SIZE;
-        VkWriteDescriptorSet w[2]{};
+        VkDescriptorBufferInfo geoms{};
+        geoms.buffer = geometryDescs;
+        geoms.range  = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet w[3]{};
         w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].dstSet          = s.rasterSet;
         w[0].dstBinding      = 2;
         w[0].descriptorCount = 1;
         w[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[0].pBufferInfo     = &mats;
-        uint32_t n           = 1;
+        w[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[1].dstSet          = s.rasterSet;
+        w[1].dstBinding      = 5;
+        w[1].descriptorCount = 1;
+        w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[1].pBufferInfo     = &geoms;
+        uint32_t n           = 2;
         if (matTex) {
-            w[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[1].dstSet          = s.rasterSet;
-            w[1].dstBinding      = 3;
-            w[1].descriptorCount = matTexCount;
-            w[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w[1].pImageInfo      = matTex;
-            n                    = 2;
+            w[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[2].dstSet          = s.rasterSet;
+            w[2].dstBinding      = 3;
+            w[2].descriptorCount = matTexCount;
+            w[2].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[2].pImageInfo      = matTex;
+            n                    = 3;
             s.matTexWritten      = true;
         }
         updateDescriptorSets(ctx_.device(), n, w, 0, nullptr);

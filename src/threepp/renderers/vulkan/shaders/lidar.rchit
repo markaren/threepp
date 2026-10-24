@@ -94,14 +94,18 @@ hitAttributeEXT vec2 bary;
 void main() {
     const uint instId = uint(gl_InstanceCustomIndexEXT);
     const GeometryDesc geom = geoms[instId];
-    const MaterialDesc mat  = mats[instId];
+    // The material's table record with the entry's instance colour on the
+    // albedo (deferred_shade_00_common's entryMat).
+    MaterialDesc mat = mats[geom.flags >> kGeomFlagMaterialShift];
+    precise vec3 tinted = mat.albedo * geom.instanceColor;
+    mat.albedo = tinted;
 
     const uint primId = uint(gl_PrimitiveID);
 
     // Resolve the three vertex indices of the hit triangle. kGeomFlagPackedIndex16:
     // packed static geometry stores uint16 indices, two per word.
     uint i0, i1, i2;
-    if (geom.indexed == 0u) {
+    if ((geom.flags & kGeomFlagIndexed) == 0u) {
         i0 = primId * 3 + 0;
         i1 = primId * 3 + 1;
         i2 = primId * 3 + 2;

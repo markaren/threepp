@@ -905,10 +905,10 @@ namespace threepp {
             if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) return;
             // One side of a LOD crossfade casts, the same one the rays see.
             if (i < entryLodFade_.size() && !lodFadeCasts(entryLodFade_[i])) return;
-            if (i >= matDescsCached_.size()) return;
+            if (i >= geomDescsCached_.size()) return;
             // shadowOccludes' policy (deferred_shade_10): transmission and
             // blend never block, strong emitters never block.
-            const auto& md = matDescsCached_[i];
+            const auto& md = entryMat(i);
             if (md.transmission > 0.f || md.alphaCutoff < 0.f) return;
             if (std::max({md.emissive[0], md.emissive[1], md.emissive[2]}) * md.emissiveIntensity >= 1.f) return;
             // Moving casters go to every layer's `dyn` list (a cached cascade
@@ -1041,8 +1041,8 @@ namespace threepp {
             tex = std::make_unique<std::array<VkDescriptorImageInfo, kMaxMaterialTextures>>();
             fillMaterialTextureInfos(*tex);
         }
-        smp.writeRasterMaterials(frame, materialDescsBuffers[frame].handle, texNeeded ? tex->data() : nullptr,
-                                 kMaxMaterialTextures);
+        smp.writeRasterMaterials(frame, materialDescsBuffers[frame].handle, geometryDescsBuffers[frame].handle,
+                                 texNeeded ? tex->data() : nullptr, kMaxMaterialTextures);
         view().shadowMatTexValid_[frame] = 1;
     }
 

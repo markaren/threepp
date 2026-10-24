@@ -1155,19 +1155,21 @@ namespace {
 // It used to be whole-array: entries-indexed at 608 B/entry, so ONE changed
 // material re-sent every entry's MaterialDesc, to every frame-in-flight slot —
 // 47.7 MB and 2.8 ms per frame at 78.4k grains, for the two belt meshes whose
-// scrolling texture bumps their material version. Now it sends the entry ranges
-// ensureSceneBuilt actually patched (see DescDirtyRanges).
+// scrolling texture bumps their material version. Then it sent the entry ranges
+// ensureSceneBuilt patched, which were still one desc per entry of a changed or
+// streamed-in mesh. Now the array is the material table (one record per
+// material), and the ranges are the records that changed.
 void VulkanRenderer::Impl::flushMaterialDescsIfDirty(uint32_t frame) {
             THREEPP_CPUPROF("frame.I_uploadMatDesc");
             auto& dirty = matDescsDirty_[frame];
             if (!dirty.any()) return;
-            if (matDescsCached_.empty() ||
+            if (matTable_.empty() ||
                 materialDescsBuffers[frame].handle == VK_NULL_HANDLE) {
                 dirty.clear();
                 return;
             }
             uploadDescRanges(ctx->allocator(), materialDescsBuffers[frame],
-                             matDescsCached_, dirty);
+                             matTable_, dirty);
             dirty.clear();
         }
 
@@ -2753,8 +2755,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
                 }
-                // Instance colors live in the per-entry MaterialDescs (see
-                // applyInstanceColor), but no fingerprint sees them: they are
+                // Instance colors live in the entries' GeometryDescs (see
+                // setGeomInstanceColor), but no fingerprint sees them: they are
                 // neither a material version nor a geometry attribute. Poll
                 // the attribute per span and route a change through the
                 // material-values patch. Only consumed when structuralSame; a
@@ -3250,7 +3252,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
 
                     // Material patch FIRST, then the TLAS fill: the fill derives each
-                    // instance's ray mask and FORCE_OPAQUE flag from matDescsCached_, so
+                    // instance's ray mask and FORCE_OPAQUE flag from the table, so
                     // it must read THIS frame's materials. A patched entry whose
                     // visibility class flipped (a blinker crossing the emitter threshold,
                     // opacity dropping below 1) sets instClassChanged, which forces the
@@ -3293,10 +3295,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // post-fence; the other slot gets flushed when its turn
                         // comes around (it's still serving the previous frame's
                         // in-flight RT trace right now).
-                        // ENTRIES-indexed (one slot per entry, overlay/skipped
-                        // slots left default) to match the full-rebuild layout so
-                        // gl_InstanceCustomIndexEXT (== entry index) keeps indexing
-                        // the right material. Dummy slots are never sampled.
+                        // The table is per material: a changed material
+                        // rewrites its record once, and an entry whose instance
+                        // colour changed rewrites the colour in its GeometryDesc.
+                        // Overlay/skipped entries keep record 0.
                         // TARGETED PATCH: only entries whose material version
                         // actually bumped (entryMatDirty) get their MaterialDesc
                         // re-derived. materialFromMesh is a ~25-dynamic_cast walk
@@ -3305,52 +3307,51 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // turned a single brake-light / blinker emissive toggle into
                         // an O(scene) stall — tens of ms once InstancedMesh foliage
                         // expands the scene to tens of thousands of entries, firing
-                        // several times a second while a blinker ticks. matDescsCached_
+                        // several times a second while a blinker ticks. The table
                         // already holds correct values for every unchanged entry (it
                         // survives matrix-only frames untouched), and a changed
                         // material keeps its pointer + textures (a texture swap aborts
                         // to the full structural rebuild), so its dedup index stays
                         // valid. Full fallback only if the cache size somehow doesn't
                         // match (never on the fast path that reaches here).
-                        const bool patchMatDescs = matDescsCached_.size() == entries.size();
+                        const bool patchMatDescs = geomDescsCached_.size() == entries.size();
                         if (!patchMatDescs) {
-                            matDescsCached_.assign(entries.size(), MaterialDesc{});
-                            // Every entry re-derived below ⇒ every entry dirty.
-                            markMatDescsWhole();
+                            // Every entry re-derived below into a fresh table;
+                            // every entry's index and every record dirty.
+                            geomDescsCached_.resize(entries.size());
+                            for (GeometryDesc& gd : geomDescsCached_) setGeomMatIdx(gd, 0u);
+                            matTableReset();
+                            markGeomDescsWhole();
                         }
+                        matTableBeginPass();
                         // Same dedup as the full-rebuild path below (consulted only on
                         // the full-rebuild fallback): entries order is identical
                         // (overlay skip matches), so identical Material* pointers
                         // produce identical materialAssetIdx values frame-to-frame.
                         std::unordered_map<const Material*, uint32_t> matAssetMap;
-                        // One-entry memo of the material's desc (before the
-                        // per-entry instance color). A dirty instanced span is
+                        // One-entry memo of the material's desc. A dirty instanced span is
                         // N consecutive entries sharing one Material, and an
                         // instance-color edit dirties all of them; without the
                         // memo each re-runs materialFromMesh + the texture-of
-                        // walk. Patch mode only: materialAssetIdx is copied per
-                        // entry from the cache, so the memoised desc is valid
-                        // for every entry of the same Material.
+                        // walk. Patch mode only: materialAssetIdx is taken from
+                        // the entry's current record, so the memoised desc is
+                        // valid for every entry of the same Material.
                         const Material* memoMat = nullptr;
                         MaterialDesc memoMd{};
                         for (size_t i = 0; i < entries.size(); ++i) {
                             const MeshEntry& en = entries[i];
-                            if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
-                            if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep cached desc
+                            if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc
+                            if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep its record
                             Mesh* m = en.mesh;
-                            MaterialDesc md;
-                            if (patchMatDescs && memoMat && m->material().get() == memoMat) {
-                                md = memoMd;
-                                md.materialAssetIdx = matDescsCached_[i].materialAssetIdx;
-                            } else {
-                            md = materialFromMesh(*m);
+                            const Material* mat = m->material().get();
+                            if (!(patchMatDescs && memoMat && mat == memoMat)) {
+                            MaterialDesc md = materialFromMesh(*m);
                             if (patchMatDescs) {
                                 // Material* unchanged → its dedup index is stable.
-                                md.materialAssetIdx = matDescsCached_[i].materialAssetIdx;
+                                md.materialAssetIdx = entryMat(i).materialAssetIdx;
                             } else {
-                                const Material* matKey = m->material().get();
                                 auto [matIt, inserted] = matAssetMap.try_emplace(
-                                        matKey, static_cast<uint32_t>(matAssetMap.size()));
+                                        mat, static_cast<uint32_t>(matAssetMap.size()));
                                 md.materialAssetIdx = matIt->second;
                             }
                             if (auto tex = albedoTexOf(*m)) {
@@ -3407,13 +3408,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             if (auto tex = terrainNormalTexOf(*m)) {
                                 md.terrainNormalTexIndex = ensureMaterialTexture(tex);
                             }
-                            memoMat = m->material().get();
+                            memoMat = mat;
                             memoMd  = md;
                             }
-                            applyInstanceColor(md, en);
-                            // Compared against the desc being replaced; on the full
-                            // fallback that desc is a default, so assume a change.
-                            const MaterialDesc& was = matDescsCached_[i];
+                            // Compared against the record being replaced; on the
+                            // full fallback that is record 0, so assume a change.
+                            const MaterialDesc& was = entryMat(i);
+                            const MaterialDesc& md = memoMd;
                             if (!patchMatDescs ||
                                 tlasInstanceFlags(was) != tlasInstanceFlags(md) ||
                                 alphaMaskGroup(was) != alphaMaskGroup(md))
@@ -3426,18 +3427,25 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 was.emissive[0] != md.emissive[0] || was.emissive[1] != md.emissive[1] ||
                                 was.emissive[2] != md.emissive[2])
                                 cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
-                            matDescsCached_[i] = md;
-                            // The dirty RANGE is recorded where the write is, so
-                            // the two can never drift. entryMatDirty is set for a
-                            // whole span at once (a material is a per-mesh fact),
-                            // and spans are contiguous in entry order, so an
-                            // instanced span of any size coalesces to one range.
-                            markMatDescsDirty(static_cast<uint32_t>(i));
+                            // The record is rewritten (and its range dirtied) once
+                            // per pass however many entries share it; the entry's
+                            // GeometryDesc when it lands on another record or its
+                            // instance color changed.
+                            setEntryMat(i, matTableSlot(mat, memoMd));
+                            {
+                                GeometryDesc& gd = geomDescsCached_[i];
+                                float was[3];
+                                std::memcpy(was, gd.instanceColor, sizeof(was));
+                                setGeomInstanceColor(gd, en);
+                                if (std::memcmp(was, gd.instanceColor, sizeof(was)) != 0)
+                                    markGeomDescsDirty(static_cast<uint32_t>(i));
+                            }
                         }
-                        cacheCullFlags(matDescsCached_);
+                        if (!patchMatDescs) markMatDescsWhole();
+                        cacheCullFlags();
                     }
                     // Cutout ray distance: after the material patch (it reads
-                    // matDescsCached_). A flipped bit changes an instance's
+                    // the material table). A flipped bit changes an instance's
                     // flags, which is a class change like any other.
                     if (classifyCutoutFar(rayCamPos)) instClassChanged = true;
                     if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged) {
@@ -3493,8 +3501,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // A cutout caster's far entries are force-opaque
                             // (setCutoutRayDistance; the bits are classifyCutoutFar's).
                             bool spanCutout = false;
-                            if (sp.first < matDescsCached_.size()) {
-                                const auto& cmd = matDescsCached_[sp.first];
+                            if (sp.first < geomDescsCached_.size()) {
+                                const auto& cmd = entryMat(sp.first);
                                 if (!e0.isDisplaced && alphaMaskGroup(cmd)) spanMask = kRayMaskAlpha;
                                 spanFlags = tlasInstanceFlags(cmd);
                                 spanCutout = cutoutRayDistance_ > 0.f && cutoutCaster(cmd);
@@ -3548,10 +3556,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                         auto& gd = geomDescsCached_[i];
                                         const auto sel = perEntryLod ? selectLodGeom(*rec, entries[i].lodLevel)
                                                                      : lodSel0;
-                                        const uint32_t ix = sel.indexed ? 1u : 0u;
-                                        if (gd.indexAddress != sel.indexAddress || gd.indexed != ix) {
+                                        if (gd.indexAddress != sel.indexAddress ||
+                                            geomFlag(gd, kGeomFlagIndexed) != sel.indexed) {
                                             gd.indexAddress = sel.indexAddress;
-                                            gd.indexed      = ix;
+                                            setGeomFlag(gd, kGeomFlagIndexed, sel.indexed);
                                             markGeomDescsDirty(static_cast<uint32_t>(i));
                                         }
                                     }
@@ -3613,10 +3621,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     blasAddr = lodSel.asAddress;
                                     if (i < geomDescsCached_.size()) {
                                         auto& gd = geomDescsCached_[i];
-                                        const uint32_t ix = lodSel.indexed ? 1u : 0u;
-                                        if (gd.indexAddress != lodSel.indexAddress || gd.indexed != ix) {
+                                        if (gd.indexAddress != lodSel.indexAddress ||
+                                            geomFlag(gd, kGeomFlagIndexed) != lodSel.indexed) {
                                             gd.indexAddress = lodSel.indexAddress;
-                                            gd.indexed      = ix;
+                                            setGeomFlag(gd, kGeomFlagIndexed, lodSel.indexed);
                                             markGeomDescsDirty(static_cast<uint32_t>(i));
                                         }
                                     }
@@ -3650,12 +3658,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // stall-free — renderFrame flushes THIS frame's
                             // slot right after its fence signals (before any
                             // recording that consumes it), the other slot when
-                            // its frame comes around. Same model as matDescs;
+                            // its frame comes around. Same model as the material table;
                             // this replaced a vkDeviceWaitIdle per switch
                             // frame, which hitched exactly when the camera
                             // was moving.
                             //
-                            // WHOLE-ARRAY on purpose, unlike the matDescs patch:
+                            // WHOLE-ARRAY on purpose, unlike the material patch:
                             // the entries this touched are chosen inside the TLAS
                             // instance fill above, the frame's hottest loop, and
                             // a level switch is already paying for BLAS
@@ -3940,14 +3948,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             THREEPP_CPUPROF_NAMED(rbLoop, "scene.R1_entryLoop");
             // The slot pool the edits until the next structural rebuild write
             // into (VulkanCoreSlots.cpp): every entry-indexed GPU buffer this
-            // build makes is sized for it. 1.5x and not 2x: the material desc
-            // is 608 B per entry per ring slot, three slots.
+            // build makes is sized for it. 1.5x and not 2x: three ring slots
+            // of every entry-indexed array. The material table is sized by
+            // materials instead (below).
             slotCapacity_ = std::max<uint32_t>({1024u, static_cast<uint32_t>(entries.size() + entries.size() / 2u),
                                                 reservedSlots_});
             std::vector<VkAccelerationStructureInstanceKHR> instances;
             instances.reserve(entries.size());
-            // geomDescs / matDescs are ENTRIES-indexed: one slot per entry, with
-            // overlay/skipped entries left default. This makes
+            // geomDescs are ENTRIES-indexed: one slot per entry, with
+            // overlay/skipped entries left default (material record 0, the
+            // all-zero desc, as their per-entry MaterialDesc used to be). This makes
             // gl_InstanceCustomIndexEXT == the entry index, so the raster gbuffer
             // id, RT gbuffer id, motionMat and meshMovedBits all live in ONE index
             // space. (Previously these were filtered/contiguous, so any overlay or
@@ -3958,7 +3968,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // Dummy slots are never referenced: skipped entries get no TLAS
             // instance and are not drawn in the gbuffer (both skip on isOverlay).
             std::vector<GeometryDesc> geomDescs(entries.size());
-            std::vector<MaterialDesc> matDescs(entries.size());
+            // The material table afresh, in entry order: a rebuild compacts it.
+            matTableReset();
+            matTableBuilding_ = true;
             // Same index space, same lifetime — see entryStableIds_. Filled in
             // the geomDescs loop below so a skipped/overlay entry keeps the 0
             // its dummy slot already means.
@@ -4305,23 +4317,22 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 entryStableIds_[i] = stableIdIfAssigned(*en.mesh);
 
                 const Material* matKey = m->material().get();
-                MaterialDesc md;
                 auto memoIt = matDescMemo.find(matKey);
-                if (memoIt != matDescMemo.end()) {
-                    md = memoIt->second;// identical for every instance of this material
-                } else {
-                    md = buildMaterialDesc(*m);
+                if (memoIt == matDescMemo.end()) {
+                    MaterialDesc md0 = buildMaterialDesc(*m);
                     {
                         auto [matIt, inserted] = matAssetMap.try_emplace(
                                 matKey, static_cast<uint32_t>(matAssetMap.size()));
-                        md.materialAssetIdx = matIt->second;
+                        md0.materialAssetIdx = matIt->second;
                     }
-                    matDescMemo.emplace(matKey, md);
+                    memoIt = matDescMemo.emplace(matKey, md0).first;
                 }
-                // After the memo: the memo holds the material's desc, the
-                // instance color is per entry.
-                applyInstanceColor(md, en);
-                matDescs[i] = md;
+                // The memo holds the material's desc, which is its table
+                // record; the entry's instance color is in its GeometryDesc.
+                const uint32_t matIdx = matTableSlot(matKey, memoIt->second);
+                setGeomMatIdx(geomDescs[i], matIdx);
+                matTableRef(matIdx);// geomDescs becomes geomDescsCached_ below
+                const MaterialDesc& md = matTable_[matIdx];
                 // Visibility group (see vulkan_shared.h): blend/transmissive
                 // surfaces move to the alpha mask so pure-visibility occlusion
                 // queries (env gather, GI, emissive-NEE) cull them out — a text
@@ -4358,6 +4369,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // seeds + texture staging/blits), waiting a single time. After this
             // returns every new BLAS is built and every new albedo texture is
             // resident, so buildTlas below can reference the fresh BLAS.
+            matTableBuilding_ = false;
             rbLoop.stop();
             THREEPP_CPUPROF_NAMED(rbFlush, "scene.R2_batchFlush");
             flushOneShotBatch();
@@ -4387,21 +4399,22 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // rebuild can still carry a >0 level from before) — this is
             // just the persistent copy the lean path patches in place.
             geomDescsCached_ = geomDescs;
-            // Seed every per-frame slot with the fresh matDescs so the first
-            // few frames don't try to flush against a half-initialised ring.
-            // matDescsCached_ stays in sync as the host-side authoritative
-            // copy used by the hot-path flush.
+            // Seed every per-frame slot with the fresh table so the first few
+            // frames don't try to flush against a half-initialised ring.
+            // matTable_ stays the host-side authoritative copy the hot-path
+            // flush carries deltas from. Sized by materials, with room for
+            // the slot path's new ones before it has to grow.
+            matTableCapacity_ = std::max<uint32_t>(256u, 2u * static_cast<uint32_t>(matTable_.size()));
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                uploadDescBuffer(materialDescsBuffers[f], matDescs, slotCapacity_);
+                uploadDescBuffer(materialDescsBuffers[f], matTable_, matTableCapacity_);
             }
-            matDescsCached_ = matDescs;
             for (auto& d : matDescsDirty_) d.clear();
-            cacheCullFlags(matDescs);
+            cacheCullFlags();
             // The asset numbering the slot path continues (slotMaterialAssetIdx).
             slotMatAssetIdx_.clear();
             for (const auto& [mat, idx] : matAssetMap) slotMatAssetIdx_[mat] = {mat ? mat->id : 0u, idx};
             slotNextMatAssetIdx_ = static_cast<uint32_t>(matAssetMap.size());
-            // matDescs just folded in every span's current instance colors.
+            // The table just folded in every span's current instance colors.
             for (auto& sp : entrySpans_) {
                 if (!sp.inst) continue;
                 sp.instColorAttr    = sp.inst->instanceColor();
@@ -4598,18 +4611,15 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
                     (rec.prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
                             ? rec.prevVertex.address
                             : rec.vertex.address;
-            // Per SELECTION, not per record: a level of a non-indexed
-            // soup record IS indexed (welded canonical indices).
-            gdesc.indexed = lodSel.indexed ? 1u : 0u;
             // Per-vertex color only when the material opts in (three.js
             // semantics: vertexColors == true) AND the geometry uploaded a
-            // color buffer. 0 otherwise → chit skips the modulation.
+            // color buffer (kGeomFlagVertexColor below).
+            bool useVtxColor = false;
             {
                 const auto mat = en.mesh->material();
-                const bool useVtxColor = rec.color.handle != VK_NULL_HANDLE &&
-                                         mat && mat->vertexColors;
-                gdesc.colorAddress = useVtxColor ? rec.color.address : 0;
+                useVtxColor = rec.color.handle != VK_NULL_HANDLE && mat && mat->vertexColors;
             }
+            setGeomInstanceColor(gdesc, en);
             // kGeomFlagMoved is stamped per frame in VulkanCoreFrame; it is
             // seeded 0 here, with the packed bits above it.
             // kGeomFlagRtProxy: the record traces a ray-tracing proxy
@@ -4617,9 +4627,14 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
             // shade moves its surface point onto it before it launches rays.
             // kGeomFlagGlowOnly: an emissive that glows but is not a light
             // (setEmissiveCastsLight): its ray hits keep their emission.
+            // kGeomFlagIndexed per SELECTION, not per record: a level of a
+            // non-indexed soup record IS indexed (welded canonical indices).
+            // The material index above them is the caller's.
             gdesc.flags = (rec.packedMask << kGeomFlagPackedShift) |
                           (rec.rtIndexCount ? kGeomFlagRtProxy : 0u) |
-                          (isGlowOnly(*en.mesh) ? kGeomFlagGlowOnly : 0u);
+                          (isGlowOnly(*en.mesh) ? kGeomFlagGlowOnly : 0u) |
+                          (lodSel.indexed ? kGeomFlagIndexed : 0u) |
+                          (useVtxColor ? kGeomFlagVertexColor : 0u);
             return gdesc;
         }
 
@@ -4752,13 +4767,13 @@ bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
         if (dx * dx + dy * dy + dz * dz < step * step) return false;
     }
     auto& entries = lastVisibleEntries_;
-    if (matDescsCached_.size() != entries.size()) return false;// no materials to class by yet
+    if (geomDescsCached_.size() != entries.size()) return false;// no materials to class by yet
     THREEPP_CPUPROF("scene.8b_cutoutFar");
     bool changed = false;
     for (const auto& sp : entrySpans_) {
         const MeshEntry& e0 = entries[sp.first];
         if (e0.isOverlay || e0.isParticle) continue;
-        const bool caster = dist > 0.f && cutoutCaster(matDescsCached_[sp.first]);
+        const bool caster = dist > 0.f && cutoutCaster(entryMat(sp.first));
         for (uint32_t j = 0; j < sp.count; ++j) {
             MeshEntry& en = entries[sp.first + j];
             const bool beyond = caster && entryBeyond(en, camPos, dist);
@@ -4774,10 +4789,10 @@ bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
     return changed;
 }
 
-void VulkanRenderer::Impl::cacheCullFlags(const std::vector<MaterialDesc>& mds) {
-            lastVisibleCullMode_.resize(mds.size());
-            for (size_t i = 0; i < mds.size(); ++i) {
-                switch (mds[i].sideMode) {
+void VulkanRenderer::Impl::cacheCullFlags() {
+            lastVisibleCullMode_.resize(geomDescsCached_.size());
+            for (size_t i = 0; i < geomDescsCached_.size(); ++i) {
+                switch (entryMat(i).sideMode) {
                     case 0:  lastVisibleCullMode_[i] = VK_CULL_MODE_BACK_BIT;  break;
                     case 1:  lastVisibleCullMode_[i] = VK_CULL_MODE_FRONT_BIT; break;
                     default: lastVisibleCullMode_[i] = VK_CULL_MODE_NONE;      break;
@@ -4997,16 +5012,103 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
         }
 
 
-void VulkanRenderer::Impl::applyInstanceColor(MaterialDesc& md, const MeshEntry& en) {
+void VulkanRenderer::Impl::setGeomInstanceColor(GeometryDesc& gd, const MeshEntry& en) {
+            gd.instanceColor[0] = gd.instanceColor[1] = gd.instanceColor[2] = 1.0f;
             if (!en.isInstanced) return;
             const auto* attr = static_cast<const InstancedMesh*>(en.mesh)->instanceColor();
             if (!attr) return;
             const auto& a = attr->array();
             const size_t o = static_cast<size_t>(en.instanceIndex) * 3u;
             if (o + 3u > a.size()) return;
-            md.albedo[0] *= a[o];
-            md.albedo[1] *= a[o + 1];
-            md.albedo[2] *= a[o + 2];
+            gd.instanceColor[0] = a[o];
+            gd.instanceColor[1] = a[o + 1];
+            gd.instanceColor[2] = a[o + 2];
+        }
+
+void VulkanRenderer::Impl::matTableReset() {
+            matTable_.assign(1, MaterialDesc{});
+            matTableKeys_.assign(1, MatTableKey{});
+            matTableRefs_.assign(1, 0u);
+            matTableStamp_.assign(1, 0u);
+            matTableDormant_.clear();
+            matTableDormantSeq_.assign(1, 0u);
+            matTableIndex_.clear();
+            matTableBeginPass();
+        }
+
+uint32_t VulkanRenderer::Impl::matTableSlot(const Material* mat, const MaterialDesc& md) {
+            MatTableKey key;
+            key.mat = mat;
+            key.matId = mat ? mat->id : 0u;
+            // Derived already this pass (the memo is dropped with the pass, and
+            // matTableAcquire never reclaims the record it names).
+            if (matTableMemoSlot_ != 0u && key == matTableMemoKey_) return matTableMemoSlot_;
+            const auto it = matTableIndex_.find(key);
+            const uint32_t s = it != matTableIndex_.end() ? it->second : matTableAcquire(key);
+            if (matTableStamp_[s] != matTableEpoch_) {
+                matTableStamp_[s] = matTableEpoch_;
+                // Bytes, not fields: the record is what the GPU reads, and a
+                // record a pass leaves as it was costs no upload.
+                if (std::memcmp(&matTable_[s], &md, sizeof(MaterialDesc)) != 0) {
+                    matTable_[s] = md;
+                    markMatDescsDirty(s);
+                }
+            }
+            matTableMemoKey_ = key;
+            matTableMemoSlot_ = s;
+            return s;
+        }
+
+uint32_t VulkanRenderer::Impl::matTableAcquire(const MatTableKey& key) {
+            if (!matTableBuilding_ && matTable_.size() >= matTableCapacity_) {
+                while (!matTableDormant_.empty()) {
+                    const auto [s, seq] = matTableDormant_.front();
+                    matTableDormant_.pop_front();
+                    if (matTableRefs_[s] != 0u || matTableDormantSeq_[s] != seq ||
+                        matTableStamp_[s] == matTableEpoch_ || s == matTableMemoSlot_)
+                        continue;
+                    matTableIndex_.erase(matTableKeys_[s]);
+                    matTableKeys_[s] = key;
+                    matTable_[s] = MaterialDesc{};
+                    matTableIndex_.emplace(key, s);
+                    return s;
+                }
+                matTableGrow(std::max<uint32_t>(matTableCapacity_ * 2u, 256u));
+            }
+            const auto s = static_cast<uint32_t>(matTable_.size());
+            matTable_.push_back(MaterialDesc{});
+            matTableKeys_.push_back(key);
+            matTableRefs_.push_back(0u);
+            matTableStamp_.push_back(0u);
+            matTableDormantSeq_.push_back(0u);
+            matTableIndex_.emplace(key, s);
+            return s;
+        }
+
+void VulkanRenderer::Impl::matTableUnref(uint32_t idx) {
+            if (idx == 0u || idx >= matTableRefs_.size() || matTableRefs_[idx] == 0u) return;
+            if (--matTableRefs_[idx] != 0u) return;
+            // No entry names it any more: dormant, kept for its key's return.
+            matTableDormant_.emplace_back(idx, ++matTableDormantSeq_[idx]);
+        }
+
+void VulkanRenderer::Impl::matTableGrow(uint32_t capacity) {
+            THREEPP_CPUPROF("scene.8d_matTableGrow");
+            // growSlotPool's model: the frames in flight keep the old buffers
+            // (retired with this frame's serial), every slot gets a new one
+            // holding the whole host table, and each frame's descriptor sets
+            // are rewritten after its own fence.
+            matTableCapacity_ = capacity;
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                retire(std::move(materialDescsBuffers[f]));
+                uploadDescBuffer(materialDescsBuffers[f], matTable_, matTableCapacity_);
+            }
+            for (auto& d : matDescsDirty_) d.clear();
+            deferredDescDirty_.fill(true);
+            for (auto& v : views_) {
+                v->rasterMatTexValid_.fill(0);
+                v->shadowMatTexValid_.fill(0);
+            }
         }
 
 uint32_t VulkanRenderer::Impl::packLodFade(float fade, bool complement) {

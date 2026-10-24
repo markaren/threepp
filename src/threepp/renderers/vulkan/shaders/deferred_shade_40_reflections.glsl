@@ -450,7 +450,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         while (rayQueryProceedEXT(rq)) {
             if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
             const int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
-            const MaterialDesc cm = mats[ci];
+            const MaterialDesc cm = entryMat(ci);
             if (cm.alphaCutoff > 0.0 && cm.albedoTexIndex >= 0) {
                 const vec2 cuv = fetchUvAt(ci, rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
                                            rayQueryGetIntersectionBarycentricsEXT(rq, false));
@@ -471,7 +471,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             break;
         }
         const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-        const MaterialDesc hm     = mats[hitId];
+        const MaterialDesc hm     = entryMat(hitId);
         const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
         const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
         const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
@@ -838,7 +838,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     }
 
     const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    const MaterialDesc hm     = mats[hitId];
+    const MaterialDesc hm     = entryMat(hitId);
     const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
     const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
     const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);

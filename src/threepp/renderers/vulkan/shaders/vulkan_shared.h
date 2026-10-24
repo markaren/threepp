@@ -140,6 +140,23 @@
 #define kGeomFlagGlowOnly      0x40u// the emissive glows but is not a light
                                     // (setEmissiveCastsLight): it is not in the emitter list,
                                     // so a ray hit on it keeps its own emission
+#define kGeomFlagIndexed       0x80u// the selected level has an index buffer (indexAddress);
+                                    // else its vertices are a triangle soup
+#define kGeomFlagVertexColor   0x100u// the material asked for vertex colours and the geometry
+                                    // has them (host-side only: the raster's DrawInfo carries
+                                    // the address; no ray hit applies vertex colour)
+#define kGeomFlagMaterialShift 9u   // bits 9..31: the entry's record in the material table,
+#define kGeomFlagMaterialMask  0xFFFFFE00u// mats[flags >> kGeomFlagMaterialShift], one record
+                                    // per material (23 bits)
+
+// GeometryDesc as 32-bit words, for the shaders that read nothing of it but
+// the entry's material index and instance colour (gbuffer.frag,
+// shadow_depth.frag, event_shade.comp, the deferred filters) and so declare
+// the buffer as a plain uint array rather than pull in the 64-bit addresses.
+// VulkanCoreImpl.hpp pins these numbers to the host struct.
+#define kGeomDescWords         16u// sizeof(GeometryDesc) / 4
+#define kGeomDescColorWord     12u// offsetof(GeometryDesc, instanceColor) / 4, three floats
+#define kGeomDescFlagsWord     15u// offsetof(GeometryDesc, flags) / 4
 
 #ifdef __cplusplus
 // Disjoint names sum to their union; a shared bit makes the sum larger.
@@ -150,9 +167,16 @@ static_assert(((kLodFadeActive | kLodFadeComplement | kLodFadeCutMask) & 0xFFFFu
               (kLodFadeCutMask >> kLodFadeCutShift) == kLodFadeSteps &&
               (kLodFadeCutMask & (kLodFadeActive | kLodFadeComplement)) == 0u,
               "kLodFade*: the fade must sit above the flag and class bytes, and the cut field hold kLodFadeSteps.");
-static_assert((kGeomFlagMoved + kGeomFlagPackedAll + kGeomFlagRtProxy + kGeomFlagGlowOnly) ==
-              (kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFlagGlowOnly),
+static_assert((kGeomFlagMoved + kGeomFlagPackedAll + kGeomFlagRtProxy + kGeomFlagGlowOnly + kGeomFlagIndexed +
+               kGeomFlagVertexColor) ==
+              (kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFlagGlowOnly | kGeomFlagIndexed |
+               kGeomFlagVertexColor),
               "GeometryDesc.flags: two kGeomFlag* names share a bit.");
+static_assert(((kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFlagGlowOnly | kGeomFlagIndexed |
+                kGeomFlagVertexColor) &
+               kGeomFlagMaterialMask) == 0u &&
+              (kGeomFlagMaterialMask >> kGeomFlagMaterialShift) == 0x007FFFFFu,
+              "GeometryDesc.flags: a kGeomFlag* bit reaches into the material index.");
 #endif
 
 // Ocean cascade-1 sample-domain rotation. The mid cascade carries only ~a
@@ -230,7 +254,7 @@ namespace threepp::vulkan_pt {
         float thickness;
         int32_t thinWalled;
         // Stable per-Material-asset index, deduplicated by Material* pointer
-        // when the matDescs buffer is built (VulkanRenderer.cpp). Adjacent
+        // when the material table is built (VulkanCoreScene.cpp). Adjacent
         // meshes that share one Material C++ object get the SAME value, so
         // a reproject/reuse consumer can accept cross-mesh-same-material
         // taps — kills the visible seam at tiled-wall boundaries during

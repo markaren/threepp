@@ -41,6 +41,12 @@ layout(set = 0, binding = 2, scalar) readonly buffer GbufMatBuf {
     MaterialDesc gbufMats[];
 };
 layout(set = 0, binding = 3) uniform sampler2D gbufAlbedoMaps[kMaxMaterialTextures];
+// The per-entry GeometryDesc array as words (binding 5 of the raster set):
+// gbufMats is the material table, one record per material, and an entry's
+// record index and instance colour sit in its GeometryDesc.
+layout(set = 0, binding = 5, scalar) readonly buffer GbufGeomWordBuf {
+    uint gbufGeomWords[];
+};
 
 layout(location = 0) in vec3 vWorldNormal;
 layout(location = 1) in vec4 vCurrClipUnjit;
@@ -380,7 +386,18 @@ void main() {
     // deferred_shade_50_water_glass.glsl, not a
     // generic surface perturbation — running it here would tile the foam
     // normal across the wave geometry and produce visible cellular noise.
-    const MaterialDesc m = gbufMats[vInstanceIdx];
+    // The material's table record with this entry's instance colour on the
+    // albedo (deferred_shade_00_common's entryMat): `precise`, the single
+    // rounded multiply the host made when the colour lived in the desc.
+    const uint gw0 = vInstanceIdx * kGeomDescWords;
+    MaterialDesc m = gbufMats[gbufGeomWords[gw0 + kGeomDescFlagsWord] >> kGeomFlagMaterialShift];
+    {
+        const vec3 instColor = uintBitsToFloat(uvec3(gbufGeomWords[gw0 + kGeomDescColorWord],
+                                                     gbufGeomWords[gw0 + kGeomDescColorWord + 1u],
+                                                     gbufGeomWords[gw0 + kGeomDescColorWord + 2u]));
+        precise vec3 tinted = m.albedo * instColor;
+        m.albedo = tinted;
+    }
     const bool isWater = (vFlags & 1u) != 0u;
     // vMF/Toksvig normal-map specular AA (deferred raster G-buffer only;
     // see project_deferred_shade_parity notes).

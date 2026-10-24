@@ -74,8 +74,9 @@ namespace threepp::vulkan::impl {
         Buffer uv2;
         // Per-vertex RGB color (BufferGeometry "color" attribute, itemSize 3).
         // .handle == VK_NULL_HANDLE when the geometry has no usable "color".
-        // Surfaced to the shaders via GeometryDesc::colorAddress / DrawInfo::
-        // colorAddr, gated on the material's vertexColors flag at fill time.
+        // Surfaced to the raster via DrawInfo::colorAddr, gated on the
+        // material's vertexColors flag at fill time (GeometryDesc keeps that
+        // decision as kGeomFlagVertexColor).
         Buffer color;
         // Which of the optional attribute buffers hold PACKED data instead
         // of tightly-packed float, and whether the index buffer is uint16:
@@ -703,20 +704,37 @@ namespace threepp::vulkan::impl {
         // vertexAddress, in which case the hit handling reads the same
         // data twice (no harm; equals current pos).
         VkDeviceAddress prevVertexAddress;
-        // Per-vertex RGB color buffer (BlasRecord::color). 0 when the mesh's
-        // material has vertexColors off or the geometry has no "color" — the
-        // chit then skips the vertex-color multiply. Set per-instance below.
-        VkDeviceAddress colorAddress;
-        uint32_t indexed;
+        // The entry's InstancedMesh::instanceColor, (1,1,1) for a plain mesh
+        // or an instanced one that never set a colour. Every shader reads an
+        // entry's material through entryMat, which multiplies the record's
+        // albedo by this (three.js multiplies the diffuse colour per
+        // instance). Here, not in the record, so the material table holds
+        // one record per Material: a forest tints every tree. The same
+        // single float multiply the host used to fold into a per-entry desc,
+        // so the albedo is the same to the bit. These twelve bytes held a
+        // vertex-colour address no shader read (kGeomFlagVertexColor keeps
+        // the host's decision) and the indexed word (kGeomFlagIndexed).
+        float instanceColor[3];
         // kGeomFlag* (shaders/vulkan_shared.h, where both languages take the
         // bits from): the sticky moved flag stamped per frame by the loop in
         // VulkanCoreFrame.cpp, BlasRecord::packedMask shifted up past it, the
-        // ray-tracing proxy flag and the glow-only flag. The ray hits read
+        // ray-tracing proxy flag, the glow-only flag, the indexed and
+        // vertex-colour flags. The ray hits read
         // their triangles through kGeomFlagPackedIndex16 (gfetchTri,
         // lidar.rchit), so a bit that is wrong there is vertices fetched at
         // fused or halved indices, far out of bounds in the first case (a
         // device loss, and no validation message). Glow-only sat on that bit
         // until 2026-10-09 (VulkanEmissiveCastsLight_test).
+        //
+        // Bits 9..31 (kGeomFlagMaterialMask) are the entry's record in the
+        // material table (Impl::matTable_): every shader that reads a
+        // MaterialDesc reaches it as mats[flags >> kGeomFlagMaterialShift].
+        // The table holds one record per Material, not one per entry, so a
+        // streamed cell of a thousand instances of one material adds a
+        // thousand indices here and at most one record there. 0 is the
+        // all-zero record that an entry without a material (an overlay, a
+        // tombstone, a span still being admitted) reads. In this word rather
+        // than a field of its own so the record stays 64 bytes.
         uint32_t flags;
     };
 

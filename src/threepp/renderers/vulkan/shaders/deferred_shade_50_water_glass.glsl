@@ -207,7 +207,7 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
     const vec3  P      = (cam.viewInverse * vec4(vhH.xyz / vhH.w, 1.0)).xyz;
     const vec4  nTap   = texelFetch(gbufNormalTex, pxH, 0);
     const vec4  aTap   = texelFetch(gbufAlbedoTex, pxH, 0);
-    const MaterialDesc hm = mats[idH - 1u];
+    const MaterialDesc hm = entryMat(idH - 1u);
     const vec3  V      = -dir;
     vec3        N      = normalize(nTap.xyz * 2.0 - 1.0);
     if (dot(N, V) < 0.0) N = -N;
@@ -1003,7 +1003,7 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
             return;
         }
         const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-        const MaterialDesc hm     = mats[hitId];
+        const MaterialDesc hm     = entryMat(hitId);
         const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
         const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
         const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);

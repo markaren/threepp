@@ -441,6 +441,26 @@ namespace threepp {
 
         // Definition moved to VulkanGeometryState.hpp.
         using GeometryDesc = vulkan::impl::GeometryDesc;
+        // The word view of it that the shaders reading only the material index
+        // and the instance colour declare.
+        static_assert(sizeof(GeometryDesc) == kGeomDescWords * 4u &&
+                              offsetof(GeometryDesc, flags) == kGeomDescFlagsWord * 4u &&
+                              offsetof(GeometryDesc, instanceColor) == kGeomDescColorWord * 4u,
+                      "GeometryDesc changed shape: update kGeomDescWords / kGeomDescColorWord / kGeomDescFlagsWord "
+                      "in vulkan_shared.h and geometry_desc.glsl.");
+        // The material record an entry's GeometryDesc names (its flags' top bits).
+        [[nodiscard]] static uint32_t geomMatIdx(const GeometryDesc& gd) {
+            return gd.flags >> kGeomFlagMaterialShift;
+        }
+        static void setGeomMatIdx(GeometryDesc& gd, uint32_t idx) {
+            gd.flags = (gd.flags & ~kGeomFlagMaterialMask) | (idx << kGeomFlagMaterialShift);
+        }
+        [[nodiscard]] static bool geomFlag(const GeometryDesc& gd, uint32_t bit) {
+            return (gd.flags & bit) != 0u;
+        }
+        static void setGeomFlag(GeometryDesc& gd, uint32_t bit, bool on) {
+            gd.flags = on ? (gd.flags | bit) : (gd.flags & ~bit);
+        }
         // MaterialDesc layout lives in vulkan_shared.h (the same file the GLSL
         // deferred-shade / gbuffer / LIDAR shaders pull in via #include).
         // Bringing it into Impl scope here keeps the existing
@@ -510,10 +530,11 @@ namespace threepp {
 
         // ── Per-slot dirty state for the entries-indexed desc rings ──────────
         // What one frame-in-flight slot still owes the GPU: either the whole
-        // array, or a set of half-open entry ranges. Ranges matter because the
-        // arrays are entries-indexed and large (MaterialDesc is 608 B; a
-        // 78.4k-entry scene is 47.7 MB), so a whole-array flush for a small
-        // per-frame change costs milliseconds of CPU.
+        // array, or a set of half-open element ranges. Ranges matter because
+        // the GeometryDesc array is entries-indexed and large (until the
+        // material table, the MaterialDescs were too: 47.7 MB at 78.4k
+        // entries), so a whole-array flush for a small per-frame change costs
+        // milliseconds of CPU. The material table's ranges are record ranges.
         //
         // Per slot, not global: a change dirtied on frame N must reach every
         // slot's buffer, but each slot may only be written after its own fence
@@ -572,18 +593,115 @@ namespace threepp {
         // slot once its fence has signaled.
         std::array<Buffer, kFramesInFlight> geometryDescsBuffers{};
         std::array<DescDirtyRanges, kFramesInFlight> geomDescsDirty_{};
-        // Per-frame-in-flight MaterialDesc storage; one buffer per slot so the
-        // upload after a fence wait races nothing. The hot path stages new
-        // descs in `matDescsCached_` and marks
-        // the entry ranges it touched (markMatDescsDirty); renderFrame's
-        // flushMaterialDescsIfDirty memcpys those ranges into
-        // `materialDescsBuffers[currentFrame]` once the fence has
-        // signaled (= GPU done with this slot). Descriptor sets are bound
-        // per-frame (set idx = f*imageCount_+k → buffer[f]) so the binding
-        // stays valid across the swap.
+        // Per-frame-in-flight material table storage; one buffer per slot so
+        // the upload after a fence wait races nothing. The hot path stages new
+        // records in `matTable_` and marks the RECORD ranges it touched
+        // (markMatDescsDirty); renderFrame's flushMaterialDescsIfDirty memcpys
+        // those ranges into `materialDescsBuffers[currentFrame]` once the
+        // fence has signaled (= GPU done with this slot). Descriptor sets are
+        // bound per-frame (set idx = f*imageCount_+k → buffer[f]) so the
+        // binding stays valid across the swap.
         std::array<Buffer, kFramesInFlight> materialDescsBuffers{};
-        std::vector<MaterialDesc> matDescsCached_;
         std::array<DescDirtyRanges, kFramesInFlight> matDescsDirty_{};
+
+        // ── The material table ──────────────────────────────────────────────
+        // One MaterialDesc per Material the scene draws, not one per entry: an
+        // entry names its record in the top bits of its GeometryDesc's flags
+        // (geomMatIdx), and every shader reads it through entryMat, which
+        // multiplies in the instance colour the entry's GeometryDesc carries
+        // (setGeomInstanceColor). The desc is a pure function of the Material
+        // (buildMaterialDesc), so the Material is the key. Per entry, a
+        // streamed cell of a thousand instances of one material cost a
+        // thousand 600-byte copies to pack and upload; here it costs a
+        // thousand indices and at most one record.
+        //
+        // Record 0 is the all-zero desc, what an entry without a material (an
+        // overlay, a tombstone, a span still being admitted) has always read.
+        // Every other record counts the entries that name it: every write of
+        // an entry's index goes through setEntryMat or assignEntryGeom. A
+        // record whose count reaches zero goes dormant, key and content kept:
+        // a streamed world brings the same materials back with the next
+        // cell, which then finds them written and uploads nothing.
+        // Only a full table reclaims a dormant record, the longest-dormant
+        // first, and only when none is left do the GPU buffers grow. The
+        // structural rebuild starts the table afresh in entry order.
+        struct MatTableKey {
+            const Material* mat = nullptr;
+            unsigned int matId = 0;// Material::id: a new material at a dead one's address is a new key
+            bool operator==(const MatTableKey& o) const {
+                return mat == o.mat && matId == o.matId;
+            }
+        };
+        struct MatTableKeyHash {
+            size_t operator()(const MatTableKey& k) const {
+                return std::hash<const void*>{}(k.mat) ^ (size_t(k.matId) * 0x9E3779B97F4A7C15ull);
+            }
+        };
+        std::vector<MaterialDesc> matTable_;
+        std::vector<MatTableKey> matTableKeys_;// per record; meaningless where the count is 0
+        std::vector<uint32_t> matTableRefs_;   // entries naming each record (record 0 uncounted)
+        // The pass a record was last derived in (matTableSlot): a record is
+        // derived once per pass however many entries share it, and is not
+        // reclaimed in that pass (its entries may not have been written yet).
+        std::vector<uint32_t> matTableStamp_;
+        // Records gone dormant, oldest first, each with the count of times it
+        // has: an entry whose record was revived and has gone dormant again
+        // since is stale and skipped.
+        std::deque<std::pair<uint32_t, uint32_t>> matTableDormant_;
+        std::vector<uint32_t> matTableDormantSeq_;
+        std::unordered_map<MatTableKey, uint32_t, MatTableKeyHash> matTableIndex_;
+        uint32_t matTableCapacity_ = 0;// records the GPU buffers hold
+        uint32_t matTableEpoch_ = 1;
+        // The structural rebuild fills the table before it sizes the buffers:
+        // no growth while it does.
+        bool matTableBuilding_ = false;
+        // The last key resolved this pass: an instanced span's entries share
+        // their material and skip the hash lookup.
+        MatTableKey matTableMemoKey_{};
+        uint32_t matTableMemoSlot_ = 0;// 0 = no memo
+
+        // Start a pass over the table: records are re-derived on their first
+        // use in it.
+        void matTableBeginPass() {
+            ++matTableEpoch_;
+            matTableMemoSlot_ = 0u;
+        }
+        // Empty but for record 0, for a structural rebuild to fill.
+        void matTableReset();
+        // The record for `mat`, created when new; `md` is its desc. Written and
+        // dirtied only when its content changes. Counts no reference: the
+        // caller hands the index to setEntryMat / assignEntryGeom.
+        uint32_t matTableSlot(const Material* mat, const MaterialDesc& md);
+        // A record for `key`: a new one while the GPU buffers have room, else
+        // the longest-dormant one, else a new one after a growth.
+        uint32_t matTableAcquire(const MatTableKey& key);
+        void matTableGrow(uint32_t capacity);
+        void matTableRef(uint32_t idx) {
+            if (idx != 0u) ++matTableRefs_[idx];
+        }
+        void matTableUnref(uint32_t idx);
+        // The record entry `i` draws with.
+        [[nodiscard]] const MaterialDesc& entryMat(size_t i) const {
+            return matTable_[geomMatIdx(geomDescsCached_[i])];
+        }
+        // Point entry `i` at record `idx`, dirtying its GeometryDesc on a change.
+        void setEntryMat(size_t i, uint32_t idx) {
+            const uint32_t was = geomMatIdx(geomDescsCached_[i]);
+            if (was == idx) return;
+            matTableRef(idx);
+            setGeomMatIdx(geomDescsCached_[i], idx);
+            matTableUnref(was);
+            markGeomDescsDirty(static_cast<uint32_t>(i));
+        }
+        // Replace entry `i`'s whole GeometryDesc with `gd` naming record
+        // `idx` (the caller marks the range dirty).
+        void assignEntryGeom(size_t i, const GeometryDesc& gd, uint32_t idx) {
+            const uint32_t was = geomMatIdx(geomDescsCached_[i]);
+            matTableRef(idx);
+            geomDescsCached_[i] = gd;
+            setGeomMatIdx(geomDescsCached_[i], idx);
+            matTableUnref(was);
+        }
 
         // Stage a desc change for every slot at once (a host-side patch applies
         // to the scene, not to one frame). Named per array so the call sites
@@ -1184,7 +1302,7 @@ namespace threepp {
         float cutoutRayCamPos_[3] = {0.f, 0.f, 0.f};// ...and the camera position
         bool  cutoutRayClassified_ = false;// false after a full re-expansion (the bits were reset)
         // Lean frames: re-derive MeshEntry::rayFarOpaque when due. Reads
-        // matDescsCached_, so call after the material patch. True when any
+        // the material table, so call after the material patch. True when any
         // entry's bit flipped (the TLAS must then be refilled and rebuilt).
         bool classifyCutoutFar(const float camPos[3]);
         // Host mirror of the last-uploaded GeometryDesc array (entries-
@@ -4052,11 +4170,13 @@ namespace threepp {
         static MaterialDesc materialFromMesh(const Mesh& m);
 
         // three.js parity: InstancedMesh::instanceColor multiplies the
-        // material's diffuse color per instance (color_vertex.glsl). Folded
-        // into the entry's own MaterialDesc, which every consumer (raster
-        // G-buffer, traced hits, lidar) already indexes per entry. No-op for
-        // plain meshes and for instanced meshes that never set a color.
-        static void applyInstanceColor(MaterialDesc& md, const MeshEntry& en);
+        // material's diffuse color per instance (color_vertex.glsl). Carried
+        // in the entry's GeometryDesc, which every consumer (raster G-buffer,
+        // traced hits, lidar) reaches per entry, and multiplied into the
+        // material record's albedo there (entryMat). (1,1,1) for plain meshes
+        // and for instanced meshes that never set a color: a multiply by one
+        // leaves the albedo's bits as they are.
+        static void setGeomInstanceColor(GeometryDesc& gd, const MeshEntry& en);
 
         // Dithered LOD crossfade (Mesh::setFade, InstancedMesh::setFadeAt).
         // One word per entry in the high-half layout of vulkan_shared.h
@@ -4478,8 +4598,8 @@ namespace threepp {
             return std::clamp(n, 8u, 128u);
         }
 
-        // Cache per-entry cull mode from a freshly-built matDescs array.
-        // Called wherever matDescs is uploaded so the gbuffer draw loop can
+        // Cache per-entry cull mode from each entry's material record.
+        // Called wherever the table is patched so the gbuffer draw loop can
         // pick BACK-cull (Front, default fast path), FRONT-cull (Back), or
         // NONE-cull (Double).
         //
@@ -4490,7 +4610,7 @@ namespace threepp {
         // you need interior viewing — chit's BVH path doesn't cull, but the
         // raster prepass does, so unmarked single-sided glass shows the
         // surface BEHIND it in the gbuffer.
-        void cacheCullFlags(const std::vector<MaterialDesc>& mds);
+        void cacheCullFlags();
 
         // Resolve the BlasRecord backing a given visible entry. The same
         // physical buffers feed BLAS and the raster prepass (VERTEX_BUFFER_BIT

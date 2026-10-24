@@ -49,7 +49,7 @@ bool restirOccluded(vec3 shadowOrig, vec3 dir, float maxDist) {
                           shadowOrig, 1e-3, dir, maxDist);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
-            const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
+            const MaterialDesc hm = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
             const vec3 hem = hm.emissive * hm.emissiveIntensity;
             if (max(max(hem.r, hem.g), hem.b) < 0.05) rayQueryConfirmIntersectionEXT(rq);
         }

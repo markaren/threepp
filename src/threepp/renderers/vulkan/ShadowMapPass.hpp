@@ -99,11 +99,12 @@ namespace threepp::vulkan {
         // indirect commands; true when the DrawInfo buffer moved (binding 4 of
         // the slot's raster set was then rewritten here).
         bool ensureDrawCapacity(uint32_t frame, uint32_t draws, uint32_t cmds);
-        // Bindings 2 (MaterialDesc[]) and, when matTex is given, 3 (the
-        // bindless albedo maps) of the slot's raster set: the shadow fragment
-        // shader's alpha test reads them.
-        void writeRasterMaterials(uint32_t frame, VkBuffer materials, const VkDescriptorImageInfo* matTex,
-                                  uint32_t matTexCount);
+        // Bindings 2 (the material table), 5 (the GeometryDescs, whose flags
+        // word names an entry's record) and, when matTex is given, 3
+        // (the bindless albedo maps) of the slot's raster set: the shadow
+        // fragment shader's alpha test reads them.
+        void writeRasterMaterials(uint32_t frame, VkBuffer materials, VkBuffer geometryDescs,
+                                  const VkDescriptorImageInfo* matTex, uint32_t matTexCount);
 
         // This frame's layers, in record order: the cascades, then the spots,
         // then six faces per point cube.

@@ -1009,7 +1009,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             computeAndUploadMotionMatrices(currentFrame, lastVisibleEntries_);
             // Same fence guarantee covers materialDescsBuffers[currentFrame].
             // ensureSceneBuilt staged any material-value change in
-            // matDescsCached_ and marked the entry ranges it patched; flush this
+            // matTable_ and marked the record ranges it patched; flush this
             // slot's ranges now (the other slot flushes when its frame comes
             // around, which is why the pending set is PER SLOT).
             flushMaterialDescsIfDirty(currentFrame);

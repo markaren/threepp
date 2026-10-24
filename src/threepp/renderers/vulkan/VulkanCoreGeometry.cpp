@@ -1954,11 +1954,9 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                     // rebuild made from the material (a colour buffer exists for
                     // the same geometry packed or not), so the material is not
                     // read here either.
-                    gd.colorAddress = (gd.colorAddress != 0ull &&
-                                       recPtr->color.handle != VK_NULL_HANDLE)
-                                              ? recPtr->color.address
-                                              : 0ull;
-                    gd.indexed = lodSel0.indexed ? 1u : 0u;
+                    setGeomFlag(gd, kGeomFlagVertexColor,
+                                geomFlag(gd, kGeomFlagVertexColor) && recPtr->color.handle != VK_NULL_HANDLE);
+                    setGeomFlag(gd, kGeomFlagIndexed, lodSel0.indexed);
                     // Only the packed bits change: the fresh record is unpacked,
                     // so they clear. kGeomFlagMoved, kGeomFlagRtProxy and
                     // kGeomFlagGlowOnly stay.

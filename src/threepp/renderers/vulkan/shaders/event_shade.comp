@@ -55,6 +55,12 @@ layout(set = 0, binding = 1) uniform usampler2D gbufIds;
 layout(set = 0, binding = 2, scalar) readonly buffer MatBuf {
     MaterialDesc mats[];
 };
+// The per-entry GeometryDesc array as words: only an entry's material index and
+// instance colour are read from it (mats[] is the material table, one record
+// per material).
+layout(set = 0, binding = 6, scalar) readonly buffer GeomWordBuf {
+    uint geomWords[];
+};
 
 // The scene lights, the same GpuLightsUbo buffer the deferred shade reads,
 // bound here at binding 3; only `ambient` and the sun list are used.
@@ -115,7 +121,15 @@ vec3 shadeProxy(ivec2 pix) {
     if (instCustomIdx > 0u) {
         const uint instId = instCustomIdx - 1u;
         const vec3 normal = normalize(texelFetch(gbufNormal, srcPix, 0).xyz);
-        const MaterialDesc mat = mats[instId];
+        // The material's table record with the entry's instance colour on
+        // the albedo (deferred_shade_00_common's entryMat).
+        const uint g0 = instId * kGeomDescWords;
+        MaterialDesc mat = mats[geomWords[g0 + kGeomDescFlagsWord] >> kGeomFlagMaterialShift];
+        const vec3 instColor = uintBitsToFloat(uvec3(geomWords[g0 + kGeomDescColorWord],
+                                                     geomWords[g0 + kGeomDescColorWord + 1u],
+                                                     geomWords[g0 + kGeomDescColorWord + 2u]));
+        precise vec3 tinted = mat.albedo * instColor;
+        mat.albedo = tinted;
 
         // Metals route most of their incoming light into the specular
         // lobe; the diffuse contribution is small. Reduces brightness

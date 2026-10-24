@@ -73,7 +73,7 @@
         if (flagOn(128u) && repIdx >= 0) {
             const uint repId    = texelFetch(gbufIdsMS, px, repIdx).x;
             const bool repUnlit = texelFetch(gbufNormalMS, px, repIdx).w < 0.0;
-            const bool repTransmissive = mats[repId - 1u].transmission > 0.0;
+            const bool repTransmissive = mats[matIdxOf(repId - 1u)].transmission > 0.0;
             if (!repUnlit && !repTransmissive) geoMinW = float(geoMinCount) / float(K);
         }
         domWeight = 1.0 - skyEdgeW - geoMinW;

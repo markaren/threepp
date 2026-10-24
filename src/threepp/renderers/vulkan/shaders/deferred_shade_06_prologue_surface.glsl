@@ -22,7 +22,7 @@
     // that mutated normal reads as enormous variance — a matte band across the mesh.
     const vec3  Nraster   = N;
 
-    const MaterialDesc pm = mats[id - 1u];
+    const MaterialDesc pm = entryMat(id - 1u);
 
     const vec3 V          = normalize(camPos - worldPos);
     const bool shadowsOn  = flagOn(1u);

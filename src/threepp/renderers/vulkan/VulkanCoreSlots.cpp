@@ -235,7 +235,6 @@ void VulkanRenderer::Impl::slotGrowRows(size_t oldSize, size_t newSize, const Me
                 entries.resize(newSize, tombEntry);
                 prevSceneFingerprint.resize(newSize, tombFp);
                 geomDescsCached_.resize(newSize);
-                matDescsCached_.resize(newSize);
                 prevWorldByEntry_.resize(newSize, identity);
                 prevWorldValidByEntry_.resize(newSize, 1u);
                 motionScratch_.resize(newSize * 16u);
@@ -260,14 +259,14 @@ void VulkanRenderer::Impl::slotFillRow(size_t i, const MeshEntry& be, const Mesh
             fp.instanceIndex = be.instanceIndex;
             fp.matrix = be.worldMatrix;
             if (rec) {
-                geomDescsCached_[i] = gd;
-                MaterialDesc md = md0;
-                applyInstanceColor(md, be);
-                matDescsCached_[i] = md;
-                lastVisibleCullMode_[i] = slotCullOf(md);
+                // The record of the mesh's material, derived once per edit
+                // however many rows share it; the row's own instance colour.
+                const uint32_t matIdx = matTableSlot(fp0.matTyped, md0);
+                assignEntryGeom(i, gd, matIdx);
+                setGeomInstanceColor(geomDescsCached_[i], be);
+                lastVisibleCullMode_[i] = slotCullOf(matTable_[matIdx]);
             } else {
-                geomDescsCached_[i] = GeometryDesc{};
-                matDescsCached_[i] = MaterialDesc{};
+                assignEntryGeom(i, GeometryDesc{}, 0u);
                 lastVisibleCullMode_[i] = VK_CULL_MODE_BACK_BIT;
             }
             entryStableIds_[i] = stableId;
@@ -285,8 +284,7 @@ void VulkanRenderer::Impl::slotTombRow(size_t i, const MeshEntry& tombEntry, con
             std::memcpy(identity.data(), kIdentity16, 64);
             lastVisibleEntries_[i] = tombEntry;
             prevSceneFingerprint[i] = tombFp;
-            geomDescsCached_[i] = GeometryDesc{};
-            matDescsCached_[i] = MaterialDesc{};
+            assignEntryGeom(i, GeometryDesc{}, 0u);
             entryStableIds_[i] = 0u;
             prevWorldByEntry_[i] = identity;
             prevWorldValidByEntry_[i] = 1u;
@@ -313,7 +311,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             auto& entries = lastVisibleEntries_;
             const size_t oldSize = entries.size();
             if (prevSceneFingerprint.size() != oldSize || geomDescsCached_.size() != oldSize ||
-                matDescsCached_.size() != oldSize || prevWorldByEntry_.size() != oldSize ||
+                prevWorldByEntry_.size() != oldSize ||
                 prevWorldValidByEntry_.size() != oldSize || motionScratch_.size() != oldSize * 16u)
                 return decline("entry-indexed arrays out of step");
             // A ParticleField publishes its entry index (particleFields_). One
@@ -711,6 +709,9 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             seAssets.stop();
             THREEPP_CPUPROF_NAMED(seRows, "scene.S4_slotRows");
             // ── 4. The rows ────────────────────────────────────────────────────
+            // The material records the rows land on are derived afresh once
+            // each in this pass (slotFillRow).
+            matTableBeginPass();
             const uint32_t newSize = highWater;
             MeshEntry tombEntry;
             MeshFingerprint tombFp;
@@ -726,8 +727,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     const size_t s = size_t(c.src) + j, d = size_t(c.dst) + j;
                     entries[d] = entries[s];
                     prevSceneFingerprint[d] = prevSceneFingerprint[s];
-                    geomDescsCached_[d] = geomDescsCached_[s];
-                    matDescsCached_[d] = matDescsCached_[s];
+                    assignEntryGeom(d, geomDescsCached_[s], geomMatIdx(geomDescsCached_[s]));
                     entryStableIds_[d] = entryStableIds_[s];
                     prevWorldByEntry_[d] = prevWorldByEntry_[s];
                     prevWorldValidByEntry_[d] = prevWorldValidByEntry_[s];
@@ -742,7 +742,6 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 // either. A moved bit would make it sticky-moving (a shorter
                 // history) for thirty frames.
                 markGeomDescsDirty(c.dst, c.count);
-                markMatDescsDirty(c.dst, c.count);
             }
             for (const RowFill& fl : fills) {
                 const EntrySpan& bsp = builtSpans[fl.builtSpan];
@@ -769,12 +768,10 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     slotFillRow(i, be, r.fp, r.rec, gd, r.md, r.stableId);
                 }
                 markGeomDescsDirty(fl.dst, fl.count);
-                markMatDescsDirty(fl.dst, fl.count);
             }
             for (const RowRange& t : tombs) {
                 for (uint32_t j = 0; j < t.count; ++j) slotTombRow(size_t(t.first) + j, tombEntry, tombFp);
                 markGeomDescsDirty(t.first, t.count);
-                markMatDescsDirty(t.first, t.count);
             }
             for (const size_t idx : hiddenFlips) {
                 EntrySpan& sp = spans[idx];
@@ -894,7 +891,7 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
             auto& entries = lastVisibleEntries_;
             const size_t oldSize = entries.size();
             if (prevSceneFingerprint.size() != oldSize || geomDescsCached_.size() != oldSize ||
-                matDescsCached_.size() != oldSize || prevWorldByEntry_.size() != oldSize ||
+                prevWorldByEntry_.size() != oldSize ||
                 prevWorldValidByEntry_.size() != oldSize || motionScratch_.size() != oldSize * 16u)
                 return decline("entry-indexed arrays out of step");
             // What died since the last edit goes first (trySlotEdit's reason).
@@ -1076,6 +1073,7 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
             dAssets.stop();
             THREEPP_CPUPROF_NAMED(dRows, "scene.D4_deltaRows");
             // ── 4. The rows ────────────────────────────────────────────────────
+            matTableBeginPass();// trySlotEdit's rows stage
             const uint32_t newSize = highWater;
             MeshEntry tombEntry;
             MeshFingerprint tombFp;
@@ -1091,7 +1089,6 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
                     slotFillRow(size_t(places[b].dst) + j, d.built[size_t(bs.first) + j], rows[b].fp, rec, gd,
                                 rows[b].md, rows[b].stableId);
                 markGeomDescsDirty(places[b].dst, bs.count);
-                markMatDescsDirty(places[b].dst, bs.count);
                 markMotionDirty(places[b].dst, bs.count);
                 markLodFadeDirty(places[b].dst, bs.count);
             }
@@ -1103,7 +1100,6 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
                     slotTombRow(i, tombEntry, tombFp);
                 }
                 markGeomDescsDirty(sp.first, sp.count);
-                markMatDescsDirty(sp.first, sp.count);
                 markMotionDirty(sp.first, sp.count);
                 markLodFadeDirty(sp.first, sp.count);
             }
@@ -1509,6 +1505,7 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
             auto& entries = lastVisibleEntries_;
             uint32_t pending = 0u, landed = 0u;
             bool batch = false;
+            matTableBeginPass();// the landed spans' records are derived afresh
             // Called on a frame that ends lean (its walk matched, or its slot
             // edit took the change): every live span's mesh is alive.
             for (EntrySpan& sp : entrySpans_) {
@@ -1548,18 +1545,17 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                 if (!recp) continue;// degenerate: default rows and no instance, as in a rebuild
                 const BlasRecord& rec = *recp;
                 THREEPP_CPUPROF("scene.E3_admitRows");
+                const Material* mat = m.material().get();
                 MaterialDesc md = buildMaterialDesc(m);// takes the prepared images
-                md.materialAssetIdx = slotMaterialAssetIdx(m.material().get());
+                md.materialAssetIdx = slotMaterialAssetIdx(mat);
                 const GeometryDesc gd = buildGeometryDesc(entries[sp.first], rec, selectLodGeom(rec, 0));
                 for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
-                    geomDescsCached_[i] = gd;
-                    MaterialDesc mi = md;
-                    applyInstanceColor(mi, entries[i]);
-                    matDescsCached_[i] = mi;
-                    lastVisibleCullMode_[i] = cullOf(mi);
+                    const uint32_t matIdx = matTableSlot(mat, md);
+                    assignEntryGeom(i, gd, matIdx);
+                    setGeomInstanceColor(geomDescsCached_[i], entries[i]);
+                    lastVisibleCullMode_[i] = cullOf(matTable_[matIdx]);
                 }
                 markGeomDescsDirty(sp.first, sp.count);
-                markMatDescsDirty(sp.first, sp.count);
                 ++landed;
                 ++tlasStats_.admissionsLanded;
             }
@@ -1648,18 +1644,17 @@ void VulkanRenderer::Impl::growSlotPool(uint32_t capacity) {
             // 10-20 ms either way. reserveEntrySlots avoids a growth outright.
             THREEPP_CPUPROF_NAMED(gBufs, "scene.G2_growBuffers");
             slotCapacity_ = capacity;
-            // The desc rings, every slot from the host copy (which the frame-
-            // in-flight flushes carry deltas from).
+            // The desc ring, every slot from the host copy (which the frame-
+            // in-flight flushes carry deltas from). The material table is
+            // sized by materials, not entries, and grows on its own
+            // (matTableGrow).
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 retire(std::move(geometryDescsBuffers[f]));
                 uploadDescBuffer(geometryDescsBuffers[f], geomDescsCached_, slotCapacity_);
-                retire(std::move(materialDescsBuffers[f]));
-                uploadDescBuffer(materialDescsBuffers[f], matDescsCached_, slotCapacity_);
                 ensureMotionMatCapacity(f, slotCapacity_);
                 ensureMeshMovedBitsCapacity(f, (slotCapacity_ + 31u) / 32u);
             }
             for (auto& d : geomDescsDirty_) d.clear();
-            for (auto& d : matDescsDirty_) d.clear();
             gBufs.stop();
             THREEPP_CPUPROF_NAMED(gTlas, "scene.G3_growTlas");
             // The TLAS: a new structure for the new pool, holding what the old

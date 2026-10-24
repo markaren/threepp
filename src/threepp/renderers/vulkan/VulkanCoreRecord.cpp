@@ -3685,11 +3685,13 @@ void VulkanRenderer::Impl::addSceneCapturePass(rg::RenderGraph& g, uint32_t imag
 void VulkanRenderer::Impl::createEventShadePipeline() {
             if (eventShadePipeline_ != VK_NULL_HANDLE) return;
 
-            // 6 bindings: gbufNormal, gbufIds (combined image samplers),
-            // matDesc (storage buffer), lightsUbo (uniform), lumaBuf (storage),
-            // finalImg (storage image — the acquired swapchain image, read by
-            // the Final source; bound every frame, unused under Shaded).
-            std::array<VkDescriptorSetLayoutBinding, 6> b{};
+            // 7 bindings: gbufNormal, gbufIds (combined image samplers),
+            // matDesc (storage buffer: the material table), lightsUbo
+            // (uniform), lumaBuf (storage), finalImg (storage image — the
+            // acquired swapchain image, read by the Final source; bound every
+            // frame, unused under Shaded), geomDescs (storage buffer: an
+            // entry's material index).
+            std::array<VkDescriptorSetLayoutBinding, 7> b{};
             b[0].binding         = 0;
             b[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b[0].descriptorCount = 1;
@@ -3714,6 +3716,10 @@ void VulkanRenderer::Impl::createEventShadePipeline() {
             b[5].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             b[5].descriptorCount = 1;
             b[5].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[6].binding         = 6;
+            b[6].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[6].descriptorCount = 1;
+            b[6].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -3776,7 +3782,7 @@ void VulkanRenderer::Impl::createEventShadePipeline() {
             ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             ps[0].descriptorCount = 2 * kFramesInFlight;
             ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps[1].descriptorCount = 2 * kFramesInFlight;
+            ps[1].descriptorCount = 3 * kFramesInFlight;
             ps[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = 1 * kFramesInFlight;
             ps[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -3839,6 +3845,13 @@ void VulkanRenderer::Impl::addEventCameraPasses(rg::RenderGraph& g, uint32_t fra
                                      ? materialDescsBuffers[frame].size
                                      : VK_WHOLE_SIZE;
 
+            VkDescriptorBufferInfo geomInfo{};
+            geomInfo.buffer = geometryDescsBuffers[frame].handle;
+            geomInfo.offset = 0;
+            geomInfo.range  = geometryDescsBuffers[frame].size
+                                      ? geometryDescsBuffers[frame].size
+                                      : VK_WHOLE_SIZE;
+
             VkDescriptorBufferInfo lightsInfo{};
             lightsInfo.buffer = lightsUbos[frame].handle;
             lightsInfo.offset = 0;
@@ -3863,7 +3876,7 @@ void VulkanRenderer::Impl::addEventCameraPasses(rg::RenderGraph& g, uint32_t fra
             // descriptor set has retired — updating it here can't race the
             // other in-flight frame's set.
             VkDescriptorSet ds = eventShadeDescSets_[frame];
-            std::array<VkWriteDescriptorSet, 6> w{};
+            std::array<VkWriteDescriptorSet, 7> w{};
             for (auto& it : w) it.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[0].dstSet = ds;
             w[0].dstBinding = 0;
@@ -3895,6 +3908,11 @@ void VulkanRenderer::Impl::addEventCameraPasses(rg::RenderGraph& g, uint32_t fra
             w[5].descriptorCount = 1;
             w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[5].pImageInfo = &finalInfo;
+            w[6].dstSet = ds;
+            w[6].dstBinding = 6;
+            w[6].descriptorCount = 1;
+            w[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[6].pBufferInfo = &geomInfo;
 
             vulkan::updateDescriptorSets(ctx->device(),
                                     static_cast<uint32_t>(w.size()), w.data(),

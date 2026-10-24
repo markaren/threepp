@@ -82,6 +82,20 @@ layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats
 
 #include "geometry_fetch.glsl"// GeometryDesc, the vertex/index buffer references, gfetch*
 layout(set = 0, binding = 10, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+// mats[] is the material TABLE, one record per material, not one per entry: an
+// entry, a G-buffer id less one or a traced hit's instance custom index,
+// reaches its record through its GeometryDesc, and entryMat folds in the
+// entry's instance colour. `precise`: the one rounded multiply the host made
+// when the colour lived in a per-entry desc, never fused into what follows.
+uint matIdxOf(uint entry) { return geoms[entry].flags >> kGeomFlagMaterialShift; }
+uint matIdxOf(int entry) { return geoms[entry].flags >> kGeomFlagMaterialShift; }
+MaterialDesc entryMat(uint entry) {
+    MaterialDesc m = mats[matIdxOf(entry)];
+    precise vec3 tinted = m.albedo * geoms[entry].instanceColor;
+    m.albedo = tinted;
+    return m;
+}
+MaterialDesc entryMat(int entry) { return entryMat(uint(entry)); }
 
 // Bindless material textures (reflection hits sample these). Indexed by the
 // material's per-map texIndex.
