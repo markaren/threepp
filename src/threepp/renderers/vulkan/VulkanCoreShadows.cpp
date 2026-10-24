@@ -362,8 +362,9 @@ namespace threepp {
         if (sz.cascades == 0u && sz.spots == 0u && sz.points == 0u) return false;
 
         if (!v.shadowMaps_) {
-            v.shadowMaps_ = std::make_unique<vulkan::ShadowMapPass>(*ctx, kFramesInFlight, rasterDsLayout,
-                                                                     transientPool_.get(), v.id);
+            v.shadowMaps_ = std::make_unique<vulkan::ShadowMapPass>(
+                    *ctx, kFramesInFlight, rasterDsLayout, transientPool_.get(), v.id,
+                    [this](Image2D&& i) { retire(std::move(i)); });
         }
         if (shadowPipeline_ == VK_NULL_HANDLE) createShadowPipeline();
         auto& smp = *v.shadowMaps_;

@@ -34,6 +34,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace threepp::vulkan {
@@ -64,9 +65,11 @@ namespace threepp::vulkan {
     class ShadowMapPass {
     public:
         // pool: the renderer's TransientPool, or null (THREEPP_VK_NO_ALIAS);
-        // view: the view's id, for the maps' span.
+        // view: the view's id, for the maps' span. retireImage: the renderer's
+        // retire queue, which a reallocated static cache is handed to (both
+        // slots read it, so the other one may still have it in flight).
         ShadowMapPass(VulkanContext& ctx, uint32_t framesInFlight, VkDescriptorSetLayout rasterLayout,
-                      TransientPool* pool, uint32_t view);
+                      TransientPool* pool, uint32_t view, std::function<void(Image2D&&)> retireImage);
         ~ShadowMapPass();
         ShadowMapPass(const ShadowMapPass&)            = delete;
         ShadowMapPass& operator=(const ShadowMapPass&) = delete;
@@ -78,7 +81,8 @@ namespace threepp::vulkan {
             bool operator==(const Sizes&) const = default;
         };
         // After the call slot `frame` holds images of exactly these sizes.
-        // Reallocates that slot only; the caller has waited for its fence.
+        // Reallocates that slot only; the caller has waited for its fence. A
+        // static cache that changes size is retired, not destroyed.
         void ensure(uint32_t frame, const Sizes& sizes);
 
         struct Slot {
@@ -188,12 +192,14 @@ namespace threepp::vulkan {
         VulkanContext&        ctx_;
         TransientPool*        transient_ = nullptr;
         uint32_t              view_      = 0;
+        std::function<void(Image2D&&)> retireImage_;
         VkDescriptorPool      pool_ = VK_NULL_HANDLE;
         std::vector<Slot>     slots_;
         uint64_t              genCounter_ = 0;
         bool cacheReady_ = false, spotCacheReady_ = false, pointCacheReady_ = false;// each cache image's one-time move to GENERAL was recorded
 
         void freeImages(Slot& s);
+        void retireCache(ShadowDepthArray& c);
     };
 
 }// namespace threepp::vulkan

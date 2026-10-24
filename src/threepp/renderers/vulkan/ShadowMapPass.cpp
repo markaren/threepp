@@ -83,8 +83,8 @@ namespace threepp::vulkan {
     }
 
     ShadowMapPass::ShadowMapPass(VulkanContext& ctx, uint32_t framesInFlight, VkDescriptorSetLayout rasterLayout,
-                                 TransientPool* pool, uint32_t view)
-        : ctx_(ctx), transient_(pool), view_(view), slots_(framesInFlight) {
+                                 TransientPool* pool, uint32_t view, std::function<void(Image2D&&)> retireImage)
+        : ctx_(ctx), transient_(pool), view_(view), retireImage_(std::move(retireImage)), slots_(framesInFlight) {
         // The raster set's shape (VulkanCorePipelines: camera UBO, motion
         // matrices, materials, the bindless albedo maps, DrawInfo, the
         // GeometryDescs); the shadow shaders read 2, 3, 4 and 5.
@@ -141,6 +141,21 @@ namespace threepp::vulkan {
         s.sizes = {};
     }
 
+    // A cache has no per-layer views and its own allocation, so it is an
+    // Image2D as far as the retire queue's destroy goes.
+    void ShadowMapPass::retireCache(ShadowDepthArray& c) {
+        if (!retireImage_) {
+            destroyShadowDepthArray(ctx_, c);
+            return;
+        }
+        Image2D img;
+        img.image = c.image;
+        img.alloc = c.alloc;
+        img.view  = c.view;
+        retireImage_(std::move(img));
+        c = {};
+    }
+
     void ShadowMapPass::ensure(uint32_t frame, const Sizes& sizes) {
         Slot& s = slots_[frame];
         if (s.gen != 0 && s.sizes == sizes) return;
@@ -160,9 +175,10 @@ namespace threepp::vulkan {
         s.sizes = sizes;
         s.gen   = ++genCounter_;
         // The static cache follows the cascades' size and count; a change
-        // drops every frozen box (the caller has waited for the fence).
+        // drops every frozen box. The caches are shared by the slots, and the
+        // fence waited for is this slot's only: the old image is retired.
         if (cache.size != sizes.cascadeSize || cache.layers != sizes.cascades) {
-            destroyShadowDepthArray(ctx_, cache);
+            retireCache(cache);
             cacheReady_ = false;
             invalidateCache();
             if (sizes.cascades > 0) {
@@ -172,7 +188,7 @@ namespace threepp::vulkan {
         }
         // The lamps' caches follow their arrays the same way.
         if (spotCache.size != sizes.spotSize || spotCache.layers != sizes.spots) {
-            destroyShadowDepthArray(ctx_, spotCache);
+            retireCache(spotCache);
             spotCacheReady_ = false;
             spotCacheState.assign(sizes.spots, {});
             if (sizes.spots > 0) {
@@ -181,7 +197,7 @@ namespace threepp::vulkan {
             }
         }
         if (pointCache.size != sizes.pointSize || pointCache.layers != 6u * sizes.points) {
-            destroyShadowDepthArray(ctx_, pointCache);
+            retireCache(pointCache);
             pointCacheReady_ = false;
             pointFaceCacheState.assign(6u * sizes.points, {});
             if (sizes.points > 0) {
