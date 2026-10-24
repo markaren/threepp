@@ -3067,9 +3067,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     bool interopDirtyAny = false;
                     if (!blasCache.empty()) {
                         std::unordered_set<const BufferGeometry*> interopEnqueued;
-                        for (size_t i = 0; i < entries.size(); ++i) {
+                        // One plain entry: its isVertexInterop, its record's drawRange
+                        // snapshot, and an armed interop's per-frame enqueue. True when it
+                        // tore its mesh's interop down (fixed capacity broken).
+                        const auto plainEntry = [&](size_t i) -> bool {
                             if (entries[i].isSkinned || entries[i].isDisplaced ||
-                                entries[i].isGrass || entries[i].isTet) continue;
+                                entries[i].isGrass || entries[i].isTet) return false;
                             const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
                             auto cIt = blasCache.find(geomKey);
                             // Refresh MeshEntry::isVertexInterop in place, every
@@ -3115,7 +3118,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             }
                             const bool iop = (cIt != blasCache.end() && cIt->second->interop);
                             entries[i].isVertexInterop = iop;
-                            if (!iop) continue;
+                            if (!iop) return false;
                             auto& rec = *cIt->second;
 
                             // Interop requires FIXED-CAPACITY geometry: the
@@ -3139,9 +3142,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                              "maximum triangle count once and write degenerates "
                                              "for the unused tail.\n";
                                 disableVertexInterop(*entries[i].mesh);
-                                continue;
+                                return true;
                             }
-                            if (!interopEnqueued.insert(geomKey).second) continue;
+                            if (!interopEnqueued.insert(geomKey).second) return false;
 
                             pendingDynamicGeomRefits_.push_back({geomKey, &rec});
                             rec.lastDirtyFrame = frameSerial_;
@@ -3153,6 +3156,39 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             const size_t w = i >> 5;
                             if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
                             meshMovedBits_[w] |= (1u << (i & 31u));
+                            return false;
+                        };
+                        // Walked per SPAN, not per entry: a span is one mesh's entries (an
+                        // InstancedMesh's instances), so the record lookup and the drawRange
+                        // compare answer the same for all of them, and in an entry walk only
+                        // the span's first entry can act — after it the record's drawRange
+                        // snapshot is current and interopEnqueued is per geometry. The rest
+                        // take the first's isVertexInterop. The entry walk did a blasCache
+                        // hash lookup per instance: 2.0 to 2.4 ms a frame, still or moving,
+                        // at about 100k instances in 4k meshes (pine-forest's orbit,
+                        // scratch/orbitperf). A span whose first entry tore interop down walks
+                        // its rest entry by entry, as before; spans that do not tile the
+                        // entries (the slot editor keeps them contiguous) fall back to the walk.
+                        const bool spansTile = !entrySpans_.empty() &&
+                                size_t(entrySpans_.back().first) + entrySpans_.back().count == entries.size();
+                        if (!spansTile) {
+                            for (size_t i = 0; i < entries.size(); ++i) plainEntry(i);
+                        } else {
+                            for (const auto& sp : entrySpans_) {
+                                if (sp.count == 0) continue;
+                                const size_t i0 = sp.first, end = i0 + sp.count;
+                                const auto& e0 = entries[i0];
+                                // deformer flags are per mesh: the span's first entry speaks for it
+                                if (e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isTet) continue;
+                                if (plainEntry(i0)) {
+                                    for (size_t i = i0 + 1; i < end; ++i) plainEntry(i);
+                                    continue;
+                                }
+                                if (sp.count == 1) continue;
+                                const auto cIt = blasCache.find(e0.mesh->geometry().get());
+                                const bool iop = cIt != blasCache.end() && cIt->second->interop;
+                                for (size_t i = i0 + 1; i < end; ++i) entries[i].isVertexInterop = iop;
+                            }
                         }
                     }
 
