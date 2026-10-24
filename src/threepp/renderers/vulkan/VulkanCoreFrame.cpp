@@ -996,7 +996,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("frame.1_uboUpdates");
                 updateCameraUbo(currentFrame, camera);
                 std::memcpy(probeCamPos_, camera.matrixWorld->elements.data() + 12, sizeof(probeCamPos_));
-                updateLightsUbo(currentFrame, scene, camera);
+                // The lights are packed after the environment refresh below:
+                // the extracted environment sun is one of them, and it belongs
+                // to the environment this frame shades with, not the last one's.
                 updateFogUbo(currentFrame, scene, camera);
                 updateCloudUbo(currentFrame);
                 uploadDownwash(currentFrame);
@@ -1199,8 +1201,8 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // is the same event as a new environment (a primary radiance
                 // source moved), so it gets the same drain + history wipe on
                 // every view, and the probe grid takes the fast blend a light
-                // step gets. (updateLightsUbo has already packed the new values
-                // this frame, which is why this compares against its own copy.)
+                // step gets. (The lights are packed from the scene below, so this
+                // compares against its own copy of the knobs.)
                 THREEPP_CPUPROF("frame.2c_descRefresh");
                 vkDeviceWaitIdle(ctx->device());
                 forEachLiveView([&] { clearGbufImages(); });
@@ -1208,6 +1210,17 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             }
             envKnobsSeen_      = vulkan::SceneEnvKnobs::fromScene(scene);
             envKnobsSeenValid_ = true;
+
+            // The lights UBO, packed now that refreshEnvTextureFromScene has
+            // settled the environment: the one-sun policy reads the sun it
+            // extracted (or cleared) THIS frame. Packed before the refresh, the
+            // first frame after an environment change carried the previous
+            // environment's sun, one frame of light from a sky no longer there,
+            // which every temporal accumulator then started from.
+            {
+                THREEPP_CPUPROF("frame.1_uboUpdates");
+                updateLightsUbo(currentFrame, scene, camera);
+            }
 
             // Per-FIF deferred-descriptor refresh: a material texture swapped in
             // place (refreshDirtyMaterialTextures) marked all FIF sets dirty.
