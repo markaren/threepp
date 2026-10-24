@@ -15,6 +15,9 @@
 //                                exit nonzero if any scene regresses
 //   VulkanGolden_test --update   (re)write references — ONLY after an
 //                                intentional, reviewed change to renderer output
+//   --only <a,b,...>             render only those scenes, in that order
+//   --dump <dir>                 write each compared render there as <scene>.ppm,
+//                                for diffing a failure against its reference
 // Or via CTest: `ctest -R VulkanGolden_test`. Exits 42 (→ CTest "Skipped") when
 // no Vulkan/RT GPU is available, so CI without RT hardware doesn't fail.
 //
@@ -214,8 +217,13 @@ namespace {
 
 int main(int argc, char** argv) {
     bool update = false;
+    std::string only, dump;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--update") == 0) update = true;
+        // Diagnostics: --only <a,b,...> runs those scenes in the order given;
+        // --dump <dir> writes every compared render there as <scene>.ppm.
+        if (std::strcmp(argv[i], "--only") == 0 && i + 1 < argc) only = argv[++i];
+        if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) dump = argv[++i];
     }
 
     // Construction throws without a Vulkan/RT GPU (or a display) — treat that as
@@ -301,12 +309,12 @@ int main(int argc, char** argv) {
         }
     };
 
-    // The scenes render one after another on one renderer, and what a scene
-    // leaves in it (the temporal histories, the environment it bound) reaches
-    // the next, so a reference holds for this list in this order: a new scene
-    // goes at the end. The floors in the comments are two runs of the same
-    // binary against references it wrote, on one GPU, with and without RT.
-    const std::vector<GoldenScene> scenes = {
+    // The scenes render one after another on one renderer; buildCurrent resets
+    // its temporal state before each, so a scene's reference does not depend
+    // on its place in this list. The floors in the comments are two runs of
+    // the same binary against references it wrote, on one GPU, with and
+    // without RT.
+    const std::vector<GoldenScene> allScenes = {
             // Glass sphere over a colour triptych: refraction through a closed
             // dielectric + env reflection. The transmission/ordering path.
             {"glass", buildGlass},
@@ -349,9 +357,10 @@ int main(int argc, char** argv) {
             // Four coloured point lamps and a spot in the closed room: the
             // clustered light list, ReSTIR DI choosing among several lamps and
             // the lamps' specular on a glossy sphere. Floor: bit-exact with and
-            // without RT. The gate is emissive's all the same: a perturbation
-            // upstream of the reservoirs (here, a run without an environment
-            // bound before it) moved the picture to 43 dB / maxD 35.
+            // without RT. The gate is emissive's all the same: a one-frame
+            // perturbation upstream of the reservoirs (the previous scene's
+            // environment sun on the first frame, before the lights were packed
+            // after the env refresh) moved the picture to 43 dB / maxD 35.
             {"lamps", [](Scene& s, PerspectiveCamera& cam, const std::shared_ptr<Texture>&) {
                  buildLampRoom(s, cam);
              },
@@ -450,6 +459,23 @@ int main(int argc, char** argv) {
             // Floor: bit-exact with and without RT.
             {"msaa4_glass", buildGlass, kMaxDelta, [](VulkanRenderer& r) { r.setGbufferMsaa(4); }},
     };
+    std::vector<GoldenScene> scenes;
+    if (only.empty()) {
+        scenes = allScenes;
+    } else {
+        for (size_t a = 0; a < only.size();) {
+            const size_t b = only.find(',', a);
+            const std::string want = only.substr(a, b == std::string::npos ? std::string::npos : b - a);
+            for (const auto& gs : allScenes)
+                if (gs.name == want) scenes.push_back(gs);
+            if (b == std::string::npos) break;
+            a = b + 1;
+        }
+        if (scenes.empty()) {
+            std::printf("--only: no scene named in '%s'\n", only.c_str());
+            return 1;
+        }
+    }
 
     // The renderer's own reading of the variable (VulkanContext): set and not
     // starting with '0' turns ray tracing off.
@@ -464,6 +490,12 @@ int main(int argc, char** argv) {
 
     auto buildCurrent = [&] {
         resetSettings();
+        // Every scene starts from the same renderer state: the temporal
+        // histories, the probe grid and the sample index that seeds every
+        // stochastic pass are those of a fresh renderer, so a scene's picture
+        // does not depend on what rendered before it and --only reproduces
+        // the full run's reference.
+        renderer.resetTemporalHistory();
         if (scenes[sceneIdx].setup) scenes[sceneIdx].setup(renderer);
         scene = std::make_unique<Scene>();
         camera = std::make_unique<PerspectiveCamera>(45.f, static_cast<float>(kW) / kH, 0.1f, 100.f);
@@ -497,6 +529,7 @@ int main(int argc, char** argv) {
             writePPM(ref, px, kW, kH);
             std::printf("[update] wrote %s (%dx%d)\n", ref.string().c_str(), kW, kH);
         } else {
+            if (!dump.empty()) writePPM(fs::path(dump) / (gs.name + ".ppm"), px, kW, kH);
             int rw = 0, rh = 0;
             const std::vector<unsigned char> golden = readPPM(ref, rw, rh);
             if (golden.empty() || rw != kW || rh != kH || golden.size() != px.size()) {
