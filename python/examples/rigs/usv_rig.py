@@ -52,8 +52,10 @@ ocean.sample_height reads the last rendered field, so a boat steps AFTER a rende
 PER-BOAT NUMBERS
 ----------------
 The spec's ``strip_model`` block holds what the strip model needs beyond the tables: where each
-half's water level is read (``probe_z``) and the ocean's hull footprint. A spec without one
-gets both from its design waterline. The drives read the spec's ``propulsion`` block; their
+half's water level is read (``probe_z``) and the ocean's hull footprint, and optionally her
+roll damping as a fraction of critical (``roll_zeta``, default 0.15) and her roll added inertia
+as a fraction of her own (``roll_added``, default 0.25). A spec without one gets the first two
+from its design waterline. The drives read the spec's ``propulsion`` block; their
 lumped resistance and damping figures are tuned per boat and stand in the classes below.
 
 MANOEUVRING (opt-in, ``hull.manoeuvring = True``, a hull under her own power with pods)
@@ -207,10 +209,13 @@ class StripHull:
         self.cog = np.array([sum(b["mass"] * b["centroid"][i] for b in items) / m for i in range(3)])
         self.design = D = hydro["conditions"][load]
         gyr = spec["mass"]["gyradius"]
+        rig = spec.get("strip_model", {})
         # Added mass and inertia as fractions (surge, heave, sway) and (roll, yaw, pitch): the
-        # usual rough figures for a hull this shape, not a strip-theory result.
+        # usual rough figures for a hull this shape, not a strip-theory result. A spec's
+        # strip_model.roll_added replaces the roll figure (a catamaran's: see roll_zeta below).
         self.m_eff = m * (1.0 + np.array([0.05, 0.80, 0.60]))
-        self.i_eff = m * np.array([gyr["roll"], gyr["yaw"], gyr["pitch"]]) ** 2 * (1.0 + np.array([0.25, 0.30, 0.60]))
+        self.i_eff = m * np.array([gyr["roll"], gyr["yaw"], gyr["pitch"]]) ** 2 * (
+            1.0 + np.array([rig.get("roll_added", 0.25), 0.30, 0.60]))
         # Bonjean strips: every station, both sides. The generator tabulated the starboard
         # half; port is its mirror.
         bj = hydro["bonjean"]
@@ -225,7 +230,6 @@ class StripHull:
         self.sx = np.concatenate([xs, xs])
         self.side = np.concatenate([np.ones(ns), -np.ones(ns)])
         self.row = np.arange(2 * ns)
-        rig = spec.get("strip_model", {})
         if probe_z is None:
             probe_z = rig["probe_z"] if "probe_z" in rig else 0.314 * D["bwl"]
         if excl is None:
@@ -235,13 +239,15 @@ class StripHull:
         self.probe_z, self.excl = probe_z, tuple(excl)
         self.mask = BUOY_MASK if mask is None else mask
         self.lowest = spec["principal"]["lowest_point_y"]
-        # damping from the design hydrostatics: a fraction of critical on each axis
+        # damping from the design hydrostatics: a fraction of critical on each axis. Roll's 0.15
+        # is a monohull's; a spec's strip_model.roll_zeta replaces it (a catamaran rolls by
+        # heaving her hulls against each other, so her roll takes about heave's fraction)
         rg = self.rho * self.g
         self.k_heave = rg * D["waterplane_area"]
         self.k_roll = rg * D["displacement_m3"] * D["gm_t"]
         self.k_pitch = rg * D["displacement_m3"] * D["gm_l"]
         self.c_heave = 2.0 * 0.35 * math.sqrt(self.k_heave * self.m_eff[1])
-        self.c_roll = 2.0 * 0.15 * math.sqrt(self.k_roll * self.i_eff[0])
+        self.c_roll = 2.0 * rig.get("roll_zeta", 0.15) * math.sqrt(self.k_roll * self.i_eff[0])
         self.c_pitch = 2.0 * 0.45 * math.sqrt(self.k_pitch * self.i_eff[2])
         self.drive = None
         self.wn_xy, self.wn_yaw, self.zeta = 0.35, 0.5, 0.9

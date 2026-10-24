@@ -130,7 +130,9 @@
   "strip_model": {
     "probe_z": 0.37,
     "footprint": {"half_length": 0.9, "half_beam": 0.5, "x_centre": 0.0},
-    "note": "For usv_rig.StripHull. probe_z: the half-breadth where each side's water level is read, mid-pontoon (the Otter X's ratio to the pontoon keel line). footprint: the ocean's hull displacement footprint (half length, half beam, waterplane centre x): one plan form over both pontoons, as the Otter X's."
+    "roll_zeta": 0.35,
+    "roll_added": 0.7,
+    "note": "For usv_rig.StripHull. probe_z: the half-breadth where each side's water level is read, mid-pontoon (the Otter X's ratio to the pontoon keel line). footprint: the ocean's hull displacement footprint (half length, half beam, waterplane centre x): one plan form over both pontoons, as the Otter X's. roll_zeta, roll_added (estimates): she rolls by heaving her pontoons against each other, so her roll takes the rig's heave figures at the pontoons' arm, 0.35 of critical and 0.80 m x 0.405^2 = 0.7 of her own roll inertia, in place of a monohull's 0.15 and 0.25. With 0.15 and 0.25 she rolled about 3x the water's own slope at her 0.77 s period on the Norvasundet sea (sigma 1.1 deg ahead, 2.6 deg abeam, Hs 0.044 m); with these 1.7x (0.56 and 1.5 deg)."
   },
   "materials": {
     "note": "Linear RGB. Colours read off the vendor renders, pulled toward plausible albedos.",
