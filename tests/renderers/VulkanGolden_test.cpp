@@ -8,7 +8,9 @@
 // no longer silently rot three changes later. Past the first three, each scene
 // pins one stage of the deferred shade (sun shadows, the lamp list, probe GI,
 // the fog froxels, clouds, the ocean branch, shadow maps, MSAA dispatch B), so
-// a change that moves a stage shows up in the scene that owns it.
+// a change that moves a stage shows up in the scene that owns it. The last two
+// pin displacementMap against a plane displaced on the CPU: displace_map must
+// render what displace_reference does.
 //
 // Run standalone (it's a plain exit-code program, not Catch2):
 //   VulkanGolden_test            compare to tests/renderers/golden/<name>.ppm;
@@ -42,10 +44,14 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/textures/DataTexture.hpp"
+#include "threepp/renderers/vulkan/EdgeRefine.hpp"
 
 #include "capture_util.hpp"// examples/libs (shared via target include dir)
 #include "vulkan_test_util.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -112,6 +118,12 @@ namespace {
         // starts from the harness's settings, so one scene's switch never leaks
         // into the next.
         std::function<void(VulkanRenderer&)> setup;
+        // Compare against another scene's reference (empty = its own); such a
+        // scene never writes a reference of its own under --update.
+        std::string reference;
+        // A scene whose feature is not built yet: rendered and reported, but
+        // neither a failure nor a missing reference until this is cleared.
+        const char* pending = nullptr;
     };
 
     std::shared_ptr<MeshStandardMaterial> matte(const Color& c, float roughness = 0.9f) {
@@ -213,6 +225,145 @@ namespace {
         r.setSunAngularRadius(2.f);
     }
 
+    // The displacement scenes' height field: a terrace along one side, a
+    // raised disc and shallow ridges, symmetric about v = 0.5 so the texture's
+    // row order cannot matter. One texel per vertex (the plane has
+    // kDispTex - 1 segments a side) and nearest filtering, so the CPU
+    // reference displaces each vertex by exactly the texel the GPU reads.
+    constexpr int kDispTex = 256;
+    constexpr float kDispSize = 4.f, kDispScale = 0.4f, kDispBias = -0.1f;
+
+    float dispHeight(float u, float v) {
+        auto smooth = [](float e0, float e1, float x) {
+            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
+            return t * t * (3.f - 2.f * t);
+        };
+        const float terrace = 0.5f * (1.f - smooth(0.26f, 0.30f, u));
+        const float r = std::hypot(u - 0.62f, v - 0.5f);
+        const float disc = 1.f - smooth(0.14f, 0.17f, r);
+        const float ridges = 0.12f * (0.5f + 0.5f * std::cos(2.f * math::PI * 6.f * (v - 0.5f)));
+        return std::clamp(std::max(terrace, disc) + ridges * smooth(0.32f, 0.36f, u), 0.f, 1.f);
+    }
+
+    std::shared_ptr<DataTexture> dispTexture() {
+        std::vector<unsigned char> px(kDispTex * kDispTex * 4);
+        for (int j = 0; j < kDispTex; ++j) {
+            for (int i = 0; i < kDispTex; ++i) {
+                const float h = dispHeight((i + 0.5f) / kDispTex, (j + 0.5f) / kDispTex);
+                const auto b = static_cast<unsigned char>(std::lround(h * 255.f));
+                unsigned char* p = &px[(j * kDispTex + i) * 4];
+                p[0] = p[1] = p[2] = b;
+                p[3] = 255;
+            }
+        }
+        auto tex = DataTexture::create(px, kDispTex, kDispTex);
+        tex->format = Format::RGBA;
+        tex->needsUpdate();
+        return tex;
+    }
+
+    // A matte plane over the height field, its normals left at the
+    // undisplaced +Y (three.js's displacementMap moves positions only, and the
+    // Vulkan plan keeps the shading normal for the normal map). `onCpu`
+    // displaces the vertices here, which is the reference; otherwise the
+    // material's displacementMap is set and the renderer must do it.
+    std::shared_ptr<Mesh> displacedPlane(const std::shared_ptr<DataTexture>& tex, bool onCpu) {
+        auto geom = PlaneGeometry::create(kDispSize, kDispSize, kDispTex - 1, kDispTex - 1);
+        auto mat = matte(Color(0.62f, 0.6f, 0.56f), 0.85f);
+        if (onCpu) {
+            const auto& data = tex->image().data<unsigned char>();
+            auto& pos = geom->getAttribute<float>("position")->array();
+            const auto& uv = geom->getAttribute<float>("uv")->array();
+            for (size_t k = 0; k < pos.size() / 3; ++k) {
+                const int i = std::min(static_cast<int>(uv[k * 2] * kDispTex), kDispTex - 1);
+                const int j = std::min(static_cast<int>(uv[k * 2 + 1] * kDispTex), kDispTex - 1);
+                const float h = data[(j * kDispTex + i) * 4] / 255.f;
+                pos[k * 3 + 2] += h * kDispScale + kDispBias;// object-space normal is +Z
+            }
+        } else {
+            mat->displacementMap = tex;
+            mat->displacementScale = kDispScale;
+            mat->displacementBias = kDispBias;
+        }
+        auto m = Mesh::create(geom, mat);
+        m->rotation.x = -math::PI / 2.f;
+        m->autoLod = false;// the reference is the full-resolution relief
+        return m;
+    }
+
+    // The coarse plane (two triangles) the renderer refines for displace_coarse
+    // (VulkanRenderer::setDisplacementDetail(kCoarsePixelEdge, kCoarseMinEdge),
+    // focus = the scene's camera), or, `onCpu`, the same refinement and
+    // displacement done here with the renderer's own edge test
+    // (vulkan::ScreenEdgeTest), at the golden's output height.
+    constexpr float kCoarsePixelEdge = 1.f, kCoarseMinEdge = 0.01f;
+
+    std::shared_ptr<Mesh> coarsePlane(const std::shared_ptr<DataTexture>& tex, const PerspectiveCamera& cam, bool onCpu) {
+        auto geom = PlaneGeometry::create(kDispSize, kDispSize, 1, 1);
+        auto mat = matte(Color(0.62f, 0.6f, 0.56f), 0.85f);
+        auto m = Mesh::create(geom, mat);
+        m->rotation.x = -math::PI / 2.f;
+        m->autoLod = false;
+        if (!onCpu) {
+            mat->displacementMap = tex;
+            mat->displacementScale = kDispScale;
+            mat->displacementBias = kDispBias;
+            return m;
+        }
+        m->updateMatrixWorld();
+        std::vector<vulkan::RefineAttribute> attrs;
+        attrs.push_back({geom->getAttribute<float>("position")->array(), 3, false});
+        attrs.push_back({geom->getAttribute<float>("normal")->array(), 3, true});
+        attrs.push_back({geom->getAttribute<float>("uv")->array(), 2, false});
+        const auto& gi = geom->getIndex()->array();
+        std::vector<uint32_t> idx(gi.begin(), gi.end());
+        // The renderer's edge test, filled as its focus capture fills it.
+        vulkan::ScreenEdgeTest edge;
+        std::copy(m->matrixWorld->elements.begin(), m->matrixWorld->elements.end(), edge.world.begin());
+        std::copy(cam.matrixWorldInverse.elements.begin(), cam.matrixWorldInverse.elements.end(), edge.view.begin());
+        edge.eye = {cam.position.x, cam.position.y, cam.position.z};
+        edge.halfY = std::tan(0.5f * cam.getEffectiveFOV() * math::DEG2RAD);
+        edge.halfX = edge.halfY * cam.aspect;
+        edge.pixelAngle = 2.f * edge.halfY / static_cast<float>(kH);
+        edge.pixelEdge = kCoarsePixelEdge;
+        edge.minEdge = kCoarseMinEdge;
+        edge.reach = std::max(std::abs(kDispBias), std::abs(kDispScale + kDispBias));
+        vulkan::refineByEdges(idx, attrs, edge);
+        const auto& data = tex->image().data<unsigned char>();
+        auto& pos = attrs[0].data;
+        const auto& uv = attrs[2].data;
+        for (size_t k = 0; k < pos.size() / 3; ++k) {
+            const int i = std::min(static_cast<int>(std::floor(uv[k * 2] * kDispTex)), kDispTex - 1);
+            const int j = std::min(static_cast<int>(std::floor(uv[k * 2 + 1] * kDispTex)), kDispTex - 1);
+            pos[k * 3 + 2] += data[(j * kDispTex + i) * 4] / 255.f * kDispScale + kDispBias;// normal +Z
+        }
+        auto out = BufferGeometry::create();
+        out->setAttribute("position", FloatBufferAttribute::create(std::move(attrs[0].data), 3));
+        out->setAttribute("normal", FloatBufferAttribute::create(std::move(attrs[1].data), 3));
+        out->setAttribute("uv", FloatBufferAttribute::create(std::move(attrs[2].data), 2));
+        out->setIndex(std::vector<unsigned int>(idx.begin(), idx.end()));
+        auto r = Mesh::create(out, mat);
+        r->rotation.x = -math::PI / 2.f;
+        r->autoLod = false;
+        return r;
+    }
+
+    // A low sun from -X across the plane, so the terrace's edge, the disc and
+    // the ridges each throw a shadow, under the sky env for the AO and GI.
+    void buildDisplaced(Scene& s, PerspectiveCamera& cam, const std::shared_ptr<Texture>& env, bool onCpu,
+                        bool coarse = false) {
+        s.background = env;
+        s.environment = env;
+        cam.position.set(1.6f, 2.4f, 4.0f);
+        cam.lookAt(Vector3(0.f, 0.f, 0.f));
+        cam.updateMatrixWorld();
+        if (coarse) s.add(coarsePlane(dispTexture(), cam, onCpu));
+        else s.add(displacedPlane(dispTexture(), onCpu));
+        auto sun = DirectionalLight::create(Color(1.f, 0.94f, 0.85f), 3.f);
+        sun->position.set(-6.f, 2.2f, -1.f);
+        s.add(sun);
+    }
+
 }// namespace
 
 int main(int argc, char** argv) {
@@ -258,7 +409,10 @@ int main(int argc, char** argv) {
     const auto heightFog0 = renderer.heightFog();
     const auto volumetrics0 = renderer.deferredVolumetrics();
     const float sunRadius0 = renderer.sunAngularRadius();
+    const float dispPixelEdge0 = renderer.displacementPixelEdge();
+    const float dispMinEdge0 = renderer.displacementMinEdge();
     auto resetSettings = [&] {
+        renderer.setDisplacementDetail(dispPixelEdge0, dispMinEdge0);
         renderer.setGbufferMsaa(msaa0);
         renderer.setShadowMode(shadowMode0);
         renderer.setProbeGI(probeGI0);
@@ -458,6 +612,39 @@ int main(int argc, char** argv) {
             // dispatch B, its coverage accounting and per-sample ray origins.
             // Floor: bit-exact with and without RT.
             {"msaa4_glass", buildGlass, kMaxDelta, [](VulkanRenderer& r) { r.setGbufferMsaa(4); }},
+            // A plane displaced on the CPU from a height texture (a terrace, a
+            // disc, ridges) under a low sun: the ground truth for
+            // displacementMap, since raster, shadow rays, AO and GI all see the
+            // same displaced triangles.
+            {"displace_reference", [](Scene& s, PerspectiveCamera& cam, const std::shared_ptr<Texture>& env) {
+                 buildDisplaced(s, cam, env, /*onCpu=*/true);
+             },
+             kMaxDelta, sunShadowSetup},
+            // The same flat plane with the height texture as its
+            // displacementMap: it must match displace_reference, raster and
+            // rays alike (plans/vulkan-displacement-maps.md).
+            {"displace_map", [](Scene& s, PerspectiveCamera& cam, const std::shared_ptr<Texture>& env) {
+                 buildDisplaced(s, cam, env, /*onCpu=*/false);
+             },
+             kMaxDelta, sunShadowSetup, "displace_reference"},
+            // A two-triangle plane under the same map, refined and displaced by
+            // the test the way the renderer does it (EdgeRefine, its edge test):
+            // the reference for displace_coarse.
+            {"displace_coarse_reference", [](Scene& s, PerspectiveCamera& cam, const std::shared_ptr<Texture>& env) {
+                 buildDisplaced(s, cam, env, /*onCpu=*/true, /*coarse=*/true);
+             },
+             kMaxDelta, sunShadowSetup},
+            // The same two triangles with the map, refined by the renderer around
+            // this scene's camera (setDisplacementDetail + refineDisplacement).
+            {"displace_coarse", [](Scene& s, PerspectiveCamera& cam, const std::shared_ptr<Texture>& env) {
+                 buildDisplaced(s, cam, env, /*onCpu=*/false, /*coarse=*/true);
+             },
+             kMaxDelta, [](VulkanRenderer& r) {
+                 sunShadowSetup(r);
+                 r.setDisplacementDetail(kCoarsePixelEdge, kCoarseMinEdge);
+                 r.refineDisplacement();
+             },
+             "displace_coarse_reference"},
     };
     std::vector<GoldenScene> scenes;
     if (only.empty()) {
@@ -524,10 +711,15 @@ int main(int argc, char** argv) {
 
         const std::vector<unsigned char> px = renderer.readRGBPixels();
         const auto& gs = scenes[sceneIdx];
-        const fs::path ref = goldenDir / (gs.name + ".ppm");
+        const bool ownRef = gs.reference.empty();
+        const fs::path ref = goldenDir / ((ownRef ? gs.name : gs.reference) + ".ppm");
         if (update) {
-            writePPM(ref, px, kW, kH);
-            std::printf("[update] wrote %s (%dx%d)\n", ref.string().c_str(), kW, kH);
+            if (ownRef) {
+                writePPM(ref, px, kW, kH);
+                std::printf("[update] wrote %s (%dx%d)\n", ref.string().c_str(), kW, kH);
+            } else {
+                std::printf("[update] %s compares to %s, nothing written\n", gs.name.c_str(), gs.reference.c_str());
+            }
         } else {
             if (!dump.empty()) writePPM(fs::path(dump) / (gs.name + ".ppm"), px, kW, kH);
             int rw = 0, rh = 0;
@@ -535,13 +727,15 @@ int main(int argc, char** argv) {
             if (golden.empty() || rw != kW || rh != kH || golden.size() != px.size()) {
                 std::printf("[%s] MISSING/!match reference %s - run --update\n",
                             gs.name.c_str(), ref.string().c_str());
-                ++missing;
+                if (!gs.pending) ++missing;
             } else {
                 const capture::DiffResult d = capture::imageDiff(px, golden);
                 const bool pass = d.psnr >= kMinPsnr && d.maxD <= gs.maxDelta;
                 std::printf("[%s] PSNR=%5.1f dB  maxD=%3d (<=%d)  hot=%6.3f%%  ->  %s\n",
-                            gs.name.c_str(), d.psnr, d.maxD, gs.maxDelta, d.hotPct, pass ? "PASS" : "FAIL");
-                if (!pass) ++failures;
+                            gs.name.c_str(), d.psnr, d.maxD, gs.maxDelta, d.hotPct,
+                            pass ? "PASS" : (gs.pending ? "PENDING" : "FAIL"));
+                if (gs.pending) std::printf("[%s] pending: %s\n", gs.name.c_str(), gs.pending);
+                else if (!pass) ++failures;
             }
         }
 

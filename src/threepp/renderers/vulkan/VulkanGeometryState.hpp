@@ -117,6 +117,14 @@ namespace threepp::vulkan::impl {
         // version changes and the BLAS is refreshed (in-place rebuild if
         // counts match, full evict+rebuild if topology changed).
         unsigned int geomVersion = 0;
+        // The material displacementMap this record's positions were displaced
+        // by (Impl::DisplacementSpec::signature; 0 = the geometry's own
+        // positions), and the object-space box those positions span, which
+        // every bounds reader takes in place of the geometry's own
+        // (Impl::boundsOf).
+        uint64_t dispSig = 0;
+        float    dispMin[3] = {0.f, 0.f, 0.f};
+        float    dispMax[3] = {0.f, 0.f, 0.f};
         // Per-attribute versions behind geomVersion, stamped wherever it is.
         // Every upload compares against these: positions and normals feed the
         // BLAS, but a refresh that left uv, color or index out (they froze at

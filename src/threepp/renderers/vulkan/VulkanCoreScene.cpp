@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <limits>
 #include <typeindex>
+#include <utility>
 #include <unordered_map>
 
 namespace threepp {
@@ -88,6 +90,7 @@ namespace {
         kMatWireframe = 1u << 0,
         kMatBasic = 1u << 1,
         kMatEmissive = 1u << 2,
+        kMatDisplacement = 1u << 3,// MaterialWithDisplacementMap: may carry a displacementMap
     };
 
     uint32_t materialKind(const Material& m) {
@@ -98,11 +101,148 @@ namespace {
         if (dynamic_cast<const MaterialWithWireframe*>(&m)) k |= kMatWireframe;
         if (dynamic_cast<const MeshBasicMaterial*>(&m)) k |= kMatBasic;
         if (dynamic_cast<const MaterialWithEmissive*>(&m)) k |= kMatEmissive;
+        if (dynamic_cast<const MaterialWithDisplacementMap*>(&m)) k |= kMatDisplacement;
         kinds.emplace(t, k);
         return k;
     }
 
 }// namespace
+
+// The displacement a plain static mesh's material asks for, or nothing:
+// a displacementMap with a CPU image, on a geometry with the normals and
+// uv it moves along and reads at (see Impl::DisplacementSpec). Deformers
+// own their vertex buffers and are left as they are.
+bool VulkanRenderer::Impl::displacementSpecOf(Mesh& m, bool morphed, DisplacementSpec& d) const {
+            if (morphed) return false;
+            if (nodeKind(m) & (kNodeSkinned | kNodeDisplaced | kNodeGrass | kNodeField | kNodeSplat | kNodeSky))
+                return false;
+            const auto mat = m.material();
+            if (!mat || !(materialKind(*mat) & kMatDisplacement) || mat->tetSkinning) return false;
+            const auto* dm = dynamic_cast<const MaterialWithDisplacementMap*>(mat.get());
+            if (!dm || !dm->displacementMap) return false;
+            const auto geom = m.geometry();
+            if (!geom || !geom->hasAttribute("normal") || !geom->hasAttribute("uv")) return false;
+            Texture& tex = *dm->displacementMap;
+            if (tex.matrixAutoUpdate) tex.updateMatrix();
+            d = DisplacementSpec{};
+            d.geom = geom;
+            d.map = dm->displacementMap;
+            d.scale = dm->displacementScale;
+            d.bias = dm->displacementBias;
+            std::copy(tex.matrix.elements.begin(), tex.matrix.elements.end(), d.uvTransform.begin());
+            d.wrapS = tex.wrapS;
+            d.wrapT = tex.wrapT;
+            d.nearest = tex.magFilter == Filter::Nearest;
+            // Refined (EdgeRefine) when the knob is on and the geometry is drawn
+            // whole by one transform: an InstancedMesh has no one distance to
+            // the focus, and groups / a draw range name the geometry's own
+            // indices, which the refinement renumbers.
+            d.refine = dispPixelEdge_ > 0.f && !(nodeKind(m) & kNodeInstanced) && geom->groups.empty() &&
+                       geom->drawRange.start == 0 && geom->drawRange.count >= std::numeric_limits<int>::max() / 2;// BufferGeometry's default: all
+            if (d.refine) {
+                d.edge = dispCamera_;
+                const auto& w = m.matrixWorld->elements;
+                std::copy(w.begin(), w.end(), d.edge.world.begin());
+                const float sx = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+                const float sy = std::sqrt(w[4] * w[4] + w[5] * w[5] + w[6] * w[6]);
+                const float sz = std::sqrt(w[8] * w[8] + w[9] * w[9] + w[10] * w[10]);
+                d.edge.reach = d.reach() * std::max({sx, sy, sz});
+                d.edge.pixelEdge = dispPixelEdge_;
+                d.edge.minEdge = dispMinEdge_;
+                d.edge.frustum = dispFrustum_;
+            }
+            // FNV-1a over everything the displaced positions depend on.
+            uint64_t h = 1469598103934665603ull;
+            const auto mix = [&h](const void* p, size_t n) {
+                const auto* c = static_cast<const unsigned char*>(p);
+                for (size_t i = 0; i < n; ++i) h = (h ^ c[i]) * 1099511628211ull;
+            };
+            const Texture* tp = &tex;
+            const unsigned int ver = tex.version();
+            const unsigned int dims[2] = {tex.image().width(), tex.image().height()};
+            const int modes[3] = {static_cast<int>(d.wrapS), static_cast<int>(d.wrapT), d.nearest ? 1 : 0};
+            mix(&tp, sizeof(tp));
+            mix(&ver, sizeof(ver));
+            mix(dims, sizeof(dims));
+            mix(&d.scale, sizeof(d.scale));
+            mix(&d.bias, sizeof(d.bias));
+            mix(d.uvTransform.data(), sizeof(float) * d.uvTransform.size());
+            mix(modes, sizeof(modes));
+            if (d.refine) {
+                mix(&dispRefineEpoch_, sizeof(dispRefineEpoch_));
+                mix(&d.edge.pixelEdge, sizeof(d.edge.pixelEdge));
+                mix(&d.edge.minEdge, sizeof(d.edge.minEdge));
+                mix(&d.edge.frustum, sizeof(d.edge.frustum));
+            }
+            d.signature = h | 1u;// never 0: 0 means "not displaced"
+            return true;
+        }
+
+const VulkanRenderer::Impl::DisplacementSpec* VulkanRenderer::Impl::noteDisplacement(Mesh& m) {
+            const BufferGeometry* g = m.geometry().get();
+            DisplacementSpec spec;
+            if (!displacementSpecOf(m, isMorphedMesh(m), spec)) {
+                // Its material no longer displaces: the spec goes if this mesh
+                // set it (another mesh sharing the geometry may have).
+                if (const auto it = geomDisplacement_.find(g);
+                    it != geomDisplacement_.end() && it->second.owner == &m && it->second.ownerId == m.id)
+                    geomDisplacement_.erase(it);
+                return nullptr;
+            }
+            spec.owner = &m;
+            spec.ownerId = m.id;
+            auto& slot = geomDisplacement_[g];
+            static bool warned = false;
+            if (!warned && slot.signature != 0u && slot.signature != spec.signature && slot.geom.lock().get() == g) {
+                std::cerr << "[VulkanRenderer] one geometry drawn with two different displacementMaps: "
+                             "the last mesh walked displaces it for both" << std::endl;
+                warned = true;
+            }
+            slot = std::move(spec);
+            return &slot;
+        }
+
+bool VulkanRenderer::Impl::displacementChanged(Mesh& m) {
+            const auto mat = m.material();
+            if (geomDisplacement_.empty() && (!mat || !(materialKind(*mat) & kMatDisplacement))) return false;
+            const BufferGeometry* g = m.geometry().get();
+            DisplacementSpec spec;
+            const bool has = displacementSpecOf(m, isMorphedMesh(m), spec);
+            const uint64_t now = has ? spec.signature : 0u;
+            if (now == displacementSignatureOf(g)) return false;
+            if (has) {
+                spec.owner = &m;
+                spec.ownerId = m.id;
+                geomDisplacement_[g] = std::move(spec);
+            }
+            else geomDisplacement_.erase(g);
+            return true;
+        }
+
+void VulkanRenderer::Impl::captureDisplacementFocus(Camera& camera) {
+            // Where this build renders from, and what one output pixel spans
+            // there: an angle under a perspective camera, a length under an
+            // orthographic one.
+            camera.updateMatrixWorld();
+            Vector3 eye;
+            eye.setFromMatrixPosition(*camera.matrixWorld);
+            vulkan::ScreenEdgeTest& c = dispCamera_;
+            c.eye = {eye.x, eye.y, eye.z};
+            const auto& vi = camera.matrixWorldInverse.elements;
+            std::copy(vi.begin(), vi.end(), c.view.begin());
+            const float h = static_cast<float>(std::max(1u, ctx->swapchainExtent().height));
+            c.pixelAngle = c.orthoPixel = c.halfX = c.halfY = 0.f;
+            if (auto* pc = camera.as<PerspectiveCamera>()) {
+                c.halfY = std::tan(0.5f * pc->getEffectiveFOV() * math::DEG2RAD);
+                c.halfX = c.halfY * pc->aspect;
+                c.pixelAngle = 2.f * c.halfY / h;
+            } else if (auto* oc = camera.as<OrthographicCamera>()) {
+                const float z = std::max(oc->zoom, 1e-6f);
+                c.halfX = 0.5f * (oc->right - oc->left) / z;
+                c.halfY = 0.5f * (oc->top - oc->bottom) / z;
+                c.orthoPixel = 2.f * c.halfY / h;
+            }
+        }
 
 uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWireframe* wf) const {
             uint32_t fl = kSnapKindMesh;
@@ -401,6 +541,29 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
                 lodCenter = geom->boundingBox->getCenter();
                 lodRadius = geom->boundingBox->getSize().length() * 0.5f;
             }
+            // A material displacementMap (noteDisplacement): the record's
+            // positions move by up to its reach, so the bounds below grow by
+            // it, and auto-LOD, which simplifies the geometry's own positions,
+            // leaves the mesh alone.
+            const DisplacementSpec* disp = noteDisplacement(*m);
+            // The record's own box once it is built for this spec (boundsOf);
+            // before that, the geometry's grown by the spec's reach.
+            Box3 dispBox;
+            bool dispExact = false;
+            float dispReach = 0.f;
+            if (disp) {
+                lodExempt = true;
+                if (const auto rit = blasCache.find(geom.get());
+                    rit != blasCache.end() && rit->second->dispSig == disp->signature)
+                    dispExact = boundsOf(*geom, dispBox);
+                if (dispExact) {
+                    lodCenter = dispBox.getCenter();
+                    lodRadius = dispBox.getSize().length() * 0.5f;
+                } else {
+                    dispReach = disp->reach();
+                    lodRadius += dispReach;
+                }
+            }
             // First-person viewmodel probe: is this mesh parented under a
             // Camera? Such geometry sits at the eye and must not occlude
             // (see MeshEntry::camAttached / kRayMaskNoShadow). One ancestor
@@ -438,14 +601,16 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
             std::memcpy(sp.meshWorld.data(), m->matrixWorld->elements.data(), 64);
             sp.localRadius = lodRadius;
             if (geom->boundingBox) {
-                const Vector3 half = geom->boundingBox->getSize() * 0.5f;
+                const Vector3 half = (dispExact ? dispBox.getSize() : geom->boundingBox->getSize()) * 0.5f;
                 sp.localCenter[0] = lodCenter.x;
                 sp.localCenter[1] = lodCenter.y;
                 sp.localCenter[2] = lodCenter.z;
-                sp.localHalf[0]   = half.x;
-                sp.localHalf[1]   = half.y;
-                sp.localHalf[2]   = half.z;
-                sp.localBoundsValid = true;
+                sp.localHalf[0]   = half.x + dispReach;
+                sp.localHalf[1]   = half.y + dispReach;
+                sp.localHalf[2]   = half.z + dispReach;
+                // A displacementMap record not built yet: the reach-grown box
+                // stands in, and the next cull re-derives the exact one.
+                sp.localBoundsValid = !disp || dispExact;
             }
             bool deferRows = false;
             if (inst && inst->count() > 0) {
@@ -480,6 +645,7 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
                     e.isVertexInterop = isVertexInterop;
+                    e.isDisplacementMapped = disp != nullptr;
                     e.isInstanced  = true;
                     e.camAttached  = camAttached;
                     e.sensorOnly   = sensorOnly;
@@ -500,6 +666,7 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
                 e.isMorphed    = isMorphed;
                 e.isTet        = isTet;
                 e.isVertexInterop = isVertexInterop;
+                e.isDisplacementMapped = disp != nullptr;
                 e.isParticleField = isParticleField;
                 e.camAttached  = camAttached;
                 e.sensorOnly   = sensorOnly;
@@ -1285,10 +1452,10 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                 if (!sp.localBoundsValid) {
                     auto geom = sp.mesh->geometry();
                     if (!geom) continue;// keep(true)
-                    if (!geom->boundingBox) geom->computeBoundingBox();
-                    if (!geom->boundingBox) continue;// keep(true)
-                    const Vector3 c = geom->boundingBox->getCenter();
-                    const Vector3 h = geom->boundingBox->getSize() * 0.5f;
+                    Box3 box;// the record's box: a displacementMap's moved positions
+                    if (!boundsOf(*geom, box)) continue;// keep(true)
+                    const Vector3 c = box.getCenter();
+                    const Vector3 h = box.getSize() * 0.5f;
                     sp.localCenter[0] = c.x; sp.localCenter[1] = c.y; sp.localCenter[2] = c.z;
                     sp.localHalf[0]   = h.x; sp.localHalf[1]   = h.y; sp.localHalf[2]   = h.z;
                     sp.localRadius    = h.length();// enclosing-sphere radius
@@ -1450,6 +1617,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // The whole scene build, every phase below included (the profiler
             // is flat: a nested phase adds to this key too).
             THREEPP_CPUPROF("scene.0_total");
+            // displacementMap refinement: the focus, taken once (and again after
+            // refineDisplacement), and whether this build re-checks every
+            // displaced entry's spec (the epoch moved, see dispPixelEdge_).
+            if (dispFocusPending_) {
+                captureDisplacementFocus(camera);
+                dispFocusPending_ = false;
+            }
+            const bool dispEpochNow = std::exchange(dispEpochPending_, false);
             // Deform work is queued here and recorded by the same frame. A frame
             // that never recorded (beginDeferredFrame gave up on an out-of-date
             // swapchain, a resize or a minimised window) leaves its queue behind,
@@ -1698,6 +1873,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (os.isFree || os.mesh != m || os.meshId != m->id || os.count == 0u) return false;
                 const MeshEntry& oe = lastVisibleEntries_[os.first];
                 if (oe.isOverlay || oe.isParticleField || oe.lodSphereDirty) return false;
+                // A displacementMap mesh, before or now, takes the full walk,
+                // which widens its bounds and exempts it from auto-LOD.
+                if (oe.isDisplacementMapped || noteDisplacement(*m)) return false;
                 // Exempt from auto-LOD: per object, or under a manual LOD level
                 // (the same ancestors as before). The old answer settles it
                 // unless it was "exempt" and the object no longer opts out.
@@ -1850,6 +2028,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                            a.isSkinned == b.isSkinned && a.isDisplaced == b.isDisplaced && a.isGrass == b.isGrass &&
                            a.isMorphed == b.isMorphed && a.isTet == b.isTet && a.isParticleField == b.isParticleField &&
                            a.isVertexInterop == b.isVertexInterop && a.isInstanced == b.isInstanced &&
+                           a.isDisplacementMapped == b.isDisplacementMapped &&
                            a.lodLevel == b.lodLevel && a.rayFarOpaque == b.rayFarOpaque &&
                            a.lodExemptStatic == b.lodExemptStatic && a.lodSphereDirty == b.lodSphereDirty &&
                            a.lodEmissive == b.lodEmissive && a.lodGeomKey == b.lodGeomKey &&
@@ -2334,7 +2513,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (fp0.uvAttr)   gv += fp0.uvAttr->version;
                     if (fp0.colAttr)  gv += fp0.colAttr->version;
                     const bool geomChanged = (gv != fp0.geomVersion);
-                    if (geomChanged) {
+                    // A material edit that moved its displacementMap re-displaces
+                    // the geometry (see the generic compare).
+                    const bool dispMoved = (matChanged || (dispEpochNow && entries[sp.first].isDisplacementMapped)) &&
+                                           !entries[sp.first].isParticle && displacementChanged(*sp.mesh);
+                    if (geomChanged || dispMoved) {
                         for (uint32_t j = 0; j < sp.count; ++j)
                             prevSceneFingerprint[sp.first + j].geomVersion = gv;
                         // Particle billboard meshes mutate their attributes every
@@ -2707,6 +2890,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     const bool morphChanged = entryMorphDirty[i];
                     if (xfmChanged) matricesSame = false;
                     if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
+                    // A material edit that moved its displacementMap (map, scale,
+                    // bias, transform; Material::needsUpdate) re-displaces the
+                    // geometry: the refresh below then rebuilds its record whole.
+                    const bool dispMoved = (matChanged || (dispEpochNow && entries[i].isDisplacementMapped)) &&
+                                           !entries[i].isParticle && displacementChanged(*entries[i].mesh);
                     if (bonesChanged) bonesDirtyAny = true;
                     if (dispChanged)  displacedDirtyAny = true;
                     if (grassChanged) grassDirtyAny = true;
@@ -2714,7 +2902,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // own no BLAS; never flag them geomDirty (would fire a per-
                     // frame vkDeviceWaitIdle for a refit that skips them). The
                     // billboard pass re-uploads their vertex cache itself.
-                    if (geomChanged && !entries[i].isParticle) {
+                    if ((geomChanged || dispMoved) && !entries[i].isParticle) {
                         geomDirtyAny = true;
                         entryGeomDirty[i] = true;
                         entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
@@ -3027,7 +3215,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
 
                             const uint32_t curVtx = static_cast<uint32_t>(posAttr->count());
                             const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
-                            if (curVtx != rec.vertexCount || curIdx != rec.indexCount ||
+                            // A displacementMap record, or one that should now be:
+                            // the in-place refits upload the geometry's own
+                            // positions, so it is rebuilt whole (buildBlasFor
+                            // displaces).
+                            if (rec.dispSig != 0u || displacementSignatureOf(geomKey) != 0u ||
+                                curVtx != rec.vertexCount || curIdx != rec.indexCount ||
                                 !refreshFitsPacking(rec, *entries[i].mesh->geometry())) {
                                 topologyChanged = true;
                                 break;
@@ -3794,6 +3987,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         ++it;
                     }
                 }
+                // Displacement specs of dead geometries go too (the spec holds
+                // its map alive); a live geometry's is looked up through the
+                // same weak test (displacementSignatureOf, buildBlasFor).
+                for (auto it = geomDisplacement_.begin(); it != geomDisplacement_.end();) {
+                    if (it->second.geom.expired()) it = geomDisplacement_.erase(it);
+                    else ++it;
+                }
                 // The per-mesh deform states go with their geometry OR their
                 // mesh (MeshOwner): a freed clone's state, keyed by an address
                 // the allocator may hand the next mesh, while the template
@@ -4156,7 +4356,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         const bool packedMismatch =
                                 (it->second->packedMask != 0u) &&
                                 forceUnpackedGeoms_.count(geomKey) != 0;
-                        if (it->second->geomVersion != curVer || packedMismatch) {
+                        // Displaced by another displacementMap spec than now (or
+                        // newly, or no longer): the same evict-and-rebuild.
+                        const bool dispMismatch = it->second->dispSig != displacementSignatureOf(geomKey);
+                        if (it->second->geomVersion != curVer || packedMismatch || dispMismatch) {
                             auto& old = it->second;
                             if (old->interop) {
                                 // A CPU edit to a SIDE attribute (color / uv /

@@ -394,8 +394,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 // can reference as it is, or none yet; or a grass field, whose
                 // record is its own (admitGrassState, step 3).
                 if (be.isOverlay || be.isParticle || be.isParticleField || be.isVertexInterop ||
-                    (isDeformer(be) && !be.isGrass))
-                    return decline("a new overlay, particle, deformer or interop mesh");
+                    be.isDisplacementMapped || (isDeformer(be) && !be.isGrass))
+                    return decline("a new overlay, particle, deformer, interop or displacementMap mesh");
                 const auto geomSp = m.geometry();
                 if (!geomSp) return decline("a new mesh without geometry");
                 if (be.isGrass) {
@@ -918,8 +918,8 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
                 const MeshEntry& be = d.built[bs.first];
                 Mesh& m = *bs.mesh;
                 if (be.isOverlay || be.isParticle || be.isParticleField || be.isVertexInterop ||
-                    (isDeformer(be) && !be.isGrass))
-                    return decline("a new overlay, particle, deformer or interop mesh");
+                    be.isDisplacementMapped || (isDeformer(be) && !be.isGrass))
+                    return decline("a new overlay, particle, deformer, interop or displacementMap mesh");
                 const auto geomSp = m.geometry();
                 if (!geomSp) return decline("a new mesh without geometry");
                 if (be.isGrass) {

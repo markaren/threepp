@@ -1835,6 +1835,27 @@ namespace threepp {
         void setDeferredAO(bool enabled);
         [[nodiscard]] bool deferredAO() const;
 
+        // Material displacementMap: Vulkan displaces the positions once, where
+        // the mesh's geometry is built, so the raster and every ray see the
+        // same surface (GL offsets them in the vertex shader). Only the
+        // vertices a mesh has move unless pixelEdge > 0: then the edges near
+        // the focus are split until none is longer than pixelEdge output
+        // pixels (nor than minEdge metres) where the map's relief would show.
+        // The focus is the camera of the first frame, or of the frame after
+        // refineDisplacement(); a moving camera keeps it until then. Changing
+        // either knob, or refining, rebuilds the displaced meshes. pixelEdge
+        // 0 (the default) is off; minEdge defaults to 0.01. Not for an
+        // InstancedMesh, or a geometry with groups or a partial draw range.
+        void setDisplacementDetail(float pixelEdge, float minEdge);
+        [[nodiscard]] float displacementPixelEdge() const;
+        [[nodiscard]] float displacementMinEdge() const;
+        void refineDisplacement();
+        // With the limit (the default), only the edges in the focus camera's
+        // view (plus a 15 % margin) get that detail; the rest aim for 8 times
+        // longer edges, a coarse ring around and behind the camera.
+        void setDisplacementFrustumLimit(bool enabled);
+        [[nodiscard]] bool displacementFrustumLimit() const;
+
         // World-space irradiance probe grid (DDGI-lite) — multi-bounce diffuse
         // GI for the deferred gather. A 32×16×32 grid of SH-L1 probes is fitted
         // to the scene AABB and refreshed round-robin (2048 probes × 64 rays

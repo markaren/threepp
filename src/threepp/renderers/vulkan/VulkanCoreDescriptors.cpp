@@ -499,13 +499,14 @@ void VulkanRenderer::Impl::fitProbeGridToScene() {
                 if (sp.probeChunks.size() != nChunks) sp.probeChunks.resize(nChunks);
                 if (sp.probeChunksValid < nChunks) {
                     auto geom = sp.mesh->geometry();
-                    if (geom && !geom->boundingBox) geom->computeBoundingBox();
+                    Box3 localBox;// the record's box: a displacementMap's moved positions
+                    const bool haveBox = geom && boundsOf(*geom, localBox);
                     for (uint32_t ch = sp.probeChunksValid; ch < nChunks; ++ch) {
                         Box3 chunkBox;
-                        if (geom && geom->boundingBox) {
+                        if (haveBox) {
                             const uint32_t j1 = std::min(sp.count, (ch + 1u) * kChunk);
                             for (uint32_t j = ch * kChunk; j < j1; ++j) {
-                                Box3 worldAabb = *geom->boundingBox;
+                                Box3 worldAabb = localBox;
                                 Matrix4 w;
                                 std::memcpy(w.elements.data(), lastVisibleEntries_[sp.first + j].worldMatrix.data(), 64);
                                 worldAabb.applyMatrix4(w);

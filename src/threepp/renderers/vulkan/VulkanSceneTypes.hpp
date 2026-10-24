@@ -125,6 +125,10 @@ namespace threepp::vulkan::impl {
         // force, exactly as isMorphed is (see the snapshot note below) — the
         // snapshot fast path never recomputes it.
         bool     isVertexInterop = false;
+        // Its material's displacementMap displaces the record's positions
+        // (Impl::noteDisplacement): the slot paths decline it, the geometry-
+        // edit refresh rebuilds it whole, auto-LOD leaves it alone.
+        bool     isDisplacementMapped = false;
         bool     isInstanced = false;// entry came from an InstancedMesh expansion
                                      // (the snapshot fast path recomputes its world
                                      // matrix as matrixWorld * getMatrixAt(i))

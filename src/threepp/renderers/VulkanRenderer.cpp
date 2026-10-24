@@ -2822,6 +2822,41 @@ namespace threepp {
         return pimpl_->shadowCascades_;
     }
 
+    void VulkanRenderer::setDisplacementDetail(float pixelEdge, float minEdge) {
+        pixelEdge = std::max(pixelEdge, 0.f);
+        minEdge   = std::max(minEdge, 1e-4f);
+        if (pixelEdge == pimpl_->dispPixelEdge_ && minEdge == pimpl_->dispMinEdge_) return;
+        pimpl_->dispPixelEdge_ = pixelEdge;
+        pimpl_->dispMinEdge_   = minEdge;
+        ++pimpl_->dispRefineEpoch_;
+        pimpl_->dispEpochPending_ = true;
+    }
+
+    float VulkanRenderer::displacementPixelEdge() const {
+        return pimpl_->dispPixelEdge_;
+    }
+
+    float VulkanRenderer::displacementMinEdge() const {
+        return pimpl_->dispMinEdge_;
+    }
+
+    void VulkanRenderer::setDisplacementFrustumLimit(bool enabled) {
+        if (enabled == pimpl_->dispFrustum_) return;
+        pimpl_->dispFrustum_ = enabled;
+        ++pimpl_->dispRefineEpoch_;
+        pimpl_->dispEpochPending_ = true;
+    }
+
+    bool VulkanRenderer::displacementFrustumLimit() const {
+        return pimpl_->dispFrustum_;
+    }
+
+    void VulkanRenderer::refineDisplacement() {
+        pimpl_->dispFocusPending_ = true;
+        ++pimpl_->dispRefineEpoch_;
+        pimpl_->dispEpochPending_ = true;
+    }
+
     void VulkanRenderer::setShadowedLamps(uint32_t spots, uint32_t points) {
         pimpl_->shadowedSpots_  = std::min(spots, static_cast<uint32_t>(kMaxShadowSpots));
         pimpl_->shadowedPoints_ = std::min(points, static_cast<uint32_t>(kMaxShadowPoints));

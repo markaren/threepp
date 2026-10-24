@@ -14,6 +14,7 @@
 #include "VulkanGpuLayouts.hpp"
 #include "VulkanGeometryState.hpp"
 #include "VulkanSceneTypes.hpp"
+#include "EdgeRefine.hpp"
 #include "VulkanViewContext.hpp"
 #include "EnvPrefilter.hpp"
 #include "SkyBake.hpp"
@@ -389,6 +390,88 @@ namespace threepp {
         // geomVersion-mismatch rebuild of the same geometry must stay unpacked,
         // or interop would silently break under the producer.
         std::unordered_set<const BufferGeometry*> forceUnpackedGeoms_;
+        // Material displacementMap (three.js semantics: each vertex moves along
+        // its normal by map.r * scale + bias, the normal itself unchanged). The
+        // positions are displaced ONCE, on the CPU from the map's source image
+        // (the GPU only ever holds its BC7 encode), when the geometry's record
+        // is built, so the raster, the BLAS and every ray share one surface. A
+        // spec per geometry, registered by the scene walk (noteDisplacement)
+        // and read by buildBlasFor like forceUnpackedGeoms_; the record keeps
+        // the signature it was built with (BlasRecord::dispSig), and a
+        // different one rebuilds it. One geometry drawn by two materials with
+        // different maps gets the last one walked (warned once).
+        struct DisplacementSpec {
+            std::weak_ptr<BufferGeometry> geom;// liveness, as BlasRecord::liveCheck
+            const Mesh* owner = nullptr;// the mesh that registered it (address + id)
+            unsigned int ownerId = 0;
+            std::shared_ptr<Texture> map;
+            float scale = 1.f, bias = 0.f;
+            std::array<float, 9> uvTransform{};// the map's Matrix3, column-major
+            TextureWrapping wrapS = TextureWrapping::ClampToEdge, wrapT = TextureWrapping::ClampToEdge;
+            bool nearest = false;// magFilter Nearest: the texel, else bilinear (level 0)
+            // Refinement around the focus (see dispPixelEdge_), copied from the
+            // renderer at registration so the build reads the spec alone. The
+            // world matrix places the vertices relative to the focus; it is not
+            // in the signature (a moving mesh keeps the refinement it got).
+            bool refine = false;
+            vulkan::ScreenEdgeTest edge;
+            uint64_t signature = 0;// never 0 for a spec
+            // The farthest any vertex moves: |h * scale + bias| over h in [0, 1].
+            [[nodiscard]] float reach() const { return std::max(std::abs(bias), std::abs(scale + bias)); }
+        };
+        std::unordered_map<const BufferGeometry*, DisplacementSpec> geomDisplacement_;
+        // The displacement m's material asks for (false: none, or not for a
+        // mesh like this one; see VulkanCoreScene.cpp).
+        bool displacementSpecOf(Mesh& m, bool morphed, DisplacementSpec& out) const;
+        // Refinement of displacementMap meshes (EdgeRefine): an edge splits
+        // while it is longer than dispPixelEdge_ pixels at its distance from
+        // the focus (and than dispMinEdge_ metres) and the map's relief there
+        // would show (its reach over half a pixel). 0 = off: only the vertices
+        // a mesh has move, as on GL. The focus is the camera of the first
+        // build, or of the build after refineDisplacement(); the epoch, in
+        // every spec's signature, rebuilds the displaced records when the
+        // focus or a knob changes. It runs where the record is built, on the
+        // render thread.
+        float dispPixelEdge_ = 0.f, dispMinEdge_ = 0.01f;
+        bool dispFrustum_ = true;// refine coarsely outside the focus camera's view (ScreenEdgeTest)
+        uint32_t dispRefineEpoch_ = 0;
+        bool dispFocusPending_ = true;// take the focus from the next build's camera
+        bool dispEpochPending_ = false;// re-check every displaced entry's spec at the next build
+        vulkan::ScreenEdgeTest dispCamera_;// the focus camera's part of the edge test
+        void captureDisplacementFocus(Camera& camera);
+        // geom refined around d's focus (a new geometry), or nullptr when d
+        // does not refine, the geometry can't be, or no edge splits.
+        static std::shared_ptr<BufferGeometry> refineForDisplacement(const BufferGeometry& geom,
+                                                                     const DisplacementSpec& d);
+        // Registers m's displacement under its geometry; the spec, or nullptr
+        // when its material displaces nothing. Render thread (the scene walks).
+        const DisplacementSpec* noteDisplacement(Mesh& m);
+        // After m's material changed: re-reads its displacement and returns
+        // whether the geometry's spec moved (the record then needs a rebuild).
+        bool displacementChanged(Mesh& m);
+        [[nodiscard]] uint64_t displacementSignatureOf(const BufferGeometry* g) const {
+            const auto it = geomDisplacement_.find(g);
+            return (it != geomDisplacement_.end() && it->second.geom.lock().get() == g) ? it->second.signature : 0u;
+        }
+        // The object-space box geom's record draws: its own bounding box, or
+        // the displaced positions' (BlasRecord::dispMin/Max), or, for a
+        // displacementMap whose record is not built yet, its own grown by the
+        // spec's reach. False when geom has no box at all.
+        bool boundsOf(BufferGeometry& geom, Box3& out) const {
+            // No displacementMap anywhere (the usual scene): no lookups.
+            const uint64_t sig = geomDisplacement_.empty() ? 0u : displacementSignatureOf(&geom);
+            if (const auto it = blasCache.find(&geom);
+                sig != 0u && it != blasCache.end() && it->second->dispSig == sig) {
+                const auto& r = *it->second;
+                out.set(Vector3(r.dispMin[0], r.dispMin[1], r.dispMin[2]), Vector3(r.dispMax[0], r.dispMax[1], r.dispMax[2]));
+                return true;
+            }
+            if (!geom.boundingBox) geom.computeBoundingBox();
+            if (!geom.boundingBox) return false;
+            out = *geom.boundingBox;
+            if (sig != 0u) out.expandByScalar(geomDisplacement_.at(&geom).reach());
+            return true;
+        }
         // Geometries whose producer declared, through setStableCorrespondence,
         // that vertex id i is NOT the same surface point frame to frame (a
         // host-uploaded marching-cubes soup). buildBlasFor stamps the record's
@@ -3734,9 +3817,15 @@ namespace threepp {
             uint32_t buildPrims = 0;
             bool compactThis = false;
         };
+        // `disp`: positions displaced by a material displacementMap (see
+        // DisplacementSpec), read by the caller like interopTarget.
         bool prepareBlas(const BufferGeometry& geom, bool allowPacked, bool updatable,
                          const std::vector<uint32_t>* rtIndices, VertexWriter writer, bool traced,
-                         bool interopTarget, BlasPrep& p);
+                         bool interopTarget, BlasPrep& p, const DisplacementSpec* disp = nullptr);
+        // geom's positions moved along its normals by d's map: false (and a
+        // one-time warning) when the geometry or the image can't be read.
+        static bool displacePositions(const BufferGeometry& geom, const DisplacementSpec& d,
+                                      std::vector<float>& out);
         std::unique_ptr<BlasRecord> finishBlas(const BufferGeometry& geom, BlasPrep& p);
         void discardBlasPrep(BlasPrep& p);
         // A hidden GrassMesh field's state prepared on a worker thread from its

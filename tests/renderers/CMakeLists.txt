@@ -277,6 +277,9 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test_executable(RenderGraph_test)
     # TransientPool placement (AliasPacker); CPU only.
     add_test_executable(TransientPool_test)
+    # The displacementMap edge refinement (EdgeRefine): conforming, budgeted,
+    # attributes carried. CPU only.
+    add_test_executable(EdgeRefine_test)
     # The render-graph A/B harness (examples/vulkan/audits/rg_ab.cpp) in --selfcheck
     # mode, one test per scene: renders the scene and fails (exit 3) on any
     # render-graph diagnostic. Four scenes, about 20 s each, cover the MSAA

@@ -3,12 +3,17 @@
 #include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/core/AttributeView.hpp"
+#include "threepp/renderers/vulkan/EdgeRefine.hpp"
+#include "threepp/extras/DataUtils.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -331,6 +336,151 @@ void VulkanRenderer::Impl::submitStagedUploads(StagedUploads& up, const char* la
             destroyBufferMaybeBatched(staging);
         }
 
+bool VulkanRenderer::Impl::displacePositions(const BufferGeometry& geom, const DisplacementSpec& d,
+                                             std::vector<float>& out) {
+            // three.js's displacementmap_vertex.glsl on the CPU, from the map's
+            // source image: position += normalize(normal) * (map.r * scale +
+            // bias), the map read at the uv through its own transform and wrap
+            // modes and, as a vertex-stage fetch reads it, at level 0: the
+            // texel itself under a Nearest magFilter, bilinear otherwise.
+            // Image row 0 is v = 0, as the shaders and GL sample it.
+            static bool warned = false;
+            const auto fail = [](const char* why) {
+                if (!warned) {
+                    std::cerr << "[VulkanRenderer] displacementMap ignored: " << why << std::endl;
+                    warned = true;
+                }
+                return false;
+            };
+            const auto* posAttr = geom.getAttribute<float>("position");
+            FloatAttributeView normals(geom.getAttribute("normal"));
+            FloatAttributeView uvs(geom.getAttribute("uv"));
+            if (!posAttr || !normals || !uvs || !d.map) return fail("the geometry needs positions, normals and uv");
+            const int n = posAttr->count();
+            if (normals.count() != n || uvs.count() != n) return fail("normal or uv count differs from the positions'");
+            const Image& img = d.map->image();
+            const int w = static_cast<int>(img.width()), h = static_cast<int>(img.height());
+            const int ch = img.channels();
+            if (w <= 0 || h <= 0 || ch <= 0) return fail("the map has no CPU image");
+            const size_t elems = static_cast<size_t>(w) * h * ch;
+            const size_t bpe = img.byteSize() / elems;// bytes per element: 1 u8, 2 half, 4 float
+            if (img.byteSize() != elems * bpe || (bpe != 1 && bpe != 2 && bpe != 4)) return fail("unreadable map pixels");
+            const unsigned char* p8  = bpe == 1 ? img.data<unsigned char>().data() : nullptr;
+            const std::uint16_t* p16 = bpe == 2 ? img.data<std::uint16_t>().data() : nullptr;
+            const float*         p32 = bpe == 4 ? img.data<float>().data() : nullptr;
+            const auto texel = [&](int i, int j) -> float {
+                const size_t k = (static_cast<size_t>(j) * w + i) * ch;// the red channel
+                if (p8) return p8[k] * (1.f / 255.f);
+                if (p16) return DataUtils::fromHalfFloat(p16[k]);
+                return p32[k];
+            };
+            const auto wrap = [](int i, int size, TextureWrapping mode) {
+                switch (mode) {
+                    case TextureWrapping::Repeat: {
+                        const int k = i % size;
+                        return k < 0 ? k + size : k;
+                    }
+                    case TextureWrapping::MirroredRepeat: {
+                        const int period = 2 * size;
+                        int k = i % period;
+                        if (k < 0) k += period;
+                        return k < size ? k : period - 1 - k;
+                    }
+                    default:
+                        return std::clamp(i, 0, size - 1);
+                }
+            };
+            const auto sample = [&](float u, float v) -> float {
+                if (d.nearest) {
+                    return texel(wrap(static_cast<int>(std::floor(u * w)), w, d.wrapS),
+                                 wrap(static_cast<int>(std::floor(v * h)), h, d.wrapT));
+                }
+                const float x = u * w - 0.5f, y = v * h - 0.5f;
+                const float fx0 = std::floor(x), fy0 = std::floor(y);
+                const float tx = x - fx0, ty = y - fy0;
+                const int x0 = static_cast<int>(fx0), y0 = static_cast<int>(fy0);
+                const int i0 = wrap(x0, w, d.wrapS), i1 = wrap(x0 + 1, w, d.wrapS);
+                const int j0 = wrap(y0, h, d.wrapT), j1 = wrap(y0 + 1, h, d.wrapT);
+                const float top = texel(i0, j0) + (texel(i1, j0) - texel(i0, j0)) * tx;
+                const float bot = texel(i0, j1) + (texel(i1, j1) - texel(i0, j1)) * tx;
+                return top + (bot - top) * ty;
+            };
+            const auto& m = d.uvTransform;
+            const auto& src = posAttr->array();
+            out.assign(src.begin(), src.end());
+            for (int k = 0; k < n; ++k) {
+                const float nx = normals[k * 3 + 0], ny = normals[k * 3 + 1], nz = normals[k * 3 + 2];
+                const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (!(len > 0.f)) continue;
+                const float u0 = uvs[k * 2 + 0], v0 = uvs[k * 2 + 1];
+                const float u = m[0] * u0 + m[3] * v0 + m[6];
+                const float v = m[1] * u0 + m[4] * v0 + m[7];
+                const float s = (sample(u, v) * d.scale + d.bias) / len;
+                out[k * 3 + 0] += nx * s;
+                out[k * 3 + 1] += ny * s;
+                out[k * 3 + 2] += nz * s;
+            }
+            return true;
+        }
+
+std::shared_ptr<BufferGeometry> VulkanRenderer::Impl::refineForDisplacement(const BufferGeometry& geom,
+                                                                           const DisplacementSpec& d) {
+            if (!d.refine) return nullptr;
+            const auto* posAttr = geom.getAttribute<float>("position");
+            FloatAttributeView normals(geom.getAttribute("normal"));
+            FloatAttributeView uvs(geom.getAttribute("uv"));
+            if (!posAttr || !normals || !uvs) return nullptr;
+            const auto n = static_cast<size_t>(posAttr->count());
+            // The attributes a static record uploads, carried to the new
+            // vertices: position first (EdgeRefine's contract), then the rest.
+            std::vector<vulkan::RefineAttribute> attrs;
+            attrs.push_back({posAttr->array(), 3, false});
+            const auto carry = [&](const char* name, bool unit) {
+                FloatAttributeView v(geom.getAttribute(name));
+                if (!v || static_cast<size_t>(v.count()) != n) return -1;
+                const int item = static_cast<int>(v.size() / n);
+                attrs.push_back({std::vector<float>(v.data(), v.data() + v.size()), item, unit});
+                return static_cast<int>(attrs.size()) - 1;
+            };
+            const char* names[4] = {"normal", "uv", "uv2", "color"};
+            int slot[4];
+            for (int k = 0; k < 4; ++k) slot[k] = carry(names[k], k == 0);
+            std::vector<uint32_t> indices;
+            if (const auto* idx = geom.getIndex()) {
+                const auto& src = idx->array();
+                indices.assign(src.begin(), src.end());
+            } else {
+                indices.resize(n - n % 3);
+                for (size_t i = 0; i < indices.size(); ++i) indices[i] = static_cast<uint32_t>(i);
+            }
+
+            // The edge test (vulkan::ScreenEdgeTest, the spec's copy of it):
+            // symmetric in an edge's ends and a function of them alone, which is
+            // what keeps the result crack-free (EdgeRefine.hpp).
+            const vulkan::ScreenEdgeTest& split = d.edge;
+            const auto stats = vulkan::refineByEdges(indices, attrs, split);
+            if (stats.hitBudget) {
+                static bool warned = false;
+                if (!warned) {
+                    std::cerr << "[VulkanRenderer] displacementMap refinement stopped at its triangle budget ("
+                              << stats.triangles << "): raise displacement_pixel_edge or displacement_min_edge"
+                              << std::endl;
+                    warned = true;
+                }
+            }
+            if (stats.passes == 0) return nullptr;
+
+            auto out = BufferGeometry::create();
+            out->setAttribute("position", FloatBufferAttribute::create(std::move(attrs[0].data), 3));
+            for (int k = 0; k < 4; ++k) {
+                if (slot[k] < 0) continue;
+                auto& a = attrs[static_cast<size_t>(slot[k])];
+                out->setAttribute(names[k], FloatBufferAttribute::create(std::move(a.data), a.itemSize));
+            }
+            out->setIndex(std::vector<unsigned int>(indices.begin(), indices.end()));
+            return out;
+        }
+
 std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
                                                                                      const std::vector<uint32_t>* rtIndices,
                                                                                      VertexWriter writer, bool traced) {
@@ -344,17 +494,44 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // keeps its packed normals/uv/color, so this is NOT THREEPP_NO_PACK
             // by another name. (A preparing worker gets it from its caller.)
             const bool interopTarget = forceUnpackedGeoms_.count(&geom) != 0;
+            // Likewise a material displacementMap's spec (noteDisplacement).
+            const DisplacementSpec* disp = nullptr;
+            if (const auto dit = geomDisplacement_.find(&geom);
+                dit != geomDisplacement_.end() && dit->second.geom.lock().get() == &geom)
+                disp = &dit->second;
+            // ...and, when it refines, the record is built from the refined
+            // copy, stamped with the versions of the geometry it stands for.
+            static const bool dispLog = [] {
+                const char* e = std::getenv("THREEPP_DISP_LOG");
+                return e && *e && *e != '0';
+            }();
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto refined = disp ? refineForDisplacement(geom, *disp) : nullptr;
+            const auto t1 = std::chrono::steady_clock::now();
+            const BufferGeometry& src = refined ? *refined : geom;
             BlasPrep p;
-            if (!prepareBlas(geom, allowPacked, updatable, rtIndices, writer, traced, interopTarget, p)) {
+            if (!prepareBlas(src, allowPacked, updatable, rtIndices, writer, traced, interopTarget, p, disp)) {
                 discardBlasPrep(p);
                 return nullptr;
             }
-            return finishBlas(geom, p);
+            const auto t2 = std::chrono::steady_clock::now();
+            auto rec = finishBlas(src, p);
+            if (rec && refined) stampVersions(*rec, geom);
+            if (disp && dispLog) {
+                const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+                const auto tris = [](const BufferGeometry& g) {
+                    const auto* i = g.getIndex();
+                    return i ? i->count() / 3 : g.getAttribute("position")->count() / 3;
+                };
+                std::fprintf(stderr, "[disp] %d -> %d triangles: refine %.1f ms, displace + upload prep %.1f ms\n",
+                             tris(geom), tris(src), ms(t0, t1), ms(t1, t2));
+            }
+            return rec;
         }
 
 bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPacked, bool updatable,
                                        const std::vector<uint32_t>* rtIndices, VertexWriter writer, bool traced,
-                                       bool interopTarget, BlasPrep& p) {
+                                       bool interopTarget, BlasPrep& p, const DisplacementSpec* disp) {
             // Any thread: the geometry's arrays, the allocator and nothing of
             // the renderer's state (forceUnpackedGeoms_ is read by the caller).
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
@@ -392,7 +569,11 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
             // never narrowed and stay a direct typed read.
             FloatAttributeView normals(geom.getAttribute("normal"));
             if (!normals) return false;// the RT path requires per-vertex normals
-            const auto& positions = posAttr->array();
+            // A material displacementMap moves the positions here, once, and
+            // only here: the buffer below feeds the raster and the BLAS alike.
+            std::vector<float> displaced;
+            if (disp && !displacePositions(geom, *disp, displaced)) disp = nullptr;
+            const auto& positions = disp ? displaced : posAttr->array();
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
             if (vertexCount < 3) return false;
             if (normals.count() != static_cast<int>(vertexCount)) return false;
@@ -454,6 +635,19 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
 
             p.rec = std::make_unique<BlasRecord>();
             auto& rec = p.rec;
+            if (disp) {
+                rec->dispSig = disp->signature;
+                for (int a = 0; a < 3; ++a) {
+                    rec->dispMin[a] = std::numeric_limits<float>::max();
+                    rec->dispMax[a] = std::numeric_limits<float>::lowest();
+                }
+                for (size_t i = 0; i + 2 < positions.size(); i += 3) {
+                    for (int a = 0; a < 3; ++a) {
+                        rec->dispMin[a] = std::min(rec->dispMin[a], positions[i + a]);
+                        rec->dispMax[a] = std::max(rec->dispMax[a], positions[i + a]);
+                    }
+                }
+            }
 
             const VkDeviceSize vbBytes = positions.size() * sizeof(float);
             rec->vertex = createGeomBuffer(vbBytes, geomUsage, deviceLocal);

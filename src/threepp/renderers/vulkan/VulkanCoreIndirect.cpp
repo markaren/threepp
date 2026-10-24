@@ -418,10 +418,10 @@ namespace threepp {
                 memoDrawStart = 0u;
                 memoDrawCount = 0xFFFFFFFFu;
                 if (auto geom = en.mesh->geometry()) {
-                    if (!geom->boundingBox) geom->computeBoundingBox();
-                    if (geom->boundingBox) {
-                        const Vector3 c = geom->boundingBox->getCenter();
-                        const Vector3 h = geom->boundingBox->getSize() * 0.5f;
+                    Box3 box;// the record's box: a displacementMap's moved positions
+                    if (boundsOf(*geom, box)) {
+                        const Vector3 c = box.getCenter();
+                        const Vector3 h = box.getSize() * 0.5f;
                         memoCenter[0] = c.x; memoCenter[1] = c.y; memoCenter[2] = c.z;
                         memoHalf[0]   = h.x; memoHalf[1]   = h.y; memoHalf[2]   = h.z;
                         memoBoundsValid = true;

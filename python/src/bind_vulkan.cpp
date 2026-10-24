@@ -1143,6 +1143,25 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().shadowCascades(); },
                               [](PyVulkanRenderer& r, uint32_t v) { r.native().setShadowCascades(v); },
                               "The sun's shadow cascades, 1-4 (default 4).")
+                .def("set_displacement_detail",
+                     [](PyVulkanRenderer& r, float pixel_edge, float min_edge) {
+                         r.native().setDisplacementDetail(pixel_edge, min_edge);
+                     },
+                     py::arg("pixel_edge"), py::arg("min_edge") = 0.01f,
+                     "Refine meshes with a material displacement_map around the camera: split edges until none "
+                     "is longer than pixel_edge output pixels (nor min_edge metres) where the relief would show. "
+                     "0 (default) = off, only the mesh's own vertices move.")
+                .def_property_readonly("displacement_pixel_edge",
+                                       [](PyVulkanRenderer& r) { return r.native().displacementPixelEdge(); })
+                .def_property_readonly("displacement_min_edge",
+                                       [](PyVulkanRenderer& r) { return r.native().displacementMinEdge(); })
+                .def_property("displacement_frustum_limit",
+                              [](PyVulkanRenderer& r) { return r.native().displacementFrustumLimit(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setDisplacementFrustumLimit(v); },
+                              "Refine fully only in the focus camera's view (plus 15 %); 8x coarser outside. "
+                              "Default True.")
+                .def("refine_displacement", [](PyVulkanRenderer& r) { r.native().refineDisplacement(); },
+                     "Re-refine the displaced meshes around the camera of the next frame.")
                 .def("set_shadowed_lamps",
                      [](PyVulkanRenderer& r, uint32_t spots, uint32_t points) {
                          r.native().setShadowedLamps(spots, points);
