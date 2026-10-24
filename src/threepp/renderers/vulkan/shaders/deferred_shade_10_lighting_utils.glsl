@@ -846,6 +846,20 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
     return sum;
 }
 
+// The emitter-specular NEE's opening gates:
+// emitters in the frame at all, then the range gate, for a lobe: against the
+// diffuse 1/π this term peaks at D·G·F/(4·NdotV) ≤ (1/(π·α²))/(4·k), so the
+// lights reach 1/(4·k·α²) times further in d² (F taken as 1: grazing Fresnel).
+bool emSpecInReach(vec3 P, float roughness, float k) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return false;
+    const float a = roughness * roughness;
+    return !(emGateBound(P) * max(1.0, 1.0 / max(4.0 * k * a * a, 1e-6)) < 1.0);
+}
+// The emitter-specular NEE's sample plan size: was 16, 8 halves the
+// per-glossy-pixel shadow rays; still deterministic (zero temporal noise),
+// slightly coarser emitter coverage on wide-lobe metals.
+const int kEmSpecSamples = 8;
+
 // Coherent emitter SPECULAR NEE — the GGX-lobe analogue of emissiveNEE (same
 // deterministic stratified power-CDF picks + R2 barycentrics → settles
 // instantly, zero per-frame noise, same accepted emitter-coverage bias). For a
@@ -869,19 +883,9 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
 vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
                      float roughness, float k, bool doShadows, float rayShareScale, out uvec2 rayShare) {
     rayShare = uvec2(0u);
-    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
-    {
-        // The range gate, for a lobe: against the diffuse 1/π this term peaks at
-        // D·G·F/(4·NdotV) ≤ (1/(π·α²))/(4·k), so the lights reach 1/(4·k·α²) times
-        // further in d² (F taken as 1: grazing Fresnel).
-        const float a = roughness * roughness;
-        if (emGateBound(P) * max(1.0, 1.0 / max(4.0 * k * a * a, 1e-6)) < 1.0) return vec3(0.0);
-    }
-    const int    EM_SAMPLES = 8;// was 16 — halves the per-glossy-pixel shadow rays;
-                                 // still deterministic (zero temporal noise), slightly
-                                 // coarser emitter coverage on wide-lobe metals.
+    if (!emSpecInReach(P, roughness, k)) return vec3(0.0);
     const vec3   shadowOrig = P + N * SHADOW_EPS;
-    const EmPlan plan = emPlanBuild(P, EM_SAMPLES);// same pick as emissiveNEE (emissive_lights.glsl)
+    const EmPlan plan = emPlanBuild(P, kEmSpecSamples);// same pick as emissiveNEE (emissive_lights.glsl)
     if (rayShareScale > 0.0) rayShare = emSpecRayShares(plan, P, roughness, rayShareScale);
     vec3 sum = vec3(0.0);
     for (int s = 0; s < plan.count; ++s) {
@@ -931,4 +935,21 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
         sum += c * (es.w * keep);
     }
     return sum;
+}
+
+// The primary pixel's rayShareScale for emissiveSpecNEE: how much of each
+// light's specular the deterministic mirror ray takes over. Only in the
+// deterministic band (roughness < kReflStochastic), only on a mesh that is not
+// moving (its own ids texel), and only on a flat surface: flat below a normal
+// step of 0.003 rad per pixel (a curvature radius over ~450 px), none from
+// 0.006. The band edge stays the trace's own cut: a ramp from 0.20 gave a
+// roughness-0.22 floor a third of its light back as strata blobs, and the flat
+// gate is what keeps the cut off curved tubes, where single pixels the
+// specular AA pushed over 0.25 fell back to the strata inside the ray's image,
+// as holes.
+float emSpecRayShareScale(float roughness, float specAaKernelSq, float kReflStochastic, int msSampleIdx, ivec2 px) {
+    const uint  selfFlagsZ = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).z
+                                                : texelFetch(gbufIdsTex, px, 0).z;
+    const float flatT = 1.0 - smoothstep(1e-5, 4e-5, specAaKernelSq);
+    return (roughness < kReflStochastic && !ifMoving(selfFlagsZ)) ? flatT : 0.0;
 }
