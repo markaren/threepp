@@ -12,23 +12,24 @@ using namespace threepp;
 
 namespace {
 
-    Vector3 _vector;
+    // Scratch vectors, one set per thread: boxes are tested from many threads at once (BVH queries run in parallel).
+    thread_local Vector3 _vector;
 
-    Vector3 _v0;
-    Vector3 _v1;
-    Vector3 _v2;
+    thread_local Vector3 _v0;
+    thread_local Vector3 _v1;
+    thread_local Vector3 _v2;
 
-    Vector3 _f0;
-    Vector3 _f1;
-    Vector3 _f2;
+    thread_local Vector3 _f0;
+    thread_local Vector3 _f1;
+    thread_local Vector3 _f2;
 
-    Vector3 _center;
-    Vector3 _extents;
+    thread_local Vector3 _center;
+    thread_local Vector3 _extents;
 
-    Vector3 _triangleNormal;
-    Vector3 _testAxis;
+    thread_local Vector3 _triangleNormal;
+    thread_local Vector3 _testAxis;
 
-    std::array<Vector3, 8> _points;
+    thread_local std::array<Vector3, 8> _points;
 
 
     bool satForAxes(const std::vector<float>& axes, const Vector3& v0, const Vector3& v1, const Vector3& v2, const Vector3& extents) {

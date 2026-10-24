@@ -301,7 +301,37 @@ namespace threepp_py {
                         },
                         py::arg("candidates"), py::arg("targets"), py::arg("accurate") = true,
                         "C x T nested list of (N, 3) float32 point arrays — the intersection points "
-                        "of every candidate/target pair. An empty (0, 3) array means no contact.");
+                        "of every candidate/target pair. An empty (0, 3) array means no contact.")
+                .def_static(
+                        "segments_hit_many", [](const BVHList& targets, const FloatArray& starts, const FloatArray& ends) {
+                            requireBuilt(targets, "segments_hit_many");
+                            if (starts.ndim() != 2 || starts.shape(1) != 3 || ends.ndim() != 2 || ends.shape(1) != 3 ||
+                                starts.shape(0) != ends.shape(0)) {
+                                throw std::invalid_argument("segments_hit_many: starts and ends must both be (N, 3)");
+                            }
+                            const auto n = static_cast<std::size_t>(starts.shape(0)), t = targets.size();
+                            const float* a = starts.data();
+                            const float* b = ends.data();
+                            std::vector<char> hits(n * t, 0);
+                            {
+                                py::gil_scoped_release release;
+                                forEachPair(n, t, [&](std::size_t i, std::size_t j, std::size_t k) {
+                                    const Vector3 p(a[3 * i], a[3 * i + 1], a[3 * i + 2]);
+                                    Vector3 d(b[3 * i] - p.x, b[3 * i + 1] - p.y, b[3 * i + 2] - p.z);
+                                    const float len = d.length();
+                                    if (len <= 0.f) return;
+                                    d.divideScalar(len);
+                                    hits[k] = targets[j]->raycastAny(Ray(p, d), len) ? 1 : 0;
+                                });
+                            }
+                            py::array_t<bool> out({static_cast<py::ssize_t>(n), static_cast<py::ssize_t>(t)});
+                            std::copy(hits.begin(), hits.end(), out.mutable_data());
+                            return out;
+                        },
+                        py::arg("targets"), py::arg("starts"), py::arg("ends"),
+                        "(N, T) bool array: does the straight segment starts[i] -> ends[i] cross a triangle of "
+                        "target j? Every segment against every target in parallel (first hit only). A segment "
+                        "wholly inside a closed mesh crosses nothing: test its ends for that separately.");
     }
 
 }// namespace threepp_py
