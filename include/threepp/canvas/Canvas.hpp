@@ -74,6 +74,19 @@ namespace threepp {
         /// window exists, or on a headless canvas).
         [[nodiscard]] bool isFullscreen() const;
 
+        /// What the cursor does over the window. Normal: the system cursor.
+        /// Hidden: invisible while over the window, free to leave it.
+        /// Disabled: hidden and grabbed, for mouse look; the mouse-move
+        /// events (and mousePosition) then carry unbounded virtual positions,
+        /// so a frame's look is the difference of two of them, and raw
+        /// (unaccelerated) motion is used where the platform has it. No-op on
+        /// a headless canvas and in the browser; before the window exists the
+        /// request is recorded and applied when it is created.
+        enum class CursorMode { Normal, Hidden, Disabled };
+        void setCursorMode(CursorMode mode);
+
+        [[nodiscard]] CursorMode cursorMode() const;
+
         void onWindowResize(std::function<void(WindowSize)> f);
 
         void onMonitorChange(std::function<void(int)> f) const;

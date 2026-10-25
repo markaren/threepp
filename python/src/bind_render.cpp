@@ -465,6 +465,23 @@ namespace threepp_py {
                 }, "The last cursor position over the window as (x, y) window pixels, origin top-left; "
                    "(0.0, 0.0) until the cursor first moves over the window. Tracked even while a UI "
                    "captures the mouse.")
+                .def("set_cursor_mode", [](Canvas& c, const std::string& mode) {
+                    if (mode == "normal") c.setCursorMode(Canvas::CursorMode::Normal);
+                    else if (mode == "hidden") c.setCursorMode(Canvas::CursorMode::Hidden);
+                    else if (mode == "disabled") c.setCursorMode(Canvas::CursorMode::Disabled);
+                    else throw py::value_error("cursor mode: 'normal', 'hidden' or 'disabled'");
+                }, py::arg("mode"),
+                   "What the cursor does over the window: 'normal'; 'hidden' (invisible over the window); "
+                   "'disabled' (hidden and grabbed, for mouse look: mouse_position and on_mouse_move then "
+                   "report unbounded virtual positions, so a frame's look is the difference of two; raw "
+                   "motion where the platform has it). No-op headless.")
+                .def("cursor_mode", [](const Canvas& c) {
+                    switch (c.cursorMode()) {
+                        case Canvas::CursorMode::Hidden: return std::string("hidden");
+                        case Canvas::CursorMode::Disabled: return std::string("disabled");
+                        default: return std::string("normal");
+                    }
+                }, "The cursor mode set_cursor_mode last set: 'normal', 'hidden' or 'disabled'.")
                 .def("is_open", &Canvas::isOpen)
                 .def("close", &Canvas::close);
 

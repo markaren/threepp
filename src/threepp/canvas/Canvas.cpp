@@ -389,6 +389,7 @@ struct Canvas::Impl {
 
     WindowSize size_;
     Vector2 lastMousePos_;
+    Canvas::CursorMode cursorMode_ = Canvas::CursorMode::Normal;
 
     bool close_{false};
 
@@ -571,6 +572,7 @@ struct Canvas::Impl {
         glfwSetKeyCallback(window, key_callback);
         glfwSetMouseButtonCallback(window, mouse_callback);
         glfwSetCursorPosCallback(window, cursor_callback);
+        applyCursorMode();// a mode requested before the window existed
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
         glfwSetWindowPosCallback(window, window_pos_callback);
@@ -659,6 +661,18 @@ struct Canvas::Impl {
 
 #ifndef __EMSCRIPTEN__
         moveFrameTo(position.first, position.second);
+#endif
+    }
+
+    void applyCursorMode() {
+#ifndef __EMSCRIPTEN__
+        if (!window || params_.headless_) return;
+        const int glfwMode = cursorMode_ == CursorMode::Disabled ? GLFW_CURSOR_DISABLED
+                           : cursorMode_ == CursorMode::Hidden   ? GLFW_CURSOR_HIDDEN
+                                                                 : GLFW_CURSOR_NORMAL;
+        glfwSetInputMode(window, GLFW_CURSOR, glfwMode);
+        if (glfwRawMouseMotionSupported())
+            glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, cursorMode_ == CursorMode::Disabled ? GLFW_TRUE : GLFW_FALSE);
 #endif
     }
 
@@ -954,6 +968,17 @@ void Canvas::setFullscreen(bool flag) {
 bool Canvas::isFullscreen() const {
 
     return pimpl_->params_.fullscreen_;
+}
+
+void Canvas::setCursorMode(CursorMode mode) {
+
+    pimpl_->cursorMode_ = mode;
+    pimpl_->applyCursorMode();
+}
+
+Canvas::CursorMode Canvas::cursorMode() const {
+
+    return pimpl_->cursorMode_;
 }
 
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
