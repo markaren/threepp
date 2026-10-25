@@ -272,15 +272,26 @@ void main() {
         // A small bright emitter reflected by a GLOSSY surface is rendered by the
         // single mirror ray at FULL radiance — but its true physically-correct value is the
         // lobe-coverage fraction, which for a sub-lobe source is ~nothing. The
-        // energy-conserving blur above only softens the spike into a speck. Once the
-        // surface is even slightly glossy (rough > 0.04 → the reflection lobe is
-        // wider than a tiny source), clamp an ISOLATED bright reflection down to its
-        // raw surround. True mirrors (rough ≤ 0.04, sharp reflections expected) are
-        // skipped; broad bright reflections (sky/walls → bright surround) pass
-        // unchanged because their surround ring is bright too.
-        if (!isGlass && rough > 0.04) {
-            const ivec2 ring[8] = ivec2[8](ivec2(7,0), ivec2(-7,0), ivec2(0,7), ivec2(0,-7),
-                                           ivec2(6,6), ivec2(6,-6), ivec2(-6,6), ivec2(-6,-6));
+        // energy-conserving blur above only softens the spike into a speck. Keyed on the
+        // BLUR THE PIXEL GETS (sigma), not on a roughness constant, and the
+        // surround is read at that blur's footprint. The old gate (rough > 0.04,
+        // ring at 7 px) acted on every near-mirror surface, where the kernel is
+        // under a pixel and a reflected emitter is a correct, sharp IMAGE, not a
+        // speck: a chrome sphere (roughness 0.05) showed a neon ring as dim
+        // blotches and a rect panel with holes, because a 2-3 px ring or a 12 px
+        // panel has a dark surround at 7 px (vulkan_lights sections 4 and 5).
+        // Below sigma 1.5 (kernel radius under 4 px) the image is what the lobe
+        // says it is: no clamp. Above, the ring sits at ~2 sigma, the extent a
+        // blurred speck has: a speck still has a dark ring there and collapses,
+        // while a source larger than the lobe keeps a bright ring inside its own
+        // image and passes, edge pixels included (a half-bright trimmed mean
+        // gives a 1.5x cap). Broad bright reflections (sky, walls) pass as
+        // before: their surround is bright too.
+        if (!isGlass && sigma >= 1.5) {
+            const int   rr = int(clamp(ceil(2.0 * sigma), 3.0, 7.0));
+            const int   rd = int(max(round(float(rr) * 0.7071), 2.0));
+            const ivec2 ring[8] = ivec2[8](ivec2(rr,0), ivec2(-rr,0), ivec2(0,rr), ivec2(0,-rr),
+                                           ivec2(rd,rd), ivec2(rd,-rd), ivec2(-rd,rd), ivec2(-rd,-rd));
             float rsum = 0.0, rn = 0.0, rmax = 0.0;
             for (int k = 0; k < 8; ++k) {
                 const ivec2 q = px + ring[k];
