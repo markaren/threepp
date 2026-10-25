@@ -199,7 +199,35 @@ void main() {
         const float stochBand   = isGlass ? 0.0 : smoothstep(0.20, 0.30, rough);
         const float stochT      = stochBand * (1.0 - convT);
         const float widenT      = max(max(noiseT, detT), stochT);
-        const float narrowSigma = min(baseSigma, 1.3);// converged: the material's own width, capped
+        // ── LOBE FOOTPRINT, the metal mirror band's width ───────────────────
+        // Below kReflStochastic the reflection is one mirror ray and this blur
+        // IS the gloss, so its width has to be the lobe's footprint on screen,
+        // not a constant per roughness. A GGX lobe of alpha = rough^2 spreads
+        // the half-vector by ~alpha and the reflected direction by ~2 alpha;
+        // content a distance h behind the surface, seen from d, moves 2 alpha h
+        // on the reflected hit and sits at d + h in the mirror, so on screen the
+        // blur is 2 alpha h / (h + d) radians, over the camera's radians per
+        // pixel (a parallel camera: 2 alpha h world units over its units per
+        // pixel). The old rough * 16 px matched this at one geometry only
+        // (roughness 0.05, content a metre behind a surface six metres away):
+        // the same chrome blurred the cube touching it and the far wall by the
+        // same 0.8 px, and a 0.15 brushed metal mirrored the room at 2.4 px
+        // whatever it reflected. Hit distance is the temporal pass's EMA (aux
+        // .w); an env miss (0) is already lobe-filtered at the trace and takes
+        // no blur; an unknown distance (glass history, < 0) keeps the old
+        // width. The stochastic band keeps its lobe-sized rough * 16 (the
+        // samples integrate the lobe, the blur only hides their noise), and
+        // the dielectric shortcut (min(rough, 0.16) * 8) is untouched.
+        const float pxScale   = 2.0 * cam.projInverse[1][1] / float(pc.height);
+        const float alpha     = rough * rough;
+        const float footSigma = hitW < 0.0 ? rough * 16.0
+                              : (hitW <= 1e-3 ? 0.0
+                                              : 2.0 * alpha * (cam.camAux.x > 0.5 ? hitW : hitW / (hitW + viewDistC)) / pxScale);
+        const float metalSig2 = mix(footSigma, rough * 16.0, stochBand);
+        const float baseSig2  = isGlass ? baseSigma : mix(dielSigma, metalSig2, metalness);
+        // Converged width: the footprint as it is in the deterministic band;
+        // the stochastic band keeps its 1.3 px cap.
+        const float narrowSigma = mix(baseSig2, min(baseSig2, 1.3), stochBand);
         // How wide an UNCONVERGED pixel may go. The dielectric cap (dielSigma,
         // roughness clipped to 0.16) keeps reflected detail crisp in the sharp
         // band, but in the stochastic band it left a dielectric's 1-spp lobe a
@@ -208,7 +236,7 @@ void main() {
         // moved and for ~64-300 frames after it stopped. There, widen to the
         // lobe as a metal does (rough * 16). Converged pixels (widenT -> 0)
         // keep narrowSigma, so a settled view looks exactly as before.
-        const float wideSigma   = mix(baseSigma, max(baseSigma, rough * 16.0), stochBand);
+        const float wideSigma   = mix(baseSig2, max(baseSig2, rough * 16.0), stochBand);
         const float sigma       = clamp(mix(narrowSigma, wideSigma, widenT), 0.0, 5.0);
         // MIRROR BAND PASS-THROUGH. The width used to have a 0.6 px floor, so a
         // true mirror (roughness 0.01: baseSigma 0.16) still took a 5-tap
