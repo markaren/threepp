@@ -280,7 +280,49 @@ namespace threepp_py {
                         "stored the way obj.position.set(px, py, pz) and obj.quaternion.set(qx, qy, qz, qw) store "
                         "them (float32, and the quaternion's Euler sync). scale_index (m,) int and scales "
                         "(m, 3): objects[scale_index[j]].scale.set(*scales[j]), after every pose; rows not "
-                        "listed keep their scale. Releases the GIL while it writes.");
+                        "listed keep their scale. Releases the GIL while it writes.")
+                // The reads: a pose's round trip in two calls (an animation mixer posed the bones; a native
+                // layer reads them, edits the rows, and set() writes them back) instead of a Python call
+                // per bone and value.
+                .def(
+                        "get",
+                        [](const TransformBatch& b, py::array_t<double, py::array::c_style>& out) {
+                            const auto n = static_cast<py::ssize_t>(b.objects.size());
+                            if (out.ndim() != 2 || out.shape(0) != n || out.shape(1) != 7) {
+                                throw std::invalid_argument("TransformBatch.get: out must be (len(batch), 7) float64");
+                            }
+                            double* p = out.mutable_data();
+                            py::gil_scoped_release release;
+                            for (py::ssize_t k = 0; k < n; ++k, p += 7) {
+                                const Object3D& o = *b.objects[k];
+                                p[0] = o.position.x, p[1] = o.position.y, p[2] = o.position.z;
+                                p[3] = o.quaternion[0], p[4] = o.quaternion[1], p[5] = o.quaternion[2], p[6] = o.quaternion[3];
+                            }
+                        },
+                        py::arg("out"),
+                        "Fill out ((len(batch), 7) float64, C order) with each object's LOCAL [px, py, pz, qx, qy, qz, "
+                        "qw]: the rows set() takes. Releases the GIL while it reads.")
+                .def(
+                        "get_world",
+                        [](const TransformBatch& b, py::array_t<double, py::array::c_style>& out) {
+                            const auto n = static_cast<py::ssize_t>(b.objects.size());
+                            if (out.ndim() != 2 || out.shape(0) != n || out.shape(1) != 7) {
+                                throw std::invalid_argument("TransformBatch.get_world: out must be (len(batch), 7) float64");
+                            }
+                            double* p = out.mutable_data();
+                            py::gil_scoped_release release;
+                            Vector3 pos, scl;
+                            Quaternion q;
+                            for (py::ssize_t k = 0; k < n; ++k, p += 7) {
+                                b.objects[k]->matrixWorld->decompose(pos, q, scl);
+                                p[0] = pos.x, p[1] = pos.y, p[2] = pos.z;
+                                p[3] = q[0], p[4] = q[1], p[5] = q[2], p[6] = q[3];
+                            }
+                        },
+                        py::arg("out"),
+                        "Fill out ((len(batch), 7) float64, C order) with each object's WORLD position and rotation, "
+                        "decomposed from its matrix_world as it stands (update the roots' matrix_world first). "
+                        "Releases the GIL while it reads.");
 
         // ---- BufferGeometry --------------------------------------------------
         py::class_<BufferGeometry, std::shared_ptr<BufferGeometry>>(m, "BufferGeometry")

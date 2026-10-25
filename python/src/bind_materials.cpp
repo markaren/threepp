@@ -73,6 +73,9 @@ namespace threepp_py {
                 .def_readwrite("blending", &T::blending)
                 .def_readwrite("alpha_test", &T::alphaTest)
                 .def_readwrite("tone_mapped", &T::toneMapped)
+                .def_readwrite("polygon_offset", &T::polygonOffset)
+                .def_readwrite("polygon_offset_factor", &T::polygonOffsetFactor)
+                .def_readwrite("polygon_offset_units", &T::polygonOffsetUnits)
                 .def_readwrite("premultiplied_alpha", &T::premultipliedAlpha)
                 // Sort-free stochastic transparency (three.js alphaHash): opacity
                 // becomes coverage against a stable hash. Pair with MSAA/TAA.
@@ -182,6 +185,9 @@ namespace threepp_py {
         THREEPP_MAT_FIELD("blending", blending);
         THREEPP_MAT_FIELD("alpha_test", alphaTest);
         THREEPP_MAT_FIELD("tone_mapped", toneMapped);
+        THREEPP_MAT_FIELD("polygon_offset", polygonOffset);
+        THREEPP_MAT_FIELD("polygon_offset_factor", polygonOffsetFactor);
+        THREEPP_MAT_FIELD("polygon_offset_units", polygonOffsetUnits);
         THREEPP_MAT_FIELD("premultiplied_alpha", premultipliedAlpha);
         THREEPP_MAT_FIELD("alpha_hash", alphaHash);
         THREEPP_MAT_FIELD("force_single_pass", forceSinglePass);

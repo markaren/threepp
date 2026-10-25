@@ -14,6 +14,8 @@
 #include "threepp/geometries/OctahedronGeometry.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Euler.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
 using namespace threepp;
@@ -65,6 +67,20 @@ namespace threepp_py {
                      py::arg("radius") = 1.f, py::arg("height") = 1.f,
                      py::arg("radial_segments") = 16, py::arg("height_segments") = 1, py::arg("open_ended") = false,
                      py::arg("theta_start") = 0.f, py::arg("theta_length") = math::TWO_PI);
+
+        // three.js' DecalGeometry: the triangles of `mesh` inside an oriented box (position, orientation, size),
+        // clipped to it and projected along its z for uvs, in world space. Draw it with a transparent material,
+        // depth_write=False and polygon_offset=True (polygon_offset_factor < 0): that is the decal signature the
+        // Vulkan gbuffer routes to its albedo-blend pipeline; GL draws it forward with the depth bias.
+        py::class_<DecalGeometry, BufferGeometry, std::shared_ptr<DecalGeometry>>(m, "DecalGeometry")
+                .def(py::init([](const Mesh& mesh, const Vector3& position, const Euler& orientation, const Vector3& size) {
+                    return DecalGeometry::create(mesh, position, orientation, size);
+                }),
+                     py::arg("mesh"), py::arg("position"), py::arg("orientation"), py::arg("size"),
+                     "The part of mesh's surface inside the box at position, turned by orientation (Euler), of "
+                     "size (x, y across, z the projection depth), as world-space triangles with uvs over the box "
+                     "face. Use it with a material that is transparent, depth_write=False and polygon_offset=True "
+                     "(factor about -4): a decal (bullet holes, blood, scorch marks).");
 
         py::class_<CapsuleGeometry, BufferGeometry, std::shared_ptr<CapsuleGeometry>>(m, "CapsuleGeometry")
                 .def(py::init([](float radius, float length, unsigned cs, unsigned rs) {

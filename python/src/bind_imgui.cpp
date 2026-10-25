@@ -112,11 +112,44 @@ namespace threepp_py {
         // ---- curated immediate-mode widget API -------------------------------
         auto im = m.def_submodule("imgui", "Dear ImGui immediate-mode widgets (call inside ImguiContext.render's draw callback).");
 
-        im.def("begin", [](const std::string& name) { return ImGui::Begin(name.c_str()); }, py::arg("name"),
-               "Start a window; returns False if collapsed. Pair with end().");
+        im.def("begin", [](const std::string& name, int flags) { return ImGui::Begin(name.c_str(), nullptr, flags); },
+               py::arg("name"), py::arg("flags") = 0,
+               "Start a window; returns False if collapsed. Pair with end(). flags: an OR of the WINDOW_* "
+               "constants (WINDOW_OVERLAY is a full-screen HUD layer: no decoration, inputs, background, "
+               "focus or saved settings).");
         im.def("end", [] { ImGui::End(); });
-        im.def("set_next_window_pos", [](float x, float y) { ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver); }, py::arg("x"), py::arg("y"));
-        im.def("set_next_window_size", [](float w, float h) { ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_FirstUseEver); }, py::arg("width"), py::arg("height"));
+        im.def("set_next_window_pos", [](float x, float y, bool always) {
+            ImGui::SetNextWindowPos(ImVec2(x, y), always ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+        }, py::arg("x"), py::arg("y"), py::arg("always") = false,
+           "Place the next window; once (its first use) unless always=True (a HUD that follows the screen).");
+        im.def("set_next_window_size", [](float w, float h, bool always) {
+            ImGui::SetNextWindowSize(ImVec2(w, h), always ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+        }, py::arg("width"), py::arg("height"), py::arg("always") = false,
+           "Size the next window; once (its first use) unless always=True.");
+        im.def("set_next_window_bg_alpha", [](float a) { ImGui::SetNextWindowBgAlpha(a); }, py::arg("alpha"),
+               "The next window's background opacity (0 transparent .. 1).");
+        im.def("set_window_font_scale", [](float s) { ImGui::SetWindowFontScale(s); }, py::arg("scale"),
+               "Scale the current window's font (call between begin and end).");
+        im.def("calc_text_size", [](const std::string& s) {
+            const ImVec2 v = ImGui::CalcTextSize(s.c_str());
+            return py::make_tuple(v.x, v.y);
+        }, py::arg("text"), "(width, height) of a text at the current window's font and scale.");
+        im.attr("WINDOW_NO_TITLE_BAR") = static_cast<int>(ImGuiWindowFlags_NoTitleBar);
+        im.attr("WINDOW_NO_RESIZE") = static_cast<int>(ImGuiWindowFlags_NoResize);
+        im.attr("WINDOW_NO_MOVE") = static_cast<int>(ImGuiWindowFlags_NoMove);
+        im.attr("WINDOW_NO_SCROLLBAR") = static_cast<int>(ImGuiWindowFlags_NoScrollbar);
+        im.attr("WINDOW_NO_COLLAPSE") = static_cast<int>(ImGuiWindowFlags_NoCollapse);
+        im.attr("WINDOW_NO_BACKGROUND") = static_cast<int>(ImGuiWindowFlags_NoBackground);
+        im.attr("WINDOW_NO_INPUTS") = static_cast<int>(ImGuiWindowFlags_NoInputs);
+        im.attr("WINDOW_NO_SAVED_SETTINGS") = static_cast<int>(ImGuiWindowFlags_NoSavedSettings);
+        im.attr("WINDOW_ALWAYS_AUTO_RESIZE") = static_cast<int>(ImGuiWindowFlags_AlwaysAutoResize);
+        im.attr("WINDOW_NO_DECORATION") = static_cast<int>(ImGuiWindowFlags_NoDecoration);
+        im.attr("WINDOW_NO_FOCUS_ON_APPEARING") = static_cast<int>(ImGuiWindowFlags_NoFocusOnAppearing);
+        im.attr("WINDOW_NO_BRING_TO_FRONT_ON_FOCUS") = static_cast<int>(ImGuiWindowFlags_NoBringToFrontOnFocus);
+        im.attr("WINDOW_OVERLAY") = static_cast<int>(ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                                     ImGuiWindowFlags_NoFocusOnAppearing |
+                                                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoMove);
         im.def("separator", [] { ImGui::Separator(); });
         im.def("spacing", [] { ImGui::Spacing(); });
         im.def("same_line", [] { ImGui::SameLine(); });
