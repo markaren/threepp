@@ -219,31 +219,46 @@ void main() {
     }
     const float visPhi = 4.0 * sqrt(max(varS, 0.0)) + 1e-3;// ratio range-stop scale
 
-    // SURGICAL WIDE PASSES. The wide steps (4, 8) exist for high-variance
-    // content — small bright emitters lighting a dark room, fresh
-    // disocclusions — but sky-lit converged pixels pay their full 25-tap
-    // cost for a near-identity: at tiny variance lumPhi collapses, the
-    // luminance stop admits only the local plateau, and the pass output
-    // ≈ its input. So at step ≥ 4, skip the tap loop when BOTH channels are
-    // quiet and pass the center through instead. The test is RELATIVE
-    // (√var against the pixel's own luminance) so it is exposure-invariant:
-    // a dim pixel that is noisy relative to its own brightness — the
-    // night-cabin lamp spill — keeps the full reach, while a bright
-    // converged sky plateau skips. The shadow ratio is bounded [0,1], so
-    // its threshold is absolute. No seam: near the threshold the filtered
-    // and pass-through values converge by construction, and skipped pixels
-    // still write their dst image, so the ping-pong stays
-    // generation-consistent. Warps skip coherently — variance is smooth.
-    const bool wideSkip = pc.step >= 4u &&
+    // SETTLED PIXELS PASS THROUGH, at every step. The wide steps (4, 8) used to
+    // skip alone, on the SAMPLE variance (sqrt(var) under 2 % of the pixel's
+    // luminance), which only ever held on smooth sky-lit plateaus: the moments
+    // carry E[L^2] of the 1-spp gather samples, and a wall whose rays see a lamp
+    // one time in ten keeps a sample variance of the order of its mean for
+    // ever. What the filter has left to smooth is the residual noise of the
+    // running MEAN, var / (2 hist - 1) for an EMA of that length (the reflection
+    // filter reads its aux the same way). A pixel whose residual is under 2 %
+    // of its own luminance (shadow ratio: under 0.02 absolute), with a history
+    // past the spatial-fallback band, passes through: every pass is a
+    // near-identity there, and the loose 1-spp-sized luminance stop was mixing
+    // it with its neighbours for nothing. Short history (motion, disocclusion,
+    // the dwell cut) and a lamp-lit gather that still swings (a sample std of
+    // ten times the mean leaves a 30 % residual at the 512 cap) keep every pass
+    // and the full +-30 px reach. Exposure-invariant as before; a skipped pixel
+    // still writes its dst image, so the ping-pong stays generation-consistent,
+    // and the history feedback below runs on the pass's source either way.
+    // Two ways in: the wide steps' sample-variance test as before (a smooth
+    // sky-lit plateau, the ocean, where the history is short but every sample
+    // agrees), or a settled residual at any step. The residual bar is 0.5 %:
+    // at 2 % the walls of vulkan_lights came back with a faint grain the
+    // narrow passes had been smoothing (grain 0.96 -> 1.42 at 3x), and 0.5 %
+    // of the luminance is under a display level.
+    const float histG = imageLoad(indirectImage, px).a;
+    const float histS = imageLoad(shadowVisImage, px).z;
+    const float resG  = sqrt(variance / max(2.0 * histG - 1.0, 1.0));
+    const float resS  = sqrt(varS     / max(2.0 * histS - 1.0, 1.0));
+    const bool wideSkip    = pc.step >= 4u &&
             sqrt(variance) <= 0.02 * lumC + 1e-4 &&
             sqrt(varS)     <= 0.02;
+    const bool settledSkip = wideSkip || (histG >= 8.0 && histS >= 4.0 &&
+            resG <= 0.005 * lumC + 1e-4 &&
+            resS <= 0.005);
 
     const int st = int(max(pc.step, 1u));
-    vec3  fC  = cC.rgb;// pass-through defaults (wideSkip)
+    vec3  fC  = cC.rgb;// pass-through defaults (settledSkip)
     float fV  = variance;
     float fS  = cS.x;
     float fVS = varS;
-    if (!wideSkip) {
+    if (!settledSkip) {
     vec3  sumC = vec3(0.0);
     float sumW = 0.0;
     float sumV = 0.0;
@@ -292,7 +307,7 @@ void main() {
     fS  = noRatio ? -1.0 : (sumWS > 0.0 ? sumS / sumWS : cS.x);// the marker survives every pass
     fVS = (pc.srcMode == 0u) ? varS
         : (sumWS > 0.0 ? sumVS / (sumWS * sumWS) : varS);
-    }// !wideSkip
+    }// !settledSkip
 
     // SVGF HISTORY FEEDBACK: on the designated pass, write THIS pass's SOURCE (the
     // first à-trous pass's already-filtered GI) back into the indirect image as the
