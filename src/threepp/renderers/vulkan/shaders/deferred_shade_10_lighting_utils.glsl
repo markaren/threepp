@@ -274,10 +274,21 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         // against (a dark-miss frame would wrongly dim a converged reflection) — and
         // rough asphalt reflects nothing, so the trail is a glossy-surface artifact
         // to begin with.
+        // ...and only on a SUSTAINED drop. A thin emitter far away (a neon
+        // tube mirrored in a chrome sphere at twenty metres, one pixel wide)
+        // is hit by the jittered mirror ray one frame and missed the next, and
+        // the clamp crushed the bright history to 1.4x the dark miss on every
+        // miss frame: the reflection flickered at distance and sat 15 % too
+        // dark (vulkan_lights, 2026-10-25). The sign trend above tells the two
+        // apart: an alternation settles at |trend| ~ 0.2, content that has
+        // left pushes it to -1 within two or three frames. Ramp the clamp in
+        // over that, so the departed car's trail still comes down in a few
+        // frames and a jittered lamp keeps its history.
         if (rough < 0.22) {
-            const float accLum  = dot(accum, vec3(0.2126, 0.7152, 0.0722));
-            const float lumCeil = curLum * 1.4 + 0.02;
-            if (accLum > lumCeil) accum *= lumCeil / accLum;
+            const float accLum    = dot(accum, vec3(0.2126, 0.7152, 0.0722));
+            const float lumCeil   = curLum * 1.4 + 0.02;
+            const float sustained = smoothstep(0.3, 0.6, -trend);
+            if (accLum > lumCeil) accum *= mix(1.0, lumCeil / accLum, sustained);
         }
         moment  = mix(pa.y, curLum * curLum, a);
         // Hit-distance EMA (floor 0.25: content distance changes matter within a
