@@ -220,9 +220,15 @@ void main() {
         // the dielectric shortcut (min(rough, 0.16) * 8) is untouched.
         const float pxScale   = 2.0 * cam.projInverse[1][1] / float(pc.height);
         const float alpha     = rough * rough;
+        // The footprint only NARROWS the gloss: rough * 16 stays the ceiling.
+        // Past it the lobe is physically wider (a 0.05 chrome mirroring a
+        // neon tube three metres away), but that is the width Lars judged,
+        // and a lamp's mirrored image softened to a smudge under the full
+        // model while everything near sharpened; the ceiling keeps the lamps.
         const float footSigma = hitW < 0.0 ? rough * 16.0
                               : (hitW <= 1e-3 ? 0.0
-                                              : 2.0 * alpha * (cam.camAux.x > 0.5 ? hitW : hitW / (hitW + viewDistC)) / pxScale);
+                                              : min(rough * 16.0,
+                                                    2.0 * alpha * (cam.camAux.x > 0.5 ? hitW : hitW / (hitW + viewDistC)) / pxScale));
         const float metalSig2 = mix(footSigma, rough * 16.0, stochBand);
         const float baseSig2  = isGlass ? baseSigma : mix(dielSigma, metalSig2, metalness);
         // Converged width: the footprint as it is in the deterministic band;
