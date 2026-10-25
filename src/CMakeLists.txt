@@ -1729,6 +1729,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth.frag"
         kOverlayDepthFragSpv
         _overlay_depth_frag_spv_h)
+    # Overlay depth import — the G-buffer's depth resampled into the overlay
+    # depth attachment when the only overlay content is ParticleField
+    # billboards (no second rasterization of the scene for a few sprites).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth_import.vert"
+        kOverlayDepthImportVertSpv
+        _overlay_depth_import_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth_import.frag"
+        kOverlayDepthImportFragSpv
+        _overlay_depth_import_frag_spv_h)
     # Shadow maps (ShadowMapPass): the casters' depth, with the cutout test.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_depth.vert"

@@ -523,6 +523,12 @@ VulkanRenderer::Impl::~Impl() {
             if (overlayWireframeColoredPipeline)  vkDestroyPipeline(d, overlayWireframeColoredPipeline, nullptr);
             if (overlayPointListPipeline)         vkDestroyPipeline(d, overlayPointListPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
+            // The prepass's G-buffer depth import (created alongside it).
+            if (overlayDepthImportPipeline_)      vkDestroyPipeline(d, overlayDepthImportPipeline_, nullptr);
+            if (overlayDepthImportLayout_)        vkDestroyPipelineLayout(d, overlayDepthImportLayout_, nullptr);
+            if (overlayDepthImportSetLayout_)     vkDestroyDescriptorSetLayout(d, overlayDepthImportSetLayout_, nullptr);
+            if (overlayDepthImportPool_)          vkDestroyDescriptorPool(d, overlayDepthImportPool_, nullptr);
+            if (overlayDepthImportSampler_)       vkDestroySampler(d, overlayDepthImportSampler_, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
             // Hardware-MSAA overlay resources.
             if (overlayInjectPipeline_)       vkDestroyPipeline(d, overlayInjectPipeline_, nullptr);

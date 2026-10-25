@@ -1168,7 +1168,8 @@ namespace threepp_py {
                      },
                      py::arg("spots"), py::arg("points"),
                      "How many spot and point lamps get a shadow map per frame (defaults 4 and 8, at most 8 "
-                     "and 16). Without ray tracing a lamp without a map casts no shadow.")
+                     "and 16). Only lamps with cast_shadow get one, the strongest near the camera first. "
+                     "Without ray tracing a lamp without a map casts no shadow.")
                 .def_property_readonly("shadowed_lamps",
                                        [](PyVulkanRenderer& r) {
                                            return std::make_tuple(r.native().shadowedSpots(),

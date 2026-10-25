@@ -652,12 +652,15 @@ namespace threepp {
         void setShadowCascades(uint32_t n);
         [[nodiscard]] uint32_t shadowCascades() const;
         // How many spot and point lamps get a shadow map per frame (defaults 4
-        // and 8; at most 8 and 16). The lamps are chosen once a frame from the
-        // primary camera: castShadow == true first, then by power over the
-        // squared distance to the camera, and a lamp keeps its map until a
-        // newcomer is twice as strong. A lamp without a map casts NO shadow in
-        // ShadowMaps mode on a device without ray query: its light passes
-        // through walls. A secondary view uses the primary's lamp choice.
+        // and 8; at most 8 and 16). Only lamps with castShadow == true are
+        // candidates (a shadowless lamp never pays for a map, which is the
+        // scene drawn again into its faces every lit frame); among them the
+        // lamps lit and in the camera's frustum are chosen once a frame from
+        // the primary camera by power over the squared distance to the
+        // camera, and a lamp keeps its map until a newcomer is twice as
+        // strong. A lamp without a map casts NO shadow in ShadowMaps mode on a
+        // device without ray query: its light passes through walls. A
+        // secondary view uses the primary's lamp choice.
         void setShadowedLamps(uint32_t spots, uint32_t points);
         [[nodiscard]] uint32_t shadowedSpots() const;
         [[nodiscard]] uint32_t shadowedPoints() const;

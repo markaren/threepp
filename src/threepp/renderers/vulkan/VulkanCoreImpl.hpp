@@ -2103,6 +2103,21 @@ namespace threepp {
         // constants (same camera UBO, same model matrix push). Runs after
         // recordRasterGbufPass and only renders non-overlay geometry.
         VkPipeline       overlayDepthPrepassPipeline = VK_NULL_HANDLE;
+        // The prepass's cheap form (overlay_depth_import.frag): when the only
+        // overlay content is ParticleField billboards, the G-buffer's depth is
+        // resampled into the overlay depth attachment by one fullscreen
+        // triangle instead of rasterizing the scene a second time at display
+        // resolution — see overlayDepthImportsGbuffer(). One descriptor set
+        // per frame in flight naming that slot's G-buffer depth, rewritten
+        // only when the view changes (imageViewSerial), from the post-fence
+        // window of its own slot (prepareOverlayDepthImport).
+        VkPipeline            overlayDepthImportPipeline_  = VK_NULL_HANDLE;
+        VkPipelineLayout      overlayDepthImportLayout_    = VK_NULL_HANDLE;
+        VkDescriptorSetLayout overlayDepthImportSetLayout_ = VK_NULL_HANDLE;
+        VkDescriptorPool      overlayDepthImportPool_      = VK_NULL_HANDLE;
+        VkSampler             overlayDepthImportSampler_   = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, kFramesInFlight> overlayDepthImportSets_{};
+        std::array<uint64_t, kFramesInFlight>        overlayDepthImportSerials_{};
 
         // ── Hardware-MSAA overlay ───────────────────────────────────────────
         // The overlay renders post-TAA, so its vector edges (SVG fills, lines,
@@ -2970,13 +2985,16 @@ namespace threepp {
         const BlasRecord* drawGenEligibleRecord(const EntrySpan& sp);
         // The primary view's frame hands draw_gen.comp spans to cull (stage 4):
         // the CPU cull keeps only its span-level answer for them.
-        // Not while the overlay depth prepass runs: it draws one entry at a
-        // time off this view's CPU cull, which would then hold only the span-
-        // level answer for these spans and draw every instance of a span that
-        // is partly in view (the pine forest under its HUD: +2.5 ms of GPU).
+        // Not while the overlay depth prepass DRAWS THE SCENE: it draws one
+        // entry at a time off this view's CPU cull, which would then hold only
+        // the span-level answer for these spans and draw every instance of a
+        // span that is partly in view (the pine forest under its HUD: +2.5 ms
+        // of GPU). The prepass draws the scene for overlay meshes, lines and
+        // sprites only; for field billboards alone it imports the G-buffer's
+        // depth and touches no entry (overlayDepthImportsGbuffer).
         [[nodiscard]] bool drawGenCullsOnGpu() const {
             return !curView_->secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
-                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_ && !sceneHasOverlayContent();
+                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_ && !sceneHasOverlayMeshes();
         }
         void recordDrawGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyDrawGen(VulkanRenderer::DrawGenCheck& out);
@@ -3135,7 +3153,11 @@ namespace threepp {
         // still UNDEFINED: VUID-vkCmdBeginRendering-pRenderingInfo-09588.)
         // Cheap: both lists are already populated by the visibility pass before
         // any command recording, so this is just two size/flag checks.
-        bool sceneHasOverlayContent() const {
+        // The overlay content that is hard-edged and tested against the
+        // prepass's UNJITTERED depth: lines and points, world sprites, and the
+        // wireframe / overlay-layer / particle-system entries. These are what
+        // the prepass rasterizes the scene for.
+        bool sceneHasOverlayMeshes() const {
             if (!lastVisibleLines_.empty()) return true;
             // World-space sprites are drawn in the overlay pass and depth-test
             // against unjitDepth, so they need the prepass + overlay pass too.
@@ -3148,13 +3170,29 @@ namespace threepp {
             for (const auto& sp : entrySpans_) {
                 if (lastVisibleEntries_[sp.first].isOverlay) return true;
             }
+            return false;
+        }
+        bool sceneHasOverlayContent() const {
+            if (sceneHasOverlayMeshes()) return true;
             // ParticleField billboards draw in the overlay pass too, and they
             // are NOT entries flagged isOverlay — a field is one ordinary
             // MeshEntry whose billboard representation is a second, independent
             // draw. A scene of nothing but a campfire's embers would otherwise
             // skip the depth prepass, leaving unjitDepth UNDEFINED for a pass
             // that reads it (VUID-vkCmdBeginRendering-pRenderingInfo-09588).
+            // For them alone the prepass takes its cheap form, the G-buffer
+            // depth import (overlayDepthImportsGbuffer).
             return sceneHasFieldBillboards();
+        }
+        // The prepass fills the overlay depth from the G-buffer's depth (one
+        // fullscreen triangle) rather than by drawing the scene: nothing but
+        // field billboards wants the attachment, and the import pipeline
+        // exists. A full-scene depth pass at display resolution cost 0.9 ms of
+        // GPU and 1.2 ms of CPU on a 15k-entry forest for a few dozen dust
+        // sprites — the jitter-exact depth it buys matters for hard-edged
+        // wireframes and lines, not for a soft sprite drawn outside TAA.
+        [[nodiscard]] bool overlayDepthImportsGbuffer() const {
+            return overlayDepthImportPipeline_ != VK_NULL_HANDLE && !sceneHasOverlayMeshes();
         }
         // G-buffer debug-view mode: blit one G-buffer channel onto the
         // swapchain instead of running the deferred shade. Lets us see the
@@ -6099,6 +6137,16 @@ namespace threepp {
         void recordOverlayDepthPrepass(VkCommandBuffer cb);
         [[nodiscard]] bool gbufferMsaaResolveActive();
         [[nodiscard]] bool overlayDepthPrepassActive();
+        // The import form of the prepass: the descriptor refresh (graph-build
+        // time, this slot's post-fence window) and the draw (inside the
+        // prepass's render-pass instance).
+        void prepareOverlayDepthImport();
+        void recordOverlayDepthImport(VkCommandBuffer cb);
+        // The overlay pass's entry walks, per span (overlaySpanEntries): the
+        // indices of the entries whose span is flagged isOverlay (or, with
+        // `particle`, isParticle), in entry order. One scratch, reused.
+        void overlaySpanEntries(bool particle);
+        std::vector<uint32_t> overlayEntryScratch_;
         // Events-only mode: the swapchain cleared to black (the canvas the
         // event accumulator's sprite overlay draws on), as a graph pass.
         void addEventsOnlyClearPass(vulkan::rg::RenderGraph& g, uint32_t imageIndex);

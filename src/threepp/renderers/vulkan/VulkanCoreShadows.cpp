@@ -212,11 +212,20 @@ namespace threepp {
 
     // ── Lamp slots ───────────────────────────────────────────────────────────
     // Once a frame from the primary camera, while the maps are in use: per
-    // type, the lamps whose range reaches the camera's frustum, castShadow ==
-    // true first, then by power over the squared distance to the camera. A
-    // lamp keeps its slot (and its layer) while it stays eligible, unless a
-    // newcomer outranks it by castShadow or is twice as strong: no slot
-    // flicker between two near-equal lamps.
+    // type, the lamps with castShadow == true whose range reaches the camera's
+    // frustum and that are lit, by power over the squared distance to the
+    // camera. A lamp keeps its slot (and its layer) while it stays eligible,
+    // unless a newcomer is twice as strong: no slot flicker between two
+    // near-equal lamps.
+    //
+    // castShadow is the gate, as in three.js, not merely a priority. The
+    // slots used to be handed out to every lamp in range, castShadow first,
+    // which gave a shadowless lamp a map whenever a slot was free — and a map
+    // is the scene drawn again into six cube faces every frame it is lit. A
+    // muzzle flash (PointLight, castShadow false, 12 m) in a 15k-entry forest
+    // cost 10 ms of GPU and 1 ms of CPU per lit frame that way; the game had
+    // asked for no shadow at all. A dark lamp (intensity 0, or a flash
+    // between rounds) is skipped too: a map of nothing lights nothing.
     void VulkanRenderer::Impl::assignShadowSlots(std::vector<GpuClusterLight>& recs, const std::vector<Light*>& src,
                                                  Camera& camera) {
         const bool active = shadowMapsActive();
@@ -230,13 +239,10 @@ namespace threepp {
         const Vector3 camPos(mw[12], mw[13], mw[14]);
         struct Cand {
             uint32_t rec;
-            bool     prio;
             float    score;
             bool     taken;
         };
-        const auto better = [](const Cand& a, const Cand& b) {
-            return a.prio != b.prio ? a.prio : a.score > b.score;
-        };
+        const auto better = [](const Cand& a, const Cand& b) { return a.score > b.score; };
         for (int spot = 0; spot < 2; ++spot) {
             auto&          slots = spot ? shadowSpotSlots_ : shadowPointSlots_;
             const uint32_t cap   = active ? (spot ? shadowedSpots_ : shadowedPoints_) : 0u;
@@ -244,10 +250,12 @@ namespace threepp {
             for (uint32_t r = 0; r < recs.size() && cap > 0u; ++r) {
                 const auto& g = recs[r];
                 if ((g.type > 0.5f) != (spot == 1) || g.cullRadius <= 0.f) continue;
+                if (!src[r]->castShadow) continue;
+                const float lum = 0.2126f * g.color[0] + 0.7152f * g.color[1] + 0.0722f * g.color[2];
+                if (lum <= 0.f) continue;
                 const Vector3 p(g.position[0], g.position[1], g.position[2]);
                 if (!frustum.intersectsSphere(Sphere(p, g.cullRadius))) continue;
-                const float lum = 0.2126f * g.color[0] + 0.7152f * g.color[1] + 0.0722f * g.color[2];
-                cands.push_back({r, src[r]->castShadow, lum / std::max(p.distanceToSquared(camPos), 1e-2f), false});
+                cands.push_back({r, lum / std::max(p.distanceToSquared(camPos), 1e-2f), false});
             }
             std::stable_sort(cands.begin(), cands.end(), better);
 
@@ -280,7 +288,7 @@ namespace threepp {
                         if (weak < 0 || better(held[weak], held[i])) weak = static_cast<int>(i);
                     }
                     const Cand& w = held[weak];
-                    if (!((c.prio && !w.prio) || (c.prio == w.prio && c.score > 2.f * w.score))) break;
+                    if (!(c.score > 2.f * w.score)) break;
                     k = weak;
                 }
                 c.taken      = true;

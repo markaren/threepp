@@ -13,6 +13,8 @@
 #include "threepp/renderers/vulkan/shaders/overlay_inject.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_depth_import.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_depth_import.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/splat_overlay_depth.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
@@ -2137,6 +2139,152 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
 
                 vkDestroyShaderModule(ctx->device(), dvert, nullptr);
                 vkDestroyShaderModule(ctx->device(), dfrag, nullptr);
+            }
+
+            // ── Overlay depth IMPORT pipeline ───────────────────────────────
+            // The prepass's cheap form (overlayDepthImportsGbuffer): one
+            // fullscreen triangle that writes the G-buffer's depth, resampled
+            // to the display extent, into the same attachment the prepass
+            // above fills — depth-only, no vertex input, the attachment's
+            // sample count, always-pass test so every pixel writes
+            // gl_FragDepth. See shaders/overlay_depth_import.frag.
+            {
+                VkSamplerCreateInfo isci{};
+                isci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+                isci.magFilter    = VK_FILTER_NEAREST;// depth: never interpolate across a silhouette
+                isci.minFilter    = VK_FILTER_NEAREST;
+                isci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                isci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                isci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                isci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                check(vkCreateSampler(ctx->device(), &isci, nullptr, &overlayDepthImportSampler_),
+                      "vkCreateSampler(overlayDepthImport)");
+
+                VkDescriptorSetLayoutBinding iBind{};
+                iBind.binding         = 0;
+                iBind.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                iBind.descriptorCount = 1;
+                iBind.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+                VkDescriptorSetLayoutCreateInfo iDslci{};
+                iDslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                iDslci.bindingCount = 1;
+                iDslci.pBindings    = &iBind;
+                check(vkCreateDescriptorSetLayout(ctx->device(), &iDslci, nullptr, &overlayDepthImportSetLayout_),
+                      "vkCreateDescriptorSetLayout(overlayDepthImport)");
+
+                VkDescriptorPoolSize iPs{};
+                iPs.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                iPs.descriptorCount = kFramesInFlight;
+                VkDescriptorPoolCreateInfo iDpci{};
+                iDpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                iDpci.maxSets       = kFramesInFlight;
+                iDpci.poolSizeCount = 1;
+                iDpci.pPoolSizes    = &iPs;
+                check(vkCreateDescriptorPool(ctx->device(), &iDpci, nullptr, &overlayDepthImportPool_),
+                      "vkCreateDescriptorPool(overlayDepthImport)");
+                std::array<VkDescriptorSetLayout, kFramesInFlight> iLayouts{};
+                iLayouts.fill(overlayDepthImportSetLayout_);
+                VkDescriptorSetAllocateInfo iDsai{};
+                iDsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                iDsai.descriptorPool     = overlayDepthImportPool_;
+                iDsai.descriptorSetCount = kFramesInFlight;
+                iDsai.pSetLayouts        = iLayouts.data();
+                check(vkAllocateDescriptorSets(ctx->device(), &iDsai, overlayDepthImportSets_.data()),
+                      "vkAllocateDescriptorSets(overlayDepthImport)");
+                overlayDepthImportSerials_.fill(0u);
+
+                VkPipelineLayoutCreateInfo iPlci{};
+                iPlci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+                iPlci.setLayoutCount = 1;
+                iPlci.pSetLayouts    = &overlayDepthImportSetLayout_;
+                check(vkCreatePipelineLayout(ctx->device(), &iPlci, nullptr, &overlayDepthImportLayout_),
+                      "vkCreatePipelineLayout(overlayDepthImport)");
+
+                VkShaderModuleCreateInfo ivsmci{};
+                ivsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                ivsmci.codeSize = sizeof(kOverlayDepthImportVertSpv);
+                ivsmci.pCode    = kOverlayDepthImportVertSpv;
+                VkShaderModule ivert = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &ivsmci, nullptr, &ivert),
+                      "vkCreateShaderModule(overlay_depth_import.vert)");
+                VkShaderModuleCreateInfo ifsmci{};
+                ifsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                ifsmci.codeSize = sizeof(kOverlayDepthImportFragSpv);
+                ifsmci.pCode    = kOverlayDepthImportFragSpv;
+                VkShaderModule ifrag = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &ifsmci, nullptr, &ifrag),
+                      "vkCreateShaderModule(overlay_depth_import.frag)");
+
+                VkPipelineShaderStageCreateInfo iStages[2]{};
+                iStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                iStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+                iStages[0].module = ivert;
+                iStages[0].pName  = "main";
+                iStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                iStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+                iStages[1].module = ifrag;
+                iStages[1].pName  = "main";
+
+                VkPipelineVertexInputStateCreateInfo ivi{};// positions from gl_VertexIndex
+                ivi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+                VkPipelineInputAssemblyStateCreateInfo iia{};
+                iia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+                iia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                VkPipelineViewportStateCreateInfo ivp{};
+                ivp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+                ivp.viewportCount = 1;
+                ivp.scissorCount  = 1;
+                VkPipelineRasterizationStateCreateInfo irs{};
+                irs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+                irs.polygonMode = VK_POLYGON_MODE_FILL;
+                irs.cullMode    = VK_CULL_MODE_NONE;
+                irs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                irs.lineWidth   = 1.0f;
+                // The attachment's sample count, exactly as the prepass above.
+                VkPipelineMultisampleStateCreateInfo ims{};
+                ims.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+                ims.rasterizationSamples = overlaySampleBits();
+                // Test enabled with an always-pass compare: depthWriteEnable
+                // only takes effect while the test is enabled (GbufResolve's
+                // depth pass has the same note).
+                VkPipelineDepthStencilStateCreateInfo ids{};
+                ids.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+                ids.depthTestEnable  = VK_TRUE;
+                ids.depthWriteEnable = VK_TRUE;
+                ids.depthCompareOp   = VK_COMPARE_OP_ALWAYS;
+                VkPipelineColorBlendStateCreateInfo icb{};
+                icb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+                icb.attachmentCount = 0;
+                VkDynamicState idyns[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+                VkPipelineDynamicStateCreateInfo idyn{};
+                idyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+                idyn.dynamicStateCount = 2;
+                idyn.pDynamicStates    = idyns;
+                VkPipelineRenderingCreateInfo iprci{};
+                iprci.sType                 = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+                iprci.colorAttachmentCount  = 0;
+                iprci.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+                VkGraphicsPipelineCreateInfo igpci{};
+                igpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+                igpci.pNext               = &iprci;
+                igpci.stageCount          = 2;
+                igpci.pStages             = iStages;
+                igpci.pVertexInputState   = &ivi;
+                igpci.pInputAssemblyState = &iia;
+                igpci.pViewportState      = &ivp;
+                igpci.pRasterizationState = &irs;
+                igpci.pMultisampleState   = &ims;
+                igpci.pDepthStencilState  = &ids;
+                igpci.pColorBlendState    = &icb;
+                igpci.pDynamicState       = &idyn;
+                igpci.layout              = overlayDepthImportLayout_;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &igpci, nullptr,
+                                                &overlayDepthImportPipeline_),
+                      "vkCreateGraphicsPipelines(overlayDepthImport)");
+
+                vkDestroyShaderModule(ctx->device(), ivert, nullptr);
+                vkDestroyShaderModule(ctx->device(), ifrag, nullptr);
             }
 
             // ── Overlay scene-inject pipeline ───────────────────────────────

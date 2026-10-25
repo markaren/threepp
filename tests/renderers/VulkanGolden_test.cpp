@@ -159,6 +159,10 @@ namespace {
         auto spot = SpotLight::create(c, intensity, 0.f, angle, penumbra, 2.f);
         spot->position.copy(from);
         spot->setTarget(*target);
+        // The lamps of these rooms cast shadows in both shadow modes: the rays
+        // shadow every lamp, the maps only a lamp that asks (castShadow), so
+        // without this the no-RT picture would light through the room's walls.
+        spot->castShadow = true;
         s.add(spot);
     }
 
@@ -191,6 +195,7 @@ namespace {
         for (const auto& l : lamps) {
             auto p = PointLight::create(l.c, 2.f, 4.f, 2.f);
             p->position.copy(l.p);
+            p->castShadow = true;// as addSpot: a map only for a lamp that asks
             s.add(p);
         }
         // The spot sits in the far corner and points back toward the camera,

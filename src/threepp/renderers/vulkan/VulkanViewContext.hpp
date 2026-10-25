@@ -69,7 +69,11 @@ namespace threepp::vulkan::impl {
         // an extra depth-only prepass (overlay_depth.vert) right after
         // the main G-buffer pass. The wireframe overlay reads it as a
         // depth attachment so its depth test compares unjittered z
-        // against unjittered z and doesn't shimmer between frames.
+        // against unjittered z and doesn't shimmer between frames. When
+        // the only overlay content is ParticleField billboards it is
+        // filled from `depth` instead, resampled by one fullscreen
+        // triangle (overlay_depth_import.frag): a soft sprite drawn
+        // outside TAA does not need the jitter-exact occluder.
         Image2D       unjitDepth;   // d32_sfloat — UNJITTERED projection
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
         uint32_t      width = 0;
