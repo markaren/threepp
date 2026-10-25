@@ -351,26 +351,25 @@ class Hud:
         if len(P) < 2:
             return None, None
         hw = width / 2.0
-        pos, idx = [], []
-        for a, b in zip(P[:-1], P[1:]):
-            d = b - a
-            n = np.array([-d[1], d[0]]) / np.linalg.norm(d) * hw
-            k = len(pos)
-            pos += [a + n, a - n, b + n, b - n]
-            idx += [k, k + 1, k + 2, k + 1, k + 3, k + 2]
-        # round joins and caps: small fans
+        # a quad per segment: (a + n, a - n, b + n, b - n), n its normal at half the width
+        A, B = P[:-1], P[1:]
+        D = B - A
+        N = np.c_[-D[:, 1], D[:, 0]] / np.linalg.norm(D, axis=1)[:, None] * hw
+        quads = np.stack([A + N, A - N, B + N, B - N], axis=1).reshape(-1, 2)
+        idx = (np.array([0, 1, 2, 1, 3, 2]) + 4 * np.arange(len(D))[:, None]).ravel()
+        # round joins and caps: small fans, each its centre and then its rim
         joins = P if round_ends else P[1:-1]
         seg = 10
-        for c in joins:
-            k = len(pos)
-            pos.append(c)
-            for s_ in range(seg + 1):
-                ang = 2 * math.pi * s_ / seg
-                pos.append(c + hw * np.array([math.cos(ang), math.sin(ang)]))
-            for s_ in range(seg):
-                idx += [k, k + 1 + s_, k + 2 + s_]
-        pos = np.c_[np.asarray(pos), np.zeros(len(pos))].astype(np.float32)
-        return pos, np.asarray(idx, np.uint32)
+        ang = 2 * math.pi * np.arange(seg + 1) / seg
+        rim = hw * np.c_[np.cos(ang), np.sin(ang)]
+        fans = np.concatenate([joins[:, None, :], joins[:, None, :] + rim[None]], axis=1).reshape(-1, 2)
+        s_ = np.arange(seg)
+        fan = np.c_[np.zeros(seg, int), 1 + s_, 2 + s_].ravel()
+        k = len(quads) + (seg + 2) * np.arange(len(joins))
+        idx = np.concatenate([idx, (fan + k[:, None]).ravel()])
+        pos = np.concatenate([quads, fans])
+        pos = np.c_[pos, np.zeros(len(pos))].astype(np.float32)
+        return pos, idx.astype(np.uint32)
 
     def _dyn_mesh(self, pos, idx, color, alpha):
         """A mesh for this frame's triangles: `pos` (N, 3), `idx` a flat triangle list into it.
