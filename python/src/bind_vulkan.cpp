@@ -1925,6 +1925,7 @@ namespace threepp_py {
                                            d["slot_deltas"]         = s.slotDeltas;
                                            d["flat_checks"]         = s.flatChecks;
                                            d["versioned_deltas"]    = s.versionedDeltas;
+                                           d["moving_entries"]      = s.movingEntries;
                                            return d;
                                        },
                                        "Scene build counters since the renderer was made: TLAS full builds and "
@@ -1948,9 +1949,12 @@ namespace threepp_py {
                                        "it in place, no device wait), slot_capacity (the entries the "
                                        "pool holds now, see reserve_entry_slots), flat_checks (frames with nothing added, removed or "
                                        "swapped settled with no walk of the scene graph), versioned_deltas (slot deltas "
-                                       "that visited only the subtrees whose structure moved) and slot_deltas (slot edits "
+                                       "that visited only the subtrees whose structure moved), slot_deltas (slot edits "
                                        "taken edit-proportionally: only the nodes and spans that changed "
-                                       "found and placed).")
+                                       "found and placed) and moving_entries (the entries the last frame "
+                                       "treated as moving: moved, shown or hidden in the last 30 frames, their "
+                                       "shadow, GI and reflection histories kept short; an instance-matrix "
+                                       "edit counts only the instances whose matrix changed).")
                 .def("reserve_entry_slots",
                      [](PyVulkanRenderer& r, uint32_t entries) { r.native().reserveEntrySlots(entries); },
                      py::arg("entries"),

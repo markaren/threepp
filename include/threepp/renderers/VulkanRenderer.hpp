@@ -970,6 +970,13 @@ namespace threepp {
             // taken by a slot edit (the mesh placed again with what it holds
             // now) instead of a structural rebuild.
             uint64_t swapEdits = 0;
+            // The entries (one per mesh, one per InstancedMesh instance) the
+            // last frame treated as moving: moved, shown or hidden within the
+            // last 30 frames. Their shadow, GI and reflection histories are
+            // kept short and they are redrawn into cached shadow maps each
+            // frame. An instance-matrix edit counts only the instances whose
+            // matrix changed.
+            uint32_t movingEntries = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

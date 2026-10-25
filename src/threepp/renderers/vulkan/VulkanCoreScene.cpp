@@ -2039,6 +2039,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                            a.meshId == b.meshId && a.hidden == b.hidden && a.meshWorld == b.meshWorld &&
                            a.instMatVersion == b.instMatVersion && a.instColorVersion == b.instColorVersion &&
                            a.fadeKnown == b.fadeKnown && a.movedThisFrame == b.movedThisFrame &&
+                           a.instancesMoved == b.instancesMoved &&
                            a.lodNonZero == b.lodNonZero && a.aabbValid == b.aabbValid &&
                            std::memcmp(a.localCenter, b.localCenter, sizeof(a.localCenter)) == 0 &&
                            std::memcmp(a.localHalf, b.localHalf, sizeof(a.localHalf)) == 0 &&
@@ -2544,7 +2545,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         for (uint32_t j = 0; j < sp.count; ++j)
                             entryMatDirty[sp.first + j] = true;
                     }
-                    if (xfmChanged || matChanged || geomChanged) {
+                    // An instance-matrix edit alone marked its own entries
+                    // (refreshSpanMatrices, EntrySpan::instancesMoved).
+                    if ((xfmChanged && !sp.instancesMoved) || matChanged || geomChanged) {
                         const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
                         if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
                         for (uint32_t i = sp.first; i < sp.first + sp.count; ++i)
@@ -4944,16 +4947,25 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
             // (mesh->matrixWorld, instanceMatrix contents); see the lean path.
             for (auto& sp : entrySpans_) {
                 sp.movedThisFrame = false;
+                sp.instancesMoved = false;
                 const float* mw = sp.mesh->matrixWorld->elements.data();
                 if (sp.inst) {
                     const unsigned int v = sp.inst->instanceMatrix()->version;
-                    if (v == sp.instMatVersion &&
-                        std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
+                    const bool meshMoved = std::memcmp(sp.meshWorld.data(), mw, 64) != 0;
+                    if (v == sp.instMatVersion && !meshMoved) continue;
                     sp.instMatVersion = v;
                     std::memcpy(sp.meshWorld.data(), mw, 64);
                     sp.movedThisFrame = true;
                     sp.aabbValid = false;
                     sp.probeChunksValid = 0;
+                    // An instance-matrix edit alone: the entries it changed
+                    // are marked moved here, one by one (see instancesMoved).
+                    // A moved mesh moves every instance, which the diff marks.
+                    sp.instancesMoved = !meshMoved && sp.count > 0u;
+                    if (sp.instancesMoved) {
+                        const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
+                        if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
+                    }
                     // Tight refresh: world = meshWorld * instanceMat[j],
                     // straight off the raw attribute floats (no
                     // bounds-checked getMatrixAt). The multiply itself
@@ -4975,8 +4987,12 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     for (uint32_t j = 0; j < sp.count; ++j) {
                         std::memcpy(instMat.elements.data(), arr.data() + size_t(j) * 16u, 64);
                         world.multiplyMatrices(meshWorld, instMat);
-                        std::memcpy(lastVisibleEntries_[sp.first + j].worldMatrix.data(),
-                                    world.elements.data(), 64);
+                        float* wm = lastVisibleEntries_[sp.first + j].worldMatrix.data();
+                        if (sp.instancesMoved && std::memcmp(wm, world.elements.data(), 64) != 0) {
+                            const uint32_t i = sp.first + j;
+                            meshMovedBits_[i >> 5] |= (1u << (i & 31u));
+                        }
+                        std::memcpy(wm, world.elements.data(), 64);
                         // Keep the fingerprint's matrix mirror fresh so a
                         // later non-lean frame's generic compare sees this
                         // frame's state, not a stale lean-era matrix.

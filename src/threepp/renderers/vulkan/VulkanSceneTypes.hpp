@@ -312,6 +312,15 @@ namespace threepp::vulkan::impl {
         bool fadeAny = false;
         bool movedThisFrame = false;     // set by the lean refresh; consumed by
                                           // the diff, motion matrices and TLAS refit
+        // With movedThisFrame: only the instance matrices moved, not the
+        // mesh's own transform. The refresh then marked the entries whose
+        // world matrix changed in meshMovedBits_ itself, and the diff leaves
+        // the rest of the span unmarked: an InstancedMesh used as a pool of
+        // slots (a forest's level meshes, re-sent whole when one slot changes
+        // owner) keeps its other instances out of the moved-sticky state, and
+        // so their shadow, GI and reflection histories and their static
+        // shadow-cache casters.
+        bool instancesMoved = false;
         // True while the motionMat scratch holds non-identity blocks for this
         // span (set when a moved span writes real deltas; the next static
         // frame resets its blocks to identity once and clears this).

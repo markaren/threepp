@@ -3051,6 +3051,7 @@ namespace threepp {
             if (t.view) ++inUse;
         stats.textureSlotsInUse = inUse;
         stats.slotCapacity = core()->slotCapacity_;
+        stats.movingEntries = core()->stickyActiveCount_;
         return stats;
     }
 

@@ -204,6 +204,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceExpand_test COMMAND VulkanInstanceExpand_test)
     set_tests_properties(VulkanInstanceExpand_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # An instance-matrix edit makes only the changed instances moving
+    # (TlasStats::movingEntries), not the whole InstancedMesh.
+    add_executable(VulkanMovedInstances_test VulkanMovedInstances_test.cpp)
+    target_link_libraries(VulkanMovedInstances_test PRIVATE threepp)
+    add_test(NAME VulkanMovedInstances_test COMMAND VulkanMovedInstances_test)
+    set_tests_properties(VulkanMovedInstances_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # InstancedMesh::setColorAt tints each instance (per-entry MaterialDesc
     # albedo), set before the first frame, created late, and edited in place.
     add_executable(VulkanInstanceColor_test VulkanInstanceColor_test.cpp)
