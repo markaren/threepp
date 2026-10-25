@@ -6059,6 +6059,13 @@ namespace threepp {
         bool                 shadowCacheDebug_ = std::getenv("THREEPP_VK_SHADOW_CACHE_DEBUG") != nullptr;
         std::vector<uint8_t> shadowDynPrev_;
         void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol, const Vector3& camPos);
+        // setShadowCacheStaleFrames: 0 (default) redraws a cascade whenever
+        // the static caster set changes; n > 0 lets it hold stale casters for
+        // up to n frames (ShadowMapPass::casterSnap). updateShadowCasterSnap
+        // clears the bits of the casters that left the static set, marks the
+        // cascades they leave stale and lists ShadowMapPass::onTop.
+        uint32_t shadowCacheStaleFrames_ = 0;
+        void     updateShadowCasterSnap(vulkan::ShadowMapPass& smp, uint32_t cascades);
         // buildShadowDrawData's scratch: every caster once, then one command
         // list per (layer, group); cleared, never reallocated, between frames.
         std::vector<DrawInfoGpu>                        shadowDrawScratch_;

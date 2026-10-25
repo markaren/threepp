@@ -1143,6 +1143,14 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().shadowCascades(); },
                               [](PyVulkanRenderer& r, uint32_t v) { r.native().setShadowCascades(v); },
                               "The sun's shadow cascades, 1-4 (default 4).")
+                .def_property("shadow_cache_stale_frames",
+                              [](PyVulkanRenderer& r) { return r.native().shadowCacheStaleFrames(); },
+                              [](PyVulkanRenderer& r, uint32_t v) { r.native().setShadowCacheStaleFrames(v); },
+                              "Frames a cached sun cascade may keep a changed static caster set before it is "
+                              "redrawn. 0 (default) redraws at once: a scene whose LODs change as the camera "
+                              "moves redraws its cascades every frame. n > 0: casters that joined are drawn "
+                              "over the cache meanwhile, ones that left keep their old shadow for up to n "
+                              "frames (a mesh that starts moving leaves its shadow behind that long).")
                 .def("set_displacement_detail",
                      [](PyVulkanRenderer& r, float pixel_edge, float min_edge) {
                          r.native().setDisplacementDetail(pixel_edge, min_edge);

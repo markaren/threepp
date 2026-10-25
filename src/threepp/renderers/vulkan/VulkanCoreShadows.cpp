@@ -118,6 +118,50 @@ namespace threepp {
         return h;
     }
 
+    // The stale-tolerant cascades' per-entry bits (ShadowMapPass::casterSnap),
+    // brought up to this frame before the cascades are fitted: a caster that
+    // left the static set since its cascade was drawn clears its bits, and the
+    // cascades whose box it reached are stale from now; the casters to draw
+    // over the caches are listed in span order.
+    void VulkanRenderer::Impl::updateShadowCasterSnap(vulkan::ShadowMapPass& smp, uint32_t cascades) {
+        const size_t   n   = lastVisibleEntries_.size();
+        const uint64_t now = std::max<uint64_t>(frameSerial_, 1u);
+        const auto     leave = [&](uint8_t s) {
+            for (uint32_t c = 0; c < cascades; ++c)
+                if (((s >> (4u + c)) & 1u) && smp.staleSince[c] == 0u) smp.staleSince[c] = now;
+        };
+        // A structural rebuild numbers the entries anew: the bits would name
+        // other meshes. Slot edits keep the numbering.
+        if (smp.snapLayout != tlasStats_.structuralRebuilds) {
+            smp.snapLayout = tlasStats_.structuralRebuilds;
+            smp.casterSnap.assign(n, 0u);
+            smp.staleSince.fill(0u);
+            for (auto& c : smp.cascadeCache) c.valid = false;
+        }
+        if (smp.casterSnap.size() > n) {
+            for (size_t i = n; i < smp.casterSnap.size(); ++i) leave(smp.casterSnap[i]);
+            smp.casterSnap.resize(n);
+        } else {
+            smp.casterSnap.resize(n, 0u);
+        }
+        const uint8_t full = static_cast<uint8_t>((1u << cascades) - 1u);
+        smp.onTop.clear();
+        for (const auto& sp : entrySpans_) {
+            for (uint32_t j = 0; j < sp.count; ++j) {
+                const uint32_t i = sp.first + j;
+                if (i >= n) break;
+                uint8_t&   s     = smp.casterSnap[i];
+                const bool dyn   = shadowCasterDynamic(i);
+                const bool casts = !sp.hidden && (i >= entryLodFade_.size() || lodFadeCasts(entryLodFade_[i]));
+                if (s != 0u && (dyn || !casts)) {
+                    leave(s);
+                    s = 0u;
+                }
+                if (!sp.hidden && (dyn || (casts && (s & full) != full))) smp.onTop.push_back(i);
+            }
+        }
+    }
+
     VulkanRenderer::ShadowMode VulkanRenderer::Impl::activeShadowMode() const {
         using M = VulkanRenderer::ShadowMode;
         switch (shadowModeReq_) {
@@ -433,6 +477,11 @@ namespace threepp {
             }
         }
         const uint64_t staticGen = shadowStaticGen_;
+        // setShadowCacheStaleFrames: a cascade outlives a changed static set
+        // for that many frames, and at most one is redrawn a frame.
+        const bool staleTolerant = shadowCacheOn_ && shadowCacheStaleFrames_ > 0u && sz.cascades > 0u;
+        if (staleTolerant) updateShadowCasterSnap(smp, sz.cascades);
+        bool cascadeRedrawn = false;
         if (sz.cascades > 0u) {
             camera.updateMatrixWorld();
             float camNear = 0.1f, camFar = 1000.f;
@@ -534,8 +583,14 @@ namespace threepp {
                 // moving redraws it: one frame at the uncached cost.
                 auto&      cc        = smp.cascadeCache[i];
                 const bool cacheable = shadowCacheOn_ && smp.cache.image != VK_NULL_HANDLE && i < smp.cache.layers;
-                bool       reuse     = false;
-                if (cacheable && cc.valid && cc.staticGen == staticGen && dot3(cc.sunDir, L) >= 0.9999996f) {
+                bool genOk = cc.staticGen == staticGen;
+                if (staleTolerant) {
+                    const uint64_t since = smp.staleSince[i];
+                    genOk = since == 0u || frameSerial_ - since < shadowCacheStaleFrames_ || cascadeRedrawn;
+                }
+                const bool sunOk     = dot3(cc.sunDir, L) >= 0.9999996f;
+                bool       boxIn     = false;
+                if (cacheable && cc.valid) {
                     // The slice inside the frozen box, to one texel: the box's
                     // centre was snapped to the texel grid, so a still camera's
                     // slice sits up to a texel off it (the receivers pick by
@@ -543,8 +598,17 @@ namespace threepp {
                     const float dc[3] = {c[0] - cc.c[0], c[1] - cc.c[1], c[2] - cc.c[2]};
                     const float dl    = dot3(dc, L);
                     const float lim   = cc.r + cc.texel;
-                    reuse = std::abs(dot3(dc, x)) + r <= lim && std::abs(dot3(dc, y)) + r <= lim && dl - r >= -lim &&
+                    boxIn = std::abs(dot3(dc, x)) + r <= lim && std::abs(dot3(dc, y)) + r <= lim && dl - r >= -lim &&
                             dl + r <= lim;
+                }
+                const bool reuse = cacheable && cc.valid && genOk && sunOk && boxIn;
+                if (staleTolerant && cacheable && !reuse) cascadeRedrawn = true;
+                if (shadowCacheDebug_ && cacheable && !reuse) {
+                    std::fprintf(stderr, "[shadowCache] cascade %u rebuilt:%s%s%s%s slice r %.2f, box r %.2f\n", i,
+                                 cc.valid ? "" : " invalid",
+                                 cc.valid && !genOk ? (staleTolerant ? " stale" : " casters") : "",
+                                 cc.valid && !sunOk ? " sun" : "", cc.valid && !boxIn ? " box" : "",
+                                 static_cast<double>(r), static_cast<double>(cc.r));
                 }
                 float                        texel, far, rBox;
                 vulkan::ShadowMapPass::Layer layer{};
@@ -581,6 +645,7 @@ namespace threepp {
                         std::memcpy(cc.c, c, sizeof(cc.c));
                         std::memcpy(cc.sunDir, L, sizeof(cc.sunDir));
                         std::memcpy(cc.vp, layer.vp, 64);
+                        smp.staleSince[i] = 0u;// its bits are drawn anew (buildShadowDrawData)
                     }
                 }
                 layer.target     = vulkan::ShadowMapPass::Target::Cascade;
@@ -826,9 +891,29 @@ namespace threepp {
             if (!v.skip) allMask[li >> 6] |= 1ull << (li & 63u);
         }
 
+        // The stale-tolerant cascades (setShadowCacheStaleFrames): the
+        // cascades drawn anew this frame take every static caster's bit again;
+        // a cached one is drawn over by the static casters without their bit.
+        // The cascades are the first layers, the only Box volumes.
+        const bool tolerant   = shadowCacheOn_ && shadowCacheStaleFrames_ > 0u;
+        uint8_t    redrawCasc = 0u, cachedCasc = 0u;
+        if (tolerant) {
+            for (uint32_t li = 0; li < nLayers && li < 4u && vol.layers[li].kind == Volume::Box; ++li) {
+                if (vol.layers[li].skip || li >= smp.layers.size()) continue;
+                if (smp.layers[li].mode == vulkan::ShadowMapPass::Mode::Rebuild) redrawCasc |= uint8_t(1u << li);
+                if (smp.layers[li].mode == vulkan::ShadowMapPass::Mode::Cached) cachedCasc |= uint8_t(1u << li);
+            }
+            if (redrawCasc != 0u) {
+                const auto keep = static_cast<uint8_t>(~(redrawCasc | (redrawCasc << 4u)));
+                for (auto& s : smp.casterSnap) s &= keep;
+            }
+        }
+        const uint64_t staleNow = std::max<uint64_t>(frameSerial_, 1u);
+
         // The layers a world sphere (centre e, radius er) can cast into. A
-        // static caster never reaches a cached cascade: the cache holds it.
-        const auto reachMask = [&](const float* e, float er, bool dynamic, uint64_t* m) {
+        // static caster never reaches a cached cascade: the cache holds it
+        // (stale-tolerant: one whose bit `snap` holds for that cascade).
+        const auto reachMask = [&](const float* e, float er, bool dynamic, uint8_t snap, uint64_t* m) {
             m[0] = m[1] = 0u;
             float px = 0.f, py = 0.f, pl = 0.f;
             if (sx) {
@@ -838,7 +923,10 @@ namespace threepp {
             }
             for (uint32_t li = 0; li < nLayers; ++li) {
                 const Volume& v = vol.layers[li];
-                if (v.skip || (v.cached && !dynamic)) continue;
+                if (v.skip) continue;
+                if (v.cached && !dynamic &&
+                    (!tolerant || li >= 4u || v.kind != Volume::Box || ((snap >> li) & 1u) != 0u))
+                    continue;
                 bool in = false;
                 if (v.kind == Volume::Box) {
                     // Sideways inside the box; along the sun anything in front
@@ -923,6 +1011,8 @@ namespace threepp {
             // Moving casters go to every layer's `dyn` list (a cached cascade
             // draws only those); static ones to `stat`.
             const bool dynamic = shadowCasterDynamic(i);
+            uint8_t*   snapAt  = tolerant && i < smp.casterSnap.size() ? &smp.casterSnap[i] : nullptr;
+            const uint8_t snap = snapAt ? *snapAt : 0u;
             uint64_t   mask[2] = {allMask[0], allMask[1]};
             if (si.bounded) {
                 const float* M     = en.worldMatrix.data();
@@ -934,7 +1024,22 @@ namespace threepp {
                 const float  s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
                 const float  s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
                 const float  wr    = sp.localRadius * std::sqrt(std::max({s0, s1, s2}));
-                reachMask(wc, wr, dynamic, mask);
+                reachMask(wc, wr, dynamic, snap, mask);
+            } else if (snapAt && !dynamic) {
+                mask[0] &= ~uint64_t(snap & cachedCasc);// unbounded: what its bit already holds
+            }
+            if (snapAt && !dynamic) {
+                // A cascade drawn anew holds it from now (and its box if it
+                // reached it); one it is drawn over without its bit is stale.
+                if (redrawCasc != 0u) {
+                    uint8_t s = static_cast<uint8_t>(snap | redrawCasc);
+                    for (uint32_t c = 0; c < 4u; ++c)
+                        if (((redrawCasc >> c) & 1u) && ((mask[0] >> c) & 1u)) s |= uint8_t(1u << (4u + c));
+                    *snapAt = s;
+                }
+                for (uint32_t c = 0; c < 4u; ++c)
+                    if (((cachedCasc >> c) & 1u) && ((mask[0] >> c) & 1u) && smp.staleSince[c] == 0u)
+                        smp.staleSince[c] = staleNow;
             }
             if ((mask[0] | mask[1]) == 0u) return;
             const BlasRecord* rec    = si.rec;
@@ -971,8 +1076,11 @@ namespace threepp {
             cmd.firstInstance = static_cast<uint32_t>(draws.size());// its DrawInfo record
             draws.push_back(di);
             for (uint32_t li = 0; li < nLayers; ++li) {
+                // A cached layer draws only its `dyn` list: a static caster
+                // drawn over a stale cascade goes there too.
+                const bool over = dynamic || (tolerant && vol.layers[li].cached);
                 if (mask[li >> 6] & (1ull << (li & 63u)))
-                    cmds[(size_t(li) * 2u + (dynamic ? 1u : 0u)) * kGroups + group].push_back(cmd);
+                    cmds[(size_t(li) * 2u + (over ? 1u : 0u)) * kGroups + group].push_back(cmd);
             }
         };
 
@@ -989,7 +1097,8 @@ namespace threepp {
             uint32_t curSpan = 0xFFFFFFFFu;
             bool     spanOk  = false;
             SpanInfo si{};
-            for (const uint32_t i : shadowDynamicIdx_) {
+            // Stale-tolerant: the static casters without their bit too.
+            for (const uint32_t i : tolerant ? smp.onTop : shadowDynamicIdx_) {
                 if (i >= shadowSpanOfEntry_.size() || i >= entries.size()) continue;
                 const uint32_t s = shadowSpanOfEntry_[i];
                 if (s != curSpan) {

@@ -651,6 +651,20 @@ namespace threepp {
         // Cascades over that distance, 1-4 (default 4).
         void setShadowCascades(uint32_t n);
         [[nodiscard]] uint32_t shadowCascades() const;
+        // The sun's cascades keep the static casters' depth in a cache while
+        // the camera stays within a margin of where they were drawn. By
+        // default (0) any change to the static casters (a mesh that starts
+        // or stops moving, is hidden or shown, a LOD crossfade handing over
+        // the shadow) redraws them at once, which a scene whose LODs change
+        // as the camera moves pays on every frame. With n > 0 a cascade
+        // keeps such changes for up to n frames: a caster that joined the
+        // static set is drawn over the cache meanwhile, but one that left it
+        // still casts its old shadow there until the redraw (a mesh that
+        // starts moving leaves its shadow behind for up to n frames; a LOD
+        // level handing over to another at the same place does not show).
+        // At most one cascade is redrawn for this per frame.
+        void setShadowCacheStaleFrames(uint32_t frames);
+        [[nodiscard]] uint32_t shadowCacheStaleFrames() const;
         // How many spot and point lamps get a shadow map per frame (defaults 4
         // and 8; at most 8 and 16). Only lamps with castShadow == true are
         // candidates (a shadowless lamp never pays for a map, which is the

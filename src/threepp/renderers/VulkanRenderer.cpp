@@ -2822,6 +2822,14 @@ namespace threepp {
         return pimpl_->shadowCascades_;
     }
 
+    void VulkanRenderer::setShadowCacheStaleFrames(uint32_t frames) {
+        pimpl_->shadowCacheStaleFrames_ = frames;
+    }
+
+    uint32_t VulkanRenderer::shadowCacheStaleFrames() const {
+        return pimpl_->shadowCacheStaleFrames_;
+    }
+
     void VulkanRenderer::setDisplacementDetail(float pixelEdge, float minEdge) {
         pixelEdge = std::max(pixelEdge, 0.f);
         minEdge   = std::max(minEdge, 1e-4f);

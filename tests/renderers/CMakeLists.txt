@@ -204,6 +204,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceExpand_test COMMAND VulkanInstanceExpand_test)
     set_tests_properties(VulkanInstanceExpand_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # setShadowCacheStaleFrames: a cached cascade waits for its redraw after
+    # the static casters change, and no shadow goes missing meanwhile.
+    add_executable(VulkanShadowCacheStale_test VulkanShadowCacheStale_test.cpp)
+    target_link_libraries(VulkanShadowCacheStale_test PRIVATE threepp)
+    add_test(NAME VulkanShadowCacheStale_test COMMAND VulkanShadowCacheStale_test)
+    set_tests_properties(VulkanShadowCacheStale_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # An instance-matrix edit makes only the changed instances moving
     # (TlasStats::movingEntries), not the whole InstancedMesh.
     add_executable(VulkanMovedInstances_test VulkanMovedInstances_test.cpp)

@@ -160,6 +160,23 @@ namespace threepp::vulkan {
             float    vp[16]{};
         };
         std::array<CascadeCache, 4> cascadeCache{};
+        // The cascades' stale-tolerant mode (VulkanRenderer::
+        // setShadowCacheStaleFrames), where a changed static caster set no
+        // longer redraws a cascade at once. Per entry, bit c: a static caster
+        // when cascade c was last drawn (in its cache, or outside its box);
+        // bit 4 + c: it reached cascade c's box then. A caster that leaves the
+        // static set (moves, hides, stops casting) clears its bits and, if it
+        // reached a box, leaves its old depth in that cache: the cascade is
+        // stale. A static caster without its bit (it settled or started
+        // casting since) is drawn over the cache each frame, which makes the
+        // cascade stale too. A cascade stale since staleSince[c] (a frame
+        // serial, 0 = not stale) is redrawn after the set number of frames.
+        // `onTop`: the entries drawn over the caches this frame, in span
+        // order (the moving casters and the static ones without their bit).
+        std::vector<uint8_t>    casterSnap;
+        std::array<uint64_t, 4> staleSince{};
+        uint64_t                snapLayout = ~0ull;// the entry numbering the bits index
+        std::vector<uint32_t>   onTop;
         // The lamps' caches: one 2D layer per spot slot (spotSize) and per
         // point-cube face (pointSize), same life and layout as `cache`. A
         // lamp layer is valid while its light clip matrix is the same bits
