@@ -1370,10 +1370,11 @@ Image2D VulkanRenderer::Impl::buildSampledImage2D(VkCommandBuffer cb,
 
             // Anisotropic filtering is paired with the mip chain — they only
             // help together. Aniso without mips snaps to mip 0 (no benefit at
-            // distance); mips without aniso blur at glancing angles. fillMat-
-            // TextureInfos binds *this* per-image sampler into descriptor
-            // binding 8, so settings here directly drive raster + RT albedo
-            // sampling quality.
+            // distance); mips without aniso blur at glancing angles. This
+            // per-image sampler serves the passes that bind the image with its
+            // own sampler (the particle textures, for one); material textures
+            // are bound with the policy samplers instead (textureSampler_,
+            // fillMaterialTextureInfos), so it does not set their quality.
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
             const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);

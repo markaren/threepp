@@ -5767,12 +5767,6 @@ namespace threepp {
             }
         }
 
-        // Raster jitter gate for the sampler policy: the condition
-        // cameraJitterOn() gives the projection jitter, except that it does
-        // not test viewTaaOff() (setViewTaa(false)).
-        [[nodiscard]] bool rasterJitterActive() const {
-            return !eventCamReadsGbuf() && (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
-        }
         // The sampler the material-texture bindings use this frame: AUTO
         // (16×, jittered or not) unless
         // setTextureAnisotropy forced a level, in the REPEAT (default) or

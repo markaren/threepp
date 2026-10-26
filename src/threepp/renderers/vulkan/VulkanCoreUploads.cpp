@@ -943,21 +943,15 @@ namespace threepp {
         // Map sub-pixel offset to clip-space: one pixel spans 2/width of
         // NDC (NDC ∈ [-1, +1]), so a 1-pixel jitter is 2/width in clip x.
         //
-        // Raster jitter trade-off: ON gives sub-pixel-offset texture AA
-        // on interior surfaces via the deferred shade's temporal blend, but
-        // the per-frame Halton coverage flip at silhouettes shows up as
-        // black-pixel stippling on moving objects (1-spp env taps on the
-        // "uncovered" half-frame). Without MSAA on the gbuffer pass, that
-        // aliasing costs more than the interior AA gains. Disabled by
-        // default; sub-pixel jitter still happens in the deferred shade's
-        // hybrid primary via the blue-noise tile (see primaryDirHybrid), so
-        // interior AA doesn't disappear — only the coverage jitter is gone.
-        // Raster jitter ON: sub-pixel Halton coverage +
-        // temporal accumulation = proper TAA/TSR (replaces FXAA). The earlier
-        // "flicker" was silhouette coverage-flip on MOVING objects with a loose
-        // RGB AABB history clamp; the resolve now uses a YCoCg variance clip
-        // (tighter history rejection) to suppress it. Static views converge to
-        // clean AA over the 16-frame Halton cycle.
+        // Raster jitter ON: sub-pixel Halton coverage + temporal accumulation
+        // = proper TAA/TSR (replaces FXAA). It was once off by default: the
+        // per-frame coverage flip at silhouettes showed up as black-pixel
+        // stippling on moving objects (1-spp env taps on the "uncovered"
+        // half-frame). That flicker came from a loose RGB AABB history clamp;
+        // the resolve now uses a YCoCg variance clip (tighter history
+        // rejection) to suppress it. Static views converge to clean AA over
+        // the jitter cycle (jitterPhaseCount_: 8 phases at native resolution,
+        // more when upscaling).
         constexpr bool kRasterJitterEnabled = true;
         // The rest of the gate (MSAA, the event camera, FSR/DLSS, setViewTaa)
         // is shared with updateCameraUbo: see cameraJitterOn.
