@@ -666,6 +666,102 @@ namespace threepp {
         return true;
     }
 
+    // This frame's sub-pixel jitter, for both camera UBOs. updateCameraUbo and
+    // uploadRasterCameraUbo each call it once per frame and get the same offset
+    // (and leave the same FSR/DLSS stash): they read the same `haltonFrame_`,
+    // which only advances at the end of uploadRasterCameraUbo. `ext` is the
+    // render extent the gbuffer rasterizes at.
+    void VulkanRenderer::Impl::cameraJitter(VkExtent2D ext, Camera& camera, float& jx, float& jy) {
+        // Sub-pixel offset in [-0.5, +0.5] per axis. Halton(2,3) is the
+        // industry-standard low-discrepancy sequence for primary AA.
+        // Phase count scales with the upscale ratio (FSR2-style) so the
+        // sequence covers the output grid when renderScale < 1.
+        uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
+#if defined(THREEPP_WITH_FSR)
+        // When FSR is the active upscaler, drive the jitter from FSR's own
+        // sequence (its phase count tracks the render/display ratio). The raster
+        // and deferred cameras both read the same haltonFrame_ index this frame,
+        // so overriding both keeps their sub-pixel offset identical — and matches
+        // the dispatch jitterOffset (VulkanCoreRecord). Also stash the sub-pixel
+        // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
+        if (useFsr() && fsr_) {
+            phaseCount = static_cast<uint32_t>(
+                    fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
+            if (phaseCount == 0u) phaseCount = 1u;
+            fsr_->jitterOffset(static_cast<int>(view().haltonFrame_ % phaseCount),
+                               static_cast<int>(phaseCount), jx, jy);
+            fsrJitterX_ = jx;
+            fsrJitterY_ = jy;
+            if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
+                fsrCamNear_ = pcam->nearPlane;
+                fsrCamFar_  = pcam->farPlane;
+                fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
+            } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
+                // A parallel projection has no field of view. FSR only feeds
+                // fovY into its disocclusion/reactivity heuristics, so hand it
+                // the angle a perspective camera would need to cover the same
+                // frustum height at the far plane — the closest equivalent,
+                // and one that at least scales with the zoom instead of holding
+                // whatever the last perspective frame left behind.
+                fsrCamNear_ = ocam->nearPlane;
+                fsrCamFar_  = ocam->farPlane;
+                const float halfH = 0.5f * std::abs(ocam->top - ocam->bottom);
+                fsrCamFovY_ = 2.f * std::atan(halfH / std::max(ocam->farPlane, 1e-3f));
+            }
+        } else
+#endif
+        {
+            const uint32_t hi = (view().haltonFrame_ % phaseCount) + 1u;
+            jx = halton_(hi, 2) - 0.5f;
+            jy = halton_(hi, 3) - 0.5f;
+        }
+#if defined(THREEPP_WITH_DLSS)
+        // DLSS consumes the built-in Halton sequence (jitterPhaseCount_'s
+        // FSR2-style scaling matches DLSS's recommended phase count); stash the
+        // sub-pixel offset for the dispatch (no camera at the record site).
+        // When DLSS is active useFsr() is false, so jx/jy came from the built-in
+        // branch above.
+        if (useDlss()) {
+            dlssJitterX_ = jx;
+            dlssJitterY_ = jy;
+        }
+#endif
+    }
+
+    // Raster jitter gate, shared by both camera UBOs: the deferred camera's
+    // jitter must match what the raster G-buffer was rendered with.
+    //
+    // MSAA G-buffer (gbufMsaaSamples_ > 1): rasterize UNJITTERED. The
+    // hardware sample coverage replaces jitter as the geometry AA, and
+    // an unjittered raster makes the dominant-sample resolve — and so
+    // every edge pixel's surface classification and reconstruction
+    // position — CONSTANT on a static viewMat. With jitter on, the whole
+    // MSAA sample cloud translates as a unit each frame, so the
+    // majority vote flips nearly as often as a point sample (measured:
+    // dominant-of-4 under jitter cut edge flicker only ~7 %).
+    // (Measured: keeping the jitter at msaa>1 for the renderScale<1
+    // upsampler does NOT work — the upsampler re-amplifies the
+    // jittered coverage flips and edge flicker returns at full
+    // strength, 6.7k px/frame vs 5.1k at msaa=1. Unjittered MSAA
+    // upsampling is STABLE; its trade is spatial softness, not noise.)
+    // Event camera on its G-buffer (Shaded) source forces UNJITTERED
+    // (eventCamReadsGbuf): event_shade reads the raw raster gbuf, and the
+    // per-frame Halton coverage flip at silhouettes makes a STATIC scene emit
+    // spurious +/- events every frame — the DVS "flickers with no motion". A
+    // real event camera sees no jitter; transform/camera motion still flows
+    // through motionMat, so genuine motion events are unaffected. The Final
+    // source reads the post-TAA frame (jitter resolved) and leaves it on.
+    // useFsr()/useDlss() force jitter on: both need it to reconstruct, even
+    // under MSAA (which otherwise rasterizes unjittered), so the dispatch
+    // jitterOffset matches the render. The gbuf-reading event camera still
+    // wins (a real DVS sees no jitter).
+    // setViewTaa(handle, false): unjittered raster, and the resolve
+    // passes the current frame through (viewTaaOff, blend alpha 1).
+    bool VulkanRenderer::Impl::cameraJitterOn() const {
+        return !eventCamReadsGbuf() && !viewTaaOff() &&
+               (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
+    }
+
     void VulkanRenderer::Impl::updateCameraUbo(uint32_t frame, Camera& camera) {
         camera.updateMatrixWorld(true);
 
@@ -717,10 +813,10 @@ namespace threepp {
         vkProjInv.invert();
         std::memcpy(data + 16, vkProjInv.elements.data(), 64);
 
-        // Per-frame Halton(2,3) jitter — must match what uploadRasterCameraUbo
-        // computes for THIS frame so the deferred shade's hybrid primary
-        // direction lands on the same surface the raster jittered to.
-        // uploadRasterCameraUbo runs after this and uses the same
+        // Per-frame Halton(2,3) jitter (cameraJitter) — must match what
+        // uploadRasterCameraUbo computes for THIS frame so the deferred shade's
+        // hybrid primary direction lands on the same surface the raster
+        // jittered to. uploadRasterCameraUbo runs after this and uses the same
         // `haltonFrame_` value before incrementing, so both ubos see
         // identical jitter. Without this, the shade reconstructs V from
         // pixel-center every frame → reflection direction frozen →
@@ -730,74 +826,13 @@ namespace threepp {
         // size in clip space (2/width) must use the resolution the deferred
         // shade + the raster gbuffer actually run at, not the swapchain extent.
         const VkExtent2D ext = renderExtent();
-        uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
         float jx, jy;
-#if defined(THREEPP_WITH_FSR)
-        // When FSR is the active upscaler, drive the jitter from FSR's own
-        // sequence (its phase count tracks the render/display ratio). The raster
-        // and deferred cameras both read the same haltonFrame_ index this frame,
-        // so overriding both keeps their sub-pixel offset identical — and matches
-        // the dispatch jitterOffset (VulkanCoreRecord). Also stash the sub-pixel
-        // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
-        if (useFsr() && fsr_) {
-            phaseCount = static_cast<uint32_t>(
-                    fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
-            if (phaseCount == 0u) phaseCount = 1u;
-            fsr_->jitterOffset(static_cast<int>(view().haltonFrame_ % phaseCount),
-                               static_cast<int>(phaseCount), jx, jy);
-            fsrJitterX_ = jx;
-            fsrJitterY_ = jy;
-            if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
-                fsrCamNear_ = pcam->nearPlane;
-                fsrCamFar_  = pcam->farPlane;
-                fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
-            } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
-                // A parallel projection has no field of view. FSR only feeds
-                // fovY into its disocclusion/reactivity heuristics, so hand it
-                // the angle a perspective camera would need to cover the same
-                // frustum height at the far plane — the closest equivalent,
-                // and one that at least scales with the zoom instead of holding
-                // whatever the last perspective frame left behind.
-                fsrCamNear_ = ocam->nearPlane;
-                fsrCamFar_  = ocam->farPlane;
-                const float halfH = 0.5f * std::abs(ocam->top - ocam->bottom);
-                fsrCamFovY_ = 2.f * std::atan(halfH / std::max(ocam->farPlane, 1e-3f));
-            }
-        } else
-#endif
-        {
-            const uint32_t hi = (view().haltonFrame_ % phaseCount) + 1u;
-            jx = halton_(hi, 2) - 0.5f;
-            jy = halton_(hi, 3) - 0.5f;
-        }
-#if defined(THREEPP_WITH_DLSS)
-        // DLSS consumes the built-in Halton sequence (jitterPhaseCount_'s
-        // FSR2-style scaling matches DLSS's recommended phase count); stash the
-        // sub-pixel offset for the dispatch (no camera at the record site).
-        // When DLSS is active useFsr() is false, so jx/jy came from the built-in
-        // branch above.
-        if (useDlss()) {
-            dlssJitterX_ = jx;
-            dlssJitterY_ = jy;
-        }
-#endif
-        // MSAA G-buffer rasterizes UNJITTERED (see uploadRasterCameraUbo) —
+        cameraJitter(ext, camera, jx, jy);
+        // MSAA G-buffer rasterizes UNJITTERED (see cameraJitterOn) —
         // this UBO's jitter must match or every consumer reconstructing
         // with cam.jitter (deferred_shade worldPos, hybrid V) lands
-        // off the rasterized surface.
-        // Event camera on its G-buffer (Shaded) source also forces UNJITTERED:
-        // event_shade reads the raw raster gbuf, and per-frame Halton jitter
-        // dithers silhouette coverage so a STATIC scene fires spurious +/-
-        // events every frame (the "event view flickers with no motion" bug). A
-        // physical DVS never sees TAA jitter. The Final source reads the
-        // post-TAA frame, where jitter is already resolved, and keeps it on.
-        // Must match uploadRasterCameraUbo's identical gate (eventCamReadsGbuf).
-        // FSR requires jitter to reconstruct — force it on whenever FSR is the
-        // active upscaler (even under MSAA, which otherwise rasterizes unjittered),
-        // so the dispatch jitterOffset matches what was rendered. The gbuf-reading
-        // event camera still wins. Must match uploadRasterCameraUbo.
-        const bool rasterJitterOn = !eventCamReadsGbuf() && !viewTaaOff() &&
-                                    (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
+        // off the rasterized surface, so this is uploadRasterCameraUbo's gate.
+        const bool rasterJitterOn = cameraJitterOn();
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
         data[32] = jClipX;
@@ -902,60 +937,9 @@ namespace threepp {
         // into the raster camera UBO must match the resolution the
         // gbuffer rasterizes at (see updateCameraUbo for the rationale).
         const VkExtent2D ext = renderExtent();
-        // Sub-pixel offset in [-0.5, +0.5] per axis. Halton(2,3) is the
-        // industry-standard low-discrepancy sequence for primary AA.
-        // Phase count scales with the upscale ratio (FSR2-style) so the
-        // sequence covers the output grid when renderScale < 1; matches
-        // updateCameraUbo's value this frame (same extents → same count).
-        uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
+        // Same offset updateCameraUbo got this frame (same haltonFrame_).
         float jx, jy;
-#if defined(THREEPP_WITH_FSR)
-        // When FSR is the active upscaler, drive the jitter from FSR's own
-        // sequence (its phase count tracks the render/display ratio). The raster
-        // and deferred cameras both read the same haltonFrame_ index this frame,
-        // so overriding both keeps their sub-pixel offset identical — and matches
-        // the dispatch jitterOffset (VulkanCoreRecord). Also stash the sub-pixel
-        // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
-        if (useFsr() && fsr_) {
-            phaseCount = static_cast<uint32_t>(
-                    fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
-            if (phaseCount == 0u) phaseCount = 1u;
-            fsr_->jitterOffset(static_cast<int>(view().haltonFrame_ % phaseCount),
-                               static_cast<int>(phaseCount), jx, jy);
-            fsrJitterX_ = jx;
-            fsrJitterY_ = jy;
-            if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
-                fsrCamNear_ = pcam->nearPlane;
-                fsrCamFar_  = pcam->farPlane;
-                fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
-            } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
-                // A parallel projection has no field of view. FSR only feeds
-                // fovY into its disocclusion/reactivity heuristics, so hand it
-                // the angle a perspective camera would need to cover the same
-                // frustum height at the far plane — the closest equivalent,
-                // and one that at least scales with the zoom instead of holding
-                // whatever the last perspective frame left behind.
-                fsrCamNear_ = ocam->nearPlane;
-                fsrCamFar_  = ocam->farPlane;
-                const float halfH = 0.5f * std::abs(ocam->top - ocam->bottom);
-                fsrCamFovY_ = 2.f * std::atan(halfH / std::max(ocam->farPlane, 1e-3f));
-            }
-        } else
-#endif
-        {
-            const uint32_t hi = (view().haltonFrame_ % phaseCount) + 1u;
-            jx = halton_(hi, 2) - 0.5f;
-            jy = halton_(hi, 3) - 0.5f;
-        }
-#if defined(THREEPP_WITH_DLSS)
-        // DLSS consumes the built-in Halton sequence; stash the sub-pixel offset
-        // for the dispatch. Matches updateCameraUbo's identical stash (same
-        // haltonFrame_ this frame → same offset).
-        if (useDlss()) {
-            dlssJitterX_ = jx;
-            dlssJitterY_ = jy;
-        }
-#endif
+        cameraJitter(ext, camera, jx, jy);
         // Map sub-pixel offset to clip-space: one pixel spans 2/width of
         // NDC (NDC ∈ [-1, +1]), so a 1-pixel jitter is 2/width in clip x.
         //
@@ -975,36 +959,9 @@ namespace threepp {
         // (tighter history rejection) to suppress it. Static views converge to
         // clean AA over the 16-frame Halton cycle.
         constexpr bool kRasterJitterEnabled = true;
-        // MSAA G-buffer (gbufMsaaSamples_ > 1): rasterize UNJITTERED. The
-        // hardware sample coverage replaces jitter as the geometry AA, and
-        // an unjittered raster makes the dominant-sample resolve — and so
-        // every edge pixel's surface classification and reconstruction
-        // position — CONSTANT on a static viewMat. With jitter on, the whole
-        // MSAA sample cloud translates as a unit each frame, so the
-        // majority vote flips nearly as often as a point sample (measured:
-        // dominant-of-4 under jitter cut edge flicker only ~7 %).
-        // (Measured: keeping the jitter at msaa>1 for the renderScale<1
-        // upsampler does NOT work — the upsampler re-amplifies the
-        // jittered coverage flips and edge flicker returns at full
-        // strength, 6.7k px/frame vs 5.1k at msaa=1. Unjittered MSAA
-        // upsampling is STABLE; its trade is spatial softness, not noise.)
-        // Event camera on its G-buffer (Shaded) source forces UNJITTERED (must
-        // match updateCameraUbo's gate, eventCamReadsGbuf): event_shade reads
-        // this raw gbuf, and the per-frame Halton coverage flip at silhouettes
-        // makes a STATIC scene emit spurious events every frame — the DVS
-        // "flickers with no motion". A real event camera sees no jitter;
-        // transform/camera motion still flows through motionMat, so genuine
-        // motion events are unaffected. The Final source reads the post-TAA
-        // frame (jitter resolved) and leaves it on.
-        // useFsr()/useDlss() force jitter on: both need it to reconstruct, even
-        // under MSAA (which otherwise rasterizes unjittered), so the dispatch
-        // jitterOffset matches the render. The gbuf-reading event camera still
-        // wins (a real DVS sees no jitter).
-        // setViewTaa(handle, false): unjittered raster, and the resolve
-        // passes the current frame through (viewTaaOff, blend alpha 1).
-        const bool rasterJitterOn =
-                kRasterJitterEnabled && !eventCamReadsGbuf() && !viewTaaOff() &&
-                (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
+        // The rest of the gate (MSAA, the event camera, FSR/DLSS, setViewTaa)
+        // is shared with updateCameraUbo: see cameraJitterOn.
+        const bool rasterJitterOn = kRasterJitterEnabled && cameraJitterOn();
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
         // Stash the raw texel-unit jitter for the TAA resolve's current-

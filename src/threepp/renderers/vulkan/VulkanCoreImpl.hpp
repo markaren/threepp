@@ -2569,7 +2569,7 @@ namespace threepp {
         // FSR is the ACTIVE upscaler this frame: available AND runtime-enabled,
         // and DLSS is not running (DLSS outranks FSR when both are on).
         // Drives the record branch and the jitter source (FSR needs jitter, so it
-        // also forces the projection jitter on — see uploadRasterCameraUbo).
+        // also forces the projection jitter on — see cameraJitterOn).
         [[nodiscard]] bool useFsr() const {
 #if defined(THREEPP_WITH_FSR)
             return fsrActive_ && fsrEnabled_ && !useDlss();
@@ -4728,10 +4728,17 @@ namespace threepp {
 
         void updateCameraUbo(uint32_t frame, Camera& camera);
 
+        // This frame's sub-pixel jitter (texels, [-0.5, +0.5] per axis) and the
+        // gate that decides whether the camera UBOs apply it. updateCameraUbo
+        // and uploadRasterCameraUbo each call both, so the deferred and raster
+        // cameras jitter identically (VulkanCoreUploads.cpp).
+        void cameraJitter(VkExtent2D ext, Camera& camera, float& jx, float& jy);
+        [[nodiscard]] bool cameraJitterOn() const;
+
         // ── Hybrid raster runtime helpers ───────────────────────────────────
-        // (halton_ is also used by updateCameraUbo above to mirror the raster's
-        // jitter into the deferred shade's camera UBO — keep both helpers
-        // reachable.)
+        // (halton_ is also used by cameraJitter above, which mirrors the
+        // raster's jitter into the deferred shade's camera UBO — keep both
+        // helpers reachable.)
         // Halton(2,3) sub-pixel jitter for raster TAA. (1, base) skips the
         // zero entry so frame 0 already gets a non-zero offset.
         static float halton_(uint32_t i, uint32_t base) {
@@ -5760,9 +5767,9 @@ namespace threepp {
             }
         }
 
-        // Raster jitter gate — MUST mirror uploadRasterCameraUbo's
-        // rasterJitterOn expression (the sampler policy keys off the same
-        // condition the projection jitter does).
+        // Raster jitter gate for the sampler policy: the condition
+        // cameraJitterOn() gives the projection jitter, except that it does
+        // not test viewTaaOff() (setViewTaa(false)).
         [[nodiscard]] bool rasterJitterActive() const {
             return !eventCamReadsGbuf() && (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         }
