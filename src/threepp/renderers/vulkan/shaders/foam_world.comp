@@ -5,7 +5,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive                   : enable
 
-#include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break)
+#include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break), sampleBicubicRG
 
 // World-space foam accumulator. One texel = one fixed point in world XZ;
 // foam value is preserved frame-to-frame regardless of how the ocean's
@@ -129,38 +129,15 @@ vec2 sampleDispXZ(vec2 worldXZ, uint mask) {
     return d * pc.choppiness;
 }
 
-// Bicubic B-spline RG fetch (4 bilinear taps, Sigg & Hadwiger). The Jacobian
-// below DIFFERENTIATES the displacement field; the derivative of a BILINEAR
-// texture is only piecewise-continuous (kinks at every texel boundary), and
-// the steep foam ramp amplifies those kinks into hard world-aligned ~1 m
-// squares baked into the foam accumulator (cascade-0 texel = tileSize0/res
-// ≈ 0.98 m — exactly the visible artifact). The B-spline kernel is C1, so
-// the fold field carries no cell boundaries to bake in.
-vec2 sampleBicubicRG(sampler2D tex, vec2 uv) {
-    const vec2 res = vec2(textureSize(tex, 0));
-    const vec2 st  = uv * res - 0.5;
-    const vec2 i   = floor(st);
-    const vec2 f   = st - i;
-    const vec2 f2  = f * f;
-    const vec2 f3  = f2 * f;
-    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
-    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
-    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
-    const vec2 w3  = f3 * (1.0 / 6.0);
-    const vec2 g0  = w0 + w1;
-    const vec2 g1  = w2 + w3;
-    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
-    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
-    const vec2 t00 = texture(tex, vec2(c0.x, c0.y)).rg;
-    const vec2 t10 = texture(tex, vec2(c1.x, c0.y)).rg;
-    const vec2 t01 = texture(tex, vec2(c0.x, c1.y)).rg;
-    const vec2 t11 = texture(tex, vec2(c1.x, c1.y)).rg;
-    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
-}
-
 // Bicubic variant of sampleDispXZ — used ONLY inside the Jacobian stencil
 // (the inverse-map keeps the cheap bilinear path: kinks in the VALUE field
-// are second-order there and invisible).
+// are second-order there and invisible). The Jacobian below DIFFERENTIATES
+// the displacement field; the derivative of a BILINEAR texture is only
+// piecewise-continuous (kinks at every texel boundary), and the steep foam
+// ramp amplifies those kinks into hard world-aligned ~1 m squares baked into
+// the foam accumulator (cascade-0 texel = tileSize0/res ≈ 0.98 m — exactly
+// the visible artifact). sampleBicubicRG (ocean_cascade.glsl) is a C1
+// B-spline, so the fold field carries no cell boundaries to bake in.
 vec2 sampleDispXZSmooth(vec2 worldXZ, uint mask) {
     vec2 d = vec2(0.0);
     if ((mask & pc.cascadeMask & 1u) != 0u) {

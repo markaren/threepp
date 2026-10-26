@@ -15,7 +15,7 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-#include "camera_ubo.glsl"
+#include "camera_ubo.glsl"// cam + viewDepth()
 layout(set = 0, binding = 1) uniform sampler2D depthTex;   // full res, reversed-Z
 layout(set = 0, binding = 2) uniform sampler2D sceneTex;   // full res, linear HDR
 layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D halfImg;// rgb + coc (half-res px)
@@ -27,14 +27,6 @@ layout(push_constant) uniform Pc {
     float maxCoc;    // clamp, FULL-res px radius
     float _pad;
 } pc;
-
-// View-space distance from reversed-Z NDC depth — only the projection
-// inverse's z/w rows matter (xy jitter never feeds them).
-float viewDepth(float zNdc) {
-    const float vz = cam.projInverse[2][2] * zNdc + cam.projInverse[3][2];
-    const float vw = cam.projInverse[2][3] * zNdc + cam.projInverse[3][3];
-    return -(vz / vw);
-}
 
 float cocFullPx(float d) {
     return clamp(pc.cocScale * (d - pc.focusDist) / max(d, 1e-4), -pc.maxCoc, pc.maxCoc);

@@ -34,9 +34,8 @@ const float PI = 3.14159265358979;
 
 #include "cloud_density.glsl"// cloudDensity, kCloudSigmaMul
 
-// KEEP IN SYNC with cloudShadowSample() in deferred_shade_10_lighting_utils.glsl
-// + froxel_inject.comp: the map covers a 2·kCloudShadowHalfExt square centred on
-// the camera XZ.
+// KEEP IN SYNC with cloudShadowSample() in cloud_shadow_sample.glsl: the map
+// covers a 2·kCloudShadowHalfExt square centred on the camera XZ.
 const float kCloudShadowHalfExt = 4000.0;// metres (8 km square)
 const int   kCloudShadowRes     = 512;
 

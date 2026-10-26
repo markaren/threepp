@@ -32,8 +32,9 @@ namespace threepp {
         // coordinates (u, v) = sample-domain XZ / tileSize. Texel i's value
         // sits at (i+0.5)/dim, as with GPU texture(). `bicubic` selects the
         // uniform cubic B-spline over the 4x4 neighbourhood, which is what
-        // sampleBicubicR/RG in water_displace.comp evaluate with four bilinear
-        // taps; otherwise bilinear. Returns the raw (unnormalized) R and G.
+        // sampleBicubicR (water_displace.comp) and sampleBicubicRG
+        // (ocean_cascade.glsl) evaluate with four bilinear taps; otherwise
+        // bilinear. Returns the raw (unnormalized) R and G.
         Vec2f sampleField(const std::vector<float>& field, uint32_t dim,
                           float u, float v, bool bicubic) {
             const float fdim = float(dim);

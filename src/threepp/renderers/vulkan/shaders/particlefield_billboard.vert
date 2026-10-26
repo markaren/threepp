@@ -253,21 +253,15 @@ layout(location = 10) out float      vViewDepth;
 const uint kModeAlphaOver = 1u;
 
 // ── The hash ────────────────────────────────────────────────────────────────
-// Bit-for-bit particle_emit.comp's hashU/rnd01, which is itself bit-for-bit
-// FireEffect.cpp's. Shared because this shader re-derives a particle's age
-// from the same closed form the emitter evaluated: there is no age channel in
-// the position buffer (w is the radius), and the lifecycle is four lines of
-// arithmetic over the same hash.
+// The same hashU as particle_emit.comp (particle_hash.glsl) and a bit-for-bit
+// copy of its rnd01, which is itself bit-for-bit FireEffect.cpp's. Shared
+// because this shader re-derives a particle's age from the same closed form
+// the emitter evaluated: there is no age channel in the position buffer (w is
+// the radius), and the lifecycle is four lines of arithmetic over the same
+// hash.
 // KEEP IN SYNC with particle_emit.comp: streams 0 (birth phase) and
 // 4 (period jitter) must mean there exactly what they mean here.
-uint hashU(uint x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
+#include "particle_hash.glsl"// hashU
 float rnd01(uint slot, uint stream, uint seed) {
     return float(hashU(slot * 0x9e3779b9u + stream * 0x85ebca6bu + seed) >> 8) *
            (1.0 / 16777216.0);

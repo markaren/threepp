@@ -59,7 +59,7 @@ layout(push_constant, scalar) uniform Pc {
     uint     height; // 12
     // The z and w rows of the inverse projection, evaluated at NDC depth d:
     //   viewZ = (lin.x * d + lin.y) / (lin.z * d + lin.w)
-    // — the dof_coc.comp linearisation, exact for perspective and
+    // — camera_ubo.glsl's viewDepth linearisation, exact for perspective and
     // orthographic alike, reverse-Z included (only the matrix knows which).
     vec4     lin;    // 16
 } pc;                // 32

@@ -24,4 +24,13 @@ layout(set = 0, binding = 0) uniform CameraUbo {
                      // primary ray from these, froxelWorldRay reads .x
 } cam;
 
+// View-space distance from reversed-Z NDC depth — only the projection
+// inverse's z/w rows matter (xy jitter never feeds them). The DoF passes
+// (dof_coc.comp, dof_combine.comp) linearize their depth reads with it.
+float viewDepth(float zNdc) {
+    const float vz = cam.projInverse[2][2] * zNdc + cam.projInverse[3][2];
+    const float vw = cam.projInverse[2][3] * zNdc + cam.projInverse[3][3];
+    return -(vz / vw);
+}
+
 #endif// CAMERA_UBO_GLSL

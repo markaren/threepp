@@ -344,7 +344,7 @@ layout(set = 0, binding = 74) uniform sampler2D rtaoTex;
 layout(set = 0, binding = 75, rgba16f) readonly uniform image2D rtaoAuxImage;
 // Cloud shadow map (cloud_shadow.comp, binding 65) — top-down cloud
 // transmittance over an 8 km camera-centred square. Sampled by cloudShadowSample()
-// (deferred_shade_10_lighting_utils.glsl) to attenuate the sun on the ground.
+// (cloud_shadow_sample.glsl) to attenuate the sun on the ground.
 layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 
 // ParticleField density volumes (bindings 67/68 + the r16f mirrors at 69,

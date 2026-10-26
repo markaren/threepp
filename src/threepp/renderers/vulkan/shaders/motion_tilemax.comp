@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Motion blur — TILE MAX (McGuire et al. 2012, "A Reconstruction Filter for
 // Plausible Motion Blur"). One workgroup per kTilePx×kTilePx tile of the
@@ -31,25 +32,7 @@ layout(push_constant) uniform Pc {
     mat4  skyReproj; // prevVPunjit · currVPunjit⁻¹ at the far plane (see taa_resolve)
 } pc;
 
-// KEEP IN SYNC with motion_blur.comp (tile size = max blur radius in px).
-const float kTilePx = 32.0;
-
-// Blur velocity (curr − prev) at `uv`, in OUTPUT pixels, shutter-scaled and
-// clamped to the tile radius. Motion is stored as prevNDC − currNDC (GL NDC,
-// Y-up); the pixel-space conversion folds in the negation and the Y flip.
-vec2 blurVelocityPx(vec2 uv) {
-    vec2 motionGL = texture(gbufMotionTex, uv).rg;
-    const vec2 currNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
-    if (all(equal(motionGL, vec2(0.0)))) {
-        const vec4 pclip = pc.skyReproj * vec4(currNDC, 0.0, 1.0);// reversed-Z far
-        if (abs(pclip.w) > 1e-6) motionGL = pclip.xy / pclip.w - currNDC;
-    }
-    vec2 vPx = vec2(-motionGL.x, motionGL.y) * 0.5
-             * vec2(float(pc.width), float(pc.height)) * pc.shutter;
-    const float len = length(vPx);
-    if (len > kTilePx) vPx *= kTilePx / len;
-    return vPx;
-}
+#include "motion_blur_velocity.glsl"// kTilePx + blurVelocityPx, shared with motion_blur.comp
 
 shared vec2  sVel[64];
 shared float sLen[64];

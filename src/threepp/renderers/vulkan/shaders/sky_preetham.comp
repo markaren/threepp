@@ -1,13 +1,14 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // threepp::Sky on the deferred renderer: the Preetham daylight model (three.js's
 // Sky; Simon Wallner, Martin Upitis) baked into mip 0 of the environment
 // equirect. The GL renderer shades the Sky's dome with the same maths per
 // pixel (Sky.cpp); here one dispatch writes the whole sphere, and the
 // prefilter chain (prefilter_env.comp) mips it like any HDRI. Same equirect
-// mapping as the prefilter's dirFromUV, so a texel here is the direction every
-// env lookup reads it at. The CPU twin, for the sun's energy and for tests, is
-// renderers/common/PreethamSky.cpp; keep the two in step.
+// mapping as the prefilter (dirFromUV, equirect.glsl), so a texel here is the
+// direction every env lookup reads it at. The CPU twin, for the sun's energy
+// and for tests, is renderers/common/PreethamSky.cpp; keep the two in step.
 //
 // Dispatched by vulkan/SkyBake.cpp, once without the solar disc (the source the
 // glossy and diffuse mips integrate: a disc of 1e4 x the sky cannot be Monte
@@ -41,12 +42,7 @@ const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848
 const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
 const float ONE_OVER_FOURPI = 0.07957747154594767;
 
-vec3 dirFromUV(vec2 uv) {
-    const float phi   = (uv.x - 0.5) * TWO_PI;
-    const float theta = (uv.y - 0.5) * PI;
-    const float cosT  = cos(theta);
-    return vec3(cosT * cos(phi), sin(theta), cosT * sin(phi));
-}
+#include "equirect.glsl"// dirFromUV, shared with prefilter_env.comp
 
 float sunIntensity(float zenithAngleCos) {
     zenithAngleCos = clamp(zenithAngleCos, -1.0, 1.0);

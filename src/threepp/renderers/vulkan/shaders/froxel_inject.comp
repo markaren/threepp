@@ -59,16 +59,7 @@ layout(set = 0, binding = 51) uniform sampler3D froxelScatterPrevTex;// prev fif
 #include "cloud_ubo.glsl"
 
 layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;// top-down cloud transmittance
-// Cloud shadow transmittance at a world point — KEEP IN SYNC with
-// deferred_shade_10_lighting_utils.glsl / cloud_shadow.comp.
-float cloudShadowSample(vec3 worldPos) {
-    if (clouds.shadowActive < 0.5) return 1.0;
-    const float halfExt = 4000.0;
-    const vec2  cenXZ   = cam.viewInverse[3].xz;
-    const vec2  suv     = (worldPos.xz - cenXZ) / (2.0 * halfExt) + 0.5;
-    if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) return 1.0;
-    return texture(cloudShadowTex, suv).r;
-}
+#include "cloud_shadow_sample.glsl"
 
 // Shared ShadePush block (vulkan_shared.h) — this pass reads only the
 // fields it names; the host zero-fills the rest.
@@ -78,10 +69,7 @@ const float PI = 3.14159265358979;
 
 #include "froxel_grid.glsl"
 
-float hgPhase(float mu, float g) {
-    const float g2 = g * g;
-    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
-}
+#include "hg_phase.glsl"
 
 uint pcgHash(uint v) {
     uint state = v * 747796405u + 2891336453u;
@@ -93,16 +81,7 @@ float rnd(inout uint seed) {
     return float(seed) * (1.0 / 4294967296.0);
 }
 
-// Binary occlusion toward a light (opaque-only mask matches the surface
-// shadow rays: blend/glass never blocks a shaft).
-float shadowVis(vec3 origin, vec3 dir, float tMax) {
-    rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                          0x01u /*kRayMaskOpaque*/, origin, 1e-3, dir, tMax);
-    while (rayQueryProceedEXT(rq)) {}
-    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
-            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
-}
+#include "medium_shadow_vis.glsl"// shadowVis: opaque-only binary occlusion toward a light
 
 #include "cloud_density.glsl"// heightFogDensity + mediumExtinction (hetero mode)
 

@@ -500,8 +500,7 @@ vec3 splatEnvTop() {
     return textureLod(envTex, uv, lod).rgb * lights.envIntensity;
 }
 
-// Henyey-Greenstein phase — the same expression as hgPhase in
-// deferred_shade_60_fog_volumetrics.glsl / particle_light.comp / froxel_inject.comp,
+// Henyey-Greenstein phase — the same expression as hgPhase in hg_phase.glsl,
 // with PI written out because splat_common carries no PI of its own.
 float splatHgPhase(float mu, float g) {
     const float g2 = g * g;

@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
 
 // Time-evolves the static h0(k) into ht(k, t), and emits the
 // frequency-domain quantities the IFFT chain needs:
@@ -32,9 +33,7 @@ layout(push_constant) uniform Params {
 
 const float PI = 3.14159265358979;
 
-vec2 complexMul(vec2 a, vec2 b) {
-    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
+#include "complex_math.glsl"// complexMul
 
 float omega(vec2 k) { return sqrt(length(k) * 9.81); }
 

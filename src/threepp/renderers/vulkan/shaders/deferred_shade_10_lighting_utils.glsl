@@ -19,18 +19,7 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
     const float w = max(clamp(t, 0.0, 1.0) * 64.0 - 0.5, 0.0) / 64.0;
     return texture(froxelLutTex, vec3(fuv, w)).rgb;
 }
-// Cloud shadow transmittance at a world point (bilinear from the top-down
-// cloud shadow map, binding 65). 1.0 (full sun) when clouds/shadows are off or
-// the point is outside the 8 km camera-centred square. KEEP the extent + centre
-// in sync with cloud_shadow.comp.
-float cloudShadowSample(vec3 worldPos) {
-    if (clouds.shadowActive < 0.5) return 1.0;
-    const float halfExt = 4000.0;// == kCloudShadowHalfExt
-    const vec2  cenXZ   = cam.viewInverse[3].xz;
-    const vec2  suv     = (worldPos.xz - cenXZ) / (2.0 * halfExt) + 0.5;
-    if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) return 1.0;
-    return texture(cloudShadowTex, suv).r;
-}
+#include "cloud_shadow_sample.glsl"// cloudShadowSample: the cloud shadow map at a world point
 // Integrated PARTICLE transmittance (LUT .a) for the same leg — exp(-∫σ_dust)
 // over camera→(uv, viewDist), folded front-to-back by froxel_integrate from
 // the ParticleField density volumes (plan §3.3). 1.0 when the froxels didn't

@@ -169,14 +169,7 @@ const float kTau = 6.28318530718;
 // redesign. No RNG object, no state, no order dependence — which a device
 // emitter cannot have anyway, since its threads run in whatever order they run
 // in, and which is what makes the field bit-reproducible.
-uint hashU(uint x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
+#include "particle_hash.glsl"// hashU, shared with particlefield_billboard.vert
 
 // 24 bits -> [0,1). Exact in fp32, and never reaches 1.0.
 float rnd01(uint slot, uint stream) {

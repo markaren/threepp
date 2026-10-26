@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Motion blur — RECONSTRUCTION (McGuire et al. 2012). Runs on the RESOLVED
 // post-TAA frame (LDR, output extent): for each pixel, gathers ~15 samples
@@ -48,23 +49,9 @@ layout(push_constant) uniform Pc {
     vec4  depthLin;
 } pc;
 
-// KEEP IN SYNC with motion_tilemax.comp.
-const float kTilePx = 32.0;
-const int   kSamples = 15;// odd — center tap sits between the two half-lines
+#include "motion_blur_velocity.glsl"// kTilePx + blurVelocityPx, shared with motion_tilemax.comp
 
-vec2 blurVelocityPx(vec2 uv) {
-    vec2 motionGL = texture(gbufMotionTex, uv).rg;
-    const vec2 currNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
-    if (all(equal(motionGL, vec2(0.0)))) {
-        const vec4 pclip = pc.skyReproj * vec4(currNDC, 0.0, 1.0);// reversed-Z far
-        if (abs(pclip.w) > 1e-6) motionGL = pclip.xy / pclip.w - currNDC;
-    }
-    vec2 vPx = vec2(-motionGL.x, motionGL.y) * 0.5
-             * vec2(float(pc.width), float(pc.height)) * pc.shutter;
-    const float len = length(vPx);
-    if (len > kTilePx) vPx *= kTilePx / len;
-    return vPx;
-}
+const int kSamples = 15;// odd — center tap sits between the two half-lines
 
 // Linear view distance from the motion buffer's prev-NDC reversed-Z depth.
 // abs() makes the result convention-agnostic (the projection's view Z may

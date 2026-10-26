@@ -18,7 +18,8 @@ vec3 applyMurkSky(vec3 dir);
 bool camPortWetDryEye();
 vec3 applyMurk(vec3 col, vec3 ro, vec3 hit);
 // The Henyey-Greenstein phase the fog/particle/cloud volumetrics all use — the
-// water column gets the SAME phase function, not a second one (deferred_shade_60).
+// water column gets the SAME phase function, not a second one (hg_phase.glsl,
+// included by deferred_shade_60).
 float hgPhase(float mu, float g);
 
 // ── Water-body IN-SCATTER calibration ───────────────────────────────────────

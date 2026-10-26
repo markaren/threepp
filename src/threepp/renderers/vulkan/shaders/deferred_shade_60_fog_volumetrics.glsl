@@ -1,7 +1,7 @@
 // Split from deferred_shade.comp: volumetric spot-light beam scattering,
-// directional-light volumetric scattering (god rays), Henyey-Greenstein
-// phase, scene fog (Beer-Lambert), sky aerial perspective, procedural star
-// field, and the fogged sky/background colour helper.
+// directional-light volumetric scattering (god rays), the Henyey-Greenstein
+// phase (hg_phase.glsl), scene fog (Beer-Lambert), sky aerial perspective,
+// procedural star field, and the fogged sky/background colour helper.
 
 // ── Volumetric SPOT-light beams (single scattering, ray-marched) ─────────────
 // In-scattered radiance along [ro, ro+rd·tMax] from every spot light — the
@@ -15,10 +15,7 @@
 // pass pure ALU. The base surface is NOT extinction-attenuated (σ is haze-thin;
 // attenuating would wash the whole scene for a localized effect) — the term is
 // purely additive in-scatter. Skipped entirely when pc.volDensity == 0.
-float hgPhase(float mu, float g) {
-    const float g2 = g * g;
-    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
-}
+#include "hg_phase.glsl"
 
 // ── Scene fog (deferred) ─────────────────────────────────────────────────────
 // Beer-Lambert extinction toward the fog colour over the PRIMARY distance —

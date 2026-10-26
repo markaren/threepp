@@ -330,16 +330,8 @@ float blueNoiseDef(uvec2 px, uint frame, uint salt) {
     const vec2  uv   = (vec2(cell & 63) + 0.5) / 64.0;
     return texture(blueNoiseTex, uv).r;
 }
-// Van der Corput radical inverse (base 2) — the second dimension of the
-// per-pixel Hammersley point set.
-float radicalInverse2(uint bits) {
-    bits = (bits << 16u) | (bits >> 16u);
-    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
-    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
-    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
-    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
-    return float(bits) * 2.3283064365386963e-10;// × 1/2^32
-}
+// radicalInverse2, the Hammersley second dimension, shared with rtao.comp.
+#include "radical_inverse.glsl"
 
 // Soft directional-light (sun) visibility: average shadowVis over a stratified
 // disc of directions inside the sun cone (tanR = tan of the angular radius;

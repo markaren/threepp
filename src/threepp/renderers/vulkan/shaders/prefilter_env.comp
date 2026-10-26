@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // PMREM: GGX-prefilter the env equirect into a mip chain so
 // glossy hits sample at a roughness-derived LOD instead of getting a flat
@@ -73,15 +74,7 @@ vec3 importanceSampleGGX(vec2 u, vec3 N, float a) {
     return normalize(T * H_local.x + B * H_local.y + N * H_local.z);
 }
 
-// Equirect → world direction. Matches deferred_shade's sampleEnvLod UV convention
-// (u = 0.5 + atan2(z,x)/2π, v = 0.5 + asin(y)/π) so a sky pixel at uv on
-// mip 0 maps to the same direction we'd sample at on the prefiltered mips.
-vec3 dirFromUV(vec2 uv) {
-    const float phi   = (uv.x - 0.5) * TWO_PI;// longitude (about y-axis)
-    const float theta = (uv.y - 0.5) * PI;    // latitude (asin(y))
-    const float cosT  = cos(theta);
-    return vec3(cosT * cos(phi), sin(theta), cosT * sin(phi));
-}
+#include "equirect.glsl"// dirFromUV, shared with sky_preetham.comp
 
 vec2 uvFromDir(vec3 d) {
     return vec2(0.5 + atan(d.z, d.x) / TWO_PI,

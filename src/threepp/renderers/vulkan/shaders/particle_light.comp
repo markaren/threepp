@@ -120,10 +120,7 @@ const float kParticleHgG = 0.35;
 #define FROXEL_GRID_LADDER_ONLY
 #include "froxel_grid.glsl"// kFroxelZMin/Max: the LUT's slice ladder
 
-float hgPhase(float mu, float g) {
-    const float g2 = g * g;
-    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
-}
+#include "hg_phase.glsl"
 
 vec3 sampleEnvLod(vec3 dir, float lod) {
     // scene.environmentRotation (world -> env) and environmentIntensity.
@@ -133,16 +130,7 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
 }
 
-// Binary occlusion toward a light (opaque-only mask — matches the surface
-// shadow rays and froxel_inject: blend/glass never blocks the sun on a puff).
-float shadowVis(vec3 origin, vec3 dir, float tMax) {
-    rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                          0x01u /*kRayMaskOpaque*/, origin, 1e-3, dir, tMax);
-    while (rayQueryProceedEXT(rq)) {}
-    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
-            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
-}
+#include "medium_shadow_vis.glsl"// shadowVis: opaque-only binary occlusion toward a light
 
 // The sun's visibility (dir light d) at a point in the air: the view's
 // shadow map where one covers it (flags bit 5, dir light 0), else the ray.
@@ -154,15 +142,7 @@ float sunVis(uint d, vec3 P, vec3 L) {
     return shadowVis(P, L, 1e30);
 }
 
-// Cloud shadow transmittance — KEEP IN SYNC with deferred_shade_10_lighting_utils.glsl.
-float cloudShadowSample(vec3 worldPos) {
-    if (clouds.shadowActive < 0.5) return 1.0;
-    const float halfExt = 4000.0;// == kCloudShadowHalfExt
-    const vec2  cenXZ   = cam.viewInverse[3].xz;
-    const vec2  suv     = (worldPos.xz - cenXZ) / (2.0 * halfExt) + 0.5;
-    if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) return 1.0;
-    return texture(cloudShadowTex, suv).r;
-}
+#include "cloud_shadow_sample.glsl"
 
 // Closed-form exponential-height-fog optical depth over [a,b], clipped at the
 // waterline: murkPathLength below covers the submerged part of the leg.

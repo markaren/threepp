@@ -36,8 +36,8 @@ shared float sDist[kTilePixels];
 shared uint  sActive;
 
 // View-space distance from a REVERSED-Z NDC depth. Only the projection
-// inverse's z/w rows matter; mirrors viewDepth() in dof_coc.comp, which reads
-// the same image with the same matrix.
+// inverse's z/w rows matter; mirrors camera_ubo.glsl's viewDepth(), which the
+// DoF passes apply to the same image with the same matrix.
 float viewDepth(float zNdc) {
     const float vz = ubo.projInv[2][2] * zNdc + ubo.projInv[3][2];
     const float vw = ubo.projInv[2][3] * zNdc + ubo.projInv[3][3];
