@@ -22,6 +22,10 @@
 //   4. Back OFF, the sprite is the hard-edged OFF sprite again (the gate).
 //      That the OFF frame is the frame the renderer drew before the knob
 //      existed is rg_ab's job (a build without the change, byte for byte).
+//      Read on OFF's TAA jitter phase: with nothing else in the overlay the
+//      sprites are depth-tested against the G-buffer's own (jittered) depth
+//      (overlayDepthImportsGbuffer), so the hard line itself moves a row
+//      from one phase to the next.
 //   5. The same fade in a SECONDARY view (its own G-buffer depth), in an
 //      ORTHOGRAPHIC one (the other linearisation), at render scale 0.75 (the
 //      fade reads the display-extent prepass, not the scaled scene), and with
@@ -280,6 +284,9 @@ int main(int argc, char** argv) {
 
     const std::uint32_t errorsBefore = vulkan::validationErrorCount();
     constexpr float kSoft = 1.5f;
+    // TAA jitter phases at render scale 1 (VulkanRenderer::Impl::jitterPhaseCount_).
+    // The frames compared line for line below are a multiple of it apart.
+    constexpr int kJitterPhases = 8;
 
     // ── The baseline: the scene without sprites ─────────────────────────────
     bb.enabled = false;
@@ -307,8 +314,11 @@ int main(int argc, char** argv) {
         const Pixels on = renderer.readRGBPixels();
         if (capDir) renderer.writeFramebuffer(std::string(capDir) + "/" + mode + "_on.png");
 
+        // ON was read 4 + 12 frames after OFF, on its phase; the reset frame
+        // 4 + 12 + 16, on it again (12 here put it half a cycle off).
         bb.softDistance = 0.f;
-        frames(12);
+        frames(16);
+        static_assert((4 + 12 + 16) % kJitterPhases == 0 && (4 + 12) % kJitterPhases == 0);
         const Pixels offAgain = renderer.readRGBPixels();
 
         const auto pOff = profile(off, none, ax);
