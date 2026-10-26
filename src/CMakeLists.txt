@@ -1036,10 +1036,10 @@ if (THREEPP_WITH_AUDIO)
 endif ()
 
 if (THREEPP_WITH_USD)
-    message("Using tinyusdz: ${tinyusdz_SOURCE_DIR}")
-    target_link_libraries(threepp PRIVATE tinyusdz_static)
+    message("Using LightUSD: ${lightusd_SOURCE_DIR}")
+    target_link_libraries(threepp PRIVATE tydra_next)
     target_include_directories(threepp PRIVATE
-            "${tinyusdz_SOURCE_DIR}/src"
+            "${lightusd_SOURCE_DIR}/src"
     )
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_USD)
 endif ()

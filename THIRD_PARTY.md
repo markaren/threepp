@@ -122,7 +122,7 @@ license text.
 | Dependency | When | License |
 |---|---|---|
 | [threepp_data](https://github.com/markaren/threepp_data) | examples or tests | **per-directory** — fonts under the MAGENTA license above, models under their own terms (including CC-BY, CC-BY-**ND** and CC0 entries), and `urdf/spot/` under the **Boston Dynamics SDK License** (see the `LICENSE` and `NOTICE.md` in that directory; simulation use only, not MIT) |
-| [tinyusdz](https://github.com/lighttransport/tinyusdz) | `THREEPP_WITH_USD` | Apache-2.0, © Syoyo Fujita / Light Transport Entertainment Inc. Note: `install()` copies its headers and static lib alongside threepp, so an installed tree redistributes it |
+| [LightUSD](https://github.com/lighttransport/LightUSD) (formerly tinyusdz) | `THREEPP_WITH_USD` | Apache-2.0 (some helper code MIT or similar; see its `LICENSE.3rdparty`), © Syoyo Fujita / Light Transport Entertainment Inc. Note: `install()` copies its headers and static libs alongside threepp, so an installed tree redistributes it |
 | [pybind11](https://github.com/pybind/pybind11) | `THREEPP_WITH_PYTHON` / editor scripting | BSD-3, © Wenzel Jakob |
 | [Catch2](https://github.com/catchorg/Catch2) | tests only | Boost Software License 1.0 |
 | AMD FidelityFX SDK (FSR) | `THREEPP_WITH_FSR` (opt-in upscaler; Windows, needs `THREEPP_WITH_VULKAN`) | MIT, © AMD — the fetch records the SDK's LICENSE.txt path; the build copies the prebuilt `amd_fidelityfx_vk.dll` beside the executable. The Windows Python wheels redistribute that DLL, with the SDK's LICENSE.txt beside it as `FIDELITYFX_LICENSE.txt` |

@@ -1,55 +1,62 @@
 include(FetchContent)
 
 if (THREEPP_WITH_USD)
-    message(STATUS "Fetching tinyusdz...")
+    message(STATUS "Fetching LightUSD...")
 
-    set(TINYUSDZ_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
-    set(TINYUSDZ_BUILD_EXAMPLES     OFF CACHE BOOL "" FORCE)
-    set(TINYUSDZ_WITH_AUDIO         OFF CACHE BOOL "" FORCE)
-    set(TINYUSDZ_WITH_EXR           OFF CACHE BOOL "" FORCE)
-    set(TINYUSDZ_WITH_COLORIO       OFF CACHE BOOL "" FORCE)
-    set(TINYUSDZ_WITH_PYTHON        OFF CACHE BOOL "" FORCE)
-    set(TINYUSDZ_WITH_USDMTLX       OFF CACHE BOOL "" FORCE)
-    set(TINYUSDZ_WITH_USDVOX        OFF CACHE BOOL "" FORCE)
-
-    # Local patches applied to the pinned tinyusdz tag.
-    # PATCH_COMMAND runs after FetchContent populates the source tree.
-    # `git reset --hard HEAD` first makes re-runs idempotent should the source
-    # tree need to be re-patched.
-    #
-    # It must not run on every configure, though: the reset and the apply
-    # rewrite the patched files, and their fresh mtimes recompile those and
-    # everything that includes crate-format.hh, then relink tinyusdz_static,
-    # after ANY CMake regeneration. FetchContent chains the patch step to the
-    # git update step, which is always dirty unless updates are disconnected.
-    # A pinned tag needs no update check, so UPDATE_DISCONNECTED takes the step
-    # out of the chain. The patch's hash rides in the command line because the
-    # patch step re-runs exactly when that changes, so editing the patch still
-    # re-applies it (nothing else tells the step the file changed).
-    find_package(Git REQUIRED)
-    set(_TINYUSDZ_PATCH_DIR "${CMAKE_CURRENT_LIST_DIR}/patches/tinyusdz")
-    set(_TINYUSDZ_PATCH "${_TINYUSDZ_PATCH_DIR}/0001-real-world-asset-compat.patch")
-    file(SHA256 "${_TINYUSDZ_PATCH}" _TINYUSDZ_PATCH_SHA256)
+    set(LIGHTUSD_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_BUILD_EXAMPLES     OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_BUILD_TOOLS        OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_BUILD_BENCHMARKS   OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_USE_CCACHE         OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_PRODUCTION_BUILD   ON  CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_AUDIO         OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_EXR           OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_PYTHON        OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_C_API         OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_USD_TO_GLTF   OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_USDOBJ        OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_USDFBX        OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_USDVOX        OFF CACHE BOOL "" FORCE)
+    set(LIGHTUSD_WITH_USDVOL        OFF CACHE BOOL "" FORCE)
+    # USDLoader reads through the `next` pipeline (next::pcp composition +
+    # tydra::next): the classic flatten path does not compose the layered
+    # Isaac Sim / SimReady assets (references of references, sublayer-only
+    # wrappers, internal references inside a referenced layer).
+    set(LIGHTUSD_USE_NEXT_PCP_LARGE_SCENE ON CACHE BOOL "" FORCE)
 
     FetchContent_Declare(
-        tinyusdz
-        GIT_REPOSITORY https://github.com/lighttransport/tinyusdz.git
-        GIT_TAG        v0.9.1
+        lightusd
+        GIT_REPOSITORY https://github.com/lighttransport/LightUSD.git
+        GIT_TAG        v1.0.0-rc4
         GIT_SHALLOW    TRUE
         UPDATE_DISCONNECTED TRUE
-        PATCH_COMMAND  ${GIT_EXECUTABLE} reset --hard HEAD
-                COMMAND ${GIT_EXECUTABLE} apply --ignore-whitespace "${_TINYUSDZ_PATCH}"
-                COMMAND ${CMAKE_COMMAND} -E echo "tinyusdz patch sha256 ${_TINYUSDZ_PATCH_SHA256}"
     )
-    FetchContent_MakeAvailable(tinyusdz)
+    FetchContent_MakeAvailable(lightusd)
 
-    # tinyusdz_static's INTERFACE_INCLUDE_DIRECTORIES may contain raw source
-    # paths, which CMake rejects when the target is exported. Clear them here —
-    # threepp links to tinyusdz_static privately and adds the paths itself via
-    # target_include_directories in src/CMakeLists.txt. The install() rule
-    # below deploys the headers so installed consumers can find them.
-    set_target_properties(tinyusdz_static PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES
-        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/tinyusdz>"
-    )
+    # LightUSD only builds tydra::next for its own examples. It also uses the
+    # classic library (image loading, MaterialX DOM, tangent generation)
+    # without declaring it.
+    if (NOT TARGET tydra_next)
+        add_subdirectory("${lightusd_SOURCE_DIR}/src/tydra/next" "${lightusd_BINARY_DIR}/tydra_next")
+    endif ()
+    target_link_libraries(tydra_next PUBLIC lightusd_static)
+
+    # lightusd_static and its texture tools publish raw source paths as
+    # INTERFACE_INCLUDE_DIRECTORIES, which CMake rejects when the targets are
+    # exported. Keep them for the build only; the install() rule in the
+    # top-level CMakeLists.txt deploys the headers for installed consumers.
+    foreach (_lightusd_target lightusd_static lightusd_textools)
+        if (TARGET ${_lightusd_target})
+            get_target_property(_lightusd_includes ${_lightusd_target} INTERFACE_INCLUDE_DIRECTORIES)
+            if (NOT _lightusd_includes)
+                set(_lightusd_includes "")
+            endif ()
+            list(TRANSFORM _lightusd_includes PREPEND "$<BUILD_INTERFACE:")
+            list(TRANSFORM _lightusd_includes APPEND ">")
+            set_target_properties(${_lightusd_target} PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES
+                "${_lightusd_includes};$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/lightusd>"
+            )
+        endif ()
+    endforeach ()
 endif ()

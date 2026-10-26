@@ -14,5 +14,11 @@ if (@THREEPP_WITH_VULKAN@)
     find_dependency(Vulkan)
 endif()
 
+# A USD build links LightUSD's static libraries; on Unix its texture tools
+# link Threads::Threads.
+if (@THREEPP_WITH_USD@ AND UNIX)
+    find_dependency(Threads)
+endif()
+
 include(${CMAKE_CURRENT_LIST_DIR}/threepp-targets.cmake)
 check_required_components(threepp)
