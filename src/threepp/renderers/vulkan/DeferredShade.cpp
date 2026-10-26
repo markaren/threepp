@@ -5,7 +5,7 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
 
-#include <cstdlib>// std::getenv (THREEPP_VK_SHADOW_DWELL kill switch)
+#include "threepp/renderers/vulkan/EnvKnob.hpp"
 
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/deferred_gi_filter.comp.spv.h"
@@ -409,14 +409,8 @@ namespace threepp::vulkan {
         //     bits made compile-time, so the driver drops the code they turn off.
         //     ORed onto kShadeSpecMsaa; it cannot take the MSAA bits out.
         //   THREEPP_VK_SHADE_SPEC_PROBE=1: the probe GI gate made compile-time.
-        {
-            auto knob = [](const char* name) -> uint32_t {
-                const char* e = std::getenv(name);
-                return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 0)) : 0u;
-            };
-            specMask_  = kShadeSpecMsaa | knob("THREEPP_VK_SHADE_SPEC_MASK");
-            specProbe_ = knob("THREEPP_VK_SHADE_SPEC_PROBE") != 0u;
-        }
+        specMask_  = kShadeSpecMsaa | static_cast<uint32_t>(env::integer("THREEPP_VK_SHADE_SPEC_MASK", 0).value_or(0));
+        specProbe_ = env::flag("THREEPP_VK_SHADE_SPEC_PROBE");
         shadeMod_ = mod;
 
         // Filter + composite pipelines — GI SVGF and reflection gloss
@@ -1298,23 +1292,14 @@ namespace threepp::vulkan {
         // dwell/top-up machinery (perf-triage instrument — if FPS recovers with
         // it set, the cost is the top-up RAYS; if not, it's deferred_shade
         // kernel growth/occupancy, which a runtime flag cannot undo).
-        static const bool shadowDwellOff = [] {
-            const char* e = std::getenv("THREEPP_VK_SHADOW_DWELL");
-            return e && e[0] == '0';
-        }();
+        static const bool shadowDwellOff = !env::flag("THREEPP_VK_SHADOW_DWELL", true);
         // THREEPP_VK_DIAG_NOGATHER=1: diagnostic only, never a default. The probe
         // path never runs its stochastic gather (where the probes measured nothing
         // the indirect goes dark): the gather's cost ceiling under the cascades.
-        static const bool diagNoGather = [] {
-            const char* e = std::getenv("THREEPP_VK_DIAG_NOGATHER");
-            return e && e[0] && e[0] != '0';
-        }();
+        static const bool diagNoGather = env::flag("THREEPP_VK_DIAG_NOGATHER");
         // THREEPP_VK_PROBE_FAR=1: beyond the coarsest probe cascade window the
         // probe path fills with the ray-free sky term instead of its gather.
-        static const bool probeFar = [] {
-            const char* e = std::getenv("THREEPP_VK_PROBE_FAR");
-            return e && e[0] && e[0] != '0';
-        }();
+        static const bool probeFar = env::flag("THREEPP_VK_PROBE_FAR");
         ShadePush push{};
         push.envMipCount        = p.envMipCount;
         push.width              = p.width;
@@ -1551,11 +1536,8 @@ namespace threepp::vulkan {
         // through. Sky-lit converged scenes pay ~2 real passes; lamp-lit
         // noise keeps the full ±30 px reach. The knob remains for A/B and
         // for forcing the old global behavior.
-        static const int kAtrousPasses = [] {
-            const char* e = std::getenv("THREEPP_DENOISE_ATROUS_PASSES");
-            const int v = e ? std::atoi(e) : 4;
-            return std::clamp(v, 2, 4);
-        }();
+        static const int kAtrousPasses =
+                static_cast<int>(std::clamp(env::integer("THREEPP_DENOISE_ATROUS_PASSES").value_or(4), 2LL, 4LL));
         struct Pass { uint32_t step, srcMode, dstMode, feedback; };
         Pass passes[4]{};
         // Lighting views 2, 4 and 7 show terms before spatial filtering: one

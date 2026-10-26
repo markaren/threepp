@@ -43,7 +43,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // for the determinism-audit readbacks of scratch images
             // (debugHashShadeImages' atrousA/B, readTaaDebugImages' input),
             // which later passes overwrite when they share memory.
-            if (const char* e = std::getenv("THREEPP_VK_NO_ALIAS"); !(e && *e && *e != '0')) {
+            if (!vulkan::env::flag("THREEPP_VK_NO_ALIAS")) {
                 transientPool_ = std::make_unique<vulkan::TransientPool>(ctx->allocator(), ctx->device(),
                                                                          "transient");
                 gbufMsPool_    = std::make_unique<vulkan::TransientPool>(ctx->allocator(), ctx->device(),
@@ -53,8 +53,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // Static BLAS compaction (see blasCompact_): THREEPP_VK_BLAS_COMPACT=0
             // leaves static BLASes at their build size.
             {
-                const char* c = std::getenv("THREEPP_VK_BLAS_COMPACT");
-                blasCompact_ = !(c && *c == '0') &&
+                blasCompact_ = vulkan::env::flag("THREEPP_VK_BLAS_COMPACT", true) &&
                                ctx->rt().cmdWriteAccelerationStructuresProperties != nullptr &&
                                ctx->rt().cmdCopyAccelerationStructure != nullptr;
             }
@@ -219,7 +218,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // is scene-independent, so this is the renderer's baseline cost — the
             // number to watch as new features add persistent targets. Enable with
             // THREEPP_VK_MEMDUMP=1 (or call dumpMemoryStats() from app code).
-            if (const char* e = std::getenv("THREEPP_VK_MEMDUMP"); e && *e && *e != '0') {
+            if (vulkan::env::flag("THREEPP_VK_MEMDUMP")) {
                 dumpMemoryStats("post-init");
             }
         }
@@ -231,8 +230,7 @@ namespace {
         bool on;
         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
         ExitTimer() {
-            const char* e = std::getenv("THREEPP_VK_EXIT_TIMING");
-            on = e && *e && *e != '0';
+            on = vulkan::env::flag("THREEPP_VK_EXIT_TIMING");
         }
         void mark(const char* what) {
             if (!on) return;

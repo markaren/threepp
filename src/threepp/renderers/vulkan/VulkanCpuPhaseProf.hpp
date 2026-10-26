@@ -31,6 +31,8 @@
 
 #include <chrono>
 #include <cstdio>
+#include "EnvKnob.hpp"
+
 #include <cstdlib>
 #include <map>
 #include <string>
@@ -47,12 +49,9 @@ namespace threepp::vulkan::cpuprof {
         static Registry& get() {
             static Registry r = [] {
                 Registry x;
-                const char* e = std::getenv("THREEPP_CPU_PHASE_PROFILE");
-                x.on = e && e[0] == '1';
-                if (const char* w = std::getenv("THREEPP_CPU_PHASE_WINDOW")) {
-                    const int n = std::atoi(w);
-                    if (n > 0) x.window = static_cast<unsigned>(n);
-                }
+                x.on = env::flag("THREEPP_CPU_PHASE_PROFILE");
+                if (const auto n = env::integer("THREEPP_CPU_PHASE_WINDOW"); n && *n > 0)
+                    x.window = static_cast<unsigned>(*n);
                 return x;
             }();
             return r;

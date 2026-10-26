@@ -1,7 +1,7 @@
 #include <cstdio>
-#include <cstdlib>
 #include "threepp/renderers/vulkan/ProbeGI.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/EnvKnob.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
@@ -32,19 +32,15 @@ namespace threepp::vulkan {
         static_assert(sizeof(GridUboData) == 48 + 4 * 16 * ProbeGI::kCascadesMax, "ProbeGridUbo layout drift");
 
         float envFloat(const char* name, float dflt) {
-            const char* e = std::getenv(name);
-            if (!e || !*e) return dflt;
-            char* end = nullptr;
-            const double v = std::strtod(e, &end);
-            return (end != e && v > 0.0) ? static_cast<float>(v) : dflt;
+            const auto v = env::number(name);
+            return (v && *v > 0.0) ? static_cast<float>(*v) : dflt;
         }
     }// namespace
 
     ProbeGI::ProbeGI(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
-        if (const char* e = std::getenv("THREEPP_VK_PROBE_CASCADES"); e && *e) {
-            const long n = std::strtol(e, nullptr, 10);
-            cascadesWanted_ = static_cast<uint32_t>(std::clamp<long>(n, 0, kCascadesMax));
+        if (const auto n = env::integer("THREEPP_VK_PROBE_CASCADES")) {
+            cascadesWanted_ = static_cast<uint32_t>(std::clamp<long long>(*n, 0, kCascadesMax));
             cascadesPinned_ = true;
         }
         cascadeBase_ = envFloat("THREEPP_VK_PROBE_CASCADE_BASE", kCascadeBaseSpacing);
@@ -363,7 +359,7 @@ namespace threepp::vulkan {
         // points clamp in probeIrradiance, so a slightly-outgrown AABB
         // degrades gracefully; a real scene swap trips the thresholds and
         // takes the full wipe.
-        const bool log = [] { const char* e = std::getenv("THREEPP_PROBE_LOG"); return e && *e && *e != '0'; }();
+        const bool log = env::flag("THREEPP_PROBE_LOG");
         // Layout: a scene the fit would cover at more than sceneFitMax_ per
         // probe gets the camera-centred cascades. The AABB then only decides
         // the layout; the windows are placed by recentre.

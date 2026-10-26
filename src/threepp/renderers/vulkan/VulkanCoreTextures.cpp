@@ -84,8 +84,8 @@ void VulkanRenderer::Impl::createTextureSampler() {
                                                                      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
             // THREEPP_VK_ANISO=<n>: startup override (same semantics as
             // setTextureAnisotropy — 0 = auto policy, 1..16 forces a level).
-            if (const char* a = std::getenv("THREEPP_VK_ANISO"); a && a[0] != '\0') {
-                textureAnisoOverride_ = std::clamp(std::strtof(a, nullptr), 0.0f, maxAniso);
+            if (const auto a = vulkan::env::number("THREEPP_VK_ANISO")) {
+                textureAnisoOverride_ = std::clamp(static_cast<float>(*a), 0.0f, maxAniso);
                 std::cout << "textureAnisotropy override = " << textureAnisoOverride_ << "\n";
             }
         }
@@ -801,7 +801,7 @@ VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::prepareMateria
                 // Anything short of that (partial chain, unmapped format,
                 // THREEPP_NO_BC) falls through to the decode path below, which
                 // re-encodes to BC7 with CPU-built mips.
-                static const bool noBcPass = std::getenv("THREEPP_NO_BC") != nullptr;
+                static const bool noBcPass = vulkan::env::flag("THREEPP_NO_BC");
                 if (!noBcPass && bc7Ok) {
                     const VkFormat vkFmt = glCompressedToVk(
                             *img.compressedFormat, tex->colorSpace == ColorSpace::sRGB);
@@ -950,7 +950,7 @@ VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::prepareMateria
             // has an odd level somewhere down it, and pairing texels up there
             // leaves the last row and column out and stretches the rest over
             // them (a 1 px frame is gone, a tile no longer meets itself).
-            static const bool noBc = std::getenv("THREEPP_NO_BC") != nullptr;
+            static const bool noBc = vulkan::env::flag("THREEPP_NO_BC");
             if (!noBc && w >= 8u && h >= 8u && bc7Ok) {
                 auto mips = bcn::buildMipChainRGBA8Area(rgba.data(), static_cast<int>(w),
                                                         static_cast<int>(h), srgb);

@@ -1,5 +1,6 @@
 #include "threepp/renderers/vulkan/SplatPass.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/EnvKnob.hpp"
 
 #include "threepp/extras/DataUtils.hpp"
 #include "threepp/objects/SplatCloud.hpp"
@@ -240,7 +241,7 @@ namespace threepp::vulkan {
         // to be no image, no pipeline and no dispatch anywhere in the pass, so
         // a frame is byte-exact what it was before the bake existed. A knob
         // sampled per upload could not promise that across one run.
-        if (const char* e = std::getenv("THREEPP_VK_SPLATVOL_OFF"); e && *e && *e != '0')
+        if (env::flag("THREEPP_VK_SPLATVOL_OFF"))
             volumeOff_ = true;
 
         // The resolution budget, read once for the OFF knob's reason: a knob
@@ -248,11 +249,8 @@ namespace threepp::vulkan {
         // different budgets and hash differently for reasons no test could
         // name. Clamped, not trusted — see kVolResCap for what 512 would cost.
         volMaxRes_ = kVolMaxResDefault;
-        if (const char* e = std::getenv("THREEPP_VK_SPLATVOL_RES"); e && *e) {
-            const long v = std::strtol(e, nullptr, 10);
-            if (v > 0)
-                volMaxRes_ = std::clamp(static_cast<uint32_t>(v), kVolMinRes, kVolResCap);
-        }
+        if (const auto v = env::integer("THREEPP_VK_SPLATVOL_RES"); v && *v > 0)
+            volMaxRes_ = static_cast<uint32_t>(std::clamp<long long>(*v, kVolMinRes, kVolResCap));
 
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
@@ -1202,7 +1200,7 @@ namespace threepp::vulkan {
         // means the radix sort dropped or duplicated entries. Both show up as
         // "some splats are just missing", which is indistinguishable by eye
         // from a culling bug — hence the assertion rather than the inference.
-        if (const char* e = std::getenv("THREEPP_VK_SPLAT_CHECKSUM"); e && *e && *e != '0') {
+        if (env::flag("THREEPP_VK_SPLAT_CHECKSUM")) {
             VmaAllocationInfo ai{};
             vmaGetAllocationInfo(ctx_.allocator(), debugBuf_[lastFrame_].alloc, &ai);
             invalidateHostReads(ctx_.allocator(), debugBuf_[lastFrame_].alloc);
@@ -1496,8 +1494,7 @@ namespace threepp::vulkan {
         // per composited pixel, so they are opt-in: the determinism test asks
         // through setSplatDebugChecksum, a human debugging by hand through the
         // environment variable.
-        const char* cse = std::getenv("THREEPP_VK_SPLAT_CHECKSUM");
-        const bool checksum = p.checksum || (cse && *cse && *cse != '0');
+        const bool checksum = p.checksum || env::flag("THREEPP_VK_SPLAT_CHECKSUM");
 
         // Per-stage timestamps go to the FIRST drawn cloud only — the slots are
         // one pair per stage per frame, and a second writer would both violate
@@ -1648,8 +1645,7 @@ namespace threepp::vulkan {
             // indirect path was A/B'd for byte-identical output on a real
             // scan, and it is the first thing to try if some other driver
             // disagrees about vkCmdDispatchIndirect.
-            const char* nie = std::getenv("THREEPP_VK_SPLAT_NOINDIRECT");
-            const bool indirectDispatch = !(nie && *nie && *nie != '0');
+            const bool indirectDispatch = !env::flag("THREEPP_VK_SPLAT_NOINDIRECT");
 
             if (indirectDispatch) {
 

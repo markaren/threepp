@@ -1324,8 +1324,8 @@ void VulkanRenderer::Impl::addSplatPasses(rg::RenderGraph& g) {
             // splatFog actually evaluates; with neither, the fog branch is
             // skipped outright and the frame is bit-identical to a fogless one.
             p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
-            static const bool noMotionEnv = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); return e && *e && *e != '0'; }();
-            static const bool noFogEnv    = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG");    return e && *e && *e != '0'; }();
+            static const bool noMotionEnv = vulkan::env::flag("THREEPP_VK_SPLAT_NOMOTION");
+            static const bool noFogEnv    = vulkan::env::flag("THREEPP_VK_SPLAT_NOFOG");
             if (noMotionEnv) p.motionVectors = false;
             if (noFogEnv)    p.fog = false;
             // The factor the shade already baked into every sceneHdr store.
@@ -1533,8 +1533,8 @@ void VulkanRenderer::Impl::addSecondaryViewSplatPasses(rg::RenderGraph& g) {
             }
 
             p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
-            static const bool noMotionEnv = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); return e && *e && *e != '0'; }();
-            static const bool noFogEnv    = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG");    return e && *e && *e != '0'; }();
+            static const bool noMotionEnv = vulkan::env::flag("THREEPP_VK_SPLAT_NOMOTION");
+            static const bool noFogEnv    = vulkan::env::flag("THREEPP_VK_SPLAT_NOFOG");
             if (noMotionEnv) p.motionVectors = false;
             if (noFogEnv)    p.fog = false;
             p.preExposure    = preExposure();

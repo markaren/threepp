@@ -3,6 +3,7 @@
 // VMA_IMPLEMENTATION must be #defined in VulkanRenderer.cpp BEFORE including this file.
 #pragma once
 
+#include "EnvKnob.hpp"
 #include "VulkanContext.hpp"
 #include "VulkanResources.hpp"
 #include "VulkanRetireQueue.hpp"
@@ -286,9 +287,9 @@ namespace threepp {
         // VulkanGeometryState.hpp (their doc comments travel with them).
         using BlasRecord = vulkan::impl::BlasRecord;
         using AttrVersions = vulkan::impl::AttrVersions;
-        std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
         using GeomAttrRefs = vulkan::impl::GeomAttrRefs;
         using MaterialTexSet = vulkan::impl::MaterialTexSet;
+        std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
 
         // Definition moved to VulkanGeometryState.hpp.
         using LodGeomSel = vulkan::impl::LodGeomSel;
@@ -566,10 +567,10 @@ namespace threepp {
         // live cutout (alphaCutoff > 0 with an albedo texture). KEEP IN SYNC
         // with shadowOccludes (deferred_shade_10_lighting_utils.glsl,
         // probe_update.comp) and the emitter-skip tests. Rays that already
-        // pass gl_RayFlagsOpaqueEXT are unaffected. THREEPP_NO_FORCE_OPAQUE
+        // pass gl_RayFlagsOpaqueEXT are unaffected. THREEPP_NO_FORCE_OPAQUE=1
         // turns it off (A/B and bisecting).
         [[nodiscard]] static VkGeometryInstanceFlagsKHR tlasInstanceFlags(const MaterialDesc& m) {
-            static const bool disabled = std::getenv("THREEPP_NO_FORCE_OPAQUE") != nullptr;
+            static const bool disabled = vulkan::env::flag("THREEPP_NO_FORCE_OPAQUE");
             VkGeometryInstanceFlagsKHR f = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
             if (disabled) return f;
             const float emMax = std::max({m.emissive[0] * m.emissiveIntensity,
@@ -1881,10 +1882,7 @@ namespace threepp {
         // THREEPP_DENOISE=0 disables the deferred SVGF denoiser from the
         // environment — an A/B discriminator for "is this artifact shading or
         // temporal/denoise?" without plumbing a flag through every example.
-        bool denoiseEnabled_ = []() {
-            const char* e = std::getenv("THREEPP_DENOISE");
-            return !(e && e[0] == '0');
-        }();
+        bool denoiseEnabled_ = vulkan::env::flag("THREEPP_DENOISE", true);
 
         // MSAA G-buffer dominant-sample resolve — see vulkan/GbufResolve.
         // Lazily constructed the first time gbufMsaaSamples_ > 1 (mirrors
@@ -3765,9 +3763,9 @@ namespace threepp {
         // record or input buffer at creation; ensureSceneBuilt prints one line
         // per structural build when the sum is non-zero, then clears it.
         void noteDeformPlacement(const Buffer& b);
-        // The composite version of the tracked attributes (GeomAttrRefs).
         VkDeviceSize deformHostBytes_ = 0;
 
+        // The composite version of the tracked attributes (GeomAttrRefs).
         static unsigned int geomVersionOf(const BufferGeometry& g) {
             return GeomAttrRefs::of(g).versionSum();
         }
@@ -4473,6 +4471,8 @@ namespace threepp {
                 return cc->clearcoatRoughnessMap;
             }
             return nullptr;
+        }
+
         // The maps a mesh fingerprint compares (MeshFingerprint::tex).
         static MaterialTexSet texSetOf(const Mesh& m) {
             return {albedoTexOf(m), roughnessTexOf(m), metalnessTexOf(m),
@@ -4491,8 +4491,6 @@ namespace threepp {
                     md.normalScale[0], md.normalScale[1],
                     md.transmission, md.ior,
                     md.clearcoat, md.clearcoatRoughness};
-        }
-
         }
 
         // Walk the scene each frame, fingerprint the meshes, and rebuild the
@@ -6062,7 +6060,7 @@ namespace threepp {
         uint64_t shadowStaticHashPrev_ = 0, shadowStaticGen_ = 1;
         // THREEPP_VK_SHADOW_CACHE_DEBUG=1: a line per generation step (what
         // flipped) and per frame (layers cached / rebuilt / drawn / skipped).
-        bool                 shadowCacheDebug_ = std::getenv("THREEPP_VK_SHADOW_CACHE_DEBUG") != nullptr;
+        bool                 shadowCacheDebug_ = vulkan::env::flag("THREEPP_VK_SHADOW_CACHE_DEBUG");
         std::vector<uint8_t> shadowDynPrev_;
         void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol, const Vector3& camPos);
         // setShadowCacheStaleFrames: 0 (default) redraws a cascade whenever
@@ -6288,10 +6286,7 @@ namespace threepp {
                     rgDiagnostics_.push_back(std::move(e));
                 }
             }
-            static const bool dump = [] {
-                const char* e = std::getenv("THREEPP_RG_DUMP");
-                return e && *e && *e != '0';
-            }();
+            static const bool dump = vulkan::env::flag("THREEPP_RG_DUMP");
             if (!dump) return;
             std::string text = graph.dump();
             auto& last = rgDumped_[name];

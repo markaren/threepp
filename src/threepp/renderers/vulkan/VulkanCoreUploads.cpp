@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>// std::getenv / std::strtof (THREEPP_VK_SPLATVOL_SIGMA)
 #include <cstring>
 #include <limits>
 
@@ -2518,9 +2517,7 @@ void VulkanRenderer::Impl::updateSplatVolumeUbo(uint32_t frame) {
             // SAMPLE time, so a run must not be able to change it mid-flight and
             // leave two frames disagreeing about the same cloud.
             static const float sigmaScale = [] {
-                const char* e = std::getenv("THREEPP_VK_SPLATVOL_SIGMA");
-                if (!e || !*e) return 1.f;
-                const float v = std::strtof(e, nullptr);
+                const float v = static_cast<float>(vulkan::env::number("THREEPP_VK_SPLATVOL_SIGMA").value_or(1.0));
                 return (std::isfinite(v) && v > 0.f) ? v : 1.f;
             }();
 

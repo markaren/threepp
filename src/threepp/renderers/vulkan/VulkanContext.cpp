@@ -5,6 +5,7 @@
 // kFramesInFlight: the suppressed-present swapchain must be deep enough for the
 // frame loop to keep one acquired image per in-flight slot (see createSwapchain).
 #include "VulkanImplCommon.hpp"
+#include "EnvKnob.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -45,8 +46,8 @@ namespace threepp::vulkan {
 
     int VulkanContext::asyncComputePilotMode() {
         static const int mode = [] {
-            const char* e = std::getenv("THREEPP_VK_ASYNC_PILOT");
-            return (e && *e >= '1' && *e <= '5') ? *e - '0' : 0;
+            const long long n = env::integer("THREEPP_VK_ASYNC_PILOT").value_or(0);
+            return (n >= 1 && n <= 5) ? static_cast<int>(n) : 0;
         }();
         return mode;
     }
@@ -319,8 +320,7 @@ namespace threepp::vulkan {
         // presents complete and the tenancy argument above still applies.
         presentSuppressed_ = false;
         if (preferHeadlessSurface) {
-            const char* sp = std::getenv("THREEPP_VULKAN_SUPPRESS_PRESENT");
-            presentSuppressed_ = (sp && *sp) ? (*sp == '1') : hiddenWindowFallback;
+            presentSuppressed_ = env::flag("THREEPP_VULKAN_SUPPRESS_PRESENT", hiddenWindowFallback);
             if (presentSuppressed_) {
                 std::cout << "[VulkanContext] presents suppressed (headless canvas): the frame "
                              "loop pins one swapchain image per in-flight slot\n";
@@ -342,9 +342,7 @@ namespace threepp::vulkan {
 #else
                 false;
 #endif
-        if (const char* env = std::getenv("THREEPP_VULKAN_VALIDATION"); env && *env) {
-            wantValidation = *env != '0';
-        }
+        wantValidation = env::flag("THREEPP_VULKAN_VALIDATION", wantValidation);
         const bool enableValidation = wantValidation && hasInstanceLayer(kValidationLayer);
         if (wantValidation && !enableValidation) {
             std::cerr << "[VulkanContext] " << kValidationLayer
@@ -362,14 +360,14 @@ namespace threepp::vulkan {
             // asked for strict validation but got no layer must not exit 0 as if
             // it had been checked. validationActive() is what tells a caller the
             // difference, and the arming message says which of the two happened.
-            if (const char* env = std::getenv("THREEPP_VULKAN_STRICT_VALIDATION"); env && *env && *env != '0') {
+            if (env::flag("THREEPP_VULKAN_STRICT_VALIDATION")) {
                 static std::once_flag once;
                 std::call_once(once, [] { std::atexit(strictValidationExitCheck); });
                 std::cerr << "[VulkanContext] strict validation armed: any validation error "
                              "exits "
                           << kStrictValidationExitCode << " at termination.\n";
             }
-        } else if (const char* env = std::getenv("THREEPP_VULKAN_STRICT_VALIDATION"); env && *env && *env != '0') {
+        } else if (env::flag("THREEPP_VULKAN_STRICT_VALIDATION")) {
             std::cerr << "[VulkanContext] THREEPP_VULKAN_STRICT_VALIDATION is set but the "
                          "validation layer is not active — nothing is being checked.\n";
         }
@@ -389,10 +387,7 @@ namespace threepp::vulkan {
 
         // THREEPP_VK_EXIT_TIMING=1: the same per-section timing the renderer's
         // destructor prints, for the device and instance teardown.
-        const bool exitTiming = [] {
-            const char* e = std::getenv("THREEPP_VK_EXIT_TIMING");
-            return e && *e && *e != '0';
-        }();
+        const bool exitTiming = env::flag("THREEPP_VK_EXIT_TIMING");
         auto last = std::chrono::steady_clock::now();
         auto mark = [&](const char* what) {
             if (!exitTiming) return;
@@ -801,7 +796,7 @@ namespace threepp::vulkan {
         // THREEPP_VULKAN_NO_RT=1 runs the no-ray-tracing mode on any device, so
         // that mode can be exercised (and validated) on RT hardware.
         bool forcedOff = false;
-        if (const char* env = std::getenv("THREEPP_VULKAN_NO_RT"); env && *env && *env != '0') {
+        if (env::flag("THREEPP_VULKAN_NO_RT")) {
             forcedOff = rayTracingEnabled_;
             rayTracingEnabled_ = false;
         }
@@ -922,7 +917,7 @@ namespace threepp::vulkan {
 
             // Diagnostic only, and opt-in: capturing statistics changes how
             // pipelines are compiled, so it must never be on by default.
-            if (const char* env = std::getenv("THREEPP_VULKAN_PIPELINE_STATS"); env && *env && *env != '0') {
+            if (env::flag("THREEPP_VULKAN_PIPELINE_STATS")) {
                 pipelineStatsEnabled_ = hasExtension(exts, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
                 std::cerr << "[VulkanContext] pipeline statistics: "
                           << (pipelineStatsEnabled_ ? "ENABLED (diagnostic)"

@@ -117,7 +117,7 @@ VkResult VulkanRenderer::Impl::acquireOrReuseSwapchainImage(uint32_t& imageIndex
             // timing, i.e. wall clock — if any shading input ever depends on
             // imageIndex, this trace is how the leak shows itself (two runs
             // print different sequences at the frame the pixels diverge).
-            static const bool traceAcquire = [] { const char* e = std::getenv("THREEPP_VK_TRACE_ACQUIRE"); return e && *e && *e != '0'; }();
+            static const bool traceAcquire = vulkan::env::flag("THREEPP_VK_TRACE_ACQUIRE");
             if (traceAcquire) {
                 std::cout << "acquire frame=" << frameSerial_ << " img=" << imageIndex << "\n";
             }
@@ -1692,10 +1692,7 @@ void VulkanRenderer::Impl::endFrame() {
             // per-frame tables (draw info, indirect commands, motion matrices)
             // do not exist yet: dump once more after a few frames.
             if (frameSerial_ == 8) {
-                static const bool memDump = [] {
-                    const char* e = std::getenv("THREEPP_VK_MEMDUMP");
-                    return e && *e && *e != '0';
-                }();
+                static const bool memDump = vulkan::env::flag("THREEPP_VK_MEMDUMP");
                 if (memDump) dumpMemoryStats("frame-8");
             }
             // Same cadence for the 3D-overlay line cache's lastTouch clock, so

@@ -82,10 +82,7 @@ Mesh& VulkanRenderer::Impl::slotTombstone() {
         }
 
 bool VulkanRenderer::Impl::slotsDisabled() {
-            static const bool off = [] {
-                const char* e = std::getenv("THREEPP_VULKAN_NO_SLOTS");
-                return e && e[0] == '1';
-            }();
+            static const bool off = vulkan::env::flag("THREEPP_VULKAN_NO_SLOTS");
             return off;
         }
 
@@ -280,10 +277,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             if (slotsDisabled() || !sceneBuilt_ || slotCapacity_ == 0u) return false;
             // THREEPP_VULKAN_SLOTS_LOG=1: one line per change the slot path
             // hands to the structural rebuild, saying why.
-            static const bool logDeclines = [] {
-                const char* v = std::getenv("THREEPP_VULKAN_SLOTS_LOG");
-                return v && v[0] == '1';
-            }();
+            static const bool logDeclines = vulkan::env::flag("THREEPP_VULKAN_SLOTS_LOG");
             const auto decline = [&](const char* why) {
                 if (logDeclines) std::fprintf(stderr, "[VulkanRenderer] slot edit declined: %s\n", why);
                 return false;
@@ -846,20 +840,14 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
         }
 
 bool VulkanRenderer::Impl::deltaDisabled() {
-            static const bool off = [] {
-                const char* e = std::getenv("THREEPP_VULKAN_NO_DELTA");
-                return e && e[0] == '1';
-            }();
+            static const bool off = vulkan::env::flag("THREEPP_VULKAN_NO_DELTA");
             return off;
         }
 
 bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
             THREEPP_CPUPROF("scene.3c_slotDelta");
             if (slotsDisabled() || deltaDisabled() || !sceneBuilt_ || slotCapacity_ == 0u) return false;
-            static const bool logDeclines = [] {
-                const char* v = std::getenv("THREEPP_VULKAN_SLOTS_LOG");
-                return v && v[0] == '1';
-            }();
+            static const bool logDeclines = vulkan::env::flag("THREEPP_VULKAN_SLOTS_LOG");
             const auto decline = [&](const char* why) {
                 if (logDeclines) std::fprintf(stderr, "[VulkanRenderer] slot delta declined: %s\n", why);
                 return false;
@@ -1394,10 +1382,7 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::admitGrassState(Gras
         }
 
 bool VulkanRenderer::Impl::syncAdmission() {
-            static const bool sync = [] {
-                const char* e = std::getenv("THREEPP_VULKAN_SYNC_ADMIT");
-                return e && e[0] == '1';
-            }();
+            static const bool sync = vulkan::env::flag("THREEPP_VULKAN_SYNC_ADMIT");
             return sync;
         }
 

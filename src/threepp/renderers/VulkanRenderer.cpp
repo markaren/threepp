@@ -2058,12 +2058,8 @@ namespace threepp {
         // be dumped without dumping the run; THREEPP_SHADE_DUMP_NAMES is a
         // comma-separated substring filter on the image names.
         const char* dumpDir = std::getenv("THREEPP_SHADE_DUMP_DIR");
-        const auto envU64 = [](const char* key, uint64_t dflt) {
-            const char* v = std::getenv(key);
-            return v ? static_cast<uint64_t>(std::strtoull(v, nullptr, 10)) : dflt;
-        };
-        const uint64_t dumpMin = envU64("THREEPP_SHADE_DUMP_MIN", 0);
-        const uint64_t dumpMax = envU64("THREEPP_SHADE_DUMP_MAX", 8);
+        const uint64_t dumpMin = static_cast<uint64_t>(vulkan::env::integer("THREEPP_SHADE_DUMP_MIN").value_or(0));
+        const uint64_t dumpMax = static_cast<uint64_t>(vulkan::env::integer("THREEPP_SHADE_DUMP_MAX").value_or(8));
         const char* dumpNames  = std::getenv("THREEPP_SHADE_DUMP_NAMES");
         const auto dumpWanted  = [&](const char* name) {
             if (!dumpNames || !*dumpNames) return true;

@@ -1,5 +1,6 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 #include "threepp/renderers/vulkan/TransientPool.hpp"
+#include "threepp/renderers/vulkan/EnvKnob.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
 #include <cstdlib>
@@ -37,10 +38,7 @@ namespace threepp::vulkan {
 
         // The live-buffer registry behind forEachLiveBuffer (memory dump only).
         bool registryOn() {
-            static const bool on = [] {
-                const char* e = std::getenv("THREEPP_VK_MEMDUMP");
-                return e && *e && *e != '0';
-            }();
+            static const bool on = env::flag("THREEPP_VK_MEMDUMP");
             return on;
         }
         std::mutex& registryMutex() {

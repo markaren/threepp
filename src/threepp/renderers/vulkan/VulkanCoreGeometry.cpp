@@ -501,10 +501,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 disp = &dit->second;
             // ...and, when it refines, the record is built from the refined
             // copy, stamped with the versions of the geometry it stands for.
-            static const bool dispLog = [] {
-                const char* e = std::getenv("THREEPP_DISP_LOG");
-                return e && *e && *e != '0';
-            }();
+            static const bool dispLog = vulkan::env::flag("THREEPP_DISP_LOG");
             const auto t0 = std::chrono::steady_clock::now();
             const auto refined = disp ? refineForDisplacement(geom, *disp) : nullptr;
             const auto t1 = std::chrono::steady_clock::now();
@@ -536,7 +533,7 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
             // the renderer's state (forceUnpackedGeoms_ is read by the caller).
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
             // attribute buffer back to tightly-packed float, same binary.
-            static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
+            static const bool noPack = vulkan::env::flag("THREEPP_NO_PACK");
             allowPacked = allowPacked && !noPack;
             // (Also read below: an interop-marked geometry's BLAS storage is
             // sized for both build-flag lineages, not just FAST_TRACE.)
@@ -3615,11 +3612,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // persists across frames is idempotent. The buffer's only consumer
             // is foam_world (water_displace no longer carries a disturbAddr at
             // all), so a deferred upload changes nothing else.
-            static const uint32_t kFoamInterval = [] {
-                const char* e = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
-                const long v = e ? std::atol(e) : 2L;
-                return static_cast<uint32_t>(std::max(v, 1L));
-            }();
+            static const uint32_t kFoamInterval =
+                    static_cast<uint32_t>(std::max(vulkan::env::integer("THREEPP_OCEAN_FOAM_INTERVAL").value_or(2), 1LL));
             const bool runFoam = (st.foamTick++ % kFoamInterval) == 0u;
 
             static_assert(sizeof(DisplacedMeshState::FoamDisturbCarry) ==
@@ -5145,14 +5139,10 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 // THREEPP_OCEAN_FOAM_RES caps the foam accumulator's edge (power
                 // of two). Raise it to 2048 to restore the pre-cap density on a
                 // large ocean; see the cost note below.
-                static const uint32_t kFoamResCap = [] {
-                    const char* e = std::getenv("THREEPP_OCEAN_FOAM_RES");
-                    const long v = e ? std::atol(e) : 1024L;
-                    return static_cast<uint32_t>(std::clamp(v, 256L, 2048L));
-                }();
+                static const uint32_t kFoamResCap = static_cast<uint32_t>(
+                        std::clamp(vulkan::env::integer("THREEPP_OCEAN_FOAM_RES").value_or(1024), 256LL, 2048LL));
                 static const float kFoamTexelTarget = [] {
-                    const char* e = std::getenv("THREEPP_OCEAN_FOAM_TEXEL");
-                    const float v = e ? static_cast<float>(std::atof(e)) : 1.0f;
+                    const float v = static_cast<float>(vulkan::env::number("THREEPP_OCEAN_FOAM_TEXEL").value_or(1.0));
                     return v > 0.f ? v : 1.0f;
                 }();
                 // Cap by COST, not by texture size. The loop below targets a

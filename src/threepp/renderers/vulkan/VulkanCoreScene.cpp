@@ -1087,10 +1087,7 @@ void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
         }
 
 bool VulkanRenderer::Impl::versionsDisabled() {
-            static const bool off = [] {
-                const char* e = std::getenv("THREEPP_VULKAN_NO_VERSIONS");
-                return e && e[0] == '1';
-            }();
+            static const bool off = vulkan::env::flag("THREEPP_VULKAN_NO_VERSIONS");
             return off;
         }
 
@@ -1668,10 +1665,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // nodes a plain field can change (flatSnapshotCheck).
             bool snapLean = flatSnapshotCheck(scene, camera);
             if (snapLean) ++tlasStats_.flatChecks;
-            static const bool flatCheck = [] {
-                const char* v = std::getenv("THREEPP_VULKAN_WALK_CHECK");
-                return v && v[0] == '1';
-            }();
+            static const bool flatCheck = vulkan::env::flag("THREEPP_VULKAN_WALK_CHECK");
             if (snapLean && flatCheck) deltaWalkCheck(scene, camera);
             // A moved structure version: something was added, removed or
             // swapped, which the replay walk can only find to fail on.
@@ -1722,10 +1716,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         deltaApplied = diffSceneWalk(scene, camera, again, false) && trySlotDelta(again);
                     }
                 }
-                static const bool deltaCheck = [] {
-                    const char* v = std::getenv("THREEPP_VULKAN_WALK_CHECK");
-                    return v && v[0] == '1';
-                }();
+                static const bool deltaCheck = vulkan::env::flag("THREEPP_VULKAN_WALK_CHECK");
                 if (deltaApplied && deltaCheck) deltaWalkCheck(scene, camera);
             }
             if (!deltaApplied) {
@@ -1787,10 +1778,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // count, the interop record). Everything else is recorded anew: other
             // kinds, overlays, fields, a visibility flip, a dirty LOD sphere.
             // Lazy walks only (a walk the rebuild consumes records everything).
-            static const bool walkCheck = [] {
-                const char* v = std::getenv("THREEPP_VULKAN_WALK_CHECK");
-                return v && v[0] == '1';
-            }();
+            static const bool walkCheck = vulkan::env::flag("THREEPP_VULKAN_WALK_CHECK");
             bool reuseNodes = lazyRows && !prevSceneSnapshot_.empty();
             // The last walk's node for each node met: this walk meets them in
             // the same pre-order wherever nothing changed, so a cursor into the
@@ -4722,7 +4710,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // baseline is the scene's true device cost (the OS-level per-
             // process counter only moves in VMA block granularity, so it
             // under-reports buffer-level savings such as packed attributes).
-            if (const char* e = std::getenv("THREEPP_VK_MEMDUMP"); e && *e && *e != '0') {
+            if (vulkan::env::flag("THREEPP_VK_MEMDUMP")) {
                 dumpMemoryStats("scene-built");
             }
             // Always on: one line when a deformer created by this build landed
@@ -5071,9 +5059,9 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 // original one — so it is how the range path is proved
                 // bit-for-bit against the whole-cloud path before a selection
                 // policy exists to submit anything more interesting.
-                if (const char* rs = std::getenv("THREEPP_VK_SPLAT_RANGESPLIT")) {
+                if (const auto rs = vulkan::env::integer("THREEPP_VK_SPLAT_RANGESPLIT")) {
 
-                    const int k = std::atoi(rs);
+                    const int k = static_cast<int>(*rs);
                     if (k > 1) {
                         e.ranges.clear();// the probe overrides the app's choice
                         const uint32_t total = static_cast<uint32_t>(sc->splatCount());

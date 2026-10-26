@@ -41,17 +41,15 @@ namespace threepp {
     }
 
     uint32_t VulkanRenderer::Impl::shadowMapSizeCapFromEnv() {
-        const char* e = std::getenv("THREEPP_VK_SHADOW_MAPSIZE");
-        return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 0u;
+        return static_cast<uint32_t>(vulkan::env::integer("THREEPP_VK_SHADOW_MAPSIZE").value_or(0));
     }
 
     // Ablation knobs for the map pass's cost: THREEPP_VK_SHADOW_CASCADES=<1..4>,
     // THREEPP_VK_SHADOW_LAMPS=<spots>,<points>. The setters still win.
     uint32_t VulkanRenderer::Impl::shadowCascadesFromEnv() {
-        const char* e = std::getenv("THREEPP_VK_SHADOW_CASCADES");
-        if (!e || !*e) return 4u;
-        return std::clamp(static_cast<uint32_t>(std::strtoul(e, nullptr, 10)), 1u,
-                          static_cast<uint32_t>(kMaxShadowCascades));
+        const auto n = vulkan::env::integer("THREEPP_VK_SHADOW_CASCADES");
+        if (!n) return 4u;
+        return std::clamp(static_cast<uint32_t>(*n), 1u, static_cast<uint32_t>(kMaxShadowCascades));
     }
 
     uint32_t VulkanRenderer::Impl::shadowedLampsFromEnv(int which) {
@@ -66,14 +64,13 @@ namespace threepp {
     }
 
     bool VulkanRenderer::Impl::shadowCacheFromEnv() {
-        const char* e = std::getenv("THREEPP_VK_SHADOW_CACHE");
-        return !(e && *e == '0');
+        return vulkan::env::flag("THREEPP_VK_SHADOW_CACHE", true);
     }
 
     float VulkanRenderer::Impl::shadowCacheMarginFromEnv() {
-        const char* e = std::getenv("THREEPP_VK_SHADOW_CACHE_MARGIN");
-        if (!e || !*e) return 1.15f;
-        return std::clamp(static_cast<float>(std::atof(e)), 1.f, 2.f);
+        const auto v = vulkan::env::number("THREEPP_VK_SHADOW_CACHE_MARGIN");
+        if (!v) return 1.15f;
+        return std::clamp(static_cast<float>(*v), 1.f, 2.f);
     }
 
     // A caster that may move between two frames: a deformer or interop mesh
