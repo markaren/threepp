@@ -244,7 +244,31 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         // boil reaches ~0.6 (mild cap, settling barely touched); real content
         // change pegs |trend| ≈ 1 → cap ~3 → re-blends at content rate.
         const float trendCap = mix(capBlend, 3.0, smoothstep(0.45, 0.9, abs(trend)));
-        histLen = max(min(pa.x + 1.0, trendCap), 1.0);
+        // REFLECTED-CONTENT DRIFT CAP (near-mirror). The history is reprojected by
+        // the SURFACE's motion, but a mirror's content sits at the virtual image,
+        // viewDist + hit behind the eye, and a translation slides it by less: the
+        // difference, 1.7 * camDelta * (1 / viewDist - 1 / (viewDist + hit)) NDC a
+        // frame, lands in the history every frame the reproject is accepted. The
+        // camera-motion reset in reflReproject keys on the SURFACE's parallax
+        // (camNdc > 0.004), so a camera creeping past a far mirror sat under it
+        // and kept the 512-frame static cap: a pond tracked at 1 m/s from ten
+        // metres (0.003 NDC a frame) smeared the stand's reflection into streaks
+        // along the track (the pine forest's tjern, 2026-10-26; the anti-ghost
+        // clamp below used to crush the bright half of them). Cap the history so
+        // the accumulated drift stays within a pixel: at that pond the cap is 1
+        // (one sharp deterministic ray a frame, as a fast camera gets), at 0.1 m/s
+        // nine frames, and a still camera (camDelta 0) keeps the full cap. Pure
+        // rotation moves surface and content alike and adds nothing. An env miss
+        // (hit 0) and an unknown hit (glass, < 0) are content at infinity: the
+        // full surface parallax. The glossy band tolerates more (its lobe blurs
+        // the content over rough * 16 px anyway) and the stochastic band keeps
+        // its accumulation: 16 px of drift at roughness 0.30 and above.
+        const float hitPrev  = pa.w > 0.0 ? pa.w : 1e9;
+        const float vd       = max(viewDist, 0.25);
+        const float drift    = 1.7 * pc.camDelta * abs(1.0 / vd - 1.0 / (vd + hitPrev));
+        const float tolPx    = mix(1.0, 16.0, smoothstep(0.05, 0.30, rough));
+        const float driftCap = tolPx * (2.0 / float(pc.height)) / max(drift, 1e-7);
+        histLen = max(min(pa.x + 1.0, min(trendCap, driftCap)), 1.0);
         const float a = 1.0 / histLen;
         accum   = mix(prevR.rgb, cur.rgb, a);
         // ANTI-GHOST temporal clamp (near-mirror only). A car sweeping the reflection
