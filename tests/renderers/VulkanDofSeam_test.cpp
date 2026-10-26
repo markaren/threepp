@@ -335,7 +335,14 @@ int main(int argc, char** argv) {
         renderer.setRenderScale(scale);
 
         renderer.setDepthOfField(false);
-        frames(3 * nFrames);// the scene converges (TAA, the denoisers' history)
+        // The scene converges (TAA, the denoisers' history) before OFF. Long:
+        // after a history reset (the first frame, the render-scale change) the
+        // denoised ground darkens by about 1.2 levels and settles only near
+        // frame 140, and 3 * nFrames left the check below measuring that slope
+        // (1.06 with no DoF in it). It also settles some 2.4 levels below the
+        // same ground with the denoiser off: an open question (2026-10-26),
+        // not one this test asks.
+        frames(8 * nFrames);
         const Pixels off = renderer.readRGBPixels();
         frames(nFrames);
         const Pixels off2 = renderer.readRGBPixels();// the frame's own temporal floor
