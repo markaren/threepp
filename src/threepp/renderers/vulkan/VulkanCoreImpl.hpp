@@ -1770,7 +1770,8 @@ namespace threepp {
         void refreshSpanMatrices();
         // A mesh's MaterialDesc before its instance color, with every map
         // admitted to the bindless array; materialAssetIdx left for the
-        // caller. One function for the structural rebuild and the slot path.
+        // caller. One function for the structural rebuild, the material
+        // patch and the slot path.
         MaterialDesc buildMaterialDesc(Mesh& m);
         // An entry's GeometryDesc for the selected BLAS level, as the
         // structural rebuild and the slot path both write it.

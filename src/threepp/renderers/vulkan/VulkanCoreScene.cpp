@@ -3484,71 +3484,17 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             Mesh* m = en.mesh;
                             const Material* mat = m->material().get();
                             if (!(patchMatDescs && memoMat && mat == memoMat)) {
-                            MaterialDesc md = materialFromMesh(*m);
-                            if (patchMatDescs) {
-                                // Material* unchanged → its dedup index is stable.
-                                md.materialAssetIdx = entryMat(i).materialAssetIdx;
-                            } else {
-                                auto [matIt, inserted] = matAssetMap.try_emplace(
-                                        mat, static_cast<uint32_t>(matAssetMap.size()));
-                                md.materialAssetIdx = matIt->second;
-                            }
-                            if (auto tex = albedoTexOf(*m)) {
-                                md.albedoTexIndex = ensureMaterialTexture(tex);
-                                copyTexUvTransform(md.uvTransform, tex);
-                            }
-                            if (auto tex = roughnessTexOf(*m)) {
-                                md.roughnessTexIndex = ensureMaterialTexture(tex);
-                                copyTexUvTransform(md.uvTransformRoughMetal, tex);
-                            }
-                            if (auto tex = metalnessTexOf(*m)) {
-                                md.metalnessTexIndex = ensureMaterialTexture(tex);
-                                if (md.roughnessTexIndex < 0) copyTexUvTransform(md.uvTransformRoughMetal, tex);
-                            }
-                            if (auto tex = normalTexOf(*m)) {
-                                md.normalTexIndex = ensureMaterialTexture(tex);
-                                copyTexUvTransform(md.uvTransformNormal, tex);
-                            }
-                            if (auto tex = transmissionTexOf(*m)) {
-                                md.transmissionTexIndex = ensureMaterialTexture(tex);
-                                copyTexUvTransform(md.uvTransformTransmission, tex);
-                            }
-                            if (auto tex = clearcoatTexOf(*m)) {
-                                md.clearcoatTexIndex = ensureMaterialTexture(tex);
-                                copyTexUvTransform(md.uvTransformClearcoat, tex);
-                            }
-                            if (auto tex = clearcoatRoughnessTexOf(*m)) {
-                                md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
-                                copyTexUvTransform(md.uvTransformClearcoatRough, tex);
-                            }
-                            if (auto tex = emissiveTexOf(*m)) {
-                                md.emissiveTexIndex = ensureMaterialTexture(tex);
-                                copyTexUvTransform(md.uvTransformEmissive, tex);
-                            }
-                            if (auto tex = occlusionTexOf(*m)) {
-                                md.occlusionTexIndex = ensureMaterialTexture(tex, true);
-                                copyTexUvTransform(md.uvTransformOcclusion, tex);
-                            }
-                            if (auto tex = detailTexOf(*m)) {
-                                md.detailTexIndex = ensureMaterialTexture(tex);
-                            }
-                            if (auto tex = detailNormalTexOf(*m)) {
-                                md.detailNormalTexIndex = ensureMaterialTexture(tex);
-                            }
-                            if (auto tex = terrainWeightTexOf(*m)) {
-                                md.terrainWeightTexIndex = ensureMaterialTexture(tex);
-                                for (int bi = 0; bi < 4; ++bi) {
-                                    if (auto bt = terrainBandAlbedoTexOf(*m, bi))
-                                        md.terrainBandAlbedoTex[bi] = ensureMaterialTexture(bt);
-                                    if (auto bt = terrainBandNormalTexOf(*m, bi))
-                                        md.terrainBandNormalTex[bi] = ensureMaterialTexture(bt);
+                                MaterialDesc md = buildMaterialDesc(*m);
+                                if (patchMatDescs) {
+                                    // Material* unchanged → its dedup index is stable.
+                                    md.materialAssetIdx = entryMat(i).materialAssetIdx;
+                                } else {
+                                    auto [matIt, inserted] = matAssetMap.try_emplace(
+                                            mat, static_cast<uint32_t>(matAssetMap.size()));
+                                    md.materialAssetIdx = matIt->second;
                                 }
-                            }
-                            if (auto tex = terrainNormalTexOf(*m)) {
-                                md.terrainNormalTexIndex = ensureMaterialTexture(tex);
-                            }
-                            memoMat = mat;
-                            memoMd  = md;
+                                memoMat = mat;
+                                memoMd  = md;
                             }
                             // Compared against the record being replaced; on the
                             // full fallback that is record 0, so assume a change.
