@@ -8,6 +8,7 @@
 namespace threepp {
 
     class Group;
+    class Robot;
     class Texture;
 
     struct USDResult {
@@ -18,6 +19,13 @@ namespace threepp {
         /// when the file has no DomeLight or its `inputs:texture:file` could
         /// not be resolved.
         std::shared_ptr<Texture> environment;
+        /// The articulated robot, when the file has UsdPhysics joints
+        /// (revolute, prismatic, fixed). Its joint nodes are spliced into
+        /// `scene` between each joint's two bodies, and it holds `scene` as its
+        /// only child: add `robot` (not `scene`) to your scene and drive it with
+        /// setJointValue(). Joint parent/child names are the bodies' prim paths.
+        /// Null when the file has no joints.
+        std::shared_ptr<Robot> robot;
     };
 
     class USDLoader {

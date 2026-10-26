@@ -10,7 +10,7 @@ option(THREEPP_BUILD_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
 option(THREEPP_BUILD_TESTS "Build test suite" ${PROJECT_IS_TOP_LEVEL})
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 
-option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
+option(THREEPP_WITH_USD "Build with USDLoader (LightUSD)" OFF)
 
 option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)" OFF)
 
@@ -216,9 +216,12 @@ if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
 endif ()
 if (THREEPP_WITH_USD)
-    install(TARGETS tinyusdz_static EXPORT threepp-targets)
-    install(DIRECTORY "${tinyusdz_SOURCE_DIR}/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/tinyusdz"
+    install(TARGETS tydra_next lightusd_static lightusd_next EXPORT threepp-targets)
+    if (TARGET lightusd_textools)
+        install(TARGETS lightusd_textools EXPORT threepp-targets)
+    endif ()
+    install(DIRECTORY "${lightusd_SOURCE_DIR}/src/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/lightusd"
             FILES_MATCHING PATTERN "*.hh" PATTERN "*.h" PATTERN "*.inc")
 endif ()
 install(TARGETS threepp EXPORT threepp-targets)
