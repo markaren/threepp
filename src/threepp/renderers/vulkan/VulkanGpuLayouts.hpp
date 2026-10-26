@@ -176,8 +176,9 @@ namespace threepp::vulkan::impl {
     // one binding-58 scalar UBO (they share wind + timeSec). clouds.enabled
     // == 0 short-circuits the far cloud march; heteroActive == 0 keeps the
     // froxel volumetrics on today's homogeneous path (off = free /
-    // image-identical). Layout matches deferred_shade.comp / cloud_march /
-    // froxel_inject / froxel_integrate's scalar CloudUbo block exactly.
+    // image-identical). Layout matches the scalar CloudUbo block in
+    // cloud_ubo.glsl, which stops before epoch, and cloud_march.comp's own
+    // copy, which reads it.
     struct GpuCloudUbo {
         float enabled;      // 1.0 = far cloud march active
         float coverage;     // 0 = clear .. 1 = overcast

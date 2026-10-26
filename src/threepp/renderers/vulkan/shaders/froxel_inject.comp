@@ -44,14 +44,8 @@ layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
 #include "ray_query_stub.glsl"
 #endif
 
-layout(set = 0, binding = 33, scalar) uniform FogUbo {
-    vec3  sigmaT;
-    float enabled;
-    vec3  color;
-    float anisotropy;
-    float waterSurfaceY;
-    vec3  worldUp;
-} fog;
+#define FOG_UBO_HEAD_ONLY
+#include "fog_ubo.glsl"
 
 #include "cluster_lights.glsl"// ClusterLight, the grid shape, the Z ladder, clusterCellBase
 layout(set = 0, binding = 48, scalar) readonly buffer ClusterGridBuf { uint clusterGrid[]; };
@@ -61,24 +55,8 @@ layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { Cluster
 layout(set = 0, binding = 50, rgba16f) uniform writeonly image3D froxelScatterImage;
 layout(set = 0, binding = 51) uniform sampler3D froxelScatterPrevTex;// prev fif (EMA history)
 
-// Cloud + height-fog UBO (heterogeneous near-field medium). Matches the
-// deferred_shade / cloud_march scalar block.
-layout(set = 0, binding = 58, scalar) uniform CloudUbo {
-    float enabled;
-    float coverage;
-    float density;
-    float bottomY;
-    float topY;
-    float evolveSpeed;
-    float timeSec;
-    float heteroActive;
-    vec3  wind;
-    float hfDensity;
-    float hfBaseY;
-    float hfFalloff;
-    float hfNoiseAmount;
-    float shadowActive;
-} clouds;
+// Cloud + height-fog UBO (heterogeneous near-field medium).
+#include "cloud_ubo.glsl"
 
 layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;// top-down cloud transmittance
 // Cloud shadow transmittance at a world point — KEEP IN SYNC with

@@ -249,37 +249,13 @@ layout(set = 0, binding = 17) uniform usampler2D gbufIds;
 // because deferred_shade_60_fog_volumetrics.glsl bakes fog into sceneHdr
 // DURING the shade — anything composited afterwards gets exactly none of it,
 // and a splat cloud punching a clear hole through a foggy scene is the most
-// obvious tell there is. KEEP IN SYNC with particle_light.comp's copies.
-layout(set = 0, binding = 18, scalar) uniform FogUbo {
-    vec3  sigmaT;
-    float enabled;
-    vec3  color;
-    float anisotropy;
-    float waterSurfaceY;
-    vec3  worldUp;
-    float hfDensity;
-    float hfBaseY;
-    float hfFalloff;
-    float murkDensity;
-    vec3  murkColor;
-} fog;
+// obvious tell there is. Both are the shared declarations, at this set's
+// bindings 18 and 19.
+#define FOG_UBO_BINDING 18
+#include "fog_ubo.glsl"
 
-layout(set = 0, binding = 19, scalar) uniform CloudUbo {
-    float enabled;
-    float coverage;
-    float density;
-    float bottomY;
-    float topY;
-    float evolveSpeed;
-    float timeSec;
-    float heteroActive;
-    vec3  wind;
-    float hfDensity;
-    float hfBaseY;
-    float hfFalloff;
-    float hfNoiseAmount;
-    float shadowActive;
-} clouds;
+#define CLOUD_UBO_BINDING 19
+#include "cloud_ubo.glsl"
 
 // Only the leading `ambient` and the sun list are read; a uniform block may be
 // shorter than the buffer bound to it, and the offsets of what it does declare

@@ -319,22 +319,7 @@ const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
 // tiny always-bound UBO — clouds.enabled == 0 short-circuits cloudMarch(), so
 // the layer costs nothing and is image-identical to today when disabled. See
 // cloudMarch()/cloudDensity() in deferred_shade_60_fog_volumetrics.glsl.
-layout(set = 0, binding = 58, scalar) uniform CloudUbo {
-    float enabled;      // 1.0 = far cloud march active
-    float coverage;     // 0 = clear sky .. 1 = overcast
-    float density;      // density multiplier
-    float bottomY;      // shell base (world Y, m)
-    float topY;         // shell top (world Y, m)
-    float evolveSpeed;  // shape churn rate
-    float timeSec;      // wall-clock seconds (wind scroll + evolution)
-    float heteroActive; // 1.0 = heterogeneous near-field froxels (height fog on)
-    vec3  wind;         // m/s drift (xz used, y ignored)
-    float hfDensity;    // height-fog σ_t at baseY (0 = height fog off)
-    float hfBaseY;      // height-fog base world Y
-    float hfFalloff;    // height-fog exponential height scale (m)
-    float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
-    float shadowActive; // 1.0 = cloud shadow map valid this frame
-} clouds;
+#include "cloud_ubo.glsl"
 
 // Half-res cloud march result (cloud_march.comp, binding 59). LINEAR sampler —
 // the full-res shade composites it with ONE bilinear upsample tap. rgb =

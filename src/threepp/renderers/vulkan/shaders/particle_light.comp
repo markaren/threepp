@@ -54,19 +54,7 @@ layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
 #include "ray_query_stub.glsl"
 #endif
 
-layout(set = 0, binding = 33, scalar) uniform FogUbo {
-    vec3  sigmaT;
-    float enabled;
-    vec3  color;
-    float anisotropy;
-    float waterSurfaceY;
-    vec3  worldUp;
-    float hfDensity;
-    float hfBaseY;
-    float hfFalloff;
-    float murkDensity;
-    vec3  murkColor;
-} fog;
+#include "fog_ubo.glsl"
 
 layout(set = 0, binding = 36, scalar) readonly buffer ProbeShBuf { vec4 probeSh[]; };
 #define PROBE_GRID_UBO_BINDING 37
@@ -89,22 +77,7 @@ layout(set = 0, binding = 57) uniform RasterCamUbo {
     vec4 prevJitter;
 } rcam;
 
-layout(set = 0, binding = 58, scalar) uniform CloudUbo {
-    float enabled;
-    float coverage;
-    float density;
-    float bottomY;
-    float topY;
-    float evolveSpeed;
-    float timeSec;
-    float heteroActive;
-    vec3  wind;
-    float hfDensity;
-    float hfBaseY;
-    float hfFalloff;
-    float hfNoiseAmount;
-    float shadowActive;
-} clouds;
+#include "cloud_ubo.glsl"
 
 layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 
