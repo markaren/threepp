@@ -431,7 +431,7 @@ vec3 splatSrgbToLinear(vec3 c) {
     return mix(hi, lo, lessThanEqual(c, vec3(0.04045)));
 }
 
-// KEEP IN SYNC with linearToSRGB in post_composite.comp — this is its exact
+// KEEP IN SYNC with linearToSRGB in tonemap.glsl — this is its exact
 // inverse, and the pair has to round-trip or a pixel with no splats over it
 // would come out changed.
 vec3 splatLinearToSrgb(vec3 x) {

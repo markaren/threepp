@@ -10,12 +10,10 @@
 // values before blending, or it lands in a different value domain and reads
 // too bright and too saturated against the frame behind it.
 //
-// KEEP IN SYNC with post_composite.comp, which is the authority, and with the
-// inline copy in particle.frag. That third copy is deliberate for now: the
-// legacy ParticleSystem path is required by plans/particle-field.md to stay
-// untouched by the ParticleField work, and folding it onto this header would
-// recompile it. Fold them together the next time that path is opened for its
-// own reasons.
+// KEEP IN SYNC with tonemap.glsl, the curves post_composite.comp (the
+// authority) and particle.frag's lit path both include. The od-prefixed
+// functions below are a renamed copy of it; odAcesNarkowicz has no
+// counterpart there.
 //
 // White balance and the grading LUT are omitted by odDisplay: the old
 // approximation for small translucent/additive overlay content, same as
