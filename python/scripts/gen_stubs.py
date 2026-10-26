@@ -360,6 +360,44 @@ def _check_no_regression(before: dict[str, set[str]], stub_dir: Path, allow_remo
         print(f"  ({added} symbol(s) added)")
 
 
+# Standard-library modules an annotation can name without stubgen importing
+# them: pybind11 spells a std::filesystem::path parameter `os.PathLike | str |
+# bytes`, and stubgen writes that with no `import os`, which leaves every such
+# annotation Unknown to a type checker (ruff F821).
+_STDLIB_ANNOTATION_MODULES = ("os",)
+_PLAIN_IMPORT = re.compile(r"^import [A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _add_missing_imports(path: Path) -> int:
+    """Import the _STDLIB_ANNOTATION_MODULES the stub names but does not import.
+
+    Placed in the stub's block of plain `import x` lines, which stays sorted.
+    Docstrings are left alone: prose naming `os.path` imports nothing.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    used = set()
+    in_docstring = False
+    for line in lines:
+        was_in_docstring = in_docstring
+        if line.count('"""') % 2:
+            in_docstring = not in_docstring
+        if was_in_docstring or in_docstring:
+            continue
+        used.update(m for m in _STDLIB_ANNOTATION_MODULES if re.search(rf"\b{m}\.", line))
+    block = [i for i, line in enumerate(lines) if _PLAIN_IMPORT.match(line.rstrip("\r\n"))]
+    imported = {lines[i].rstrip("\r\n")[len("import "):] for i in block}
+    missing = sorted(used - imported)
+    if not missing:
+        return 0
+    if not block or block != list(range(block[0], block[-1] + 1)):
+        raise SystemExit(f"error: {path} has no contiguous `import x` block to add {missing} to")
+    eol = lines[block[0]][len(lines[block[0]].rstrip("\r\n")):]
+    names = sorted(imported | set(missing))
+    lines[block[0] : block[-1] + 1] = [f"import {n}{eol}" for n in names]
+    path.write_text("".join(lines), encoding="utf-8")
+    return len(missing)
+
+
 _FEATURE_FLAG = re.compile(r"^(HAS_[A-Z_]+): bool = (True|False)$")
 
 
@@ -431,6 +469,7 @@ def main() -> int:
         repaired = _repair_keyword_names(path)
         unqualified = _strip_self_qualification(path)
         unbaked = _unbake_feature_flags(path)
+        imported = _add_missing_imports(path)
         _validate(path)
         notes = []
         if repaired:
@@ -439,6 +478,8 @@ def main() -> int:
             notes.append(f"{unqualified} self-qualified name(s) unqualified")
         if unbaked:
             notes.append(f"{unbaked} HAS_* flag value(s) left to the build")
+        if imported:
+            notes.append(f"{imported} missing stdlib import(s) added")
         note = f" ({', '.join(notes)})" if notes else ""
         print(f"  {path.relative_to(pkg_dir)}: {len(path.read_text(encoding='utf-8').splitlines())} lines{note}")
 

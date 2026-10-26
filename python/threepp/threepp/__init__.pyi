@@ -5,27 +5,16 @@ from __future__ import annotations
 import collections.abc
 import numpy
 import numpy.typing
+import os
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
 class AnimationAction:
     blend_mode: AnimationBlendMode
-    enabled: bool
-    paused: bool
-    time: float
-    time_scale: float
-    @property
-    def clamp_when_finished(self) -> bool:
-        """
-        A Loop.ONCE action (or one whose repetitions ran out) normally ends disabled, weight 0, which snaps the pose back. True pauses it on its last frame and keeps feeding that frame (three.js clampWhenFinished).
-        """
-    @clamp_when_finished.setter
-    def clamp_when_finished(self, arg1: bool) -> None:
-        ...
     def cross_fade_to(self, other: AnimationAction, duration: typing.SupportsFloat | typing.SupportsIndex, warp: bool = False) -> AnimationAction:
         ...
     def fade_in(self, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
@@ -65,6 +54,46 @@ class AnimationAction:
     def sync_with(self, action: AnimationAction) -> AnimationAction:
         ...
     def warp(self, start_time_scale: typing.SupportsFloat | typing.SupportsIndex, end_time_scale: typing.SupportsFloat | typing.SupportsIndex, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    @property
+    def clamp_when_finished(self) -> bool:
+        """
+        A Loop.ONCE action (or one whose repetitions ran out) normally ends disabled, weight 0, which snaps the pose back. True pauses it on its last frame and keeps feeding that frame (three.js clampWhenFinished).
+        """
+    @clamp_when_finished.setter
+    def clamp_when_finished(self, arg1: bool) -> None:
+        ...
+    @property
+    def enabled(self) -> bool:
+        """
+        False zeroes the action's effective weight.
+        """
+    @enabled.setter
+    def enabled(self, arg1: bool) -> None:
+        ...
+    @property
+    def paused(self) -> bool:
+        """
+        True freezes the action's time (zero effective time scale).
+        """
+    @paused.setter
+    def paused(self, arg1: bool) -> None:
+        ...
+    @property
+    def time(self) -> float:
+        """
+        The action's local time in seconds, clamped or wrapped to the clip's duration by the loop mode.
+        """
+    @time.setter
+    def time(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def time_scale(self) -> float:
+        """
+        Playback speed multiplier (1 = normal, 0 = frozen, negative = reverse).
+        """
+    @time_scale.setter
+    def time_scale(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class AnimationBlendMode:
     """
@@ -403,6 +432,11 @@ class BVH:
     def intersects_many(candidates: collections.abc.Sequence[BVH], targets: collections.abc.Sequence[BVH]) -> numpy.typing.NDArray[numpy.bool]:
         """
         (C, T) bool array: does candidate i touch target j?
+        """
+    @staticmethod
+    def segments_hit_many(targets: collections.abc.Sequence[BVH], starts: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], ends: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> numpy.typing.NDArray[numpy.bool]:
+        """
+        (N, T) bool array: does the straight segment starts[i] -> ends[i] cross a triangle of target j? Every segment against every target in parallel (first hit only). A segment wholly inside a closed mesh crosses nothing: test its ends for that separately.
         """
     def __init__(self, max_triangles_per_node: typing.SupportsInt | typing.SupportsIndex = 8, max_subdivisions: typing.SupportsInt | typing.SupportsIndex = 10) -> None:
         """
@@ -976,6 +1010,10 @@ class Canvas:
         ...
     def close(self) -> None:
         ...
+    def cursor_mode(self) -> str:
+        """
+        The cursor mode set_cursor_mode last set: 'normal', 'hidden' or 'disabled'.
+        """
     def is_key_down(self, key: str) -> bool:
         """
         Poll whether a key is currently held — e.g. 'W','A','S','D','SPACE','UP','LEFT'. Query per-frame for continuous controls (WASD driving); never sticks.
@@ -1027,6 +1065,10 @@ class Canvas:
     def remove_mouse_listener(self, id: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Remove a mouse callback by the id its on_mouse_* call returned; an unknown id is ignored.
+        """
+    def set_cursor_mode(self, mode: str) -> None:
+        """
+        What the cursor does over the window: 'normal'; 'hidden' (invisible over the window); 'disabled' (hidden and grabbed, for mouse look: mouse_position and on_mouse_move then report unbounded virtual positions, so a frame's look is the difference of two; raw motion where the platform has it). No-op headless.
         """
     def set_exit_on_escape(self, value: bool) -> None:
         """
@@ -1561,6 +1603,31 @@ class Curve3:
         ...
 class CylinderGeometry(BufferGeometry):
     def __init__(self, radius_top: typing.SupportsFloat | typing.SupportsIndex = 1.0, radius_bottom: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0, radial_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 1, open_ended: bool = False, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
+        ...
+class DecalGeometry(BufferGeometry):
+    def __init__(self, mesh: ..., position: Vector3, orientation: Euler, size: Vector3) -> None:
+        """
+        The part of mesh's surface inside the box at position, turned by orientation (Euler), of size (x, y across, z the projection depth), as world-space triangles with uvs over the box face. Use it with a material that is transparent, depth_write=False and polygon_offset=True (factor about -4): a decal (bullet holes, blood, scorch marks).
+        """
+class DeformableAttachment:
+    """
+    Simulation-mesh vertices of a soft body held to points in a world frame (SoftBody.attach_to_world).
+    """
+    def release(self) -> None:
+        """
+        Let go. Idempotent.
+        """
+    def update_pose(self, position: Vector3, rotation: Quaternion = ...) -> None:
+        """
+        Move the frame the held points were given in (world space, identity at creation): the held vertices follow.
+        """
+    @property
+    def count(self) -> int:
+        """
+        How many vertices it holds.
+        """
+    @property
+    def released(self) -> bool:
         ...
 class DepthPacking:
     """
@@ -2878,7 +2945,7 @@ class Flock(Mesh):
         """
         Soft repulsion from the camera, so birds do not fly through the lens.
         """
-    def set_perch_filter(self, predicate: collections.abc.Callable[[Mesh], bool] | None) -> None:
+    def set_perch_filter(self, predicate: typing.Any) -> None:
         """
         predicate(mesh) -> bool, deciding which meshes may be landed on (None clears it). Applied by the next bake_perches / bake_perches_blocking.
         """
@@ -3469,22 +3536,17 @@ class GLTFLoader:
 class GLTFResult:
     def __repr__(self) -> str:
         ...
-    def apply_variant(self, name: str, root: Object3D | None = None) -> None:
+    def apply_variant(self, name: str, root: Object3D = None) -> None:
         """
         Give every mesh under root (default: scene) its material in the named variant; meshes the variant does not list go back to their load-time material.
         """
-    def reset_variants(self, root: Object3D | None = None) -> None:
+    def reset_variants(self, root: Object3D = None) -> None:
         """
         Give every mesh under root (default: scene) its load-time material back.
         """
-    def variant_material(self, name: str, mesh: Object3D) -> Material | None:
+    def variant_material(self, name: str, mesh: Object3D) -> typing.Any:
         """
         The material this mesh of the result takes in the named variant (without applying it): its variant material, else its load-time one; None for a mesh the variants do not track.
-        """
-    @property
-    def variant_names(self) -> list[str]:
-        """
-        Names of the file's material variants (KHR_materials_variants), in file order; empty if none.
         """
     @property
     def animations(self) -> list[AnimationClip]:
@@ -3500,6 +3562,11 @@ class GLTFResult:
     def scenes(self) -> list[Group]:
         """
         All scenes in the file.
+        """
+    @property
+    def variant_names(self) -> list[str]:
+        """
+        Names of the file's material variants (KHR_materials_variants), in file order; empty if none.
         """
 class GTAOPass(Pass):
     """
@@ -3627,7 +3694,7 @@ class Gait:
 class GeoScene(Group):
     def __init__(self, pack_dir: str, bands: bool = True, cliff_shell: bool = True, forest: bool = True, forest_extent: typing.SupportsFloat | typing.SupportsIndex = 1100.0, forest_focus: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], forest_cap: typing.SupportsInt | typing.SupportsIndex = 40000, scatter: bool = True, shell_level_step: typing.SupportsFloat | typing.SupportsIndex = 2.0, shell_extent: typing.SupportsFloat | typing.SupportsIndex = 1200.0, bathymetry: bool = True, shore_slope: typing.SupportsFloat | typing.SupportsIndex = 0.3499999940395355, max_depth: typing.SupportsFloat | typing.SupportsIndex = 180.0, seed: typing.SupportsInt | typing.SupportsIndex = 4242, buildings: bool = True, pitched_roofs: bool = True, measured_roofs: bool = True, urban_props: bool = True, cars: bool = True, boats: bool = True, decks: bool = True, props_cell_size: typing.SupportsFloat | typing.SupportsIndex = 250.0, props_extent: typing.SupportsFloat | typing.SupportsIndex = 1500.0, stream_budget: typing.SupportsInt | typing.SupportsIndex = 2, forest_dilate: typing.SupportsFloat | typing.SupportsIndex = 4.0, urban_forest_cap: typing.SupportsInt | typing.SupportsIndex = 80000, car_max_slope: typing.SupportsFloat | typing.SupportsIndex = 28.0, road_ribbon: bool = True, ribbon_distance: typing.SupportsFloat | typing.SupportsIndex = 600.0, land_use_paint: bool = True, quay_apron: bool = True, stream_prefetch: typing.SupportsFloat | typing.SupportsIndex = 0.0, tile_stage_frames: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
         """
-        Load a geodata region pack and build the whole terrain scene. Raises RuntimeError if the pack directory is missing or malformed. `car_max_slope` (degrees) refuses a parked car on ground steeper than this: OSM parking polygons are drawn in plan view and some are draped over a mountainside. `road_ribbon` adds bridge decks plus near-field road geometry with crisp edges and lane markings, distance-culled at `ribbon_distance` metres — past that the asphalt painted into the terrain is the road. `land_use_paint` paints the surveyed town surfacing (parking, grass, pitches, quay concrete) into the splat. `quay_apron` raises the reclaimed harbour front out of the water before the bathymetry runs: a Kartverket DTM stores reclaimed land at exactly sea level (93.8% of ground inside the Alesund pack's pier polygons reads 0.00 m), so without it the sink excavates the quay into the seabed and the harbour buildings stand with their walls in the fjord.
+        Load a geodata region pack and build the whole terrain scene. Raises RuntimeError if the pack directory is missing or malformed. `car_max_slope` (degrees) refuses a parked car on ground steeper than this: OSM parking polygons are drawn in plan view and some are draped over a mountainside. `road_ribbon` adds bridge decks plus near-field road geometry with crisp edges and lane markings, distance-culled at `ribbon_distance` metres — past that the asphalt painted into the terrain is the road. `land_use_paint` paints the surveyed town surfacing (parking, grass, pitches, quay concrete) into the splat. `quay_apron` raises the reclaimed harbour front out of the water before the bathymetry runs: a Kartverket DTM stores reclaimed land at exactly sea level (93.8% of ground inside the Alesund pack's pier polygons reads 0.00 m), so without it the sink excavates the quay into the seabed and the harbour buildings stand with their walls in the fjord. `stream_prefetch` (metres, default 0 = off) builds and attaches the streamed forest and car cells HIDDEN that far ahead of their ring and shows them when they enter it; the Vulkan renderer admits a hidden mesh over the frames in between, so a cell's first frame on screen only flips it visible. `tile_stage_frames` (default 0 = off) attaches a terrain tile hidden as soon as its bake is done and swaps it in that many updates later, so its swap only flips visibility (the swap comes that many updates later than without).
         """
     def height_at(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> float:
         """
@@ -5121,6 +5188,7 @@ class LineBasicMaterial(Material):
     fog: bool
     force_single_pass: bool
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     stencil_fail: StencilOp
@@ -5157,6 +5225,18 @@ class LineBasicMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def stencil_func_mask(self) -> int:
@@ -5289,6 +5369,7 @@ class Material:
     fog: bool
     force_single_pass: bool
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     tone_mapped: bool
@@ -5312,6 +5393,18 @@ class Material:
         ...
     @opacity.setter
     def opacity(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class Matrix3:
     def __init__(self) -> None:
@@ -5510,6 +5603,7 @@ class MeshBasicMaterial(Material):
     force_single_pass: bool
     map: Texture
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     specular_map: Texture
@@ -5542,6 +5636,18 @@ class MeshBasicMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def reflectivity(self) -> float:
@@ -5592,6 +5698,7 @@ class MeshDepthMaterial(Material):
     force_single_pass: bool
     map: Texture
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     stencil_fail: StencilOp
@@ -5637,6 +5744,18 @@ class MeshDepthMaterial(Material):
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def stencil_func_mask(self) -> int:
         ...
     @stencil_func_mask.setter
@@ -5676,6 +5795,7 @@ class MeshLambertMaterial(Material):
     force_single_pass: bool
     map: Texture
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     stencil_fail: StencilOp
@@ -5713,6 +5833,18 @@ class MeshLambertMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def reflectivity(self) -> float:
@@ -5752,6 +5884,7 @@ class MeshNormalMaterial(Material):
     name: str
     normal_map: Texture
     normal_scale: Vector2
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     stencil_fail: StencilOp
@@ -5783,6 +5916,18 @@ class MeshNormalMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def stencil_func_mask(self) -> int:
@@ -5822,6 +5967,7 @@ class MeshPhongMaterial(Material):
     map: Texture
     name: str
     normal_map: Texture
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     specular: Color
@@ -5861,6 +6007,18 @@ class MeshPhongMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def reflectivity(self) -> float:
@@ -5952,6 +6110,30 @@ class MeshPhysicalMaterial(MeshStandardMaterial):
         ...
     @iridescence_thickness_nm.setter
     def iridescence_thickness_nm(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def planar_reflection(self) -> Texture:
+        """
+        The mirror texture (tp.PlanarReflection.texture), or None. GLRenderer only.
+        """
+    @planar_reflection.setter
+    def planar_reflection(self, arg0: Texture) -> None:
+        ...
+    @property
+    def planar_reflection_distortion(self) -> float:
+        """
+        Metres the lookup moves per unit tilt of the shading normal off the surface: how much the normal map breaks the mirror up. Default 2.
+        """
+    @planar_reflection_distortion.setter
+    def planar_reflection_distortion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def planar_reflection_matrix(self) -> Matrix4:
+        """
+        World position -> the mirror's texture coordinates (tp.PlanarReflection.texture_matrix, or set both with its apply()).
+        """
+    @planar_reflection_matrix.setter
+    def planar_reflection_matrix(self, arg0: Matrix4) -> None:
         ...
     @property
     def scatter_color(self) -> Color:
@@ -6047,6 +6229,7 @@ class MeshStandardMaterial(Material):
     name: str
     normal_map: Texture
     normal_scale: Vector2
+    polygon_offset: bool
     premultiplied_alpha: bool
     roughness_map: Texture
     side: Side
@@ -6068,14 +6251,6 @@ class MeshStandardMaterial(Material):
     def dispose(self) -> None:
         ...
     def needs_update(self) -> None:
-        ...
-    @property
-    def ripples(self) -> float:
-        """
-        Flat water under a rotor downwash (renderer.downwash): > 0 gives the G-buffer normal the downwash's concentric rings and its struck disc's roughness, scaled by this value (1 = as tuned). 0 (default) = off. Vulkan deferred G-buffer only. Changed on a material already rendered, call needs_update() as for any material value.
-        """
-    @ripples.setter
-    def ripples(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def set_terrain_band(self, band: typing.SupportsInt | typing.SupportsIndex, albedo: Texture, normal_rough: Texture = None, repeat: typing.SupportsFloat | typing.SupportsIndex = 0.5, roughness: typing.SupportsFloat | typing.SupportsIndex = 0.8999999761581421) -> None:
         """
@@ -6164,6 +6339,26 @@ class MeshStandardMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ripples(self) -> float:
+        """
+        Flat water under a rotor downwash (renderer.downwash): > 0 gives the G-buffer normal the downwash's concentric rings and its struck disc's roughness, scaled by this value (1 = as tuned). 0 (default) = off. Vulkan deferred G-buffer only. Changed on a material already rendered, call needs_update() as for any material value.
+        """
+    @ripples.setter
+    def ripples(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def roughness(self) -> float:
@@ -6591,10 +6786,18 @@ class OutlinePass(Pass):
         ...
 class OutputPass(Pass):
     """
-    Tone mapping + output colour space. The composer appends one implicitly; add it explicitly only when a later pass needs display-ready input.
+    Tone mapping + output colour space. The composer appends one implicitly; add it explicitly only when a later pass needs display-ready input, or to set a white balance or a colour grade: the same two stages, in the same order and with the same math, as VulkanRenderer.set_white_balance / set_color_grade, so one look reads the same on both renderers. Both default to off and then cost nothing.
     """
     def __init__(self) -> None:
         ...
+    def set_color_grade(self, lift: Vector3 = ..., gamma: Vector3 = ..., gain: Vector3 = ..., saturation: typing.SupportsFloat | typing.SupportsIndex = 1.0, contrast: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        """
+        Lift/gamma/gain wheels + saturation + contrast on the display-referred (sRGB-encoded) result, after the tone map. Defaults = identity = off.
+        """
+    def set_white_balance(self, temperature: typing.SupportsFloat | typing.SupportsIndex = 6500.0, tint: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        """
+        Scene-illuminant white balance, applied in linear before the tone curve: Kelvin on the Planckian locus (6500 = neutral = off), tint green(-)/magenta(+).
+        """
 class PMREMGenerator:
     """
     Turns a Scene into an environment map (GLRenderer only). Keeps the renderer alive.
@@ -6615,6 +6818,14 @@ class ParticleField(Mesh):
             """
         @alpha_over.setter
         def alpha_over(self, arg0: bool) -> None:
+            ...
+        @property
+        def attribute_coverage(self) -> bool:
+            """
+            In alpha_over mode, multiply each sprite's coverage by its own attribute alpha (clamped to 0..1), so a simulation can thin a parcel out as it ages. Off by default. Needs Config.attributes.
+            """
+        @attribute_coverage.setter
+        def attribute_coverage(self, arg0: bool) -> None:
             ...
         @property
         def bright_jitter(self) -> float:
@@ -6735,14 +6946,6 @@ class ParticleField(Mesh):
             """
         @opacity.setter
         def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
-        def attribute_coverage(self) -> bool:
-            """
-            In alpha_over mode, multiply each sprite's coverage by its own attribute alpha (clamped to 0..1), so a simulation can thin a parcel out as it ages. Off by default. Needs Config.attributes.
-            """
-        @attribute_coverage.setter
-        def attribute_coverage(self, arg0: bool) -> None:
             ...
         @property
         def size_scale(self) -> float:
@@ -8000,6 +8203,64 @@ class PhysxWorld:
         """
         Accumulated fixed-substep simulation time (s) — the clock stamped onto sensor samples.
         """
+class PlanarReflection:
+    background: bool
+    def __init__(self, resolution_scale: typing.SupportsFloat | typing.SupportsIndex = 0.5, far_distance: typing.SupportsFloat | typing.SupportsIndex = 400.0, clip_bias: typing.SupportsFloat | typing.SupportsIndex = 0.0, background: bool = False) -> None:
+        """
+        resolution_scale: the target's size as a share of the frame (0.5 = half).
+        far_distance: the mirrored camera's far plane in metres; what stands further off stays in the environment map (0 = the camera's own far plane).
+        clip_bias: pushes the oblique near plane off the mirror plane (hides seams).
+        background: draw scene.background into the mirror (default False: the env map shows there).
+        """
+    def apply(self, material: MeshPhysicalMaterial) -> None:
+        """
+        Set the material's planar_reflection and planar_reflection_matrix. The first time (and when the texture is set back to None) call material.needs_update(): the shader is keyed on the texture, as for any map.
+        """
+    def hide(self, object: Object3D) -> None:
+        """
+        Set this object invisible for the mirrored render (the water itself, first of all).
+        """
+    def render(self, renderer: GLRenderer, scene: Object3D, camera: Camera) -> bool:
+        """
+        Render the mirror for this camera. False when the camera is behind the plane (nothing rendered). Call before the frame's own render.
+        """
+    def set_plane(self, point: Vector3, normal: Vector3) -> None:
+        """
+        The mirror plane: a point on it and its normal, world space. Default y = 0, +y.
+        """
+    @property
+    def clip_bias(self) -> float:
+        ...
+    @clip_bias.setter
+    def clip_bias(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def culled_by_far(self) -> int:
+        """
+        How many objects the far limit left out of the last render.
+        """
+    @property
+    def far_distance(self) -> float:
+        ...
+    @far_distance.setter
+    def far_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def resolution_scale(self) -> float:
+        ...
+    @resolution_scale.setter
+    def resolution_scale(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def texture(self) -> Texture:
+        """
+        The mirror (scene-linear RGBA, alpha 0 where nothing was drawn), or None before the first render.
+        """
+    @property
+    def texture_matrix(self) -> Matrix4:
+        """
+        World position -> the mirror's texture coordinates, as of the last render.
+        """
 class PlaneGeometry(BufferGeometry):
     def __init__(self, width: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0, width_segments: typing.SupportsInt | typing.SupportsIndex = 1, height_segments: typing.SupportsInt | typing.SupportsIndex = 1) -> None:
         ...
@@ -8170,6 +8431,7 @@ class PointsMaterial(Material):
     force_single_pass: bool
     map: Texture
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     size_attenuation: bool
@@ -8201,6 +8463,18 @@ class PointsMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def size(self) -> float:
@@ -8242,12 +8516,12 @@ class PositionalAudio(Object3D):
         ...
     def set_max_distance(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    def set_min_distance(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
     def set_occlusion(self, occlusion: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
         0 = unobstructed, 1 = fully occluded: a low-pass filter and a gain dip on this sound. Call at most once per frame with a smoothed value.
         """
-    def set_min_distance(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
     def set_playback_rate(self, rate: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
         Playback rate / pitch multiplier (1 = as recorded). Applies from the next audio period, a few ms, playing or not. A rate <= 0 is ignored.
@@ -8788,6 +9062,7 @@ class ShadowMaterial(Material):
     fog: bool
     force_single_pass: bool
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     stencil_fail: StencilOp
@@ -8818,6 +9093,18 @@ class ShadowMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def stencil_func_mask(self) -> int:
@@ -8978,9 +9265,9 @@ class SkinnedMesh(Mesh):
 class SkinnedMeshBindMode:
     """
     Members:
-
+    
       ATTACHED
-
+    
       DETACHED
     """
     ATTACHED: typing.ClassVar[SkinnedMeshBindMode]  # value = <SkinnedMeshBindMode.ATTACHED: 0>
@@ -9012,10 +9299,60 @@ class SkinnedMeshBindMode:
     @property
     def value(self) -> int:
         ...
+class Sky(Mesh):
+    """
+    The Preetham daylight model (three.js's Sky). On the GL renderer a dome the scene sits in, shaded per pixel; on the Vulkan renderer the environment itself: the sky the camera sees, the light the scene is lit by (and its sun, where the scene has no DirectionalLight), baked from these properties each frame they change. A scene.environment outranks it.
+    """
+    def __init__(self) -> None:
+        ...
+    @property
+    def mie_coefficient(self) -> float:
+        """
+        Mie scattering: the glow around the sun (0.005 = the model's).
+        """
+    @mie_coefficient.setter
+    def mie_coefficient(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def mie_directional_g(self) -> float:
+        """
+        How tightly that glow hugs the sun, 0..1 (0.8 = the model's).
+        """
+    @mie_directional_g.setter
+    def mie_directional_g(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rayleigh(self) -> float:
+        """
+        Rayleigh scattering: the blue of the sky (1 = the model's).
+        """
+    @rayleigh.setter
+    def rayleigh(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def sun_position(self) -> Vector3:
+        """
+        Where the sun stands, as a direction from the origin (its length does not matter); copy a DirectionalLight's position here to keep the two in step.
+        """
+    @sun_position.setter
+    def sun_position(self, arg1: Vector3) -> None:
+        ...
+    @property
+    def turbidity(self) -> float:
+        """
+        Haze: 2 is a clear sky, 10 a hazy one.
+        """
+    @turbidity.setter
+    def turbidity(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class SoftBody:
     """
     Handle to a PhysX deformable volume created via world.add_soft_body. Valid only while its world lives (and until remove_soft_body). The simulation runs on two meshes: a CONFORMING collision tet mesh (what tet_mesh/sim_positions report, and what contact is resolved against) and a voxelised simulation mesh the solver integrates; voxel_resolution sizes the latter.
     """
+    def attach_to_world(self, indices: typing.Annotated[numpy.typing.ArrayLike, numpy.int64], points: typing.Any = None) -> DeformableAttachment:
+        """
+        Hold simulation-mesh vertices `indices` to world points `points` (K, 3) -- where those vertices are now when None -- with a PxDeformableAttachment. Returns its handle; update_pose moves the frame the points are given in. Release it before removing the body.
+        """
     def enable_gpu_skinning(self) -> None:
         """
         Blend the visual mesh in the vertex shader from a small per-body tet texture instead of CPU-skinning and re-uploading the full-resolution mesh every step. Call once, right after add_soft_body. Also the cheap option when the visual mesh is NOT drawn at all (an external skinner owns the render surface): it reduces the per-step cost to one few-hundred-texel texture write.
@@ -9024,6 +9361,18 @@ class SoftBody:
         """
         Recompute the visual geometry's vertex normals each step (default on). Turn it off when something else owns the normals — it is a full pass over the visual mesh.
         """
+    def set_sim_mesh_velocities(self, velocities: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+        """
+        Overwrite the simulation mesh's vertex velocities, (M, 3); they take effect at the next simulate. A force F on a vertex of mass m over a step dt is an added F dt / m. Wakes the body (a sleeping volume is not simulated).
+        """
+    def sim_mesh_state(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        The SIMULATION (voxel) mesh's vertices as an (M, 4) float32 array: world-space x, y, z and inverse mass. The indices attach_to_world and set_sim_mesh_velocities take.
+        """
+    def sim_mesh_velocities(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        The simulation mesh's vertex velocities, (M, 3) float32.
+        """
     def sim_positions(self) -> numpy.typing.NDArray[numpy.float32]:
         """
         Current collision-mesh vertex positions as an (N, 3) float32 array, world space. One device->host copy per call — read it once per frame, not once per fish per query.
@@ -9031,6 +9380,11 @@ class SoftBody:
     def tet_mesh(self) -> tuple:
         """
         ((V, 3) float32 rest vertices, (T, 4) int32 tets) of the cooked CONFORMING collision mesh. Rest vertices are in the template mesh's own local space, so they differ from sim_positions() by the spawn transform only — rest-relative metrics (volume ratio, edge stretch) compare directly. Feed the pair to another solver to run PhysX's tetrahedralisation elsewhere.
+        """
+    @property
+    def is_sleeping(self) -> bool:
+        """
+        True while PhysX has put the body to sleep (still, and nothing awake touching it).
         """
     @property
     def num_tets(self) -> int:
@@ -9633,6 +9987,7 @@ class SpriteMaterial(Material):
     force_single_pass: bool
     map: Texture
     name: str
+    polygon_offset: bool
     premultiplied_alpha: bool
     side: Side
     size_attenuation: bool
@@ -9664,6 +10019,18 @@ class SpriteMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_factor(self) -> float:
+        ...
+    @polygon_offset_factor.setter
+    def polygon_offset_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def polygon_offset_units(self) -> float:
+        ...
+    @polygon_offset_units.setter
+    def polygon_offset_units(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def rotation(self) -> float:
@@ -10495,6 +10862,14 @@ class TransformBatch:
         """
     def __len__(self) -> int:
         ...
+    def get(self, out: typing.Annotated[numpy.typing.ArrayLike, numpy.float64]) -> None:
+        """
+        Fill out ((len(batch), 7) float64, C order) with each object's LOCAL [px, py, pz, qx, qy, qz, qw]: the rows set() takes. Releases the GIL while it reads.
+        """
+    def get_world(self, out: typing.Annotated[numpy.typing.ArrayLike, numpy.float64]) -> None:
+        """
+        Fill out ((len(batch), 7) float64, C order) with each object's WORLD position and rotation, decomposed from its matrix_world as it stands (update the roots' matrix_world first). Releases the GIL while it reads.
+        """
     def set(self, pq: typing.Annotated[numpy.typing.ArrayLike, numpy.float64], scale_index: typing.Annotated[numpy.typing.ArrayLike, numpy.int64] | None = None, scales: typing.Annotated[numpy.typing.ArrayLike, numpy.float64] | None = None) -> None:
         """
         pq: (len(batch), 7) float64, row k = [px, py, pz, qx, qy, qz, qw] for objects[k], stored the way obj.position.set(px, py, pz) and obj.quaternion.set(qx, qy, qz, qw) store them (float32, and the quaternion's Euler sync). scale_index (m,) int and scales (m, 3): objects[scale_index[j]].scale.set(*scales[j]), after every pose; rows not listed keep their scale. Releases the GIL while it writes.
@@ -11209,18 +11584,6 @@ class VulkanRenderer:
         """
         Turn the volumetric cloud layer off (default).
         """
-    @property
-    def downwash(self) -> Downwash:
-        """
-        The rotor downwash (threepp.Downwash) the water (MeshStandardMaterial.ripples), every GrassMesh and the Renderer-owned particle emitters react to, or None (the default). Read every frame: move a jet by editing its Source.
-        """
-    @downwash.setter
-    def downwash(self, arg1: Downwash) -> None:
-        ...
-    def dump_memory_stats(self, tag: str = 'python') -> None:
-        """
-        Print the renderer's GPU memory report to stderr, prefixed with `tag`: each heap's usage against its budget, then where the geometry buffers landed per class (device-local, the BAR window, or system memory). Deforming geometry (skinned, tet, grass) in the system-memory column means its deform pass crosses PCIe every frame. THREEPP_VK_MEMDUMP=1 prints the same report after init, after each structural scene build and at frame 8.
-        """
     def disable_frame_interop(self, view: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
         """
         Release this view's frame-interop exports. Close the importing tensors FIRST (FrameTensors.close() does both in the right order) — freeing the Vulkan allocation under a live CUDA mapping reports as nothing at all.
@@ -11232,6 +11595,10 @@ class VulkanRenderer:
     def disable_vertex_interop(self, mesh: Mesh) -> None:
         """
         Release the exports and return the mesh to the CPU attribute path. STOP the foreign writes first — nothing here can wait on a CUDA stream. Close the importing VkInteropArrays before calling this.
+        """
+    def dump_memory_stats(self, tag: str = 'python') -> None:
+        """
+        Print the renderer's GPU memory report to stderr, prefixed with `tag`: each heap's usage against its budget, then where the geometry buffers landed per class (device-local, the BAR window, or system memory). Deforming geometry (skinned, tet, grass) in the system-memory column means its deform pass crosses PCIe every frame. THREEPP_VK_MEMDUMP=1 prints the same report after init, after each structural scene build and at frame 8.
         """
     def enable_frame_interop(self, view: typing.SupportsInt | typing.SupportsIndex = 0, channels: collections.abc.Iterable = ('color', 'depth')) -> list:
         """
@@ -11289,6 +11656,10 @@ class VulkanRenderer:
         """
         Back to a measurement camera: still rendered, still readable, no longer drawn into the frame.
         """
+    def last_motion(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        The motion vectors of the last rendered frame, as read_motion returns them, without rendering again: (H, W, 2) float32 in pixels.
+        """
     def probe_grid(self) -> typing.Any:
         """
         The probe-GI grid as a dict: 'origin' (the first probe's world position), 'spacing', 'dims' (x, y, z), and 'sh', float32 (N, 4, 4): per probe the SH-L1 irradiance rows L00, L1x, L1y, L1z (rgb) with validity, update count and two statistics in column 3. Probe (i, j, k) is row i + dims[0]*(j + dims[1]*k), at origin + (i, j, k)*spacing. None before the grid is fitted. Full device sync.
@@ -11340,10 +11711,6 @@ class VulkanRenderer:
         """
         Stable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; otherwise a per-object id that persists across frames and visible-set changes (no hashing, no collisions). Auto-assigned; override with set_instance_id().
         """
-    def last_motion(self) -> numpy.typing.NDArray[numpy.float32]:
-        """
-        The motion vectors of the last rendered frame, as read_motion returns them, without rendering again: (H, W, 2) float32 in pixels.
-        """
     def read_motion(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.float32]:
         """
         Screen-space motion vectors as (H, W, 2) float32, in pixels (previous - current surface position; +x rightward, y down-positive). RENDERS the scene first (flush_frames frames) and returns the motion of that render, so anything that moved before the call and not during it reads 0. To measure the frame a step loop just rendered, call last_motion() after its render().
@@ -11367,6 +11734,10 @@ class VulkanRenderer:
     def read_view_rgb_pixels(self, handle: typing.SupportsInt | typing.SupportsIndex) -> numpy.typing.NDArray[numpy.uint8]:
         """
         This view's most recent frame as (H, W, 3) uint8, TOP-LEFT origin — the same convention as read_pixels. Reads the view's own colour image, never the swapchain. An unknown handle gives an empty (0, 0, 3) array.
+        """
+    def refine_displacement(self) -> None:
+        """
+        Re-refine the displaced meshes around the camera of the next frame.
         """
     def remove_view(self, handle: typing.SupportsInt | typing.SupportsIndex) -> bool:
         """
@@ -11428,6 +11799,10 @@ class VulkanRenderer:
         """
         Lift/gamma/gain wheels + saturation + contrast, baked into a 33^3 LUT applied after the tone map. Defaults = identity = off.
         """
+    def set_displacement_detail(self, pixel_edge: typing.SupportsFloat | typing.SupportsIndex, min_edge: typing.SupportsFloat | typing.SupportsIndex = 0.009999999776482582) -> None:
+        """
+        Refine meshes with a material displacement_map around the camera: split edges until none is longer than pixel_edge output pixels (nor min_edge metres) where the relief would show. 0 (default) = off, only the mesh's own vertices move.
+        """
     def set_emissive_casts_light(self, object: Object3D, casts_light: bool) -> None:
         """
         casts_light=False: the object's emissive glows but is not a light. It still shows on its surface, in reflections and through glass, and lights what is near it through the diffuse GI bounce, but it leaves the emitter list that ReSTIR DI and the emitter NEE sample (a shadow ray per sample, rebuilt on the CPU whenever the mesh moves). For a faint self-glow over many small triangles that list is nearly all cost. Keyed by object id; may be called before the object is added. Default True.
@@ -11487,6 +11862,10 @@ class VulkanRenderer:
     def set_sensor_only_surfaces(self, enabled: bool) -> None:
         """
         Scene master switch for sensor-only surfaces (meshes from splats.make_sensor_mesh). OFF, the default, nothing at all sees them. ON, lidar beams hit them and the secondary views that ALSO ask (set_view_sensor_surfaces) rasterize them. The primary view never draws them either way, and no radiance trace — reflection, shadow, GI — has them in its cull mask: the real splats are what the picture shows.
+        """
+    def set_shadowed_lamps(self, spots: typing.SupportsInt | typing.SupportsIndex, points: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        How many spot and point lamps get a shadow map per frame (defaults 4 and 8, at most 8 and 16). Only lamps with cast_shadow get one, the strongest near the camera first. Without ray tracing a lamp without a map casts no shadow.
         """
     def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
@@ -11635,22 +12014,6 @@ class VulkanRenderer:
     def deferred_ao(self, arg1: bool) -> None:
         ...
     @property
-    def unlit_fog_scatter(self) -> bool:
-        """
-        Volumetric in-scatter on unlit surfaces (MeshBasicMaterial). Off by default: an unlit pixel gets the fog's extinction and ambient scatter only, so a basic-material tree behind sunlit haze reads as a cut-out. True adds the cloud layer, point-light glow, spot beams and sun shafts in front of it, as lit surfaces get them.
-        """
-    @unlit_fog_scatter.setter
-    def unlit_fog_scatter(self, arg1: bool) -> None:
-        ...
-    @property
-    def fog_shadow_opaque_cutouts(self) -> bool:
-        """
-        The volumetric sun march (shafts, aerial glow) traces a shadow ray at each of its 16 steps. True (the default) makes a fog shadow ray commit on its first hit, so an alpha-tested crown is an opaque blob to the fog: gaps between crowns still make the shafts, surface shadows keep their shapes, and a forest of card trees costs half the frame it did. False alpha-tests every cutout card the ray crosses, as the surface shadows do: exact, for a scene whose cutouts are sparse and large (a chain-link fence, a net, a railing) and would otherwise wall off the fog.
-        """
-    @fog_shadow_opaque_cutouts.setter
-    def fog_shadow_opaque_cutouts(self, arg1: bool) -> None:
-        ...
-    @property
     def denoise(self) -> bool:
         """
         Toggle the deferred denoiser (SVGF + temporal). Default on. Off uses the deterministic 64-ray AO (noise-free, no GI colour).
@@ -11667,6 +12030,20 @@ class VulkanRenderer:
     def depth_of_field(self, arg1: bool) -> None:
         ...
     @property
+    def displacement_frustum_limit(self) -> bool:
+        """
+        Refine fully only in the focus camera's view (plus 15 %); 8x coarser outside. Default True.
+        """
+    @displacement_frustum_limit.setter
+    def displacement_frustum_limit(self, arg1: bool) -> None:
+        ...
+    @property
+    def displacement_min_edge(self) -> float:
+        ...
+    @property
+    def displacement_pixel_edge(self) -> float:
+        ...
+    @property
     def dlss(self) -> bool:
         """
         NVIDIA DLSS upscaler on/off (no-op / False if unavailable — see dlss_available). Setting True while unavailable prints the reason to stderr once per process.
@@ -11679,6 +12056,14 @@ class VulkanRenderer:
         """
         True when DLSS was compiled in and NGX created its feature on this GPU.
         """
+    @property
+    def downwash(self) -> Downwash:
+        """
+        The rotor downwash (threepp.Downwash) the water (MeshStandardMaterial.ripples), every GrassMesh and the Renderer-owned particle emitters react to, or None (the default). Read every frame: move a jet by editing its Source.
+        """
+    @downwash.setter
+    def downwash(self, arg1: Downwash) -> None:
+        ...
     @property
     def env_sun_color(self) -> typing.Annotated[list[float], "FixedSize(3)"]:
         """
@@ -11784,6 +12169,14 @@ class VulkanRenderer:
     def fog_anisotropy(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def fog_shadow_opaque_cutouts(self) -> bool:
+        """
+        The volumetric sun march (shafts, aerial glow) traces a shadow ray at each of its 16 steps. True (the default) makes a fog shadow ray commit on its first hit, so an alpha-tested crown is an opaque blob to the fog: gaps between crowns still make the shafts, surface shadows keep their shapes, and a forest of card trees costs half the frame it did. False alpha-tests every cutout card the ray crosses, as the surface shadows do: exact, for a scene whose cutouts are sparse and large (a chain-link fence, a net, a railing) and would otherwise wall off the fog.
+        """
+    @fog_shadow_opaque_cutouts.setter
+    def fog_shadow_opaque_cutouts(self, arg1: bool) -> None:
+        ...
+    @property
     def frame_timings(self) -> dict:
         ...
     @property
@@ -11808,11 +12201,6 @@ class VulkanRenderer:
     def gbuffer_msaa(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
-    def gpu_memory(self) -> dict:
-        """
-        Device memory the renderer holds through its allocator, in bytes: allocated_bytes (every buffer, image and acceleration structure it created) and reserved_bytes (the memory blocks those live in, slack included). Cheap enough to read every frame.
-        """
-    @property
     def gpu_instances(self) -> bool:
         """
         The instanced meshes' per-frame work on the GPU: their world matrices, G-buffer draw records (frustum cull included) and ray-tracing instances written by compute instead of the CPU, byte for byte the CPU's. Off by default; a script can A/B it on its own content.
@@ -11820,6 +12208,11 @@ class VulkanRenderer:
     @gpu_instances.setter
     def gpu_instances(self, arg1: bool) -> None:
         ...
+    @property
+    def gpu_memory(self) -> dict:
+        """
+        Device memory the renderer holds through its allocator, in bytes: allocated_bytes (every buffer, image and acceleration structure it created) and reserved_bytes (the memory blocks those live in, slack included). Cheap enough to read every frame.
+        """
     @property
     def lens_distortion(self) -> dict:
         """
@@ -11908,7 +12301,7 @@ class VulkanRenderer:
         Camera-centred probe cascades for a scene too large for one probe grid (a harbour, a fjord). 0 (default): one grid fitted to the scene's bounds, whatever its size. 1..4: a scene whose fit would space probes more than 2 m apart gets that many windows around the primary camera, 1, 4, 16 and 64 m apart. Every window is updated every frame, so it costs frame time (about 1.7 ms for 3 on an RTX 4060 Laptop). Set it before the first frame. The env var THREEPP_VK_PROBE_CASCADES, when set, takes precedence.
         """
     @probe_cascades.setter
-    def probe_cascades(self, arg1: int) -> None:
+    def probe_cascades(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
     def probe_gi(self) -> bool:
@@ -11921,7 +12314,7 @@ class VulkanRenderer:
     @property
     def ray_tracing(self) -> bool:
         """
-        True when the device traces rays (ray query + acceleration structures) and THREEPP_VULKAN_NO_RT=1 did not turn them off. False: a raster-only frame where every ray misses (no shadows, sky/env-only GI and reflections, no lidar).
+        True when the device traces rays (ray query + acceleration structures) and THREEPP_VULKAN_NO_RT=1 did not turn them off. False: a raster-only frame where every ray misses (sky/env-only GI and reflections, no lidar); shadows come from shadow maps (shadow_mode).
         """
     @property
     def render_scale(self) -> float:
@@ -11979,6 +12372,48 @@ class VulkanRenderer:
     def sensor_only_surfaces(self) -> bool:
         """
         Whether sensor-only surfaces are perceivable at all (the scene master switch).
+        """
+    @property
+    def shadow_cache_stale_frames(self) -> int:
+        """
+        Frames a cached sun cascade may keep a changed static caster set before it is redrawn. 0 (default) redraws at once: a scene whose LODs change as the camera moves redraws its cascades every frame. n > 0: casters that joined are drawn over the cache meanwhile, ones that left keep their old shadow for up to n frames (a mesh that starts moving leaves its shadow behind that long).
+        """
+    @shadow_cache_stale_frames.setter
+    def shadow_cache_stale_frames(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def shadow_cascades(self) -> int:
+        """
+        The sun's shadow cascades, 1-4 (default 4).
+        """
+    @shadow_cascades.setter
+    def shadow_cascades(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def shadow_distance(self) -> float:
+        """
+        How far the sun's shadow cascades reach, metres; 0 (default) = the camera's far plane clamped to [50, 2000].
+        """
+    @shadow_distance.setter
+    def shadow_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def shadow_mode(self) -> str:
+        """
+        How the sun and lamps cast shadows: 'auto' (ray traced where ray_tracing, else shadow maps), 'rt' (a ray per light per pixel), 'sm' (shadow maps: the sun in cascades, the strongest lamps near the camera in their own maps), 'off'.
+        """
+    @shadow_mode.setter
+    def shadow_mode(self, arg1: str) -> None:
+        ...
+    @property
+    def shadow_mode_active(self) -> str:
+        """
+        The shadow mode that runs: 'rt', 'sm' or 'off' (never 'auto').
+        """
+    @property
+    def shadowed_lamps(self) -> tuple[int, int]:
+        """
+        (spots, points) as set_shadowed_lamps left them.
         """
     @property
     def sharpen_strength(self) -> float:
@@ -12049,7 +12484,7 @@ class VulkanRenderer:
     @property
     def tlas_stats(self) -> dict:
         """
-        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a skinned, displaced, morphed or tet mesh or a ParticleField added or removed, a mesh changing class), slot_edits (meshes added or removed, a GrassMesh among them, an InstancedMesh count changed, a first show, a geometry, material or texture swap: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed), records_pruned, textures_pruned, texture_slots_in_use, texture_slot_fallbacks, admissions_deferred, admissions_landed, swap_edits, slot_pool_growths (slot edits that outgrew the slot pool and grew it in place, no device wait), slot_capacity (the entries the pool holds now, see reserve_entry_slots), flat_checks (frames with nothing added, removed or swapped settled with no walk of the scene graph), versioned_deltas (slot deltas that visited only the subtrees whose structure moved) and slot_deltas (slot edits taken edit-proportionally: only the nodes and spans that changed found and placed).
+        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a skinned, displaced, morphed or tet mesh or a ParticleField added or removed, a mesh changing class), slot_edits (meshes added or removed, a GrassMesh among them, an InstancedMesh count changed, a first show, a geometry, material or texture swap: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed), records_pruned and textures_pruned (geometries and textures that died, freed by a slot edit without a rebuild), texture_slots_in_use (of 2048), texture_slot_fallbacks (textures that found no slot and drew without their map), admissions_deferred (meshes that arrived hidden and were admitted over the following frames), admissions_landed (of those, landed while still hidden), swap_edits (a geometry, material or texture swapped on a mesh, taken by a slot edit), slot_pool_growths (slot edits that outgrew the slot pool and grew it in place, no device wait), slot_capacity (the entries the pool holds now, see reserve_entry_slots), flat_checks (frames with nothing added, removed or swapped settled with no walk of the scene graph), versioned_deltas (slot deltas that visited only the subtrees whose structure moved), slot_deltas (slot edits taken edit-proportionally: only the nodes and spans that changed found and placed) and moving_entries (the entries the last frame treated as moving: moved, shown or hidden in the last 30 frames, their shadow, GI and reflection histories kept short; an instance-matrix edit counts only the instances whose matrix changed).
         """
     @property
     def tone_mapping_exposure(self) -> float:
@@ -12077,6 +12512,14 @@ class VulkanRenderer:
         """
     @underwater_sprite_foreshortening.setter
     def underwater_sprite_foreshortening(self, arg1: bool) -> None:
+        ...
+    @property
+    def unlit_fog_scatter(self) -> bool:
+        """
+        Volumetric in-scatter on unlit surfaces (MeshBasicMaterial). Off by default: an unlit pixel gets the fog's extinction and ambient scatter only, so a basic-material tree behind sunlit haze reads as a cut-out. True adds the cloud layer, point-light glow, spot beams and sun shafts in front of it, as lit surfaces get them.
+        """
+    @unlit_fog_scatter.setter
+    def unlit_fog_scatter(self, arg1: bool) -> None:
         ...
 class WrenchSample:
     """

@@ -898,6 +898,20 @@ namespace threepp_py {
                               &PhysxSoftBodyMaterial::setDynamicFriction)
                 .def_property("damping", &PhysxSoftBodyMaterial::damping, &PhysxSoftBodyMaterial::setDamping);
 
+        // Registered before SoftBody: pybind11 spells a signature when it is
+        // def()ed, and attach_to_world returns this type. Registered after,
+        // its return type was the raw C++ name, which stops the stub generator.
+        py::class_<PyDeformableAttachment>(m, "DeformableAttachment",
+                                           "Simulation-mesh vertices of a soft body held to points in a world "
+                                           "frame (SoftBody.attach_to_world).")
+                .def("update_pose", &PyDeformableAttachment::updatePose, py::arg("position"),
+                     py::arg("rotation") = Quaternion(),
+                     "Move the frame the held points were given in (world space, identity at creation): "
+                     "the held vertices follow.")
+                .def("release", &PyDeformableAttachment::release, "Let go. Idempotent.")
+                .def_property_readonly("released", &PyDeformableAttachment::released)
+                .def_property_readonly("count", &PyDeformableAttachment::count, "How many vertices it holds.");
+
         py::class_<PySoftBody>(m, "SoftBody",
                                "Handle to a PhysX deformable volume created via world.add_soft_body. Valid only "
                                "while its world lives (and until remove_soft_body). The simulation runs on two "
@@ -943,17 +957,6 @@ namespace threepp_py {
                      "vertices are now when None -- with a PxDeformableAttachment. Returns its handle; "
                      "update_pose moves the frame the points are given in. Release it before removing "
                      "the body.");
-
-        py::class_<PyDeformableAttachment>(m, "DeformableAttachment",
-                                           "Simulation-mesh vertices of a soft body held to points in a world "
-                                           "frame (SoftBody.attach_to_world).")
-                .def("update_pose", &PyDeformableAttachment::updatePose, py::arg("position"),
-                     py::arg("rotation") = Quaternion(),
-                     "Move the frame the held points were given in (world space, identity at creation): "
-                     "the held vertices follow.")
-                .def("release", &PyDeformableAttachment::release, "Let go. Idempotent.")
-                .def_property_readonly("released", &PyDeformableAttachment::released)
-                .def_property_readonly("count", &PyDeformableAttachment::count, "How many vertices it holds.");
 #endif// THREEPP_PHYSX_GPU
 
         py::class_<PhysxWorld>(m, "PhysxWorld",
