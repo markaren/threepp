@@ -767,12 +767,7 @@ bool VulkanRenderer::Impl::snapNodeUnchanged(const SnapNode& sn, Object3D& o, bo
             // values-only change stays on this path (the lean diff).
             if (sn.spanIndex >= 0 && sn.mat && static_cast<size_t>(sn.spanIndex) < entrySpans_.size()) {
                 const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
-                if (sn.mat->version() != fp0.matVersion &&
-                    (albedoTexOf(*m) != fp0.albedoTex || roughnessTexOf(*m) != fp0.roughnessTex ||
-                     metalnessTexOf(*m) != fp0.metalnessTex || normalTexOf(*m) != fp0.normalTex ||
-                     transmissionTexOf(*m) != fp0.transmissionTex || clearcoatTexOf(*m) != fp0.clearcoatTex ||
-                     clearcoatRoughnessTexOf(*m) != fp0.clearcoatRoughnessTex ||
-                     emissiveTexOf(*m) != fp0.emissiveTex || occlusionTexOf(*m) != fp0.occlusionTex))
+                if (sn.mat->version() != fp0.matVersion && texSetOf(*m) != fp0.tex)
                     return false;
             }
             // Dynamic routing bits — plain bool reads, no lookups. The
@@ -1152,13 +1147,7 @@ bool VulkanRenderer::Impl::flatSnapshotCheck(Object3D& scene, Camera& camera) {
                     if (static_cast<size_t>(sn.spanIndex) >= entrySpans_.size()) return false;
                     const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
                     const Mesh& m = *sn.mesh;
-                    if (v != fp0.matVersion &&
-                        (albedoTexOf(m) != fp0.albedoTex || roughnessTexOf(m) != fp0.roughnessTex ||
-                         metalnessTexOf(m) != fp0.metalnessTex || normalTexOf(m) != fp0.normalTex ||
-                         transmissionTexOf(m) != fp0.transmissionTex || clearcoatTexOf(m) != fp0.clearcoatTex ||
-                         clearcoatRoughnessTexOf(m) != fp0.clearcoatRoughnessTex ||
-                         emissiveTexOf(m) != fp0.emissiveTex || occlusionTexOf(m) != fp0.occlusionTex))
-                        return false;
+                    if (v != fp0.matVersion && texSetOf(m) != fp0.tex) return false;
                 }
                 fm.version = v;
             }
@@ -2459,28 +2448,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     const unsigned int matVer = fp0.matTyped ? fp0.matTyped->version() : 0u;
                     if (matVer != fp0.matVersion) {
                         Mesh* m = sp.mesh;
-                        if (albedoTexOf(*m) != fp0.albedoTex ||
-                            roughnessTexOf(*m) != fp0.roughnessTex ||
-                            metalnessTexOf(*m) != fp0.metalnessTex ||
-                            normalTexOf(*m) != fp0.normalTex ||
-                            transmissionTexOf(*m) != fp0.transmissionTex ||
-                            clearcoatTexOf(*m) != fp0.clearcoatTex ||
-                            clearcoatRoughnessTexOf(*m) != fp0.clearcoatRoughnessTex ||
-                            emissiveTexOf(*m) != fp0.emissiveTex ||
-                            occlusionTexOf(*m) != fp0.occlusionTex) {
+                        if (texSetOf(*m) != fp0.tex) {
                             leanOk = false;// texture swap = STRUCTURAL — full path decides
                             break;
                         }
                         matChanged = true;
-                        const MaterialDesc md = materialFromMesh(*m);
-                        const std::array<float, 15> pbr = {
-                                md.albedo[0], md.albedo[1], md.albedo[2],
-                                md.roughness, md.metalness,
-                                md.emissive[0], md.emissive[1], md.emissive[2],
-                                md.emissiveIntensity,
-                                md.normalScale[0], md.normalScale[1],
-                                md.transmission, md.ior,
-                                md.clearcoat, md.clearcoatRoughness};
+                        const std::array<float, 15> pbr = pbrKeyOf(materialFromMesh(*m));
                         for (uint32_t j = 0; j < sp.count; ++j) {
                             auto& fp = prevSceneFingerprint[sp.first + j];
                             fp.matVersion = matVer;
@@ -2490,29 +2463,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     BufferGeometry* g = fp0.geomTyped;
                     const unsigned int av = g->attributesVersion();
                     if (av != fp0.attrVersion) {// attribute added/replaced/removed — re-cache
-                        // Untyped: only `version` is polled off these, and typed
-                        // lookups would come back null for narrowed attributes.
-                        auto* posAttr  = g->getAttribute("position");
-                        auto* normAttr = g->getAttribute("normal");
-                        auto* uvAttr   = g->getAttribute("uv");
-                        auto* idxAttr  = g->getIndex();
-                        auto* colAttr  = g->getAttribute("color");
+                        const GeomAttrRefs attrs = GeomAttrRefs::of(*g);
                         for (uint32_t j = 0; j < sp.count; ++j) {
                             auto& fp = prevSceneFingerprint[sp.first + j];
                             fp.attrVersion = av;
-                            fp.posAttr  = posAttr;
-                            fp.normAttr = normAttr;
-                            fp.uvAttr   = uvAttr;
-                            fp.idxAttr  = idxAttr;
-                            fp.colAttr  = colAttr;
+                            fp.attrs = attrs;
                         }
                     }
-                    unsigned int gv = 0;// must mirror geomVersionOf()
-                    if (fp0.posAttr)  gv += fp0.posAttr->version;
-                    if (fp0.normAttr) gv += fp0.normAttr->version;
-                    if (fp0.idxAttr)  gv += fp0.idxAttr->version;
-                    if (fp0.uvAttr)   gv += fp0.uvAttr->version;
-                    if (fp0.colAttr)  gv += fp0.colAttr->version;
+                    const unsigned int gv = fp0.attrs.versionSum();// = geomVersionOf(*g)
                     const bool geomChanged = (gv != fp0.geomVersion);
                     // A material edit that moved its displacementMap re-displaces
                     // the geometry (see the generic compare).
@@ -2583,8 +2541,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // geometry shares one material across hundreds of entries. Cache the
             // derived texture pointers + PBR floats and reuse them per material.
             struct FpMatDerived {
-                std::shared_ptr<Texture> albedoTex, roughnessTex, metalnessTex, normalTex,
-                        transmissionTex, clearcoatTex, clearcoatRoughnessTex, emissiveTex, occlusionTex;
+                MaterialTexSet tex;
                 std::array<float, 15> pbr;
             };
             std::unordered_map<const Material*, FpMatDerived> fpMemo;
@@ -2631,50 +2588,19 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     fp.matTyped  = matPtr;
                     fp.geomTyped = m->geometry().get();
                     fp.attrVersion = fp.geomTyped->attributesVersion();
-                    fp.posAttr  = fp.geomTyped->getAttribute("position");
-                    fp.normAttr = fp.geomTyped->getAttribute("normal");
-                    fp.uvAttr   = fp.geomTyped->getAttribute("uv");
-                    fp.idxAttr  = fp.geomTyped->getIndex();
-                    // Without it the lean diff summed no color version, so a
-                    // color-only edit went unseen on every lean frame.
-                    fp.colAttr  = fp.geomTyped->getAttribute("color");
+                    fp.attrs = GeomAttrRefs::of(*fp.geomTyped);
                     const Material* matKey = matPtr;
                     auto memoIt = fpMemo.find(matKey);
                     if (memoIt == fpMemo.end()) {
-                        FpMatDerived d{};
-                        d.albedoTex             = albedoTexOf(*m);
-                        d.roughnessTex          = roughnessTexOf(*m);
-                        d.metalnessTex          = metalnessTexOf(*m);
-                        d.normalTex             = normalTexOf(*m);
-                        d.transmissionTex       = transmissionTexOf(*m);
-                        d.clearcoatTex          = clearcoatTexOf(*m);
-                        d.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m);
-                        d.emissiveTex           = emissiveTexOf(*m);
-                        d.occlusionTex          = occlusionTexOf(*m);
-                        const MaterialDesc md = materialFromMesh(*m);
-                        d.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
-                                 md.roughness, md.metalness,
-                                 md.emissive[0], md.emissive[1], md.emissive[2],
-                                 md.emissiveIntensity,
-                                 md.normalScale[0], md.normalScale[1],
-                                 md.transmission, md.ior,
-                                 md.clearcoat, md.clearcoatRoughness};
+                        FpMatDerived d{texSetOf(*m), pbrKeyOf(materialFromMesh(*m))};
                         memoIt = fpMemo.emplace(matKey, std::move(d)).first;
                     }
                     const FpMatDerived& d = memoIt->second;
-                    fp.albedoTex             = d.albedoTex;
-                    fp.roughnessTex          = d.roughnessTex;
-                    fp.metalnessTex          = d.metalnessTex;
-                    fp.normalTex             = d.normalTex;
-                    fp.transmissionTex       = d.transmissionTex;
-                    fp.clearcoatTex          = d.clearcoatTex;
-                    fp.clearcoatRoughnessTex = d.clearcoatRoughnessTex;
-                    fp.emissiveTex           = d.emissiveTex;
-                    fp.occlusionTex          = d.occlusionTex;
-                    fp.instanceIndex         = en.instanceIndex;
-                    fp.overlay               = en.isOverlay;
-                    fp.matrix                = en.worldMatrix;
-                    fp.pbr = d.pbr;
+                    fp.tex           = d.tex;
+                    fp.instanceIndex = en.instanceIndex;
+                    fp.overlay       = en.isOverlay;
+                    fp.matrix        = en.worldMatrix;
+                    fp.pbr           = d.pbr;
                 }
             }
             }// !leanOk (fingerprint re-derivation)
@@ -2866,14 +2792,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // instance set changed, so a refit would MODE_UPDATE with
                         // a different instance count than the last build (spec
                         // violation → corrupt TLAS → traversal hang). Rebuild.
-                        a.overlay != b.overlay ||
-                        a.albedoTex != b.albedoTex || a.roughnessTex != b.roughnessTex ||
-                        a.metalnessTex != b.metalnessTex || a.normalTex != b.normalTex ||
-                        a.transmissionTex != b.transmissionTex ||
-                        a.clearcoatTex != b.clearcoatTex ||
-                        a.clearcoatRoughnessTex != b.clearcoatRoughnessTex ||
-                        a.emissiveTex != b.emissiveTex ||
-                        a.occlusionTex != b.occlusionTex) {
+                        a.overlay != b.overlay || a.tex != b.tex) {
                         structuralSame = false;
                         break;
                     }

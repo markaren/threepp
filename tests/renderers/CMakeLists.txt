@@ -255,6 +255,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanVisibilityToggle_test COMMAND VulkanVisibilityToggle_test)
     set_tests_properties(VulkanVisibilityToggle_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A version bump of any one tracked geometry attribute (position, normal,
+    # uv, uv2, color, index) is seen on a frame whose scene did not otherwise
+    # change (the lean diff), with and without ray tracing.
+    add_executable(VulkanAttributeEdit_test VulkanAttributeEdit_test.cpp)
+    target_link_libraries(VulkanAttributeEdit_test PRIVATE threepp)
+    add_test(NAME VulkanAttributeEdit_test COMMAND VulkanAttributeEdit_test)
+    add_test(NAME VulkanAttributeEdit_nort_test COMMAND VulkanAttributeEdit_test)
+    set_tests_properties(VulkanAttributeEdit_test VulkanAttributeEdit_nort_test PROPERTIES SKIP_RETURN_CODE 42)
+    set_tests_properties(VulkanAttributeEdit_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+
     # Content streamed through the entry list the way CellStreamer and the
     # forest's LODs drive it (cells detached and re-attached, an InstancedMesh
     # count grown and shrunk, a never-shown mesh shown): what each event costs

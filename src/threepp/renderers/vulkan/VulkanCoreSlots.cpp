@@ -177,28 +177,9 @@ VulkanRenderer::Impl::MeshFingerprint VulkanRenderer::Impl::slotFingerprintOf(Me
             fp.matTyped = mat.get();
             fp.geomTyped = geom.get();
             fp.attrVersion = geom->attributesVersion();
-            fp.posAttr = geom->getAttribute("position");
-            fp.normAttr = geom->getAttribute("normal");
-            fp.uvAttr = geom->getAttribute("uv");
-            fp.idxAttr = geom->getIndex();
-            fp.colAttr = geom->getAttribute("color");
-            fp.albedoTex = albedoTexOf(m);
-            fp.roughnessTex = roughnessTexOf(m);
-            fp.metalnessTex = metalnessTexOf(m);
-            fp.normalTex = normalTexOf(m);
-            fp.transmissionTex = transmissionTexOf(m);
-            fp.clearcoatTex = clearcoatTexOf(m);
-            fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(m);
-            fp.emissiveTex = emissiveTexOf(m);
-            fp.occlusionTex = occlusionTexOf(m);
-            const MaterialDesc pd = materialFromMesh(m);
-            fp.pbr = {pd.albedo[0], pd.albedo[1], pd.albedo[2],
-                      pd.roughness, pd.metalness,
-                      pd.emissive[0], pd.emissive[1], pd.emissive[2],
-                      pd.emissiveIntensity,
-                      pd.normalScale[0], pd.normalScale[1],
-                      pd.transmission, pd.ior,
-                      pd.clearcoat, pd.clearcoatRoughness};
+            fp.attrs = GeomAttrRefs::of(*geom);
+            fp.tex = texSetOf(m);
+            fp.pbr = pbrKeyOf(materialFromMesh(m));
             fp.overlay = false;
             return fp;
         }
@@ -222,8 +203,7 @@ void VulkanRenderer::Impl::slotTombRows(MeshEntry& e, MeshFingerprint& fp) {
             fp.matTyped = mt.get();
             fp.geomTyped = g.get();
             fp.attrVersion = g->attributesVersion();
-            fp.posAttr = g->getAttribute("position");
-            fp.normAttr = g->getAttribute("normal");
+            fp.attrs = GeomAttrRefs::of(*g);
         }
 
 void VulkanRenderer::Impl::slotGrowRows(size_t oldSize, size_t newSize, const MeshEntry& tombEntry,
@@ -328,11 +308,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             const bool rq = ctx->rayQuerySupported();
 
             const auto texturesChanged = [&](const Mesh& m, const MeshFingerprint& f) {
-                return albedoTexOf(m) != f.albedoTex || roughnessTexOf(m) != f.roughnessTex ||
-                       metalnessTexOf(m) != f.metalnessTex || normalTexOf(m) != f.normalTex ||
-                       transmissionTexOf(m) != f.transmissionTex || clearcoatTexOf(m) != f.clearcoatTex ||
-                       clearcoatRoughnessTexOf(m) != f.clearcoatRoughnessTex ||
-                       emissiveTexOf(m) != f.emissiveTex || occlusionTexOf(m) != f.occlusionTex;
+                return texSetOf(m) != f.tex;
             };
 
             THREEPP_CPUPROF_NAMED(seMatch, "scene.S1_slotMatch");

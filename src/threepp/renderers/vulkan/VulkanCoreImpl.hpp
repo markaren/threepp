@@ -287,6 +287,8 @@ namespace threepp {
         using BlasRecord = vulkan::impl::BlasRecord;
         using AttrVersions = vulkan::impl::AttrVersions;
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
+        using GeomAttrRefs = vulkan::impl::GeomAttrRefs;
+        using MaterialTexSet = vulkan::impl::MaterialTexSet;
 
         // Definition moved to VulkanGeometryState.hpp.
         using LodGeomSel = vulkan::impl::LodGeomSel;
@@ -3763,32 +3765,16 @@ namespace threepp {
         // record or input buffer at creation; ensureSceneBuilt prints one line
         // per structural build when the sum is non-zero, then clears it.
         void noteDeformPlacement(const Buffer& b);
+        // The composite version of the tracked attributes (GeomAttrRefs).
         VkDeviceSize deformHostBytes_ = 0;
 
         static unsigned int geomVersionOf(const BufferGeometry& g) {
-            // Untyped lookups: only `version` is read, and the typed getter
-            // returns null for narrowed (compressAttributes) attributes, which
-            // would silently drop their edits from the composite version.
-            unsigned int v = 0;
-            if (auto* a = g.getAttribute("position")) v += a->version;
-            if (auto* a = g.getAttribute("normal"))   v += a->version;
-            if (auto* idx = g.getIndex())              v += idx->version;
-            if (auto* a = g.getAttribute("uv"))        v += a->version;
-            if (auto* a = g.getAttribute("uv2"))       v += a->version;
-            if (auto* a = g.getAttribute("color"))     v += a->version;
-            return v;
+            return GeomAttrRefs::of(g).versionSum();
         }
 
-        // The parts of geomVersionOf, kept apart (same untyped lookups).
+        // The parts of geomVersionOf, kept apart.
         static AttrVersions attrVersionsOf(const BufferGeometry& g) {
-            AttrVersions v;
-            if (auto* a = g.getAttribute("position")) v.position = a->version;
-            if (auto* a = g.getAttribute("normal"))   v.normal = a->version;
-            if (auto* a = g.getAttribute("uv"))       v.uv = a->version;
-            if (auto* a = g.getAttribute("uv2"))      v.uv2 = a->version;
-            if (auto* a = g.getAttribute("color"))    v.color = a->version;
-            if (auto* idx = g.getIndex())             v.index = idx->version;
-            return v;
+            return GeomAttrRefs::of(g).versions();
         }
 
         // Stamp both version snapshots after the record's buffers were filled
@@ -4487,6 +4473,26 @@ namespace threepp {
                 return cc->clearcoatRoughnessMap;
             }
             return nullptr;
+        // The maps a mesh fingerprint compares (MeshFingerprint::tex).
+        static MaterialTexSet texSetOf(const Mesh& m) {
+            return {albedoTexOf(m), roughnessTexOf(m), metalnessTexOf(m),
+                    normalTexOf(m), transmissionTexOf(m), clearcoatTexOf(m),
+                    clearcoatRoughnessTexOf(m), emissiveTexOf(m), occlusionTexOf(m)};
+        }
+
+        // The material values a mesh fingerprint compares (MeshFingerprint::pbr):
+        // albedo, roughness, metalness, emissive + intensity, normalScale,
+        // transmission + ior, clearcoat + its roughness.
+        static std::array<float, 15> pbrKeyOf(const MaterialDesc& md) {
+            return {md.albedo[0], md.albedo[1], md.albedo[2],
+                    md.roughness, md.metalness,
+                    md.emissive[0], md.emissive[1], md.emissive[2],
+                    md.emissiveIntensity,
+                    md.normalScale[0], md.normalScale[1],
+                    md.transmission, md.ior,
+                    md.clearcoat, md.clearcoatRoughness};
+        }
+
         }
 
         // Walk the scene each frame, fingerprint the meshes, and rebuild the

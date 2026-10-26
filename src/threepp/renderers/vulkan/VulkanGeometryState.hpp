@@ -48,6 +48,72 @@ namespace threepp::vulkan::impl {
         unsigned int index = 0;
     };
 
+    // The attributes a BLAS record and a mesh fingerprint track, as untyped
+    // pointers: only `version` is read off them, and the typed getter returns
+    // null for narrowed (compressAttributes) attributes, which would silently
+    // drop their edits. This is the one list: geomVersionOf, attrVersionsOf and
+    // the lean diff's cached pointers (MeshFingerprint::attrs) all read it, so
+    // an attribute added here is counted by all three. A hand-kept copy of it
+    // in the lean diff missed color, and later uv2 (VulkanAttributeEdit_test).
+    struct GeomAttrRefs {
+        const BufferAttribute* position = nullptr;
+        const BufferAttribute* normal = nullptr;
+        const BufferAttribute* uv = nullptr;
+        const BufferAttribute* uv2 = nullptr;
+        const BufferAttribute* color = nullptr;
+        const BufferAttribute* index = nullptr;
+
+        static GeomAttrRefs of(const BufferGeometry& g) {
+            GeomAttrRefs r;
+            r.position = g.getAttribute("position");
+            r.normal = g.getAttribute("normal");
+            r.uv = g.getAttribute("uv");
+            r.uv2 = g.getAttribute("uv2");
+            r.color = g.getAttribute("color");
+            r.index = g.getIndex();
+            return r;
+        }
+
+        [[nodiscard]] AttrVersions versions() const {
+            AttrVersions v;
+            if (position) v.position = position->version;
+            if (normal) v.normal = normal->version;
+            if (uv) v.uv = uv->version;
+            if (uv2) v.uv2 = uv2->version;
+            if (color) v.color = color->version;
+            if (index) v.index = index->version;
+            return v;
+        }
+
+        // Their sum: says THAT something changed (BlasRecord::geomVersion,
+        // MeshFingerprint::geomVersion).
+        [[nodiscard]] unsigned int versionSum() const {
+            const AttrVersions v = versions();
+            return v.position + v.normal + v.uv + v.uv2 + v.color + v.index;
+        }
+    };
+
+    // The material maps a mesh fingerprint compares: a swap of any of them is
+    // STRUCTURAL. Held as shared_ptr, not raw pointers, so the comparison
+    // cannot be fooled by an allocator recycling a freed Texture's address for
+    // a new one: the held pointer keeps the previous Texture alive, and ==
+    // compares get(). Filled by VulkanRenderer::Impl::texSetOf. (occlusion was
+    // once missing: an aoMap swap neither rebuilt nor got this protection, and
+    // its dead predecessor's address could hit a stale textureCache slot.)
+    struct MaterialTexSet {
+        std::shared_ptr<Texture> albedo;
+        std::shared_ptr<Texture> roughness;
+        std::shared_ptr<Texture> metalness;
+        std::shared_ptr<Texture> normal;
+        std::shared_ptr<Texture> transmission;
+        std::shared_ptr<Texture> clearcoat;
+        std::shared_ptr<Texture> clearcoatRoughness;
+        std::shared_ptr<Texture> emissive;
+        std::shared_ptr<Texture> occlusion;
+
+        bool operator==(const MaterialTexSet&) const = default;
+    };
+
     // Per-geometry BLAS + the buffers that back its build inputs. Vertex /
     // index / normal / uv buffers are kept alive past the build so the
     // closest-hit shader can sample them via buffer-reference pointers.
@@ -856,25 +922,7 @@ namespace threepp::vulkan::impl {
         unsigned int meshId = 0;
         unsigned int geomId = 0;
         unsigned int matId  = 0;
-        // Texture fingerprint slots hold the shared_ptr (not just the raw
-        // pointer) so the comparison can't be fooled by an allocator
-        // recycling a freed Texture's address for a brand-new Texture: a
-        // held shared_ptr keeps the previous Texture alive long enough that
-        // no overlap can happen, and operator!= still compares get().
-        std::shared_ptr<Texture> albedoTex;            // covers map swap on the same material
-        std::shared_ptr<Texture> roughnessTex;         // covers roughnessMap swap
-        std::shared_ptr<Texture> metalnessTex;         // covers metalnessMap swap
-        std::shared_ptr<Texture> normalTex;            // covers normalMap swap
-        std::shared_ptr<Texture> transmissionTex;      // covers transmissionMap swap
-        std::shared_ptr<Texture> clearcoatTex;         // covers clearcoatMap swap
-        std::shared_ptr<Texture> clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
-        std::shared_ptr<Texture> emissiveTex;          // covers emissiveMap swap
-        std::shared_ptr<Texture> occlusionTex;         // covers aoMap swap — was MISSING: an
-                                                       // occlusion-map swap neither triggered a
-                                                       // structural rebuild nor got the held-
-                                                       // shared_ptr recycle protection, so its
-                                                       // dead predecessor's Texture* could be
-                                                       // reused and hit a stale textureCache slot
+        MaterialTexSet tex;// a map swapped on the same material
         uint32_t instanceIndex;// 0 for non-instanced; distinguishes sub-instances
         // TLAS membership. An overlay flip (e.g. material.wireframe toggled)
         // keeps every pointer above identical but adds/removes this entry's
@@ -888,27 +936,20 @@ namespace threepp::vulkan::impl {
                                     // 8 texture-of dynamic_casts + materialFromMesh
                                     // (~21 dynamic_casts/mesh) when nothing on the
                                     // material has changed since last frame.
-        unsigned int geomVersion = 0;// composite BufferAttribute version (pos+norm+idx+uv+color)
+        unsigned int geomVersion = 0;// GeomAttrRefs::versionSum of the geometry
         std::array<float, 16> matrix{};
-        std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
+        std::array<float, 15> pbr{};// VulkanRenderer::Impl::pbrKeyOf
         // TYPED views + attribute-pointer cache for the snapshot lean diff
         // (the void* fields above are compare-only). attrVersion gates the
         // cached attribute pointers: while BufferGeometry::
         // attributesVersion() is unchanged, the attribute map still holds
         // the same objects, so the raw pointers cannot dangle and the
-        // composite geomVersion is 4 direct version reads instead of 4
-        // string-keyed map lookups + dynamic_casts per entry per frame.
+        // composite geomVersion is direct version reads instead of
+        // string-keyed map lookups per entry per frame.
         const Material* matTyped = nullptr;
         BufferGeometry* geomTyped = nullptr;
         unsigned int attrVersion = ~0u;
-        const BufferAttribute* posAttr  = nullptr;
-        const BufferAttribute* normAttr = nullptr;
-        const BufferAttribute* uvAttr   = nullptr;
-        const BufferAttribute* idxAttr  = nullptr;
-        const BufferAttribute* colAttr  = nullptr;// was MISSING: a color-only
-                                                  // edit sailed through the lean
-                                                  // fast path unseen even though
-                                                  // geomVersionOf() counts it
+        GeomAttrRefs attrs;
     };
 
     // Per-frame refresh op for a plain (non-skinned/non-displaced/non-morphed)
