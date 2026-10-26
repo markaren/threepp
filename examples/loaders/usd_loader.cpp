@@ -3,23 +3,29 @@
 
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/USDLoader.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <unordered_set>
 
 using namespace threepp;
 
 int main(int argc, char** argv) {
-    // usd_loader [model.usd] [--shot out.png] [--frames N]
+    // usd_loader [model.usd] [--shot out.png] [--frames N] [--pose mid|v1,v2,...]
     // --shot: headless capture — frame the loaded scene from its bounding box,
     // render N warm-up frames (TAA/denoiser converge), write one PNG, exit.
+    // --pose: drive a robot's joints, to each range's midpoint or to the
+    // listed values (degrees for revolute joints, metres for prismatic).
     std::string modelPath;
     std::string shotPath;
+    std::string pose;
     int   shotFrames = 240;
     float shotZoom   = 1.f;// <1 = closer (distance scales with it)
     for (int i = 1; i < argc; ++i) {
@@ -33,6 +39,10 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[i], "--zoom") == 0 && i + 1 < argc) {
             shotZoom = static_cast<float>(std::atof(argv[++i]));
+            continue;
+        }
+        if (std::strcmp(argv[i], "--pose") == 0 && i + 1 < argc) {
+            pose = argv[++i];
             continue;
         }
         std::filesystem::path arg = argv[i];
@@ -111,7 +121,39 @@ int main(int argc, char** argv) {
             scene.background = result.environment;
             scene.environment = result.environment;
         }
-        scene.add(result.scene);
+        if (auto robot = result.robot) {
+            const auto infos = robot->getArticulatedJointInfo();
+            std::cout << "Robot: dofs=" << robot->numDOF() << " joints=" << robot->jointInfos().size()
+                      << " endEffector=" << robot->endEffectorLink() << "\n";
+            for (size_t i = 0; i < infos.size(); ++i) {
+                const auto range = robot->getJointRange(i, true);
+                std::cout << "  " << infos[i].name << " " << (infos[i].type == Robot::JointType::Revolute ? "revolute" : "prismatic")
+                          << " axis=(" << infos[i].axis.x << "," << infos[i].axis.y << "," << infos[i].axis.z << ")"
+                          << " range=[" << range.min << "," << range.max << "]"
+                          << " loaded=" << robot->getJointValue(i, true) << "\n";
+            }
+            if (pose == "mid") {
+                for (size_t i = 0; i < robot->numDOF(); ++i) {
+                    const auto range = robot->getJointRange(i);
+                    if (std::isfinite(range.min) && std::isfinite(range.max)) robot->setJointValue(i, range.mid());
+                }
+            } else if (!pose.empty()) {
+                std::stringstream ss(pose);
+                std::string value;
+                for (size_t i = 0; std::getline(ss, value, ',') && i < robot->numDOF(); ++i) {
+                    robot->setJointValue(i, std::stof(value), infos[i].type == Robot::JointType::Revolute);
+                }
+            }
+            if (!pose.empty()) {
+                robot->updateMatrixWorld(true);
+                Vector3 ee;
+                ee.setFromMatrixPosition(robot->getEndEffectorTransform());
+                std::cout << "End effector (world, Y-up): " << ee.x << " " << ee.y << " " << ee.z << "\n";
+            }
+            scene.add(robot);
+        } else {
+            scene.add(result.scene);
+        }
     } else {
         auto catPlane = loader.load(std::string(DATA_FOLDER) + "/models/usd/texture-cat-plane.usdz");
 

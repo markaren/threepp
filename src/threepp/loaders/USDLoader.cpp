@@ -15,6 +15,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include "next/layer/asset-anchor.hh"
@@ -422,6 +423,8 @@ namespace threepp {
         // to the caller via USDResult so they can assign it to scene.environment
         // / scene.background. Reset at the start of each load().
         std::shared_ptr<Texture> _envTexture;
+        // The latest load's articulated robot, when it has UsdPhysics joints.
+        std::shared_ptr<Robot> _robot;
 
         // State of one load: the converted scene plus caches keyed by its ids.
         // The scene grows when a material rc4 skipped is converted on demand.
@@ -437,11 +440,13 @@ namespace threepp {
             std::unordered_map<int, std::vector<SubMesh>> subMeshes;
             std::unordered_map<std::string, std::shared_ptr<Texture>> sampledTextures;
             std::unordered_set<int> prototypeNodes;
+            std::unordered_map<std::string, std::shared_ptr<Object3D>> objectByPath;
             int meshCount = 0;
         };
 
         std::shared_ptr<Group> load(const std::filesystem::path& path) {
             _envTexture.reset();
+            _robot.reset();
             const std::string pathStr = path.string();
             const std::filesystem::path baseDir = path.parent_path();
 
@@ -518,6 +523,9 @@ namespace threepp {
                 return nullptr;
             }
 
+            // --- UsdPhysics joints ---
+            _robot = buildRobot(build, root);
+
             return root;
         }
 
@@ -559,6 +567,7 @@ namespace threepp {
 
             obj->name = node->name;
             obj->visible = node->visible;
+            b.objectByPath[node->prim_path] = obj;
             Matrix4 local = toMatrix4(node->local_transform);
             if (resetsXformStack) {
                 // The prim's ops are world-space (rigid bodies in physics
@@ -1102,6 +1111,158 @@ namespace threepp {
         }
 
         // -------------------------------------------------------------------
+        // UsdPhysics joints → Robot.
+        //
+        // A joint relates two bodies: its frame sits at localPos0/localRot0
+        // in body0 and at localPos1/localRot1 in body1, and the joint's zero
+        // is where those two frames coincide; it moves body1 about
+        // (revolute) or along (prismatic) its axis in that frame. Each joint
+        // becomes a node under body0 at the body0 frame, with body1 moved
+        // beneath it. Assets are authored in some pose (SimReady's FR3 in
+        // Franka's "ready" pose), so the authored joint value is measured
+        // from the bodies' poses and set on the robot: it loads as authored
+        // and reports true joint angles. Revolute limits are degrees in USD.
+        // -------------------------------------------------------------------
+
+        static std::shared_ptr<Robot> buildRobot(Build& b, const std::shared_ptr<Group>& root) {
+            struct Joint {
+                const tnext::PhysicsJointAnnotation* usd;
+                Robot::JointType type;
+            };
+            std::vector<Joint> joints;
+            for (const auto& j : b.scene.physics.joints) {
+                Robot::JointType type;
+                if (j.type_name == "PhysicsRevoluteJoint") type = Robot::JointType::Revolute;
+                else if (j.type_name == "PhysicsPrismaticJoint") type = Robot::JointType::Prismatic;
+                else if (j.type_name == "PhysicsFixedJoint") type = Robot::JointType::Fixed;
+                else continue;// spherical, distance, D6: no Robot equivalent
+                // A joint to the world (no body0) anchors the root; nothing to articulate.
+                if (!j.has_body0 || !j.has_body1) continue;
+                if (!b.objectByPath.count(j.body0) || !b.objectByPath.count(j.body1)) continue;
+                // body1 must not contain body0, or moving it under the joint
+                // would make a cycle.
+                if (j.body0 == j.body1 || j.body0.rfind(j.body1 + "/", 0) == 0) continue;
+                joints.push_back({&j, type});
+            }
+            if (joints.empty()) return nullptr;
+
+            // Parents before children, so DOF order runs root to tip.
+            std::ranges::stable_sort(joints, {}, [](const Joint& j) {
+                return std::ranges::count(j.usd->body1, '/');
+            });
+
+            // Rest poses, read before any body moves.
+            root->updateMatrixWorld(true);
+            std::unordered_map<std::string, Matrix4> world;
+            for (const auto& j : joints) {
+                for (const auto* path : {&j.usd->body0, &j.usd->body1}) {
+                    world.emplace(*path, *b.objectByPath.at(*path)->matrixWorld);
+                }
+            }
+
+            auto robot = Robot::create();
+            std::vector<float> authoredValues;// parallel to the robot's joints
+            std::unordered_set<std::string> links;
+            auto addLink = [&](const std::string& path) {
+                if (links.insert(path).second) robot->addLink(b.objectByPath.at(path));
+            };
+
+            for (const auto& j : joints) {
+                const auto& usd = *j.usd;
+                const auto body0 = b.objectByPath.at(usd.body0);
+                const auto body1 = b.objectByPath.at(usd.body1);
+
+                const Vector3 pos0(usd.local_pos0.x, usd.local_pos0.y, usd.local_pos0.z);
+                const Quaternion rot0(usd.local_rot0.y, usd.local_rot0.z, usd.local_rot0.w, usd.local_rot0.x);
+                Matrix4 frame;
+                frame.compose(pos0, rot0, Vector3(1, 1, 1));
+
+                auto jointNode = std::make_shared<Object3D>();
+                jointNode->name = usd.prim_path.substr(usd.prim_path.rfind('/') + 1);
+                jointNode->position.copy(pos0);
+                jointNode->quaternion.copy(rot0);
+                body0->add(jointNode);
+
+                Robot::JointInfo info;
+                info.type = j.type;
+                info.name = jointNode->name;
+                info.parent = usd.body0;
+                info.child = usd.body1;
+                info.axis.set(usd.axis.x, usd.axis.y, usd.axis.z);
+                if (info.axis.lengthSq() > 0) info.axis.normalize();
+                const bool limited = std::isfinite(usd.lower_limit) && std::isfinite(usd.upper_limit) &&
+                                     usd.lower_limit <= usd.upper_limit;
+                if (limited && j.type == Robot::JointType::Revolute) {
+                    info.range = Robot::JointRange{math::degToRad(usd.lower_limit), math::degToRad(usd.upper_limit)};
+                } else if (limited && j.type == Robot::JointType::Prismatic) {
+                    info.range = Robot::JointRange{usd.lower_limit, usd.upper_limit};
+                }
+
+                // body1 in the body0 joint frame, from the authored poses.
+                Matrix4 body0Inv = world.at(usd.body0);
+                body0Inv.invert();
+                Matrix4 frameInv = frame;
+                frameInv.invert();
+                Matrix4 relative;
+                relative.multiplyMatrices(frameInv, body0Inv.multiply(world.at(usd.body1)));
+
+                // The joint motion that takes the body1 frame onto the body0
+                // frame: relative * frame1 is a rotation about (or a
+                // translation along) the axis by the authored value.
+                const Vector3 pos1(usd.local_pos1.x, usd.local_pos1.y, usd.local_pos1.z);
+                const Quaternion rot1(usd.local_rot1.y, usd.local_rot1.z, usd.local_rot1.w, usd.local_rot1.x);
+                Matrix4 frame1;
+                frame1.compose(pos1, rot1, Vector3(1, 1, 1));
+                Matrix4 motion;
+                motion.multiplyMatrices(relative, frame1);
+                Vector3 motionPos, motionScale;
+                Quaternion motionRot;
+                motion.decompose(motionPos, motionRot, motionScale);
+
+                float authored = 0;
+                Matrix4 undo;// the inverse of the joint motion at the authored value
+                if (j.type == Robot::JointType::Revolute) {
+                    const float s = motionRot.x * info.axis.x + motionRot.y * info.axis.y + motionRot.z * info.axis.z;
+                    authored = 2 * std::atan2(s, motionRot.w);
+                    if (authored > math::PI) authored -= 2 * math::PI;
+                    if (authored < -math::PI) authored += 2 * math::PI;
+                    // Ranges like FR3's joint 6 (25..265 deg) run past pi.
+                    if (info.range) {
+                        for (float wrapped : {authored + 2 * math::PI, authored - 2 * math::PI}) {
+                            if (!(authored >= info.range->min && authored <= info.range->max) &&
+                                wrapped >= info.range->min && wrapped <= info.range->max) authored = wrapped;
+                        }
+                    }
+                    undo.makeRotationAxis(info.axis, -authored);
+                } else if (j.type == Robot::JointType::Prismatic) {
+                    authored = motionPos.dot(info.axis);
+                    undo.makeTranslation(info.axis.x * -authored, info.axis.y * -authored, info.axis.z * -authored);
+                }
+                // body1 at the joint's zero, keeping whatever the authored pose
+                // has beyond the joint motion so the loaded pose is exact.
+                Matrix4 local;
+                local.multiplyMatrices(undo, relative);
+                jointNode->add(body1);
+                local.decompose(body1->position, body1->quaternion, body1->scale);
+
+                addLink(usd.body0);
+                addLink(usd.body1);
+                robot->addJoint(jointNode, info);
+                authoredValues.push_back(authored);
+            }
+
+            robot->add(root);
+            robot->finalizeInPlace();
+            const auto& nodes = robot->jointNodes();
+            for (size_t i = 0; i < nodes.size(); ++i) {
+                if (const int dof = robot->jointDof(i); dof >= 0) {
+                    robot->setJointValue(static_cast<size_t>(dof), authoredValues[i]);
+                }
+            }
+            return robot;
+        }
+
+        // -------------------------------------------------------------------
         // UsdLux → threepp lights, placed in stage space under the root.
         //
         //   DistantLight  → DirectionalLight (sun-like, parallel rays)
@@ -1207,7 +1368,7 @@ namespace threepp {
 
     USDResult USDLoader::loadFull(const std::filesystem::path& path) {
         auto group = pimpl_->load(path);
-        return {std::move(group), {}, pimpl_->_envTexture};
+        return {std::move(group), {}, pimpl_->_envTexture, pimpl_->_robot};
     }
 
 }// namespace threepp
