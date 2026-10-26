@@ -531,6 +531,11 @@ jobs:
           echo "Both gate tests ran for real."
 
 
+  # MSVC, static and shared. The shared leg links every example, test and the
+  # editor against threepp.dll, which is what a BUILD_SHARED_LIBS=ON user gets
+  # with MSVC and what the static tree would become if the main build ever
+  # switched: CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS has a per-DLL symbol limit and
+  # exports no static data members, and only an MSVC link finds either.
   windows:
 
     runs-on: ${{ matrix.os }}
@@ -538,6 +543,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022]
+        preset: [ci-windows, ci-windows-shared]
 
     steps:
       - uses: actions/checkout@v6
@@ -550,11 +556,11 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake --preset ci-windows
-          cmake --build --preset ci-windows
+          cmake --preset ${{ matrix.preset }}
+          cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ci-windows
+        run: ctest --preset ${{ matrix.preset }}
 
 
   # threepp as a DLL built by MinGW-w64 GCC, in Debug: what a CLion or MSYS2

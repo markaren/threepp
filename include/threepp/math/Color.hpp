@@ -3,6 +3,7 @@
 #define THREEPP_COLOR_HPP
 
 #include "threepp/constants.hpp"
+#include "threepp/export.hpp"
 
 #include <ostream>
 
@@ -23,8 +24,9 @@ namespace threepp {
     // Set `enabled = false` for the legacy (raw, unmanaged) behaviour.
     struct ColorManagement {
 
-        static bool enabled;
-        static ColorSpace workingColorSpace;
+        // Static data members are the one thing a DLL does not export on its own.
+        static THREEPP_API bool enabled;
+        static THREEPP_API ColorSpace workingColorSpace;
 
         // Converts `color` in place from `source` to `target` color space.
         static Color& convert(Color& color, ColorSpace source, ColorSpace target);

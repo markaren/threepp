@@ -95,8 +95,9 @@
 #include <unordered_set>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
-// are private to the threepp target, but the symbol is linked into it and the
-// signature is a plain C entry point taking an opaque window handle.
+// are private to the threepp target, but the symbol links (from threepp itself
+// in the static build, from the glfw library threepp links publicly when it is
+// a DLL) and the signature is a plain C entry point taking an opaque handle.
 extern "C" void glfwSetWindowTitle(void* window, const char* title);
 
 using namespace threepp;

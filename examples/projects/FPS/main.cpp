@@ -77,7 +77,8 @@ using namespace ::physx;
 namespace fs = std::filesystem;
 
 // Minimal GLFW FFI for pointer-lock mouse-look (GLFW is compiled into the
-// threepp library, so these resolve at link time — same trick as tps_shooter).
+// static threepp library, and a shared threepp links the glfw library publicly,
+// so these resolve at link time either way — same trick as tps_shooter).
 extern "C" {
 void glfwSetInputMode(void* window, int mode, int value);
 int glfwRawMouseMotionSupported(void);

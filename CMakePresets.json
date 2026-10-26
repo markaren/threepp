@@ -170,6 +170,15 @@
       }
     },
     {
+      "name": "ci-windows-shared",
+      "inherits": "ci-windows",
+      "displayName": "CI: Windows, GL, threepp as a DLL",
+      "description": "The MSVC build of threepp as a shared library: every example, test and the editor link against threepp.dll. The only other shared-library job is MinGW in Debug, which says nothing about MSVC's export-all-symbols limits or about which statics need an explicit import.",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON"
+      }
+    },
+    {
       "name": "ci-mingw",
       "inherits": [
         "gl",
@@ -288,6 +297,11 @@
       "configuration": "Release"
     },
     {
+      "name": "ci-windows-shared",
+      "configurePreset": "ci-windows-shared",
+      "configuration": "Release"
+    },
+    {
       "name": "ci-mingw",
       "configurePreset": "ci-mingw",
       "configuration": "Debug"
@@ -369,6 +383,12 @@
       "name": "ci-windows",
       "inherits": "base",
       "configurePreset": "ci-windows",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-windows-shared",
+      "inherits": "base",
+      "configurePreset": "ci-windows-shared",
       "configuration": "Release"
     },
     {

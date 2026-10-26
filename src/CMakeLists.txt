@@ -977,6 +977,14 @@ list(APPEND sources ${THREEPP_GENERATED_SHADER_HEADERS})
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
+
+# A shared threepp tells its consumers so: THREEPP_API (include/threepp/export.hpp)
+# turns into dllimport for them and dllexport inside the library, which is the
+# only way a static data member crosses a DLL boundary on Windows. PUBLIC, and
+# never per-target, for the same ODR reason as THREEPP_WITH_AUDIO below.
+if (BUILD_SHARED_LIBS)
+    target_compile_definitions(threepp PUBLIC THREEPP_SHARED)
+endif ()
 target_compile_features(threepp PUBLIC "cxx_std_20")
 
 if (UNIX)
@@ -1052,7 +1060,13 @@ if (NOT DEFINED EMSCRIPTEN)
     )
 
     if (THREEPP_USE_EXTERNAL_GLFW OR BUILD_SHARED_LIBS)
-        target_link_libraries(threepp PRIVATE glfw)
+        # PUBLIC, not PRIVATE: a few consumers (the editor's window title, the
+        # FPS demo's pointer lock) declare the GLFW entry points they need as
+        # extern "C" and rely on them resolving at link time. In the static
+        # build they come out of threepp itself, where GLFW's objects live; when
+        # GLFW is its own library they have to link it, and this is the one
+        # place that knows. The headers stay with the glfw target either way.
+        target_link_libraries(threepp PUBLIC glfw)
     else ()
         target_include_directories(threepp SYSTEM BEFORE PRIVATE "external/glfw/include")
         if (APPLE)
