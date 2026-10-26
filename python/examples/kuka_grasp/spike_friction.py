@@ -360,7 +360,7 @@ def run_sweep():
 
     if GRIPPER_URDF is None or not os.path.exists(GRIPPER_URDF):
         raise RuntimeError(
-            f"Combined gripper URDF not found. Expected: {_URDF_CANDIDATES[0]}\n"
+            f"Combined gripper URDF not found. Expected: {_URDF_SEARCH[0]}\n"
             "Run this script from any directory; it resolves paths automatically."
         )
     print(f"[OK] Gripper URDF: {GRIPPER_URDF}")
