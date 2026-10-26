@@ -32,13 +32,7 @@ layout(set = 0, binding = 52, rgba16f) uniform writeonly image3D froxelLutImage;
 // fields it names; the host zero-fills the rest.
 layout(push_constant) uniform Pc { ShadePush pc; };
 
-// KEEP IN SYNC with froxel_inject.comp + deferred_shade.comp.
-const uint  kFroxelX = 128u, kFroxelY = 72u, kFroxelZ = 64u;
-const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
-
-float froxelDist(float s) {
-    return kFroxelZMin * pow(kFroxelZMax / kFroxelZMin, s / float(kFroxelZ));
-}
+#include "froxel_grid.glsl"
 
 #include "cloud_density.glsl"// mediumExtinction (hetero mode)
 

@@ -15,7 +15,7 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
     // (froxel_integrate stores AFTER folding slice k), so the unshifted
     // normalized read landed half a slice DEEP — a deterministic
     // 2048^(0.5/64) ≈ 6.1% over-integration of every volumetric leg. Shift
-    // back half a texel. 64.0 = kFroxelZ — KEEP IN SYNC with froxel_integrate.
+    // back half a texel. 64.0 = kFroxelZ — KEEP IN SYNC with froxel_grid.glsl.
     const float w = max(clamp(t, 0.0, 1.0) * 64.0 - 0.5, 0.0) / 64.0;
     return texture(froxelLutTex, vec3(fuv, w)).rgb;
 }

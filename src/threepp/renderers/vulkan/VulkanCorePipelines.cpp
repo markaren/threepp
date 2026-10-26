@@ -585,7 +585,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                         {info(k2D, w, h, 1, kRgba16, VK_IMAGE_USAGE_STORAGE_BIT), lightFilterSpan, all},// demodColor
                         {info(k2D, w, h, 1, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT), filterSpan, all},
                         {info(k2D, w, h, 1, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT), filterSpan, all},
-                        {info(VK_IMAGE_TYPE_3D, 128, 72, 64, kRgba16,
+                        {info(VK_IMAGE_TYPE_3D, kFroxelGridX, kFroxelGridY, kFroxelGridZ, kRgba16,
                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT),
                          lightFilterSpan, all},// froxelLut
                         {info(k2D, w, h, 1, kRgba16,
@@ -727,15 +727,15 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 }
                 // Froxel volumetrics — FIXED-size 3D volumes (independent of
                 // the render extent; recreated here anyway on resize, which
-                // also correctly resets the temporal history). KEEP the dims
-                // in sync with froxel_inject/integrate.comp.
-                g.froxelScatter = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
+                // also correctly resets the temporal history). The dims are
+                // vulkan_shared.h's kFroxelGrid*, the grid the froxel passes walk.
+                g.froxelScatter = createImage3D(kFroxelGridX, kFroxelGridY, kFroxelGridZ, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                                 N("froxelScatter"));
                 // Rebuilt from froxelScatter every frame (the EMA history lives
                 // there), so one LUT serves every slot, like atrousA/B.
                 if (fi == 0) {
-                    g.froxelLut = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
+                    g.froxelLut = createImage3D(kFroxelGridX, kFroxelGridY, kFroxelGridZ, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                 N("froxelLut"), transientPool_.get(), lightFilterSpan);
                 } else {

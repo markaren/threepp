@@ -308,10 +308,10 @@ layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { Cluster
 // bit 8 says the froxel passes ran this frame (medium present); the LUT holds
 // stale data otherwise. Surface extinction stays applySceneFog's analytic
 // Beer-Lambert — this LUT carries in-scatter only.
-// KEEP the grid constants IN SYNC with froxel_inject/integrate.comp.
 layout(set = 0, binding = 53) uniform sampler3D froxelLutTex;
 
-const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
+#define FROXEL_GRID_LADDER_ONLY
+#include "froxel_grid.glsl"// kFroxelZMin/Max: the LUT's slice ladder
 // (froxelInscatter() lives just below the push-constant block — it gates on pc.flags.)
 
 // ── Volumetric clouds (binding 58) ─────────────────────────────────────────

@@ -1385,7 +1385,7 @@ namespace threepp::vulkan {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cb, 128u / 4u, 72u / 4u, 64u / 4u);
+        vkCmdDispatch(cb, kFroxelGridX / 4u, kFroxelGridY / 4u, kFroxelGridZ / 4u);
 
         // Inject's scatter writes → integrate's reads.
         VkMemoryBarrier mb{};
@@ -1399,7 +1399,7 @@ namespace threepp::vulkan {
         // Integrate: one thread per froxel column (128×72, local 8×8).
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, froxelIntegratePipe_);
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cb, 128u / 8u, 72u / 8u, 1);
+        vkCmdDispatch(cb, kFroxelGridX / 8u, kFroxelGridY / 8u, 1);
     }
 
     void DeferredShade::recordCloudMarch(VkCommandBuffer cb, uint32_t frame,

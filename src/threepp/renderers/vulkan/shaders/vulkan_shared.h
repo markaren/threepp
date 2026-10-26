@@ -36,6 +36,17 @@
 #define kMaxShadowSpots    8
 #define kMaxShadowPoints   16
 
+// Froxel volumetrics grid (froxel_grid.glsl): screen tiles across and down,
+// then exponential view-distance slices. The host sizes the froxel scatter
+// and LUT 3D images and the inject/integrate dispatches from these, and the
+// shaders' kFroxelX/Y/Z are initialised from them. Each stays a multiple of
+// the passes' local sizes (4x4x4 inject, 8x8 integrate), which the dispatches
+// divide by. deferred_shade_10_lighting_utils.glsl and particle_light.comp
+// write kFroxelZ out as the literal 64.0 in their half-texel shift.
+#define kFroxelGridX 128u
+#define kFroxelGridY 72u
+#define kFroxelGridZ 64u
+
 // TLAS instance visibility groups (VkAccelerationStructureInstanceKHR.mask).
 // Opaque + alpha-CUTOUT instances carry kRayMaskOpaque; alpha-BLEND and
 // transmissive instances (text decals, alpha quads, glass — anything whose

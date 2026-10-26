@@ -76,12 +76,7 @@ layout(push_constant) uniform Pc { ShadePush pc; };
 
 const float PI = 3.14159265358979;
 
-// Grid + ladders — KEEP IN SYNC with froxel_integrate.comp + deferred_shade.comp.
-const uint  kFroxelX = 128u, kFroxelY = 72u, kFroxelZ = 64u;
-const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
-float froxelDist(float s) {// continuous slice coord [0,kFroxelZ] → view distance
-    return kFroxelZMin * pow(kFroxelZMax / kFroxelZMin, s / float(kFroxelZ));
-}
+#include "froxel_grid.glsl"
 
 float hgPhase(float mu, float g) {
     const float g2 = g * g;
