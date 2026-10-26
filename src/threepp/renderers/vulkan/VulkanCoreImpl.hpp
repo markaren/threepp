@@ -613,6 +613,35 @@ namespace threepp {
         [[nodiscard]] static bool alphaMaskGroup(const MaterialDesc& m) {
             return m.transmission > 0.0f || m.alphaCutoff < 0.0f;
         }
+        // An entry's TLAS ray mask before the LOD crossfade has its say (the
+        // side lodFadeCasts turns down is hit by no ray; the callers apply
+        // that per entry). Visibility group (see vulkan_shared.h): blend/
+        // transmissive surfaces move to the alpha mask so pure-visibility
+        // occlusion queries (env gather, GI, emissive-NEE) cull them out — a
+        // text decal's transparent quad must not block IBL light. Water
+        // (DisplacedMesh) stays opaque-mask: underwater light transport is
+        // handled by its volumetrics, not pass-through. `hidden` is the
+        // caller's (the lean refit reads its span's); no `md` (the lean
+        // refit's entry past the desc cache) means no alpha group.
+        [[nodiscard]] uint8_t tlasRayMask(const vulkan::impl::MeshEntry& en, const MaterialDesc* md, bool hidden) const {
+            if (hidden) return 0u;// MeshEntry::hidden: no ray hits it
+            // Sensors only, and only once opted in: mask 0 is hit by no ray at all.
+            if (en.sensorOnly) return sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u;
+            if (en.camAttached) return kRayMaskNoShadow;// FP viewmodel: visible, never occludes
+            if (!en.isDisplaced && md && alphaMaskGroup(*md)) return kRayMaskAlpha;
+            return kRayMaskOpaque;
+        }
+        // A TLAS instance's transform: VkTransformMatrixKHR is row-major 3x4;
+        // threepp Matrix4 is column-major 4x4 (elements[c*4 + r]). For
+        // InstancedMesh the entry's worldMatrix already incorporates the
+        // per-instance transform.
+        static void copyTlasTransform(VkTransformMatrixKHR& dst, const std::array<float, 16>& e) {
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 4; ++c) {
+                    dst.matrix[r][c] = e[c * 4 + r];
+                }
+            }
+        }
 
         // ── Per-slot dirty state for the entries-indexed desc rings ──────────
         // What one frame-in-flight slot still owes the GPU: either the whole

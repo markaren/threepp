@@ -3576,26 +3576,20 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         for (const auto& sp : entrySpans_) {
                             const MeshEntry& e0 = entries[sp.first];
                             if (e0.isOverlay) continue;// raster-overlay only
-                            // Same visibility-group rule as the full rebuild:
-                            // blend/transmissive (non-water) → alpha mask so
-                            // occlusion queries skip them, camera-parented
-                            // viewmodels → no-shadow mask.
-                            uint8_t spanMask = kRayMaskOpaque;
                             VkGeometryInstanceFlagsKHR spanFlags =
                                     VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                             // A cutout caster's far entries are force-opaque
                             // (setCutoutRayDistance; the bits are classifyCutoutFar's).
                             bool spanCutout = false;
+                            const MaterialDesc* cmd = nullptr;
                             if (sp.first < geomDescsCached_.size()) {
-                                const auto& cmd = entryMat(sp.first);
-                                if (!e0.isDisplaced && alphaMaskGroup(cmd)) spanMask = kRayMaskAlpha;
-                                spanFlags = tlasInstanceFlags(cmd);
-                                spanCutout = cutoutRayDistance_ > 0.f && cutoutCaster(cmd);
+                                cmd = &entryMat(sp.first);
+                                spanFlags = tlasInstanceFlags(*cmd);
+                                spanCutout = cutoutRayDistance_ > 0.f && cutoutCaster(*cmd);
                             }
-                            if (e0.camAttached) spanMask = kRayMaskNoShadow;
-                            if (e0.sensorOnly)
-                                spanMask = sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u;
-                            if (sp.hidden) spanMask = 0u;// MeshEntry::hidden: no ray hits it
+                            // Same visibility-group rule as the full rebuild,
+                            // from the span's first entry.
+                            const uint8_t spanMask = tlasRayMask(e0, cmd, sp.hidden);
                             const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
                                                     e0.isGrass || e0.isTet || e0.isMorphed;
                             BlasRecord* rec = nullptr;
@@ -3715,12 +3709,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     }
                                 }
                                 VkAccelerationStructureInstanceKHR inst{};
-                                const auto& e = en.worldMatrix;
-                                for (int r = 0; r < 3; ++r) {
-                                    for (int c = 0; c < 4; ++c) {
-                                        inst.transform.matrix[r][c] = e[c * 4 + r];
-                                    }
-                                }
+                                copyTlasTransform(inst.transform, en.worldMatrix);
                                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
                                 // The side of a LOD crossfade the shadows do not
                                 // take is hit by no ray (lodFadeCasts).
@@ -4382,15 +4371,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (en.isOverlay) continue;
 
                 VkAccelerationStructureInstanceKHR inst{};
-                // VkTransformMatrixKHR is row-major 3x4; threepp Matrix4 is
-                // column-major 4x4 (elements[c*4 + r]). For InstancedMesh the
-                // worldMatrix already incorporates the per-instance transform.
-                const auto& e = en.worldMatrix;
-                for (int r = 0; r < 3; ++r) {
-                    for (int c = 0; c < 4; ++c) {
-                        inst.transform.matrix[r][c] = e[c * 4 + r];
-                    }
-                }
+                copyTlasTransform(inst.transform, en.worldMatrix);
                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
                 inst.mask = kRayMaskOpaque;// placeholder; set to Opaque/Alpha once md is built below
                 inst.instanceShaderBindingTableRecordOffset = 0;
@@ -4428,25 +4409,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 setGeomMatIdx(geomDescs[i], matIdx);
                 matTableRef(matIdx);// geomDescs becomes geomDescsCached_ below
                 const MaterialDesc& md = matTable_[matIdx];
-                // Visibility group (see vulkan_shared.h): blend/transmissive
-                // surfaces move to the alpha mask so pure-visibility occlusion
-                // queries (env gather, GI, emissive-NEE) cull them out — a text
-                // decal's transparent quad must not block IBL light. Water
-                // (DisplacedMesh) stays opaque-mask: underwater light transport
-                // is handled by its volumetrics, not pass-through.
+                // Visibility group (tlasRayMask); a shown entry on the other
+                // side of a LOD crossfade is hit by no ray.
                 if (!instances.empty()) {
-                    instances.back().mask =
-                            en.hidden ? 0u// MeshEntry::hidden: no ray hits it
-                            : !lodFadeCasts(entryLodFade_[i]) ? 0u// the other side of a LOD crossfade
-                            : en.sensorOnly
-                                    // Sensors only, and only once opted in: mask 0
-                                    // is hit by no ray at all.
-                                    ? (sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u)
-                            : en.camAttached
-                                    ? kRayMaskNoShadow// FP viewmodel: visible, never occludes
-                                    : (!en.isDisplaced && alphaMaskGroup(md))
-                                              ? kRayMaskAlpha
-                                              : kRayMaskOpaque;
+                    instances.back().mask = (!en.hidden && !lodFadeCasts(entryLodFade_[i]))
+                                                    ? 0u
+                                                    : tlasRayMask(en, &md, en.hidden);
                     instances.back().flags = tlasInstanceFlags(md);
                     // Cutout ray distance: the same bit classifyCutoutFar
                     // derives on lean frames, for this frame's camera.
