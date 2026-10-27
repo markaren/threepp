@@ -28,6 +28,11 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;// separable H->V scratch (the GI a-trous finished with it)
 layout(set = 0, binding = 25, rgba16f) uniform readonly image2D reflectImage;// sharp mirror reflection (.rgb pre-weighted, .a=roughness)
 layout(set = 0, binding = 31, rgba16f) uniform readonly image2D reflAuxImage;// ReBLUR aux: .x=history length, .y=E[L²] (temporal convergence → blur width)
+layout(set = 0, binding = 77, rgba16f) uniform readonly image2D demodColorImage;// .a = the ParticleField dust's opacity over the camera leg
+
+// What the reflection adds is behind the same dust the shade extinguished the
+// surface by (deferred_shade stores 1 - T in demodColorImage.a; 0 = no dust).
+float dustTransmittance(ivec2 q) { return 1.0 - imageLoad(demodColorImage, q).a; }
 
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -95,7 +100,7 @@ void main() {
         if ((isGlass && rough < 0.12) || pc.lightingView == 7u) {
             if (!vert) { imageStore(atrousB, px, cR); return; }
             const vec3 cur = imageLoad(outImage, px).rgb;// pre-exposed by the shade
-            imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+            imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc) * dustTransmittance(px) * recombineCoverage(px)
                                                 * uintBitsToFloat(pc.preExpBits), 1.0));
             return;
         }
@@ -254,7 +259,7 @@ void main() {
         if (sigma < 0.5) {
             if (!vert) { imageStore(atrousB, px, cR); return; }
             const vec3 cur0 = imageLoad(outImage, px).rgb;
-            imageStore(outImage, px, vec4(cur0 + cR.rgb * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+            imageStore(outImage, px, vec4(cur0 + cR.rgb * fogTransmittance(camPos, Pc) * dustTransmittance(px) * recombineCoverage(px)
                                                  * uintBitsToFloat(pc.preExpBits), 1.0));
             return;
         }
@@ -356,7 +361,7 @@ void main() {
             if (bl > cap) blurred *= cap / bl;       // collapse the isolated spike
         }
         const vec3 cur     = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + blurred * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+        imageStore(outImage, px, vec4(cur + blurred * fogTransmittance(camPos, Pc) * dustTransmittance(px) * recombineCoverage(px)
                                             * uintBitsToFloat(pc.preExpBits), 1.0));// pre-weighted → add, fog-extinguished
         return;
 }

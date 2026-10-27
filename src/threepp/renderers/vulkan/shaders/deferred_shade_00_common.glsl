@@ -61,6 +61,16 @@ float gNearPointY = 0.0;
 // own; threading it down would grow four signatures to hand one value to one
 // hash. Set beside gPrimaryOrigin, so every reader below sees this pixel's.
 ivec2 gPixelCoord = ivec2(0);
+// The ParticleField dust transmittance of the LAST leg applyParticleFog
+// marched (1 = no dust on it). The lit path reads it straight after its
+// camera-leg call and stores 1 - T in demodColorImage.a: the denoised direct,
+// indirect and reflection terms are added AFTER this pass (deferred_gi_filter,
+// deferred_refl_filter) and must be extinguished by the same dust, or a dense
+// plume over geometry shows the surface's denoised light straight through it.
+// A global for the reason gPixelCoord is one: the march is reached through
+// skyBackground() and the reflection legs too, so it is read at the one call
+// site that wants it, not threaded out of every caller.
+float gPdLegT = 1.0;
 
 #include "lights_ubo.glsl"
 

@@ -1065,6 +1065,7 @@ void main() {
     // branch runs only when no medium is present (a no-op then). The underwater
     // murk (below-surface leg) composes on top; the beam march carries its own
     // extinction either way.
+    float pdCamT = 1.0;// this pixel's camera-leg dust transmittance, for the recombines (see gPdLegT)
     {
         const float distL = length(worldPos - camPos);
         lit = applyParticleFog(
@@ -1072,6 +1073,7 @@ void main() {
                                 ? applyHeteroSurfaceFog(lit, uv, distL, camPos, worldPos)
                                 : applySceneFog(lit, camPos, worldPos), camPos, worldPos),
                       camPos, (worldPos - camPos) / max(distL, 1e-6), distL);
+        pdCamT = gPdLegT;
     }
     if (pc.shadeMode == 1u) {
         // Dispatch B: weighted accumulate into dispatch A's already-written
@@ -1622,5 +1624,9 @@ void main() {
     // .a: the indirect-diffuse share (see diffBaseShare). The recombine no
     // longer reads it; it takes the share from demodColor, stored next.
     imageStore(directUImage, px, vec4(min(directU, vec3(6.5e4)), demodIndirect ? diffBaseShare : 1.0));
-    imageStore(demodColorImage, px, vec4(demodColor, 0.0));
+    // .a: the ParticleField dust's OPACITY over the camera leg, 1 - T (0 = no
+    // dust, which is what every other path's vec4(0) store already means). The
+    // GI and reflection recombines multiply what they add by 1 - a, as they
+    // multiply it by the air fog's transmittance.
+    imageStore(demodColorImage, px, vec4(demodColor, 1.0 - pdCamT));
 }

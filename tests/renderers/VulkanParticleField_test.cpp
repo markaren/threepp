@@ -1572,10 +1572,18 @@ int main(int argc, char** argv) {
         // — so "washed toward the medium" is the physical claim and "darkened"
         // is not. A signed test would pass or fail on the ambient level.
         //
-        // (Contrast against the backdrop is printed for the reader but not
-        // asserted: the far marker and the backdrop sit at nearly the same
-        // depth, so the medium moves BOTH by nearly the same amount and their
-        // mutual contrast is the one thing dust legitimately barely changes.)
+        // "Hidden" is asserted on CONTRAST, not on the marker's own luma. The
+        // far marker and the backdrop sit at nearly the same depth, so one
+        // transmittance T covers both: each becomes T * surface + (1 - T) *
+        // medium, and their mutual contrast scales by T whatever the medium's
+        // radiance is. A marker's luma alone can barely move under a dense
+        // cloud (a grey medium in front of an equally grey wall hides it
+        // without changing its brightness), which is why the old |change| > 8
+        // gate only ever passed while the denoised direct and indirect light
+        // were recombined with no dust extinction at all: every marker then
+        // got BRIGHTER by the in-scatter (far marker +36, backdrop +41) while
+        // keeping most of its contrast (27.6 -> 22.1). With the dust applied
+        // to the recombines too the contrast falls to about a third.
         const auto contrast = [&](const std::array<double, kMarkers + 1>& m) {
             return std::fabs(m[kMarkers - 1] - m[kMarkers]);
         };
@@ -1585,13 +1593,14 @@ int main(int argc, char** argv) {
         };
         const double nearDelta = std::fabs(mDust[0] - mOff[0]);
         const double farDelta  = farDeltaOf(mOff, mDust);
-        std::printf("[info] far-marker vs backdrop contrast (not asserted, same depth): "
+        std::printf("[info] far-marker vs backdrop contrast (same depth, asserted below): "
                     "%.1f -> %.1f\n", contrast(mOff), contrast(mDust));
         std::printf("[info] |change| grows with path: near marker %.1f, far marker %.1f "
                     "(%.1fx)\n", nearDelta, farDelta,
                     nearDelta > 0 ? farDelta / nearDelta : 0.0);
-        check(farDelta > 8.0,
-              "dust visibly changes the objects behind it");
+        check(contrast(mDust) < 0.5 * contrast(mOff),
+              "dust hides the objects behind it (the far marker's contrast "
+              "against the backdrop at its depth falls with the transmittance)");
         check(farDelta > 2.0 * nearDelta,
               "the medium is INTEGRATED along the ray: the marker deepest in "
               "the cloud moves more than twice as far as the one at its near face");
@@ -1698,12 +1707,18 @@ int main(int argc, char** argv) {
         std::printf("[info] parked field vs density-off, same process: %.2f%% of pixels "
                     "differ (exact test is cross-process)\n",
                     changedFraction(fieldOffPx, parkedPx) * 100.0);
-        // The gates must have shut. Same metric: with no live particles the far
-        // marker must be back where it was with no dust at all.
-        const double farDeltaParked = farDeltaOf(mOff, markerLuma(parkedPx));
-        std::printf("[info] parked far-marker |change| %.1f (dust %.1f)\n",
-                    farDeltaParked, farDelta);
-        check(farDeltaParked < 0.2 * farDelta,
+        // The gates must have shut. Same metric as the occlusion check above:
+        // with no live particles the far marker's contrast must be back where
+        // it was with no dust at all. (Its luma alone settles a few levels off
+        // the density-off frame in the same process, with or without the dust
+        // in the recombines: 4.7 at the far marker on both builds.)
+        const auto   mParked        = markerLuma(parkedPx);
+        const double farDeltaParked = farDeltaOf(mOff, mParked);
+        std::printf("[info] parked far-marker |change| %.1f (dust %.1f); contrast off %.1f, "
+                    "dust %.1f, parked %.1f\n",
+                    farDeltaParked, farDelta, contrast(mOff), contrast(mDust), contrast(mParked));
+        check(std::fabs(contrast(mParked) - contrast(mOff))
+                  < 0.25 * std::fabs(contrast(mDust) - contrast(mOff)),
               "a parked (liveCount == 0) density field occludes nothing");
 
         // ── Checkpoint (b): the scatter's GPU cost, and the froxel bill ──────

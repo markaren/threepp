@@ -111,8 +111,9 @@ void main() {
         const vec3 indirect = imageLoad(indirectImage, px).rgb * imageLoad(demodColorImage, px).rgb;
         const vec3 term = (pc.lightingView == 2u) ? direct : (pc.lightingView == 4u) ? indirect : direct + indirect;
         const vec3 base = (pc.lightingView == 7u) ? imageLoad(outImage, px).rgb : vec3(0.0);
-        imageStore(outImage, px, vec4(base + term * fogTransmittance(camPos, Pc) * recombineCoverage(px)
-                                      * uintBitsToFloat(pc.preExpBits), 1.0));
+        imageStore(outImage, px, vec4(base + term * fogTransmittance(camPos, Pc)
+                                      * (1.0 - imageLoad(demodColorImage, px).a)// the ParticleField dust in front
+                                      * recombineCoverage(px) * uintBitsToFloat(pc.preExpBits), 1.0));
         return;
     }
 
@@ -353,7 +354,9 @@ void main() {
         // than through it; deferred_shade, diffBaseShare). Only the demodulated
         // irradiance and the bounded ratio were filtered, so albedo/texture
         // detail stays crisp.
-        const vec3 demodColor   = imageLoad(demodColorImage, px).rgb;
+        const vec4 demodTap     = imageLoad(demodColorImage, px);
+        const vec3 demodColor   = demodTap.rgb;
+        const float dustT       = 1.0 - demodTap.a;// the ParticleField dust in front (deferred_shade's .a)
         const vec3 dU           = imageLoad(directUImage, px).rgb;
         vec3 cur                = imageLoad(outImage, px).rgb;
         vec3 term               = fC * demodColor + dU * clamp(fS, 0.0, 1.0);
@@ -369,7 +372,7 @@ void main() {
                                            : vec3(0.0);
         }
         imageStore(outImage, px, vec4(cur + term
-                                            * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+                                            * fogTransmittance(camPos, Pc) * dustT * recombineCoverage(px)
                                             * uintBitsToFloat(pc.preExpBits), 1.0));
     } else if (pc.dstMode == 0u) {
         imageStore(atrousA, px, vec4(fC, fV16));
