@@ -44,7 +44,7 @@ namespace threepp::vulkan {
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
     // shaders/particle_density.glsl and ParticleFieldPass.hpp.
-    constexpr uint32_t kMaxDensityVolumes = 4;
+    constexpr uint32_t kMaxDensityVolumes = 8;
 
     // Splat reflection volumes bound at once (binding 70 is an array of this
     // many). KEEP IN SYNC with kMaxSplatVolumes in shaders/splat_volume.glsl

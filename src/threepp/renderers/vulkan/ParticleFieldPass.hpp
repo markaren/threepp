@@ -113,7 +113,7 @@ namespace threepp::vulkan {
     // Volumes bound to the froxel/shade descriptor set at once. KEEP IN SYNC
     // with kMaxDensityFields in shaders/particle_density.glsl. Fields past this
     // many keep every other representation and simply contribute no density.
-    inline constexpr std::uint32_t kMaxDensityFields = 4;
+    inline constexpr std::uint32_t kMaxDensityFields = 8;
 
     // Fixed-point scale for the r32ui accumulator: 12 fractional bits.
     // KEEP IN SYNC with kParticleDensityScale in shaders/particle_density.glsl,
@@ -159,7 +159,7 @@ namespace threepp::vulkan {
         // x = active volumes, y = 1 when any of them is emissive
         std::uint32_t counts[4];
     };
-    static_assert(sizeof(ParticleDensityUboGpu) == 272, "ParticleDensityUbo layout drift");
+    static_assert(sizeof(ParticleDensityUboGpu) == 16 + 4 * 16 * kMaxDensityFields, "ParticleDensityUbo layout drift");
 
     // ── F4/F5: the emitter's per-field AUX RECORD ───────────────────────────
     // particle_emit.comp's push block is 128 B EXACTLY — the range every Vulkan

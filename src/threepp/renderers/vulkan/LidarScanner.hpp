@@ -57,7 +57,7 @@ namespace threepp::vulkan {
         // KEEP IN SYNC with vulkan::kMaxDensityFields (ParticleFieldPass.hpp)
         // and kMaxDensityFields in shaders/particle_density.glsl; a
         // static_assert in the .cpp ties this one to the first.
-        static constexpr uint32_t kDensityVolumes = 4;
+        static constexpr uint32_t kDensityVolumes = 8;
 
         // The world-anchored ParticleField density volumes this scan should
         // delta-track through (parent plan phase 3). The scanner binds exactly

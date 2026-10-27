@@ -59,7 +59,7 @@
 // Volumes bound simultaneously. One per ParticleField with DensityRepr on;
 // fields past this many are ignored (the host reports which). Unused slots are
 // bound to a 1x1x1 dummy so every descriptor is always valid.
-#define kMaxDensityFields 4
+#define kMaxDensityFields 8
 
 // KEEP IN SYNC with particle_density_scatter.comp and with
 // ParticleFieldPass.hpp's kDensityFixedScale.

@@ -3111,7 +3111,7 @@ if not NO_GAS:
     # is the honest representation for dust and it is the only one here.
 
     # ── the condensation ring ───────────────────────────────────────────────
-    # The FOURTH and last density slot (kMaxDensityFields is 4). A real blast
+    # The FOURTH density slot (kMaxDensityFields is 8). A real blast
     # front briefly drops the pressure behind it enough to condense the air's
     # water into a visible shell -- the Wilson cloud -- and that shell is the
     # only part of a shockwave you can actually photograph. Here it is a thin
