@@ -46,7 +46,6 @@
 #endif
 #endif
 
-#include "threepp/canvas/Monitor.hpp"
 #include "threepp/core/Clock.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
@@ -392,13 +391,11 @@ EditorApp::EditorApp(const Options& options)
       camera_(55.f, canvas_.aspect(), 0.05f, 5000.f),
       ortho_(-1.f, 1.f, 1.f, -1.f, 0.05f, 10000.f) {
 
-    contentScale_ = monitor::contentScale().first;
-    // The fonts already follow the window between monitors (ImguiContext has
-    // its own onMonitorChange subscription); this keeps the editor's layout
-    // math — panel widths, button sizes, marker pixels — on the same scale,
-    // so a HiDPI laptop screen and a 100% external monitor both look right.
-    canvas_.onMonitorChange([this](int idx) {
-        contentScale_ = monitor::contentScale(idx).first;
+    // Match ImguiContext's logical UI scale. On macOS, Retina density is
+    // handled by ImGui's framebuffer scale, not by enlarging the layout.
+    contentScale_ = ImGui_ImplGlfw_GetContentScaleForWindow(static_cast<GLFWwindow*>(canvas_.windowPtr()));
+    canvas_.onMonitorChange([this](int) {
+        contentScale_ = ImGui_ImplGlfw_GetContentScaleForWindow(static_cast<GLFWwindow*>(canvas_.windowPtr()));
     });
 
     renderer_->shadowMap().enabled = true;

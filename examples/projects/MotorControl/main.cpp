@@ -3,6 +3,7 @@
 #include "utility/Regulator.hpp"
 #include "renderer_factory.hpp"
 
+#include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"

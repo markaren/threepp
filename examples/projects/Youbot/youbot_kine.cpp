@@ -18,6 +18,7 @@
 
 #include "renderer_factory.hpp"
 
+#include "threepp/canvas/Monitor.hpp"
 #include "threepp/threepp.hpp"
 
 #include "Youbot.hpp"
