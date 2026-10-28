@@ -62,7 +62,7 @@ namespace {
         void setup() {
             ImGui::StyleColorsDark();
             ImGui::GetIO().IniFilename = nullptr;// don't litter an imgui.ini next to scripts
-            // contentScale() can report 0 for a headless/hidden window, which
+            // The window content scale can come back 0 for a headless/hidden window, which
             // builds a zero-size font atlas — fine for the legacy GL path but it
             // crashes imgui's dynamic-texture font path (the Vulkan backend).
             // Clamp to a sane minimum.

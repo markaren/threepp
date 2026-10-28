@@ -75,3 +75,14 @@ void threepp::loadGlad(GLADloadproc procAddress) {
     }
     gladLoadedBy() = Loader::supplied;
 }
+
+void threepp::reloadGlad(GLADloadproc procAddress) {
+
+    if (!procAddress) {
+        throwLoadFailure("a null loader");
+    }
+    if (!gladLoadGLLoader(procAddress)) {
+        throwLoadFailure("the supplied loader");
+    }
+    gladLoadedBy() = Loader::supplied;
+}

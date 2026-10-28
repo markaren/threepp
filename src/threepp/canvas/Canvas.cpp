@@ -15,6 +15,10 @@
 
 #include <GLFW/glfw3.h>
 
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <dlfcn.h>
+#endif
+
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -207,8 +211,37 @@ namespace {
         return count;
     }
 
+    // How many times this process has initialised GLFW. A new generation means
+    // glfwTerminate() ran in between, and with it the GL module GLFW had
+    // loaded was closed: whatever GLAD resolved against it is stale.
+    static int& glfwGeneration() {
+        static int generation = 0;
+        return generation;
+    }
+
     void initGLfw(bool headless) {
         if (glfwRefCount()++ == 0) {
+            ++glfwGeneration();
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+            // GLFW opens the GL client library itself (libGLX.so.0 or
+            // libGL.so.1 for a GLX context, libEGL.so.1 for EGL) and closes it
+            // again in glfwTerminate(). Closing it unloads the whole GL stack
+            // behind it - glvnd, the vendor library, the driver - and a second
+            // Canvas in the same process loads all of it again. Not every stack
+            // comes back from that: the python-bindings CI job (Ubuntu 22.04,
+            // llvmpipe under Xvfb) segfaulted constructing the second canvas's
+            // GLRenderer once the first canvas's death terminated GLFW in
+            // between. Hold the client libraries open once, for the life of the
+            // process, so GLFW's close only drops its own reference and the
+            // stack stays mapped. Missing libraries are simply skipped.
+            static bool glClientLibrariesHeld = false;
+            if (!glClientLibrariesHeld) {
+                glClientLibrariesHeld = true;
+                for (const char* soname : {"libGLX.so.0", "libGL.so.1", "libEGL.so.1"}) {
+                    dlopen(soname, RTLD_LAZY | RTLD_NODELETE);
+                }
+            }
+#endif
             glfwSetErrorCallback(error_callback);
             (void) headless;
 #if !defined(__EMSCRIPTEN__) && defined(GLFW_PLATFORM)
@@ -598,7 +631,21 @@ struct Canvas::Impl {
             // gladLoadGL() instead dlopens libGL.so.1 and insists on
             // glXGetProcAddressARB, which an OSMesa or EGL context does not
             // feed — the second reason a display-less GL canvas could not work.
-            loadGlad(reinterpret_cast<GLADloadproc>(glfwGetProcAddress));
+            //
+            // Resolved once per GLFW generation. The first Canvas loads; a
+            // Canvas made after the last one died (glfwTerminate, then
+            // glfwInit again for this window) resolves everything afresh,
+            // since the libGL those pointers belonged to was closed in
+            // between. On X11 that is a real dlclose, and a long-lived host
+            // such as the Python module makes and drops canvases in one
+            // process: the second GLRenderer crashed in its first GL call.
+            static int gladResolvedInGeneration = 0;
+            if (gladResolvedInGeneration != 0 && gladResolvedInGeneration != glfwGeneration()) {
+                reloadGlad(reinterpret_cast<GLADloadproc>(glfwGetProcAddress));
+            } else {
+                loadGlad(reinterpret_cast<GLADloadproc>(glfwGetProcAddress));
+            }
+            gladResolvedInGeneration = glfwGeneration();
             warnIfSoftwareRenderer();
             glfwSwapInterval(params_.vsync_ ? 1 : 0);
 
