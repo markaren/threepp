@@ -807,6 +807,11 @@ namespace threepp_py {
                 .def_readwrite("upper", &Joint::Params::upper)
                 .def_readwrite("cone_y", &Joint::Params::coneY)
                 .def_readwrite("cone_z", &Joint::Params::coneZ)
+                .def_readwrite("twist_lower", &Joint::Params::twistLower,
+                               "SPHERICAL with limited: the twist about the frame's X is bounded to "
+                               "[twist_lower, twist_upper] radians when twist_lower < twist_upper "
+                               "(left equal, the twist is free).")
+                .def_readwrite("twist_upper", &Joint::Params::twistUpper)
                 .def_readwrite("stiffness", &Joint::Params::stiffness)
                 .def_readwrite("damping", &Joint::Params::damping)
                 .def_readwrite("max_force", &Joint::Params::maxForce)

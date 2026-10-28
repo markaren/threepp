@@ -273,3 +273,32 @@ def test_heightfield_up_axis_y_holds_a_ball_and_z_is_the_default():
     assert rest_y() < -5.0  # Z-up: nothing under it
     with pytest.raises(ValueError):
         tp.PhysxWorld().add_static_heightfield(np.zeros((2, 2), np.float32), 1.0, tp.Vector3(), up_axis="x")
+
+
+def test_spherical_joint_twist_range_bounds_a_spin():
+    """A ball joint's swing cone alone lets the child spin about its own axis (a ragdoll's arm turning round in
+    its socket); twist_lower / twist_upper bound that spin, and left equal keep it free."""
+    def twist_after_spin(limited_twist):
+        world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, 0))
+        base = box(0.2)
+        arm = tp.Mesh(tp.CapsuleGeometry(0.05, 0.3), tp.MeshStandardMaterial())
+        arm.position.set(0, 0.3, 0)
+        a, b = world.add_static(base), world.add(arm, density=1000)
+        p = tp.Joint.Params()
+        p.type = tp.Joint.Type.SPHERICAL
+        p.limited = True
+        p.cone_y = p.cone_z = 0.5
+        if limited_twist:
+            p.twist_lower, p.twist_upper = -0.4, 0.4
+        s = np.sqrt(0.5)                                     # the frame's X turned onto +Y, the arm's axis
+        j = tp.Joint(world, a, b, tp.Vector3(0, 0.1, 0), tp.Quaternion(0, 0, s, s), p)
+        b.angular_velocity = tp.Vector3(0, 6.0, 0)           # a spin about the arm's own axis
+        for _ in range(24):                                  # 0.4 s: 2.4 rad if nothing stops it
+            world.step(1 / 60)
+        q = arm.quaternion
+        twist = abs(2.0 * np.arctan2(q.y, q.w))
+        del j
+        return twist
+
+    assert twist_after_spin(False) > 1.5
+    assert twist_after_spin(True) < 0.5

@@ -40,7 +40,7 @@ namespace threepp {
             Fixed,    // welds the two frames together
             Revolute, // hinge: rotation about the frame's X axis
             Prismatic,// slider: translation along the frame's X axis
-            Spherical,// ball socket: all three rotations, optional swing cone
+            Spherical,// ball socket: all three rotations, optional swing cone and twist range
             Distance  // tether: keeps the anchors within [min, max] metres
         };
 
@@ -49,14 +49,20 @@ namespace threepp {
 
             // Motion limits. Revolute: radians about X. Prismatic: metres
             // along X. Spherical: `limited` turns the swing cone on (coneY /
-            // coneZ half-angles in radians; twist stays free). Distance
-            // ignores `limited` — lower/upper ARE the constraint (min/max
-            // metres; a min of 0 leaves only the max enforced).
+            // coneZ half-angles in radians), and with twistLower < twistUpper
+            // also bounds the twist about X to that range (radians; left
+            // equal, the twist stays free, as before). A ragdoll's shoulder,
+            // hip or neck needs both: a cone alone lets a limb spin about its
+            // own axis. Distance ignores `limited` — lower/upper ARE the
+            // constraint (min/max metres; a min of 0 leaves only the max
+            // enforced).
             bool limited = false;
             float lower = 0.f;
             float upper = 0.f;
             float coneY = 0.f;
             float coneZ = 0.f;
+            float twistLower = 0.f;
+            float twistUpper = 0.f;
 
             // PD drive toward `target` (radians/metres along the motion axis),
             // plus a feed-forward `velocity`. Zero stiffness AND damping means
@@ -135,8 +141,11 @@ namespace threepp {
                                                   PxJointLinearLimitPair(world.physics().getTolerancesScale(),
                                                                          params.lower, params.upper));
                         break;
-                    case Type::Spherical:
-                        joint->setMotion(PxD6Axis::eTWIST, PxD6Motion::eFREE);
+                    case Type::Spherical: {
+                        const bool twistLimited = params.limited && params.twistLower < params.twistUpper;
+                        joint->setMotion(PxD6Axis::eTWIST, twistLimited ? PxD6Motion::eLIMITED : PxD6Motion::eFREE);
+                        if (twistLimited)
+                            joint->setTwistLimit(PxJointAngularLimitPair(params.twistLower, params.twistUpper));
                         joint->setMotion(PxD6Axis::eSWING1,
                                          params.limited ? PxD6Motion::eLIMITED : PxD6Motion::eFREE);
                         joint->setMotion(PxD6Axis::eSWING2,
@@ -144,6 +153,7 @@ namespace threepp {
                         if (params.limited)
                             joint->setSwingLimit(PxJointLimitCone(params.coneY, params.coneZ));
                         break;
+                    }
                     case Type::Fixed:
                     case Type::Distance:
                         break;
