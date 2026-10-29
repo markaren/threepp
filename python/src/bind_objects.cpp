@@ -281,7 +281,11 @@ namespace threepp_py {
                 }),
                  py::arg("geometry"), py::arg("material"), py::arg("count"))
                 .def_property_readonly("count", &InstancedMesh::count)
-                .def("set_count", &InstancedMesh::setCount, py::arg("count"))
+                .def("set_count", &InstancedMesh::setCount, py::arg("count"),
+                     "Draw the first `count` instances. Within the capacity the mesh was created with (Vulkan) "
+                     "this is a slot edit, not a structural rebuild, but it still walks the scene: fine on "
+                     "events, too dear every frame on a large scene; a pool that grows and shrinks often keeps "
+                     "a high-water count and parks the unused instances out of sight instead.")
                 .def("set_matrix_at", &InstancedMesh::setMatrixAt, py::arg("index"), py::arg("matrix"))
                 .def("set_matrices", [](InstancedMesh& im, const py::array& matrices, size_t offset) {
                     const auto dt = matrices.dtype();

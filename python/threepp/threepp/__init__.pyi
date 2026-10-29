@@ -4246,7 +4246,9 @@ class InstancedMesh(Mesh):
         Write N instance colours in one call: instances offset .. offset+N-1. colors is a float32/float64 numpy array of shape (N, 3), the r, g, b each set_color_at's Color holds. Marks the instance colours for upload once, which set_color_at does not. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.
         """
     def set_count(self, count: typing.SupportsInt | typing.SupportsIndex) -> None:
-        ...
+        """
+        Draw the first `count` instances. Within the capacity the mesh was created with (Vulkan) this is a slot edit, not a structural rebuild, but it still walks the scene: fine on events, too dear every frame on a large scene; a pool that grows and shrinks often keeps a high-water count and parks the unused instances out of sight instead.
+        """
     def set_fade_at(self, index: typing.SupportsInt | typing.SupportsIndex, fade: typing.SupportsFloat | typing.SupportsIndex, complement: bool = False) -> None:
         """
         Mesh.set_fade for one instance. The first call gives every instance its own fade (all fully drawn), which then replaces the mesh-wide set_fade. Marks the fades for upload.
