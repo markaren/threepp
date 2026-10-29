@@ -46,7 +46,6 @@
 #endif
 #endif
 
-#include "threepp/canvas/Monitor.hpp"
 #include "threepp/core/Clock.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
@@ -392,15 +391,6 @@ EditorApp::EditorApp(const Options& options)
       camera_(55.f, canvas_.aspect(), 0.05f, 5000.f),
       ortho_(-1.f, 1.f, 1.f, -1.f, 0.05f, 10000.f) {
 
-    contentScale_ = monitor::contentScale().first;
-    // The fonts already follow the window between monitors (ImguiContext has
-    // its own onMonitorChange subscription); this keeps the editor's layout
-    // math — panel widths, button sizes, marker pixels — on the same scale,
-    // so a HiDPI laptop screen and a 100% external monitor both look right.
-    canvas_.onMonitorChange([this](int idx) {
-        contentScale_ = monitor::contentScale(idx).first;
-    });
-
     renderer_->shadowMap().enabled = true;
     renderer_->shadowMap().type = ShadowMap::PFC;
     renderer_->toneMapping = ToneMapping::ACESFilmic;
@@ -512,6 +502,17 @@ EditorApp::EditorApp(const Options& options)
 
     // --- ImGui --------------------------------------------------------------
     ui_ = std::make_unique<ImguiFunctionalContext>(canvas_, *renderer_, [this] { drawUi(); });
+
+    // The editor's layout math — panel widths, button sizes, marker pixels —
+    // uses the scale ImguiContext applied to the fonts, so a HiDPI laptop
+    // screen and a 100% external monitor both look right. On macOS that is 1:
+    // Retina density is handled by ImGui's framebuffer scale, not by enlarging
+    // the layout. ImguiContext subscribed to monitor changes in its
+    // constructor, so by the time this listener runs it holds the new scale.
+    contentScale_ = ui_->dpiScale();
+    canvas_.onMonitorChange([this](int) {
+        contentScale_ = ui_->dpiScale();
+    });
 
     ioCapture_.preventMouseEvent = [this] {
         // The view gizmo draws on the background list, so ImGui's own capture

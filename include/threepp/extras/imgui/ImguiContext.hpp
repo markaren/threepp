@@ -14,7 +14,6 @@
 #include <functional>
 
 #include <threepp/canvas/Canvas.hpp>
-#include <threepp/canvas/Monitor.hpp>
 #include <threepp/renderers/Renderer.hpp>
 
 class ImguiContext {
@@ -34,13 +33,15 @@ public:
             ImGui_ImplGlfw_InitForOther(static_cast<GLFWwindow*>(window), true);
         }
 
-        setFontScale(threepp::monitor::contentScale().first);
+        // Retina uses framebuffer scaling; only scale logical UI coordinates
+        // on platforms where the GLFW backend requires it.
+        setFontScale(ImGui_ImplGlfw_GetContentScaleForWindow(static_cast<GLFWwindow*>(window)));
     }
 
     explicit ImguiContext(const threepp::Canvas& canvas)
         : ImguiContext(canvas.windowPtr(), canvas.graphicsApi() == threepp::GraphicsAPI::OpenGL) {
-        canvas.onMonitorChange([this](int monitor) {
-            setFontScale(threepp::monitor::contentScale(monitor).first);
+        canvas.onMonitorChange([this, window = static_cast<GLFWwindow*>(canvas.windowPtr())](int) {
+            setFontScale(ImGui_ImplGlfw_GetContentScaleForWindow(window));
         });
     }
 
@@ -116,8 +117,8 @@ public:
             glInitialized_ = true;
         }
 
-        canvas.onMonitorChange([this](int monitor) {
-            setFontScale(threepp::monitor::contentScale(monitor).first);
+        canvas.onMonitorChange([this, window = static_cast<GLFWwindow*>(canvas.windowPtr())](int) {
+            setFontScale(ImGui_ImplGlfw_GetContentScaleForWindow(window));
         });
     }
 

@@ -12,7 +12,7 @@ struct ImVec4;
 
 namespace threepp::editor::theme {
 
-    // `scale` is the monitor content scale (DPI), already applied to fonts by
+    // `scale` is the logical UI scale (1 on Retina), already applied to fonts by
     // ImguiContext — every size here is multiplied by it.
     void apply(float scale);
 
