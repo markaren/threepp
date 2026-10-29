@@ -74,6 +74,30 @@ float gPdLegT = 1.0;
 
 #include "lights_ubo.glsl"
 
+// Ray-query counters (VulkanRenderer::setCountRays, frame_timings rays_*):
+// lights.rayCountAddr names this frame's kRayCountSlots uints (0 = off). Every
+// rayQueryInitializeEXT below bumps the category the shade is in, one atomic
+// per subgroup per category; shadowOccludes bumps kRayCountAlphaTests.
+uint gRayCat = kRayCatOther;
+uint rayCatSet(uint c) {
+    const uint was = gRayCat;
+    gRayCat = c;
+    return was;
+}
+layout(buffer_reference, scalar) buffer RayCountBuf { uint n[]; };
+void rayCountSlot(uint cat) {
+    if (lights.rayCountAddr == uvec2(0u)) return;
+    RayCountBuf buf = RayCountBuf(packUint2x32(lights.rayCountAddr));
+    for (;;) {
+        if (subgroupBroadcastFirst(cat) == cat) {
+            const uint n = subgroupBallotBitCount(subgroupBallot(true));
+            if (subgroupElect()) atomicAdd(buf.n[cat], n);
+            break;
+        }
+    }
+}
+void rayCount() { rayCountSlot(gRayCat); }
+
 layout(set = 0, binding = 2) uniform sampler2D  envTex;        // prefiltered PMREM mip chain
 layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // .xyz = n*0.5+0.5, .w = roughness (<0 = unlit)
 layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // .x = Vulkan NDC z [0,1]
@@ -85,6 +109,11 @@ layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // .rgb = albedo,
 layout(set = 0, binding = 7, rgba16f) uniform image2D outImage;
 #ifndef THREEPP_NO_RAY_QUERY
 layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
+// Each query counts itself (rayCount; a no-op unless count_rays is on). The
+// name inside the expansion is not expanded again.
+#define rayQueryInitializeEXT(q, as, flags, mask, origin, tMin, dir, tMax) \
+    rayCount();                                                            \
+    rayQueryInitializeEXT(q, as, flags, mask, origin, tMin, dir, tMax)
 #else
 #include "ray_query_stub.glsl"
 #endif

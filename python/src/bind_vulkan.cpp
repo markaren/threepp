@@ -1473,6 +1473,19 @@ namespace threepp_py {
                                            d["cpu_ensure_scene_ms"] = t.cpuEnsureSceneMs;
                                            d["cpu_record_ms"] = t.cpuRecordMs;
                                            d["cpu_frame_ms"] = t.cpuFrameMs;
+                                           // renderer.count_rays: the shade's ray queries by category.
+                                           if (r.native().countRays()) {
+                                               static constexpr const char* kRayKeys[7] = {
+                                                       "rays_sun", "rays_soft_sun", "rays_translucency", "rays_fog",
+                                                       "rays_gi", "rays_reflections", "rays_other"};
+                                               double total = 0.0;
+                                               for (size_t k = 0; k < t.rays.size(); ++k) {
+                                                   d[kRayKeys[k]] = static_cast<double>(t.rays[k]);
+                                                   total += static_cast<double>(t.rays[k]);
+                                               }
+                                               d["rays_total"] = total;
+                                               d["shadow_alpha_tests"] = static_cast<double>(t.shadowAlphaTests);
+                                           }
                                            return d;
                                        })
                 // The render graph's per-pass GPU table for the last completed
@@ -2081,6 +2094,14 @@ namespace threepp_py {
                               "the whole leg). With a range they sit within it, where the shafts between "
                               "near trunks are, and 8 untraced steps take the rest of the leg, lit through "
                               "the shadow maps where they cover it, else unshadowed.")
+                .def_property("count_rays",
+                              [](PyVulkanRenderer& r) { return r.native().countRays(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setCountRays(v); },
+                              "Count the deferred shade's ray queries per frame by category into "
+                              "frame_timings (rays_sun, rays_soft_sun, rays_translucency, rays_fog, "
+                              "rays_gi, rays_reflections, rays_other, rays_total) and the alpha-cutout tests "
+                              "their shadow rays paid (shadow_alpha_tests). Off by default; off costs nothing, "
+                              "on adds one atomic per subgroup per query.")
                 .def_property_readonly("auto_lod_stats",
                                        [](PyVulkanRenderer& r) {
                                            const auto s = r.native().autoLodStats();

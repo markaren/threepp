@@ -19,6 +19,7 @@
 // mover itself, so without the vote those pixels keep their long stale history
 // and trail the swept shadow as a faint ghost ring.
 #extension GL_KHR_shader_subgroup_vote : require
+#extension GL_KHR_shader_subgroup_ballot : require// rayCount (renderer.count_rays)
 
 // Raster-first deferred shading. Shades the material G-buffer
 // from the raster prepass into a clean, analytic base + adds ray-traced
@@ -458,8 +459,10 @@ void main() {
                 if (probeFarW < 1.0) {
                     float openness;
                     gGiMovFrac = 0.0;
+                    rayCatSet(kRayCatGi);
                     fallE = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, true, giSpp,
                                       pm.envMapIntensity, openness);
+                    rayCatSet(kRayCatOther);
                     // The moving-hit dwell cut applies to the share the gather supplies.
                     gGiMovFrac *= (1.0 - conf) * gatherW;
                 }
@@ -483,7 +486,9 @@ void main() {
         // occlude the scene ambient with RT AO instead of the gather's openness.
         float openness;
         gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
+        rayCatSet(kRayCatGi);
         diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, pm.envMapIntensity, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
+        rayCatSet(kRayCatOther);
     } else {
         diffInd = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
     }
@@ -555,6 +560,7 @@ void main() {
     bool  sOccMoved = false;// this pixel's shadow (or a subgroup neighbour's) hit a MOVING occluder
     bool  sTopUp    = false;// visEst carries the 16-ray sunShadowVis top-up (cap-1 eligible)
     bool  sMapOnly  = false;// visEst is the shadow maps' exact ratio (kSM, no rays)
+    rayCatSet(kRayCatSun);
     if (shadowChannel) {
         // Cluster slice by view-space -z (matches cluster_build's AABB axis).
         const float clusterDist = max(-(viewH.z / viewH.w), 0.0);
@@ -577,6 +583,7 @@ void main() {
                                   /*addEmissive=*/(!flagOn(8u)),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
                                   /*cheapHit=*/false);// primary: exhaustive lights + full NEE
     gSkipAnalyticDirect = false;// reflection/GI/glass hits below keep inline lights
+    rayCatSet(kRayCatOther);
 
     // ── Foliage translucency (MaterialWithTranslucency) — RASTER PRIMARY ONLY ──
     // Thin leaf cards transmit the light that reaches their BACK face, so a
@@ -595,6 +602,7 @@ void main() {
     // Ray-hit shading (reflections / GI / lidar / probes) never reaches main(), so
     // those paths are untouched, matching the detail-layer precedent.
     if (pm.translucency > 0.0) {
+        rayCatSet(kRayCatTrans);
         const vec3  tCol  = albedo * pm.translucencyColor;
         vec3        tSum  = vec3(0.0);
         for (uint i = 0u; i < lights.dirCount; ++i) {
@@ -647,6 +655,8 @@ void main() {
     // Sheen has no traced band at ANY roughness, so it takes the env term at
     // FULL weight (env-mip gloss stands in for the missing mirror ray);
     // opaqueRefl keeps the usual rough remainder (1 − reflBlend).
+    // Every ray from here to the end: reflections, refraction, their hits.
+    rayCatSet(kRayCatRefl);
     const float envSpecW = opaqueRefl ? (1.0 - reflBlend) : 1.0;
     if (pm.transmission <= 0.0 && envSpecW > 0.0) {
         // SPECULAR OCCLUSION, split by whether RT AO is available.

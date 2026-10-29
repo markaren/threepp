@@ -118,6 +118,23 @@
 #define kLodFadeCutMask    0x3FFF0000u
 #define kLodFadeSteps      16383u// odd: a pair's cut is never exactly half, so one side casts
 
+// The deferred shade's ray-query categories (setCountRays; frame_timings
+// rays_sun ... rays_other, in this order). Sun: the surface's direct light;
+// soft sun: sunShadowVis's penumbra probe and refinement; GI: the gather, its
+// bounces and their shadow rays; refl: reflections, refraction and their hits.
+#define kRayCatSun     0u
+#define kRayCatSoftSun 1u
+#define kRayCatTrans   2u
+#define kRayCatFog     3u
+#define kRayCatGi      4u
+#define kRayCatRefl    5u
+#define kRayCatOther   6u
+#define kRayCatCount   7u
+// One more counter after the categories: the alpha-cutout texture tests the
+// shadow rays' candidate hits paid (shadowOccludes), whatever the ray.
+#define kRayCountAlphaTests 7u
+#define kRayCountSlots      8u
+
 // Packed vertex data — BlasRecord::packedMask. Static geometry narrows its
 // attribute and index buffers when its BLAS is built, and this word says
 // which. It reaches the shaders twice: as DrawInfo.packedAttrs (the raster's

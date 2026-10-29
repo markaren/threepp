@@ -1546,7 +1546,64 @@ namespace threepp {
         // The shade's ray budget and the ray counters (setCountRays).
         ubo.fogMarchSteps   = fogMarchSteps_;
         ubo.fogMarchRtRange = fogMarchRtRange_;
+        if (countRays_) {
+            Buffer& b = rayCountBufs_[frame];
+            if (b.handle == VK_NULL_HANDLE) {
+                b = createBuffer(ctx->allocator(), ctx->device(), kRayCountSlots * sizeof(uint32_t),
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+                rayCountReadback_[frame] =
+                        createBuffer(ctx->allocator(), ctx->device(), kRayCountSlots * sizeof(uint32_t),
+                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO,
+                                     VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            }
+            ubo.rayCountAddr = b.address;
+        }
+
         uploadHostVisible(ctx->allocator(), lightsUbos[frame], &ubo, sizeof(ubo));
+    }
+
+    void VulkanRenderer::Impl::readRayCounts(uint32_t frame) {
+        if (!countRays_) lastRayCounts_.fill(0u);
+        if (!rayCountCopied_[frame]) return;
+        rayCountCopied_[frame] = false;
+        Buffer& b = rayCountReadback_[frame];
+        if (!countRays_ || b.handle == VK_NULL_HANDLE) return;
+        void* p = nullptr;
+        check(vmaMapMemory(ctx->allocator(), b.alloc, &p), "vmaMapMemory(rayCounts)");
+        invalidateHostReads(ctx->allocator(), b.alloc, 0, VK_WHOLE_SIZE);
+        std::memcpy(lastRayCounts_.data(), p, kRayCountSlots * sizeof(uint32_t));
+        vmaUnmapMemory(ctx->allocator(), b.alloc);
+    }
+
+    void VulkanRenderer::Impl::recordRayCountClear(VkCommandBuffer cb) {
+        const Buffer& b = rayCountBufs_[currentFrame];
+        if (!countRays_ || b.handle == VK_NULL_HANDLE) return;
+        vkCmdFillBuffer(cb, b.handle, 0, VK_WHOLE_SIZE, 0u);
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+    }
+
+    void VulkanRenderer::Impl::recordRayCountCopy(VkCommandBuffer cb) {
+        const Buffer& b  = rayCountBufs_[currentFrame];
+        const Buffer& rb = rayCountReadback_[currentFrame];
+        if (!countRays_ || b.handle == VK_NULL_HANDLE || rb.handle == VK_NULL_HANDLE) return;
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+        const VkBufferCopy region{0, 0, kRayCountSlots * sizeof(uint32_t)};
+        vkCmdCopyBuffer(cb, b.handle, rb.handle, 1, &region);
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0,
+                             nullptr);
+        rayCountCopied_[currentFrame] = true;
     }
 
     // A STEP in the scene's lighting since the previous probe update: a light

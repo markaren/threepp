@@ -876,6 +876,12 @@ namespace threepp {
         [[nodiscard]] unsigned int fogMarchSteps() const;
         void setFogMarchRtRange(float metres);
         [[nodiscard]] float fogMarchRtRange() const;
+        // Count the deferred shade's ray queries by category into
+        // FrameTimings::rays (off by default; off costs nothing). One atomic
+        // per subgroup per query, so the counted frames run a little slower.
+        void setCountRays(bool on);
+        [[nodiscard]] bool countRays() const;
+
         // Debug/harness stats snapshot from the last render()'s LOD
         // selection pass. entriesPerLevel[0] is LOD0 (unsimplified); [1..4]
         // are the generated chain levels; [5] is a defensive catch-all
@@ -1803,6 +1809,16 @@ namespace threepp {
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time
+            // setCountRays: the deferred shade's ray queries in the last
+            // completed frame, by category: sun (the surface's direct light),
+            // soft sun (the penumbra probe and refinement), translucency, fog
+            // (the sun march), GI (gather, bounces and their shadow rays),
+            // reflections (with refraction and their hits), other. All 0 while
+            // counting is off.
+            std::array<uint32_t, 7> rays{};
+            // ...and the alpha-cutout texture tests the shadow rays' candidate
+            // hits paid (a far alpha-tested caster's cost shows here).
+            uint32_t shadowAlphaTests = 0;
 
             // One row per render-graph pass of the frame, in execution order,
             // every view included. A row is the GPU span from the point the

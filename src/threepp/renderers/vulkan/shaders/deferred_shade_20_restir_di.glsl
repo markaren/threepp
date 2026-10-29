@@ -408,18 +408,22 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     const vec3 t  = normalize(cross(up, L));
     const vec3 b  = cross(L, t);
     if (gSunFixedPattern && !cheapHit) {
+        const uint rayCatWas = rayCatSet(kRayCatSoftSun);
         const float c = shadowVis(orig, L, 1e30);
         if (c == shadowVis(orig, normalize(L + t * tanR), 1e30) &&
             c == shadowVis(orig, normalize(L - t * tanR), 1e30) &&
             c == shadowVis(orig, normalize(L + b * tanR), 1e30) &&
-            c == shadowVis(orig, normalize(L - b * tanR), 1e30))
+            c == shadowVis(orig, normalize(L - b * tanR), 1e30)) {
+            rayCatSet(rayCatWas);
             return c;// binary 0/1 (TerminateOnFirstHit) -> exact
+        }
         float sum = 0.0;
         for (int i = 0; i < 16; ++i) {
             const float a = (float(i) + 0.5) * 2.39996323;
             const float r = sqrt((float(i) + 0.5) / 16.0) * tanR;
             sum += shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * r), 1e30);
         }
+        rayCatSet(rayCatWas);
         return sum * (1.0 / 16.0);
     }
     const uvec2 px = uvec2(gl_GlobalInvocationID.xy);
@@ -431,11 +435,15 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
         const vec3 d = t * cos(rot) + b * sin(rot);
         return shadowVis(orig, normalize(L + d * (sqrt(bnRad) * tanR)), 1e30);
     }
+    const uint  rayCatWas = rayCatSet(kRayCatSoftSun);
     const vec3  rim = t * cos(rot) + b * sin(rot);
     const float v0  = shadowVis(orig, L, 1e30);
     const float v1  = shadowVis(orig, normalize(L + rim * (0.9 * tanR)), 1e30);
     const float v2  = shadowVis(orig, normalize(L - rim * (0.9 * tanR)), 1e30);
-    if (v0 == v1 && v1 == v2) return v0;// binary 0/1 (TerminateOnFirstHit) → exact
+    if (v0 == v1 && v1 == v2) {
+        rayCatSet(rayCatWas);
+        return v0;// binary 0/1 (TerminateOnFirstHit) → exact
+    }
     float sum = v0 + v1 + v2;
     const float GA = 2.39996323;
     for (int i = 0; i < 13; ++i) {
@@ -443,6 +451,7 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
         const float r = sqrt((float(i) + bnRad) / 13.0) * tanR;
         sum += shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * r), 1e30);
     }
+    rayCatSet(rayCatWas);
     return sum * (1.0 / 16.0);
 }
 

@@ -1445,8 +1445,24 @@ namespace threepp {
         // derived. True when any entry's state changed (a TLAS refill and
         // full build). Needs no materials, so it runs before either fill.
         bool classifyRayShadow(const float camPos[3]);
+        // The deferred shade's ray budget (setSunSoftDistance, setFogMarchSteps,
+        // setFogMarchRtRange: the lights UBO's tail) and setCountRays: per frame
+        // in flight a device-local buffer of kRayCatCount uints the shade bumps
+        // through its device address (zeroed at the head of the frame's command
+        // buffer, recordRayCountClear), copied at its tail into a host-mapped
+        // one (recordRayCountCopy) that readRayCounts reads after the fence.
+        // Device-local because the atomics, aimed at host memory, cost the
+        // shade 17 ms a frame.
         uint32_t fogMarchSteps_   = 16u;
         float    fogMarchRtRange_ = 0.f;
+        bool     countRays_       = false;
+        std::array<Buffer, kFramesInFlight> rayCountBufs_{};    // device-local
+        std::array<Buffer, kFramesInFlight> rayCountReadback_{};// host-mapped
+        std::array<bool, kFramesInFlight>   rayCountCopied_{};  // the frame recorded its clear and copy
+        std::array<uint32_t, kRayCountSlots> lastRayCounts_{};
+        void readRayCounts(uint32_t frame);
+        void recordRayCountClear(VkCommandBuffer cb);
+        void recordRayCountCopy(VkCommandBuffer cb);
         uint64_t rayShadowEpochSeen_    = 0;
         uint64_t rayShadowSpansVersion_ = ~0ull;
         size_t   rayShadowEntryCount_   = 0;

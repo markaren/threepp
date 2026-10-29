@@ -2412,3 +2412,42 @@ def test_ray_shadow_from_lets_a_faded_out_proxy_cast(vk_renderer):
     assert not probe.shadowed()
 
 
+def test_ray_budget_knobs_round_trip_and_count_rays(vk_renderer):
+    """The shade's ray budget: sun_soft_distance, fog_march_steps (clamped to
+    1..64) and fog_march_rt_range keep their defaults until set, and
+    count_rays adds the per-category ray counts to frame_timings; the fog
+    march's count follows fog_march_steps."""
+    r = vk_renderer
+    assert r.sun_soft_distance == 0.0 and r.fog_march_steps == 16 and r.fog_march_rt_range == 0.0
+    assert r.count_rays is False
+    assert "rays_sun" not in r.frame_timings
+    r.fog_march_steps = 0
+    assert r.fog_march_steps == 1
+    r.fog_march_steps = 200
+    assert r.fog_march_steps == 64
+    r.fog_march_steps = 16
+    skip_without_ray_tracing(r)
+    scene, cam, _box = _shadow_scene()
+    r.set_height_fog(density=0.02, base_y=0.0, falloff=50.0, noise_amount=0.0)
+    r.count_rays = True
+    try:
+        def fog_rays(frames=4):
+            for _ in range(frames):
+                r.render(scene, cam)
+            return r.frame_timings
+        t16 = fog_rays()
+        keys = ("rays_sun", "rays_soft_sun", "rays_translucency", "rays_fog", "rays_gi",
+                "rays_reflections", "rays_other")
+        assert all(k in t16 for k in keys) and t16["rays_total"] == sum(t16[k] for k in keys)
+        assert t16["rays_sun"] > 0 and t16["rays_fog"] > 0
+        r.fog_march_steps = 4
+        t4 = fog_rays()
+        assert 0.15 < t4["rays_fog"] / t16["rays_fog"] < 0.35, (t4["rays_fog"], t16["rays_fog"])
+        r.fog_march_rt_range = 5.0
+        assert fog_rays()["rays_fog"] > 0
+    finally:
+        r.count_rays = False
+        r.fog_march_steps = 16
+        r.fog_march_rt_range = 0.0
+        r.set_height_fog(density=0.0)
+    assert "rays_sun" not in r.frame_timings

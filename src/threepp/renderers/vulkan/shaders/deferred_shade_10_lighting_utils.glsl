@@ -590,6 +590,7 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary, out bool cutoutMiss) {
     if (m.alphaCutoff < 0.0) return false;
     if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
     // Alpha-cutout (alphaCutoff > 0): occlude only where the texel is solid.
+    rayCountSlot(kRayCountAlphaTests);
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
     const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;

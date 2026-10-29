@@ -876,6 +876,7 @@ void VulkanRenderer::Impl::beginCommandRecording(VkCommandBuffer cb) {
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer");
             gpuTimings_->beginFrame(cb, currentFrame);
+            recordRayCountClear(cb);
         }
 
 bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
@@ -918,6 +919,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             {
                 THREEPP_CPUPROF("frame.0b_queryReadback");
                 gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
+                readRayCounts(currentFrame);
             }
             // Same fence, same reasoning, for the DisplacedMesh (FFT water)
             // CPU height mirrors. Each ocean update ensureSceneBuilt queued
@@ -1412,6 +1414,7 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             // path shares the fence ring). See VulkanRetireQueue.hpp.
             drainRetireQueue();
             gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
+            readRayCounts(currentFrame);
 
             uint32_t imageIndex = 0;
             VkResult acq;
@@ -1516,6 +1519,7 @@ void VulkanRenderer::Impl::endFrame() {
             {
                 THREEPP_CPUPROF("frame.K1_endRecord");
                 recordOverlayAndPresentTransition(cb, imageIndex);
+                recordRayCountCopy(cb);
                 // Closes the whole-command-buffer GPU bracket opened in
                 // GpuTimings::beginFrame; must be the last recorded command.
                 gpuTimings_->endFrameTotal(cb, currentFrame);

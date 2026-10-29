@@ -1223,6 +1223,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     const float jitter = rnd(seed);
     const float dtRt   = (tRt - tStart) / float(STEPS);
     const float dtTail = (tEnd - tRt) / float(max(TAIL_STEPS, 1));
+    const uint rayCatWas = rayCatSet(kRayCatFog);
 
     vec3 sum = vec3(0.0), sumTail = vec3(0.0);
     for (int s = 0; s < STEPS + TAIL_STEPS; ++s) {
@@ -1264,6 +1265,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         if (traced) sum += add;
         else sumTail += add;
     }
+    rayCatSet(rayCatWas);
     return sum * medAlbedo * (dtRt * trWater) + sumTail * medAlbedo * (dtTail * trWater);
 }
     }

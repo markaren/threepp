@@ -420,6 +420,8 @@ VulkanRenderer::Impl::~Impl() {
                 for (auto& img : vp->reservoirWImagesPP)   destroyImage2D(ctx->allocator(), d, img);
             }
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : rayCountBufs_) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : rayCountReadback_) destroyBuffer(ctx->allocator(), b);
             for (auto& b : clusterLightsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : clusterGridBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : fogUbos) destroyBuffer(ctx->allocator(), b);

@@ -12092,6 +12092,14 @@ class VulkanRenderer:
         Pinhole intrinsics in RENDER-extent pixels (top-left origin, OpenCV convention) as a dict fx/fy/cx/cy/width/height. Derived from the camera's own film gauge and focal length -- set a real camera with `cam.film_gauge = 6.3; cam.set_focal_length(4.8)`. Valid after the first render.
         """
     @property
+    def count_rays(self) -> bool:
+        """
+        Count the deferred shade's ray queries per frame by category into frame_timings (rays_sun, rays_soft_sun, rays_translucency, rays_fog, rays_gi, rays_reflections, rays_other, rays_total) and the alpha-cutout tests their shadow rays paid (shadow_alpha_tests). Off by default; off costs nothing, on adds one atomic per subgroup per query.
+        """
+    @count_rays.setter
+    def count_rays(self, arg1: bool) -> None:
+        ...
+    @property
     def cutout_ray_cap(self) -> int:
         """
         A shadow ray counts as blocked once it has passed this many transparent texels of alpha-cutout surfaces (leaf cards). 0 (the default) is off, 15 the most.

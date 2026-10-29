@@ -3054,6 +3054,15 @@ namespace threepp {
     float VulkanRenderer::fogMarchRtRange() const {
         return core()->fogMarchRtRange_;
     }
+
+    void VulkanRenderer::setCountRays(bool on) {
+        core()->countRays_ = on;
+    }
+
+    bool VulkanRenderer::countRays() const {
+        return core()->countRays_;
+    }
+
     VulkanRenderer::AutoLodStats VulkanRenderer::autoLodStats() const {
         auto stats        = core()->autoLodStats_;
         stats.drainWaitMs = core()->lodDrainWaitMs_;
@@ -3118,7 +3127,11 @@ namespace threepp {
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
-        return core()->gpuTimings_->timings();
+        auto t = core()->gpuTimings_->timings();
+        static_assert(std::tuple_size_v<decltype(t.rays)> == kRayCatCount, "FrameTimings::rays drift");
+        std::copy_n(core()->lastRayCounts_.begin(), kRayCatCount, t.rays.begin());
+        t.shadowAlphaTests = core()->lastRayCounts_[kRayCountAlphaTests];
+        return t;
     }
 
     void VulkanRenderer::scanLidar(const std::vector<LidarBeam>& beams,
