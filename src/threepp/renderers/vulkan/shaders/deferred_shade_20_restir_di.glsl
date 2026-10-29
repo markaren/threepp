@@ -407,9 +407,23 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 t  = normalize(cross(up, L));
     const vec3 b  = cross(L, t);
+    // setSunSoftDistance (the lights UBO's sunSoftDistance, 0 = off): past it
+    // from the eye a probe that disagrees returns its own mean, and the
+    // denoiser smooths the coarse penumbra instead of 13 or 16 more rays.
+    const vec3 eyeToOrig = orig - gPrimaryOrigin;
+    const bool coarse = lights.sunSoftDistance > 0.0 &&
+                        dot(eyeToOrig, eyeToOrig) > lights.sunSoftDistance * lights.sunSoftDistance;
     if (gSunFixedPattern && !cheapHit) {
         const uint rayCatWas = rayCatSet(kRayCatSoftSun);
         const float c = shadowVis(orig, L, 1e30);
+        if (coarse) {
+            const float m = (c + shadowVis(orig, normalize(L + t * tanR), 1e30) +
+                             shadowVis(orig, normalize(L - t * tanR), 1e30) +
+                             shadowVis(orig, normalize(L + b * tanR), 1e30) +
+                             shadowVis(orig, normalize(L - b * tanR), 1e30)) * 0.2;
+            rayCatSet(rayCatWas);
+            return m;
+        }
         if (c == shadowVis(orig, normalize(L + t * tanR), 1e30) &&
             c == shadowVis(orig, normalize(L - t * tanR), 1e30) &&
             c == shadowVis(orig, normalize(L + b * tanR), 1e30) &&
@@ -445,6 +459,10 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
         return v0;// binary 0/1 (TerminateOnFirstHit) → exact
     }
     float sum = v0 + v1 + v2;
+    if (coarse) {
+        rayCatSet(rayCatWas);
+        return sum * (1.0 / 3.0);
+    }
     const float GA = 2.39996323;
     for (int i = 0; i < 13; ++i) {
         const float a = rot + (float(i) + 1.0) * GA;

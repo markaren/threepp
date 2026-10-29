@@ -866,6 +866,12 @@ namespace threepp {
 
         // The deferred shade's ray budget. Each knob's default renders as
         // before; all take effect at the next render().
+        // Soft sun distance (metres, 0 = off, the default): past it from the
+        // eye the soft sun's 3-ray penumbra probe, where its rays disagree,
+        // returns their mean instead of tracing 13 more, and the denoiser
+        // smooths the coarser penumbra. Nearer penumbrae are refined as before.
+        void setSunSoftDistance(float metres);
+        [[nodiscard]] float sunSoftDistance() const;
         // The sun's volumetric fog march (shafts through height fog): its
         // number of shadow-traced steps (1 to 64, default 16) and the range
         // (metres from the eye, 0 = the whole leg, the default) they cover.

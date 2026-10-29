@@ -2082,6 +2082,12 @@ namespace threepp_py {
                               },
                               "The distance from the eye from which cutout_ray_cap holds (0 = "
                               "everywhere): nearer shadows are exact.")
+                .def_property("sun_soft_distance",
+                              [](PyVulkanRenderer& r) { return r.native().sunSoftDistance(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setSunSoftDistance(v); },
+                              "Metres from the eye past which the soft sun's penumbra is not refined: "
+                              "where its 3 probe rays disagree they return their mean instead of tracing "
+                              "13 more, and the denoiser smooths it. 0 (the default) refines everywhere.")
                 .def_property("fog_march_steps",
                               [](PyVulkanRenderer& r) { return r.native().fogMarchSteps(); },
                               [](PyVulkanRenderer& r, unsigned int v) { r.native().setFogMarchSteps(v); },

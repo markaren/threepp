@@ -3038,6 +3038,13 @@ namespace threepp {
         return core()->cutoutRayCap_;
     }
 
+    void VulkanRenderer::setSunSoftDistance(float metres) {
+        core()->sunSoftDistance_ = std::max(0.f, metres);
+    }
+
+    float VulkanRenderer::sunSoftDistance() const {
+        return core()->sunSoftDistance_;
+    }
 
     void VulkanRenderer::setFogMarchSteps(unsigned int steps) {
         core()->fogMarchSteps_ = std::clamp(steps, 1u, 64u);

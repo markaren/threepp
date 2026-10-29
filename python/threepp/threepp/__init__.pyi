@@ -12617,6 +12617,14 @@ class VulkanRenderer:
     def sun_angular_radius(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def sun_soft_distance(self) -> float:
+        """
+        Metres from the eye past which the soft sun's penumbra is not refined: where its 3 probe rays disagree they return their mean instead of tracing 13 more, and the denoiser smooths it. 0 (the default) refines everywhere.
+        """
+    @sun_soft_distance.setter
+    def sun_soft_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def tlas_stats(self) -> dict:
         """
         Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a skinned, displaced, morphed or tet mesh or a ParticleField added or removed, a mesh changing class), slot_edits (meshes added or removed, a GrassMesh among them, an InstancedMesh count changed, a first show, a geometry, material or texture swap: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed), records_pruned and textures_pruned (geometries and textures that died, freed by a slot edit without a rebuild), texture_slots_in_use (of 2048), texture_slot_fallbacks (textures that found no slot and drew without their map), admissions_deferred (meshes that arrived hidden and were admitted over the following frames), admissions_landed (of those, landed while still hidden), swap_edits (a geometry, material or texture swapped on a mesh, taken by a slot edit), slot_pool_growths (slot edits that outgrew the slot pool and grew it in place, no device wait), slot_capacity (the entries the pool holds now, see reserve_entry_slots), flat_checks (frames with nothing added, removed or swapped settled with no walk of the scene graph), versioned_deltas (slot deltas that visited only the subtrees whose structure moved), slot_deltas (slot edits taken edit-proportionally: only the nodes and spans that changed found and placed) and moving_entries (the entries the last frame treated as moving: moved, shown or hidden in the last 30 frames, their shadow, GI and reflection histories kept short; an instance-matrix edit counts only the instances whose matrix changed).

@@ -1453,6 +1453,7 @@ namespace threepp {
         // one (recordRayCountCopy) that readRayCounts reads after the fence.
         // Device-local because the atomics, aimed at host memory, cost the
         // shade 17 ms a frame.
+        float    sunSoftDistance_ = 0.f;
         uint32_t fogMarchSteps_   = 16u;
         float    fogMarchRtRange_ = 0.f;
         bool     countRays_       = false;

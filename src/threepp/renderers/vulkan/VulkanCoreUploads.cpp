@@ -1544,6 +1544,7 @@ namespace threepp {
         }
 
         // The shade's ray budget and the ray counters (setCountRays).
+        ubo.sunSoftDistance = sunSoftDistance_;
         ubo.fogMarchSteps   = fogMarchSteps_;
         ubo.fogMarchRtRange = fogMarchRtRange_;
         if (countRays_) {
