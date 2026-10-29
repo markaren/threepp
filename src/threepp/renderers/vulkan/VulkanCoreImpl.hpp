@@ -1449,6 +1449,10 @@ namespace threepp {
         // derived. True when any entry's state changed (a TLAS refill and
         // full build). Needs no materials, so it runs before either fill.
         bool classifyRayShadow(const float camPos[3]);
+        // An in-place edit of a record whose auto-LOD chain is still landing:
+        // the chain goes to its batch's garbage (freed after that batch's
+        // fence) instead of costing a device-wide wait. False: no such batch.
+        bool detachLandingLod(BlasRecord& rec);
         // The lean TLAS fill's per-span signature (EntrySpan::tlasSig).
         [[nodiscard]] uint64_t spanTlasSig(const vulkan::impl::EntrySpan& sp, uint8_t mask,
                                            VkGeometryInstanceFlagsKHR flags, bool cutout, const BlasRecord* rec,

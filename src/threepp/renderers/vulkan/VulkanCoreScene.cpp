@@ -3197,6 +3197,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // deforms, but a mesh edited every so often (a rut
                             // chunk reused from a pool) gets a chain while it
                             // sits still, and its next edit used to drain.
+                            // A chain still landing (a pooled rut chunk that sat still
+                            // long enough to get one) is handed to its batch to free.
+                            if (nrmAttr && !rec.lodLanding.empty()) detachLandingLod(rec);
                             const bool frameRoute = nrmAttr && rec.lodLanding.empty();
                             if (frameRoute) {
                                 // An in-place vertex rewrite invalidates the chain:

@@ -4523,6 +4523,30 @@ void VulkanRenderer::Impl::destroyBlasLodLevels(BlasRecord& rec) {
             rec.lodState = BlasRecord::LodState::None;
         }
 
+bool VulkanRenderer::Impl::detachLandingLod(BlasRecord& rec) {
+            // The batch still building (or compacting) this chain frees its
+            // own garbage once its fence has signalled (landLodBatches), and a
+            // landing level is referenced by no TLAS: handing it the levels
+            // frees them without a device wait. The batch then finds
+            // lodLandingBatch zeroed and lands nothing for this record.
+            if (rec.lodLandingBatch == 0 || rec.lodLanding.empty()) return false;
+            for (auto& b : lodLanding_) {
+                if (b.id != rec.lodLandingBatch) continue;
+                for (auto& lvl : rec.lodLanding) {
+                    lodBlasBytes_  -= std::min<uint64_t>(lodBlasBytes_,  lvl.storage.size);
+                    lodIndexBytes_ -= std::min<uint64_t>(lodIndexBytes_, lvl.index.size);
+                    if (lvl.as) b.garbageAs.push_back(lvl.as);
+                    b.garbage.push_back(lvl.storage);
+                    b.garbage.push_back(lvl.index);
+                }
+                rec.lodLanding.clear();
+                rec.lodLandingBatch = 0;
+                rec.lodState = BlasRecord::LodState::None;
+                return true;
+            }
+            return false;
+        }
+
 void VulkanRenderer::Impl::retireBlasLodLevels(BlasRecord& rec) {
             for (auto& lvl : rec.lodLevels) {
                 lodBlasBytes_  -= std::min<uint64_t>(lodBlasBytes_,  lvl.storage.size);
