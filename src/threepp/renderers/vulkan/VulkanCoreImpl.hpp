@@ -6248,8 +6248,18 @@ namespace threepp {
         void     updateShadowCasterSnap(vulkan::ShadowMapPass& smp, uint32_t cascades);
         // buildShadowDrawData's scratch: every caster once, then one command
         // list per (layer, group); cleared, never reallocated, between frames.
-        std::vector<DrawInfoGpu>                        shadowDrawScratch_;
-        std::vector<std::vector<VkDrawIndirectCommand>> shadowCmdScratch_;
+        // One set per chunk of the span walk (CpuPar.hpp): chunk c's draws
+        // follow chunk c-1's in the upload, so a command's firstInstance is
+        // chunk-local until the merge adds its chunk's base.
+        struct ShadowChunk {
+            std::vector<DrawInfoGpu>                        draws;
+            std::vector<std::vector<VkDrawIndirectCommand>> cmds;// [(layer * 2 + dynamic) * kGroups + group]
+            uint8_t staleMask = 0;// cascades a static caster reached while cached
+        };
+        std::vector<ShadowChunk> shadowChunks_;
+        std::vector<uint32_t>    shadowChunkBounds_;
+        // The TLAS fill's per-chunk GeometryDesc dirty rows (same chunking).
+        std::vector<std::vector<uint32_t>> tlasChunkDirty_;
         // Depth-only, reverse-Z, dynamic rendering into one D32 layer: the
         // indirect G-buffer draw reduced to position + the cutout test, with
         // depth clamp where the device has it and dynamic cull mode, front

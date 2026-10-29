@@ -1,5 +1,6 @@
 #include "VulkanCoreImpl.hpp"
 
+#include "CpuPar.hpp"
 #include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/core/Assert.hpp"
@@ -3730,7 +3731,57 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             size_t tlasWrite = tlasSpanBase;
                             size_t tlasRunFirst = 0, tlasRunEnd = 0;// rows rewritten, coalesced for the upload
                             // No bit in the span's words: none of its rows changed.
+                            // A plain span rewritten whole with rows enough to
+                            // share: its rows in chunks (CpuPar.hpp), each from
+                            // its entry alone, the dirty marks after in order.
+                            // The serial loop below is the reference; this
+                            // writes the same bytes to the same rows.
+                            const bool     tlasWhole  = !tlasRowsOnly && !sinkTlas && !isDeformer && rec;
+                            const unsigned tlasChunks = tlasWhole ? vulkan::par::chunksFor(sp.count) : 1u;
                             if (tlasRowsOnly && !tlasRowsChangedIn(sp.first, sp.count)) tlasWrite += sp.count;
+                            else if (tlasChunks > 1u &&
+                                     (!tlasInPlace || tlasSpanBase + sp.count <= size_t(prevTlasBase) + prevTlasCount)) {
+                                if (!tlasInPlace) instances.resize(tlasSpanBase + sp.count);
+                                auto& dirtyIdx = tlasChunkDirty_;
+                                if (dirtyIdx.size() < tlasChunks) dirtyIdx.resize(tlasChunks);
+                                vulkan::par::run(tlasChunks, [&](unsigned c) {
+                                    auto& dirty = dirtyIdx[c];
+                                    dirty.clear();
+                                    const auto j0 = static_cast<uint32_t>(uint64_t(sp.count) * c / tlasChunks);
+                                    const auto j1 = static_cast<uint32_t>(uint64_t(sp.count) * (c + 1u) / tlasChunks);
+                                    for (uint32_t j = j0; j < j1; ++j) {
+                                        const size_t     i      = size_t(sp.first) + j;
+                                        const MeshEntry& en     = entries[i];
+                                        const auto       lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel) : lodSel0;
+                                        if (i < geomDescsCached_.size()) {
+                                            auto& gd = geomDescsCached_[i];
+                                            if (gd.indexAddress != lodSel.indexAddress ||
+                                                geomFlag(gd, kGeomFlagIndexed) != lodSel.indexed) {
+                                                gd.indexAddress = lodSel.indexAddress;
+                                                setGeomFlag(gd, kGeomFlagIndexed, lodSel.indexed);
+                                                dirty.push_back(static_cast<uint32_t>(i));
+                                            }
+                                        }
+                                        VkAccelerationStructureInstanceKHR& inst = instances[tlasSpanBase + j];
+                                        inst                                     = {};
+                                        copyTlasTransform(inst.transform, en.worldMatrix);
+                                        inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                                        inst.mask = entryRayMask(spanMask, en, !sp.fadeAny || lodFadeCasts(entryLodFade_[i]));
+                                        inst.instanceShaderBindingTableRecordOffset = 0;
+                                        inst.flags = (spanCutout && en.rayFarOpaque)
+                                                             ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
+                                                             : spanFlags;
+                                        inst.accelerationStructureReference = lodSel.asAddress;
+                                    }
+                                });
+                                for (unsigned c = 0; c < tlasChunks; ++c)
+                                    for (const uint32_t i : dirtyIdx[c]) markGeomDescsDirty(i);
+                                if (tlasInPlace) {// one run: every row of the span
+                                    tlasRunFirst = tlasSpanBase;
+                                    tlasRunEnd   = tlasSpanBase + sp.count;
+                                }
+                                tlasWrite = tlasSpanBase + sp.count;
+                            }
                             else for (uint32_t j = 0; j < sp.count; ++j) {
                                 const size_t i = size_t(sp.first) + j;
                                 if (tlasRowsOnly && !tlasRowChanged(i)) {

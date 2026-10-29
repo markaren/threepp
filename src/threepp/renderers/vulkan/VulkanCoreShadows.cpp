@@ -4,6 +4,7 @@
 
 #include "VulkanCoreImpl.hpp"
 
+#include "CpuPar.hpp"
 #include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/lights/PointLight.hpp"
@@ -859,11 +860,18 @@ namespace threepp {
         // lies in its 90 degree wedge within the lamp's range, a skipped layer
         // nothing. A caster whose bounds are unknown (a deformer) reaches every
         // layer, as the G-buffer keeps it.
-        auto& draws = shadowDrawScratch_;
-        auto& cmds  = shadowCmdScratch_;// [(layer * 2 + dynamic) * kGroups + group]
-        draws.clear();
-        cmds.resize(size_t(nLayers) * 2u * kGroups);
-        for (auto& v : cmds) v.clear();
+        // The walk runs in chunks of spans (CpuPar.hpp), each emitting into
+        // its own lists; the upload below lays the chunks out in span order,
+        // so the bytes do not depend on the chunk count.
+        auto&      chunks     = shadowChunks_;
+        uint32_t   nChunks    = 1u;
+        const auto resetChunk = [&](ShadowChunk& ch) {
+            ch.draws.clear();
+            ch.cmds.resize(size_t(nLayers) * 2u * kGroups);
+            for (auto& v : ch.cmds) v.clear();
+            ch.staleMask = 0u;
+        };
+        if (chunks.empty()) chunks.resize(1);
 
         // The cascades share the sun's frame, so a caster's coordinates in it
         // are taken once; each box keeps its centre's coordinates.
@@ -993,7 +1001,7 @@ namespace threepp {
             }
             return true;
         };
-        const auto emit = [&](const EntrySpan& sp, const SpanInfo& si, uint32_t i) {
+        const auto emit = [&](const EntrySpan& sp, const SpanInfo& si, uint32_t i, ShadowChunk& ch) {
             const MeshEntry& en = entries[i];
             if (en.camAttached) return;
             if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) return;
@@ -1034,9 +1042,11 @@ namespace threepp {
                         if (((redrawCasc >> c) & 1u) && ((mask[0] >> c) & 1u)) s |= uint8_t(1u << (4u + c));
                     *snapAt = s;
                 }
+                // Marked stale after the walk, in chunk order (the value is
+                // this frame's either way).
                 for (uint32_t c = 0; c < 4u; ++c)
                     if (((cachedCasc >> c) & 1u) && ((mask[0] >> c) & 1u) && smp.staleSince[c] == 0u)
-                        smp.staleSince[c] = staleNow;
+                        ch.staleMask |= static_cast<uint8_t>(1u << c);
             }
             if ((mask[0] | mask[1]) == 0u) return;
             const BlasRecord* rec    = si.rec;
@@ -1070,14 +1080,14 @@ namespace threepp {
             cmd.vertexCount   = vcount;
             cmd.instanceCount = 1u;
             cmd.firstVertex   = vfirst;
-            cmd.firstInstance = static_cast<uint32_t>(draws.size());// its DrawInfo record
-            draws.push_back(di);
+            cmd.firstInstance = static_cast<uint32_t>(ch.draws.size());// its DrawInfo record, chunk-local
+            ch.draws.push_back(di);
             for (uint32_t li = 0; li < nLayers; ++li) {
                 // A cached layer draws only its `dyn` list: a static caster
                 // drawn over a stale cascade goes there too.
                 const bool over = dynamic || (tolerant && vol.layers[li].cached);
                 if (mask[li >> 6] & (1ull << (li & 63u)))
-                    cmds[(size_t(li) * 2u + (over ? 1u : 0u)) * kGroups + group].push_back(cmd);
+                    ch.cmds[(size_t(li) * 2u + (over ? 1u : 0u)) * kGroups + group].push_back(cmd);
             }
         };
 
@@ -1094,6 +1104,7 @@ namespace threepp {
             uint32_t curSpan = 0xFFFFFFFFu;
             bool     spanOk  = false;
             SpanInfo si{};
+            resetChunk(chunks[0]);
             // Stale-tolerant: the static casters without their bit too.
             for (const uint32_t i : tolerant ? smp.onTop : shadowDynamicIdx_) {
                 if (i >= shadowSpanOfEntry_.size() || i >= entries.size()) continue;
@@ -1103,40 +1114,83 @@ namespace threepp {
                     spanOk  = s < entrySpans_.size() && !entrySpans_[s].hidden && entrySpans_[s].count > 0u &&
                              spanInfo(entrySpans_[s], si);
                 }
-                if (spanOk) emit(entrySpans_[s], si, i);
+                if (spanOk) emit(entrySpans_[s], si, i, chunks[0]);
             }
         } else {
-            for (const auto& sp : entrySpans_) {
-                if (sp.hidden || sp.count == 0u) continue;
-                SpanInfo si{};
-                if (!spanInfo(sp, si)) continue;
-                for (uint32_t j = 0; j < sp.count; ++j) emit(sp, si, sp.first + j);
-            }
+            // Chunks of spans weighted by entry count (a stand of pines is
+            // one span of thousands): one chunk when the knob is off.
+            auto& bounds = shadowChunkBounds_;
+            vulkan::par::splitByWeight(
+                    entrySpans_.size(), vulkan::par::chunksFor(entries.size()),
+                    [&](size_t s) -> uint64_t {
+                        const auto& sp = entrySpans_[s];
+                        return sp.hidden ? 0u : sp.count;
+                    },
+                    bounds);
+            nChunks = static_cast<uint32_t>(bounds.size() - 1);
+            if (chunks.size() < nChunks) chunks.resize(nChunks);
+            vulkan::par::run(nChunks, [&](unsigned c) {
+                ShadowChunk& ch = chunks[c];
+                resetChunk(ch);
+                for (uint32_t s = bounds[c]; s < bounds[c + 1]; ++s) {
+                    const auto& sp = entrySpans_[s];
+                    if (sp.hidden || sp.count == 0u) continue;
+                    SpanInfo si{};
+                    if (!spanInfo(sp, si)) continue;
+                    for (uint32_t j = 0; j < sp.count; ++j) emit(sp, si, sp.first + j, ch);
+                }
+            });
         }
+        for (uint32_t c = 0; c < nChunks; ++c)
+            for (uint32_t k = 0; k < 4u; ++k)
+                if (((chunks[c].staleMask >> k) & 1u) && smp.staleSince[k] == 0u) smp.staleSince[k] = staleNow;
 
-        uint32_t totalCmds = 0;
-        for (const auto& v : cmds) totalCmds += static_cast<uint32_t>(v.size());
-        const uint32_t totalDraws = static_cast<uint32_t>(draws.size());
+        uint32_t totalCmds = 0, totalDraws = 0;
+        for (uint32_t c = 0; c < nChunks; ++c) {
+            totalDraws += static_cast<uint32_t>(chunks[c].draws.size());
+            for (const auto& v : chunks[c].cmds) totalCmds += static_cast<uint32_t>(v.size());
+        }
         smp.ensureDrawCapacity(frame, totalDraws, totalCmds);
         auto& slot = smp.slot(frame);
         void* dm   = nullptr;
         void* cm   = nullptr;
         check(vmaMapMemory(ctx->allocator(), slot.drawInfo.alloc, &dm), "vmaMapMemory(shadow drawInfo)");
         check(vmaMapMemory(ctx->allocator(), slot.cmds.alloc, &cm), "vmaMapMemory(shadow cmds)");
-        if (totalDraws > 0u) std::memcpy(dm, draws.data(), size_t(totalDraws) * sizeof(DrawInfoGpu));
+        // The chunks' records one after the other; a chunk's commands then
+        // name theirs from the chunk's base.
+        for (uint32_t c = 0, at = 0; c < nChunks; ++c) {
+            const auto& d = chunks[c].draws;
+            if (!d.empty()) std::memcpy(static_cast<DrawInfoGpu*>(dm) + at, d.data(), d.size() * sizeof(DrawInfoGpu));
+            at += static_cast<uint32_t>(d.size());
+        }
         smp.layerGroups.assign(nLayers, {});
         uint32_t offset = 0;
         for (uint32_t li = 0; li < nLayers; ++li) {
             for (uint32_t d = 0; d < 2u; ++d) {
                 auto& groups = d == 0u ? smp.layerGroups[li].stat : smp.layerGroups[li].dyn;
                 for (uint32_t g = 0; g < kGroups; ++g) {
-                    const auto&    list = cmds[(size_t(li) * 2u + d) * kGroups + g];
-                    const uint32_t n    = static_cast<uint32_t>(list.size());
-                    groups[g]           = {offset, n};
-                    if (n > 0u) {
-                        std::memcpy(static_cast<uint8_t*>(cm) + size_t(offset) * sizeof(VkDrawIndirectCommand),
-                                    list.data(), size_t(n) * sizeof(VkDrawIndirectCommand));
+                    const size_t idx      = (size_t(li) * 2u + d) * kGroups + g;
+                    uint32_t     n        = 0u;
+                    uint32_t     drawBase = 0u;
+                    for (uint32_t c = 0; c < nChunks; ++c) {
+                        const auto& list = chunks[c].cmds[idx];
+                        auto*       out  = reinterpret_cast<VkDrawIndirectCommand*>(cm) + offset + n;
+                        if (drawBase == 0u) {
+                            if (!list.empty()) std::memcpy(out, list.data(), list.size() * sizeof(VkDrawIndirectCommand));
+                        } else {
+                            // Built in a register and written once: the
+                            // mapped memory is write-combined, a read-back
+                            // from it costs more than the whole walk.
+                            for (const auto& cmd : list) {
+                                VkDrawIndirectCommand c = cmd;
+                                c.firstInstance += drawBase;
+                                *out++ = c;
+                            }
+                        }
+                        n += static_cast<uint32_t>(list.size());
+                        drawBase += static_cast<uint32_t>(chunks[c].draws.size());
                     }
+                    groups[g] = {offset, n};
                     offset += n;
                 }
             }
