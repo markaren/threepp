@@ -35,11 +35,15 @@
 
 #include <cstdlib>
 #include <map>
+#include <mutex>
 #include <string>
 
 namespace threepp::vulkan::cpuprof {
 
     struct Registry {
+        // The frame prep's concurrent chains (CpuPar.hpp tasks) close their
+        // scopes from worker threads; the maps are theirs under this lock.
+        std::mutex mtx;
         bool on = false;
         unsigned window = 300;// frames per printed block
         unsigned frames = 0;  // frames in the CURRENT window
@@ -53,15 +57,17 @@ namespace threepp::vulkan::cpuprof {
         uint64_t frameNo = 0;
 
         static Registry& get() {
-            static Registry r = [] {
-                Registry x;
-                x.on = env::flag("THREEPP_CPU_PHASE_PROFILE");
+            // Built in place (the mutex makes the registry non-copyable).
+            static Registry   r;
+            static const bool init = [] {
+                r.on = env::flag("THREEPP_CPU_PHASE_PROFILE");
                 if (const auto n = env::integer("THREEPP_CPU_PHASE_WINDOW"); n && *n > 0)
-                    x.window = static_cast<unsigned>(*n);
+                    r.window = static_cast<unsigned>(*n);
                 if (const auto s = env::integer("THREEPP_CPU_PHASE_SPIKE"); s && *s > 0)
-                    x.spikeMs = static_cast<double>(*s);
-                return x;
+                    r.spikeMs = static_cast<double>(*s);
+                return true;
             }();
+            (void) init;
             return r;
         }
 
@@ -118,7 +124,8 @@ namespace threepp::vulkan::cpuprof {
             const double ms = std::chrono::duration<double, std::milli>(
                                       std::chrono::high_resolution_clock::now() - t0)
                                       .count();
-            auto& r = Registry::get();
+            auto&           r = Registry::get();
+            std::lock_guard lock(r.mtx);
             r.acc[name] += ms;
             r.frameAcc[name] += ms;
         }

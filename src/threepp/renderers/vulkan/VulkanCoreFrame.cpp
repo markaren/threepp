@@ -1,3 +1,4 @@
+#include "CpuPar.hpp"
 #include "DescriptorShadow.hpp"
 #include "VulkanCoreImpl.hpp"
 
@@ -1090,26 +1091,36 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // consistent with this frame's TLAS (which references the newly
             // selected level BLASes) without any device stall.
             flushGeometryDescsIfDirty(currentFrame);
-            // Per-frame frustum cull: tags every entry with `inFrustum`
-            // for the raster passes to consume.
-            cullEntriesAgainstFrustum(camera);
             // Hybrid raster prepass: lazy-create resources on first use,
-            // refresh attachments on resize, then upload the per-frame
-            // camera VPs (curr jittered, curr unjittered, prev unjittered).
-            // Must run after computeAndUploadMotionMatrices so the descriptor
-            // rewrite picks up the populated motionMat buffer for this frame.
+            // refresh attachments on resize. Must run after
+            // computeAndUploadMotionMatrices so the descriptor rewrite picks
+            // up the populated motionMat buffer for this frame, and before
+            // the chains below, which assume the resources exist.
             {
                 THREEPP_CPUPROF("frame.2_ensureHybridRes");
                 ensureHybridResources();
-                uploadRasterCameraUbo(currentFrame, camera);
             }
-            // Build the per-frame DrawInfo + indirect-cmd buffers used
-            // by the indirect-drawing gbuf pass. Runs after the cull
-            // pass + camera upload (depends on both) and before record.
-            buildIndirectDrawData(currentFrame);
-            // The view's shadow maps (ShadowMode::ShadowMaps): the fit, the
-            // caster list and the UBO, or the dummies back in its deferred set.
-            prepareShadowMaps(camera);
+            // Two chains that read the same scene and write disjoint state:
+            // the frustum cull (tags every entry with `inFrustum`), the
+            // per-frame camera VPs (curr jittered, curr unjittered, prev
+            // unjittered) and the DrawInfo + indirect-cmd build the gbuf
+            // pass consumes, in that order; and the view's shadow maps
+            // (ShadowMode::ShadowMaps): the fit, the caster list and the UBO,
+            // or the dummies back in its deferred set. They run at once
+            // (THREEPP_VK_CPU_TASKS=0: one after the other), once the view's
+            // shadow pass exists: its creation allocates descriptor sets,
+            // which is the frame thread's to do.
+            vulkan::par::tasks(
+                    vulkan::par::tasksOn() && view().shadowMaps_ != nullptr,
+                    [&] {
+                        cullEntriesAgainstFrustum(camera);
+                        {
+                            THREEPP_CPUPROF("frame.2_ensureHybridRes");
+                            uploadRasterCameraUbo(currentFrame, camera);
+                        }
+                        buildIndirectDrawData(currentFrame);
+                    },
+                    [&] { prepareShadowMaps(camera); });
             // GPU per-instance world matrices — the producer half only; nothing
             // above or below reads its output yet (stage 1 of
             // plans/gpu-driven-instances.md). Placed after ensureHybridResources
@@ -1316,6 +1327,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // of {frame.J_record} / {M3, L, H} belongs in a phase sum.
             {
                 THREEPP_CPUPROF("frame.J_record");
+                // Detail row: the primary's pass-list build alone (the
+                // recording of every pass is frame.J2_execute below).
+                THREEPP_CPUPROF("frame.J1_graphBuild");
                 addViewEnterPass(g, 0);
                 addPrimaryViewPasses(g, imageIndex);
                 saveViewRecordState(viewRecordStates_[0]);
@@ -1353,6 +1367,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             }
             {
                 THREEPP_CPUPROF("frame.J_record");
+                THREEPP_CPUPROF("frame.J2_execute");// detail row: the recording alone
                 if (asyncFrame_) {
                     const VkCommandBuffer cbs[3] = {cmdBuffers[currentFrame], asyncGbufCmdBuffers_[currentFrame],
                                                     asyncTailCmdBuffers_[currentFrame]};
@@ -2191,13 +2206,19 @@ bool VulkanRenderer::Impl::addSecondaryViewPasses(rg::RenderGraph& g) {
                 cam.updateMatrixWorld(true);
                 v.orthoFrame_ = cam.is<OrthographicCamera>();
                 updateCameraUbo(currentFrame, cam);
-                cullEntriesAgainstFrustum(cam);
-                uploadRasterCameraUbo(currentFrame, cam);
-                buildIndirectDrawData(currentFrame);
-                prepareShadowMaps(cam);
                 // Sizes/creates this view's G-buffer on the first frame and is
                 // a cheap no-op after (the extent never changes for a view).
                 ensureHybridResources();
+                // The primary's two chains (renderFrame), for this view, at
+                // once (THREEPP_VK_CPU_TASKS=0: one after the other).
+                vulkan::par::tasks(
+                        vulkan::par::tasksOn() && v.shadowMaps_ != nullptr,
+                        [&] {
+                            cullEntriesAgainstFrustum(cam);
+                            uploadRasterCameraUbo(currentFrame, cam);
+                            buildIndirectDrawData(currentFrame);
+                        },
+                        [&] { prepareShadowMaps(cam); });
 
                 // This view's passes open with the pass that restores what its
                 // build leaves behind (saved below, once they are all built).
