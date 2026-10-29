@@ -104,6 +104,25 @@ namespace threepp_py {
             "Set it before the mesh is first rendered. True by default; checked on the mesh itself, not "
             "inherited (set it on the InstancedMesh or Mesh, not on a parent Group).";
 
+    // Docstrings of Object3D.ray_shadow_distance / ray_shadow_from /
+    // ray_cast_shadow, bound at the same two sites.
+    inline constexpr const char* kRayShadowDistanceDoc =
+            "Vulkan ray-traced shadow level of detail: each instance whose bounds lie wholly farther than this "
+            "many metres from the eye is left out of the shadow and GI rays (sun, soft sun, translucency, fog "
+            "shafts, GI and probe rays; reflections still see it), so a dense far forest stops costing every "
+            "shadow ray its triangles. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by "
+            "default.";
+    inline constexpr const char* kRayShadowFromDoc =
+            "The reverse of ray_shadow_distance, for a far shadow proxy such as impostor cards: an instance "
+            "whose bounds reach nearer than this many metres casts no ray-traced shadow, and one wholly beyond "
+            "it casts even while its LOD fade (InstancedMesh.set_fades) hides it from the raster. Set it to the "
+            "detailed mesh's ray_shadow_distance so each tree casts from exactly one of the two. Read off the "
+            "mesh, else its nearest ancestor that sets one. 0 (off) by default.";
+    inline constexpr const char* kRayCastShadowDoc =
+            "Vulkan ray-traced shadow override: True casts (also for geometry under a Camera, which casts no "
+            "ray shadow by default), False never casts (still seen by reflections), None keeps the default. "
+            "Read off the mesh, else its nearest ancestor that sets one. None by default.";
+
     // The string userData entry for `key` as a Python str, or None when the key
     // is absent or the value is not a string. Read access for scripts to the
     // editor's flat `key=value;...` configs (spline, physics, script), which

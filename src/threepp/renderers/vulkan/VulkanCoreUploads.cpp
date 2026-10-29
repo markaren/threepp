@@ -2815,7 +2815,8 @@ void VulkanRenderer::Impl::prepareTlasGen(uint32_t frame) {
 
 void VulkanRenderer::Impl::recordTlasGen(VkCommandBuffer cb, uint32_t frame) {
             if (!tlasGenActive_ || !tlasGen_) return;
-            const vulkan::TlasGen::Pc pc{static_cast<uint32_t>(tlasGenSpans_.size()), tlasGenWork_};
+            const vulkan::TlasGen::Pc pc{static_cast<uint32_t>(tlasGenSpans_.size()), tlasGenWork_,
+                                         {rayShadowCamPos_[0], rayShadowCamPos_[1], rayShadowCamPos_[2]}};
             tlasGen_->record(cb, frame, pc);
         }
 

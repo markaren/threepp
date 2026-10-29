@@ -80,6 +80,12 @@ namespace threepp_py {
                 .def_readwrite("frustum_culled", &T::frustumCulled)
                 .def_readwrite("resident", &T::resident, kResidentDoc)
                 .def_readwrite("auto_lod", &T::autoLod, kAutoLodDoc)
+                .def_property("ray_shadow_distance", [](const T& o) { return o.rayShadowDistance(); },
+                              [](T& o, float v) { o.setRayShadowDistance(v); }, kRayShadowDistanceDoc)
+                .def_property("ray_shadow_from", [](const T& o) { return o.rayShadowFrom(); },
+                              [](T& o, float v) { o.setRayShadowFrom(v); }, kRayShadowFromDoc)
+                .def_property("ray_cast_shadow", [](const T& o) { return o.rayCastShadow(); },
+                              [](T& o, std::optional<bool> v) { o.setRayCastShadow(v); }, kRayCastShadowDoc)
                 .def_readwrite("render_order", &T::renderOrder)
                 .def_readwrite("matrix_auto_update", &T::matrixAutoUpdate)
                 .def_readwrite("layers", &T::layers)

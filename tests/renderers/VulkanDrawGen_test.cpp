@@ -129,6 +129,10 @@ int main() {
     auto shells = field(SphereGeometry::create(0.7f, 12, 6), paint(Color(0.2f, 0.3f, 0.9f), Side::Back), 400, 400,
                         0.7f, 4441u);
     scene.add(shells);
+    // The ray shadow LOD (Object3D::setRayShadowDistance / setRayShadowFrom):
+    // per-instance masks tlas_gen.comp derives from the same camera.
+    forest->setRayShadowDistance(16.f);
+    shells->setRayShadowFrom(14.f);
     auto crate = Mesh::create(BoxGeometry::create(2.f, 2.f, 2.f), paint(Color(0.7f, 0.6f, 0.3f), Side::Double));
     crate->position.set(-5.f, 1.f, 2.f);
     scene.add(crate);

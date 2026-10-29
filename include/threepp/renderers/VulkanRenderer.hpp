@@ -24,6 +24,7 @@
 #include "threepp/math/Vector3.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>

@@ -2304,3 +2304,111 @@ def _probe_cascades_follow_the_camera(r):
     untouched = kept & (hist2 == hist0)
     assert untouched.sum() > 0
     assert np.array_equal(sh2[untouched], sh0[untouched]), "a kept slot's store changed without an update"
+
+
+def _shadow_scene():
+    """A ground plane, a tall box on it and a sun at a slant, seen from 12 m:
+    the box's ray-traced shadow covers a good share of the ground."""
+    scene = tp.Scene()
+    scene.background = 0x202830
+    ground = tp.Mesh(tp.PlaneGeometry(40, 40), tp.MeshStandardMaterial())
+    ground.rotation.x = -math.pi / 2
+    scene.add(ground)
+    box = tp.Mesh(tp.BoxGeometry(1.5, 4.0, 1.5), tp.MeshStandardMaterial())
+    box.position.set(0, 2.0, 0)
+    scene.add(box)
+    sun = tp.DirectionalLight(0xffffff, 3.0)
+    sun.position.set(-4, 6, 0)
+    scene.add(sun)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 200)
+    cam.position.set(2.0, 9.0, 8.0)
+    cam.look_at(2.5, 0, 0)
+    return scene, cam, box
+
+
+def _settled_rgb(renderer, scene, cam, frames=10):
+    img = None
+    for _ in range(frames):
+        img = renderer.render_aov(scene, cam, "rgb")
+    return img.astype(np.float32).mean(axis=2)
+
+
+class _ShadowProbe:
+    """Tells a frame with the box's shadow from one without by the pixels that
+    differ between the two references (the shadow on the ground)."""
+
+    def __init__(self, renderer, scene, cam, with_shadow, without_shadow):
+        self.r, self.scene, self.cam = renderer, scene, cam
+        self.mask = np.abs(without_shadow - with_shadow) > 20.0
+        assert self.mask.sum() > 200, "the shadow covers too few pixels to tell"
+        self.dark = float(with_shadow[self.mask].mean())
+        self.bright = float(without_shadow[self.mask].mean())
+
+    def shadowed(self):
+        v = float(_settled_rgb(self.r, self.scene, self.cam)[self.mask].mean())
+        assert abs(v - self.dark) < 0.25 * (self.bright - self.dark) or                abs(v - self.bright) < 0.25 * (self.bright - self.dark), (v, self.dark, self.bright)
+        return abs(v - self.dark) < abs(v - self.bright)
+
+
+def test_ray_shadow_lod_knobs_drop_and_restore_the_shadow(vk_renderer):
+    """Object3D.ray_shadow_distance: an instance wholly past it from the eye
+    casts no ray-traced shadow (the box stays drawn, the ground behind it
+    lights up); ray_cast_shadow False does the same at any distance, and under
+    a Camera, where geometry casts none by default, True brings it back."""
+    skip_without_ray_tracing(vk_renderer)
+    scene, cam, box = _shadow_scene()
+    assert box.ray_shadow_distance == 0.0 and box.ray_shadow_from == 0.0 and box.ray_cast_shadow is None
+    with_shadow = _settled_rgb(vk_renderer, scene, cam)
+    box.ray_shadow_distance = 2.0  # the box's bounds are ~10 m from the eye
+    probe = _ShadowProbe(vk_renderer, scene, cam, with_shadow, _settled_rgb(vk_renderer, scene, cam))
+    box.ray_shadow_distance = 100.0
+    assert probe.shadowed()
+    box.ray_shadow_distance = 0.0
+    box.ray_cast_shadow = False
+    assert not probe.shadowed()
+    box.ray_cast_shadow = None
+    assert probe.shadowed()
+    # Inherited: the nearest ancestor that sets a knob decides.
+    group = tp.Group()
+    scene.remove(box)
+    group.add(box)
+    scene.add(group)
+    group.ray_shadow_distance = 2.0
+    assert not probe.shadowed()
+    group.ray_shadow_distance = 0.0
+    assert probe.shadowed()
+    # Under a Camera node: no ray shadow unless opted in.
+    holder = tp.PerspectiveCamera()
+    group.remove(box)
+    holder.add(box)
+    scene.add(holder)
+    assert not probe.shadowed()
+    box.ray_cast_shadow = True
+    assert probe.shadowed()
+
+
+def test_ray_shadow_from_lets_a_faded_out_proxy_cast(vk_renderer):
+    """Object3D.ray_shadow_from: an instance wholly beyond it casts even while
+    its LOD fade hides it from the raster (a far impostor carrying the shadow
+    of a tree drawn by another mesh); nearer than it, it casts nothing."""
+    skip_without_ray_tracing(vk_renderer)
+    scene, cam, box = _shadow_scene()
+    # The references: the box drawn, with and without its shadow (the box's own
+    # pixels match, so only the shadow on the ground tells them apart).
+    with_shadow = _settled_rgb(vk_renderer, scene, cam)
+    box.ray_cast_shadow = False
+    probe = _ShadowProbe(vk_renderer, scene, cam, with_shadow, _settled_rgb(vk_renderer, scene, cam))
+    scene.remove(box)
+    proxy = tp.InstancedMesh(tp.BoxGeometry(1.5, 4.0, 1.5), tp.MeshStandardMaterial(), 1)
+    proxy.set_matrices(np.array([[[1, 0, 0, 0], [0, 1, 0, 2.0], [0, 0, 1, 0], [0, 0, 0, 1]]], np.float32))
+    scene.add(proxy)
+    assert probe.shadowed()
+    # Faded out, the box is drawn by no pixel and hit by no ray.
+    proxy.set_fades(np.zeros(1, np.float32))
+    assert not probe.shadowed()
+    proxy.ray_shadow_from = 2.0
+    assert probe.shadowed(), "the proxy past ray_shadow_from cast no shadow"
+    proxy.ray_shadow_from = 50.0
+    assert not probe.shadowed()
+
+

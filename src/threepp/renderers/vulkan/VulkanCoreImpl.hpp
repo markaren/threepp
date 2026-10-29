@@ -627,9 +627,26 @@ namespace threepp {
             if (hidden) return 0u;// MeshEntry::hidden: no ray hits it
             // Sensors only, and only once opted in: mask 0 is hit by no ray at all.
             if (en.sensorOnly) return sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u;
-            if (en.camAttached) return kRayMaskNoShadow;// FP viewmodel: visible, never occludes
+            // Object3D::rayCastShadow overrides the viewmodel rule either way.
+            const uint8_t rs = en.rayShadowState;
+            if ((rs & vulkan::impl::kRayCastOff) || (en.camAttached && !(rs & vulkan::impl::kRayCastOn)))
+                return kRayMaskNoShadow;// FP viewmodel: visible, never occludes
             if (!en.isDisplaced && md && alphaMaskGroup(*md)) return kRayMaskAlpha;
             return kRayMaskOpaque;
+        }
+        // The per-instance half: `group` is tlasRayMask's answer, fadeCasts
+        // lodFadeCasts' for the entry. The ray shadow LOD (rayShadowState)
+        // turns an opaque caster into a no-shadow one; a proxy past its
+        // rayShadowFrom keeps its mask on the side of a crossfade that would
+        // otherwise drop out. tlas_gen.comp's instanceMask is the GPU copy.
+        [[nodiscard]] static uint8_t entryRayMask(uint8_t group, const vulkan::impl::MeshEntry& en, bool fadeCasts) {
+            if (group == 0u) return 0u;
+            const uint8_t rs = en.rayShadowState;
+            if ((rs & vulkan::impl::kRayShadowProxy) && group != kRayMaskNoShadow) return group;
+            if (!fadeCasts) return 0u;
+            if (group == kRayMaskOpaque && (rs & (vulkan::impl::kRayShadowFar | vulkan::impl::kRayShadowNear)))
+                return kRayMaskNoShadow;
+            return group;
         }
         // A TLAS instance's transform: VkTransformMatrixKHR is row-major 3x4;
         // threepp Matrix4 is column-major 4x4 (elements[c*4 + r]). For
@@ -1420,6 +1437,20 @@ namespace threepp {
         // the material table, so call after the material patch. True when any
         // entry's bit flipped (the TLAS must then be refilled and rebuilt).
         bool classifyCutoutFar(const float camPos[3]);
+        // Ray shadow LOD (Object3D::setRayShadowDistance / setRayShadowFrom /
+        // setRayCastShadow): resolves each span's knobs (only once any object
+        // has set one: Object3D::rayShadowEpoch) and re-derives the entries'
+        // MeshEntry::rayShadowState when the knobs or spans changed or the
+        // camera moved 5 % of the smallest distance from where they were last
+        // derived. True when any entry's state changed (a TLAS refill and
+        // full build). Needs no materials, so it runs before either fill.
+        bool classifyRayShadow(const float camPos[3]);
+        uint64_t rayShadowEpochSeen_    = 0;
+        uint64_t rayShadowSpansVersion_ = ~0ull;
+        size_t   rayShadowEntryCount_   = 0;
+        float    rayShadowCamPos_[3]    = {0.f, 0.f, 0.f};// the camera the states were derived for
+        float    rayShadowStep_         = 0.f;            // 5 % of the smallest distance; 0: none set
+        bool     rayShadowClassified_   = false;
         // Host mirror of the last-uploaded GeometryDesc array (entries-
         // indexed, same layout as the `geomDescs` local built in the full
         // rebuild). The lean auto-LOD path patches indexAddress/indexed in

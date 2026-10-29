@@ -22,7 +22,7 @@
 
 layout(local_size_x = 64) in;
 
-// Matches TlasGen::SpanDesc (scalar, 40 B).
+// Matches TlasGen::SpanDesc (scalar, 64 B).
 struct TlasSpan {
     uint64_t blasAddress;// level 0's
     uint     firstEntry;// entry index of instance 0
@@ -33,6 +33,10 @@ struct TlasSpan {
     uint     flagsWord; // instance flags << 24 (SBT record offset 0)
     uint     lodRowBase; // its first level BLAS address, when lodRowCount > 0
     uint     lodRowCount;// levels 1..n, then the fallback; 0: no chain
+    float    rayShadowDist;// ray shadow LOD (0 = off) ...
+    float    rayShadowFrom;
+    vec3     center;       // ... to the object-space bounding sphere
+    float    radius;
 };
 
 layout(set = 0, binding = 0, scalar) readonly  buffer Spans { TlasSpan spans[]; };
@@ -53,7 +57,42 @@ bool lodFadeCasts(uint word) {
 layout(push_constant, scalar) uniform Pc {
     uint spanCount;
     uint totalWork;
+    vec3 camPos;// the camera the CPU's ray shadow states were derived for
 } pc;
+
+// VulkanRenderer::Impl::entryBeyond: the whole bounding sphere farther from
+// the camera than dist. `precise`: the CPU's float ops, unfused.
+bool entryBeyond(uint e, vec3 c, float r, float dist) {
+    if (r <= 0.0) return false;
+    const uint b = e * 16u;
+    precise float cx = world[b + 0u] * c.x + world[b + 4u] * c.y + world[b + 8u] * c.z + world[b + 12u];
+    precise float cy = world[b + 1u] * c.x + world[b + 5u] * c.y + world[b + 9u] * c.z + world[b + 13u];
+    precise float cz = world[b + 2u] * c.x + world[b + 6u] * c.y + world[b + 10u] * c.z + world[b + 14u];
+    precise float s0 = world[b + 0u] * world[b + 0u] + world[b + 1u] * world[b + 1u] + world[b + 2u] * world[b + 2u];
+    precise float s1 = world[b + 4u] * world[b + 4u] + world[b + 5u] * world[b + 5u] + world[b + 6u] * world[b + 6u];
+    precise float s2 = world[b + 8u] * world[b + 8u] + world[b + 9u] * world[b + 9u] + world[b + 10u] * world[b + 10u];
+    precise float reach = dist + r * sqrt(max(s0, max(s1, s2)));
+    precise float dx = pc.camPos.x - cx, dy = pc.camPos.y - cy, dz = pc.camPos.z - cz;
+    precise float d2 = dx * dx + dy * dy + dz * dz;
+    precise float r2 = reach * reach;
+    return d2 > r2;
+}
+
+// VulkanRenderer::Impl::entryRayMask with classifyRayShadow's states: the
+// span's mask, dropped on the side of a LOD crossfade no ray hits, made a
+// no-shadow one by the ray shadow LOD, kept by a proxy past rayShadowFrom.
+uint instanceMask(uint s, uint e) {
+    const uint group = spans[s].maskWord >> 24;
+    if (group == 0u) return 0u;
+    const float dist = spans[s].rayShadowDist, from = spans[s].rayShadowFrom;
+    const bool proxy = from > 0.0 && entryBeyond(e, spans[s].center, spans[s].radius, from);
+    if (proxy && group != kRayMaskNoShadow) return group;
+    if (!lodFadeCasts(lodFades[e])) return 0u;
+    if (group == kRayMaskOpaque &&
+        ((dist > 0.0 && entryBeyond(e, spans[s].center, spans[s].radius, dist)) || (from > 0.0 && !proxy)))
+        return kRayMaskNoShadow;
+    return group;
+}
 
 void main() {
     const uint g = gl_GlobalInvocationID.x;
@@ -75,7 +114,7 @@ void main() {
     for (uint r = 0u; r < 3u; ++r)
         for (uint c = 0u; c < 4u; ++c)
             instWords[o + r * 4u + c] = floatBitsToUint(world[e * 16u + c * 4u + r]);
-    instWords[o + 12u] = (e & 0x00FFFFFFu) | (lodFadeCasts(lodFades[e]) ? spans[lo].maskWord : 0u);
+    instWords[o + 12u] = (e & 0x00FFFFFFu) | (instanceMask(lo, e) << 24);
     instWords[o + 13u] = spans[lo].flagsWord;
     uint64_t blas = spans[lo].blasAddress;
     if (spans[lo].lodRowCount > 0u) {

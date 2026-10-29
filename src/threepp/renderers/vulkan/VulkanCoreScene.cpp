@@ -2383,6 +2383,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 rayCamPos[1] = p.y;
                 rayCamPos[2] = p.z;
             }
+            // Ray shadow LOD: the entries' states for this camera, before
+            // either TLAS fill reads them (the matrices are this frame's).
+            const bool rayShadowChanged = classifyRayShadow(rayCamPos);
 
             // Change flags shared by the LEAN in-place diff and the generic
             // compare loop below — exactly one of the two fills them.
@@ -3533,6 +3536,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // the material table). A flipped bit changes an instance's
                     // flags, which is a class change like any other.
                     if (classifyCutoutFar(rayCamPos)) instClassChanged = true;
+                    profCutout.stop();
+                    if (rayShadowChanged) instClassChanged = true;
                     if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged) {
                         THREEPP_CPUPROF("scene.7_tlasRefitFill");
                         // TLAS refit: needed when instance transforms change
@@ -3617,6 +3622,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 d.workBase    = tlasGenWork_;
                                 d.maskWord    = static_cast<uint32_t>(spanMask) << 24;
                                 d.flagsWord   = static_cast<uint32_t>(spanFlags) << 24;
+                                d.rayShadowDist = sp.rayShadowDist;
+                                d.rayShadowFrom = sp.rayShadowFrom;
+                                std::copy(e0.lodCenter, e0.lodCenter + 3, d.center);
+                                d.radius = e0.lodRadius;
                                 // An auto-LOD chain: each level's BLAS (and the
                                 // fallback past it), as the loop below reads them.
                                 d.lodRowBase  = static_cast<uint32_t>(tlasGenLodRows_.size());
@@ -3713,7 +3722,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
                                 // The side of a LOD crossfade the shadows do not
                                 // take is hit by no ray (lodFadeCasts).
-                                inst.mask = (sp.fadeAny && !lodFadeCasts(entryLodFade_[i])) ? 0u : spanMask;
+                                inst.mask = entryRayMask(spanMask, en, !sp.fadeAny || lodFadeCasts(entryLodFade_[i]));
                                 inst.instanceShaderBindingTableRecordOffset = 0;
                                 inst.flags = (spanCutout && en.rayFarOpaque)
                                                      ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
@@ -4412,9 +4421,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // Visibility group (tlasRayMask); a shown entry on the other
                 // side of a LOD crossfade is hit by no ray.
                 if (!instances.empty()) {
-                    instances.back().mask = (!en.hidden && !lodFadeCasts(entryLodFade_[i]))
-                                                    ? 0u
-                                                    : tlasRayMask(en, &md, en.hidden);
+                    instances.back().mask = entryRayMask(tlasRayMask(en, &md, en.hidden), en,
+                                                         lodFadeCasts(entryLodFade_[i]));
                     instances.back().flags = tlasInstanceFlags(md);
                     // Cutout ray distance: the same bit classifyCutoutFar
                     // derives on lean frames, for this frame's camera.
@@ -4862,6 +4870,76 @@ bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
     cutoutRayClassified_    = true;
     cutoutRayClassifiedFor_ = dist;
     std::copy(camPos, camPos + 3, cutoutRayCamPos_);
+    return changed;
+}
+
+
+bool VulkanRenderer::Impl::classifyRayShadow(const float camPos[3]) {
+    // No object has ever set a knob: every state is 0 and stays so.
+    const uint64_t epoch = Object3D::rayShadowEpoch();
+    if (epoch == 0u) return false;
+    auto& entries = lastVisibleEntries_;
+    const bool spansNew = spansVersion_ != rayShadowSpansVersion_ || entries.size() != rayShadowEntryCount_;
+    bool due = spansNew || epoch != rayShadowEpochSeen_ || !rayShadowClassified_;
+    if (!due && rayShadowStep_ > 0.f) {
+        const float dx = camPos[0] - rayShadowCamPos_[0], dy = camPos[1] - rayShadowCamPos_[1],
+                    dz = camPos[2] - rayShadowCamPos_[2];
+        due = dx * dx + dy * dy + dz * dz >= rayShadowStep_ * rayShadowStep_;
+    }
+    bool changed = false;
+    // One span's entries for the camera `cam`.
+    const auto classify = [&](EntrySpan& sp, const float cam[3]) {
+        for (uint32_t j = 0; j < sp.count; ++j) {
+            MeshEntry& en = entries[sp.first + j];
+            uint8_t s = sp.rayCastBits;
+            if (sp.rayShadowDist > 0.f && entryBeyond(en, cam, sp.rayShadowDist)) s |= vulkan::impl::kRayShadowFar;
+            if (sp.rayShadowFrom > 0.f)
+                s |= entryBeyond(en, cam, sp.rayShadowFrom) ? vulkan::impl::kRayShadowProxy : vulkan::impl::kRayShadowNear;
+            if (s != en.rayShadowState) {
+                en.rayShadowState = s;
+                changed = true;
+            }
+        }
+    };
+    if (!due) {
+        // Between steps, only the instances that moved, for the camera the
+        // rest were derived for: a slot that takes another tree takes that
+        // tree's state the same frame.
+        for (auto& sp : entrySpans_)
+            if (sp.rayShadowLive && sp.movedThisFrame && !sp.isFree) classify(sp, rayShadowCamPos_);
+        return changed;
+    }
+    THREEPP_CPUPROF("scene.8c_rayShadow");
+    float minDist = 0.f;
+    for (auto& sp : entrySpans_) {
+        if (sp.isFree || !sp.mesh || sp.count == 0u) continue;
+        const MeshEntry& e0 = entries[sp.first];
+        if (e0.isOverlay || e0.isParticle) continue;
+        // The mesh's own knob, else its nearest ancestor's.
+        float dist = 0.f, from = 0.f;
+        std::optional<bool> cast;
+        for (const Object3D* o = sp.mesh; o && (dist <= 0.f || from <= 0.f || !cast); o = o->parent) {
+            if (dist <= 0.f) dist = o->rayShadowDistance();
+            if (from <= 0.f) from = o->rayShadowFrom();
+            if (!cast) cast = o->rayCastShadow();
+        }
+        for (const float d : {dist, from})
+            if (d > 0.f && (minDist <= 0.f || d < minDist)) minDist = d;
+        sp.rayShadowDist = std::max(dist, 0.f);
+        sp.rayShadowFrom = std::max(from, 0.f);
+        sp.rayCastBits   = !cast ? 0u : (*cast ? vulkan::impl::kRayCastOn : vulkan::impl::kRayCastOff);
+        // A span with no knob and no state left from one: nothing to visit.
+        const bool live = sp.rayCastBits != 0u || dist > 0.f || from > 0.f;
+        if (!live && !sp.rayShadowLive && !spansNew) continue;
+        sp.rayShadowLive = live;
+        classify(sp, camPos);
+    }
+    rayShadowEpochSeen_    = epoch;
+    rayShadowSpansVersion_ = spansVersion_;
+    rayShadowEntryCount_   = entries.size();
+    rayShadowStep_         = 0.05f * minDist;
+    rayShadowClassified_   = true;
+    std::copy(camPos, camPos + 3, rayShadowCamPos_);
     return changed;
 }
 

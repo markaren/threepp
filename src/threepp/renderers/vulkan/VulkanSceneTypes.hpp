@@ -48,6 +48,16 @@ namespace threepp::vulkan::impl {
     // expands to one MeshEntry; an InstancedMesh expands to N entries (one
     // per sub-instance) all sharing the same Mesh*/BLAS but with distinct
     // worldMatrix = mesh->matrixWorld * instanceMatrix[i].
+    // MeshEntry::rayShadowState bits. Far: beyond Object3D::rayShadowDistance;
+    // Near: nearer than rayShadowFrom (both: no shadow or GI ray sees it).
+    // Proxy: wholly beyond rayShadowFrom, so it casts on either side of a LOD
+    // crossfade. CastOn / CastOff: Object3D::rayCastShadow.
+    inline constexpr uint8_t kRayShadowFar   = 1u;
+    inline constexpr uint8_t kRayShadowNear  = 2u;
+    inline constexpr uint8_t kRayShadowProxy = 4u;
+    inline constexpr uint8_t kRayCastOn      = 8u;
+    inline constexpr uint8_t kRayCastOff     = 16u;
+
     struct MeshEntry {
         Mesh*    mesh;
         std::array<float, 16> worldMatrix;
@@ -154,6 +164,10 @@ namespace threepp::vulkan::impl {
         // instance fills. Resets to false on a full re-expansion, which
         // un-classifies (cutoutRayClassified_) so the bits are re-derived.
         bool     rayFarOpaque = false;
+        // Ray shadow level of detail (Object3D::rayShadowDistance, rayShadowFrom,
+        // rayCastShadow as the span resolves them): kRayShadow* bits, written by
+        // classifyRayShadow, read by both TLAS fills (tlasRayMask, entryRayMask).
+        uint8_t  rayShadowState = 0;
         // Auto-LOD selection caches, derived ONCE at full expansion so the
         // per-frame selection pass is pure float math — the uncached
         // version paid a dynamic_cast + ancestor hash-walk + shared_ptr
@@ -347,6 +361,12 @@ namespace threepp::vulkan::impl {
         float localCenter[3]{}, localHalf[3]{};
         float localRadius = 0.f;
         bool  localBoundsValid = false;
+        // Object3D::rayShadowDistance / rayShadowFrom as the mesh resolves them
+        // (its own, else its nearest ancestor's; classifyRayShadow).
+        float  rayShadowDist = 0.f;
+        float  rayShadowFrom = 0.f;
+        uint8_t rayCastBits  = 0;    // kRayCastOn / kRayCastOff from Object3D::rayCastShadow
+        bool   rayShadowLive = false;// a knob set, or entry states left from one
         // Stable entry slots (VulkanCoreSlots.cpp): a FREE span is a run of
         // entry slots no mesh owns. It is hidden, its entries are hidden and
         // its mesh is the renderer's tombstone, so every loop that already

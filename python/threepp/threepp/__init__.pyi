@@ -4436,6 +4436,20 @@ class Joint:
         def target(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def twist_lower(self) -> float:
+            """
+            SPHERICAL with limited: the twist about the frame's X is bounded to [twist_lower, twist_upper] radians when twist_lower < twist_upper (left equal, the twist is free).
+            """
+        @twist_lower.setter
+        def twist_lower(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def twist_upper(self) -> float:
+            ...
+        @twist_upper.setter
+        def twist_upper(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def upper(self) -> float:
             ...
         @upper.setter
@@ -5162,6 +5176,30 @@ class Line(Object3D):
     def parent(self) -> Object3D:
         ...
     @property
+    def ray_cast_shadow(self) -> bool | None:
+        """
+        Vulkan ray-traced shadow override: True casts (also for geometry under a Camera, which casts no ray shadow by default), False never casts (still seen by reflections), None keeps the default. Read off the mesh, else its nearest ancestor that sets one. None by default.
+        """
+    @ray_cast_shadow.setter
+    def ray_cast_shadow(self, arg1: bool | None) -> None:
+        ...
+    @property
+    def ray_shadow_distance(self) -> float:
+        """
+        Vulkan ray-traced shadow level of detail: each instance whose bounds lie wholly farther than this many metres from the eye is left out of the shadow and GI rays (sun, soft sun, translucency, fog shafts, GI and probe rays; reflections still see it), so a dense far forest stops costing every shadow ray its triangles. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_distance.setter
+    def ray_shadow_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ray_shadow_from(self) -> float:
+        """
+        The reverse of ray_shadow_distance, for a far shadow proxy such as impostor cards: an instance whose bounds reach nearer than this many metres casts no ray-traced shadow, and one wholly beyond it casts even while its LOD fade (InstancedMesh.set_fades) hides it from the raster. Set it to the detailed mesh's ray_shadow_distance so each tree casts from exactly one of the two. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_from.setter
+    def ray_shadow_from(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def render_order(self) -> int:
         ...
     @render_order.setter
@@ -5570,6 +5608,30 @@ class Mesh(Object3D):
         ...
     @property
     def parent(self) -> Object3D:
+        ...
+    @property
+    def ray_cast_shadow(self) -> bool | None:
+        """
+        Vulkan ray-traced shadow override: True casts (also for geometry under a Camera, which casts no ray shadow by default), False never casts (still seen by reflections), None keeps the default. Read off the mesh, else its nearest ancestor that sets one. None by default.
+        """
+    @ray_cast_shadow.setter
+    def ray_cast_shadow(self, arg1: bool | None) -> None:
+        ...
+    @property
+    def ray_shadow_distance(self) -> float:
+        """
+        Vulkan ray-traced shadow level of detail: each instance whose bounds lie wholly farther than this many metres from the eye is left out of the shadow and GI rays (sun, soft sun, translucency, fog shafts, GI and probe rays; reflections still see it), so a dense far forest stops costing every shadow ray its triangles. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_distance.setter
+    def ray_shadow_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ray_shadow_from(self) -> float:
+        """
+        The reverse of ray_shadow_distance, for a far shadow proxy such as impostor cards: an instance whose bounds reach nearer than this many metres casts no ray-traced shadow, and one wholly beyond it casts even while its LOD fade (InstancedMesh.set_fades) hides it from the raster. Set it to the detailed mesh's ray_shadow_distance so each tree casts from exactly one of the two. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_from.setter
+    def ray_shadow_from(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def render_order(self) -> int:
@@ -6614,6 +6676,30 @@ class Object3D:
         ...
     @property
     def parent(self) -> Object3D:
+        ...
+    @property
+    def ray_cast_shadow(self) -> bool | None:
+        """
+        Vulkan ray-traced shadow override: True casts (also for geometry under a Camera, which casts no ray shadow by default), False never casts (still seen by reflections), None keeps the default. Read off the mesh, else its nearest ancestor that sets one. None by default.
+        """
+    @ray_cast_shadow.setter
+    def ray_cast_shadow(self, arg1: bool | None) -> None:
+        ...
+    @property
+    def ray_shadow_distance(self) -> float:
+        """
+        Vulkan ray-traced shadow level of detail: each instance whose bounds lie wholly farther than this many metres from the eye is left out of the shadow and GI rays (sun, soft sun, translucency, fog shafts, GI and probe rays; reflections still see it), so a dense far forest stops costing every shadow ray its triangles. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_distance.setter
+    def ray_shadow_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ray_shadow_from(self) -> float:
+        """
+        The reverse of ray_shadow_distance, for a far shadow proxy such as impostor cards: an instance whose bounds reach nearer than this many metres casts no ray-traced shadow, and one wholly beyond it casts even while its LOD fade (InstancedMesh.set_fades) hides it from the raster. Set it to the detailed mesh's ray_shadow_distance so each tree casts from exactly one of the two. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_from.setter
+    def ray_shadow_from(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def render_order(self) -> int:
@@ -8401,6 +8487,30 @@ class Points(Object3D):
         ...
     @property
     def parent(self) -> Object3D:
+        ...
+    @property
+    def ray_cast_shadow(self) -> bool | None:
+        """
+        Vulkan ray-traced shadow override: True casts (also for geometry under a Camera, which casts no ray shadow by default), False never casts (still seen by reflections), None keeps the default. Read off the mesh, else its nearest ancestor that sets one. None by default.
+        """
+    @ray_cast_shadow.setter
+    def ray_cast_shadow(self, arg1: bool | None) -> None:
+        ...
+    @property
+    def ray_shadow_distance(self) -> float:
+        """
+        Vulkan ray-traced shadow level of detail: each instance whose bounds lie wholly farther than this many metres from the eye is left out of the shadow and GI rays (sun, soft sun, translucency, fog shafts, GI and probe rays; reflections still see it), so a dense far forest stops costing every shadow ray its triangles. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_distance.setter
+    def ray_shadow_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ray_shadow_from(self) -> float:
+        """
+        The reverse of ray_shadow_distance, for a far shadow proxy such as impostor cards: an instance whose bounds reach nearer than this many metres casts no ray-traced shadow, and one wholly beyond it casts even while its LOD fade (InstancedMesh.set_fades) hides it from the raster. Set it to the detailed mesh's ray_shadow_distance so each tree casts from exactly one of the two. Read off the mesh, else its nearest ancestor that sets one. 0 (off) by default.
+        """
+    @ray_shadow_from.setter
+    def ray_shadow_from(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def render_order(self) -> int:

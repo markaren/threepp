@@ -28,7 +28,7 @@ namespace threepp::vulkan {
 
     class TlasGen {
     public:
-        // Matches tlas_gen.comp's TlasSpan (scalar, 40 B).
+        // Matches tlas_gen.comp's TlasSpan (scalar, 64 B).
         struct SpanDesc {
             uint64_t blasAddress;// level 0's
             uint32_t firstEntry;
@@ -39,12 +39,20 @@ namespace threepp::vulkan {
             uint32_t flagsWord;// instance flags << 24
             uint32_t lodRowBase; // its first level BLAS address, when lodRowCount > 0
             uint32_t lodRowCount;// an auto-LOD chain's levels 1..n and the fallback; 0: no chain
+            // Ray shadow LOD (EntrySpan::rayShadowDist / rayShadowFrom, 0 = off)
+            // and the object-space bounding sphere the distances are taken to
+            // (MeshEntry::lodCenter / lodRadius, one per mesh).
+            float    rayShadowDist;
+            float    rayShadowFrom;
+            float    center[3];
+            float    radius;
         };
-        static_assert(sizeof(SpanDesc) == 40, "tlas_gen SpanDesc drift");
+        static_assert(sizeof(SpanDesc) == 64, "tlas_gen SpanDesc drift");
 
         struct Pc {
             uint32_t spanCount;
             uint32_t totalWork;
+            float    camPos[3];// the camera the ray shadow states were derived for
         };
 
         TlasGen(VulkanContext& ctx, uint32_t framesInFlight);

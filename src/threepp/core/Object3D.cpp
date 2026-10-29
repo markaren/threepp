@@ -346,6 +346,27 @@ void Object3D::structureChanged() {
     for (Object3D* o = this; o; o = o->parent) o->structureVersion_ = v;
 }
 
+void Object3D::setRayShadowDistance(float metres) {
+
+    if (metres == rayShadowDistance_) return;
+    rayShadowDistance_ = metres;
+    ++rayShadowEpoch_;
+}
+
+void Object3D::setRayShadowFrom(float metres) {
+
+    if (metres == rayShadowFrom_) return;
+    rayShadowFrom_ = metres;
+    ++rayShadowEpoch_;
+}
+
+void Object3D::setRayCastShadow(std::optional<bool> cast) {
+
+    if (cast == rayCastShadow_) return;
+    rayCastShadow_ = cast;
+    ++rayShadowEpoch_;
+}
+
 void Object3D::clear() {
 
     if (!this->children.empty()) structureChanged();
@@ -565,6 +586,9 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
     this->frustumCulled = source.frustumCulled;
     this->resident = source.resident;
+    this->setRayShadowDistance(source.rayShadowDistance_);
+    this->setRayShadowFrom(source.rayShadowFrom_);
+    this->setRayCastShadow(source.rayCastShadow_);
     this->renderOrder = source.renderOrder;
 
     // three.js copies userData too (Object3D.copy deep-clones it). Without this
@@ -646,6 +670,9 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
 
     this->frustumCulled = source.frustumCulled;
     this->resident = source.resident;
+    this->setRayShadowDistance(source.rayShadowDistance_);
+    this->setRayShadowFrom(source.rayShadowFrom_);
+    this->setRayCastShadow(source.rayCastShadow_);
     this->renderOrder = source.renderOrder;
 
     this->onAfterRender = std::move(source.onAfterRender);

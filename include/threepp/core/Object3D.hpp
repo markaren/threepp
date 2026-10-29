@@ -400,6 +400,26 @@ namespace threepp {
         // subclass whose own setter changes what a renderer draws of it.
         void structureChanged();
 
+        // Ray-traced shadow level of detail (Vulkan). Each instance of a mesh
+        // whose bounds lie wholly farther than rayShadowDistance metres from
+        // the eye is left out of the shadow and GI rays (reflections still
+        // see it); 0 = off. rayShadowFrom is the reverse, for a far proxy: an
+        // instance whose bounds reach nearer than it casts no ray shadow, one
+        // wholly beyond it casts even while its LOD fade hides it from the
+        // raster; 0 = off. rayCastShadow forces the ray shadow on (true, also
+        // under a Camera, where geometry casts none by default) or off
+        // (false); unset leaves the default. Each is read off the mesh, else
+        // its nearest ancestor that sets one. Defaults 0, 0 and unset.
+        void setRayShadowDistance(float metres);
+        [[nodiscard]] float rayShadowDistance() const { return rayShadowDistance_; }
+        void setRayShadowFrom(float metres);
+        [[nodiscard]] float rayShadowFrom() const { return rayShadowFrom_; }
+        void setRayCastShadow(std::optional<bool> cast);
+        [[nodiscard]] std::optional<bool> rayCastShadow() const { return rayCastShadow_; }
+        // Bumped by any of the three setters above on any object: a renderer
+        // re-resolves them when it moves.
+        [[nodiscard]] static uint64_t rayShadowEpoch() { return rayShadowEpoch_.load(std::memory_order_relaxed); }
+
     protected:
         virtual std::shared_ptr<Object3D> createDefault() {
 
@@ -410,6 +430,10 @@ namespace threepp {
         inline static std::atomic<unsigned int> _object3Did{0};
         inline static std::atomic<uint64_t> structureCounter_{0};
         uint64_t structureVersion_ = 0;
+        inline static std::atomic<uint64_t> rayShadowEpoch_{0};
+        float rayShadowDistance_ = 0.f;
+        float rayShadowFrom_ = 0.f;
+        std::optional<bool> rayCastShadow_;
 
         // Unlink `object` from this node: drop it from `children`, clear its
         // parent, fire "remove", and hand back the owning reference if this node
