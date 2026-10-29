@@ -3556,13 +3556,47 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // below) so both vectors keep their capacity — a fresh
                         // ~5 MB allocation per moving frame at 100k instances
                         // otherwise.
-                        auto& instances = tlasInstanceScratch_;
-                        instances.clear();
-                        instances.reserve(entries.size());
+                        // The array persists across fills (pendingTlasInstances_):
+                        // with the same layout as the last fill, a span whose
+                        // inputs did not change (spanTlasSig) keeps its rows and
+                        // only the others are rewritten in place, and only those
+                        // ranges are uploaded (tlasInstDirty_). A city of static
+                        // pools no longer pays 64 B a row whenever one car moves.
+                        // A span whose rows moved (a count change, a span turning
+                        // GPU-written) and every span after it are rewritten from
+                        // there (tlasAppendFrom); spans whose count has changed
+                        // once go last (EntrySpan::tlasVolatile), so a pool that
+                        // grows and shrinks moves only its fellow movers' rows.
+                        auto& instances = pendingTlasInstances_;
                         // Stage 5: instanced spans whose instances tlas_gen.comp
                         // appends after these (the expansion's world matrices).
                         const bool tlasGenOn = gpuTlasGen_ && gpuInstanceExpand_ && tlasGen_ && instExpand_ &&
                                                ctx->rayQuerySupported() && !asyncPilot_;
+                        // THREEPP_VK_TLAS_FILL_INPLACE=0: every fill from empty (A/B).
+                        static const bool tlasFillInPlaceOn = vulkan::env::flag("THREEPP_VK_TLAS_FILL_INPLACE", true);
+                        if (tlasRowDirty_.size() != (entries.size() + 31u) / 32u) {
+                            tlasRowDirty_.assign((entries.size() + 31u) / 32u, 0u);
+                            tlasFillValid_ = false;// bits from another layout
+                        }
+                        bool tlasInPlace = tlasFillInPlaceOn && tlasFillValid_ &&
+                                           tlasFillEntryCount_ == entries.size() && tlasFillGenOn_ == tlasGenOn &&
+                                           !gpuDrawGenCheck_ && instances.size() <= entries.size();
+                        // Stable spans first, in entry order, then the volatile ones.
+                        auto& tlasOrder = tlasSpanOrder_;
+                        tlasOrder.clear();
+                        tlasOrder.reserve(entrySpans_.size());
+                        for (uint32_t s = 0; s < entrySpans_.size(); ++s)
+                            if (!entrySpans_[s].tlasVolatile) tlasOrder.push_back(s);
+                        for (uint32_t s = 0; s < entrySpans_.size(); ++s)
+                            if (entrySpans_[s].tlasVolatile) tlasOrder.push_back(s);
+                    tlasFillPass:
+                        if (!tlasInPlace) {
+                            instances.clear();
+                            instances.reserve(entries.size());
+                        }
+                        const bool tlasFromEmpty = !tlasInPlace;
+                        size_t tlasAppendFrom = SIZE_MAX;
+                        size_t tlasCursor = 0;
                         tlasGenSpans_.clear();
                         tlasGenLodRows_.clear();
                         tlasGenWork_ = 0;
@@ -3577,7 +3611,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // one per instance. Per-entry work is the transform
                         // write (+ per-entry LOD selection only when the span's
                         // record actually has a chain).
-                        for (const auto& sp : entrySpans_) {
+                        for (const uint32_t tlasSpanIdx : tlasOrder) {
+                            auto& sp = entrySpans_[tlasSpanIdx];
+                            // Its rows at the last fill; reset, so a span that
+                            // leaves below without rows carries none.
+                            const uint32_t prevTlasBase  = sp.tlasInstBase;
+                            const uint32_t prevTlasCount = sp.tlasInstCount;
+                            const uint64_t prevTlasSig   = sp.tlasSig;
+                            sp.tlasInstBase  = ~0u;
+                            sp.tlasInstCount = 0;
+                            sp.tlasSig       = 0;
                             const MeshEntry& e0 = entries[sp.first];
                             if (e0.isOverlay) continue;// raster-overlay only
                             VkGeometryInstanceFlagsKHR spanFlags =
@@ -3654,8 +3697,31 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 }
                                 sinkTlas = true;// check mode: the loop builds the reference
                             }
-                            for (uint32_t j = 0; j < sp.count; ++j) {
+                            // Deformers are rewritten every fill (their BLAS moves under them).
+                            const uint64_t tlasSig = isDeformer ? 0ull
+                                    : spanTlasSig(sp, spanMask, spanFlags, spanCutout, rec, lodSel0.asAddress, perEntryLod);
+                            if (tlasInPlace && !sinkTlas &&
+                                (prevTlasBase != tlasCursor || (!isDeformer && prevTlasCount != sp.count))) {
+                                // This span's rows moved: it and the rest are written anew from here.
+                                if (prevTlasBase != ~0u && prevTlasCount != sp.count) sp.tlasVolatile = true;
+                                instances.resize(tlasCursor);
+                                tlasInPlace = false;
+                                tlasAppendFrom = tlasCursor;
+                            }
+                            // Same span facts as last fill: only the rows a bit names.
+                            const bool tlasRowsOnly = tlasInPlace && !sinkTlas && tlasSig != 0ull &&
+                                                      tlasSig == prevTlasSig && prevTlasCount == sp.count;
+                            const size_t tlasSpanBase = tlasInPlace ? tlasCursor : instances.size();
+                            size_t tlasWrite = tlasSpanBase;
+                            size_t tlasRunFirst = 0, tlasRunEnd = 0;// rows rewritten, coalesced for the upload
+                            // No bit in the span's words: none of its rows changed.
+                            if (tlasRowsOnly && !tlasRowsChangedIn(sp.first, sp.count)) tlasWrite += sp.count;
+                            else for (uint32_t j = 0; j < sp.count; ++j) {
                                 const size_t i = size_t(sp.first) + j;
+                                if (tlasRowsOnly && !tlasRowChanged(i)) {
+                                    ++tlasWrite;
+                                    continue;
+                                }
                                 const MeshEntry& en = entries[i];
                                 VkDeviceAddress blasAddr = 0;
                                 if (en.isSkinned) {
@@ -3731,8 +3797,56 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     tlasGenExpected_.push_back(inst);
                                     continue;
                                 }
-                                instances.push_back(inst);
+                                if (tlasInPlace) {
+                                    if (tlasWrite >= size_t(prevTlasBase) + prevTlasCount) {
+                                        tlasInPlace = false;
+                                        goto tlasFillPass;
+                                    }
+                                    // Runs a few rows apart upload as one range.
+                                    if (tlasRunEnd > tlasRunFirst && tlasWrite > tlasRunEnd + 32u) {
+                                        for (auto& d : tlasInstDirty_)
+                                            d.mark(static_cast<uint32_t>(tlasRunFirst),
+                                                   static_cast<uint32_t>(tlasRunEnd - tlasRunFirst));
+                                        tlasRunEnd = tlasRunFirst;
+                                    }
+                                    if (tlasRunEnd == tlasRunFirst) tlasRunFirst = tlasWrite;
+                                    instances[tlasWrite++] = inst;
+                                    tlasRunEnd = tlasWrite;
+                                } else {
+                                    instances.push_back(inst);
+                                    ++tlasWrite;
+                                }
                             }
+                            if (sinkTlas) continue;
+                            if (tlasInPlace) {
+                                if (tlasWrite != size_t(prevTlasBase) + prevTlasCount) {
+                                    tlasInPlace = false;
+                                    goto tlasFillPass;
+                                }
+                                if (tlasRunEnd > tlasRunFirst)
+                                    for (auto& d : tlasInstDirty_)
+                                        d.mark(static_cast<uint32_t>(tlasRunFirst),
+                                               static_cast<uint32_t>(tlasRunEnd - tlasRunFirst));
+                            }
+                            sp.tlasInstBase  = static_cast<uint32_t>(tlasSpanBase);
+                            sp.tlasInstCount = static_cast<uint32_t>(tlasWrite - tlasSpanBase);
+                            sp.tlasSig       = tlasSig;
+                            tlasCursor       = tlasWrite;
+                        }
+                        // Rows left past the last span's (the layout shrank): dropped.
+                        if (tlasInPlace && tlasCursor != instances.size()) instances.resize(tlasCursor);
+                        if (tlasFromEmpty) {
+                            for (auto& d : tlasInstDirty_) d.markWhole();
+                        } else if (tlasAppendFrom != SIZE_MAX && instances.size() > tlasAppendFrom) {
+                            for (auto& d : tlasInstDirty_)
+                                d.mark(static_cast<uint32_t>(tlasAppendFrom),
+                                       static_cast<uint32_t>(instances.size() - tlasAppendFrom));
+                        }
+                        std::fill(tlasRowDirty_.begin(), tlasRowDirty_.end(), 0u);// consumed
+                        tlasFillValid_       = true;
+                        tlasFillSpansVersion_ = spansVersion_;
+                        tlasFillEntryCount_  = entries.size();
+                        tlasFillGenOn_       = tlasGenOn;
                         }
                         if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
                             // geomDescsCached_ was patched in place above; the
@@ -3745,13 +3859,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // frame, which hitched exactly when the camera
                             // was moving.
                             //
-                            // WHOLE-ARRAY on purpose, unlike the material patch:
-                            // the entries this touched are chosen inside the TLAS
-                            // instance fill above, the frame's hottest loop, and
-                            // a level switch is already paying for BLAS
-                            // re-references. 64 B/entry with a bounded audience
-                            // is not worth a mark in there.
-                            markGeomDescsWhole();
+                            // The fill above marks each entry whose level moved
+                            // its index address (markGeomDescsDirty, CPU rows and
+                            // GPU spans alike); a span whose LOD state changed is
+                            // rewritten whole there (spanTlasSig). The whole
+                            // array (15 MB at 237k entries) is no longer sent.
                         }
                         const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
                         // Stage the refit; recordCommandBuffer records it into the
@@ -3774,7 +3886,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                         const bool splitChanged = partition != tlasGenPartition_;
                         tlasGenPartition_ = partition;
-                        pendingTlasInstances_.swap(instances);// scratch keeps its capacity
                         // A class flip rebuilds rather than updates: whether an
                         // update may change instance flags is not worth betting a
                         // traversal on, and it only happens on the flip frame.
@@ -4853,7 +4964,7 @@ bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
     if (geomDescsCached_.size() != entries.size()) return false;// no materials to class by yet
     THREEPP_CPUPROF("scene.8b_cutoutFar");
     bool changed = false;
-    for (const auto& sp : entrySpans_) {
+    for (auto& sp : entrySpans_) {
         const MeshEntry& e0 = entries[sp.first];
         if (e0.isOverlay || e0.isParticle) continue;
         const bool caster = dist > 0.f && cutoutCaster(entryMat(sp.first));
@@ -4862,6 +4973,7 @@ bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
             const bool beyond = caster && entryBeyond(en, camPos, dist);
             if (beyond != en.rayFarOpaque) {
                 en.rayFarOpaque = beyond;
+                markTlasRowDirty(sp.first + j);
                 changed = true;
             }
         }
@@ -4872,6 +4984,38 @@ bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
     return changed;
 }
 
+uint64_t VulkanRenderer::Impl::spanTlasSig(const EntrySpan& sp, uint8_t mask, VkGeometryInstanceFlagsKHR flags,
+                                           bool cutout, const BlasRecord* rec, VkDeviceAddress blas0,
+                                           bool perEntryLod) const {
+    // FNV-1a over everything a span's TLAS rows are made from (see the fill).
+    uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](const void* p, size_t n) {
+        const auto* b = static_cast<const uint8_t*>(p);
+        for (size_t k = 0; k < n; ++k) h = (h ^ b[k]) * 1099511628211ull;
+    };
+    const auto put = [&mix](const auto& v) { mix(&v, sizeof(v)); };
+    put(sp.first);
+    put(sp.count);
+    put(mask);
+    put(flags);
+    put(cutout);
+    put(sp.hidden);
+    put(rec);
+    put(blas0);
+    const uint64_t lodKey = perEntryLod ? lodLevelVersion_ : 0ull;
+    put(lodKey);
+    const size_t levels = rec ? rec->lodLevels.size() : 0u;
+    put(levels);
+    // The rows' own changes (a moved instance, a fade that flips its side of
+    // a crossfade, a reclassified ray shadow or cutout bit) are not in here:
+    // they arrive as meshMovedBits_ / tlasRowDirty_ bits, and only those rows
+    // are rewritten. A moved mesh moves them all.
+    mix(sp.meshWorld.data(), sizeof(float) * 16);
+    put(sp.fadeAttr);
+    put(sp.meshFade);
+    put(sp.meshFadeComplement);
+    return h | 1ull;// 0 means "rewrite"
+}
 
 bool VulkanRenderer::Impl::classifyRayShadow(const float camPos[3]) {
     // No object has ever set a knob: every state is 0 and stays so.
@@ -4896,6 +5040,7 @@ bool VulkanRenderer::Impl::classifyRayShadow(const float camPos[3]) {
                 s |= entryBeyond(en, cam, sp.rayShadowFrom) ? vulkan::impl::kRayShadowProxy : vulkan::impl::kRayShadowNear;
             if (s != en.rayShadowState) {
                 en.rayShadowState = s;
+                markTlasRowDirty(sp.first + j);
                 changed = true;
             }
         }
@@ -5321,7 +5466,10 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                     if (w != was) {
                         out.words = true;
                         spanChanged = true;
-                        if (lodFadeCasts(w) != lodFadeCasts(was)) out.casters = true;
+                        if (lodFadeCasts(w) != lodFadeCasts(was)) {
+                            out.casters = true;
+                            markTlasRowDirty(i);
+                        }
                         entryLodFade_[i] = w;
                     }
                     any = any || w != 0u;

@@ -4199,6 +4199,9 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
             // frame command buffer (recordTlasRefit), which needs instance
             // buffers and storage that already hold them.
             const uint32_t maxInstances = std::max(instanceCount, slotCapacity_);
+            // The slots are seeded with `instances` below: the lean fill starts over.
+            tlasFillValid_ = false;
+            for (auto& d : tlasInstDirty_) d.markWhole();
             const VkDeviceSize instBytes = std::max<VkDeviceSize>(
                     VkDeviceSize(maxInstances) * sizeof(VkAccelerationStructureInstanceKHR),
                     sizeof(VkAccelerationStructureInstanceKHR));// keep buf non-empty
@@ -4341,9 +4344,27 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             // scene.7_tlasRefitFill, which is the CPU FILL of the same array back
             // inside ensureSceneBuilt; this is the copy to the device. Scoped to
             // the copy ALONE so it stays a sibling of frame.L_tlasRefitRec below.
+            // Only the ranges this slot lacks (tlasInstDirty_: the lean fill
+            // marks what it rewrote, for every slot; a full fill, all of it).
             if (cpuBytes > 0) {
                 THREEPP_CPUPROF("frame.H_uploadTlasInst");
-                uploadHostVisible(ctx->allocator(), instBuf, instances.data(), cpuBytes);
+                auto& dirty = tlasInstDirty_[currentFrame];
+                if (dirty.whole) {
+                    uploadHostVisible(ctx->allocator(), instBuf, instances.data(), cpuBytes);
+                } else if (!dirty.ranges.empty()) {
+                    void* mapped = nullptr;
+                    check(vmaMapMemory(ctx->allocator(), instBuf.alloc, &mapped), "vmaMapMemory(tlas ranges)");
+                    for (auto [first, last] : dirty.ranges) {
+                        if (last > instances.size()) last = static_cast<uint32_t>(instances.size());
+                        if (first >= last) continue;
+                        const VkDeviceSize off = VkDeviceSize(first) * sizeof(VkAccelerationStructureInstanceKHR);
+                        const VkDeviceSize n = VkDeviceSize(last - first) * sizeof(VkAccelerationStructureInstanceKHR);
+                        std::memcpy(static_cast<uint8_t*>(mapped) + off, instances.data() + first, n);
+                        check(vmaFlushAllocation(ctx->allocator(), instBuf.alloc, off, n), "vmaFlushAllocation(tlas ranges)");
+                    }
+                    vmaUnmapMemory(ctx->allocator(), instBuf.alloc);
+                }
+                dirty.clear();
             }
             // The build-size query is a per-frame driver round-trip at N instances
             // and the refit record is one command — separated from the copy so a

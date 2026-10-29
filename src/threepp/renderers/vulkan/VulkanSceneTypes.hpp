@@ -370,6 +370,12 @@ namespace threepp::vulkan::impl {
         float  rayShadowDist = 0.f;
         float  rayShadowFrom = 0.f;
         uint8_t rayCastBits  = 0;    // kRayCastOn / kRayCastOff from Object3D::rayCastShadow
+        // Its rows in the TLAS instance array at the last lean fill (base ~0:
+        // none) and the signature of what they were made from.
+        uint32_t tlasInstBase  = ~0u;
+        uint32_t tlasInstCount = 0;
+        uint64_t tlasSig       = 0;
+        bool     tlasVolatile  = false;// its row count changed once: placed after the stable spans
         bool   rayShadowLive = false;// a knob set, or entry states left from one
         // Stable entry slots (VulkanCoreSlots.cpp): a FREE span is a run of
         // entry slots no mesh owns. It is hidden, its entries are hidden and

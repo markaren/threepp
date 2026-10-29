@@ -676,6 +676,7 @@ namespace threepp {
             // Half-open [first, last) entry ranges, kept sorted and coalesced.
             std::vector<std::pair<uint32_t, uint32_t>> ranges;
             bool whole = false;// structural rebuild / unidentifiable source
+            uint32_t maxRanges = 64;// past this many, one whole-array flush
 
             bool any() const { return whole || !ranges.empty(); }
             void clear() {
@@ -707,7 +708,7 @@ namespace threepp {
                 }
                 // Many ranges suggest a scene-wide change; fall back to one
                 // whole-array flush (broader than necessary, never wrong).
-                if (ranges.size() >= 64) {
+                if (ranges.size() >= maxRanges) {
                     markWhole();
                     return;
                 }
@@ -724,7 +725,10 @@ namespace threepp {
         // flushGeometryDescsIfDirty memcpys the marked ranges into this frame's
         // slot once its fence has signaled.
         std::array<Buffer, kFramesInFlight> geometryDescsBuffers{};
-        std::array<DescDirtyRanges, kFramesInFlight> geomDescsDirty_{};
+        // A forest's moved-sticky transitions and auto-LOD switches touch a few
+        // thousand scattered entries of 200k+: ranges, not the 15 MB array.
+        std::array<DescDirtyRanges, kFramesInFlight> geomDescsDirty_{DescDirtyRanges{.maxRanges = 1024},
+                                                                     DescDirtyRanges{.maxRanges = 1024}};
         // Per-frame-in-flight material table storage; one buffer per slot so
         // the upload after a fence wait races nothing. The hot path stages new
         // records in `matTable_` and marks the RECORD ranges it touched
@@ -1445,6 +1449,43 @@ namespace threepp {
         // derived. True when any entry's state changed (a TLAS refill and
         // full build). Needs no materials, so it runs before either fill.
         bool classifyRayShadow(const float camPos[3]);
+        // The lean TLAS fill's per-span signature (EntrySpan::tlasSig).
+        [[nodiscard]] uint64_t spanTlasSig(const vulkan::impl::EntrySpan& sp, uint8_t mask,
+                                           VkGeometryInstanceFlagsKHR flags, bool cutout, const BlasRecord* rec,
+                                           VkDeviceAddress blas0, bool perEntryLod) const;
+        // The lean fill's layout key: pendingTlasInstances_ is rewritten in
+        // place only while these hold (buildTlas clears tlasFillValid_), and
+        // tlasInstDirty_ names the instance ranges each frame slot still lacks.
+        bool     tlasFillValid_        = false;
+        uint64_t tlasFillSpansVersion_ = ~0ull;
+        size_t   tlasFillEntryCount_   = 0;
+        bool     tlasFillGenOn_        = false;
+        std::array<DescDirtyRanges, kFramesInFlight> tlasInstDirty_{DescDirtyRanges{.maxRanges = 1024},
+                                                                    DescDirtyRanges{.maxRanges = 1024}};
+        // Entries whose TLAS row changed for a reason meshMovedBits_ does not
+        // carry (a crossfade side, a ray shadow or cutout reclassification),
+        // a bit each; consumed by the next fill.
+        std::vector<uint32_t> tlasRowDirty_;
+        std::vector<uint32_t> tlasSpanOrder_;// the lean fill's span order (stable, then volatile)
+        void markTlasRowDirty(size_t i) {
+            if ((i >> 5) < tlasRowDirty_.size()) tlasRowDirty_[i >> 5] |= 1u << (i & 31u);
+        }
+        [[nodiscard]] bool tlasRowsChangedIn(uint32_t first, uint32_t count) const {
+            if (count == 0u) return false;
+            const size_t w0 = first >> 5, w1 = (size_t(first) + count - 1u) >> 5;
+            for (size_t w = w0; w <= w1; ++w) {
+                const uint32_t bits = (w < meshMovedBits_.size() ? meshMovedBits_[w] : 0u) |
+                                      (w < tlasRowDirty_.size() ? tlasRowDirty_[w] : 0u);
+                if (bits != 0u) return true;// a neighbour's bit in an edge word: a false positive, harmless
+            }
+            return false;
+        }
+        [[nodiscard]] bool tlasRowChanged(size_t i) const {
+            const size_t w = i >> 5;
+            const uint32_t bit = 1u << (i & 31u);
+            return (w < meshMovedBits_.size() && (meshMovedBits_[w] & bit)) ||
+                   (w < tlasRowDirty_.size() && (tlasRowDirty_[w] & bit));
+        }
         // The deferred shade's ray budget (setSunSoftDistance, setFogMarchSteps,
         // setFogMarchRtRange: the lights UBO's tail) and setCountRays: per frame
         // in flight a device-local buffer of kRayCatCount uints the shade bumps
