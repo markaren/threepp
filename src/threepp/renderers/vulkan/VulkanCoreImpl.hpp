@@ -1775,6 +1775,9 @@ namespace threepp {
         // Count of entries whose moved-sticky countdown is nonzero — lets the
         // per-frame stamp skip its O(entries) walk on fully settled scenes.
         uint32_t stickyActiveCount_ = 0;
+        // spansVersion_ at the last moved-sticky walk: a new layout walks every
+        // entry once, after which entries with no mover and no countdown are skipped.
+        uint64_t stickyWalkSpansVersion_ = ~0ull;
         // Per-entry cull mode cached from each upload of matDescs.
         //   Side::Front  → VK_CULL_MODE_BACK_BIT  (default fast path)
         //   Side::Back   → VK_CULL_MODE_FRONT_BIT
@@ -4401,6 +4404,13 @@ namespace threepp {
             const uint32_t cut = (word & kLodFadeCutMask) >> kLodFadeCutShift;
             return (word & kLodFadeComplement) ? 2u * cut < kLodFadeSteps : 2u * cut > kLodFadeSteps;
         }
+        // Whether the dither draws none of the entry's pixels: a plain fade
+        // of 0, or a complement whose share is 0 (packLodFade's cut ends).
+        static bool lodFadeDrawsNone(uint32_t word) {
+            if ((word & kLodFadeActive) == 0u) return false;
+            const uint32_t cut = (word & kLodFadeCutMask) >> kLodFadeCutShift;
+            return (word & kLodFadeComplement) ? cut >= kLodFadeSteps : cut == 0u;
+        }
 
         static std::shared_ptr<Texture> emissiveTexOf(const Mesh& m) {
             auto mat = m.material();
@@ -5016,6 +5026,34 @@ namespace threepp {
         std::array<std::vector<DrawInfoGpu>, 4>                     indirectDrawScratch_;
         std::array<std::vector<VkDrawIndirectCommand>, 4>           indirectCmdScratch_;
         std::array<std::vector<vulkan::OcclusionCull::CullMeta>, 4> indirectOcclScratch_;
+        // Per-span draw cache (buildIndirectDrawData): for a large plain
+        // instanced span, its rows' world matrices and occlusion records, kept
+        // contiguous so a frame whose span did not move builds its draw records
+        // from these and a per-span template, without reading the entries.
+        // By mesh id (a slot edit that renumbers the entries leaves a pool's
+        // instance matrices as they were); valid for the span's count, mesh
+        // world matrix and instance-matrix version, and on a version change
+        // with the rest equal only the rows meshMovedBits_ names are re-read.
+        // The occlusion half is keyed by the geometry box and cull-bit base too.
+        struct SpanDrawCache {
+            uint64_t lastUsed = 0;
+            uint32_t count = 0;
+            unsigned int instMatVersion = ~0u;
+            std::array<float, 16> meshWorld{};
+            std::vector<std::array<float, 16>> models;
+            bool     occlValid = false;
+            uint32_t occlCullBase = 0;
+            float    occlCenter[3]{}, occlHalf[3]{};
+            bool     occlBounds = false;
+            std::vector<vulkan::OcclusionCull::CullMeta> occl;
+        };
+        std::unordered_map<unsigned int, SpanDrawCache> spanDrawCache_;
+        uint64_t spanDrawCacheFrame_ = 0;
+        uint64_t sceneBuildSerial_ = 0;// ensureSceneBuilt calls: meshMovedBits_ holds one call's moves
+        struct SpanDrawPlan { uint32_t first, count, span; };
+        std::vector<SpanDrawPlan> spanDrawPlans_;
+        // Spans this short take the per-entry path (their entries are few).
+        static constexpr uint32_t kSpanDrawCacheMinRows = 64;
 
         bool ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes);
 

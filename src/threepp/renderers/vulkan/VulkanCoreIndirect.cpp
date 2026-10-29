@@ -330,7 +330,198 @@ namespace threepp {
         // must (see the EntrySpan work).
         uint32_t          memoDrawStart = 0u;
         uint32_t          memoDrawCount = 0xFFFFFFFFu;
+        VkCullModeFlags   memoWantCull  = VK_CULL_MODE_BACK_BIT;
+        bool              memoIsDecal   = false;
         uint64_t          drawnTriangles = 0;// AutoLodStats::trianglesDrawn
+
+        // ── Large plain instanced spans: the per-span draw cache ────────────
+        // (SpanDrawCache). Their records are the per-entry loop's, byte for
+        // byte: a per-span template, the row's cached world matrix, its entry
+        // index and the per-row flag bits (moving, LOD fade). Check mode keeps
+        // the per-entry path, which builds the GPU reference.
+        if (!view().secondary && (++spanDrawCacheFrame_ & 255u) == 0u) {
+            // Meshes not drawn for a while (removed, or hidden) let go of theirs.
+            for (auto it = spanDrawCache_.begin(); it != spanDrawCache_.end();)
+                it = (sceneBuildSerial_ - it->second.lastUsed > 256u) ? spanDrawCache_.erase(it) : std::next(it);
+        }
+        auto& cachePlans = spanDrawPlans_;
+        cachePlans.clear();
+        // THREEPP_VK_SPAN_DRAW_CACHE=0: every span through the per-entry loop (A/B).
+        static const bool spanDrawCacheOn = vulkan::env::flag("THREEPP_VK_SPAN_DRAW_CACHE", true);
+        if (!gpuDrawGenCheck_ && spanDrawCacheOn) {
+            for (uint32_t s = 0; s < entrySpans_.size(); ++s) {
+                const EntrySpan& sp = entrySpans_[s];
+                if (!sp.inst || sp.isFree || sp.hidden || sp.count < kSpanDrawCacheMinRows) continue;
+                if (gpuDraws && drawGenEligibleRecord(sp)) continue;// draw_gen.comp writes it
+                const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+                if (!e0.isInstanced || e0.isOverlay || e0.sensorOnly || e0.isParticleField || e0.isVertexInterop ||
+                    e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed || e0.isTet)
+                    continue;
+                cachePlans.push_back({sp.first, sp.count, s});
+            }
+            std::sort(cachePlans.begin(), cachePlans.end(),
+                      [](const SpanDrawPlan& a, const SpanDrawPlan& b) { return a.first < b.first; });
+        }
+        size_t cacheNext = 0;
+        // One span through its cache. False: not cacheable after all (no
+        // record, a LOD chain), and the per-entry loop takes it.
+        const auto emitCachedSpan = [&](const SpanDrawPlan& cp) -> bool {
+            const EntrySpan& sp = entrySpans_[cp.span];
+            const MeshEntry& e0 = lastVisibleEntries_[cp.first];
+            const BlasRecord* rec = resolveBlasForEntry(e0);
+            if (!rec || rec->vertex.handle == VK_NULL_HANDLE || !rec->lodLevels.empty()) return false;
+            // The per-mesh facts, as the loop's memo derives them.
+            const auto matSp = e0.mesh->material();
+            const Material* sm = matSp.get();
+            uint32_t matFlags = 0u;
+            if (sm && sm->side == Side::Double) matFlags |= kInstFlagDoubleSided;
+            if (sm && sm->textureAnimatedHint) matFlags |= kInstFlagTexAnim;
+            const bool vtxColor = sm && sm->vertexColors;
+            float polyOff = 0.f;
+            if (sm && sm->polygonOffset) {
+                const float uf = sm->polygonOffsetUnits + sm->polygonOffsetFactor;
+                polyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
+            }
+            const LodGeomSel sel = selectLodGeom(*rec, 0);
+            uint32_t drawStart = 0u, drawCount = 0xFFFFFFFFu;
+            bool boundsValid = false;
+            float center[3]{}, half[3]{};
+            if (auto geom = e0.mesh->geometry()) {
+                Box3 box;
+                if (boundsOf(*geom, box)) {
+                    const Vector3 c = box.getCenter();
+                    const Vector3 h = box.getSize() * 0.5f;
+                    center[0] = c.x; center[1] = c.y; center[2] = c.z;
+                    half[0]   = h.x; half[1]   = h.y; half[2]   = h.z;
+                    boundsValid = true;
+                }
+                const auto& dr = geom->drawRange;
+                drawStart = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
+                drawCount = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
+            }
+            uint32_t vcount = sel.indexed ? sel.indexCount : rec->vertexCount;
+            const uint32_t vfirst = std::min(drawStart, vcount);
+            vcount = std::min(vcount - vfirst, drawCount);
+            if (vcount == 0u) return true;// the loop draws none of its rows either
+            const VkCullModeFlags wantCull =
+                    cp.first < lastVisibleCullMode_.size() ? lastVisibleCullMode_[cp.first] : VK_CULL_MODE_BACK_BIT;
+            const bool isDecal = cp.first < geomDescsCached_.size() && entryMat(cp.first).alphaCutoff == -2.0f;
+            const int b = isDecal ? 3 : bucketOf(wantCull);
+
+            // The rows' matrices: the moved ones re-read, all of them on anything else.
+            // Only rows moved THIS frame are in meshMovedBits_: the per-row
+            // path needs the cache brought up to date last frame.
+            SpanDrawCache& c = spanDrawCache_[sp.meshId];
+            const bool lastFrame = c.lastUsed + 1u == sceneBuildSerial_ || c.lastUsed == sceneBuildSerial_;
+            c.lastUsed = sceneBuildSerial_;
+            if (lastFrame && c.count == cp.count && c.meshWorld == sp.meshWorld && c.models.size() == cp.count &&
+                c.instMatVersion != sp.instMatVersion) {
+                c.instMatVersion = sp.instMatVersion;
+                for (uint32_t j = 0; j < cp.count; ++j) {
+                    const size_t i = size_t(cp.first) + j;
+                    if ((i >> 5) >= meshMovedBits_.size() || !(meshMovedBits_[i >> 5] & (1u << (i & 31u)))) continue;
+                    std::memcpy(c.models[j].data(), lastVisibleEntries_[i].worldMatrix.data(), 64);
+                    if (c.occlValid && c.occlBounds) {
+                        const float* M = c.models[j].data();
+                        const float* ce = c.occlCenter;
+                        const float* ha = c.occlHalf;
+                        auto& cm = c.occl[j];
+                        const float cx = M[0]*ce[0] + M[4]*ce[1] + M[8]*ce[2] + M[12];
+                        const float cy = M[1]*ce[0] + M[5]*ce[1] + M[9]*ce[2] + M[13];
+                        const float cz = M[2]*ce[0] + M[6]*ce[1] + M[10]*ce[2] + M[14];
+                        const float hx = std::abs(M[0])*ha[0] + std::abs(M[4])*ha[1] + std::abs(M[8])*ha[2];
+                        const float hy = std::abs(M[1])*ha[0] + std::abs(M[5])*ha[1] + std::abs(M[9])*ha[2];
+                        const float hz = std::abs(M[2])*ha[0] + std::abs(M[6])*ha[1] + std::abs(M[10])*ha[2];
+                        cm.aabbMin[0] = cx - hx; cm.aabbMin[1] = cy - hy; cm.aabbMin[2] = cz - hz;
+                        cm.aabbMax[0] = cx + hx; cm.aabbMax[1] = cy + hy; cm.aabbMax[2] = cz + hz;
+                    }
+                }
+            } else if (c.count != cp.count || c.instMatVersion != sp.instMatVersion ||
+                c.meshWorld != sp.meshWorld || c.models.size() != cp.count) {
+                c.count = cp.count;
+                c.instMatVersion = sp.instMatVersion;
+                c.meshWorld = sp.meshWorld;
+                c.models.resize(cp.count);
+                for (uint32_t j = 0; j < cp.count; ++j)
+                    std::memcpy(c.models[j].data(), lastVisibleEntries_[cp.first + j].worldMatrix.data(), 64);
+                c.occlValid = false;
+            }
+            if (wantOcclMeta) {
+                const uint32_t cullBase = occlCullBitFor(e0) - e0.instanceIndex;
+                if (!c.occlValid || c.occlCullBase != cullBase || c.occlBounds != boundsValid ||
+                    std::memcmp(c.occlCenter, center, sizeof(center)) != 0 ||
+                    std::memcmp(c.occlHalf, half, sizeof(half)) != 0) {
+                    c.occl.resize(cp.count);
+                    for (uint32_t j = 0; j < cp.count; ++j) {
+                        const MeshEntry& en = lastVisibleEntries_[cp.first + j];
+                        vulkan::OcclusionCull::CullMeta cm{};
+                        cm.cullBit = occlCullBitFor(en);
+                        if (boundsValid) {
+                            // The loop's Arvo transform of the object-space box.
+                            const float* M = c.models[j].data();
+                            const float cx = M[0]*center[0] + M[4]*center[1] + M[8]*center[2] + M[12];
+                            const float cy = M[1]*center[0] + M[5]*center[1] + M[9]*center[2] + M[13];
+                            const float cz = M[2]*center[0] + M[6]*center[1] + M[10]*center[2] + M[14];
+                            const float hx = std::abs(M[0])*half[0] + std::abs(M[4])*half[1] + std::abs(M[8])*half[2];
+                            const float hy = std::abs(M[1])*half[0] + std::abs(M[5])*half[1] + std::abs(M[9])*half[2];
+                            const float hz = std::abs(M[2])*half[0] + std::abs(M[6])*half[1] + std::abs(M[10])*half[2];
+                            cm.aabbMin[0] = cx - hx; cm.aabbMin[1] = cy - hy; cm.aabbMin[2] = cz - hz;
+                            cm.aabbMax[0] = cx + hx; cm.aabbMax[1] = cy + hy; cm.aabbMax[2] = cz + hz;
+                            cm.flags = 0u;
+                        } else {
+                            cm.flags = 1u;
+                        }
+                        c.occl[j] = cm;
+                    }
+                    c.occlValid = true;
+                    c.occlCullBase = cullBase;
+                    c.occlBounds = boundsValid;
+                    std::memcpy(c.occlCenter, center, sizeof(center));
+                    std::memcpy(c.occlHalf, half, sizeof(half));
+                }
+            }
+
+            DrawInfoGpu tmpl{};
+            tmpl.posAddr     = rec->vertex.address;
+            tmpl.nrmAddr     = rec->normal.address;
+            tmpl.uvAddr      = (rec->uv.handle != VK_NULL_HANDLE) ? rec->uv.address : 0ull;
+            tmpl.uv2Addr     = (rec->uv2.handle != VK_NULL_HANDLE) ? rec->uv2.address : 0ull;
+            tmpl.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE && !rec->interopWorldStatic)
+                                       ? rec->prevVertex.address
+                                       : rec->vertex.address;
+            tmpl.indexAddr   = sel.indexed ? sel.indexAddress : 0ull;
+            tmpl.colorAddr   = (rec->color.handle != VK_NULL_HANDLE && vtxColor) ? rec->color.address : 0ull;
+            tmpl.indexed     = sel.indexed ? 1u : 0u;
+            tmpl.packedAttrs = rec->packedMask;
+            tmpl.polygonOffset = polyOff;
+            bool idsValid = false;
+            const VkDrawIndirectCommand cmd{vcount, 1u, vfirst, 0u};
+            for (uint32_t j = 0; j < cp.count; ++j) {
+                const size_t i = size_t(cp.first) + j;
+                if (!viewCulled(i)) continue;
+                const uint32_t fade = i < entryLodFade_.size() ? entryLodFade_[i] : 0u;
+                if (lodFadeDrawsNone(fade)) continue;
+                if (!idsValid) {
+                    // Lazily, at the first drawn row, as the loop assigns them.
+                    const uint16_t classId = classIdForObject(*e0.mesh);
+                    tmpl.stableId = stableIdForObject(*e0.mesh);
+                    tmpl.flags    = matFlags | ((static_cast<uint32_t>(classId) & 0xFFu) << 8);
+                    idsValid = true;
+                }
+                drawnTriangles += vcount / 3u;
+                DrawInfoGpu& di = draws[b].emplace_back(tmpl);
+                std::memcpy(di.model, c.models[j].data(), 64);
+                di.instanceCustomIndex = static_cast<uint32_t>(i);
+                uint32_t flags = tmpl.flags | fade;
+                if (i < meshMovedSticky_.size() && meshMovedSticky_[i] > 0u) flags |= kInstFlagMoving;
+                di.flags = flags;
+                cpuPos[b].push_back(bucketTotal[b]++);
+                cmds[b].push_back(cmd);
+                if (wantOcclMeta) occlMeta[b].push_back(c.occl[j]);
+                ++globalIdx;
+            }
+            return true;
+        };
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             if (gpuNext < gpuPlans.size() && i == gpuPlans[gpuNext].first) {
                 GpuSpanPlan& gp = gpuPlans[gpuNext];
@@ -362,7 +553,22 @@ namespace threepp {
                     continue;
                 }
             }
+            if (cacheNext < cachePlans.size() && i == cachePlans[cacheNext].first) {
+                const SpanDrawPlan cp = cachePlans[cacheNext++];
+                if (emitCachedSpan(cp)) {
+                    memoMesh = nullptr;
+                    i += cp.count - 1u;
+                    continue;
+                }
+            }
             const bool sinkExpected = i < gpuSinkEnd;
+            // The cull bit first: in a forest most entries are culled, and the
+            // tests below read the entry, a cache line each.
+            if (!viewCulled(i)) continue;
+            // An instance its LOD fade draws with no pixel at all (a far
+            // impostor's near side) gets no record; the GPU-written spans keep
+            // theirs, so check mode's reference keeps it too.
+            if (!sinkExpected && i < entryLodFade_.size() && lodFadeDrawsNone(entryLodFade_[i])) continue;
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
             // Sensor-only surfaces rasterize into the secondary views that ASK
@@ -372,7 +578,6 @@ namespace threepp {
             // editor viewport pane are secondary views too and must not show
             // the bake shell. Scene opt-in off ⇒ no view draws it.
             if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) continue;
-            if (!viewCulled(i)) continue;
             if (en.mesh != memoMesh) {
                 memoMesh     = en.mesh;
                 memoRec      = resolveBlasForEntry(en);
@@ -417,6 +622,10 @@ namespace threepp {
                 memoBoundsValid = false;
                 memoDrawStart = 0u;
                 memoDrawCount = 0xFFFFFFFFu;
+                // The mesh's material decides both (one material table record
+                // for all its entries).
+                memoWantCull = (i < lastVisibleCullMode_.size()) ? lastVisibleCullMode_[i] : VK_CULL_MODE_BACK_BIT;
+                memoIsDecal  = (i < geomDescsCached_.size()) && (entryMat(i).alphaCutoff == -2.0f);
                 if (auto geom = en.mesh->geometry()) {
                     Box3 box;// the record's box: a displacementMap's moved positions
                     if (boundsOf(*geom, box)) {
@@ -465,16 +674,11 @@ namespace threepp {
             if (vcount == 0u) continue;
             drawnTriangles += vcount / 3u;
 
-            const VkCullModeFlags wantCull =
-                    (i < lastVisibleCullMode_.size())
-                            ? lastVisibleCullMode_[i]
-                            : VK_CULL_MODE_BACK_BIT;
+            const VkCullModeFlags wantCull = memoWantCull;
             // Blend decals (alphaCutoff == -2 sentinel from materialFromMesh)
             // go to bucket [3]: drawn last, with the albedo-blend pipeline.
             // The deferred shade reads the blended albedo attachment.
-            const bool isDecal = (i < geomDescsCached_.size()) &&
-                                 (entryMat(i).alphaCutoff == -2.0f);
-            const int b = isDecal ? 3 : bucketOf(wantCull);
+            const int b = memoIsDecal ? 3 : bucketOf(wantCull);
 
             DrawInfoGpu di{};
             std::memcpy(di.model, en.worldMatrix.data(), 64);

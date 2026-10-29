@@ -1453,6 +1453,8 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                 // transform — identical to the old 8-corner result); an
                 // instanced span gets the union of world sphere centers
                 // dilated by radius x max scale (conservative).
+                // The per-instance spheres follow the count (an in-place setCount).
+                if (sp.count > 1 && sp.cullSpheres.size() != sp.count) sp.aabbValid = false;
                 if (!sp.aabbValid) {
                     const float* lc = sp.localCenter;
                     if (sp.count == 1) {
@@ -1473,6 +1475,7 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                         constexpr uint32_t kCullChunk = 512;
                         const uint32_t nChunks = (sp.count + kCullChunk - 1u) / kCullChunk;
                         sp.chunkAabbs.resize(nChunks);
+                        sp.cullSpheres.resize(sp.count);
                         float smn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
                         float smx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
                         for (uint32_t ch = 0; ch < nChunks; ++ch) {
@@ -1492,7 +1495,9 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                                 const float s0 = M[0]*M[0] + M[1]*M[1] + M[2]*M[2];
                                 const float s1 = M[4]*M[4] + M[5]*M[5] + M[6]*M[6];
                                 const float s2 = M[8]*M[8] + M[9]*M[9] + M[10]*M[10];
-                                maxScaleSq = std::max(maxScaleSq, std::max(s0, std::max(s1, s2)));
+                                const float sMax = std::max(s0, std::max(s1, s2));
+                                maxScaleSq = std::max(maxScaleSq, sMax);
+                                sp.cullSpheres[j] = {cx, cy, cz, sp.localRadius * std::sqrt(sMax)};
                             }
                             const float r = sp.localRadius * std::sqrt(maxScaleSq);
                             auto& cb = sp.chunkAabbs[ch];
@@ -1536,7 +1541,6 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                 }
                 // Straddling instanced span: classify chunk AABBs first, then
                 // per-entry world-sphere tests only for straddling chunks.
-                const float* lc = sp.localCenter;
                 constexpr uint32_t kCullChunk = 512;
                 for (uint32_t ch = 0; ch < sp.chunkAabbs.size(); ++ch) {
                     const auto& cb = sp.chunkAabbs[ch];
@@ -1561,15 +1565,9 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                     if (ccls == 2) continue;// whole chunk stays visible
                     for (uint32_t j = j0; j < j1; ++j) {
                         const size_t ci = size_t(sp.first) + j;
-                        const float* M = entries[ci].worldMatrix.data();
-                        const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
-                        const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
-                        const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
-                        const float s0 = M[0]*M[0] + M[1]*M[1] + M[2]*M[2];
-                        const float s1 = M[4]*M[4] + M[5]*M[5] + M[6]*M[6];
-                        const float s2 = M[8]*M[8] + M[9]*M[9] + M[10]*M[10];
-                        const float r = sp.localRadius *
-                                        std::sqrt(std::max(s0, std::max(s1, s2)));
+                        // The world sphere the AABB pass derived (EntrySpan::cullSpheres).
+                        const auto& s = sp.cullSpheres[j];
+                        const float cx = s[0], cy = s[1], cz = s[2], r = s[3];
                         uint8_t vis = 1;
                         for (const auto& plane : planes) {
                             const auto& n = plane.normal;
@@ -1600,6 +1598,7 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
         }
 
 void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
+            ++sceneBuildSerial_;
             // The whole scene build, every phase below included (the profiler
             // is flat: a nested phase adds to this key too).
             THREEPP_CPUPROF("scene.0_total");

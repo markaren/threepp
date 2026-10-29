@@ -1046,10 +1046,19 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 if (anyMoved || stickyActiveCount_ > 0u) {
                     bool changed = false;
                     uint32_t active = 0;
+                    // An entry neither moved now nor counting down has its flag
+                    // clear already (this walk cleared it when its count ran
+                    // out), so it is skipped without touching its GeometryDesc:
+                    // a forest of 300k entries with 20k movers paid ~1 ms for the
+                    // descs alone. After the entries were laid out anew the walk
+                    // visits them all once, as before.
+                    const bool all = stickyWalkSpansVersion_ != spansVersion_;
+                    stickyWalkSpansVersion_ = spansVersion_;
                     for (size_t i = 0; i < geomDescsCached_.size(); ++i) {
                         const uint32_t w = static_cast<uint32_t>(i) >> 5u;
                         const uint32_t bit = 1u << (static_cast<uint32_t>(i) & 31u);
                         const bool movedNow = w < meshMovedBits_.size() && (meshMovedBits_[w] & bit);
+                        if (!movedNow && meshMovedSticky_[i] == 0u && !all) continue;
                         if (movedNow) meshMovedSticky_[i] = kMovedStickyFrames;
                         else if (meshMovedSticky_[i] > 0u) --meshMovedSticky_[i];
                         const uint32_t moved = meshMovedSticky_[i] > 0u ? kGeomFlagMoved : 0u;

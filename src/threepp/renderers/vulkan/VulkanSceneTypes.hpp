@@ -354,6 +354,10 @@ namespace threepp::vulkan::impl {
         // classifies a whole chunk at a time and runs per-entry tests only
         // for chunks that straddle the frustum. min/max packed as [0..2]/[3..5].
         std::vector<std::array<float, 6>> chunkAabbs;
+        // Each instance's world bounding sphere (centre, radius), derived with
+        // chunkAabbs: the per-instance frustum test reads these 16 bytes
+        // instead of the entry's matrix.
+        std::vector<std::array<float, 4>> cullSpheres;
         // Object-space bounds of the shared geometry (box + enclosing-sphere
         // radius), cached at expansion for the per-entry Arvo transform /
         // sphere tests. Invalidated (localBoundsValid=false) when the
