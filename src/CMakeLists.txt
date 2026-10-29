@@ -1418,6 +1418,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/rtao.comp"
         kRtaoCompSpv
         _rtao_spv_h)
+    # The sun's fog march at half resolution, temporally accumulated (deferred):
+    # the shade's own march over the shade's set. See DeferredShade::recordFogMarch.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/fog_march.comp"
+        kFogMarchCompSpv
+        _fog_march_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv

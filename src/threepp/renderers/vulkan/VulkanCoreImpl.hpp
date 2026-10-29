@@ -180,6 +180,7 @@ namespace threepp {
     using vulkan::TP_ProbeGI;
     using vulkan::TP_ShadowMaps;
     using vulkan::TP_Rtao;
+    using vulkan::TP_FogMarch;
 
     namespace {
         // kFramesInFlight — and the long note on why it MUST stay EVEN —
@@ -1509,6 +1510,9 @@ namespace threepp {
         float    sunSoftDistance_ = 0.f;
         uint32_t fogMarchSteps_   = 16u;
         float    fogMarchRtRange_ = 0.f;
+        // setFogMarchHalfRes: fog_march.comp at half res. THREEPP_VK_FOG_HALF_RES=1
+        // starts it on (an A/B on an app that does not set the knob).
+        bool     fogMarchHalfRes_ = vulkan::env::flag("THREEPP_VK_FOG_HALF_RES");
         bool     countRays_       = false;
         std::array<Buffer, kFramesInFlight> rayCountBufs_{};    // device-local
         std::array<Buffer, kFramesInFlight> rayCountReadback_{};// host-mapped

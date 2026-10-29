@@ -125,7 +125,9 @@ namespace threepp::vulkan {
         // The shadow-map pass (ShadowMapPass): every cascade and lamp map of
         // the primary view. Secondary views' brackets are suppressed.
         TP_ShadowMaps     = 27,
-        TP_COUNT          = 28,
+        // The half-res sun fog march (fog_march.comp, setFogMarchHalfRes).
+        TP_FogMarch       = 28,
+        TP_COUNT          = 29,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

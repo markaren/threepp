@@ -17,6 +17,7 @@
 #include "threepp/renderers/vulkan/shaders/cloud_shadow.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_light.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/rtao.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/fog_march.comp.spv.h"
 // No-ray-query variants (ray_query_stub.glsl): every ray misses.
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.nort.spv.h"
 #include "threepp/renderers/vulkan/shaders/froxel_inject.comp.nort.spv.h"
@@ -39,7 +40,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 83;
+    constexpr uint32_t kDeferredBindingCount = 86;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -78,6 +79,7 @@ namespace threepp::vulkan {
         if (cloudMarchPipe_)      vkDestroyPipeline(d, cloudMarchPipe_, nullptr);
         if (cloudShadowPipe_)     vkDestroyPipeline(d, cloudShadowPipe_, nullptr);
         if (rtaoPipe_)            vkDestroyPipeline(d, rtaoPipe_, nullptr);
+        if (fogMarchPipe_)        vkDestroyPipeline(d, fogMarchPipe_, nullptr);
         if (particleLightPipe_)   vkDestroyPipeline(d, particleLightPipe_, nullptr);
         if (particlePipeLayout_)  vkDestroyPipelineLayout(d, particlePipeLayout_, nullptr);
         if (particleIoLayout_)    vkDestroyDescriptorSetLayout(d, particleIoLayout_, nullptr);
@@ -280,6 +282,11 @@ namespace threepp::vulkan {
         set(81, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // spot maps (D32 2D array)
         set(82, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // point cubes (D32 cube array)
         set(83, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // GpuShadowMapsUbo
+        // The half-res sun fog march (fog_march.comp, setFogMarchHalfRes): CUR
+        // written by the march, PREV its history, CUR sampled by the shade.
+        set(84, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // fogHalf CUR
+        set(85, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // fogHalf PREV
+        set(86, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // fogHalf CUR sampled
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -364,6 +371,7 @@ namespace threepp::vulkan {
             refl_[static_cast<int>(Stage::CloudMarch)]      = reflectSpirvBindings(kCloudMarchCompSpv);
             refl_[static_cast<int>(Stage::CloudShadow)]     = reflectSpirvBindings(kCloudShadowCompSpv);
             if (rt) refl_[static_cast<int>(Stage::Rtao)] = reflectSpirvBindings(kRtaoCompSpv);
+            if (rt) refl_[static_cast<int>(Stage::FogMarch)] = reflectSpirvBindings(kFogMarchCompSpv);
             refl_[static_cast<int>(Stage::ParticleLight)]   = reflectSpirvBindings(particleSpv.words, particleSpv.count);
         }
         smci.codeSize = shadeSpv.count * sizeof(uint32_t);
@@ -511,6 +519,17 @@ namespace threepp::vulkan {
             cpciAo.stage.module = modAo;
             check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciAo, nullptr, &rtaoPipe_),
                   "vkCreateComputePipelines(rtao)");
+            // The half-res sun fog march: the shade's set, push block and march.
+            VkShaderModuleCreateInfo smciFog = smciS;
+            smciFog.codeSize = sizeof(kFogMarchCompSpv);
+            smciFog.pCode    = kFogMarchCompSpv;
+            VkShaderModule modFog = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(d, &smciFog, nullptr, &modFog), "vkCreateShaderModule(fog_march)");
+            VkComputePipelineCreateInfo cpciFog = cpci;
+            cpciFog.stage.module = modFog;
+            check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciFog, nullptr, &fogMarchPipe_),
+                  "vkCreateComputePipelines(fog_march)");
+            vkDestroyShaderModule(d, modFog, nullptr);
         }
 
         // Particle billboard lighting — set 0 is the shared deferred set; set 1
@@ -1105,6 +1124,21 @@ namespace threepp::vulkan {
             setw(80, 81, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smSpotInfo,  nullptr);
             setw(81, 82, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smPointInfo, nullptr);
             setw(82, 83, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &smUboInfo);
+            // The half-res fog march (84-86), ping-ponged like rtao.
+            VkDescriptorImageInfo fogCurInfo{};
+            fogCurInfo.imageView   = in.fogHalf[f];
+            fogCurInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo fogPrevInfo{};
+            fogPrevInfo.sampler     = lutSampler_;
+            fogPrevInfo.imageView   = in.fogHalf[pf];
+            fogPrevInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo fogCurSampledInfo{};
+            fogCurSampledInfo.sampler     = gbufSampler_;
+            fogCurSampledInfo.imageView   = in.fogHalf[f];
+            fogCurSampledInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            setw(83, 84, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &fogCurInfo,        nullptr);
+            setw(84, 85, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogPrevInfo,       nullptr);
+            setw(85, 86, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogCurSampledInfo, nullptr);
             // Without ray query the layout has no binding 8: drop its write.
             uint32_t writeCount = static_cast<uint32_t>(w.size());
             if (!ctx_.rayQuerySupported()) {
@@ -1282,6 +1316,24 @@ namespace threepp::vulkan {
     void DeferredShade::recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p) {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        const ShadePush push = shadePush(p);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline(push.flags, p.probeGi, p.shadowMaps));
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
+    }
+
+    void DeferredShade::recordFogMarch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p) {
+        if (!fogMarchPipe_) return;
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        const ShadePush push = shadePush(p);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, fogMarchPipe_);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        const uint32_t hw = (p.width + 1u) / 2u, hh = (p.height + 1u) / 2u;
+        vkCmdDispatch(cb, (hw + 7u) / 8u, (hh + 7u) / 8u, 1);
+    }
+
+    ShadePush DeferredShade::shadePush(const DispatchParams& p) const {
         // gbufMsaaSamples packed into flags bits 5-6: 0=1x(default),1=2x,2=4x.
         // Bit 7 = dispatch B will run this frame: dispatch A reserves the
         // geometry-minority coverage weight for it; with bit 7 clear that
@@ -1317,10 +1369,10 @@ namespace threepp::vulkan {
                    | (probeFar ? 32768u : 0u)         // bit 15: far field beyond the probe windows
                    | (p.unlitScatter ? 268435456u : 0u)// bit 28: unlit surfaces take the in-scatter
                    | (p.fogShadowOpaqueCutouts ? 536870912u : 0u)// bit 29: fog shadow rays take cutouts as opaque
+                   | (p.fogHalf ? 1073741824u : 0u)   // bit 30: the sun march came at half res (fogDirPrimary)
                    | (std::min(p.cutoutRayCap, 15u) << 16u)// bits 16-19: cutout ray cap (0 = off)
                    | (std::min(static_cast<uint32_t>(std::max(p.cutoutRayCapFrom, 0.f) / 4.f + 0.5f), 255u)
                       << 20u);                       // bits 20-27: ...from this distance, in 4 m steps
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline(push.flags, p.probeGi, p.shadowMaps));
         push.frame             = p.frameCounter;
         push.emissiveCount      = p.emissiveCount;
         push.emissiveTotalPower = p.emissiveTotalPower;
@@ -1337,8 +1389,7 @@ namespace threepp::vulkan {
         push.clusterLightCount  = p.clusterLightCount;
         push.shadeMode          = p.shadeMode;
         push.preExpBits         = p.preExpBits;
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
+        return push;
     }
 
     void DeferredShade::recordClusterBuild(VkCommandBuffer cb, uint32_t frame,

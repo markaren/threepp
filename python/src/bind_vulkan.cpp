@@ -1457,6 +1457,8 @@ namespace threepp_py {
                                            // Half-res RT AO + bent normals (rtao.comp);
                                            // 0 unless deferred AO is enabled.
                                            d["rtao_ms"] = t.rtaoMs;
+                                           // The half-res sun fog march (fog_march_half_res); 0 when off.
+                                           d["fog_march_ms"] = t.fogMarchMs;
                                            // The shadow-map pass (shadow_mode 'sm'); 0 otherwise.
                                            d["shadow_maps_ms"] = t.shadowMapsMs;
                                            d["instance_expand_ms"] = t.instanceExpandMs;
@@ -2093,6 +2095,13 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, unsigned int v) { r.native().setFogMarchSteps(v); },
                               "Shadow-traced steps of the sun's volumetric fog march (the shafts through "
                               "height fog), one ray each per pixel: 1 to 64, default 16.")
+                .def_property("fog_march_half_res",
+                              [](PyVulkanRenderer& r) { return r.native().fogMarchHalfRes(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setFogMarchHalfRes(v); },
+                              "Run the sun's fog march at half resolution in a pass of its own (frame_timings "
+                              "fog_march_ms), each pixel blended with its reprojected history (about ten "
+                              "frames; sky pixels take the frame's march alone), and upsampled by matching "
+                              "each pixel's distance. Ray-traced shadows only. Off by default.")
                 .def_property("fog_march_rt_range",
                               [](PyVulkanRenderer& r) { return r.native().fogMarchRtRange(); },
                               [](PyVulkanRenderer& r, float v) { r.native().setFogMarchRtRange(v); },

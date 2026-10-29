@@ -882,6 +882,14 @@ namespace threepp {
         [[nodiscard]] unsigned int fogMarchSteps() const;
         void setFogMarchRtRange(float metres);
         [[nodiscard]] float fogMarchRtRange() const;
+        // The fog march at half resolution (off by default): a pass of its own
+        // marches a quarter of the pixels, blends each with its reprojected
+        // history (about ten frames' worth; sky pixels take the frame's march
+        // alone), and the shade takes each pixel's value from the half-res taps
+        // whose leg is as long as its own. Ray-traced shadows only; with shadow
+        // maps the march stays per pixel. Its cost is FrameTimings::fogMarchMs.
+        void setFogMarchHalfRes(bool on);
+        [[nodiscard]] bool fogMarchHalfRes() const;
         // Count the deferred shade's ray queries by category into
         // FrameTimings::rays (off by default; off costs nothing). One atomic
         // per subgroup per query, so the counted frames run a little slower.
@@ -1789,6 +1797,8 @@ namespace threepp {
             // Half-res RT ambient occlusion + bent normals (rtao.comp).
             // 0 unless setDeferredAO is on (the pass is only dispatched then).
             float rtaoMs          = 0.f;
+            // The half-res sun fog march (setFogMarchHalfRes); 0 while it is off.
+            float fogMarchMs      = 0.f;
             // World-space probe-GI update (probe_update.comp) plus its
             // prev-store snapshot copy. 0 unless probe GI is enabled. Recorded
             // once per frame for all views — the dispatch is primary-only — so

@@ -1268,6 +1268,35 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     rayCatSet(rayCatWas);
     return sum * medAlbedo * (dtRt * trWater) + sumTail * medAlbedo * (dtTail * trWater);
 }
+
+// The sun march for a PRIMARY ray (the camera to this pixel's surface, or
+// 2000 m of sky). With setFogMarchHalfRes (flags bit 30) fog_march.comp has
+// marched it at half resolution this frame: the 2x2 half-res taps around the
+// pixel, bilinear, each weighted by how close its leg's length is to this
+// pixel's own (a trunk's in-scatter stays off the sky beside it); with no tap
+// within reach, the one whose leg is nearest. Off, the march runs here.
+vec3 fogDirPrimary(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    if (!flagOn(1073741824u)) return volumetricDirScatter(ro, rd, tMax, px);
+    const ivec2 hsize = textureSize(fogHalfTex, 0);
+    const vec2  hp    = (vec2(px) + 0.5) * 0.5 - 0.5;
+    const ivec2 b     = ivec2(floor(hp));
+    const vec2  f     = hp - vec2(b);
+    vec3  sum  = vec3(0.0);
+    float wSum = 0.0;
+    vec3  nearest = vec3(0.0);
+    float nearestD = 1e30;
+    for (int k = 0; k < 4; ++k) {
+        const ivec2 o = ivec2(k & 1, k >> 1);
+        const vec4  t = texelFetch(fogHalfTex, clamp(b + o, ivec2(0), hsize - 1), 0);
+        const float dd = abs(t.a - tMax);
+        if (dd < nearestD) {
+            nearestD = dd;
+            nearest  = t.rgb;
+        }
+        const float wb = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+        const float wd = max(0.0, 1.0 - dd / (0.05 * tMax + 0.5));
+        sum  += t.rgb * (wb * wd);
+        wSum += wb * wd;
     }
     return wSum > 1e-4 ? sum / wSum : nearest;
 }

@@ -18,6 +18,7 @@
 
 #include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/SpirvReflect.hpp"
+#include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// ShadePush
 
 #include <vulkan/vulkan.h>
 
@@ -158,6 +159,9 @@ namespace threepp::vulkan {
             // when AO is enabled.
             const VkImageView* rtao    = nullptr;// [framesInFlight] rgba16f half-res
             const VkImageView* rtaoAux = nullptr;// [framesInFlight] rgba16f half-res
+            // setFogMarchHalfRes (84 storage, 85 prev, 86 sampled): the half-res
+            // sun march, (rgb, leg length), ping-ponged like rtao.
+            const VkImageView* fogHalf = nullptr;// [framesInFlight] rgba16f half-res
             // ParticleField density volumes (bindings 67/68) — plan §3.3. A
             // FIXED-SIZE array of r32ui 3D images sampled by the froxel passes
             // through mediumExtinction, plus the small std140 UBO that says
@@ -280,6 +284,10 @@ namespace threepp::vulkan {
             // cutout card they cross. Off = exact, as the surface shadows. The
             // renderer's default is on; this field is filled every frame.
             bool fogShadowOpaqueCutouts = false;
+            // setFogMarchHalfRes (flags bit 30): fog_march.comp marched the sun's
+            // fog at half resolution this frame (recordFogMarch, before this
+            // dispatch); the shade upsamples it instead of marching per pixel.
+            bool fogHalf = false;
             // setCutoutRayCap (flags bits 16-19): a shadow ray counts as
             // blocked after this many transparent cutout texels; 0 = off.
             uint32_t cutoutRayCap = 0u;
@@ -323,6 +331,12 @@ namespace threepp::vulkan {
         };
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
+        // The sun's fog march at half resolution with temporal accumulation
+        // (fog_march.comp), for the shade dispatch `p` describes (its flags,
+        // extent and frame; p.fogHalf set). Record before that dispatch, as its
+        // own graph pass (Stage::FogMarch). Not without ray query.
+        void recordFogMarch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
+        [[nodiscard]] bool fogMarchAvailable() const { return fogMarchPipe_ != VK_NULL_HANDLE; }
 
         // Clustered light culling: one thread per cluster cell tests every
         // light's cull sphere against the cell's view-space AABB and writes
@@ -433,7 +447,7 @@ namespace threepp::vulkan {
         // SPIR-V, so each stage declares exactly that — no hand-written list.
         // The barriers BETWEEN a stage's own dispatches (froxel inject →
         // integrate, the à-trous chain) stay inside the record* functions.
-        enum class Stage { Shade, FilterComposite, ClusterBuild, Froxels, CloudMarch, CloudShadow, Rtao, ParticleLight };
+        enum class Stage { Shade, FilterComposite, ClusterBuild, Froxels, CloudMarch, CloudShadow, Rtao, ParticleLight, FogMarch };
         void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, Stage stage, uint32_t frame,
                      VkDescriptorSet particleIoSet = VK_NULL_HANDLE) const;
 
@@ -472,6 +486,9 @@ namespace threepp::vulkan {
         VkPipeline            cloudMarchPipe_      = VK_NULL_HANDLE;// half-res cloud march (cloud_march.comp)
         VkPipeline            cloudShadowPipe_     = VK_NULL_HANDLE;// cloud shadow map (cloud_shadow.comp)
         VkPipeline            rtaoPipe_            = VK_NULL_HANDLE;// half-res ray-traced AO + bent normals (rtao.comp)
+        VkPipeline            fogMarchPipe_        = VK_NULL_HANDLE;// half-res sun fog march (fog_march.comp)
+        // The ShadePush both the shade and the fog march push for dispatch `p`.
+        [[nodiscard]] ShadePush shadePush(const DispatchParams& p) const;
         // Particle billboard lighting (particle_light.comp) — set 0 is the
         // shared deferred set, set 1 the caller's particle IO buffers.
         VkDescriptorSetLayout particleIoLayout_    = VK_NULL_HANDLE;
@@ -488,7 +505,7 @@ namespace threepp::vulkan {
 
         // Reflected bindings per Stage (see declare), from the same SPIR-V the
         // pipelines are built from.
-        std::vector<SpirvBinding> refl_[8];
+        std::vector<SpirvBinding> refl_[9];
 
         void createPipeline();
         void createDescriptorPool();

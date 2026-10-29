@@ -12287,6 +12287,13 @@ class VulkanRenderer:
     def fog_anisotropy(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def fog_march_half_res(self) -> bool:
+        """
+        Run the sun's fog march at half resolution in a pass of its own (frame_timings fog_march_ms), each pixel blended with its reprojected history (about ten frames; sky pixels take the frame's march alone), and upsampled by matching each pixel's distance. Ray-traced shadows only. Off by default.
+        """
+    @fog_march_half_res.setter
+    def fog_march_half_res(self, arg1: bool) -> None:
+        ...
     @property
     def fog_march_rt_range(self) -> float:
         """

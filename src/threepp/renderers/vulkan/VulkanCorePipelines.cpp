@@ -51,7 +51,8 @@ void VulkanRenderer::Impl::clearGbufImages() {
             for (auto& g : view().rasterGbufs) {
                 for (const VkImage img : {g.indirect.image, g.momentsSq.image, g.reflect.image,
                                           g.reflAux.image, g.shadowVis.image, g.froxelScatter.image,
-                                          g.rtao.image, g.rtaoAux.image, g.cloudColor.image, g.cloudAux.image}) {
+                                          g.rtao.image, g.rtaoAux.image, g.cloudColor.image, g.cloudAux.image,
+                                          g.fogHalf.image}) {
                     if (img != VK_NULL_HANDLE) images.push_back(img);
                 }
             }
@@ -265,6 +266,7 @@ void VulkanRenderer::Impl::destroyRasterGbufImages() {
                 destroyImage2D(ctx->allocator(), d, g.cloudShadow);
                 destroyImage2D(ctx->allocator(), d, g.rtao);
                 destroyImage2D(ctx->allocator(), d, g.rtaoAux);
+                destroyImage2D(ctx->allocator(), d, g.fogHalf);
                 destroyImage2D(ctx->allocator(), d, g.splatDepth);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
@@ -782,6 +784,12 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("rtaoAux"));
+                // The half-res sun fog march and its history (cleared: a zero
+                // leg length is no history).
+                g.fogHalf = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                            VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("fogHalf"));
                 // Cloud shadow map — FIXED 512² R8 (independent of the render
                 // extent; recreated here on resize). Top-down cloud
                 // transmittance regenerated per frame by cloud_shadow.comp.
@@ -980,6 +988,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 pushInit(g.cloudShadow.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.rtao.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, kReadAndClear);// storage (compute r/w) + cleared below
                 pushInit(g.rtaoAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, kReadAndClear);// storage (compute r/w) + cleared below
+                pushInit(g.fogHalf.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, kReadAndClear);// storage (compute r/w) + cleared below
                 pushInit(g.splatDepth.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w) + transfer clear
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
                 // null-check, not just the msaa toggle: a SECONDARY view gets no
@@ -1027,6 +1036,8 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                     vkCmdClearColorImage(initCb, g.rtao.image,
                                          VK_IMAGE_LAYOUT_GENERAL, &rtaoIdentity, 1, &full);
                     vkCmdClearColorImage(initCb, g.rtaoAux.image,
+                                         VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &full);
+                    vkCmdClearColorImage(initCb, g.fogHalf.image,
                                          VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &full);
                 }
                 VkMemoryBarrier mb{};

@@ -276,6 +276,20 @@ namespace threepp {
         shadeParams.preExpBits         = preExpBits_;
         shadeParams.bgIsSolidColor     = envIsBgColor;
         shadeParams.probeGi            = probeGI_ && probeGIEnabled_;// what updateGridUbo wrote
+        // setFogMarchHalfRes: the sun's fog march at half res, its own pass and
+        // timer, ahead of the shade that upsamples it. Ray traced views only
+        // (the shadow-map permutation's march reads the maps), and only while
+        // the air medium the march integrates is present.
+        shadeParams.fogHalf = fogMarchHalfRes_ && mediumActiveThisFrame_ && !shadeParams.shadowMaps &&
+                              view().deferredShade_->fogMarchAvailable();
+        if (shadeParams.fogHalf) {
+            auto pass = g.addPass("fogMarch", [this, f, shadeParams](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_FogMarch, f);
+                view().deferredShade_->recordFogMarch(c, f, shadeParams);
+                gpuTimings_->end(c, TP_FogMarch, f);
+            });
+            shade.declare(g, pass, Stage::FogMarch, f);
+        }
 
         {
             auto pass = g.addPass("shade", [this, f, shadeParams](VkCommandBuffer c) {
@@ -3052,6 +3066,14 @@ namespace threepp {
 
     unsigned int VulkanRenderer::fogMarchSteps() const {
         return core()->fogMarchSteps_;
+    }
+
+    void VulkanRenderer::setFogMarchHalfRes(bool on) {
+        core()->fogMarchHalfRes_ = on;
+    }
+
+    bool VulkanRenderer::fogMarchHalfRes() const {
+        return core()->fogMarchHalfRes_;
     }
 
     void VulkanRenderer::setFogMarchRtRange(float metres) {

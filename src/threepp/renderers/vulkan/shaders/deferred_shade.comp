@@ -89,7 +89,7 @@ void main() {
         // the night sky). Physical radiance → always pre-exposed.
         sky += (froxelInscatter(uv, kFroxelZMax)
               + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
-              + volumetricDirScatter(camPos, dirWS, 2000.0, px)
+              + fogDirPrimary(camPos, dirWS, 2000.0, px)
               // Shafts against open water: on a background pixel the murk march
               // is the ONLY structure in the frame, so it is what stops the
               // endless blue from being a flat gradient.
@@ -136,7 +136,7 @@ void main() {
             outU = compositeClouds(outU, px, distU);
             outU += froxelInscatter(uv, max(-(vhU.z / vhU.w), 0.0))
                   + volumetricSpotScatter(camPos, dirU, distU, px)
-                  + volumetricDirScatter(camPos, dirU, distU, px);
+                  + fogDirPrimary(camPos, dirU, distU, px);
         }
         // Murk sun shafts over the submerged part of this leg — a per-pixel
         // view-ray integral, so full weight, after the coverage scale. (This
@@ -198,7 +198,7 @@ void main() {
         wcol = compositeClouds(wcol, px, length(worldPos - camPos));// depth-aware cloud layer in front of the water
         wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)
-              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px)
+              + fogDirPrimary(camPos, -V, length(worldPos - camPos), px)
               + murkSunScatter(camPos, -V, length(worldPos - camPos), px);// shafts under the surface
         imageStore(outImage, px, vec4(applyMeniscus(wcol * uintBitsToFloat(pc.preExpBits),
                                                     uintBitsToFloat(pc.preExpBits)), 1.0));
@@ -1128,7 +1128,7 @@ void main() {
         // minority coverage at every edge pixel — a dark fringe in fog.)
         outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))// clustered point-light glow
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)// crisp spot beams
-              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px)// sun shafts / aerial glow
+              + fogDirPrimary(camPos, -V, length(worldPos - camPos), px)// sun shafts / aerial glow
               + murkSunScatter(camPos, -V, length(worldPos - camPos), px);// the same, through water
         imageStore(outImage, px, vec4(applyMeniscus(outC * uintBitsToFloat(pc.preExpBits),
                                                     uintBitsToFloat(pc.preExpBits)), 1.0));

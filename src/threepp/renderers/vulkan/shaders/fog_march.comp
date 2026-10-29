@@ -1,0 +1,90 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_KHR_shader_subgroup_vote : require
+#extension GL_KHR_shader_subgroup_ballot : require
+
+// The sun's volumetric fog march (volumetricDirScatter) at HALF resolution,
+// temporally accumulated (VulkanRenderer::setFogMarchHalfRes).
+//
+// One thread per half-res pixel marches the view ray of the nearest surface in
+// its 2x2 block (the largest reversed-Z depth: a foreground trunk keeps its own
+// leg rather than the sky's behind it) and writes (in-scatter rgb, the leg's
+// length) to fogHalfImage. The leg's length is what the full-res shade matches
+// when it upsamples (fogDirPrimary in deferred_shade_00_common.glsl): a pixel
+// takes the half-res taps whose leg is as long as its own.
+//
+// TEMPORAL: reprojected with the full-res motion vector of the chosen pixel and
+// blended against the previous frame's result while that history marched a leg
+// of the same length (within 8 % plus the camera's own travel), else taken
+// fresh. The march's jitter changes every frame, so the blend is what turns its
+// few steps into a smooth integral. Sky pixels write no motion vectors: they
+// take this frame's march alone, as the full-res path always did.
+//
+// Shares the DeferredShade descriptor set and push block (the shade's own
+// flags, extent and frame), so the march is the shade's, byte for byte.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "deferred_shade_00_common.glsl"
+
+layout(set = 0, binding = 84, rgba16f) uniform writeonly image2D fogHalfImage;// this frame's (rgb, leg length)
+layout(set = 0, binding = 85) uniform sampler2D fogHalfPrevTex;              // last frame's (other FIF)
+
+// History weight of a frame's fresh march: ~10 frames of memory.
+const float kFogHistoryAlpha = 0.15;
+
+void main() {
+    const ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 hsize = ivec2((pc.width + 1u) / 2u, (pc.height + 1u) / 2u);
+    if (hp.x >= hsize.x || hp.y >= hsize.y) return;
+    const ivec2 fmax = ivec2(int(pc.width) - 1, int(pc.height) - 1);
+
+    // The block's nearest surface.
+    ivec2 fp = min(hp * 2, fmax);
+    float depth = texelFetch(gbufDepthTex, fp, 0).x;
+    for (int k = 1; k < 4; ++k) {
+        const ivec2 q = min(hp * 2 + ivec2(k & 1, k >> 1), fmax);
+        const float d = texelFetch(gbufDepthTex, q, 0).x;
+        if (d > depth) {
+            depth = d;
+            fp = q;
+        }
+    }
+    const vec2 uv  = (vec2(fp) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
+    const vec3 camPos = camRayOrigin(ndc);
+    gPrimaryOrigin = camPos;
+    gPrimaryDir    = camRayDir(ndc);
+    gPixelCoord    = fp;
+    gNearPointY    = camNearPoint(ndc).y;
+
+    // The leg the shade marches for this pixel: to the surface, or 2000 m of sky.
+    const bool sky = texelFetch(gbufIdsTex, fp, 0).x == 0u;
+    vec3  dir  = gPrimaryDir;
+    float dist = 2000.0;
+    if (!sky) {
+        const vec4 viewH    = cam.projInverse * vec4(ndc, depth, 1.0);
+        const vec3 worldPos = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
+        dist = length(worldPos - camPos);
+        dir  = (worldPos - camPos) / max(dist, 1e-6);
+    }
+    vec3 fog = volumetricDirScatter(camPos, dir, dist, fp);
+
+    if (!sky && !flagOn(8192u)) {
+        const vec2 mv      = texelFetch(gbufMotionTex, fp, 0).rg;
+        const vec2 prevNDC = ndc - cam.jitter.xy + mv;
+        const vec2 pUv     = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
+        if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
+            const vec4  prev = textureLod(fogHalfPrevTex, pUv, 0.0);
+            const float tol  = 0.08 * dist + pc.camDelta + 0.25;
+            if (prev.a > 0.0 && abs(prev.a - dist) < tol && all(lessThan(abs(prev.rgb), vec3(6.0e4))))
+                fog = mix(prev.rgb, fog, kFogHistoryAlpha);
+        }
+    }
+    imageStore(fogHalfImage, hp, vec4(fog, dist));
+}

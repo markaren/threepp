@@ -2445,9 +2445,18 @@ def test_ray_budget_knobs_round_trip_and_count_rays(vk_renderer):
         assert 0.15 < t4["rays_fog"] / t16["rays_fog"] < 0.35, (t4["rays_fog"], t16["rays_fog"])
         r.fog_march_rt_range = 5.0
         assert fog_rays()["rays_fog"] > 0
+        # Half resolution: a quarter of the rays, in a pass of its own.
+        r.fog_march_rt_range = 0.0
+        full = fog_rays()["rays_fog"]
+        assert r.fog_march_half_res is False
+        r.fog_march_half_res = True
+        half = fog_rays()
+        assert 0.2 < half["rays_fog"] / full < 0.3, (half["rays_fog"], full)
+        assert half["fog_march_ms"] > 0.0
     finally:
         r.count_rays = False
         r.fog_march_steps = 16
         r.fog_march_rt_range = 0.0
+        r.fog_march_half_res = False
         r.set_height_fog(density=0.0)
     assert "rays_sun" not in r.frame_timings

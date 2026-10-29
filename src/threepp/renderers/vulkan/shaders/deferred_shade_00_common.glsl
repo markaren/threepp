@@ -198,6 +198,9 @@ layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
 // geometric disocclusion (NOT IDs — those are draw-order, see binding setup).
 layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
 layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion
+// setFogMarchHalfRes: fog_march.comp's half-res sun march for this frame,
+// (in-scatter rgb, leg length); read by fogDirPrimary while flags bit 30 is set.
+layout(set = 0, binding = 86) uniform sampler2D fogHalfTex;
 layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world normals (geometric disocclusion)
 layout(set = 0, binding = 20, rg32f) uniform image2D momentsImage; // .r = SVGF E[L²] accumulator (r32 — the square overflows fp16 at lum≈256); .g = GI content-change trend (antilag)
 layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
