@@ -1201,13 +1201,16 @@ namespace threepp::vulkan {
     }
 
     // The shade pipeline for this dispatch: the permutation for
-    // key = (flags & mask) | probe state << 32, built on first use (see
-    // createPipeline). With no knob set the key is the MSAA code alone, so an
-    // app holds one pipeline per G-buffer sample count its views use.
-    VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps) {
+    // key = (flags & mask) | probe state << 32 | shadow maps << 40 | the ray
+    // budget features << 41, built on first use (see createPipeline). With no
+    // knob set the key is the MSAA code and the shadow mode alone, so an app
+    // holds one pipeline per G-buffer sample count and shadow mode its views
+    // use, and one more for each set of ray-budget knobs it turns on.
+    VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
-                             (shadowMaps ? (1ull << 40u) : 0ull);
+                             (shadowMaps ? (1ull << 40u) : 0ull) |
+                             (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1217,12 +1220,13 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 4> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+        const std::array<uint32_t, 5> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
-                                            static_cast<uint32_t>((key >> 40u) & 1u)};
-        std::array<VkSpecializationMapEntry, 4> entries{};
-        for (uint32_t i = 0; i < 4; ++i) {
-            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps
+                                            static_cast<uint32_t>((key >> 40u) & 1u),
+                                            static_cast<uint32_t>((key >> 41u) & kRayBudgetAll)};
+        std::array<VkSpecializationMapEntry, 5> entries{};
+        for (uint32_t i = 0; i < 5; ++i) {
+            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget
             entries[i].offset     = i * sizeof(uint32_t);
             entries[i].size       = sizeof(uint32_t);
         }
@@ -1317,7 +1321,7 @@ namespace threepp::vulkan {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         const ShadePush push = shadePush(p);
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline(push.flags, p.probeGi, p.shadowMaps));
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget));
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
     }

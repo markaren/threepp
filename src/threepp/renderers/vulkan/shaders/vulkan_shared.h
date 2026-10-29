@@ -134,6 +134,17 @@
 // shadow rays' candidate hits paid (shadowOccludes), whatever the ray.
 #define kRayCountAlphaTests 7u
 #define kRayCountSlots      8u
+// The shade's ray-budget features, one bit each of the kRayBudget
+// specialization constant (deferred_shade_00_common.glsl, constant_id 4):
+// DeferredShade builds the permutation with only the bits of the knobs that
+// are on, so with all of them at their defaults the driver drops their code
+// and the kernel is the one these features were added to. The shade is at the
+// register cap, where code it never runs still costs spills.
+#define kRayBudgetCount   1u// setCountRays: rayCountSlot's atomics
+#define kRayBudgetFog     2u// setFogMarchSteps != 16 or setFogMarchRtRange > 0: the UBO-driven march and its tail
+#define kRayBudgetFogHalf 4u// the half-res march this frame (pc.flags bit 30): fogDirPrimary's taps
+#define kRayBudgetSoftSun 8u// setSunSoftDistance > 0: sunShadowVis's coarse probe
+#define kRayBudgetAll     15u
 
 // Packed vertex data — BlasRecord::packedMask. Static geometry narrows its
 // attribute and index buffers when its BLAS is built, and this word says

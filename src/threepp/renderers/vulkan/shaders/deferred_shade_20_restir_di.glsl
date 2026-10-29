@@ -411,7 +411,7 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     // from the eye a probe that disagrees returns its own mean, and the
     // denoiser smooths the coarse penumbra instead of 13 or 16 more rays.
     const vec3 eyeToOrig = orig - gPrimaryOrigin;
-    const bool coarse = lights.sunSoftDistance > 0.0 &&
+    const bool coarse = (kRayBudget & kRayBudgetSoftSun) != 0u && lights.sunSoftDistance > 0.0 &&
                         dot(eyeToOrig, eyeToOrig) > lights.sunSoftDistance * lights.sunSoftDistance;
     if (gSunFixedPattern && !cheapHit) {
         const uint rayCatWas = rayCatSet(kRayCatSoftSun);

@@ -290,6 +290,12 @@ namespace threepp {
             });
             shade.declare(g, pass, Stage::FogMarch, f);
         }
+        // The ray-budget knobs that are on pick the shade permutation that
+        // compiles their code; at their defaults the kernel has none of it.
+        shadeParams.rayBudget = (countRays_ ? kRayBudgetCount : 0u) |
+                                (fogMarchSteps_ != 16u || fogMarchRtRange_ > 0.f ? kRayBudgetFog : 0u) |
+                                (shadeParams.fogHalf ? kRayBudgetFogHalf : 0u) |
+                                (sunSoftDistance_ > 0.f ? kRayBudgetSoftSun : 0u);
 
         {
             auto pass = g.addPass("shade", [this, f, shadeParams](VkCommandBuffer c) {

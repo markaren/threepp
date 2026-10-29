@@ -328,6 +328,9 @@ namespace threepp::vulkan {
             // This view's shadow maps are live (ShadowMode::ShadowMaps): the
             // shade's kShadowMaps permutation (constant_id 3).
             bool shadowMaps = false;
+            // The kRayBudget* features whose knobs are on (vulkan_shared.h):
+            // the shade's kRayBudget permutation (constant_id 4).
+            uint32_t rayBudget = 0;
         };
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
@@ -468,7 +471,7 @@ namespace threepp::vulkan {
         bool                  specProbe_    = false;// THREEPP_VK_SHADE_SPEC_PROBE
         VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept for the lazy creates
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
-        VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps);
+        VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget);
         VkPipeline createShadePipeline(uint64_t key);
         // What the pipeline-cache blob holds of the shade, kept in a text file
         // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"

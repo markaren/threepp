@@ -74,6 +74,11 @@ float gPdLegT = 1.0;
 
 #include "lights_ubo.glsl"
 
+// The kRayBudget* features this pipeline compiles in (vulkan_shared.h). The
+// default, every one, keeps their runtime tests: the shade's other pipelines
+// (fog_march.comp) take it unspecialized.
+layout(constant_id = 4) const uint kRayBudget = kRayBudgetAll;
+
 // Ray-query counters (VulkanRenderer::setCountRays, frame_timings rays_*):
 // lights.rayCountAddr names this frame's kRayCountSlots uints (0 = off). Every
 // rayQueryInitializeEXT below bumps the category the shade is in, one atomic
@@ -86,7 +91,7 @@ uint rayCatSet(uint c) {
 }
 layout(buffer_reference, scalar) buffer RayCountBuf { uint n[]; };
 void rayCountSlot(uint cat) {
-    if (lights.rayCountAddr == uvec2(0u)) return;
+    if ((kRayBudget & kRayBudgetCount) == 0u || lights.rayCountAddr == uvec2(0u)) return;
     RayCountBuf buf = RayCountBuf(packUint2x32(lights.rayCountAddr));
     for (;;) {
         if (subgroupBroadcastFirst(cat) == cat) {

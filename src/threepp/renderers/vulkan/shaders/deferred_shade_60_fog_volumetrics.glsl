@@ -1216,9 +1216,12 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     // through the shadow maps where they cover the step and else unshadowed.
     // The near steps then sit metres apart, where the shafts between trunks
     // are; the far haze keeps its brightness but not its per-step shadows.
-    const int   STEPS  = int(clamp(lights.fogMarchSteps, 1u, 64u));
-    const float tRt    = lights.fogMarchRtRange > 0.0 ? min(tEnd, tStart + lights.fogMarchRtRange) : tEnd;
-    const int   TAIL_STEPS = tRt < tEnd ? 8 : 0;
+    // Without kRayBudgetFog (both knobs at their defaults) this is the fixed
+    // 16-step march over the whole leg, at compile time.
+    const bool  budget = (kRayBudget & kRayBudgetFog) != 0u;
+    const int   STEPS  = budget ? int(clamp(lights.fogMarchSteps, 1u, 64u)) : 16;
+    const float tRt    = budget && lights.fogMarchRtRange > 0.0 ? min(tEnd, tStart + lights.fogMarchRtRange) : tEnd;
+    const int   TAIL_STEPS = budget && tRt < tEnd ? 8 : 0;
     uint        seed   = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
     const float jitter = rnd(seed);
     const float dtRt   = (tRt - tStart) / float(STEPS);
@@ -1227,7 +1230,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 
     vec3 sum = vec3(0.0), sumTail = vec3(0.0);
     for (int s = 0; s < STEPS + TAIL_STEPS; ++s) {
-        const bool  traced = s < STEPS;
+        const bool  traced = !budget || s < STEPS;
         const float t  = traced ? tStart + (float(s) + jitter) * dtRt : tRt + (float(s - STEPS) + jitter) * dtTail;
         const vec3  x = ro + rd * t;
         // Local height-fog σ (smooth analytic mean — the noise modulation is a
@@ -1266,6 +1269,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         else sumTail += add;
     }
     rayCatSet(rayCatWas);
+    if (!budget) return sum * medAlbedo * (dtRt * trWater);
     return sum * medAlbedo * (dtRt * trWater) + sumTail * medAlbedo * (dtTail * trWater);
 }
 
@@ -1276,7 +1280,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // pixel's own (a trunk's in-scatter stays off the sky beside it); with no tap
 // within reach, the one whose leg is nearest. Off, the march runs here.
 vec3 fogDirPrimary(vec3 ro, vec3 rd, float tMax, ivec2 px) {
-    if (!flagOn(1073741824u)) return volumetricDirScatter(ro, rd, tMax, px);
+    if ((kRayBudget & kRayBudgetFogHalf) == 0u || !flagOn(1073741824u)) return volumetricDirScatter(ro, rd, tMax, px);
     const ivec2 hsize = textureSize(fogHalfTex, 0);
     const vec2  hp    = (vec2(px) + 0.5) * 0.5 - 0.5;
     const ivec2 b     = ivec2(floor(hp));
