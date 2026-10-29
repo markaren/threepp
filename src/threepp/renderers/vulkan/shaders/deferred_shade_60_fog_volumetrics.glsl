@@ -1210,14 +1210,24 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         if (max(max(trWater.r, trWater.g), trWater.b) < 0.003) return vec3(0.0);
     }
 
-    const int   STEPS  = 16;
+    // Ray budget (setFogMarchSteps / setFogMarchRtRange; the lights UBO's
+    // tail): STEPS traced steps over the first fogMarchRtRange metres (0 = the
+    // whole leg, as before), then TAIL_STEPS untraced ones over the rest, lit
+    // through the shadow maps where they cover the step and else unshadowed.
+    // The near steps then sit metres apart, where the shafts between trunks
+    // are; the far haze keeps its brightness but not its per-step shadows.
+    const int   STEPS  = int(clamp(lights.fogMarchSteps, 1u, 64u));
+    const float tRt    = lights.fogMarchRtRange > 0.0 ? min(tEnd, tStart + lights.fogMarchRtRange) : tEnd;
+    const int   TAIL_STEPS = tRt < tEnd ? 8 : 0;
     uint        seed   = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
     const float jitter = rnd(seed);
-    const float dt     = (tEnd - tStart) / float(STEPS);
+    const float dtRt   = (tRt - tStart) / float(STEPS);
+    const float dtTail = (tEnd - tRt) / float(max(TAIL_STEPS, 1));
 
-    vec3 sum = vec3(0.0);
-    for (int s = 0; s < STEPS; ++s) {
-        const float t = tStart + (float(s) + jitter) * dt;
+    vec3 sum = vec3(0.0), sumTail = vec3(0.0);
+    for (int s = 0; s < STEPS + TAIL_STEPS; ++s) {
+        const bool  traced = s < STEPS;
+        const float t  = traced ? tStart + (float(s) + jitter) * dtRt : tRt + (float(s - STEPS) + jitter) * dtTail;
         const vec3  x = ro + rd * t;
         // Local height-fog σ (smooth analytic mean — the noise modulation is a
         // near-field froxel concern; the march wants the mean). Same profile as
@@ -1238,16 +1248,26 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
             // setFogShadowOpaqueCutouts (flags bit 29): crowns are opaque blobs to
             // this march; see shadowVisOpaque. Off = every step alpha-tests every
             // card it crosses, as the surface shadows do.
-            const float vis = primarySunVis(i, x, vec3(0.0), x, L, flagOn(536870912u));// tree/terrain shaft occlusion
+            float vis = 1.0;
+            if (traced) vis = primarySunVis(i, x, vec3(0.0), x, L, flagOn(536870912u));// tree/terrain shaft occlusion
+            else if (kSM && i == 0u) {
+                const float m = smSunVis(x, vec3(0.0), vec2(px));
+                vis = m >= 0.0 ? m : 1.0;
+            }
             if (vis <= 0.0) continue;
             const float phase = hgPhase(dot(L, rd), hgG);// forward glow toward the sun
             stepSum += lights.dirLights[i].color * (phase * vis);
         }
         // σ_s = σ_t · albedo (albedo applied once below); cloud shadow overhead
         // dims the shafts exactly like the (now-deleted) froxel sun term did.
-        sum += stepSum * (trCam * sigmaX * cloudShadowSample(x));
+        const vec3 add = stepSum * (trCam * sigmaX * cloudShadowSample(x));
+        if (traced) sum += add;
+        else sumTail += add;
     }
-    return sum * medAlbedo * (dt * trWater);
+    return sum * medAlbedo * (dtRt * trWater) + sumTail * medAlbedo * (dtTail * trWater);
+}
+    }
+    return wSum > 1e-4 ? sum / wSum : nearest;
 }
 
 // Fogged sky/background colour along this pixel's view ray — the term dispatch A

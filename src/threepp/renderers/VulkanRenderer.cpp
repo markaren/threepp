@@ -3038,6 +3038,22 @@ namespace threepp {
         return core()->cutoutRayCap_;
     }
 
+
+    void VulkanRenderer::setFogMarchSteps(unsigned int steps) {
+        core()->fogMarchSteps_ = std::clamp(steps, 1u, 64u);
+    }
+
+    unsigned int VulkanRenderer::fogMarchSteps() const {
+        return core()->fogMarchSteps_;
+    }
+
+    void VulkanRenderer::setFogMarchRtRange(float metres) {
+        core()->fogMarchRtRange_ = std::max(0.f, metres);
+    }
+
+    float VulkanRenderer::fogMarchRtRange() const {
+        return core()->fogMarchRtRange_;
+    }
     VulkanRenderer::AutoLodStats VulkanRenderer::autoLodStats() const {
         auto stats        = core()->autoLodStats_;
         stats.drainWaitMs = core()->lodDrainWaitMs_;

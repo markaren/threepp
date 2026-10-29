@@ -1543,6 +1543,9 @@ namespace threepp {
             sig.valid = true;
         }
 
+        // The shade's ray budget and the ray counters (setCountRays).
+        ubo.fogMarchSteps   = fogMarchSteps_;
+        ubo.fogMarchRtRange = fogMarchRtRange_;
         uploadHostVisible(ctx->allocator(), lightsUbos[frame], &ubo, sizeof(ubo));
     }
 

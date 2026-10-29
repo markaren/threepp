@@ -864,6 +864,18 @@ namespace threepp {
         [[nodiscard]] unsigned int cutoutRayCap() const;
         [[nodiscard]] float cutoutRayCapFrom() const;
 
+        // The deferred shade's ray budget. Each knob's default renders as
+        // before; all take effect at the next render().
+        // The sun's volumetric fog march (shafts through height fog): its
+        // number of shadow-traced steps (1 to 64, default 16) and the range
+        // (metres from the eye, 0 = the whole leg, the default) they cover.
+        // With a range, the steps sit within it, where the shafts between
+        // near trunks are, and 8 untraced steps take the rest of the leg,
+        // lit through the shadow maps where they cover it, else unshadowed.
+        void setFogMarchSteps(unsigned int steps);
+        [[nodiscard]] unsigned int fogMarchSteps() const;
+        void setFogMarchRtRange(float metres);
+        [[nodiscard]] float fogMarchRtRange() const;
         // Debug/harness stats snapshot from the last render()'s LOD
         // selection pass. entriesPerLevel[0] is LOD0 (unsimplified); [1..4]
         // are the generated chain levels; [5] is a defensive catch-all

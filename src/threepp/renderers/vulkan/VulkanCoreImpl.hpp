@@ -1445,6 +1445,8 @@ namespace threepp {
         // derived. True when any entry's state changed (a TLAS refill and
         // full build). Needs no materials, so it runs before either fill.
         bool classifyRayShadow(const float camPos[3]);
+        uint32_t fogMarchSteps_   = 16u;
+        float    fogMarchRtRange_ = 0.f;
         uint64_t rayShadowEpochSeen_    = 0;
         uint64_t rayShadowSpansVersion_ = ~0ull;
         size_t   rayShadowEntryCount_   = 0;

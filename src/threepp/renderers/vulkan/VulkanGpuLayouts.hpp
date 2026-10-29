@@ -84,6 +84,17 @@ namespace threepp::vulkan::impl {
         float    bgBlurriness;
         uint32_t envKnobFlags;
         float    envKnobPad[2];
+        // The deferred shade's ray budget, appended LAST (lights_ubo.glsl):
+        // sunSoftDistance (m, setSunSoftDistance; 0 = full refinement
+        // everywhere), fogMarchSteps (setFogMarchSteps), fogMarchRtRange (m,
+        // setFogMarchRtRange; 0 = every step traces) and the device address
+        // of this frame's setCountRays buffer (0 = off).
+        float    sunSoftDistance;
+        uint32_t fogMarchSteps;
+        float    fogMarchRtRange;
+        float    rayBudgetPad;
+        uint64_t rayCountAddr;
+        uint64_t rayCountPad;
     };
     static_assert(sizeof(GpuDirLight)   == 24);
     static_assert(sizeof(GpuPointLight) == 40);
@@ -92,7 +103,7 @@ namespace threepp::vulkan::impl {
     // splat_common.glsl declares a prefix of this block and skips to the
     // environment knobs with a float array sized from it: a size change here
     // moves that skip (it ends 96 bytes before the end).
-    static_assert(sizeof(GpuLightsUbo)  == 1392);
+    static_assert(sizeof(GpuLightsUbo)  == 1424);
 
     struct GpuClusterLight {
         float position[3];   float range;         // range 0 = infinite (three.js)

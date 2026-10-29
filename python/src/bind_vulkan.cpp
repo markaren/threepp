@@ -2069,6 +2069,18 @@ namespace threepp_py {
                               },
                               "The distance from the eye from which cutout_ray_cap holds (0 = "
                               "everywhere): nearer shadows are exact.")
+                .def_property("fog_march_steps",
+                              [](PyVulkanRenderer& r) { return r.native().fogMarchSteps(); },
+                              [](PyVulkanRenderer& r, unsigned int v) { r.native().setFogMarchSteps(v); },
+                              "Shadow-traced steps of the sun's volumetric fog march (the shafts through "
+                              "height fog), one ray each per pixel: 1 to 64, default 16.")
+                .def_property("fog_march_rt_range",
+                              [](PyVulkanRenderer& r) { return r.native().fogMarchRtRange(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setFogMarchRtRange(v); },
+                              "Metres from the eye the fog march's traced steps cover (0, the default: "
+                              "the whole leg). With a range they sit within it, where the shafts between "
+                              "near trunks are, and 8 untraced steps take the rest of the leg, lit through "
+                              "the shadow maps where they cover it, else unshadowed.")
                 .def_property_readonly("auto_lod_stats",
                                        [](PyVulkanRenderer& r) {
                                            const auto s = r.native().autoLodStats();

@@ -12279,6 +12279,23 @@ class VulkanRenderer:
     def fog_anisotropy(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    @property
+    def fog_march_rt_range(self) -> float:
+        """
+        Metres from the eye the fog march's traced steps cover (0, the default: the whole leg). With a range they sit within it, where the shafts between near trunks are, and 8 untraced steps take the rest of the leg, lit through the shadow maps where they cover it, else unshadowed.
+        """
+    @fog_march_rt_range.setter
+    def fog_march_rt_range(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def fog_march_steps(self) -> int:
+        """
+        Shadow-traced steps of the sun's volumetric fog march (the shafts through height fog), one ray each per pixel: 1 to 64, default 16.
+        """
+    @fog_march_steps.setter
+    def fog_march_steps(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
     def fog_shadow_opaque_cutouts(self) -> bool:
         """
         The volumetric sun march (shafts, aerial glow) traces a shadow ray at each of its 16 steps. True (the default) makes a fog shadow ray commit on its first hit, so an alpha-tested crown is an opaque blob to the fog: gaps between crowns still make the shafts, surface shadows keep their shapes, and a forest of card trees costs half the frame it did. False alpha-tests every cutout card the ray crosses, as the surface shadows do: exact, for a scene whose cutouts are sparse and large (a chain-link fence, a net, a railing) and would otherwise wall off the fog.
