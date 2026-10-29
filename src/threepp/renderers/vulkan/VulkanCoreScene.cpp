@@ -3201,6 +3201,15 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // long enough to get one) is handed to its batch to free.
                             if (nrmAttr && !rec.lodLanding.empty()) detachLandingLod(rec);
                             const bool frameRoute = nrmAttr && rec.lodLanding.empty();
+                            if (!frameRoute) {
+                                // Diagnostics (THREEPP_VK_DRAW_STATS): which edits drain the device.
+                                static const bool logDrains = vulkan::env::integer("THREEPP_VK_DRAW_STATS").value_or(0) > 0;
+                                static std::unordered_set<const void*> logged;
+                                if (logDrains && logged.insert(geomKey).second)
+                                    std::fprintf(stderr, "[draw-stats] drained edit: mesh '%s', %u verts, normals %s, LOD chain landing %s\n",
+                                                 entries[i].mesh->name.c_str(), rec.vertexCount, nrmAttr ? "yes" : "NO",
+                                                 rec.lodLanding.empty() ? "no" : "YES");
+                            }
                             if (frameRoute) {
                                 // An in-place vertex rewrite invalidates the chain:
                                 // its level BLASes BAKE positions and its error
@@ -3299,6 +3308,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             goto fullRebuild;
                         }
                         if (!refreshOps.empty()) {
+                            THREEPP_CPUPROF("scene.6x_geomRefreshDrain");
                             check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
                             ++dynGeomStats_.drains;
                             for (BlasRecord* doomed : lodChainDoomed) {
@@ -3375,6 +3385,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             resyncRecs.push_back(rec);
                         }
                         if (!resyncRecs.empty()) {
+                            THREEPP_CPUPROF("scene.6y_prevResyncDrain");
                             // Same in-flight hazard as the refresh above: prior
                             // frames may still read prevVertex as a vertex buffer,
                             // so drain device-wide before overwriting it.
@@ -3537,6 +3548,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // Cutout ray distance: after the material patch (it reads
                     // the material table). A flipped bit changes an instance's
                     // flags, which is a class change like any other.
+                    THREEPP_CPUPROF_NAMED(profCutout, "scene.8b_cutoutFar");
                     if (classifyCutoutFar(rayCamPos)) instClassChanged = true;
                     profCutout.stop();
                     if (rayShadowChanged) instClassChanged = true;
@@ -3850,6 +3862,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         tlasFillSpansVersion_ = spansVersion_;
                         tlasFillEntryCount_  = entries.size();
                         tlasFillGenOn_       = tlasGenOn;
+                        ++drawStats_.tlasFills;
+                        drawStats_.tlasRows += instances.size();
+                        if (tlasFromEmpty) {
+                            ++drawStats_.tlasFullFills;
+                            drawStats_.tlasRewritten += instances.size();
+                        } else {
+                            for (const auto& r : tlasInstDirty_[currentFrame].ranges) drawStats_.tlasRewritten += r.second - r.first;
                         }
                         if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
                             // geomDescsCached_ was patched in place above; the

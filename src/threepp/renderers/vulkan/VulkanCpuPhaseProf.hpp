@@ -45,6 +45,12 @@ namespace threepp::vulkan::cpuprof {
         unsigned frames = 0;  // frames in the CURRENT window
         unsigned blocks = 0;  // windows printed so far
         std::map<std::string, double> acc;
+        // Per frame too: each key's worst frame in the window (the max column),
+        // and THREEPP_CPU_PHASE_SPIKE=<ms>: a frame whose scene.0_total passes
+        // it prints its own phases (the window mean hides a 30 ms frame).
+        std::map<std::string, double> frameAcc, maxAcc;
+        double   spikeMs = 0.0;
+        uint64_t frameNo = 0;
 
         static Registry& get() {
             static Registry r = [] {
@@ -52,6 +58,8 @@ namespace threepp::vulkan::cpuprof {
                 x.on = env::flag("THREEPP_CPU_PHASE_PROFILE");
                 if (const auto n = env::integer("THREEPP_CPU_PHASE_WINDOW"); n && *n > 0)
                     x.window = static_cast<unsigned>(*n);
+                if (const auto s = env::integer("THREEPP_CPU_PHASE_SPIKE"); s && *s > 0)
+                    x.spikeMs = static_cast<double>(*s);
                 return x;
             }();
             return r;
@@ -59,15 +67,31 @@ namespace threepp::vulkan::cpuprof {
 
         void endFrame() {
             if (!on) return;
+            ++frameNo;
+            for (auto& [k, v] : frameAcc) {
+                double& m = maxAcc[k];
+                if (v > m) m = v;
+            }
+            if (spikeMs > 0.0) {
+                const auto it = frameAcc.find("scene.0_total");
+                if (it != frameAcc.end() && it->second > spikeMs) {
+                    std::fprintf(stderr, "[cpuprof] spike frame %llu:", static_cast<unsigned long long>(frameNo));
+                    for (auto& [k, v] : frameAcc)
+                        if (v >= 0.25) std::fprintf(stderr, " %s=%.2f", k.c_str(), v);
+                    std::fprintf(stderr, "\n");
+                }
+            }
+            frameAcc.clear();
             if (++frames < window) return;
             ++blocks;
-            std::fprintf(stderr, "[cpuprof] block %u: avg ms/frame over %u frames\n",
+            std::fprintf(stderr, "[cpuprof] block %u: avg ms/frame over %u frames (max: the worst frame)\n",
                          blocks, frames);
             for (auto& [k, v] : acc)
-                std::fprintf(stderr, "  %-34s %9.4f\n", k.c_str(), v / frames);
+                std::fprintf(stderr, "  %-34s %9.4f   max %8.3f\n", k.c_str(), v / frames, maxAcc[k]);
             std::fflush(stderr);
             // Windowed: start the next block from zero (see the header note).
             acc.clear();
+            maxAcc.clear();
             frames = 0;
         }
     };
@@ -91,10 +115,12 @@ namespace threepp::vulkan::cpuprof {
         void stop() {
             if (!live) return;
             live = false;
-            Registry::get().acc[name] +=
-                    std::chrono::duration<double, std::milli>(
-                            std::chrono::high_resolution_clock::now() - t0)
-                            .count();
+            const double ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::high_resolution_clock::now() - t0)
+                                      .count();
+            auto& r = Registry::get();
+            r.acc[name] += ms;
+            r.frameAcc[name] += ms;
         }
         ~Scope() { stop(); }
     };

@@ -1471,6 +1471,14 @@ namespace threepp {
         // a bit each; consumed by the next fill.
         std::vector<uint32_t> tlasRowDirty_;
         std::vector<uint32_t> tlasSpanOrder_;// the lean fill's span order (stable, then volatile)
+        // THREEPP_VK_DRAW_STATS=N: every N primary frames, one stderr line of
+        // what the frame prep walked (drawStatsTick). Diagnostics only.
+        struct DrawStats {
+            uint64_t frames = 0, entries = 0, spans = 0, cachedSpans = 0, cachedRows = 0, cachedDrawn = 0,
+                     otherDrawn = 0, cacheRebuildRows = 0, tlasRows = 0, tlasRewritten = 0, tlasFills = 0,
+                     tlasFullFills = 0;
+        } drawStats_;
+        void drawStatsTick();
         void markTlasRowDirty(size_t i) {
             if ((i >> 5) < tlasRowDirty_.size()) tlasRowDirty_[i >> 5] |= 1u << (i & 31u);
         }

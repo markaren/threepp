@@ -75,6 +75,23 @@ namespace threepp {
         return rec;
     }
 
+    void VulkanRenderer::Impl::drawStatsTick() {
+        static const long long every = vulkan::env::integer("THREEPP_VK_DRAW_STATS").value_or(0);
+        if (every <= 0) return;
+        auto& s = drawStats_;
+        if (++s.frames < static_cast<uint64_t>(every)) return;
+        const double n = double(s.frames);
+        std::fprintf(stderr,
+                     "[draw-stats] per frame over %llu: entries %.0f spans %.0f | cached spans %.0f rows %.0f drawn %.0f "
+                     "rebuilt %.0f | other drawn %.0f | tlas rows %.0f rewritten %.0f fills %.2f full %.2f | "
+                     "geometry drains so far %llu\n",
+                     static_cast<unsigned long long>(s.frames), s.entries / n, s.spans / n, s.cachedSpans / n,
+                     s.cachedRows / n, s.cachedDrawn / n, s.cacheRebuildRows / n,
+                     (double(s.otherDrawn) - double(s.cachedDrawn)) / n, s.tlasRows / n, s.tlasRewritten / n,
+                     s.tlasFills / n, s.tlasFullFills / n, static_cast<unsigned long long>(dynGeomStats_.drains));
+        s = {};
+    }
+
     void VulkanRenderer::Impl::buildIndirectDrawData(uint32_t frame) {
         // SPLIT, not nested: function-scope until now, so its number already
         // included the ~15 MB of memcpy at the bottom of this function and the
@@ -366,6 +383,7 @@ namespace threepp {
         // One span through its cache. False: not cacheable after all (no
         // record, a LOD chain), and the per-entry loop takes it.
         const auto emitCachedSpan = [&](const SpanDrawPlan& cp) -> bool {
+            THREEPP_CPUPROF("frame.D1_cachedSpans");
             const EntrySpan& sp = entrySpans_[cp.span];
             const MeshEntry& e0 = lastVisibleEntries_[cp.first];
             const BlasRecord* rec = resolveBlasForEntry(e0);
@@ -421,6 +439,7 @@ namespace threepp {
                     const size_t i = size_t(cp.first) + j;
                     if ((i >> 5) >= meshMovedBits_.size() || !(meshMovedBits_[i >> 5] & (1u << (i & 31u)))) continue;
                     std::memcpy(c.models[j].data(), lastVisibleEntries_[i].worldMatrix.data(), 64);
+                    ++drawStats_.cacheRebuildRows;
                     if (c.occlValid && c.occlBounds) {
                         const float* M = c.models[j].data();
                         const float* ce = c.occlCenter;
@@ -442,6 +461,7 @@ namespace threepp {
                 c.instMatVersion = sp.instMatVersion;
                 c.meshWorld = sp.meshWorld;
                 c.models.resize(cp.count);
+                drawStats_.cacheRebuildRows += cp.count;
                 for (uint32_t j = 0; j < cp.count; ++j)
                     std::memcpy(c.models[j].data(), lastVisibleEntries_[cp.first + j].worldMatrix.data(), 64);
                 c.occlValid = false;
@@ -509,6 +529,7 @@ namespace threepp {
                     idsValid = true;
                 }
                 drawnTriangles += vcount / 3u;
+                ++drawStats_.cachedDrawn;
                 DrawInfoGpu& di = draws[b].emplace_back(tmpl);
                 std::memcpy(di.model, c.models[j].data(), 64);
                 di.instanceCustomIndex = static_cast<uint32_t>(i);
@@ -858,6 +879,14 @@ namespace threepp {
             autoLodStats_.trianglesDrawn = drawnTriangles;
         }
         view().cachedIndirectTriangles = drawnTriangles;
+        if (!view().secondary) {
+            drawStats_.entries += lastVisibleEntries_.size();
+            drawStats_.spans += entrySpans_.size();
+            drawStats_.cachedSpans += cachePlans.size();
+            for (const auto& cp : cachePlans) drawStats_.cachedRows += cp.count;
+            drawStats_.otherDrawn += globalIdx;// minus the cached ones, below
+            drawStatsTick();
+        }
         if (globalIdx == 0u) {
             // Nothing visible: cache the (all-zero) outputs so identical
             // frames skip even the entry walk.
