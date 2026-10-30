@@ -160,6 +160,34 @@ namespace threepp::vulkan::par {
     // Runs the callables at once when `on`, else one after the other in
     // argument order. An exception in a task is rethrown here once every
     // task has returned (a parallel algorithm would terminate instead).
+    // Waits for `done` to come true by spinning on this thread (bounded),
+    // then returns whether it did. The waits here are a fraction of a
+    // millisecond, and a thread that sleeps through one wakes on whichever
+    // processor the scheduler has free: measured 2026-10-30 on a 5950X (two
+    // core complexes, an L3 each), the frame thread then crossed to the other
+    // complex on 4-7 % of frames instead of 1 %, and ran every later phase of
+    // the frame, the next frame's scene sync included, against a cold L3
+    // (+0.3-0.5 ms per frame). A machine with fewer than four hardware
+    // threads does not spin: a job that has no processor to run on while
+    // this thread spins would only wait longer.
+    template<class Done>
+    bool spinUntil(Done&& done) {
+        static const bool spin = std::thread::hardware_concurrency() >= 4u;
+        if (!spin) return done();
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!done()) {
+            for (int i = 0; i < 64; ++i) {
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(__i386__)
+                _mm_pause();
+#else
+                std::this_thread::yield();
+#endif
+            }
+            if (std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(8)) return done();
+        }
+        return true;
+    }
+
     template<class... Fns>
     void tasks(bool on, Fns&&... fns) {
         if (!on) {
@@ -169,17 +197,54 @@ namespace threepp::vulkan::par {
         constexpr unsigned     n = sizeof...(Fns);
         std::function<void()>  fs[n] = {std::function<void()>(std::forward<Fns>(fns))...};
         std::exception_ptr     errs[n] = {};
-        unsigned               ids[n];
-        std::iota(ids, ids + n, 0u);
-        void* const context = threadContext();
-        threepp::parallelForEach(ids, ids + n, [&](unsigned i) {
+        void* const            context = threadContext();
+#if defined(_MSC_VER)
+        // The other callables are offered to the pool (std::async, the
+        // Windows thread pool); this thread runs the first, then runs
+        // whichever of the others no pool thread has claimed yet, then spins
+        // until the rest have returned (spinUntil), so it never leaves its
+        // processor for the join and never waits for a pool thread to appear
+        // (the pool may be busy with the frame's uploads: on the entry-churn
+        // test's add frame, waiting cost 1-4 ms). Before 2026-10-30 the fork
+        // went through the parallel STL, whose caller sleeps for the tail of
+        // the other task.
+        std::atomic<bool>     claimed[n] = {};
+        std::atomic<unsigned> remaining{n - 1u};
+        std::future<void>     pend[n > 1u ? n - 1u : 1u];
+        const auto            runOne = [&](unsigned i) {
+            try {
+                fs[i]();
+            } catch (...) {
+                errs[i] = std::current_exception();
+            }
+            remaining.fetch_sub(1u, std::memory_order_release);
+        };
+        for (unsigned i = 1; i < n; ++i)
+            pend[i - 1u] = std::async(std::launch::async, [&, i] {
+                if (claimed[i].exchange(true, std::memory_order_acq_rel)) return;
+                ContextScope scope(context);
+                runOne(i);
+            });
+        try {
+            fs[0]();
+        } catch (...) {
+            errs[0] = std::current_exception();
+        }
+        for (unsigned i = 1; i < n; ++i)
+            if (!claimed[i].exchange(true, std::memory_order_acq_rel)) runOne(i);
+        spinUntil([&] { return remaining.load(std::memory_order_acquire) == 0u; });
+        for (unsigned i = 1; i < n; ++i) pend[i - 1u].get();
+#else
+        // No parallel pool on this compiler (Parallel.hpp): in order, here.
+        for (unsigned i = 0; i < n; ++i) {
             ContextScope scope(context);
             try {
                 fs[i]();
             } catch (...) {
                 errs[i] = std::current_exception();
             }
-        });
+        }
+#endif
         for (auto& e : errs)
             if (e) std::rethrow_exception(e);
     }
@@ -245,7 +310,8 @@ namespace threepp::vulkan::par {
         void start(std::vector<std::function<void()>> jobs) {
             jobs_ = std::move(jobs);
             errs_.assign(jobs_.size(), nullptr);
-            done_.store(false, std::memory_order_relaxed);
+            claimed_ = std::vector<std::atomic<bool>>(jobs_.size());
+            remaining_.store(static_cast<unsigned>(jobs_.size()), std::memory_order_relaxed);
 #if defined(_MSC_VER)
             pending_ = std::async(std::launch::async, [this] { runAll(); });
 #else
@@ -253,13 +319,13 @@ namespace threepp::vulkan::par {
 #endif
         }
 
+        // Runs here whatever job no pool thread has claimed yet (the pool
+        // may be busy, or late to start the task), spins until the rest
+        // have returned (spinUntil), then rethrows a job's exception.
         void join() {
             if (pending_.valid()) {
-                const auto t0 = std::chrono::steady_clock::now();
-                while (!done_.load(std::memory_order_acquire)) {
-                    for (int i = 0; i < 64; ++i) pause();
-                    if (std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(8)) break;
-                }
+                for (unsigned i = 0; i < jobs_.size(); ++i) runIfUnclaimed(i);
+                spinUntil([this] { return remaining_.load(std::memory_order_acquire) == 0u; });
                 pending_.get();
             }
             for (auto& e : errs_)
@@ -267,31 +333,28 @@ namespace threepp::vulkan::par {
         }
 
     private:
+        // Each job runs exactly once, on whichever thread claims it first.
+        void runIfUnclaimed(unsigned i) {
+            if (claimed_[i].exchange(true, std::memory_order_acq_rel)) return;
+            try {
+                jobs_[i]();
+            } catch (...) {
+                errs_[i] = std::current_exception();
+            }
+            remaining_.fetch_sub(1u, std::memory_order_release);
+        }
+
         void runAll() {
             std::vector<unsigned> ids(jobs_.size());
             std::iota(ids.begin(), ids.end(), 0u);
-            threepp::parallelForEach(ids.begin(), ids.end(), [this](unsigned i) {
-                try {
-                    jobs_[i]();
-                } catch (...) {
-                    errs_[i] = std::current_exception();
-                }
-            });
-            done_.store(true, std::memory_order_release);
-        }
-
-        static void pause() {
-#if defined(_MSC_VER) || defined(__x86_64__) || defined(__i386__)
-            _mm_pause();
-#else
-            std::this_thread::yield();
-#endif
+            threepp::parallelForEach(ids.begin(), ids.end(), [this](unsigned i) { runIfUnclaimed(i); });
         }
 
         std::vector<std::function<void()>> jobs_;
         std::vector<std::exception_ptr>     errs_;
+        std::vector<std::atomic<bool>>      claimed_;
         std::future<void>                   pending_;
-        std::atomic<bool>                   done_{true};
+        std::atomic<unsigned>               remaining_{0};
     };
 
 }// namespace threepp::vulkan::par
