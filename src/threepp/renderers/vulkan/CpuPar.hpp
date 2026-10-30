@@ -190,12 +190,13 @@ namespace threepp::vulkan::par {
     // A pass whose recording is long and splits (the overlay depth prepass's
     // one draw per entry) records its pieces into secondary command buffers
     // on the pool, which the frame's command buffer then executes in order:
-    // the same commands, recorded at once. THREEPP_VK_CPU_RECORD=1; off, the
-    // default, records them inline as before. Chunked as the walks above
+    // the same commands, recorded at once. THREEPP_VK_CPU_RECORD=0 records
+    // them inline as before (default on since 2026-10-30: the pine forest
+    // drive's prepass 0.72 -> 0.30 ms). Chunked as the walks above
     // (THREEPP_VK_CPU_PAR_CHUNKS caps the count; THREEPP_VK_CPU_PAR_MIN the
     // fewest items a piece takes), but not gated by THREEPP_VK_CPU_PAR.
     inline bool recordOn() {
-        static const bool on = env::flag("THREEPP_VK_CPU_RECORD", false);
+        static const bool on = env::flag("THREEPP_VK_CPU_RECORD", true);
         return on;
     }
     inline unsigned recordChunksFor(size_t items) {
