@@ -14,7 +14,7 @@ inline bool matrixEquals4(const threepp::Matrix4& a, const threepp::Matrix4& b, 
 
     for (unsigned i = 0, il = a.elements.size(); i < il; i++) {
 
-        if (const auto delta = a.elements[i] - b.elements[i]; delta > tolerance) {
+        if (std::abs(a.elements[i] - b.elements[i]) > tolerance) {
 
             return false;
         }
