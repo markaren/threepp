@@ -2591,6 +2591,18 @@ namespace threepp {
         using WorldSpriteEntry = vulkan::impl::WorldSpriteEntry;
         std::vector<WorldSpriteEntry> lastVisibleSprites_;
 
+        // What the per-frame collectors ask of the scene graph, in scene order:
+        // the lights and sprites of the visible part, and every SplatCloud,
+        // hidden or not (see collectSplatClouds). Valid for one render():
+        // render() clears root, so no list outlives the frame's graph.
+        struct SceneCensus {
+            const Object3D* root = nullptr;
+            std::vector<Light*> lights;
+            std::vector<Sprite*> sprites;
+            std::vector<SplatCloud*> splats;
+        };
+        SceneCensus sceneCensus_;
+
         // Definition moved to VulkanSceneTypes.hpp.
         using LineEntry = vulkan::impl::LineEntry;
         std::vector<LineEntry> lastVisibleLines_;
@@ -5573,8 +5585,14 @@ namespace threepp {
         // whose ONLY overlay content is a field of embers.
         [[nodiscard]] bool sceneHasFieldBillboards() const;
 
-        // Walk the scene for visible world-space Sprites (screenSpace == false)
-        // with a texture map, snapshotting their world transform + material into
+        // The scene's SceneCensus for this render(): one walk on the first ask,
+        // a per-type answer for each node, so a scene of plain meshes pays no
+        // failed cast per node per collector (about 75 ns a cast on MSVC, and
+        // there were four such walks a frame).
+        const SceneCensus& sceneCensus(Object3D& scene);
+
+        // Snapshot the census's world-space Sprites (screenSpace == false) with
+        // a texture map, their world transform + material, into
         // lastVisibleSprites_. Run every perspective frame (sprites move / spawn
         // / expire constantly — no snapshot caching). Mirrors OverlayPass's
         // sprite collection, minus the screen-space branch.
@@ -5582,8 +5600,8 @@ namespace threepp {
 
         // Sidecar collector for SplatClouds — same shape and the same reason as
         // collectWorldSprites: a SplatCloud is not a kind the snapshot/BLAS
-        // machinery has anything to say about, so it is gathered by its own
-        // traversal and nothing else has to change. Also estimates each cloud's
+        // machinery has anything to say about, so it is gathered from the
+        // census and nothing else has to change. Also estimates each cloud's
         // p1/p99 view distance here, where the camera is in hand, from the same
         // fixed-stride sample SplatCloud::sortByDepth uses on the GL path.
         void collectSplatClouds(Object3D& scene, Camera& camera);

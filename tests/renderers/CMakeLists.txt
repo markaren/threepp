@@ -239,6 +239,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanVisibilityToggle_test COMMAND VulkanVisibilityToggle_test)
     set_tests_properties(VulkanVisibilityToggle_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A frame draws the lights and sprites the scene holds at that render():
+    # hidden groups, additions, removals, a second scene and a HUD in one frame.
+    add_executable(VulkanSceneCensus_test VulkanSceneCensus_test.cpp)
+    target_link_libraries(VulkanSceneCensus_test PRIVATE threepp)
+    add_test(NAME VulkanSceneCensus_test COMMAND VulkanSceneCensus_test)
+    set_tests_properties(VulkanSceneCensus_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A version bump of any one tracked geometry attribute (position, normal,
     # uv, uv2, color, index) is seen on a frame whose scene did not otherwise
     # change (the lean diff), with and without ray tracing.

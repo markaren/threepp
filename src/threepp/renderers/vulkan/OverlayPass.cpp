@@ -1503,7 +1503,8 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
-                          Object3D& scene, Camera& camera, bool screenSpaceOnly,
+                          Object3D& scene, const std::vector<Sprite*>& sprites,
+                          Camera& camera, bool screenSpaceOnly,
                           uint32_t regionX, uint32_t regionY,
                           uint32_t regionW, uint32_t regionH) {
     // Lazy pipeline setup on first HUD overlay of the program.
@@ -1581,8 +1582,9 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                                 spriteDescPools_[frame], 0),
           "vkResetDescriptorPool(sprite)");
 
-    // Collect visible sprites. traverseVisible skips invisible
-    // subtrees the same way the deferred scene walk does. effWorld captures the
+    // Collect visible sprites, from the renderer's census of the scene: hidden
+    // subtrees are out the same way the deferred scene walk leaves them out,
+    // and a scene with no sprite pays nothing here. effWorld captures the
     // world matrix used for the draw — for screenSpace sprites we
     // synthesise this from screenAnchor + viewport + position
     // instead of using sp->matrixWorld (which carries the user's
@@ -1590,14 +1592,12 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     const VkExtent2D extEarly = ctx_.swapchainExtent();
     auto& draws = scratch_->sprites;
     draws.clear();
-    scene.traverseVisible([&](Object3D& o) {
-        auto* sp = dynamic_cast<Sprite*>(&o);
-        if (!sp) return;
-        if (screenSpaceOnly && !sp->screenSpace) return;
+    for (Sprite* sp : sprites) {
+        if (screenSpaceOnly && !sp->screenSpace) continue;
         auto mat = sp->material();
-        if (!mat || !mat->visible) return;
+        if (!mat || !mat->visible) continue;
         auto* mm = dynamic_cast<MaterialWithMap*>(mat.get());
-        if (!mm || !mm->map) return;
+        if (!mm || !mm->map) continue;
         SpriteDraw d;
         d.sprite = sp;
         d.atlas  = mm->map;
@@ -1628,7 +1628,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                         sp->matrixWorld->elements.data(), 64);
         }
         draws.push_back(std::move(d));
-    });
+    }
 
     // Collect Line / LineSegments for the ortho overlay (the deferred
     // "Mesh / Line HUD overlay" follow-up). ensureSceneBuilt is skipped

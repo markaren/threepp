@@ -1254,14 +1254,9 @@ namespace threepp {
         const float pointUnitScale = physicalLightUnits_ ? 1.f / (4.f * math::PI) : 1.f;
         const float spotUnitScale  = physicalLightUnits_ ? 1.f / math::PI : 1.f;
 
-        // traverseVisible so a hidden parent prunes its child lights too.
-        scene.traverseVisible([&](Object3D& o) {
-            // One RTTI probe instead of five for the ~99% of nodes that are not
-            // lights: every type the chain below handles derives from Light, so
-            // a failed cast here cannot skip a branch that would have matched.
-            // (LightProbe passes this gate and falls through the chain
-            // unhandled, exactly as before.)
-            if (!dynamic_cast<Light*>(&o)) return;
+        // The census's lights: a hidden parent prunes its child lights too.
+        // (A LightProbe is one and falls through the chain unhandled.)
+        const auto gatherLight = [&](Object3D& o) {
             if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
                 ubo.ambient[0] += a->color.r * a->intensity;
                 ubo.ambient[1] += a->color.g * a->intensity;
@@ -1378,7 +1373,8 @@ namespace threepp {
                 g.color[1] = rl->color.g * rl->intensity;
                 g.color[2] = rl->color.b * rl->intensity;
             }
-        });
+        };
+        for (Light* light : sceneCensus(scene).lights) gatherLight(*light);
 
         // Power-sort the point/spot list (strongest first) so BOTH the
         // UBO's 8-per-type slots (legacy paths: PT, reflection/GI hits,

@@ -59,6 +59,8 @@ namespace {
         kNodeGrass = 1u << 10,
         kNodeField = 1u << 11,
         kNodeCamera = 1u << 12,
+        kNodeLight = 1u << 13,
+        kNodeSprite = 1u << 14,
     };
 
     uint32_t nodeKind(Object3D& o) {
@@ -83,6 +85,8 @@ namespace {
             if (dynamic_cast<ParticleField*>(m)) k |= kNodeField;
         }
         if (dynamic_cast<Camera*>(&o)) k |= kNodeCamera;
+        if (dynamic_cast<Light*>(&o)) k |= kNodeLight;
+        if (dynamic_cast<Sprite*>(&o)) k |= kNodeSprite;
         kinds.emplace(t, k);
         return k;
     }
@@ -5221,15 +5225,32 @@ void VulkanRenderer::Impl::cacheCullFlags() {
             }
         }
 
+const VulkanRenderer::Impl::SceneCensus& VulkanRenderer::Impl::sceneCensus(Object3D& scene) {
+            auto& c = sceneCensus_;
+            if (c.root == &scene) return c;
+            c.root = &scene;
+            c.lights.clear();
+            c.sprites.clear();
+            c.splats.clear();
+            auto visit = [&](Object3D& o, bool vis, bool) {
+                const uint32_t kind = nodeKind(o);
+                if (vis && (kind & kNodeLight)) c.lights.push_back(dynamic_cast<Light*>(&o));
+                if (vis && (kind & kNodeSprite)) c.sprites.push_back(dynamic_cast<Sprite*>(&o));
+                if (kind & kNodeSplat) c.splats.push_back(dynamic_cast<SplatCloud*>(&o));
+                return false;
+            };
+            walkSceneGraph(scene, true, false, visit);
+            return c;
+        }
+
 void VulkanRenderer::Impl::collectWorldSprites(Object3D& scene) {
             lastVisibleSprites_.clear();
-            scene.traverseVisible([&](Object3D& o) {
-                auto* sp = dynamic_cast<Sprite*>(&o);
-                if (!sp || sp->screenSpace) return;
+            for (Sprite* sp : sceneCensus(scene).sprites) {
+                if (sp->screenSpace) continue;
                 auto mat = sp->material();
-                if (!mat || !mat->visible) return;
+                if (!mat || !mat->visible) continue;
                 auto* mm = dynamic_cast<MaterialWithMap*>(mat.get());
-                if (!mm || !mm->map) return;// untextured world sprites aren't drawn
+                if (!mm || !mm->map) continue;// untextured world sprites aren't drawn
                 WorldSpriteEntry e{};
                 std::memcpy(e.world.data(), sp->matrixWorld->elements.data(), 64);
                 e.color = {1.f, 1.f, 1.f, 1.f};
@@ -5245,7 +5266,7 @@ void VulkanRenderer::Impl::collectWorldSprites(Object3D& scene) {
                 e.center = sp->center;
                 e.tex = mm->map.get();
                 lastVisibleSprites_.push_back(e);
-            });
+            }
         }
 
 void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
@@ -5284,21 +5305,20 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 splatParams_.nearPlane = oc->nearPlane;
             }
 
-            // Full traverse, not traverseVisible: a hidden cloud must be
-            // COLLECTED so the pass can PARK it (keep its GPU buffers) rather
-            // than age it out — the difference between a visibility toggle
-            // costing nothing and costing a seconds-long re-upload each way.
+            // Every cloud, hidden ones too: a hidden cloud must be COLLECTED
+            // so the pass can PARK it (keep its GPU buffers) rather than age
+            // it out — the difference between a visibility toggle costing
+            // nothing and costing a seconds-long re-upload each way.
             lastParkedSplats_.clear();
-            scene.traverse([&](Object3D& o) {
-                auto* sc = dynamic_cast<SplatCloud*>(&o);
-                if (!sc || sc->splatCount() == 0) return;
+            for (SplatCloud* sc : sceneCensus(scene).splats) {
+                if (sc->splatCount() == 0) continue;
                 auto mat = sc->material();
                 bool effectiveVisible = !(mat && !mat->visible);
-                for (Object3D* n = &o; effectiveVisible && n; n = n->parent)
+                for (Object3D* n = sc; effectiveVisible && n; n = n->parent)
                     if (!n->visible) effectiveVisible = false;
                 if (!effectiveVisible) {
                     lastParkedSplats_.push_back(sc);
-                    return;
+                    continue;
                 }
 
                 vulkan::SplatPass::CloudEntry e{};
@@ -5384,7 +5404,7 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
                 }
 
                 lastVisibleSplats_.push_back(e);
-            });
+            }
 
             // The CURRENT env view, every frame: resize() also hands it over,
             // but resize() runs on swapchain lifecycle and the environment can

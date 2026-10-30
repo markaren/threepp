@@ -1454,12 +1454,12 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
 
             // Screen-space sprite auto-overlay, after the graph: the same
             // self-synchronising recorder as a HUD render() call, from GENERAL
-            // back to GENERAL. Walks the main scene for
+            // back to GENERAL. Takes the main scene's census for
             // Sprites with screenSpace=true and composites them through
             // an internal ortho camera derived from the swapchain extent —
             // no user code beyond setting the flag on the sprite.
             // recordOrthoOverlay short-circuits when no eligible sprites
-            // are found, so the typical no-sprite case pays only the walk.
+            // are found, so the typical no-sprite case pays nothing.
             const VkExtent2D extPT = ctx->swapchainExtent();
             if (!screenSpaceCam_) {
                 screenSpaceCam_ = OrthographicCamera::create(
@@ -1474,7 +1474,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 screenSpaceCam_->updateProjectionMatrix();
             }
             overlayPass_->record(frameCb(), currentFrame, frameImageIndex_,
-                                 scene, *screenSpaceCam_, /*screenSpaceOnly=*/true);
+                                 scene, sceneCensus(scene).sprites, *screenSpaceCam_, /*screenSpaceOnly=*/true);
             return true;
         }
 
@@ -1818,7 +1818,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                     // first, then ortho) instead reaches recordOrthoOverlay via the
                     // frame-already-in-flight path below.
                     overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
-                                         scene, camera, /*screenSpaceOnly=*/false);
+                                         scene, sceneCensus(scene).sprites, camera, /*screenSpaceOnly=*/false);
                     // A lit material drawn as a flat fill is never what the
                     // caller asked for: it means the ortho camera was a 3D view
                     // and the flag was not set. The picture gives no hint (the
@@ -1905,7 +1905,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                             (!envIsDefault && !envIsBgColor) ? envImage.view : VK_NULL_HANDLE,
                             envImage.sampler, currentExposure());
                     overlayPass_->record(frameCb(), currentFrame, frameImageIndex_,
-                                         scene, camera, /*screenSpaceOnly=*/false, rx, ry, rw, rh);
+                                         scene, sceneCensus(scene).sprites, camera, /*screenSpaceOnly=*/false, rx, ry, rw, rh);
                     return;
                 }
                 // User issued a second full-frame perspective render — finalize
@@ -1919,7 +1919,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
             // a follow-up — the no-op branch falls through to here so the
             // present still completes from endFrame().
             overlayPass_->record(frameCb(), currentFrame, frameImageIndex_,
-                                 scene, camera, /*screenSpaceOnly=*/false);
+                                 scene, sceneCensus(scene).sprites, camera, /*screenSpaceOnly=*/false);
         }
 
 // ── Multi-view: lifecycle ───────────────────────────────────────────────────

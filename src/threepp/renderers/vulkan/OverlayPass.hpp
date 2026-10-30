@@ -33,6 +33,7 @@ namespace threepp {
     class Object3D;
     class Camera;
     class Mesh;
+    class Sprite;
 }
 
 namespace threepp::vulkan {
@@ -85,6 +86,7 @@ namespace threepp::vulkan {
         // frame    — which frame-in-flight slot to use (descriptor pool, etc.).
         // imageIndex — which swapchain image/view to render into.
         // scene / camera — the ortho HUD scene and its camera.
+        // sprites  — the visible Sprites of `scene`, in scene order.
         // screenSpaceOnly — when true, only sprites with Sprite::screenSpace=true
         //                   are drawn (used for the automatic screen-space sprite
         //                   compositing after the deferred-shaded frame body).
@@ -98,7 +100,8 @@ namespace threepp::vulkan {
         // Lines / Points / Sprites / normal-less meshes composite on top
         // through the flat path as before.
         void record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
-                    Object3D& scene, Camera& camera, bool screenSpaceOnly,
+                    Object3D& scene, const std::vector<Sprite*>& sprites,
+                    Camera& camera, bool screenSpaceOnly,
                     uint32_t regionX = 0, uint32_t regionY = 0,
                     uint32_t regionW = 0, uint32_t regionH = 0);
 

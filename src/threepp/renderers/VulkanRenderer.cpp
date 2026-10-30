@@ -418,6 +418,10 @@ namespace threepp {
     void VulkanRenderer::render(Object3D& scene, Camera& camera) {
         const auto frameStart = std::chrono::high_resolution_clock::now();
 
+        // The graph may have changed since the last render(), and may hold
+        // none of the census's nodes any more.
+        core()->sceneCensus_.root = nullptr;
+
         // A readback already finished this canvas iteration's frame (see
         // readRGBPixels). An ortho HUD pass or a split-screen pane only ever
         // extends an open frame; from Idle it would open one of its own, the
