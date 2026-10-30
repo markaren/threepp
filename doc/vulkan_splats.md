@@ -351,15 +351,15 @@ overlay geometry against it, so at a fixed pixel both the stamp's depth and its
 coverage gate wobble frame to frame — by the jitter amplitude times the local
 depth gradient, which at a grazing view from a distance is metres, over a
 region that at that framing is the whole surface. An overlay sitting NEAR the
-stamped depth therefore flickers however the comparison is biased: measured in
-`SplatOverlayFlicker_probe` (a baked-surface wireframe over its own scan,
-grazing, 960×600, static camera, 31 frame pairs), the depth-tested hugging
+stamped depth therefore flickers however the comparison is biased: measured on
+a baked-surface wireframe over its own scan (grazing, 960×600, static camera,
+31 frame pairs), the depth-tested hugging
 overlay flips 25 px/frame across 18 % of its pixels, a one-voxel normal push
 plus a 3×3-max stamp still flips 12.6, and a 3×3 **gate** makes it 7× worse —
 the covered SET churns, not just the values. The exemption is the fix that
 measures 0.0: the stamp records as a draw **inside** the overlay pass, overlays
 that enable the layer draw before it (depth-tested against scene geometry —
-the probe's wall hides 566 of their pixels — never against clouds), and
+a wall in that scene hides 566 of their pixels — never against clouds), and
 everything after it is occluded exactly as before. The editor's baked-surface
 preview is the intended user: it is a picture OF the splat surface, so the
 splat surface must not hide it. A grid should NOT take the layer — behind a

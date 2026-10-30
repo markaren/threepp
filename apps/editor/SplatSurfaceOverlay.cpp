@@ -139,7 +139,7 @@ void EditorApp::syncSplatSurfacePreviews() {
             // overlay-depth stamp is re-expressed from the jittered raster's
             // AOV — at a grazing view from a distance that comparison flickers
             // per frame however it is biased (measured, and the numbers are in
-            // SplatOverlayFlicker_probe). The layer draws these lines before
+            // doc/vulkan_splats.md). The layer draws these lines before
             // the stamp: occluded by geometry, never by splats.
             //
             // The layer is a Vulkan one. A GL session reaches here only for a

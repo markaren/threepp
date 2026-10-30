@@ -24,11 +24,11 @@ if (THREEPP_WITH_GLFW)
     target_compile_definitions(CanvasPosition_test PRIVATE
             THREEPP_GLFW_HAS_NULL_PLATFORM=${_null_platform})
     unset(_null_platform)
-    # Catch2 exits 4 when every one of its test cases skipped itself, which is
-    # what the guard above does on such a machine. The file holds three cases
-    # carrying one assertion each, so four failed assertions is not a number it
-    # can otherwise return.
-    set_tests_properties(CanvasPosition_test PROPERTIES SKIP_RETURN_CODE 4)
+    # On such a machine the guard above skips every case. Catch2 then exits 4,
+    # but it also exits with the number of failed assertions, so that code would
+    # read four failures as a skip. The guard's message appears only on a skip.
+    set_tests_properties(CanvasPosition_test PROPERTIES
+            SKIP_REGULAR_EXPRESSION "predates the Null platform")
 endif ()
 
 # Vulkan deferred golden-image regression net. Plain exit-code program (not
@@ -64,18 +64,6 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanOrthoView_test COMMAND VulkanOrthoView_test)
     set_tests_properties(VulkanOrthoView_test PROPERTIES SKIP_RETURN_CODE 42)
 
-    # A/B probe for the analyticDirectSplit light pick. NOT a ctest: it needs
-    # two builds (old shader / new shader) to say anything, and it exists
-    # because the golden scenes above have zero analytic lights and so never
-    # execute that code path at all.
-    add_executable(VulkanShadowPick_probe VulkanShadowPick_probe.cpp)
-    target_link_libraries(VulkanShadowPick_probe PRIVATE threepp)
-    target_include_directories(VulkanShadowPick_probe PRIVATE
-            "${PROJECT_SOURCE_DIR}/src"
-            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
-    target_compile_definitions(VulkanShadowPick_probe PRIVATE
-            DATA_FOLDER="${THREEPP_DATA_DIR}")
-
     # Multi-view deferred rendering: N cameras, one scene, one submission.
     # Parity against the primary, temporal-history independence, add/remove
     # lifecycle, the primary's overlay culling being immune to a secondary, and
@@ -90,20 +78,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanMultiView_test COMMAND VulkanMultiView_test)
     set_tests_properties(VulkanMultiView_test PROPERTIES SKIP_RETURN_CODE 42)
 
-    # Measurement probe for overlay-vs-splat temporal stability. Not a CTest —
-    # a harness for quantifying the baked-surface preview's shimmer.
-    add_executable(SplatOverlayFlicker_probe SplatOverlayFlicker_probe.cpp)
-    target_link_libraries(SplatOverlayFlicker_probe PRIVATE threepp)
-    target_include_directories(SplatOverlayFlicker_probe PRIVATE "${PROJECT_SOURCE_DIR}/src")
-
-    # Does a cloud OCCLUDE the post-resolve overlay? The flicker probe above
-    # measures the exempt path's stability; this one measures the plain path's
+    # Does a cloud OCCLUDE the post-resolve overlay? Measures the plain path's
     # correctness on the kSnapUiBlend fill route (an untextured transparent
     # MeshBasicMaterial), which is where the auto-latch has to fire for the
-    # stamp to run at all. Exit-code probe, not a CTest golden.
+    # stamp to run at all. Plain exit-code + skip-42 like the goldens, without a
+    # stored image: the overlay behind the cloud goes, the part beside it stays.
     add_executable(SplatOverlayOcclusion_probe SplatOverlayOcclusion_probe.cpp)
     target_link_libraries(SplatOverlayOcclusion_probe PRIVATE threepp)
     target_include_directories(SplatOverlayOcclusion_probe PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME SplatOverlayOcclusion_probe COMMAND SplatOverlayOcclusion_probe)
+    set_tests_properties(SplatOverlayOcclusion_probe PROPERTIES SKIP_RETURN_CODE 42)
 
     # Gaussian-splat compute tile rasterizer: bit-exact repeat-frame
     # determinism (the gate on the prefix-sum tile expansion — an atomic-append

@@ -1584,8 +1584,8 @@ namespace threepp {
         // is re-expressed from the jittered splat raster's depth AOV, so at a
         // grazing view from a distance both its coverage gate and its depth
         // wobble per frame by more than the gap between the preview and the
-        // cloud, and any depth test between the two flickers (measured:
-        // SplatOverlayFlicker_probe). ENABLE the bit (Layers::enable), do not
+        // cloud, and any depth test between the two flickers (measured, see
+        // doc/vulkan_splats.md). ENABLE the bit (Layers::enable), do not
         // set it exclusively — the object still needs its camera layer.
         // Ordinary overlays should not use this: a grid behind a cloud is
         // behind it, and this layer would put it on top.
