@@ -3,8 +3,10 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/core/BufferAttribute.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Plane.hpp"
+#include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Sphere.hpp"
 #include "threepp/math/Triangle.hpp"
 
@@ -299,6 +301,25 @@ TEST_CASE("applyMatrix4") {
     CHECK(compareBox(b.clone().applyMatrix4(m), b.clone().translate(t1)));
     CHECK(compareBox(c.clone().applyMatrix4(m), c.clone().translate(t1)));
     CHECK(compareBox(d.clone().applyMatrix4(m), d.clone().translate(t1)));
+
+    // A rotation needs all eight corners. The two stored ones alone would leave
+    // this box with no width at all: (0,0) and (1,1) both land on x = 0.
+    const float s = std::sqrt(0.5f);
+    CHECK(compareBox(b.clone().applyMatrix4(Matrix4().makeRotationZ(math::PI / 4)),
+                     Box3(Vector3(-s, 0, 0), Vector3(s, 2 * s, 1))));
+
+    // A scale works about the origin, not the box's centre, and a negative one
+    // swaps the faces.
+    CHECK(compareBox(c.clone().translate(one3).applyMatrix4(Matrix4().makeScale(2, 3, 4)),
+                     Box3(zero3, Vector3(4, 6, 8))));
+    CHECK(compareBox(b.clone().applyMatrix4(Matrix4().makeScale(-2, 1, 1)),
+                     Box3(Vector3(-2, 0, 0), Vector3(0, 1, 1))));
+
+    // All three at once: scale, then rotate, then translate.
+    Quaternion q;
+    q.setFromAxisAngle(Vector3(0, 0, 1), math::PI / 2);
+    CHECK(compareBox(b.clone().applyMatrix4(Matrix4().compose(t1, q, Vector3(2, 3, 4))),
+                     Box3(Vector3(-2, -2, 1), Vector3(1, 0, 5))));
 }
 
 TEST_CASE("translate") {

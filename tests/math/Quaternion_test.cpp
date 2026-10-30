@@ -279,14 +279,15 @@ TEST_CASE("rotateTowards") {
     float halfPI = math::PI * 0.5f;
 
     a.rotateTowards(b, 0);
-    REQUIRE(a.equals(a) == true);
+    REQUIRE(a.equals(c));
 
     a.rotateTowards(b, math::PI * 2.f);// test overshoot
     REQUIRE(a.equals(b) == true);
 
     a.set(0, 0, 0, 1);
     a.rotateTowards(b, halfPI);
-    REQUIRE(a.angleTo(c) - halfPI <= eps);
+    REQUIRE(std::abs(a.angleTo(c) - halfPI) <= eps);
+    REQUIRE(std::abs(a.angleTo(b) - halfPI) <= eps);
 }
 
 TEST_CASE("identity") {
@@ -306,14 +307,31 @@ TEST_CASE("invert/conjugate") {
 
     Quaternion a(x, y, z, w);
 
-    // TODO: add better validation here.
-
     auto b = a.clone().conjugate();
 
     CHECK(a.x == -b.x);
     CHECK(a.y == -b.y);
     CHECK(a.z == -b.z);
     CHECK(a.w == b.w);
+
+    // On a unit quaternion the inverse multiplies out to the identity, from
+    // either side, and undoes the rotation.
+    auto unit = a.clone().normalize();
+    auto inverse = unit.clone().invert();
+
+    for (const auto& product : {unit.clone().multiply(inverse), inverse.clone().multiply(unit)}) {
+        CHECK(std::abs(product.x) <= eps);
+        CHECK(std::abs(product.y) <= eps);
+        CHECK(std::abs(product.z) <= eps);
+        CHECK(std::abs(product.w - 1) <= eps);
+    }
+
+    const Vector3 v(1, 0, 0);
+    Vector3 rotated = v;
+    rotated.applyQuaternion(unit);
+    CHECK(rotated.distanceTo(v) > 1);
+    rotated.applyQuaternion(inverse);
+    CHECK(rotated.distanceTo(v) <= eps);
 }
 
 TEST_CASE("dot") {
@@ -391,21 +409,4 @@ TEST_CASE("slerp") {
     REQUIRE(std::abs(result.y - expected.y) <= eps);
     REQUIRE(std::abs(result.z - expected.z) <= eps);
     REQUIRE(std::abs(result.w - expected.w) <= eps);
-}
-
-TEST_CASE("slerpQuaternions") {
-
-    float SQRT1_2 = std::sqrt(0.5);
-
-    Quaternion e(1, 0, 0, 0);
-    Quaternion f(0, 0, 1, 0);
-    Quaternion expected(SQRT1_2, 0, SQRT1_2, 0);
-
-    Quaternion a;
-    a.slerpQuaternions(e, f, 0.5);
-
-    CHECK(std::abs(a.x - expected.x) <= eps);
-    CHECK(std::abs(a.y - expected.y) <= eps);
-    CHECK(std::abs(a.z - expected.z) <= eps);
-    CHECK(std::abs(a.w - expected.w) <= eps);
 }

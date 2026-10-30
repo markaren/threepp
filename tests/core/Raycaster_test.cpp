@@ -11,6 +11,9 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
 
+#include <cmath>
+#include <limits>
+
 using namespace threepp;
 
 namespace {
@@ -62,7 +65,8 @@ namespace {
 
     bool isRayDirectionAgainstReferenceVector(const Vector3& rayDirection, const Vector3& refVector) {
 
-        return refVector.x - rayDirection.x <= std::numeric_limits<float>::epsilon() && refVector.y - rayDirection.y <= std::numeric_limits<float>::epsilon() && refVector.z - rayDirection.z <= std::numeric_limits<float>::epsilon();
+        const auto tolerance = std::numeric_limits<float>::epsilon();
+        return std::abs(refVector.x - rayDirection.x) <= tolerance && std::abs(refVector.y - rayDirection.y) <= tolerance && std::abs(refVector.z - rayDirection.z) <= tolerance;
     }
 }// namespace
 

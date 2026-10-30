@@ -2,9 +2,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "threepp/math/Box3.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Plane.hpp"
+#include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Sphere.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 
@@ -134,7 +138,7 @@ TEST_CASE("distanceToPoint") {
 
     Sphere a(one3, 1);
 
-    CHECK((a.distanceToPoint(zero3) - 0.7320f) < 0.001f);
+    CHECK(std::abs(a.distanceToPoint(zero3) - 0.7320f) < 0.001f);
     CHECK(a.distanceToPoint(one3) == -1);
 }
 
@@ -199,6 +203,24 @@ TEST_CASE("applyMatrix4") {
     a.getBoundingBox(aabb2);
 
     CHECK(aabb1 == aabb2.applyMatrix4(m));
+
+    // A rotation moves the centre and leaves the radius alone.
+    const auto rotated = a.clone().applyMatrix4(Matrix4().makeRotationZ(math::PI / 2));
+    CHECK(rotated.center.distanceTo(Vector3(-1, 1, 1)) < eps);
+    CHECK(std::abs(rotated.radius - 1) < eps);
+
+    // A scale takes the radius along by its largest axis, so the sphere still
+    // contains the ellipsoid its surface became.
+    const auto scaled = a.clone().applyMatrix4(Matrix4().makeScale(2, 3, 4));
+    CHECK(scaled.center.distanceTo(Vector3(2, 3, 4)) < eps);
+    CHECK(std::abs(scaled.radius - 4) < eps);
+
+    // All three at once: scale, then rotate, then translate.
+    Quaternion q;
+    q.setFromAxisAngle(Vector3(0, 0, 1), math::PI / 2);
+    const auto trs = a.clone().applyMatrix4(Matrix4().compose(Vector3(1, -2, 1), q, Vector3(2, 3, 4)));
+    CHECK(trs.center.distanceTo(Vector3(-2, 0, 5)) < eps);
+    CHECK(std::abs(trs.radius - 4) < eps);
 }
 
 TEST_CASE("translate") {
