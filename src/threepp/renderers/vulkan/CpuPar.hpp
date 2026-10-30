@@ -25,6 +25,8 @@
 #include "threepp/utils/Parallel.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -33,6 +35,11 @@
 #include <numeric>
 #include <thread>
 #include <vector>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#elif defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
 
 namespace threepp::vulkan::par {
 
@@ -216,6 +223,14 @@ namespace threepp::vulkan::par {
     // they run at start(), one after the other. Each job sets its own
     // threadContext(). An exception in a job is rethrown by join() once
     // every job has returned.
+    //
+    // join() spins (bounded) rather than sleeps while the jobs finish. The
+    // wait is a fraction of a millisecond, and a thread that sleeps in it
+    // wakes on whichever processor the scheduler has free: measured
+    // 2026-10-30 on a 5950X (two core complexes, an L3 each), the frame
+    // thread then crossed to the other complex on 4-7 % of frames instead
+    // of 1 %, and ran every later phase of the frame, the next frame's
+    // scene sync included, against a cold L3 (+0.3-0.5 ms per frame).
     class Group {
     public:
         Group() = default;
@@ -229,6 +244,7 @@ namespace threepp::vulkan::par {
         void start(std::vector<std::function<void()>> jobs) {
             jobs_ = std::move(jobs);
             errs_.assign(jobs_.size(), nullptr);
+            done_.store(false, std::memory_order_relaxed);
 #if defined(_MSC_VER)
             pending_ = std::async(std::launch::async, [this] { runAll(); });
 #else
@@ -237,7 +253,14 @@ namespace threepp::vulkan::par {
         }
 
         void join() {
-            if (pending_.valid()) pending_.get();
+            if (pending_.valid()) {
+                const auto t0 = std::chrono::steady_clock::now();
+                while (!done_.load(std::memory_order_acquire)) {
+                    for (int i = 0; i < 64; ++i) pause();
+                    if (std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(8)) break;
+                }
+                pending_.get();
+            }
             for (auto& e : errs_)
                 if (e) std::rethrow_exception(e);
         }
@@ -253,11 +276,21 @@ namespace threepp::vulkan::par {
                     errs_[i] = std::current_exception();
                 }
             });
+            done_.store(true, std::memory_order_release);
+        }
+
+        static void pause() {
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(__i386__)
+            _mm_pause();
+#else
+            std::this_thread::yield();
+#endif
         }
 
         std::vector<std::function<void()>> jobs_;
         std::vector<std::exception_ptr>     errs_;
         std::future<void>                   pending_;
+        std::atomic<bool>                   done_{true};
     };
 
 }// namespace threepp::vulkan::par
