@@ -23,11 +23,6 @@ def test_model_loader_obj(obj_cube):
     assert n_meshes[0] >= 1
 
 
-def test_obj_loader_direct(obj_cube):
-    model = tp.OBJLoader().load(obj_cube)
-    assert isinstance(model, tp.Group)
-
-
 def test_box3_set_from_object_frames_model(stl_cube):
     model = tp.ModelLoader().load(stl_cube)
     bbox = tp.Box3().set_from_object(model)

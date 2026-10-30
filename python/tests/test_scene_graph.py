@@ -4,6 +4,8 @@ Mesh/Points/Line derive from Object3D virtually; writing inherited members (the
 std::string `name` especially) used to corrupt the heap. These tests pin that
 down — they crash the interpreter if the concrete-binding workaround regresses.
 """
+import math
+
 import pytest
 
 import threepp as tp
@@ -62,16 +64,6 @@ def test_resident_hint_round_trips(name):
 
 
 @pytest.mark.parametrize("name", list(VIRTUAL_OBJECTS))
-def test_virtual_base_methods(name):
-    o = VIRTUAL_OBJECTS[name]()
-    o.rotate_x(0.5)
-    o.translate_z(2.0)
-    o.look_at(0, 0, 0)
-    wp = o.get_world_position()
-    assert isinstance(wp, tp.Vector3)
-
-
-@pytest.mark.parametrize("name", list(VIRTUAL_OBJECTS))
 def test_world_pose_getters_virtual_leaves(name):
     # get_world_quaternion / get_world_scale / matrix_world / local<->world are
     # added to BOTH binding sites; this pins the virtual-base (Mesh/Points/Line)
@@ -92,6 +84,16 @@ def test_world_pose_getters_virtual_leaves(name):
     assert abs(loc.x) < 1e-4 and abs(loc.y) < 1e-4 and abs(loc.z) < 1e-4
     wl = o.local_to_world(tp.Vector3(0, 0, 0))
     assert (round(wl.x, 4), round(wl.y, 4), round(wl.z, 4)) == (1, 2, 3)
+    # The mutators through the same virtual base. rotate_x turns the object's +z
+    # to world -y, translate_z moves it along that, look_at turns +z to the target.
+    o = VIRTUAL_OBJECTS[name]()
+    o.rotate_x(math.pi / 2)
+    o.translate_z(2.0)
+    assert (round(o.position.x, 4), round(o.position.y, 4), round(o.position.z, 4)) == (0, -2, 0)
+    o.look_at(1, -2, 0)
+    o.update_matrix_world(True)
+    front = o.local_to_world(tp.Vector3(0, 0, 1))
+    assert (round(front.x, 4), round(front.y, 4), round(front.z, 4)) == (1, -2, 0)
 
 
 def test_world_pose_getters_base_object3d():

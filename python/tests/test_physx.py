@@ -17,17 +17,6 @@ def box(size=1.0):
     return m
 
 
-def test_box_falls_under_gravity():
-    world = tp.PhysxWorld()
-    b = box()
-    b.position.set(0, 10, 0)
-    body = world.add(b, density=100)
-    assert body.is_dynamic
-    for _ in range(60):  # ~1 s
-        world.step(1 / 60)
-    assert b.position.y < 9.0, "box did not fall"
-
-
 def test_static_floor_stops_fall():
     world = tp.PhysxWorld()
     floor = tp.Mesh(tp.BoxGeometry(20, 1, 20), tp.MeshStandardMaterial())

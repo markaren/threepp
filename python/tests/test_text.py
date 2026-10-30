@@ -6,11 +6,6 @@ import numpy as np
 import threepp as tp
 
 
-def test_default_font():
-    font = tp.FontLoader().default_font()
-    assert isinstance(font, tp.Font)
-
-
 def test_text2d_is_a_mesh():
     font = tp.FontLoader().default_font()
     t = tp.Text2D(font, "Hi", size=1.0)

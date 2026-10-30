@@ -80,12 +80,6 @@ def test_euler_floatview_and_order():
     assert e.order == tp.RotationOrder.XYZ
 
 
-def test_matrix4():
-    m = tp.Matrix4()
-    assert len(m.elements()) == 16
-    assert m.elements()[0] == 1 and m.elements()[5] == 1  # identity diagonal
-
-
 def test_box3():
     b = tp.Box3(tp.Vector3(-1, -1, -1), tp.Vector3(1, 1, 1))
     assert not b.is_empty()

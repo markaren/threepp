@@ -50,13 +50,6 @@ def test_imgui_panel_draws(gl):
     assert int(panel.max()) - int(panel.min()) > 40
 
 
-def test_want_capture_flags(gl):
-    _, _, ui = gl
-    # no UI is hovered in a headless one-shot, but the properties resolve
-    assert ui.want_capture_mouse in (True, False)
-    assert ui.want_capture_keyboard in (True, False)
-
-
 def test_material_after_disposed_program_and_imgui_frame_draws(gl):
     """A material built after another was disposed and an ImGui frame was drawn still draws.
 

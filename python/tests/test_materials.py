@@ -12,11 +12,6 @@ LONG = "material_name_long_enough_to_force_heap_allocation_xxxxxx"
 
 
 @pytest.mark.parametrize("ctor", MATERIAL_CTORS, ids=lambda c: c.__name__)
-def test_material_constructs(ctor):
-    assert isinstance(ctor(), tp.Material)
-
-
-@pytest.mark.parametrize("ctor", MATERIAL_CTORS, ids=lambda c: c.__name__)
 def test_material_base_fields_virtual_base(ctor):
     # Material is a virtual base — exercise the std::string `name` write that
     # used to corrupt memory, repeated to surface intermittent corruption.

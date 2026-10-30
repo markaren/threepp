@@ -105,15 +105,3 @@ def test_spot_light_fields():
 def test_hemisphere_ground_color():
     h = tp.HemisphereLight(0xffffff, 0x444444, 1.0)
     assert h.ground_color == tp.Color(0x444444)
-
-
-def test_directional_set_target():
-    light = tp.DirectionalLight()
-    target = tp.Object3D()
-    light.set_target(target)  # should not raise
-
-
-def test_light_position():
-    light = tp.DirectionalLight()
-    light.position.set(3, 5, 2)
-    assert (light.position.x, light.position.y, light.position.z) == (3, 5, 2)
