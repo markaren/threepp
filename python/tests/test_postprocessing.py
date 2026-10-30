@@ -62,17 +62,27 @@ def test_composer_with_gtao_renders(renderer, lit_scene):
     floor = tp.Mesh(tp.PlaneGeometry(10, 10), tp.MeshStandardMaterial())
     floor.rotate_x(-1.5707963)
     floor.position.y = -1
-    lit_scene.add(floor, tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial()))
+    box = tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial())
+    box.position.y = -0.5  # stands on the floor
+    lit_scene.add(floor, box)
     cam = _camera()
-    composer = tp.EffectComposer(renderer)
-    composer.add_pass(tp.RenderPass(lit_scene, cam))
-    gtao = tp.GTAOPass(lit_scene, cam, 200, 150)
-    gtao.output = tp.GTAOPass.Output.Default
-    gtao.update_gtao_material(radius=0.5, samples=8)
-    composer.add_pass(gtao)
-    composer.render()
-    img = renderer.read_pixels()
-    assert img.shape == (150, 200, 3) and int(img.max()) > int(img.min()) + 20
+
+    def render(with_gtao):
+        composer = tp.EffectComposer(renderer)
+        composer.add_pass(tp.RenderPass(lit_scene, cam))
+        if with_gtao:
+            gtao = tp.GTAOPass(lit_scene, cam, 200, 150)
+            gtao.output = tp.GTAOPass.Output.Default
+            gtao.update_gtao_material(radius=0.5, samples=8)
+            composer.add_pass(gtao)
+        composer.render()
+        return renderer.read_pixels().astype(int)
+
+    plain, occluded = render(False), render(True)
+    assert plain.shape == (150, 200, 3)
+    darkened = (plain - occluded).mean(axis=2)
+    assert darkened[126:134, 80:120].mean() > 10, "no occlusion where the box meets the floor"
+    assert darkened[75:105, 80:120].max() < 3, "occlusion on the open face of the box"
 
 
 def test_outline_pass_draws_the_edge_colour(renderer):

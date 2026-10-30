@@ -23,14 +23,7 @@ def test_texture_fields():
     assert tex.repeat.x == 2
 
 
-def test_texture_applied_to_material(checker_texture):
-    tex = tp.TextureLoader().load(checker_texture, tp.ColorSpace.SRGB)
-    mat = tp.MeshStandardMaterial()
-    mat.map = tex
-    assert mat.map is not None
-
-
-def test_textured_render_is_not_flat(renderer, lit_scene, checker_texture):
+def test_textured_render_shows_both_checker_colours(renderer, lit_scene, checker_texture):
     tex = tp.TextureLoader().load(checker_texture, tp.ColorSpace.SRGB)
     mat = tp.MeshStandardMaterial()
     mat.map = tex
@@ -41,7 +34,10 @@ def test_textured_render_is_not_flat(renderer, lit_scene, checker_texture):
     cam.look_at(0, 0, 0)
 
     renderer.render(lit_scene, cam)
-    img = renderer.read_pixels()
+    img = renderer.read_pixels().astype(int)
     assert img.shape == (150, 200, 3)
-    # a textured, lit object produces a range of values, not a flat fill
-    assert int(img.max()) - int(img.min()) > 40
+    # White light keeps the hues apart, and the clear colour is neither: a lit box
+    # without its map has no pixel on either side of these.
+    red, blue = img[..., 0], img[..., 2]
+    assert int((red > blue + 60).sum()) > 500, "no orange squares on the box"
+    assert int((blue > red + 60).sum()) > 500, "no blue squares on the box"

@@ -98,14 +98,23 @@ def test_quaternion_track_animates_rotation():
 
 
 def test_mixer_outlives_root_reference():
-    # keep_alive must pin the root: drop the local name, force GC, still update.
+    # keep_alive must pin the root: with the last Python name gone the mixer still
+    # drives it, and it dies with the mixer, so the weakref could have failed.
     import gc
-    _, clip, mixer = _bounce_setup()
+    import weakref
+    cube, clip, mixer = _bounce_setup()
+    root = weakref.ref(cube)
     action = mixer.clip_action(clip)
     action.play()
+    del cube
     gc.collect()
+    assert root() is not None, "the mixer let its root die"
     mixer.update(1.0)  # must not crash on a freed root
     assert action.is_running()
+    assert root().position.y > 4.5
+    del action, mixer
+    gc.collect()
+    assert root() is None
 
 
 def _rise_action():
