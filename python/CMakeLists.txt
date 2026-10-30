@@ -173,6 +173,9 @@ threepp_fix_physx_static_link_order()
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     target_link_libraries(threepp_py PRIVATE unofficial::omniverse-physx-sdk::sdk)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_PHYSX)
+    if (THREEPP_WITH_USD)
+        target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_USD)
+    endif ()
     # Stage the SDK runtime DLLs (PhysX_64 / Common / Cooking / Foundation, plus the
     # GPU pair) next to the module so `import threepp` resolves them without the
     # vcpkg toolchain's applocal step (we use a _DIR hint, not the toolchain).

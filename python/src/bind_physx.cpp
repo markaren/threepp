@@ -34,6 +34,9 @@
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
+#ifdef THREEPP_PY_HAS_USD
+#include "threepp/extras/physx/UsdArticulation.hpp"
+#endif
 #include "threepp/extras/sensors/Imu.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
@@ -46,6 +49,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -1312,7 +1316,51 @@ namespace threepp_py {
                      "prismatic DOF then reads and drives in the SCALED units. `args` are xacro "
                      "argument overrides, the same name:=value pairs the xacro CLI takes - a "
                      "parameterised description built without them expands to the FILE's defaults, "
-                     "which for many robots names config paths that do not exist.");
+                     "which for many robots names config paths that do not exist.")
+#ifdef THREEPP_PY_HAS_USD
+                .def("load_usd_articulation",
+                     [](PhysxWorld& w, const std::string& path, std::optional<bool> fixed_base,
+                        std::optional<bool> self_collision, std::optional<int> solver_position_iterations,
+                        std::optional<float> stiffness, std::optional<float> damping, std::optional<float> max_force,
+                        const std::array<float, 3>& base_position, const std::array<float, 4>& base_rotation,
+                        float default_density, bool render_visuals, bool drive_limits_are_forces) {
+                         USDArticulationOptions opts;
+                         opts.fixedBase = fixed_base;
+                         opts.selfCollision = self_collision;
+                         opts.solverPositionIterations = solver_position_iterations;
+                         opts.stiffness = stiffness;
+                         opts.damping = damping;
+                         opts.maxForce = max_force;
+                         opts.basePosition = Vector3(base_position[0], base_position[1], base_position[2]);
+                         opts.baseRotation = Quaternion(base_rotation[0], base_rotation[1], base_rotation[2], base_rotation[3]);
+                         opts.defaultDensity = default_density;
+                         opts.renderVisuals = render_visuals;
+                         opts.driveLimitsAreForces = drive_limits_are_forces;
+                         auto r = loadUsdArticulation(w, std::filesystem::path(path), opts);
+                         if (!r.articulation) throw std::runtime_error("load_usd_articulation: " + r.error);
+                         return std::make_tuple(std::move(r.articulation), std::move(r.meshes), std::move(r.jointNames),
+                                                std::move(r.diagnostics), std::move(r.scene));
+                     },
+                     py::arg("path"), py::arg("fixed_base") = py::none(), py::arg("self_collision") = py::none(),
+                     py::arg("solver_position_iterations") = py::none(), py::arg("stiffness") = py::none(),
+                     py::arg("damping") = py::none(), py::arg("max_force") = py::none(),
+                     py::arg("base_position") = std::array<float, 3>{0.f, 0.f, 0.f},
+                     py::arg("base_rotation") = std::array<float, 4>{0.f, 0.f, 0.f, 1.f},
+                     py::arg("default_density") = 1000.f, py::arg("render_visuals") = true,
+                     py::arg("drive_limits_are_forces") = true,
+                     // No keep_alive, as for load_articulation: usd.py keeps the world alive.
+                     "Import a USD robot as a finalized Articulation in the pose the file authors. Returns "
+                     "(articulation, meshes, joint_names, diagnostics, scene): the meshes are bound to the sim "
+                     "(add them to a scene to render), joint_names lists the actuated joints in drive-target "
+                     "order, diagnostics says what the file holds that could not be imported, and scene holds "
+                     "what is outside the robot's bodies. articulation.link(name) takes a body's prim path or "
+                     "leaf name. An argument left None takes the file's value: fixed base from a fixed joint to "
+                     "the world, drive gains and effort limits, solver iterations and self-collision from a "
+                     "'PhysX' variant, which is selected. stiffness, damping and max_force override every drive, "
+                     "in N·m/rad or N/m (USD authors angular gains per degree). base_rotation is x, y, z, w. "
+                     "Needs a build with THREEPP_WITH_USD (HAS_USD).")
+#endif
+                ;
 
 #if THREEPP_PHYSX_GPU
         // GPU-resident batched articulation state I/O (the direct-GPU API). Build one
@@ -1832,6 +1880,11 @@ namespace threepp_py {
         // False where the PhysX SDK has no CUDA backend (macOS): gpu_dynamics,
         // soft bodies, PBD particles and PhysxGpuBatch are compiled out there.
         m.attr("HAS_PHYSX_GPU") = THREEPP_PHYSX_GPU != 0;
+#ifdef THREEPP_PY_HAS_USD
+        m.attr("HAS_USD") = true;
+#else
+        m.attr("HAS_USD") = false;
+#endif
     }
 
 }// namespace threepp_py
@@ -1843,6 +1896,7 @@ namespace threepp_py {
     void init_physx(py::module_& m) {
         m.attr("HAS_PHYSX") = false;// Python can check availability: threepp.HAS_PHYSX
         m.attr("HAS_PHYSX_GPU") = false;
+        m.attr("HAS_USD") = false;// the only USD binding is the PhysX importer
     }
 
 }// namespace threepp_py

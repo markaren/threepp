@@ -25,6 +25,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -196,7 +197,7 @@ namespace threepp {
         // articulation is in the scene) to make the cap a torque.
         Articulation(PhysxWorld& world, bool fixedBase, int solverPositionIters, bool disableSelfCollision,
                      bool driveLimitsAreForces = false)
-            : world_(world) {
+            : world_(world), worldLifetime_(world.lifetime()) {
             using namespace ::physx;
             art_ = world_.physics().createArticulationReducedCoordinate();
             if (!art_) throw std::runtime_error("createArticulationReducedCoordinate failed");
@@ -206,9 +207,12 @@ namespace threepp {
             if (solverPositionIters > 0) art_->setSolverIterationCounts(static_cast<PxU32>(solverPositionIters), 1);
         }
         ~Articulation() {
+            // A garbage-collected Python cycle destroys the world and this object in
+            // no fixed order, and the cache and the articulation are gone with PhysX.
+            if (worldLifetime_.expired()) return;
             if (cache_) cache_->release();
             // If it was never added to a scene we still own it; once finalized the
-            // scene owns it and releases it on world teardown (the world outlives us).
+            // scene owns it and releases it on world teardown.
             if (art_ && !finalized_) art_->release();
         }
         Articulation(const Articulation&) = delete;
@@ -506,6 +510,7 @@ namespace threepp {
 
     private:
         PhysxWorld& world_;
+        std::weak_ptr<void> worldLifetime_;
         ::physx::PxArticulationReducedCoordinate* art_ = nullptr;
         ::physx::PxArticulationCache* cache_ = nullptr;
         ::physx::PxArticulationLink* rootLink_ = nullptr;

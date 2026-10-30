@@ -360,7 +360,8 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
   (Sumner/O'Brien/Hodgins deformable ground with a Bekker-Wong bearing, batched
   in Warp) and `threepp.granular_mpm` (MLS-MPM granular soil with two-way rigid
   wheel and plate colliders, in Warp); `threepp.urdf` (a URDF straight into a
-  PhysX articulation) and `threepp.rl`. The Warp modules import Warp only on
+  PhysX articulation), `threepp.usd` (the same from a USD robot, in builds with
+  `THREEPP_WITH_USD`) and `threepp.rl`. The Warp modules import Warp only on
   first use, so `import threepp` never needs it. `threepp.capture` renders a
   scene headless on either backend and returns the picture with the frame's
   GPU pass timings (`capture.render(scene, camera, backend="vulkan", frames=60,

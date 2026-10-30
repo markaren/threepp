@@ -1643,6 +1643,10 @@ namespace threepp {
         ::physx::PxCudaContextManager* cudaContextManager() const { return cuda_; }
 
         const Settings& settings() const { return settings_; }
+
+        // Expires when this world is destroyed. For an object that can outlive the
+        // world and must not call into PhysX from its destructor once it has gone.
+        [[nodiscard]] std::weak_ptr<void> lifetime() const { return lifetime_; }
         bool directGpuEnabled() const { return settings_.enableDirectGpu; }
 
         // Raw fixed-rate substep with no binding sync — simulate() + fetchResults().
@@ -1819,6 +1823,7 @@ namespace threepp {
         Settings settings_;
         ::physx::PxDefaultAllocator allocator_;
         ::physx::PxDefaultErrorCallback errorCallback_;
+        std::shared_ptr<void> lifetime_ = std::make_shared<char>();
         ::physx::PxFoundation* foundation_ = nullptr;
         ::physx::PxPhysics* physics_ = nullptr;
         // Whether PxInitExtensions succeeded — releaseCore() must not call
