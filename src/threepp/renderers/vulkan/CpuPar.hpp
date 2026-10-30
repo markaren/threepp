@@ -29,11 +29,35 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <future>
 #include <numeric>
 #include <thread>
 #include <vector>
 
 namespace threepp::vulkan::par {
+
+    // What the work on this thread is FOR, carried by every fork below from
+    // the thread that forks to the threads that run its pieces. The renderer
+    // keeps the view a frame prep runs for here (VulkanRenderer::Impl::view),
+    // so a view's prep can run on a pool thread, and the chunked walks it
+    // forks in turn, while another view's prep runs beside it. Null on every
+    // thread that runs no such work, and then nothing changes.
+    inline void*& threadContext() {
+        thread_local void* context = nullptr;
+        return context;
+    }
+
+    // Sets threadContext() for a scope and puts back what was there.
+    class ContextScope {
+    public:
+        explicit ContextScope(void* context): saved_(threadContext()) { threadContext() = context; }
+        ~ContextScope() { threadContext() = saved_; }
+        ContextScope(const ContextScope&)            = delete;
+        ContextScope& operator=(const ContextScope&) = delete;
+
+    private:
+        void* saved_;
+    };
 
     struct Config {
         bool     on       = true;
@@ -92,18 +116,28 @@ namespace threepp::vulkan::par {
         bounds.push_back(static_cast<uint32_t>(n));
     }
 
-    // Runs fn(chunk) for chunk in [0, chunks): in parallel when the knob is
-    // on and there is more than one chunk, else in order on this thread.
+    // Runs fn(chunk) for chunk in [0, chunks): in parallel when `parallel`
+    // and there is more than one chunk, else in order on this thread.
     template<class Fn>
-    void run(unsigned chunks, Fn&& fn) {
-        if (chunks <= 1u || !config().on) {
+    void runIf(bool parallel, unsigned chunks, Fn&& fn) {
+        if (chunks <= 1u || !parallel) {
             for (unsigned c = 0; c < chunks; ++c) fn(c);
             return;
         }
         thread_local std::vector<unsigned> ids;
         ids.resize(chunks);
         std::iota(ids.begin(), ids.end(), 0u);
-        threepp::parallelForEach(ids.begin(), ids.end(), [&](unsigned c) { fn(c); });
+        void* const context = threadContext();
+        threepp::parallelForEach(ids.begin(), ids.end(), [&](unsigned c) {
+            ContextScope scope(context);
+            fn(c);
+        });
+    }
+
+    // runIf under THREEPP_VK_CPU_PAR.
+    template<class Fn>
+    void run(unsigned chunks, Fn&& fn) {
+        runIf(config().on, chunks, std::forward<Fn>(fn));
     }
 
     // The frame prep's independent chains (the cull to indirect-build chain
@@ -130,7 +164,9 @@ namespace threepp::vulkan::par {
         std::exception_ptr     errs[n] = {};
         unsigned               ids[n];
         std::iota(ids, ids + n, 0u);
+        void* const context = threadContext();
         threepp::parallelForEach(ids, ids + n, [&](unsigned i) {
+            ContextScope scope(context);
             try {
                 fs[i]();
             } catch (...) {
@@ -140,6 +176,88 @@ namespace threepp::vulkan::par {
         for (auto& e : errs)
             if (e) std::rethrow_exception(e);
     }
+
+    // The secondary views' frame prep (camera UBOs, cull, draw records,
+    // shadow maps) runs on the pool, every view at once and beside the
+    // primary's graph build, instead of view after view between the
+    // primary's build and theirs (VulkanCoreFrame, addSecondaryViewPasses).
+    // THREEPP_VK_CPU_VIEWS=1; off, the default, keeps the serial loop.
+    inline bool viewsOn() {
+        static const bool on = env::flag("THREEPP_VK_CPU_VIEWS", false);
+        return on;
+    }
+
+    // A pass whose recording is long and splits (the overlay depth prepass's
+    // one draw per entry) records its pieces into secondary command buffers
+    // on the pool, which the frame's command buffer then executes in order:
+    // the same commands, recorded at once. THREEPP_VK_CPU_RECORD=1; off, the
+    // default, records them inline as before. Chunked as the walks above
+    // (THREEPP_VK_CPU_PAR_CHUNKS caps the count; THREEPP_VK_CPU_PAR_MIN the
+    // fewest items a piece takes), but not gated by THREEPP_VK_CPU_PAR.
+    inline bool recordOn() {
+        static const bool on = env::flag("THREEPP_VK_CPU_RECORD", false);
+        return on;
+    }
+    inline unsigned recordChunksFor(size_t items) {
+        if (!recordOn()) return 1u;
+        const unsigned hw  = std::max(1u, std::thread::hardware_concurrency());
+        unsigned       cap = std::min(hw, 16u);
+        if (const auto n = env::integer("THREEPP_VK_CPU_PAR_CHUNKS"); n && *n > 0)
+            cap = static_cast<unsigned>(std::min<long long>(*n, 64));
+        const size_t minItems = config().minItems;
+        if (items < minItems * 2u) return 1u;
+        return static_cast<unsigned>(std::min<size_t>(cap, items / minItems));
+    }
+
+    // Jobs started together and joined later, while the starting thread
+    // does its own work in between: on MSVC one std::async task that runs
+    // them as a parallel loop; elsewhere (no parallel STL, see Parallel.hpp)
+    // they run at start(), one after the other. Each job sets its own
+    // threadContext(). An exception in a job is rethrown by join() once
+    // every job has returned.
+    class Group {
+    public:
+        Group() = default;
+        Group(const Group&)            = delete;
+        Group& operator=(const Group&) = delete;
+        ~Group() {
+            // Never leave a job running against state this frame tears down.
+            if (pending_.valid()) pending_.wait();
+        }
+
+        void start(std::vector<std::function<void()>> jobs) {
+            jobs_ = std::move(jobs);
+            errs_.assign(jobs_.size(), nullptr);
+#if defined(_MSC_VER)
+            pending_ = std::async(std::launch::async, [this] { runAll(); });
+#else
+            runAll();
+#endif
+        }
+
+        void join() {
+            if (pending_.valid()) pending_.get();
+            for (auto& e : errs_)
+                if (e) std::rethrow_exception(e);
+        }
+
+    private:
+        void runAll() {
+            std::vector<unsigned> ids(jobs_.size());
+            std::iota(ids.begin(), ids.end(), 0u);
+            threepp::parallelForEach(ids.begin(), ids.end(), [this](unsigned i) {
+                try {
+                    jobs_[i]();
+                } catch (...) {
+                    errs_[i] = std::current_exception();
+                }
+            });
+        }
+
+        std::vector<std::function<void()>> jobs_;
+        std::vector<std::exception_ptr>     errs_;
+        std::future<void>                   pending_;
+    };
 
 }// namespace threepp::vulkan::par
 

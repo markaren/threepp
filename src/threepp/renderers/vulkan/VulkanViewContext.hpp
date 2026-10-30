@@ -12,10 +12,12 @@
 #define THREEPP_VULKAN_VIEW_CONTEXT_HPP
 
 #include "VulkanImplCommon.hpp"
+#include "VulkanGpuLayouts.hpp"// DrawInfoGpu (the prep scratch)
 #include "VulkanResources.hpp"
 #include "VulkanSceneTypes.hpp"// DrawGroup (indirect-skip cache)
 #include "BloomPass.hpp"
 #include "DeferredShade.hpp"
+#include "OcclusionCull.hpp"// CullMeta (the prep scratch)
 #include "ShadowMapPass.hpp"
 #include "PostComposite.hpp"
 #include "TaaResolve.hpp"
@@ -24,9 +26,14 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace threepp {
+    class ParticleField;
+}
 
 namespace threepp::vulkan::impl {
 
@@ -97,6 +104,126 @@ namespace threepp::vulkan::impl {
         Image2D       albedoMS;
         Image2D       depthMS;
         VkFramebuffer framebufferMS = VK_NULL_HANDLE;// MS render target (rasterGbufRenderPassMS)
+    };
+
+    // A visible ParticleField's DrawInfo record, for the particle pipeline's
+    // push-constant index (buildIndirectDrawData).
+    struct ParticleDrawSlot {
+        const ParticleField* field   = nullptr;
+        uint32_t             drawIdx = 0;                    // index into the DrawInfo SSBO
+        VkCullModeFlags      cull    = VK_CULL_MODE_BACK_BIT;// from the material's Side
+    };
+
+    // What one view's frame prep leaves for that view's passes: the draw
+    // groups and particle slots of its indirect build, and what its camera
+    // UBO upload stashed for passes that have no camera (DoF, intrinsics,
+    // FSR/DLSS dispatch, the reflection policy). The renderer's own copy
+    // (Impl::prepOut_) is what the passes being built or recorded read; a
+    // view's ViewRecordState carries a copy from its build to its recording.
+    //
+    // Several fields are written only on some frames (an orthographic
+    // camera leaves tanHalfFovY standing, a frame without FSR the FSR
+    // stash, an empty draw list the groups' cull modes), so one view's prep
+    // inherits them from whatever ran before it: the previous view's. A
+    // prep that runs beside the others (THREEPP_VK_CPU_VIEWS) writes into
+    // its own copy, marked unwritten() first; inheritFrom() then gives the
+    // fields it did not write the previous view's values, in view order,
+    // which is what the serial loop would have left.
+    struct ViewPrepOut {
+        std::array<DrawGroup, 4>      indirectGroups{};
+        uint32_t                      indirectTotalDraws = 0;
+        std::vector<ParticleDrawSlot> particleDrawSlots;
+        float tanHalfFovY = 0.4142f;              // stashed in updateCameraUbo (45° default)
+        float filmHeightM = 0.035f / 1.7777778f;  // the sensor height the DoF CoC assumes
+        float projP0 = 1.f, projP5 = 1.f, projP8 = 0.f, projP9 = 0.f;// unjittered pinhole intrinsics
+        float fsrJitterX = 0.f, fsrJitterY = 0.f; // FSR dispatch: this frame's sub-pixel offset
+        float fsrCamNear = 0.1f, fsrCamFar = 1000.f, fsrCamFovY = 1.0f;
+        float dlssJitterX = 0.f, dlssJitterY = 0.f;
+        float deferredCamRotAngle = 0.f;          // the camera's rotation since last frame
+
+        // A NaN no assignment in the renderer produces, as "not written".
+        static constexpr uint32_t kUnwrittenBits = 0x7FC0BEEFu;
+        static constexpr VkCullModeFlags kUnwrittenCull = VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
+
+        void unwritten() {
+            for (auto& g : indirectGroups) g.cullMode = kUnwrittenCull;
+            float u;
+            std::memcpy(&u, &kUnwrittenBits, sizeof(u));
+            tanHalfFovY = filmHeightM = u;
+            fsrJitterX = fsrJitterY = fsrCamNear = fsrCamFar = fsrCamFovY = u;
+            dlssJitterX = dlssJitterY = u;
+        }
+        void inheritFrom(const ViewPrepOut& prev) {
+            for (size_t b = 0; b < indirectGroups.size(); ++b)
+                if (indirectGroups[b].cullMode == kUnwrittenCull) indirectGroups[b].cullMode = prev.indirectGroups[b].cullMode;
+            const auto keep = [](float& mine, float theirs) {
+                uint32_t bits;
+                std::memcpy(&bits, &mine, sizeof(bits));
+                if (bits == kUnwrittenBits) mine = theirs;
+            };
+            keep(tanHalfFovY, prev.tanHalfFovY);
+            keep(filmHeightM, prev.filmHeightM);
+            keep(fsrJitterX, prev.fsrJitterX);
+            keep(fsrJitterY, prev.fsrJitterY);
+            keep(fsrCamNear, prev.fsrCamNear);
+            keep(fsrCamFar, prev.fsrCamFar);
+            keep(fsrCamFovY, prev.fsrCamFovY);
+            keep(dlssJitterX, prev.dlssJitterX);
+            keep(dlssJitterY, prev.dlssJitterY);
+        }
+    };
+
+    // THREEPP_VK_DRAW_STATS=N: what the frame prep walked, summed over N
+    // primary frames and printed (Impl::drawStatsTick). Diagnostics only.
+    struct DrawStats {
+        uint64_t frames = 0, entries = 0, spans = 0, cachedSpans = 0, cachedRows = 0, cachedDrawn = 0,
+                 otherDrawn = 0, cacheRebuildRows = 0, tlasRows = 0, tlasRewritten = 0, tlasFills = 0,
+                 tlasFullFills = 0;
+        DrawStats& operator+=(const DrawStats& o) {
+            frames += o.frames; entries += o.entries; spans += o.spans; cachedSpans += o.cachedSpans;
+            cachedRows += o.cachedRows; cachedDrawn += o.cachedDrawn; otherDrawn += o.otherDrawn;
+            cacheRebuildRows += o.cacheRebuildRows; tlasRows += o.tlasRows; tlasRewritten += o.tlasRewritten;
+            tlasFills += o.tlasFills; tlasFullFills += o.tlasFullFills;
+            return *this;
+        }
+    };
+
+    // A large plain instanced span the indirect build takes through the
+    // per-span draw cache (Impl::spanDrawCache_).
+    struct SpanDrawPlan {
+        uint32_t first, count, span;
+    };
+
+    // buildShadowDrawData's scratch: every caster once, then one command
+    // list per (layer, group); cleared, never reallocated, between frames.
+    // One set per chunk of the span walk (CpuPar.hpp): chunk c's draws
+    // follow chunk c-1's in the upload, so a command's firstInstance is
+    // chunk-local until the merge adds its chunk's base.
+    struct ShadowChunk {
+        std::vector<DrawInfoGpu>                        draws;
+        std::vector<std::vector<VkDrawIndirectCommand>> cmds;// [(layer * 2 + dynamic) * kGroups + group]
+        uint8_t staleMask = 0;// cascades a static caster reached while cached
+    };
+
+    // The frame prep's per-frame scratch, one set per view so that views
+    // can prepare at once: cleared, not reallocated, at the top of each use,
+    // so the capacity survives across frames (a few hundred KB of fresh
+    // pages a frame at high draw counts otherwise).
+    struct ViewPrepScratch {
+        // buildIndirectDrawData, per bucket: the records, their commands,
+        // the occlusion-cull metadata and each CPU record's bucket position.
+        std::array<std::vector<DrawInfoGpu>, 4>                     draws;
+        std::array<std::vector<VkDrawIndirectCommand>, 4>           cmds;
+        std::array<std::vector<vulkan::OcclusionCull::CullMeta>, 4> occl;
+        std::array<std::vector<uint32_t>, 4>                        cpuPos;
+        std::vector<SpanDrawPlan>                                   spanDrawPlans;
+        // The shadow maps' caster walk (buildShadowDrawData) and its chunk
+        // bounds; the dynamic casters and each entry's span, listed by the
+        // static-set hash walk (Impl::shadowStaticHash).
+        std::vector<ShadowChunk> shadowChunks;
+        std::vector<uint32_t>    shadowChunkBounds;
+        std::vector<uint32_t>    shadowDynamicIdx;
+        std::vector<uint32_t>    shadowSpanOfEntry;
     };
 
     // ── ViewContext: everything a single camera's render owns ───────────
@@ -430,6 +557,20 @@ namespace threepp::vulkan::impl {
         // Binding 3 of the shadow pass's raster set is current for slot f;
         // reset with rasterMatTexValid_ when the texture table changes.
         std::array<int8_t, kFramesInFlight> shadowMatTexValid_{};
+
+        // The frame prep's own scratch (ViewPrepScratch).
+        ViewPrepScratch prep;
+        // THREEPP_VK_CPU_VIEWS: this view's prep running beside the others.
+        // Its outputs land in prepStage (Impl::prepOut() hands it out) until
+        // the frame thread takes them in view order; its draw statistics in
+        // prepDrawStats. prepIdsReadOnly: the stable-id table is only read
+        // while views prepare at once, so the ids a new object gets keep the
+        // serial loop's order; a build that met an object without one sets
+        // prepIdMiss and is built again on the frame thread.
+        ViewPrepOut prepStage;
+        DrawStats   prepDrawStats;
+        bool        prepIdsReadOnly = false;
+        bool        prepIdMiss      = false;
     };
 
     // Per-frame raster camera data. currVPjittered drives gl_Position;

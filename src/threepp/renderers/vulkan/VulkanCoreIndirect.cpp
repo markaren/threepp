@@ -100,27 +100,35 @@ namespace threepp {
         // frame.F_uploadDrawInfo, as a sibling. Every early return between here
         // and the stop() still accounts (the destructor is what fires).
         THREEPP_CPUPROF_NAMED(profD, "frame.D_buildIndirect");
+        // The view this build is for, and where its outputs go: taken once,
+        // as both may be this thread's own (a view preparing on a pool
+        // thread, THREEPP_VK_CPU_VIEWS) and the walk below asks per entry.
+        ViewContext& vc  = view();
+        ViewPrepOut& out = prepOut();
+        const auto&  cullBits = vc.inFrustum;
+        // viewCulled for this view: out-of-range answers "drawn".
+        const auto inView = [&](size_t i) { return i >= cullBits.size() || cullBits[i] != 0; };
         // The primary's build owns the frame's draw_gen dispatch: none unless
         // this build plans one (a skipped build leaves this slot's records,
         // GPU-written ones included, as they are).
-        if (!view().secondary) {
+        if (!vc.secondary) {
             drawGenActive_ = false;
             drawGenSpans_.clear();
             drawGenLodRows_.clear();
             drawGenWork_ = 0;
         }
-        for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
-        indirectTotalDraws_ = 0;
-        particleDrawSlots_.clear();
-        if (!view().secondary) autoLodStats_.trianglesDrawn = 0;
+        for (auto& g : out.indirectGroups) { g.offset = 0; g.count = 0; }
+        out.indirectTotalDraws = 0;
+        out.particleDrawSlots.clear();
+        if (!vc.secondary) autoLodStats_.trianglesDrawn = 0;
 
         if (lastVisibleEntries_.empty()) return;
 
         // Four buckets: [BACK_cull, FRONT_cull, NONE_cull, decal] order.
-        // Reused member scratch (see the declarations in VulkanCoreImpl.hpp):
-        // cleared, not reallocated, so capacity survives across frames.
-        auto& draws = indirectDrawScratch_;
-        auto& cmds  = indirectCmdScratch_;
+        // The view's own scratch (ViewPrepScratch): cleared, not reallocated,
+        // so capacity survives across frames.
+        auto& draws = vc.prep.draws;
+        auto& cmds  = vc.prep.cmds;
         for (auto& v : draws) v.clear();
         for (auto& v : cmds) v.clear();
         // Occlusion-cull metadata rides the same bucketing so its final
@@ -138,7 +146,7 @@ namespace threepp {
         // indirect draws — a GPU hang → watchdog → device lost.
         const bool wantOcclMeta = occlusionCullingEnabled_ && occl_ &&
                                   occlHiz_ && occlHiz_->valid() && !scissorTest &&
-                                  !view().secondary;
+                                  !vc.secondary;
 
         // Skip signature: the DrawInfo/cmd/occl-meta contents are a pure
         // function of (scene draw inputs, this view's cull bits, the occl
@@ -147,38 +155,38 @@ namespace threepp {
         // and return — a fully static frame reuses ~20 MB of records
         // verbatim instead of rebuilding and re-copying them.
         const std::array<uint64_t, 2> buildSig = {
-                (uint64_t(drawInputsVersion_) << 32) | uint64_t(view().cullVersion),
+                (uint64_t(drawInputsVersion_) << 32) | uint64_t(vc.cullVersion),
                 // The pyramid's generation, not its view handle: a recreated
                 // pyramid can hand back the view value the last one had.
                 wantOcclMeta ? ((1ull << 63) | occlHiz_->generation()) : 0ull};
         // A scene with a ParticleField never takes the skip path. The DrawInfo
-        // contents would restore correctly, but particleDrawSlots_ (which is
-        // per-view and holds the push-constant index the particle pipeline
-        // needs) would not — it is Impl state, not view state, so a secondary
-        // view's build would leave the primary reading the wrong index. Fields
+        // contents would restore correctly, but the particle slots (which hold
+        // the push-constant index the particle pipeline needs) would not —
+        // they are not in the view's skip cache, so a restored build would
+        // leave the view reading another build's index. Fields
         // only appear in scenes that are moving anyway, where the signature
         // never matches; this is here so it cannot be wrong in the case it does.
-        if (particleFields_.empty() && view().indirectBuiltSig[frame] == buildSig) {
-            indirectGroups_     = view().cachedIndirectGroups;
-            indirectTotalDraws_ = view().cachedIndirectTotal;
-            if (!view().secondary) {
-                occlActiveThisFrame_ = view().cachedOcclActive;
-                autoLodStats_.trianglesDrawn = view().cachedIndirectTriangles;
+        if (particleFields_.empty() && vc.indirectBuiltSig[frame] == buildSig) {
+            out.indirectGroups     = vc.cachedIndirectGroups;
+            out.indirectTotalDraws = vc.cachedIndirectTotal;
+            if (!vc.secondary) {
+                occlActiveThisFrame_ = vc.cachedOcclActive;
+                autoLodStats_.trianglesDrawn = vc.cachedIndirectTriangles;
             }
-            if (view().cachedOcclActive && indirectTotalDraws_ > 0u) {
+            if (vc.cachedOcclActive && out.indirectTotalDraws > 0u) {
                 // Descriptor upkeep only: the records and the meta are the
                 // ones this slot already holds.
                 vulkan::OcclusionCull::FrameInputs oin{};
-                oin.srcCmds    = view().indirectCmdBuffers[frame].handle;
-                oin.rasterCam  = view().rasterCameraUbos[frame].handle;
+                oin.srcCmds    = vc.indirectCmdBuffers[frame].handle;
+                oin.rasterCam  = vc.rasterCameraUbos[frame].handle;
                 oin.hizView    = occlHiz_->view();
                 oin.hizSampler = occlHiz_->sampler();
-                occl_->prepareFrame(frame, indirectTotalDraws_, occlBitDomain_, oin);
+                occl_->prepareFrame(frame, out.indirectTotalDraws, occlBitDomain_, oin);
             }
             return;
         }
 
-        auto& occlMeta = indirectOcclScratch_;
+        auto& occlMeta = vc.prep.occl;
         for (auto& v : occlMeta) v.clear();
         auto bucketOf = [](VkCullModeFlags cm) -> int {
             if (cm == VK_CULL_MODE_BACK_BIT)  return 0;
@@ -195,7 +203,7 @@ namespace threepp {
         // Records per bucket so far (the CPU's and the reserved GPU ranges),
         // and each CPU record's position in its bucket.
         std::array<uint32_t, 4> bucketTotal{};
-        auto& cpuPos = indirectCpuPosScratch_;
+        auto& cpuPos = vc.prep.cpuPos;
         for (auto& v : cpuPos) v.clear();
 
         // ── Stage 2: instanced spans whose records draw_gen.comp writes ─────
@@ -216,9 +224,9 @@ namespace threepp {
             vulkan::DrawGen::SpanDesc desc{};
         };
         std::vector<GpuSpanPlan> gpuPlans;
-        const bool gpuDraws = !view().secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
+        const bool gpuDraws = !vc.secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
                               !wantOcclMeta;
-        if (!view().secondary && gpuDrawGenCheck_) {
+        if (!vc.secondary && gpuDrawGenCheck_) {
             drawGenExpected_.clear();
             drawGenExpectedFrame_ = frame;
         }
@@ -273,7 +281,7 @@ namespace threepp {
                 }
                 for (uint32_t j = 0; j < sp.count; ++j) {
                     const size_t e = size_t(sp.first) + j;
-                    if (!viewCulled(e)) continue;
+                    if (!inView(e)) continue;
                     ++gp.visible;
                     uint32_t vc = vcount;
                     if (d.lodRowCount > 0u) {
@@ -356,12 +364,12 @@ namespace threepp {
         // byte: a per-span template, the row's cached world matrix, its entry
         // index and the per-row flag bits (moving, LOD fade). Check mode keeps
         // the per-entry path, which builds the GPU reference.
-        if (!view().secondary && (++spanDrawCacheFrame_ & 255u) == 0u) {
+        if (!vc.secondary && (++spanDrawCacheFrame_ & 255u) == 0u) {
             // Meshes not drawn for a while (removed, or hidden) let go of theirs.
             for (auto it = spanDrawCache_.begin(); it != spanDrawCache_.end();)
                 it = (sceneBuildSerial_ - it->second.lastUsed > 256u) ? spanDrawCache_.erase(it) : std::next(it);
         }
-        auto& cachePlans = spanDrawPlans_;
+        auto& cachePlans = vc.prep.spanDrawPlans;
         cachePlans.clear();
         // THREEPP_VK_SPAN_DRAW_CACHE=0: every span through the per-entry loop (A/B).
         static const bool spanDrawCacheOn = vulkan::env::flag("THREEPP_VK_SPAN_DRAW_CACHE", true);
@@ -428,8 +436,12 @@ namespace threepp {
 
             // The rows' matrices: the moved ones re-read, all of them on anything else.
             // Only rows moved THIS frame are in meshMovedBits_: the per-row
-            // path needs the cache brought up to date last frame.
+            // path needs the cache brought up to date last frame. The first
+            // build this frame does that, under the lock (views can build at
+            // once); the rows are read after it, when nothing writes them.
+            std::unique_lock cacheLock(spanDrawCacheMutex_);
             SpanDrawCache& c = spanDrawCache_[sp.meshId];
+            DrawStats& stats = drawStatsOut();
             const bool lastFrame = c.lastUsed + 1u == sceneBuildSerial_ || c.lastUsed == sceneBuildSerial_;
             c.lastUsed = sceneBuildSerial_;
             if (lastFrame && c.count == cp.count && c.meshWorld == sp.meshWorld && c.models.size() == cp.count &&
@@ -439,7 +451,7 @@ namespace threepp {
                     const size_t i = size_t(cp.first) + j;
                     if ((i >> 5) >= meshMovedBits_.size() || !(meshMovedBits_[i >> 5] & (1u << (i & 31u)))) continue;
                     std::memcpy(c.models[j].data(), lastVisibleEntries_[i].worldMatrix.data(), 64);
-                    ++drawStats_.cacheRebuildRows;
+                    ++stats.cacheRebuildRows;
                     if (c.occlValid && c.occlBounds) {
                         const float* M = c.models[j].data();
                         const float* ce = c.occlCenter;
@@ -461,7 +473,7 @@ namespace threepp {
                 c.instMatVersion = sp.instMatVersion;
                 c.meshWorld = sp.meshWorld;
                 c.models.resize(cp.count);
-                drawStats_.cacheRebuildRows += cp.count;
+                stats.cacheRebuildRows += cp.count;
                 for (uint32_t j = 0; j < cp.count; ++j)
                     std::memcpy(c.models[j].data(), lastVisibleEntries_[cp.first + j].worldMatrix.data(), 64);
                 c.occlValid = false;
@@ -501,6 +513,8 @@ namespace threepp {
                 }
             }
 
+            cacheLock.unlock();
+
             DrawInfoGpu tmpl{};
             tmpl.posAddr     = rec->vertex.address;
             tmpl.nrmAddr     = rec->normal.address;
@@ -518,7 +532,7 @@ namespace threepp {
             const VkDrawIndirectCommand cmd{vcount, 1u, vfirst, 0u};
             for (uint32_t j = 0; j < cp.count; ++j) {
                 const size_t i = size_t(cp.first) + j;
-                if (!viewCulled(i)) continue;
+                if (!inView(i)) continue;
                 const uint32_t fade = i < entryLodFade_.size() ? entryLodFade_[i] : 0u;
                 if (lodFadeDrawsNone(fade)) continue;
                 if (!idsValid) {
@@ -529,7 +543,7 @@ namespace threepp {
                     idsValid = true;
                 }
                 drawnTriangles += vcount / 3u;
-                ++drawStats_.cachedDrawn;
+                ++stats.cachedDrawn;
                 DrawInfoGpu& di = draws[b].emplace_back(tmpl);
                 std::memcpy(di.model, c.models[j].data(), 64);
                 di.instanceCustomIndex = static_cast<uint32_t>(i);
@@ -561,7 +575,7 @@ namespace threepp {
                     for (uint32_t j = 0; j < gp.count; ++j) {
                         DrawGenExpected x;
                         x.entry  = gp.first + j;
-                        x.culled = !viewCulled(size_t(gp.first) + j);
+                        x.culled = !inView(size_t(gp.first) + j);
                         drawGenExpected_.push_back(x);
                     }
                     gpuSinkEnd  = gp.first + gp.count;
@@ -585,7 +599,7 @@ namespace threepp {
             const bool sinkExpected = i < gpuSinkEnd;
             // The cull bit first: in a forest most entries are culled, and the
             // tests below read the entry, a cache line each.
-            if (!viewCulled(i)) continue;
+            if (!inView(i)) continue;
             // An instance its LOD fade draws with no pixel at all (a far
             // impostor's near side) gets no record; the GPU-written spans keep
             // theirs, so check mode's reference keeps it too.
@@ -598,7 +612,7 @@ namespace threepp {
             // rasterizer's. Per view, because an RGB camera preview and an
             // editor viewport pane are secondary views too and must not show
             // the bake shell. Scene opt-in off ⇒ no view draws it.
-            if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) continue;
+            if (en.sensorOnly && !(sensorOnlySurfaces_ && vc.secondary && vc.sensorSurfaces)) continue;
             if (en.mesh != memoMesh) {
                 memoMesh     = en.mesh;
                 memoRec      = resolveBlasForEntry(en);
@@ -866,20 +880,26 @@ namespace threepp {
             }
             ++globalIdx;
         }
+        // A view preparing beside the others met an object the stable-id
+        // table has no number for yet (stableIdForObject): this slot's
+        // buffers and the skip cache are left as they are, and the frame
+        // thread builds the view again, in view order, where the number is
+        // handed out.
+        if (vc.prepIdMiss) return;
         // Every record, the reserved GPU ranges included.
         globalIdx = bucketTotal[0] + bucketTotal[1] + bucketTotal[2] + bucketTotal[3];
 
-        indirectTotalDraws_ = globalIdx;
+        out.indirectTotalDraws = globalIdx;
         // Publish only from the primary's build: a secondary reruns this
         // function later in the same frame (wantOcclMeta forced false above)
         // and must not stomp the flag the primary's frame body branched on.
         const bool occlThisBuild = wantOcclMeta && globalIdx > 0u;
-        if (!view().secondary) {
+        if (!vc.secondary) {
             occlActiveThisFrame_ = occlThisBuild;
             autoLodStats_.trianglesDrawn = drawnTriangles;
         }
-        view().cachedIndirectTriangles = drawnTriangles;
-        if (!view().secondary) {
+        vc.cachedIndirectTriangles = drawnTriangles;
+        if (!vc.secondary) {
             drawStats_.entries += lastVisibleEntries_.size();
             drawStats_.spans += entrySpans_.size();
             drawStats_.cachedSpans += cachePlans.size();
@@ -890,10 +910,10 @@ namespace threepp {
         if (globalIdx == 0u) {
             // Nothing visible: cache the (all-zero) outputs so identical
             // frames skip even the entry walk.
-            view().cachedIndirectGroups = indirectGroups_;
-            view().cachedIndirectTotal  = 0u;
-            view().cachedOcclActive     = false;
-            view().indirectBuiltSig[frame] = buildSig;
+            vc.cachedIndirectGroups = out.indirectGroups;
+            vc.cachedIndirectTotal  = 0u;
+            vc.cachedOcclActive     = false;
+            vc.indirectBuiltSig[frame] = buildSig;
             return;
         }
         // Build done; everything below is bytes-to-the-device (plus the
@@ -914,8 +934,8 @@ namespace threepp {
         vulkan::OcclusionCull::CullMeta* occlMetaDst = nullptr;
         if (occlThisBuild) {
             vulkan::OcclusionCull::FrameInputs oin{};
-            oin.srcCmds    = view().indirectCmdBuffers[frame].handle;
-            oin.rasterCam  = view().rasterCameraUbos[frame].handle;
+            oin.srcCmds    = vc.indirectCmdBuffers[frame].handle;
+            oin.rasterCam  = vc.rasterCameraUbos[frame].handle;
             oin.hizView    = occlHiz_->view();
             oin.hizSampler = occlHiz_->sampler();
             occl_->prepareFrame(frame, globalIdx, occlBitDomain_, oin);
@@ -923,9 +943,9 @@ namespace threepp {
         }
 
         void* mappedDraws = nullptr;
-        check(vmaMapMemory(ctx->allocator(), view().drawInfoBuffers[frame].alloc, &mappedDraws), "vmaMapMemory(drawInfo)");
+        check(vmaMapMemory(ctx->allocator(), vc.drawInfoBuffers[frame].alloc, &mappedDraws), "vmaMapMemory(drawInfo)");
         void* mappedCmds = nullptr;
-        check(vmaMapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, &mappedCmds), "vmaMapMemory(indirectCmds)");
+        check(vmaMapMemory(ctx->allocator(), vc.indirectCmdBuffers[frame].alloc, &mappedCmds), "vmaMapMemory(indirectCmds)");
 
         uint8_t* dDst = static_cast<uint8_t*>(mappedDraws);
         uint8_t* cDst = static_cast<uint8_t*>(mappedCmds);
@@ -936,9 +956,9 @@ namespace threepp {
         };
         for (int b = 0; b < 4; ++b) {
             const uint32_t n = static_cast<uint32_t>(draws[b].size());// the CPU's records
-            indirectGroups_[b].cullMode = cullForBucket[b];
-            indirectGroups_[b].offset   = offset;
-            indirectGroups_[b].count    = bucketTotal[b];
+            out.indirectGroups[b].cullMode = cullForBucket[b];
+            out.indirectGroups[b].offset   = offset;
+            out.indirectGroups[b].count    = bucketTotal[b];
             // Patch firstInstance now that we know each draw's final
             // position in the concatenated DrawInfo / indirect arrays.
             // Entry-order assignment up above doesn't match concat
@@ -967,7 +987,7 @@ namespace threepp {
         // The GPU spans' record ranges are final too: the dispatch's input.
         if (!gpuPlans.empty()) {
             Matrix4 cvp;
-            std::memcpy(cvp.elements.data(), view().prevCullVp, 64);
+            std::memcpy(cvp.elements.data(), vc.prevCullVp, 64);
             Frustum frustum;
             frustum.setFromProjectionMatrix(cvp);
             const auto& planes = frustum.planes();
@@ -979,7 +999,7 @@ namespace threepp {
             }
             uint32_t work = 0;
             for (auto& gp : gpuPlans) {
-                gp.desc.recordBase = indirectGroups_[gp.bucket].offset + gp.bucketPos;
+                gp.desc.recordBase = out.indirectGroups[gp.bucket].offset + gp.bucketPos;
                 gp.desc.workBase   = work;
                 work += gp.count;
                 drawGenSpans_.push_back(gp.desc);
@@ -1001,32 +1021,32 @@ namespace threepp {
         // Now that the bucket offsets are final, resolve each field's DrawInfo
         // index. Same reason the firstInstance patch above exists: entry order
         // is not concatenated order.
-        particleDrawSlots_.reserve(pfSlots.size());
+        out.particleDrawSlots.reserve(pfSlots.size());
         for (const auto& s : pfSlots) {
-            particleDrawSlots_.push_back(
-                    {s.field, indirectGroups_[s.bucket].offset + s.pos, s.cull});
+            out.particleDrawSlots.push_back(
+                    {s.field, out.indirectGroups[s.bucket].offset + s.pos, s.cull});
         }
 
         // Bucket-offset writes above land in [0, globalIdx) of each buffer —
         // flush exactly that; the occl meta rides its own persistently-mapped
         // buffer, flushed through its owner.
-        flushHostWrites(ctx->allocator(), view().drawInfoBuffers[frame].alloc, 0, drawBytes);
-        flushHostWrites(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, 0, cmdBytes);
+        flushHostWrites(ctx->allocator(), vc.drawInfoBuffers[frame].alloc, 0, drawBytes);
+        flushHostWrites(ctx->allocator(), vc.indirectCmdBuffers[frame].alloc, 0, cmdBytes);
         if (occlMetaDst) occl_->flushMeta(frame, globalIdx);
-        vmaUnmapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc);
-        vmaUnmapMemory(ctx->allocator(), view().drawInfoBuffers[frame].alloc);
+        vmaUnmapMemory(ctx->allocator(), vc.indirectCmdBuffers[frame].alloc);
+        vmaUnmapMemory(ctx->allocator(), vc.drawInfoBuffers[frame].alloc);
 
         // Rewrite binding 4 if the DrawInfo buffer handle moved (grow).
         // The indirect cmd buffer is consumed by vkCmdDrawIndirect — no
         // descriptor binding needed for it.
         if (drawGrown) {
             VkDescriptorBufferInfo dbInfo{};
-            dbInfo.buffer = view().drawInfoBuffers[frame].handle;
+            dbInfo.buffer = vc.drawInfoBuffers[frame].handle;
             dbInfo.offset = 0;
             dbInfo.range  = VK_WHOLE_SIZE;
             VkWriteDescriptorSet w{};
             w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w.dstSet          = view().rasterDescSets[frame];
+            w.dstSet          = vc.rasterDescSets[frame];
             w.dstBinding      = 4;
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1035,10 +1055,10 @@ namespace threepp {
         }
 
         // Publish the skip cache for this view + FIF slot.
-        view().cachedIndirectGroups = indirectGroups_;
-        view().cachedIndirectTotal  = indirectTotalDraws_;
-        view().cachedOcclActive     = occlThisBuild;
-        view().indirectBuiltSig[frame] = buildSig;
+        vc.cachedIndirectGroups = out.indirectGroups;
+        vc.cachedIndirectTotal  = out.indirectTotalDraws;
+        vc.cachedOcclActive     = occlThisBuild;
+        vc.indirectBuiltSig[frame] = buildSig;
     }
 
     // Begin the raster G-buffer render pass and ship the prebuilt
@@ -1116,11 +1136,11 @@ namespace threepp {
         scissor.extent = gbufReg;
         vkCmdSetScissor(cb, 0, 1, &scissor);
 
-        if (indirectTotalDraws_ == 0u) {
+        if (prepOut().indirectTotalDraws == 0u) {
             vkCmdEndRenderPass(cb);
             return;
         }
-        const bool drawParticleFields = particles && !particleDrawSlots_.empty();
+        const bool drawParticleFields = particles && !prepOut().particleDrawSlots.empty();
 
         const VkPipeline indirectPipe = useMsaa ? rasterGbufIndirectPipelineMS : rasterGbufIndirectPipeline;
         const VkPipeline decalPipe    = useMsaa ? rasterGbufDecalPipelineMS : rasterGbufDecalPipeline;
@@ -1137,7 +1157,7 @@ namespace threepp {
         // it per draw.
         constexpr VkDeviceSize cmdStride = sizeof(VkDrawIndirectCommand);
         for (int b = 0; b < 3; ++b) {
-            const auto& g = indirectGroups_[b];
+            const auto& g = prepOut().indirectGroups[b];
             if (g.count == 0u) continue;
             vkCmdSetCullMode(cb, g.cullMode);
             vkCmdDrawIndirect(cb,
@@ -1148,7 +1168,7 @@ namespace threepp {
         }
         // Blend decals last: albedo-blend pipeline lerps over the receivers
         // rasterized above (same layout/descriptors, no set rebind needed).
-        if (const auto& g = indirectGroups_[3]; g.count > 0u) {
+        if (const auto& g = prepOut().indirectGroups[3]; g.count > 0u) {
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, decalPipe);
             vkCmdSetCullMode(cb, g.cullMode);
             vkCmdDrawIndirect(cb,
@@ -1206,7 +1226,7 @@ namespace threepp {
             // DrawInfo, so the two lists are not index-parallel. Fields per
             // scene are counted in ones, so the scan is free.
             const ParticleDrawSlot* slot = nullptr;
-            for (const auto& s : particleDrawSlots_) {
+            for (const auto& s : prepOut().particleDrawSlots) {
                 if (s.field == st.field) { slot = &s; break; }
             }
             if (!slot) continue;

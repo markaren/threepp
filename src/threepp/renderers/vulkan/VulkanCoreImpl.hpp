@@ -3,6 +3,7 @@
 // VMA_IMPLEMENTATION must be #defined in VulkanRenderer.cpp BEFORE including this file.
 #pragma once
 
+#include "CpuPar.hpp"
 #include "EnvKnob.hpp"
 #include "VulkanContext.hpp"
 #include "VulkanResources.hpp"
@@ -1473,12 +1474,16 @@ namespace threepp {
         std::vector<uint32_t> tlasRowDirty_;
         std::vector<uint32_t> tlasSpanOrder_;// the lean fill's span order (stable, then volatile)
         // THREEPP_VK_DRAW_STATS=N: every N primary frames, one stderr line of
-        // what the frame prep walked (drawStatsTick). Diagnostics only.
-        struct DrawStats {
-            uint64_t frames = 0, entries = 0, spans = 0, cachedSpans = 0, cachedRows = 0, cachedDrawn = 0,
-                     otherDrawn = 0, cacheRebuildRows = 0, tlasRows = 0, tlasRewritten = 0, tlasFills = 0,
-                     tlasFullFills = 0;
-        } drawStats_;
+        // what the frame prep walked (drawStatsTick). Diagnostics only. A
+        // view that prepares beside the others counts into its own
+        // (ViewContext::prepDrawStats), added here once it is done.
+        using DrawStats = vulkan::impl::DrawStats;
+        DrawStats drawStats_;
+        // Where the build running on this thread counts.
+        DrawStats& drawStatsOut() {
+            ViewContext& v = view();
+            return v.prepIdsReadOnly ? v.prepDrawStats : drawStats_;
+        }
         void drawStatsTick();
         void markTlasRowDirty(size_t i) {
             if ((i >> 5) < tlasRowDirty_.size()) tlasRowDirty_[i >> 5] |= 1u << (i & 31u);
@@ -2085,8 +2090,29 @@ namespace threepp {
                 total += budgets[i].statistics.blockBytes;
             return total;
         }
-        ViewContext&       view()       { return *curView_; }
-        const ViewContext& view() const { return *curView_; }
+        // A view's frame prep running on a pool thread (THREEPP_VK_CPU_VIEWS)
+        // names its view in the thread's context (CpuPar.hpp), and so do the
+        // forks it makes; everywhere else the context is null and the view is
+        // curView_.
+        [[nodiscard]] ViewContext* viewPtr() const {
+            auto* v = static_cast<ViewContext*>(vulkan::par::threadContext());
+            return v ? v : curView_;
+        }
+        ViewContext&       view()       { return *viewPtr(); }
+        const ViewContext& view() const { return *viewPtr(); }
+        // What the frame prep left for the passes of the view being built or
+        // recorded (ViewPrepOut, defined with ViewContext). A view's prep
+        // running on a pool thread writes into its own ViewContext::prepStage
+        // instead, which the frame thread takes in view order before that
+        // view's passes are built; prepOut() is the one this thread's code
+        // writes and reads.
+        using ViewPrepOut     = vulkan::impl::ViewPrepOut;
+        using ViewPrepScratch = vulkan::impl::ViewPrepScratch;
+        ViewPrepOut prepOut_;
+        ViewPrepOut& prepOut() {
+            auto* v = static_cast<ViewContext*>(vulkan::par::threadContext());
+            return v ? v->prepStage : prepOut_;
+        }
         // The primary view, by name, for the (many) places that mean "the
         // swapchain view" rather than "whichever view is being recorded".
         ViewContext&       primaryView()       { return *views_[0]; }
@@ -2574,8 +2600,8 @@ namespace threepp {
         using RasterCameraData = vulkan::impl::RasterCameraData;
         // (rasterCameraUbos, the prev-VP / prev-jitter / sky-reproject /
         //  depth-linearization TAA bookkeeping, and the prev camera pose all
-        //  moved to ViewContext — see the RasterCameraData note there.)
-        float deferredCamRotAngle_ = 0.f;
+        //  moved to ViewContext — see the RasterCameraData note there; the
+        //  camera's rotation since last frame is prepOut_.deferredCamRotAngle.)
 
         // Nearest-filter sampler used by the deferred shade to read gbuffer
         // attachments. Nearest avoids bilinear smearing of normal/motion/ids
@@ -2605,11 +2631,10 @@ namespace threepp {
         bool   fsrResetNext_ = true; // force FSR history reset on the next dispatch
         double fsrPrevTimeSec_ = -1.0;// for FSR frameTimeDelta (ms)
         // Camera params stashed at raster-camera-upload time (no camera at the
-        // record site) — FSR needs near/far/vertical-FOV for depth reconstruction.
-        float  fsrCamNear_ = 0.1f, fsrCamFar_ = 1000.f, fsrCamFovY_ = 1.0f;
-        // The sub-pixel [-0.5,0.5] jitter applied to the projection this frame,
-        // sourced from FSR's own sequence so the dispatch jitterOffset matches.
-        float  fsrJitterX_ = 0.f, fsrJitterY_ = 0.f;
+        // record site) — FSR needs near/far/vertical-FOV for depth
+        // reconstruction — and the sub-pixel [-0.5,0.5] jitter applied to the
+        // projection this frame, sourced from FSR's own sequence so the
+        // dispatch jitterOffset matches: prepOut_.fsrCam* and .fsrJitter*.
         // Runtime on/off (setFsr), distinct from fsrActive_ (compiled + context
         // created). Default on so a THREEPP_WITH_FSR build uses FSR by default.
         bool   fsrEnabled_ = true;
@@ -2627,8 +2652,7 @@ namespace threepp {
         double dlssPrevTimeSec_ = -1.0;// for DLSS frameTimeDelta (ms)
         // The sub-pixel [-0.5,0.5] jitter applied to the projection this frame
         // (built-in Halton — DLSS's recommended sequence/phase count matches
-        // jitterPhaseCount_'s FSR2-style scaling).
-        float  dlssJitterX_ = 0.f, dlssJitterY_ = 0.f;
+        // jitterPhaseCount_'s FSR2-style scaling): prepOut_.dlssJitter*.
         // Runtime on/off (setDlss), distinct from dlssActive_. Default on so a
         // THREEPP_WITH_DLSS build uses DLSS by default.
         bool   dlssEnabled_ = true;
@@ -2776,19 +2800,18 @@ namespace threepp {
         std::unique_ptr<vulkan::SensorPass> sensorPass_;
         bool  dofEnabled_    = false;
         float focusDistance_ = 10.f;
-        float tanHalfFovY_   = 0.4142f;// stashed in updateCameraUbo (45° default)
+        // tan(fovY/2), stashed in updateCameraUbo: prepOut_.tanHalfFovY.
         // Sensor height in METRES, stashed in updateCameraUbo from
         // PerspectiveCamera::getFilmHeight() (filmGauge is the film WIDTH in
         // mm; the height follows from the camera's aspect). This is the one
         // sensor the whole camera model shares: FOV comes from it via
         // setFocalLength, and the DoF CoC + cameraIntrinsics() read it back.
         // 0.0197 = the default 35 mm gauge at 16:9. Non-perspective cameras
-        // keep whatever the last perspective camera left here.
-        float filmHeightM_ = 0.035f / 1.7777778f;
+        // keep whatever the last perspective camera left here:
+        // prepOut_.filmHeightM.
         // Unjittered projection terms stashed in updateCameraUbo, consumed by
         // cameraIntrinsics(): [0]/[5] = 2n/(r-l), 2n/(t-b); [8]/[9] = frustum
-        // skew (non-zero under filmOffset / setViewOffset).
-        float projP0_ = 1.f, projP5_ = 1.f, projP8_ = 0.f, projP9_ = 0.f;
+        // skew (non-zero under filmOffset / setViewOffset): prepOut_.projP*.
 
         // ── Lens + sensor (the non-pinhole half of the camera) ──────────────
         // Both default to inactive, and while inactive the RCAS stage keeps
@@ -2947,13 +2970,9 @@ namespace threepp {
         // vertex stage reads. Parallel to particleFields_ /
         // particleFieldPass_->drawStates(), rebuilt by buildIndirectDrawData
         // (and restored from the view cache on its skip path, since the field's
-        // DrawInfo is as static as every other one).
-        struct ParticleDrawSlot {
-            const ParticleField* field = nullptr;
-            uint32_t             drawIdx = 0;   // index into the DrawInfo SSBO
-            VkCullModeFlags      cull = VK_CULL_MODE_BACK_BIT;// from the material's Side
-        };
-        std::vector<ParticleDrawSlot> particleDrawSlots_;
+        // DrawInfo is as static as every other one): prepOut_.particleDrawSlots.
+        // Definition moved to VulkanViewContext.hpp.
+        using ParticleDrawSlot = vulkan::impl::ParticleDrawSlot;
 
         // ── ParticleField density volumes (phase 2, plan §3.3) ──────────────
         // Bindings 67/68 of EVERY view's deferred set. Both handles are owned
@@ -3063,7 +3082,6 @@ namespace threepp {
         };
         std::vector<DrawGenExpected> drawGenExpected_;
         uint32_t drawGenExpectedFrame_ = 0;
-        std::array<std::vector<uint32_t>, 4> indirectCpuPosScratch_;// bucket position of each CPU record
         void prepareDrawGen(uint32_t frame);
 
         // ── GPU TLAS instances (stage 5; TlasGen.hpp, tlas_gen.comp) ───────
@@ -3133,7 +3151,7 @@ namespace threepp {
         // sprites only; for field billboards alone it imports the G-buffer's
         // depth and touches no entry (overlayDepthImportsGbuffer).
         [[nodiscard]] bool drawGenCullsOnGpu() const {
-            return !curView_->secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
+            return !view().secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
                    !gpuDrawGenCheck_ && !occlusionCullingEnabled_ && !sceneHasOverlayMeshes();
         }
         void recordDrawGen(VkCommandBuffer cb, uint32_t frame);
@@ -3243,11 +3261,13 @@ namespace threepp {
         // Secondaries are native-res by scope: renderExt == outExt, so their
         // TAA resolve is a plain 1:1 temporal filter with no upsampling.
         VkExtent2D renderExtent() const {
-            if (curView_ && curView_->secondary) return curView_->renderExt;
+            const ViewContext* v = viewPtr();
+            if (v && v->secondary) return v->renderExt;
             return primaryRenderExtent();
         }
         VkExtent2D viewOutExtent() const {
-            if (curView_ && curView_->secondary) return curView_->outExt;
+            const ViewContext* v = viewPtr();
+            if (v && v->secondary) return v->outExt;
             return ctx->swapchainExtent();
         }
         // ── Per-frame timing instrumentation ─────────────────────────────
@@ -4413,6 +4433,15 @@ namespace threepp {
         // GPU pays a small constant for these. Overlay entries also stay
         // on (debug viz should always render).
         void cullEntriesAgainstFrustum(Camera& camera);
+        // A span's world bounds for the cull, derived when cleared; false when
+        // it has none (VulkanCoreScene.cpp).
+        bool refreshSpanCullBounds(EntrySpan& sp);
+        // Every span a cull walk would box, boxed now, ahead of culls and
+        // shadow fits that run at once.
+        void boxSpansForCull();
+        // Whether the current view's cull would walk the spans this frame.
+        [[nodiscard]] bool cullWouldWalk(const Matrix4& vp, bool gpuCull) const;
+        [[nodiscard]] bool cullWouldWalk(Camera& camera) const;
 
         // Pull per-mesh PBR material params off the threepp Material chain.
         // Anything not satisfying the relevant interface gets a sensible
@@ -4986,6 +5015,15 @@ namespace threepp {
                     return it->second;
                 }
             }
+            if (view().prepIdsReadOnly) {
+                // A view preparing beside the others: numbering an object here
+                // would hand out the next id in whichever order the views got
+                // here. Its build is redone on the frame thread instead.
+                const auto it = autoStableIds_.find(o.id);
+                if (it != autoStableIds_.end()) return it->second;
+                view().prepIdMiss = true;
+                return 0u;
+            }
             const auto [it, inserted] = autoStableIds_.try_emplace(o.id, 0u);
             if (inserted) {
                 it->second = nextAutoStableId_;
@@ -5068,21 +5106,12 @@ namespace threepp {
         // [3] blend decals (NONE cull, drawn LAST with rasterGbufDecalPipeline
         // so their albedo lerps over the already-rasterized receivers).
         // The static order means recordRasterGbufPass can issue at most 4
-        // vkCmdDrawIndirect calls and skip the empty ones.
-        std::array<DrawGroup, 4> indirectGroups_{};
-        uint32_t indirectTotalDraws_ = 0;
+        // vkCmdDrawIndirect calls and skip the empty ones. The groups and the
+        // total of the view being built or recorded: prepOut_.indirectGroups
+        // and .indirectTotalDraws.
 
-        // Per-frame scratch for buildIndirectDrawData, kept as members so the
-        // bucket vectors retain their capacity instead of being reallocated and
-        // grown by push_back every frame (a few hundred KB of fresh pages per
-        // frame at high draw counts — steady-state cost plus allocator churn
-        // that surfaces as frame-time variance). Cleared, not rebuilt, at the
-        // top of each build; peak capacity is deliberately retained for the
-        // renderer's lifetime. Only ever touched by buildIndirectDrawData,
-        // which has a single call site and is neither recursive nor reentrant.
-        std::array<std::vector<DrawInfoGpu>, 4>                     indirectDrawScratch_;
-        std::array<std::vector<VkDrawIndirectCommand>, 4>           indirectCmdScratch_;
-        std::array<std::vector<vulkan::OcclusionCull::CullMeta>, 4> indirectOcclScratch_;
+        // The frame prep's per-frame scratch (buildIndirectDrawData's bucket
+        // vectors among it) is the view's own: ViewContext::prep.
         // Per-span draw cache (buildIndirectDrawData): for a large plain
         // instanced span, its rows' world matrices and occlusion records, kept
         // contiguous so a frame whose span did not move builds its draw records
@@ -5104,11 +5133,16 @@ namespace threepp {
             bool     occlBounds = false;
             std::vector<vulkan::OcclusionCull::CullMeta> occl;
         };
+        // Every view's build reads it, and the first this frame brings a span
+        // up to date: under spanDrawCacheMutex_, the map and that refresh, as
+        // views can build at once (THREEPP_VK_CPU_VIEWS); a span's rows are
+        // read after the lock, by which time no other build writes them.
         std::unordered_map<unsigned int, SpanDrawCache> spanDrawCache_;
+        std::mutex spanDrawCacheMutex_;
         uint64_t spanDrawCacheFrame_ = 0;
         uint64_t sceneBuildSerial_ = 0;// ensureSceneBuilt calls: meshMovedBits_ holds one call's moves
-        struct SpanDrawPlan { uint32_t first, count, span; };
-        std::vector<SpanDrawPlan> spanDrawPlans_;
+        // Definition moved to VulkanViewContext.hpp.
+        using SpanDrawPlan = vulkan::impl::SpanDrawPlan;
         // Spans this short take the per-entry path (their entries are few).
         static constexpr uint32_t kSpanDrawCacheMinRows = 64;
 
@@ -6183,6 +6217,9 @@ namespace threepp {
         // The fit and fill half of prepareShadowMaps; false when the view has
         // nothing to draw a map for (no sun, no slotted lamp).
         bool fitShadowMaps(Camera& camera);
+        // The maps' sizes this frame's sun and lamp slots ask for (all zero:
+        // none), as fitShadowMaps allocates them.
+        [[nodiscard]] vulkan::ShadowMapPass::Sizes shadowMapSizes() const;
         // The caster list of the current view's maps: every entry a shadow
         // ray could hit (shadowOccludes' set: no blend, no transmission, no
         // strong emitter, no viewmodel), kept when its world sphere meets a
@@ -6225,15 +6262,19 @@ namespace threepp {
         [[nodiscard]] bool     shadowCasterDynamic(uint32_t entry) const;
         [[nodiscard]] uint64_t shadowStaticHash();
         // The hash walk's by-products: the moving casters' entry indices in
-        // span order, and each entry's span. In steady state (every layer
-        // skipped or served from its cache) buildShadowDrawData walks only
-        // those; the caches hold the static casters.
-        std::vector<uint32_t> shadowDynamicIdx_, shadowSpanOfEntry_;
+        // span order, and each entry's span (the view's prep scratch,
+        // ViewPrepScratch::shadowDynamicIdx / shadowSpanOfEntry). In steady
+        // state (every layer skipped or served from its cache)
+        // buildShadowDrawData walks only those; the caches hold the static
+        // casters.
         // The static set as a generation: +1 whenever shadowStaticHash changes.
         // A cached layer is valid for one generation, never for a hash value:
         // a layer unseen while a mesh moves and settles would meet its old
-        // hash again with the mesh at its old place.
-        uint64_t shadowStaticHashPrev_ = 0, shadowStaticGen_ = 1;
+        // hash again with the mesh at its old place. Every view's fit
+        // compares, the first to see a new hash steps it: under
+        // shadowStaticMutex_, as views can fit at once.
+        uint64_t   shadowStaticHashPrev_ = 0, shadowStaticGen_ = 1;
+        std::mutex shadowStaticMutex_;
         // THREEPP_VK_SHADOW_CACHE_DEBUG=1: a line per generation step (what
         // flipped) and per frame (layers cached / rebuilt / drawn / skipped).
         bool                 shadowCacheDebug_ = vulkan::env::flag("THREEPP_VK_SHADOW_CACHE_DEBUG");
@@ -6246,18 +6287,10 @@ namespace threepp {
         // cascades they leave stale and lists ShadowMapPass::onTop.
         uint32_t shadowCacheStaleFrames_ = 0;
         void     updateShadowCasterSnap(vulkan::ShadowMapPass& smp, uint32_t cascades);
-        // buildShadowDrawData's scratch: every caster once, then one command
-        // list per (layer, group); cleared, never reallocated, between frames.
-        // One set per chunk of the span walk (CpuPar.hpp): chunk c's draws
-        // follow chunk c-1's in the upload, so a command's firstInstance is
-        // chunk-local until the merge adds its chunk's base.
-        struct ShadowChunk {
-            std::vector<DrawInfoGpu>                        draws;
-            std::vector<std::vector<VkDrawIndirectCommand>> cmds;// [(layer * 2 + dynamic) * kGroups + group]
-            uint8_t staleMask = 0;// cascades a static caster reached while cached
-        };
-        std::vector<ShadowChunk> shadowChunks_;
-        std::vector<uint32_t>    shadowChunkBounds_;
+        // buildShadowDrawData's scratch: the view's own
+        // (ViewPrepScratch::shadowChunks). Definition moved to
+        // VulkanViewContext.hpp.
+        using ShadowChunk = vulkan::impl::ShadowChunk;
         // The TLAS fill's per-chunk GeometryDesc dirty rows (same chunking).
         std::vector<std::vector<uint32_t>> tlasChunkDirty_;
         // Depth-only, reverse-Z, dynamic rendering into one D32 layer: the
@@ -6332,6 +6365,26 @@ namespace threepp {
         void recordGbufferRaster(VkCommandBuffer cb);
         void recordGbufferMsaaResolve(VkCommandBuffer cb);
         void recordOverlayDepthPrepass(VkCommandBuffer cb);
+        // The scene form's draws of entries [first, last) into `cb`, inside the
+        // prepass's rendering instance: pipeline, set, one draw per entry.
+        void recordOverlayDepthDraws(VkCommandBuffer cb, size_t first, size_t last);
+
+        // THREEPP_VK_CPU_RECORD: secondary command buffers that a pass records
+        // apart, on the pool, and the primary executes in its place. Per
+        // frame-in-flight slot, one transient pool per buffer, each holding its
+        // one buffer: a pool is externally synchronized, and each recording
+        // thread then owns the pool it records from. Handed out on the frame
+        // thread; the slot's pools are reset at its first hand-out of a frame,
+        // its fence having been waited.
+        struct RecordApartBuffer {
+            VkCommandPool   pool = VK_NULL_HANDLE;
+            VkCommandBuffer cb   = VK_NULL_HANDLE;
+        };
+        std::array<std::vector<RecordApartBuffer>, kFramesInFlight> recordApart_;
+        std::array<size_t, kFramesInFlight>                         recordApartUsed_{};
+        std::array<uint64_t, kFramesInFlight>                       recordApartSerial_{};
+        VkCommandBuffer acquireSecondaryCommandBuffer();
+        void            destroyRecordApartBuffers();
         [[nodiscard]] bool gbufferMsaaResolveActive();
         [[nodiscard]] bool overlayDepthPrepassActive();
         // The import form of the prepass: the descriptor refresh (graph-build
@@ -6424,20 +6477,8 @@ namespace threepp {
             ViewContext* view = nullptr;
             VkExtent2D   regionRenderExt{}, regionSwapExt{};
             int32_t      regionDstX = 0, regionDstY = 0;
-            std::array<DrawGroup, 4>      indirectGroups{};
-            uint32_t                      indirectTotalDraws = 0;
-            std::vector<ParticleDrawSlot> particleDrawSlots;
-            bool  occlActive  = false;
-            float tanHalfFovY = 0.f, filmHeightM = 0.f;
-            float projP0 = 0.f, projP5 = 0.f, projP8 = 0.f, projP9 = 0.f;
-#if defined(THREEPP_WITH_FSR)
-            float fsrJitterX = 0.f, fsrJitterY = 0.f;
-            float fsrCamNear = 0.f, fsrCamFar = 0.f, fsrCamFovY = 0.f;
-#endif
-#if defined(THREEPP_WITH_DLSS)
-            float dlssJitterX = 0.f, dlssJitterY = 0.f;
-#endif
-            float deferredCamRotAngle = 0.f;
+            bool         occlActive = false;
+            ViewPrepOut  out;
         };
         std::vector<ViewRecordState> viewRecordStates_;
         void saveViewRecordState(ViewRecordState& s);
@@ -6590,6 +6631,18 @@ namespace threepp {
         // textures; re-runs only what is genuinely per-camera. Returns whether
         // any view added passes (the tail then re-enters the primary).
         bool addSecondaryViewPasses(vulkan::rg::RenderGraph& g);
+        // THREEPP_VK_CPU_VIEWS: the secondary views' frame prep (camera UBOs,
+        // cull, draw records, shadow maps), started on the pool for every
+        // view at once, beside the primary's graph build; joined, with their
+        // outputs taken in view order, by addSecondaryViewPasses. False when
+        // this frame's views must prepare one after the other there instead
+        // (a view's first frame, a shadow map size change: work that creates
+        // resources, which is the frame thread's to do).
+        bool startSecondaryViewPrep(Camera& primaryCamera);
+        void joinSecondaryViewPrep();
+        vulkan::par::Group        secondaryPrep_;
+        bool                      secondaryPrepStarted_ = false;
+        std::vector<ViewContext*> secondaryPrepViews_;// in view order
         // Run `fn` once per LIVE view — the primary and every secondary that
         // already owns its resources — with curView_ pointed at it.
         //

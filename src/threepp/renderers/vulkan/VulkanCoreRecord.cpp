@@ -528,12 +528,12 @@ void VulkanRenderer::Impl::recordGbufferRaster(VkCommandBuffer cb) {
                 // only the newly visible. rasterGbufMs (this timing
                 // scope) covers the whole sequence, so the on/off
                 // comparison measures like for like.
-                occl_->recordFilter(cb, currentFrame, indirectTotalDraws_);
+                occl_->recordFilter(cb, currentFrame, prepOut().indirectTotalDraws);
                 recordRasterGbufPassInternal(cb, currentFrame, occlA, occlFb,
                                              occlMsaa,
                                              occl_->phase1Buffer(), /*clear=*/true);
                 occlHiz_->record(cb, currentFrame);
-                occl_->recordCullTest(cb, currentFrame, indirectTotalDraws_,
+                occl_->recordCullTest(cb, currentFrame, prepOut().indirectTotalDraws,
                                       occlHiz_->mips(), renderExtent());
                 // The pyramid build sampled pass A's depth; pass B loads and
                 // writes the same attachments. Its render pass carries the
@@ -817,7 +817,6 @@ void VulkanRenderer::Impl::recordOverlayDepthPrepass(VkCommandBuffer cb) {
                 dRi.layerCount = 1;
                 dRi.colorAttachmentCount = 0;
                 dRi.pDepthAttachment = &dDepthAtt;
-                vkCmdBeginRendering(cb, &dRi);
 
                 // Split-screen: clip the overlay depth prepass to the pane
                 // region. unjitDepth is full-res but the deferred-render
@@ -826,122 +825,58 @@ void VulkanRenderer::Impl::recordOverlayDepthPrepass(VkCommandBuffer cb) {
                 // down at the same place the color pass reads it. Both
                 // default to the full frame when scissorTest is off
                 // (byte-identical single-scene).
-                VkViewport dvp{float(regionDstX_), float(regionDstY_),
-                               float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
-                vkCmdSetViewport(cb, 0, 1, &dvp);
-                VkRect2D dsc{{regionDstX_, regionDstY_}, regionSwapExt_};
-                vkCmdSetScissor(cb, 0, 1, &dsc);
+                const VkViewport dvp{float(regionDstX_), float(regionDstY_),
+                                     float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
+                const VkRect2D   dsc{{regionDstX_, regionDstY_}, regionSwapExt_};
 
-                if (overlayDepthImportsGbuffer()) {
-                    // The cheap form: the G-buffer's depth, resampled. No
-                    // entry is touched (and so no CPU cull result is read —
-                    // drawGenCullsOnGpu stays true).
-                    recordOverlayDepthImport(cb);
-                } else {
-                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayDepthPrepassPipeline);
-                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            rasterPipelineLayout, 0, 1,
-                                            &view().rasterDescSets[currentFrame], 0, nullptr);
-                    // Last-entry memos, the same shape (and for the same
-                    // reason) as the ones the indirect draw builder keeps: an
-                    // InstancedMesh expands to one entry per instance, all
-                    // sharing a single en.mesh, so a whole instanced run
-                    // collapses to one BLAS resolve and one pair of buffer
-                    // binds; a scene of distinct meshes simply always misses
-                    // and pays a pointer compare. Keying on en.mesh is exact —
-                    // resolveBlasForEntry dispatches on en.mesh's cached type
-                    // flags and looks up by en.mesh (or by its geometry), and
-                    // none of the caches it reads are mutated inside this loop.
-                    // The bind cache is a SEPARATE key because blasCache is
-                    // keyed by geometry: two distinct meshes sharing one
-                    // BufferGeometry resolve to the same record and so to the
-                    // same handles. Both live HERE, inside the render-pass
-                    // instance, so no bind state is ever assumed to survive
-                    // into the next frame's command buffer — this loop is the
-                    // only thing that binds vertex/index buffers in the pass.
-                    const Mesh*       memoMesh = nullptr;
-                    const BlasRecord* memoRec  = nullptr;
-                    VkBuffer          boundVtx = VK_NULL_HANDLE;
-                    VkBuffer          boundIdx = VK_NULL_HANDLE;
-                    VkIndexType       boundIdxType = VK_INDEX_TYPE_UINT32;
+                // The cheap form: the G-buffer's depth, resampled. No entry
+                // is touched (and so no CPU cull result is read —
+                // drawGenCullsOnGpu stays true).
+                const bool     importDepth = overlayDepthImportsGbuffer();
+                const size_t   entries     = lastVisibleEntries_.size();
+                const unsigned pieces      = importDepth ? 1u : vulkan::par::recordChunksFor(entries);
+                if (pieces > 1u) {
+                    // THREEPP_VK_CPU_RECORD: the scene form's draws in runs of
+                    // entries, each run recorded into its own secondary command
+                    // buffer on the pool and executed here in entry order: the
+                    // draws the single loop records, in the same order. A
+                    // secondary inherits no state, so each sets the viewport,
+                    // the scissor, the pipeline and the set again.
                     THREEPP_CPUPROF("frame.N_overlayDepthRec");
-                    for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
-                        const auto& en = lastVisibleEntries_[i];
-                        if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
-                        if (en.sensorOnly) continue;// primary-only pass, and the primary never sees them
-                        // Frustum cull, same lever as the gbuf prepass — read
-                        // from THIS view's results. The overlay only ever runs
-                        // for the primary, and this is the reader that a shared
-                        // cull bit would have fed the last secondary's answer.
-                        if (!viewCulled(i)) continue;
-                        // ParticleField: its BlasRecord is the MeshRepr PROXY,
-                        // and this fixed-function pass has no per-particle
-                        // vertex stage — drawing it here would put ONE proxy at
-                        // the field origin into the overlay depth buffer. Phase
-                        // 1's answer is that particles do not occlude overlay
-                        // meshes; the alternative is a second particle pipeline
-                        // for a depth-only pass, which no consumer has asked for.
-                        if (en.isParticleField) continue;
-                        // A LOD crossfade's pair occludes overlays as one level,
-                        // the one the shadows see (lodFadeCasts).
-                        if (i < entryLodFade_.size() && !lodFadeCasts(entryLodFade_[i])) continue;
-                        // Below the skips: the resolve is a pure lookup, so a
-                        // culled entry has no reason to pay for it. It cannot
-                        // stale the memo either — the answer depends only on
-                        // en.mesh, never on which entries came before.
-                        if (en.mesh != memoMesh) {
-                            memoMesh = en.mesh;
-                            memoRec  = resolveBlasForEntry(en);
-                        }
-                        const BlasRecord* rec = memoRec;
-                        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
-
-                        struct PC {
-                            float    model[16];
-                            uint32_t instanceCustomIndex;
-                            uint32_t flags;
-                            uint32_t _pad0;
-                            uint32_t _pad1;
-                        } pcDepth{};
-                        std::memcpy(pcDepth.model, en.worldMatrix.data(), 64);
-                        pcDepth.instanceCustomIndex = static_cast<uint32_t>(i);
-                        pcDepth.flags = 0u;
-                        vkCmdPushConstants(cb, rasterPipelineLayout,
-                                           VK_SHADER_STAGE_VERTEX_BIT,
-                                           0, sizeof(pcDepth), &pcDepth);
-
-                        if (rec->vertex.handle != boundVtx) {
-                            VkBuffer     vbufs[1] = {rec->vertex.handle};
-                            VkDeviceSize voffs[1] = {0};
-                            vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
-                            boundVtx = rec->vertex.handle;
-                        }
-                        // Element counts come off the record, not off the CPU
-                        // attribute: the snapshot was taken by buildBlasFor
-                        // against the very buffers bound above (every state
-                        // that owns a BlasRecord — skinned, tet, displaced,
-                        // grass, morphed — gets it from that one funnel), so
-                        // the count can never describe more elements than the
-                        // buffer holds. idxAttr->count() can, on a frame where
-                        // the app grew the array and the BLAS refresh has not
-                        // run yet. It also drops two by-value shared_ptr
-                        // returns and a string-keyed attribute lookup per
-                        // entry, which is the whole point at instance counts.
-                        if (rec->index.handle != VK_NULL_HANDLE) {
-                            // Packed static records store uint16 indices (bit 3).
-                            const VkIndexType itype = (rec->packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16
-                                                                             : VK_INDEX_TYPE_UINT32;
-                            if (rec->index.handle != boundIdx || itype != boundIdxType) {
-                                vkCmdBindIndexBuffer(cb, rec->index.handle, 0, itype);
-                                boundIdx     = rec->index.handle;
-                                boundIdxType = itype;
-                            }
-                            if (rec->indexCount > 0u) {
-                                vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
-                            }
-                        } else if (rec->vertexCount > 0u) {
-                            vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
-                        }
+                    std::array<VkCommandBuffer, 64> secs{};
+                    for (unsigned c = 0; c < pieces; ++c) secs[c] = acquireSecondaryCommandBuffer();
+                    VkCommandBufferInheritanceRenderingInfo inr{};
+                    inr.sType                 = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO;
+                    inr.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;// the prepass pipeline's
+                    inr.rasterizationSamples  = overlaySampleBits();
+                    VkCommandBufferInheritanceInfo inh{};
+                    inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+                    inh.pNext = &inr;
+                    VkCommandBufferBeginInfo sbi{};
+                    sbi.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                    sbi.flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT |
+                                           VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+                    sbi.pInheritanceInfo = &inh;
+                    vulkan::par::runIf(true, pieces, [&](unsigned c) {
+                        const VkCommandBuffer sc = secs[c];
+                        check(vkBeginCommandBuffer(sc, &sbi), "vkBeginCommandBuffer (overlay depth piece)");
+                        vkCmdSetViewport(sc, 0, 1, &dvp);
+                        vkCmdSetScissor(sc, 0, 1, &dsc);
+                        recordOverlayDepthDraws(sc, entries * c / pieces, entries * (c + 1u) / pieces);
+                        check(vkEndCommandBuffer(sc), "vkEndCommandBuffer (overlay depth piece)");
+                    });
+                    dRi.flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
+                    vkCmdBeginRendering(cb, &dRi);
+                    vkCmdExecuteCommands(cb, pieces, secs.data());
+                } else {
+                    vkCmdBeginRendering(cb, &dRi);
+                    vkCmdSetViewport(cb, 0, 1, &dvp);
+                    vkCmdSetScissor(cb, 0, 1, &dsc);
+                    if (importDepth) {
+                        recordOverlayDepthImport(cb);
+                    } else {
+                        THREEPP_CPUPROF("frame.N_overlayDepthRec");
+                        recordOverlayDepthDraws(cb, 0, entries);
                     }
                 }
                 vkCmdEndRendering(cb);
@@ -971,6 +906,114 @@ void VulkanRenderer::Impl::recordOverlayDepthPrepass(VkCommandBuffer cb) {
                 gpuTimings_->end(cb, TP_OverlayDepth, currentFrame);
             }
 }
+
+void VulkanRenderer::Impl::recordOverlayDepthDraws(VkCommandBuffer cb, size_t first, size_t last) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayDepthPrepassPipeline);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    rasterPipelineLayout, 0, 1,
+                                    &view().rasterDescSets[currentFrame], 0, nullptr);
+            // Last-entry memos, the same shape (and for the same
+            // reason) as the ones the indirect draw builder keeps: an
+            // InstancedMesh expands to one entry per instance, all
+            // sharing a single en.mesh, so a whole instanced run
+            // collapses to one BLAS resolve and one pair of buffer
+            // binds; a scene of distinct meshes simply always misses
+            // and pays a pointer compare. Keying on en.mesh is exact —
+            // resolveBlasForEntry dispatches on en.mesh's cached type
+            // flags and looks up by en.mesh (or by its geometry), and
+            // none of the caches it reads are mutated inside this loop.
+            // The bind cache is a SEPARATE key because blasCache is
+            // keyed by geometry: two distinct meshes sharing one
+            // BufferGeometry resolve to the same record and so to the
+            // same handles. Both live HERE, inside the render-pass
+            // instance, so no bind state is ever assumed to survive
+            // into the next frame's command buffer — this loop is the
+            // only thing that binds vertex/index buffers in the pass.
+            const Mesh*       memoMesh = nullptr;
+            const BlasRecord* memoRec  = nullptr;
+            VkBuffer          boundVtx = VK_NULL_HANDLE;
+            VkBuffer          boundIdx = VK_NULL_HANDLE;
+            VkIndexType       boundIdxType = VK_INDEX_TYPE_UINT32;
+            for (size_t i = first; i < last; ++i) {
+                const auto& en = lastVisibleEntries_[i];
+                if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
+                if (en.sensorOnly) continue;// primary-only pass, and the primary never sees them
+                // Frustum cull, same lever as the gbuf prepass — read
+                // from THIS view's results. The overlay only ever runs
+                // for the primary, and this is the reader that a shared
+                // cull bit would have fed the last secondary's answer.
+                if (!viewCulled(i)) continue;
+                // ParticleField: its BlasRecord is the MeshRepr PROXY,
+                // and this fixed-function pass has no per-particle
+                // vertex stage — drawing it here would put ONE proxy at
+                // the field origin into the overlay depth buffer. Phase
+                // 1's answer is that particles do not occlude overlay
+                // meshes; the alternative is a second particle pipeline
+                // for a depth-only pass, which no consumer has asked for.
+                if (en.isParticleField) continue;
+                // A LOD crossfade's pair occludes overlays as one level,
+                // the one the shadows see (lodFadeCasts).
+                if (i < entryLodFade_.size() && !lodFadeCasts(entryLodFade_[i])) continue;
+                // Below the skips: the resolve is a pure lookup, so a
+                // culled entry has no reason to pay for it. It cannot
+                // stale the memo either — the answer depends only on
+                // en.mesh, never on which entries came before.
+                if (en.mesh != memoMesh) {
+                    memoMesh = en.mesh;
+                    memoRec  = resolveBlasForEntry(en);
+                }
+                const BlasRecord* rec = memoRec;
+                if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                struct PC {
+                    float    model[16];
+                    uint32_t instanceCustomIndex;
+                    uint32_t flags;
+                    uint32_t _pad0;
+                    uint32_t _pad1;
+                } pcDepth{};
+                std::memcpy(pcDepth.model, en.worldMatrix.data(), 64);
+                pcDepth.instanceCustomIndex = static_cast<uint32_t>(i);
+                pcDepth.flags = 0u;
+                vkCmdPushConstants(cb, rasterPipelineLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(pcDepth), &pcDepth);
+
+                if (rec->vertex.handle != boundVtx) {
+                    VkBuffer     vbufs[1] = {rec->vertex.handle};
+                    VkDeviceSize voffs[1] = {0};
+                    vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                    boundVtx = rec->vertex.handle;
+                }
+                // Element counts come off the record, not off the CPU
+                // attribute: the snapshot was taken by buildBlasFor
+                // against the very buffers bound above (every state
+                // that owns a BlasRecord — skinned, tet, displaced,
+                // grass, morphed — gets it from that one funnel), so
+                // the count can never describe more elements than the
+                // buffer holds. idxAttr->count() can, on a frame where
+                // the app grew the array and the BLAS refresh has not
+                // run yet. It also drops two by-value shared_ptr
+                // returns and a string-keyed attribute lookup per
+                // entry, which is the whole point at instance counts.
+                if (rec->index.handle != VK_NULL_HANDLE) {
+                    // Packed static records store uint16 indices (bit 3).
+                    const VkIndexType itype = (rec->packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16
+                                                                     : VK_INDEX_TYPE_UINT32;
+                    if (rec->index.handle != boundIdx || itype != boundIdxType) {
+                        vkCmdBindIndexBuffer(cb, rec->index.handle, 0, itype);
+                        boundIdx     = rec->index.handle;
+                        boundIdxType = itype;
+                    }
+                    if (rec->indexCount > 0u) {
+                        vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
+                    }
+                } else if (rec->vertexCount > 0u) {
+                    vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
+                }
+            }
+}
+
 
 bool VulkanRenderer::Impl::gbufferMsaaResolveActive() {
             return !view().secondary && gbufMsaaSamples_ > 1 && gbufResolve_ &&
@@ -1636,9 +1679,9 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
             // derivation below would read a tan(fov/2) the projection never
             // carried and defocus the frame by an arbitrary amount.
             if (!secondary && dofEnabled_ && !view().orthoFrame_ && dof_ && dof_->valid()) {
-                const float     kSensorH  = filmHeightM_;// sensor height (m)
+                const float     kSensorH  = prepOut().filmHeightM;// sensor height (m)
                 constexpr float kMaxCocPx = 32.f;        // full-res radius clamp
-                const float fl = (kSensorH * 0.5f) / std::max(tanHalfFovY_, 1e-3f);
+                const float fl = (kSensorH * 0.5f) / std::max(prepOut().tanHalfFovY, 1e-3f);
                 const float S  = std::max(focusDistance_, fl * 2.f);
                 const float cocScale = fl * fl / (std::max(camAperture_, 0.1f) * (S - fl)) *
                                        (static_cast<float>(regionRenderExt_.height) / kSensorH) * 0.5f;
@@ -1774,8 +1817,8 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 din.renderHeight = regionRenderExt_.height;
                 din.displayWidth = regionSwapExt_.width;
                 din.displayHeight = regionSwapExt_.height;
-                din.jitterX      = dlssJitterX_;
-                din.jitterY      = dlssJitterY_;
+                din.jitterX      = prepOut().dlssJitterX;
+                din.jitterY      = prepOut().dlssJitterY;
                 // NDC-delta (GL Y-up) → render-pixel (texture Y-down): {0.5W, -0.5H}.
                 din.motionScaleX =  0.5f * static_cast<float>(regionRenderExt_.width);
                 din.motionScaleY = -0.5f * static_cast<float>(regionRenderExt_.height);
@@ -1849,14 +1892,14 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 fin.renderHeight = regionRenderExt_.height;
                 fin.displayWidth = regionSwapExt_.width;
                 fin.displayHeight = regionSwapExt_.height;
-                fin.jitterX      = fsrJitterX_;
-                fin.jitterY      = fsrJitterY_;
+                fin.jitterX      = prepOut().fsrJitterX;
+                fin.jitterY      = prepOut().fsrJitterY;
                 // NDC-delta (GL Y-up) → render-pixel (texture Y-down): {0.5W, -0.5H}.
                 fin.motionScaleX =  0.5f * static_cast<float>(regionRenderExt_.width);
                 fin.motionScaleY = -0.5f * static_cast<float>(regionRenderExt_.height);
-                fin.nearPlane    = fsrCamNear_;
-                fin.farPlane     = fsrCamFar_;
-                fin.fovYRadians  = fsrCamFovY_;
+                fin.nearPlane    = prepOut().fsrCamNear;
+                fin.farPlane     = prepOut().fsrCamFar;
+                fin.fovYRadians  = prepOut().fsrCamFovY;
                 fin.frameTimeDeltaMs = fsrDtMs;
                 fin.preExposure  = preExp;
                 fin.reset        = fsrResetNext_;
@@ -4307,10 +4350,10 @@ vulkan::SensorPass::Params VulkanRenderer::Impl::buildSensorParams() {
                 // intrinsics — updateCameraUbo stashes them before applying
                 // overscan, so the lens is described by the camera the user
                 // configured, not by the widened one we rendered.
-                p.normK[0] = 0.5f * projP0_;
-                p.normK[1] = 0.5f * projP5_;
-                p.normK[2] = 0.5f * (1.f - projP8_);
-                p.normK[3] = 0.5f * (1.f + projP9_);
+                p.normK[0] = 0.5f * prepOut().projP0;
+                p.normK[1] = 0.5f * prepOut().projP5;
+                p.normK[2] = 0.5f * (1.f - prepOut().projP8);
+                p.normK[3] = 0.5f * (1.f + prepOut().projP9);
                 p.overscan = effectiveOverscan();
             }
 

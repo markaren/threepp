@@ -191,7 +191,7 @@ namespace threepp {
                 view().deferredShade_->recordFroxels(c, f, regionRenderExt_.width, regionRenderExt_.height,
                                                      deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
                                                      sampleIndex,
-                                                     view().deferredCamDeltaLen_, deferredCamRotAngle_,
+                                                     view().deferredCamDeltaLen_, prepOut().deferredCamRotAngle,
                                                      clusterLightCountThisFrame_, historyStale);
                 gpuTimings_->end(c, TP_Froxel, f);
             });
@@ -207,7 +207,7 @@ namespace threepp {
             auto pass = g.addPass("cloudMarch", [this, f](VkCommandBuffer c) {
                 view().deferredShade_->recordCloudMarch(c, f, regionRenderExt_.width, regionRenderExt_.height,
                                                         envImage.mipLevels, sampleIndex,
-                                                        view().deferredCamDeltaLen_, deferredCamRotAngle_);
+                                                        view().deferredCamDeltaLen_, prepOut().deferredCamRotAngle);
             });
             shade.declare(g, pass, Stage::CloudMarch, f);
         }
@@ -250,7 +250,7 @@ namespace threepp {
         shadeParams.volAniso           = deferredVolAniso_;
         shadeParams.starIntensity      = deferredStarIntensity_;
         shadeParams.camDeltaLen        = view().deferredCamDeltaLen_;
-        shadeParams.camRotAngle        = deferredCamRotAngle_;
+        shadeParams.camRotAngle        = prepOut().deferredCamRotAngle;
         shadeParams.timeSec            = static_cast<float>(frameNowSec());
         shadeParams.sunTanHalfAngle    = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
         shadeParams.gbufMsaaSamples    = viewMsaaSamples;
@@ -1285,8 +1285,8 @@ namespace threepp {
         // match, or the dataset ships distorted pixels with undistorted labels
         // — worse than shipping neither.
         if (impl.lens_.active()) {
-            const float normK[4] = {0.5f * impl.projP0_, 0.5f * impl.projP5_,
-                                    0.5f * (1.f - impl.projP8_), 0.5f * (1.f + impl.projP9_)};
+            const float normK[4] = {0.5f * impl.prepOut_.projP0, 0.5f * impl.prepOut_.projP5,
+                                    0.5f * (1.f - impl.prepOut_.projP8), 0.5f * (1.f + impl.prepOut_.projP9)};
             for (auto& r : out) {
                 warpAovForLens(impl.lens_, normK, impl.effectiveOverscan(), r.data,
                                static_cast<uint32_t>(r.width), static_cast<uint32_t>(r.height),
@@ -2552,10 +2552,10 @@ namespace threepp {
         const float h = static_cast<float>(ext.height);
 
         CameraIntrinsics k;
-        k.fx     = 0.5f * w * impl.projP0_;
-        k.fy     = 0.5f * h * impl.projP5_;
-        k.cx     = 0.5f * w * (1.f - impl.projP8_);
-        k.cy     = 0.5f * h * (1.f + impl.projP9_);
+        k.fx     = 0.5f * w * impl.prepOut_.projP0;
+        k.fy     = 0.5f * h * impl.prepOut_.projP5;
+        k.cx     = 0.5f * w * (1.f - impl.prepOut_.projP8);
+        k.cy     = 0.5f * h * (1.f + impl.prepOut_.projP9);
         k.width  = ext.width;
         k.height = ext.height;
         return k;

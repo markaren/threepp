@@ -690,12 +690,12 @@ namespace threepp {
             if (phaseCount == 0u) phaseCount = 1u;
             fsr_->jitterOffset(static_cast<int>(view().haltonFrame_ % phaseCount),
                                static_cast<int>(phaseCount), jx, jy);
-            fsrJitterX_ = jx;
-            fsrJitterY_ = jy;
+            prepOut().fsrJitterX = jx;
+            prepOut().fsrJitterY = jy;
             if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
-                fsrCamNear_ = pcam->nearPlane;
-                fsrCamFar_  = pcam->farPlane;
-                fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
+                prepOut().fsrCamNear = pcam->nearPlane;
+                prepOut().fsrCamFar  = pcam->farPlane;
+                prepOut().fsrCamFovY = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
             } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
                 // A parallel projection has no field of view. FSR only feeds
                 // fovY into its disocclusion/reactivity heuristics, so hand it
@@ -703,10 +703,10 @@ namespace threepp {
                 // frustum height at the far plane — the closest equivalent,
                 // and one that at least scales with the zoom instead of holding
                 // whatever the last perspective frame left behind.
-                fsrCamNear_ = ocam->nearPlane;
-                fsrCamFar_  = ocam->farPlane;
+                prepOut().fsrCamNear = ocam->nearPlane;
+                prepOut().fsrCamFar  = ocam->farPlane;
                 const float halfH = 0.5f * std::abs(ocam->top - ocam->bottom);
-                fsrCamFovY_ = 2.f * std::atan(halfH / std::max(ocam->farPlane, 1e-3f));
+                prepOut().fsrCamFovY = 2.f * std::atan(halfH / std::max(ocam->farPlane, 1e-3f));
             }
         } else
 #endif
@@ -722,8 +722,8 @@ namespace threepp {
         // When DLSS is active useFsr() is false, so jx/jy came from the built-in
         // branch above.
         if (useDlss()) {
-            dlssJitterX_ = jx;
-            dlssJitterY_ = jy;
+            prepOut().dlssJitterX = jx;
+            prepOut().dlssJitterY = jy;
         }
 #endif
     }
@@ -773,7 +773,7 @@ namespace threepp {
         // pass is skipped for that frame (a parallel projection has no lens),
         // so the last perspective value is simply left standing.
         if (!view().orthoFrame_ && std::abs(camera.projectionMatrix.elements[5]) > 1e-6f)
-            tanHalfFovY_ = 1.f / std::abs(camera.projectionMatrix.elements[5]);
+            prepOut().tanHalfFovY = 1.f / std::abs(camera.projectionMatrix.elements[5]);
 
         // ...and the SENSOR that FOV was derived from. threepp's
         // PerspectiveCamera already carries the film gauge (width, mm) and
@@ -783,7 +783,7 @@ namespace threepp {
         // agrees with the projection instead of assuming full frame.
         if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
             const float filmH = pcam->getFilmHeight();// mm
-            if (filmH > 1e-4f) filmHeightM_ = filmH * 1e-3f;
+            if (filmH > 1e-4f) prepOut().filmHeightM = filmH * 1e-3f;
         }
 
         // Pinhole intrinsics for cameraIntrinsics() — taken from the UNJITTERED
@@ -799,10 +799,10 @@ namespace threepp {
         // wider frustum we rendered to fill its corners. Overscan does not move
         // the principal point, so the skew terms need no correction.
         const float osc = effectiveOverscan();
-        projP0_ = camera.projectionMatrix.elements[0] * osc;
-        projP5_ = camera.projectionMatrix.elements[5] * osc;
-        projP8_ = camera.projectionMatrix.elements[8];
-        projP9_ = camera.projectionMatrix.elements[9];
+        prepOut().projP0 = camera.projectionMatrix.elements[0] * osc;
+        prepOut().projP5 = camera.projectionMatrix.elements[5] * osc;
+        prepOut().projP8 = camera.projectionMatrix.elements[8];
+        prepOut().projP9 = camera.projectionMatrix.elements[9];
 
         float data[40];
         std::memcpy(data + 0,  camera.matrixWorld->elements.data(), 64);
@@ -1086,10 +1086,10 @@ namespace threepp {
                                                    fwd[1] * view().deferredCamPrevFwd_[1] +
                                                    fwd[2] * view().deferredCamPrevFwd_[2],
                                            -1.f, 1.f);
-                deferredCamRotAngle_ = std::acos(c);
+                prepOut().deferredCamRotAngle = std::acos(c);
             } else {
                 view().deferredCamDeltaLen_ = 0.f;
-                deferredCamRotAngle_ = 0.f;
+                prepOut().deferredCamRotAngle = 0.f;
             }
             std::memcpy(view().deferredCamPrevPos_, pos, sizeof(pos));
             std::memcpy(view().deferredCamPrevFwd_, fwd, sizeof(fwd));

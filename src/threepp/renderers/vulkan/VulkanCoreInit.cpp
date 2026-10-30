@@ -303,6 +303,7 @@ VulkanRenderer::Impl::~Impl() {
             for (auto s : renderFinished) if (s) vkDestroySemaphore(d, s, nullptr);
             for (auto f : inFlight) if (f) vkDestroyFence(d, f, nullptr);
             if (cmdPool) vkDestroyCommandPool(d, cmdPool, nullptr);
+            destroyRecordApartBuffers();
             gpuTimings_.reset();// query pool destruction while device is still valid
             // Explicit, next to gpuTimings_ and for the same reason: the pass
             // frees its per-field position rings through ctx's allocator, and

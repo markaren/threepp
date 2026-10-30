@@ -71,6 +71,43 @@ void VulkanRenderer::Impl::createCommandResources() {
             }
         }
 
+VkCommandBuffer VulkanRenderer::Impl::acquireSecondaryCommandBuffer() {
+            const uint32_t f    = currentFrame;
+            auto&          list = recordApart_[f];
+            if (recordApartSerial_[f] != frameSerial_) {
+                // This slot's buffers were last recorded kFramesInFlight frames
+                // ago, and its fence has been waited since.
+                for (size_t i = 0; i < recordApartUsed_[f]; ++i) vkResetCommandPool(ctx->device(), list[i].pool, 0);
+                recordApartUsed_[f]   = 0;
+                recordApartSerial_[f] = frameSerial_;
+            }
+            if (recordApartUsed_[f] == list.size()) {
+                RecordApartBuffer b;
+                VkCommandPoolCreateInfo pci{};
+                pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+                pci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+                pci.queueFamilyIndex = ctx->queueFamilies().graphics;
+                check(vkCreateCommandPool(ctx->device(), &pci, nullptr, &b.pool), "vkCreateCommandPool (record apart)");
+                VkCommandBufferAllocateInfo ai{};
+                ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                ai.commandPool        = b.pool;
+                ai.level              = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+                ai.commandBufferCount = 1;
+                check(vkAllocateCommandBuffers(ctx->device(), &ai, &b.cb), "vkAllocateCommandBuffers (record apart)");
+                list.push_back(b);
+            }
+            return list[recordApartUsed_[f]++].cb;
+        }
+
+void VulkanRenderer::Impl::destroyRecordApartBuffers() {
+            // The buffers go with their pools.
+            for (auto& list : recordApart_) {
+                for (auto& b : list) vkDestroyCommandPool(ctx->device(), b.pool, nullptr);
+                list.clear();
+            }
+            recordApartUsed_.fill(0);
+        }
+
 void VulkanRenderer::Impl::destroyAsyncPilotResources() {
             VkDevice d = ctx->device();
             for (auto s : asyncHeadDone_) if (s) vkDestroySemaphore(d, s, nullptr);
@@ -1109,9 +1146,14 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // or the dummies back in its deferred set. They run at once
             // (THREEPP_VK_CPU_TASKS=0: one after the other), once the view's
             // shadow pass exists: its creation allocates descriptor sets,
-            // which is the frame thread's to do.
+            // which is the frame thread's to do. The cull derives the span
+            // bounds the shadow fit reads too, so a cull that will walk has
+            // them derived first, here (boxSpansForCull): the fit then reads
+            // what the cull-then-fit order gives it, not a span half written.
+            const bool forkChains = vulkan::par::tasksOn() && view().shadowMaps_ != nullptr;
+            if (forkChains && cullWouldWalk(camera)) boxSpansForCull();
             vulkan::par::tasks(
-                    vulkan::par::tasksOn() && view().shadowMaps_ != nullptr,
+                    forkChains,
                     [&] {
                         cullEntriesAgainstFrustum(camera);
                         {
@@ -1256,6 +1298,19 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 forEachLiveView([&] {
                     rewriteDeferredDescriptors(static_cast<int>(currentFrame));
                 });
+            }
+
+            // THREEPP_VK_CPU_VIEWS: the secondary views' prep starts here, on
+            // the pool, and runs while this thread begins the command buffer
+            // and builds the primary's passes; addSecondaryViewPasses takes
+            // its results. Here, and no earlier: their shadow maps fit to this
+            // frame's sun and lamp slots (updateLightsUbo, above), and the
+            // descriptor refreshes above write their sets. Off, or on a frame
+            // whose views cannot prepare at once, the views prepare one after
+            // the other in addSecondaryViewPasses, as before.
+            {
+                THREEPP_CPUPROF("frame.J9s_viewPrepStart");
+                secondaryPrepStarted_ = vulkan::par::viewsOn() && startSecondaryViewPrep(camera);
             }
 
             vkResetFences(d, 1, &inFlight[currentFrame]);
@@ -2095,63 +2150,23 @@ bool VulkanRenderer::Impl::setViewCameraImpl(uint32_t handle, Camera& camera) {
 // ── Multi-view: per-frame recording ─────────────────────────────────────────
 
 void VulkanRenderer::Impl::saveViewRecordState(ViewRecordState& s) {
-            s.view                = curView_;
-            s.regionRenderExt     = regionRenderExt_;
-            s.regionSwapExt       = regionSwapExt_;
-            s.regionDstX          = regionDstX_;
-            s.regionDstY          = regionDstY_;
-            s.indirectGroups      = indirectGroups_;
-            s.indirectTotalDraws  = indirectTotalDraws_;
-            s.particleDrawSlots   = particleDrawSlots_;// assign: keeps capacity
-            s.occlActive          = occlActiveThisFrame_;
-            s.tanHalfFovY         = tanHalfFovY_;
-            s.filmHeightM         = filmHeightM_;
-            s.projP0              = projP0_;
-            s.projP5              = projP5_;
-            s.projP8              = projP8_;
-            s.projP9              = projP9_;
-#if defined(THREEPP_WITH_FSR)
-            s.fsrJitterX          = fsrJitterX_;
-            s.fsrJitterY          = fsrJitterY_;
-            s.fsrCamNear          = fsrCamNear_;
-            s.fsrCamFar           = fsrCamFar_;
-            s.fsrCamFovY          = fsrCamFovY_;
-#endif
-#if defined(THREEPP_WITH_DLSS)
-            s.dlssJitterX         = dlssJitterX_;
-            s.dlssJitterY         = dlssJitterY_;
-#endif
-            s.deferredCamRotAngle = deferredCamRotAngle_;
+            s.view            = curView_;
+            s.regionRenderExt = regionRenderExt_;
+            s.regionSwapExt   = regionSwapExt_;
+            s.regionDstX      = regionDstX_;
+            s.regionDstY      = regionDstY_;
+            s.occlActive      = occlActiveThisFrame_;
+            s.out             = prepOut_;// assign: the particle slots keep their capacity
         }
 
 void VulkanRenderer::Impl::applyViewRecordState(const ViewRecordState& s) {
-            curView_              = s.view;
-            regionRenderExt_      = s.regionRenderExt;
-            regionSwapExt_        = s.regionSwapExt;
-            regionDstX_           = s.regionDstX;
-            regionDstY_           = s.regionDstY;
-            indirectGroups_       = s.indirectGroups;
-            indirectTotalDraws_   = s.indirectTotalDraws;
-            particleDrawSlots_    = s.particleDrawSlots;
-            occlActiveThisFrame_  = s.occlActive;
-            tanHalfFovY_          = s.tanHalfFovY;
-            filmHeightM_          = s.filmHeightM;
-            projP0_               = s.projP0;
-            projP5_               = s.projP5;
-            projP8_               = s.projP8;
-            projP9_               = s.projP9;
-#if defined(THREEPP_WITH_FSR)
-            fsrJitterX_           = s.fsrJitterX;
-            fsrJitterY_           = s.fsrJitterY;
-            fsrCamNear_           = s.fsrCamNear;
-            fsrCamFar_            = s.fsrCamFar;
-            fsrCamFovY_           = s.fsrCamFovY;
-#endif
-#if defined(THREEPP_WITH_DLSS)
-            dlssJitterX_          = s.dlssJitterX;
-            dlssJitterY_          = s.dlssJitterY;
-#endif
-            deferredCamRotAngle_  = s.deferredCamRotAngle;
+            curView_             = s.view;
+            regionRenderExt_     = s.regionRenderExt;
+            regionSwapExt_       = s.regionSwapExt;
+            regionDstX_          = s.regionDstX;
+            regionDstY_          = s.regionDstY;
+            occlActiveThisFrame_ = s.occlActive;
+            prepOut_             = s.out;
             // One query pool per frame-in-flight, one slot pair per pass — a
             // secondary re-running those passes into the same command buffer
             // would overwrite timestamps the primary already wrote. Record
@@ -2178,6 +2193,14 @@ bool VulkanRenderer::Impl::addSecondaryViewPasses(rg::RenderGraph& g) {
             // a secondary always renders full-frame into its own target.
             const ViewRecordState& primary = viewRecordStates_[0];
 
+            // The views' prep, when it ran on the pool (startSecondaryViewPrep):
+            // done, and its outputs in view order (joinSecondaryViewPrep).
+            const bool prepped = secondaryPrepStarted_;
+            if (prepped) {
+                THREEPP_CPUPROF("frame.J9w_viewPrepJoin");
+                joinSecondaryViewPrep();
+            }
+
             // Silenced for the builds too, as the recording is (see
             // applyViewRecordState).
             gpuTimings_->setSuppressed(true);
@@ -2199,26 +2222,34 @@ bool VulkanRenderer::Impl::addSecondaryViewPasses(rg::RenderGraph& g) {
                 regionDstX_      = 0;
                 regionDstY_      = 0;
 
-                // Per-camera CPU work. Everything world-space — the TLAS/BLAS
-                // build, deformers, lights, materials, motion matrices, the
-                // emissive CDF — was already done once for this frame by the
-                // primary and is deliberately NOT repeated.
-                cam.updateMatrixWorld(true);
-                v.orthoFrame_ = cam.is<OrthographicCamera>();
-                updateCameraUbo(currentFrame, cam);
-                // Sizes/creates this view's G-buffer on the first frame and is
-                // a cheap no-op after (the extent never changes for a view).
-                ensureHybridResources();
-                // The primary's two chains (renderFrame), for this view, at
-                // once (THREEPP_VK_CPU_TASKS=0: one after the other).
-                vulkan::par::tasks(
-                        vulkan::par::tasksOn() && v.shadowMaps_ != nullptr,
-                        [&] {
-                            cullEntriesAgainstFrustum(cam);
-                            uploadRasterCameraUbo(currentFrame, cam);
-                            buildIndirectDrawData(currentFrame);
-                        },
-                        [&] { prepareShadowMaps(cam); });
+                if (prepped) {
+                    // What the view's prep left, as it would have stood here.
+                    prepOut_ = v.prepStage;
+                } else {
+                    // Per-camera CPU work. Everything world-space — the TLAS/BLAS
+                    // build, deformers, lights, materials, motion matrices, the
+                    // emissive CDF — was already done once for this frame by the
+                    // primary and is deliberately NOT repeated.
+                    cam.updateMatrixWorld(true);
+                    v.orthoFrame_ = cam.is<OrthographicCamera>();
+                    updateCameraUbo(currentFrame, cam);
+                    // Sizes/creates this view's G-buffer on the first frame and is
+                    // a cheap no-op after (the extent never changes for a view).
+                    ensureHybridResources();
+                    // The primary's two chains (renderFrame), for this view, at
+                    // once (THREEPP_VK_CPU_TASKS=0: one after the other), the
+                    // span bounds first as there.
+                    const bool forkChains = vulkan::par::tasksOn() && v.shadowMaps_ != nullptr;
+                    if (forkChains && cullWouldWalk(cam)) boxSpansForCull();
+                    vulkan::par::tasks(
+                            forkChains,
+                            [&] {
+                                cullEntriesAgainstFrustum(cam);
+                                uploadRasterCameraUbo(currentFrame, cam);
+                                buildIndirectDrawData(currentFrame);
+                            },
+                            [&] { prepareShadowMaps(cam); });
+                }
 
                 // This view's passes open with the pass that restores what its
                 // build leaves behind (saved below, once they are all built).
@@ -2268,6 +2299,127 @@ bool VulkanRenderer::Impl::addSecondaryViewPasses(rg::RenderGraph& g) {
             // same from the tail's own "view" pass).
             applyViewRecordState(primary);
             return any;
+        }
+
+// ── Multi-view: every view's prep at once (THREEPP_VK_CPU_VIEWS) ─────────────
+//
+// The serial loop above prepares view after view: camera UBOs, the cull, the
+// draw records and the shadow maps of view 1, then of view 2, each after the
+// primary's whole build. Each of those preps reads the shared scene and
+// writes its own view, so they run at once here, on the pool, and beside the
+// frame thread's own work up to the graph build of the views (the fence, the
+// command buffer, the primary's passes). What they do share is handled where
+// it lives: the span bounds are derived before (boxSpansForCull), the span
+// draw cache and the shadow static-set generation are taken under their
+// locks, the stable ids are only read (a view that meets an object without
+// one is built again on the frame thread, in view order), the draw
+// statistics are counted per view, and every output the passes read lands in
+// the view's prepStage, taken in view order with what the serial loop would
+// have inherited from the view before (ViewPrepOut::inheritFrom).
+//
+// Work that creates resources stays on the frame thread: a frame on which a
+// view would create its G-buffer or its shadow maps, or whose cameras share a
+// subtree (a camera's matrices are rewritten by its own prep), prepares in
+// the serial loop instead.
+bool VulkanRenderer::Impl::startSecondaryViewPrep(Camera& primaryCamera) {
+            if (views_.size() < 2u) return false;
+            auto& list = secondaryPrepViews_;
+            list.clear();
+            for (size_t i = 1; i < views_.size(); ++i) {
+                ViewContext& v = *views_[i];
+                if (v.pendingCreate || v.pendingDestroy) continue;
+                if (!v.camera || !v.taa_ || !v.deferredShade_) continue;
+                list.push_back(&v);
+            }
+            if (list.empty()) return false;
+
+            // One camera per view, none inside another's subtree: a view's
+            // prep updates its camera's world matrices and its children's.
+            const auto within = [](const Object3D* o, const Object3D* root) {
+                for (; o != nullptr; o = o->parent)
+                    if (o == root) return true;
+                return false;
+            };
+            for (const ViewContext* a : list) {
+                if (within(&primaryCamera, a->camera) || within(a->camera, &primaryCamera)) return false;
+                for (const ViewContext* b : list)
+                    if (a != b && within(b->camera, a->camera)) return false;
+            }
+
+            // What would create resources, created now or the frame declined:
+            // the G-buffer and camera rings (ensureHybridResources: a no-op
+            // once the view has them), the shadow dummies, and maps of the
+            // sizes this frame asks for.
+            ensureShadowDummies();
+            const bool shadowMaps = shadowMapsActive() && rasterDsLayout != VK_NULL_HANDLE;
+            const auto sizes      = shadowMapSizes();
+            const bool anyMap     = sizes.cascades != 0u || sizes.spots != 0u || sizes.points != 0u;
+            bool ready = true;
+            bool walk  = false;
+            for (ViewContext* v : list) {
+                curView_ = v;
+                ensureHybridResources();
+                if (shadowMaps && anyMap &&
+                    (!v->shadowMaps_ || shadowPipeline_ == VK_NULL_HANDLE || !v->shadowMaps_->ready(currentFrame, sizes)))
+                    ready = false;
+                // Its world matrices for the cull's frustum, as the serial loop
+                // updates them before its prep (the prep does again).
+                v->camera->updateMatrixWorld(true);
+                walk = walk || cullWouldWalk(*v->camera);
+            }
+            curView_ = views_[0].get();
+            if (!ready) return false;
+            if (walk) boxSpansForCull();
+
+            std::vector<std::function<void()>> jobs;
+            jobs.reserve(list.size());
+            for (ViewContext* v : list) {
+                jobs.emplace_back([this, v] {
+                    vulkan::par::ContextScope scope(v);
+                    THREEPP_CPUPROF("frame.J9a_viewPrep");
+                    v->prepStage.unwritten();
+                    v->prepDrawStats   = {};
+                    v->prepIdsReadOnly = true;
+                    v->prepIdMiss      = false;
+                    Camera& cam    = *v->camera;
+                    v->orthoFrame_ = cam.is<OrthographicCamera>();
+                    updateCameraUbo(currentFrame, cam);
+                    vulkan::par::tasks(
+                            vulkan::par::tasksOn() && v->shadowMaps_ != nullptr,
+                            [&] {
+                                cullEntriesAgainstFrustum(cam);
+                                uploadRasterCameraUbo(currentFrame, cam);
+                                buildIndirectDrawData(currentFrame);
+                            },
+                            [&] { prepareShadowMaps(cam); });
+                });
+            }
+            secondaryPrep_.start(std::move(jobs));
+            return true;
+        }
+
+void VulkanRenderer::Impl::joinSecondaryViewPrep() {
+            secondaryPrep_.join();
+            secondaryPrepStarted_ = false;
+            // In view order: a view whose build met an object without a
+            // stable id is built again here, where the id is handed out; then
+            // the fields its prep left unwritten take the values the view
+            // before it left (the primary's for the first), as they would
+            // have in the serial loop, and its draw statistics are counted.
+            const ViewPrepOut* prev = &prepOut_;
+            for (ViewContext* v : secondaryPrepViews_) {
+                v->prepIdsReadOnly = false;
+                if (v->prepIdMiss) {
+                    THREEPP_CPUPROF("frame.J9r_viewPrepRebuild");
+                    v->prepIdMiss    = false;
+                    v->prepDrawStats = {};// the rebuild counts into drawStats_ itself
+                    vulkan::par::ContextScope scope(v);
+                    buildIndirectDrawData(currentFrame);
+                }
+                drawStats_ += v->prepDrawStats;
+                v->prepStage.inheritFrom(*prev);
+                prev = &v->prepStage;
+            }
         }
 
 bool VulkanRenderer::Impl::setViewSensorSurfacesImpl(uint32_t handle, bool enabled) {

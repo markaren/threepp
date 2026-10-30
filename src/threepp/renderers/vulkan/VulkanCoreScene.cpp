@@ -1344,6 +1344,130 @@ void VulkanRenderer::Impl::flushGeometryDescsIfDirty(uint32_t frame) {
             dirty.clear();
         }
 
+// The world bounds the frustum cull classifies a span by (cullEntriesAgainst-
+// Frustum): derived lazily, here, after a matrix refresh, an in-place count
+// change or a geometry edit cleared them. The shadow fit reads them too
+// (fitShadowMaps' reach, buildShadowDrawData's bounded casters), so before
+// culls and fits run at once (THREEPP_VK_CPU_TASKS / _VIEWS) the spans are
+// boxed up front, serially (boxSpansForCull), and every one of them only
+// reads. False: the span has no bounds (no geometry), and is kept whole.
+bool VulkanRenderer::Impl::refreshSpanCullBounds(EntrySpan& sp) {
+            auto& entries = lastVisibleEntries_;
+            // Lazily (re-)derive the shared object-space bounds — cleared
+            // when the geometry is edited in place.
+            if (!sp.localBoundsValid) {
+                auto geom = sp.mesh->geometry();
+                if (!geom) return false;// keep(true)
+                Box3 box;// the record's box: a displacementMap's moved positions
+                if (!boundsOf(*geom, box)) return false;// keep(true)
+                const Vector3 c = box.getCenter();
+                const Vector3 h = box.getSize() * 0.5f;
+                sp.localCenter[0] = c.x; sp.localCenter[1] = c.y; sp.localCenter[2] = c.z;
+                sp.localHalf[0]   = h.x; sp.localHalf[1]   = h.y; sp.localHalf[2]   = h.z;
+                sp.localRadius    = h.length();// enclosing-sphere radius
+                sp.localBoundsValid = true;
+                sp.aabbValid = false;
+            }
+            // Lazily recompute the span's world AABB after a matrix
+            // refresh. A single-entry span gets the EXACT world box (Arvo
+            // transform — identical to the old 8-corner result); an
+            // instanced span gets the union of world sphere centers
+            // dilated by radius x max scale (conservative).
+            // The per-instance spheres follow the count (an in-place setCount).
+            if (sp.count > 1 && sp.cullSpheres.size() != sp.count) sp.aabbValid = false;
+            if (!sp.aabbValid) {
+                const float* lc = sp.localCenter;
+                if (sp.count == 1) {
+                    const float* M = entries[sp.first].worldMatrix.data();
+                    const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
+                    const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
+                    const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
+                    const float hx = std::abs(M[0])*sp.localHalf[0] + std::abs(M[4])*sp.localHalf[1] + std::abs(M[8])*sp.localHalf[2];
+                    const float hy = std::abs(M[1])*sp.localHalf[0] + std::abs(M[5])*sp.localHalf[1] + std::abs(M[9])*sp.localHalf[2];
+                    const float hz = std::abs(M[2])*sp.localHalf[0] + std::abs(M[6])*sp.localHalf[1] + std::abs(M[10])*sp.localHalf[2];
+                    sp.aabbMin[0] = cx - hx; sp.aabbMin[1] = cy - hy; sp.aabbMin[2] = cz - hz;
+                    sp.aabbMax[0] = cx + hx; sp.aabbMax[1] = cy + hy; sp.aabbMax[2] = cz + hz;
+                } else {
+                    // Chunked accumulation: one AABB per kCullChunk-entry
+                    // run (union of world sphere centers dilated by
+                    // radius x chunk max scale) + the span AABB as the
+                    // union of the chunks.
+                    constexpr uint32_t kCullChunk = 512;
+                    const uint32_t nChunks = (sp.count + kCullChunk - 1u) / kCullChunk;
+                    sp.chunkAabbs.resize(nChunks);
+                    sp.cullSpheres.resize(sp.count);
+                    float smn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+                    float smx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+                    for (uint32_t ch = 0; ch < nChunks; ++ch) {
+                        const uint32_t j0 = ch * kCullChunk;
+                        const uint32_t j1 = std::min(sp.count, j0 + kCullChunk);
+                        float mn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+                        float mx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+                        float maxScaleSq = 0.f;
+                        for (uint32_t j = j0; j < j1; ++j) {
+                            const float* M = entries[sp.first + j].worldMatrix.data();
+                            const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
+                            const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
+                            const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
+                            mn[0] = std::min(mn[0], cx); mx[0] = std::max(mx[0], cx);
+                            mn[1] = std::min(mn[1], cy); mx[1] = std::max(mx[1], cy);
+                            mn[2] = std::min(mn[2], cz); mx[2] = std::max(mx[2], cz);
+                            const float s0 = M[0]*M[0] + M[1]*M[1] + M[2]*M[2];
+                            const float s1 = M[4]*M[4] + M[5]*M[5] + M[6]*M[6];
+                            const float s2 = M[8]*M[8] + M[9]*M[9] + M[10]*M[10];
+                            const float sMax = std::max(s0, std::max(s1, s2));
+                            maxScaleSq = std::max(maxScaleSq, sMax);
+                            sp.cullSpheres[j] = {cx, cy, cz, sp.localRadius * std::sqrt(sMax)};
+                        }
+                        const float r = sp.localRadius * std::sqrt(maxScaleSq);
+                        auto& cb = sp.chunkAabbs[ch];
+                        for (int k = 0; k < 3; ++k) {
+                            cb[k]     = mn[k] - r;
+                            cb[k + 3] = mx[k] + r;
+                            smn[k] = std::min(smn[k], cb[k]);
+                            smx[k] = std::max(smx[k], cb[k + 3]);
+                        }
+                    }
+                    for (int k = 0; k < 3; ++k) { sp.aabbMin[k] = smn[k]; sp.aabbMax[k] = smx[k]; }
+                }
+                sp.aabbValid = true;
+            }
+            return true;
+        }
+
+// Every span a cull walk boxes, boxed now: the spans neither hidden nor kept
+// whole by their kind (the deformers, overlays, fields, interop meshes) nor
+// grass, which the cull bounds per entry. The same refresh the walk makes, so
+// the bounds a fit reads are the ones the serial order (cull, then fit) left.
+void VulkanRenderer::Impl::boxSpansForCull() {
+            if (lastVisibleEntries_.empty()) return;
+            for (auto& sp : entrySpans_) {
+                const bool stale = !sp.localBoundsValid || !sp.aabbValid ||
+                                   (sp.count > 1 && sp.cullSpheres.size() != sp.count);
+                if (!stale || sp.hidden) continue;
+                const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+                if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isMorphed || e0.isTet ||
+                    e0.isParticleField || e0.isVertexInterop || e0.isGrass)
+                    continue;
+                refreshSpanCullBounds(sp);
+            }
+        }
+
+// Whether the view's cull would walk the spans this frame: false when its
+// results still hold (same frustum, same draw inputs, same GPU-cull split).
+bool VulkanRenderer::Impl::cullWouldWalk(const Matrix4& vp, bool gpuCull) const {
+            const ViewContext& v = view();
+            return !(v.cullValidVersion == drawInputsVersion_ && v.cullGpuSpans == gpuCull &&
+                     v.inFrustum.size() == lastVisibleEntries_.size() &&
+                     std::memcmp(v.prevCullVp, vp.elements.data(), 64) == 0);
+        }
+bool VulkanRenderer::Impl::cullWouldWalk(Camera& camera) const {
+            if (lastVisibleEntries_.empty()) return false;
+            Matrix4 vp;
+            vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            return cullWouldWalk(vp, drawGenCullsOnGpu());
+        }
+
 void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             THREEPP_CPUPROF("frame.C_frustumCull");
             if (lastVisibleEntries_.empty()) return;
@@ -1364,11 +1488,7 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             // Stage 4: a span draw_gen.comp writes is culled per instance there,
             // from this frame's planes; here it keeps its span-level answer.
             const bool gpuCull = drawGenCullsOnGpu();
-            if (view().cullValidVersion == drawInputsVersion_ && view().cullGpuSpans == gpuCull &&
-                cull.size() == lastVisibleEntries_.size() &&
-                std::memcmp(view().prevCullVp, vp.elements.data(), 64) == 0) {
-                return;
-            }
+            if (!cullWouldWalk(vp, gpuCull)) return;
             cull.assign(lastVisibleEntries_.size(), uint8_t{1});
             Frustum frustum;
             frustum.setFromProjectionMatrix(vp);
@@ -1434,85 +1554,9 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                     }
                     continue;
                 }
-                // Lazily (re-)derive the shared object-space bounds — cleared
-                // when the geometry is edited in place.
-                if (!sp.localBoundsValid) {
-                    auto geom = sp.mesh->geometry();
-                    if (!geom) continue;// keep(true)
-                    Box3 box;// the record's box: a displacementMap's moved positions
-                    if (!boundsOf(*geom, box)) continue;// keep(true)
-                    const Vector3 c = box.getCenter();
-                    const Vector3 h = box.getSize() * 0.5f;
-                    sp.localCenter[0] = c.x; sp.localCenter[1] = c.y; sp.localCenter[2] = c.z;
-                    sp.localHalf[0]   = h.x; sp.localHalf[1]   = h.y; sp.localHalf[2]   = h.z;
-                    sp.localRadius    = h.length();// enclosing-sphere radius
-                    sp.localBoundsValid = true;
-                    sp.aabbValid = false;
-                }
-                // Lazily recompute the span's world AABB after a matrix
-                // refresh. A single-entry span gets the EXACT world box (Arvo
-                // transform — identical to the old 8-corner result); an
-                // instanced span gets the union of world sphere centers
-                // dilated by radius x max scale (conservative).
-                // The per-instance spheres follow the count (an in-place setCount).
-                if (sp.count > 1 && sp.cullSpheres.size() != sp.count) sp.aabbValid = false;
-                if (!sp.aabbValid) {
-                    const float* lc = sp.localCenter;
-                    if (sp.count == 1) {
-                        const float* M = entries[sp.first].worldMatrix.data();
-                        const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
-                        const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
-                        const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
-                        const float hx = std::abs(M[0])*sp.localHalf[0] + std::abs(M[4])*sp.localHalf[1] + std::abs(M[8])*sp.localHalf[2];
-                        const float hy = std::abs(M[1])*sp.localHalf[0] + std::abs(M[5])*sp.localHalf[1] + std::abs(M[9])*sp.localHalf[2];
-                        const float hz = std::abs(M[2])*sp.localHalf[0] + std::abs(M[6])*sp.localHalf[1] + std::abs(M[10])*sp.localHalf[2];
-                        sp.aabbMin[0] = cx - hx; sp.aabbMin[1] = cy - hy; sp.aabbMin[2] = cz - hz;
-                        sp.aabbMax[0] = cx + hx; sp.aabbMax[1] = cy + hy; sp.aabbMax[2] = cz + hz;
-                    } else {
-                        // Chunked accumulation: one AABB per kCullChunk-entry
-                        // run (union of world sphere centers dilated by
-                        // radius x chunk max scale) + the span AABB as the
-                        // union of the chunks.
-                        constexpr uint32_t kCullChunk = 512;
-                        const uint32_t nChunks = (sp.count + kCullChunk - 1u) / kCullChunk;
-                        sp.chunkAabbs.resize(nChunks);
-                        sp.cullSpheres.resize(sp.count);
-                        float smn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
-                        float smx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
-                        for (uint32_t ch = 0; ch < nChunks; ++ch) {
-                            const uint32_t j0 = ch * kCullChunk;
-                            const uint32_t j1 = std::min(sp.count, j0 + kCullChunk);
-                            float mn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
-                            float mx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
-                            float maxScaleSq = 0.f;
-                            for (uint32_t j = j0; j < j1; ++j) {
-                                const float* M = entries[sp.first + j].worldMatrix.data();
-                                const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
-                                const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
-                                const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
-                                mn[0] = std::min(mn[0], cx); mx[0] = std::max(mx[0], cx);
-                                mn[1] = std::min(mn[1], cy); mx[1] = std::max(mx[1], cy);
-                                mn[2] = std::min(mn[2], cz); mx[2] = std::max(mx[2], cz);
-                                const float s0 = M[0]*M[0] + M[1]*M[1] + M[2]*M[2];
-                                const float s1 = M[4]*M[4] + M[5]*M[5] + M[6]*M[6];
-                                const float s2 = M[8]*M[8] + M[9]*M[9] + M[10]*M[10];
-                                const float sMax = std::max(s0, std::max(s1, s2));
-                                maxScaleSq = std::max(maxScaleSq, sMax);
-                                sp.cullSpheres[j] = {cx, cy, cz, sp.localRadius * std::sqrt(sMax)};
-                            }
-                            const float r = sp.localRadius * std::sqrt(maxScaleSq);
-                            auto& cb = sp.chunkAabbs[ch];
-                            for (int k = 0; k < 3; ++k) {
-                                cb[k]     = mn[k] - r;
-                                cb[k + 3] = mx[k] + r;
-                                smn[k] = std::min(smn[k], cb[k]);
-                                smx[k] = std::max(smx[k], cb[k + 3]);
-                            }
-                        }
-                        for (int k = 0; k < 3; ++k) { sp.aabbMin[k] = smn[k]; sp.aabbMax[k] = smx[k]; }
-                    }
-                    sp.aabbValid = true;
-                }
+                // The span's world bounds, brought up to date (the shared
+                // object-space ones too); none to be had keeps it whole.
+                if (!refreshSpanCullBounds(sp)) continue;
                 // Span-level classify: 0 = fully outside, 2 = fully inside,
                 // 1 = straddles (per-entry tests decide).
                 int cls = 2;

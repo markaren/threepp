@@ -84,6 +84,10 @@ namespace threepp::vulkan {
         // Reallocates that slot only; the caller has waited for its fence. A
         // static cache that changes size is retired, not destroyed.
         void ensure(uint32_t frame, const Sizes& sizes);
+        // ensure(frame, sizes) would allocate nothing: the slot holds them.
+        [[nodiscard]] bool ready(uint32_t frame, const Sizes& sizes) const {
+            return slots_[frame].gen != 0 && slots_[frame].sizes == sizes;
+        }
 
         struct Slot {
             ShadowDepthArray cascades, spots, points;

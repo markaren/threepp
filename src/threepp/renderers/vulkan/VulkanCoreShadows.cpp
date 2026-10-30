@@ -97,8 +97,10 @@ namespace threepp {
         // A crossfade handing the shadow to its other level changes the
         // static casters without moving anything.
         mix(static_cast<uint64_t>(lodFadeCastEpoch_));
-        shadowDynamicIdx_.clear();
-        shadowSpanOfEntry_.assign(lastVisibleEntries_.size(), 0u);
+        auto& dynamicIdx = view().prep.shadowDynamicIdx;
+        auto& spanOf     = view().prep.shadowSpanOfEntry;
+        dynamicIdx.clear();
+        spanOf.assign(lastVisibleEntries_.size(), 0u);
         for (size_t s = 0; s < entrySpans_.size(); ++s) {
             const auto& sp = entrySpans_[s];
             mix(sp.hidden ? 0x9e3779b97f4a7c15ull : 0x7f4a7c159e3779b9ull);
@@ -107,9 +109,9 @@ namespace threepp {
                 const uint32_t i   = sp.first + j;
                 const bool     dyn = shadowCasterDynamic(i);
                 mix(static_cast<uint64_t>(i) * 2ull + (dyn ? 1ull : 0ull));
-                if (i < shadowSpanOfEntry_.size()) {
-                    shadowSpanOfEntry_[i] = static_cast<uint32_t>(s);
-                    if (dyn) shadowDynamicIdx_.push_back(i);
+                if (i < spanOf.size()) {
+                    spanOf[i] = static_cast<uint32_t>(s);
+                    if (dyn) dynamicIdx.push_back(i);
                 }
             }
         }
@@ -225,7 +227,7 @@ namespace threepp {
         b.spots    = shadowDummyArray_.view;
         b.points   = shadowDummyCube_.view;
         b.ubo      = shadowDummyUbo_.handle;
-        const auto& v = *curView_;
+        const auto& v = view();
         if (!v.shadowLive || !v.shadowMaps_) return b;
         const auto& s = v.shadowMaps_->slot(frame);
         if (s.gen == 0) return b;
@@ -385,10 +387,8 @@ namespace threepp {
 
     }// namespace
 
-    bool VulkanRenderer::Impl::fitShadowMaps(Camera& camera) {
-        const uint32_t f   = currentFrame;
-        auto&          v   = view();
-        const uint32_t cap = shadowMapSizeCap_ ? std::min(shadowMapSizeCap_, 8192u) : 8192u;
+    vulkan::ShadowMapPass::Sizes VulkanRenderer::Impl::shadowMapSizes() const {
+        const uint32_t cap       = shadowMapSizeCap_ ? std::min(shadowMapSizeCap_, 8192u) : 8192u;
         const auto     clampSize = [cap](uint32_t s) { return std::clamp(s, 16u, cap); };
 
         vulkan::ShadowMapPass::Sizes sz{};
@@ -409,6 +409,13 @@ namespace threepp {
             sz.pointSize = clampSize(512u);
             sz.points    = static_cast<uint32_t>(shadowPointSlots_.size());
         }
+        return sz;
+    }
+
+    bool VulkanRenderer::Impl::fitShadowMaps(Camera& camera) {
+        const uint32_t f  = currentFrame;
+        auto&          v  = view();
+        const auto     sz = shadowMapSizes();
         if (sz.cascades == 0u && sz.spots == 0u && sz.points == 0u) return false;
 
         if (!v.shadowMaps_) {
@@ -443,8 +450,12 @@ namespace threepp {
         // are pancaked onto the near plane by depth clamp (or, without it, the
         // near plane is pulled 1 km toward the sun).
         // The static caster set this frame as a generation, for the caches.
+        uint64_t staticGen = 0;
         if (shadowCacheOn_) {
             const uint64_t h = shadowStaticHash();
+            // The first view to fit after the set changed steps the
+            // generation; the views after it read the new one.
+            std::lock_guard lock(shadowStaticMutex_);
             if (h != shadowStaticHashPrev_) {
                 shadowStaticHashPrev_ = h;
                 ++shadowStaticGen_;
@@ -461,9 +472,10 @@ namespace threepp {
                         if (cur[i] != prev) {
                             if (flips < 8) {
                                 const MeshEntry& e = lastVisibleEntries_[i];
+                                const auto& spanOf = view().prep.shadowSpanOfEntry;
                                 first += " " + std::to_string(i) + (cur[i] ? "->dyn" : "->static") +
                                          (e.isSkinned ? "(skin)" : e.isDisplaced ? "(disp)" : e.isGrass ? "(grass)" : e.isMorphed ? "(morph)" : "") +
-                                         "(span " + std::to_string(i < shadowSpanOfEntry_.size() ? shadowSpanOfEntry_[i] : 0u) + ")";
+                                         "(span " + std::to_string(i < spanOf.size() ? spanOf[i] : 0u) + ")";
                             }
                             ++flips;
                         }
@@ -473,8 +485,10 @@ namespace threepp {
                     shadowDynPrev_ = std::move(cur);
                 }
             }
+            staticGen = shadowStaticGen_;
+        } else {
+            staticGen = shadowStaticGen_;// stepped only with the cache on
         }
-        const uint64_t staticGen = shadowStaticGen_;
         // setShadowCacheStaleFrames: a cascade outlives a changed static set
         // for that many frames, and at most one is redrawn a frame.
         const bool staleTolerant = shadowCacheOn_ && shadowCacheStaleFrames_ > 0u && sz.cascades > 0u;
@@ -849,6 +863,7 @@ namespace threepp {
         THREEPP_CPUPROF("frame.D_buildShadowDraws");
         constexpr uint32_t kGroups = vulkan::ShadowMapPass::kGroups;
         using Volume               = ShadowCullVolumes::Volume;
+        ViewPrepScratch& scratch   = view().prep;
         auto&          smp         = *view().shadowMaps_;
         const auto&    entries     = lastVisibleEntries_;
         const float    cam[3]      = {camPos.x, camPos.y, camPos.z};
@@ -863,7 +878,7 @@ namespace threepp {
         // The walk runs in chunks of spans (CpuPar.hpp), each emitting into
         // its own lists; the upload below lays the chunks out in span order,
         // so the bytes do not depend on the chunk count.
-        auto&      chunks     = shadowChunks_;
+        auto&      chunks     = scratch.shadowChunks;
         uint32_t   nChunks    = 1u;
         const auto resetChunk = [&](ShadowChunk& ch) {
             ch.draws.clear();
@@ -1106,9 +1121,10 @@ namespace threepp {
             SpanInfo si{};
             resetChunk(chunks[0]);
             // Stale-tolerant: the static casters without their bit too.
-            for (const uint32_t i : tolerant ? smp.onTop : shadowDynamicIdx_) {
-                if (i >= shadowSpanOfEntry_.size() || i >= entries.size()) continue;
-                const uint32_t s = shadowSpanOfEntry_[i];
+            const auto& spanOf = scratch.shadowSpanOfEntry;
+            for (const uint32_t i : tolerant ? smp.onTop : scratch.shadowDynamicIdx) {
+                if (i >= spanOf.size() || i >= entries.size()) continue;
+                const uint32_t s = spanOf[i];
                 if (s != curSpan) {
                     curSpan = s;
                     spanOk  = s < entrySpans_.size() && !entrySpans_[s].hidden && entrySpans_[s].count > 0u &&
@@ -1119,7 +1135,7 @@ namespace threepp {
         } else {
             // Chunks of spans weighted by entry count (a stand of pines is
             // one span of thousands): one chunk when the knob is off.
-            auto& bounds = shadowChunkBounds_;
+            auto& bounds = scratch.shadowChunkBounds;
             vulkan::par::splitByWeight(
                     entrySpans_.size(), vulkan::par::chunksFor(entries.size()),
                     [&](size_t s) -> uint64_t {
