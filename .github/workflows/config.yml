@@ -99,11 +99,15 @@ jobs:
       # Fails the job if the PhysX targets did not materialise. Without this,
       # tests/extras/CMakeLists.txt would quietly take its `physx not found`
       # branch, every remaining test would pass, and the job would go green
-      # having built none of what it was extended to cover.
-      - name: Assert the PhysX targets were built
+      # having built none of what it was extended to cover. The scripting tests
+      # vanish the same way when find_package(Python3 ... Development.Embed)
+      # finds nothing on the runner.
+      - name: Assert the PhysX and scripting targets were built
         run: |
           ctest --preset ci-linux-physx -N | grep -q 'EditorConveyor_test' \
             || { echo "PhysX tests absent — the vcpkg feature did not take effect"; exit 1; }
+          ctest --preset ci-linux-physx -N | grep -q 'EditorScriptPhysics_test' \
+            || { echo "Scripting tests absent — CPython's Development.Embed was not found"; exit 1; }
 
       - name: Test
         run: ctest --preset ci-linux-physx
