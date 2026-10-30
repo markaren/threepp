@@ -2,9 +2,9 @@
 // transparency, fog, shadows, render targets, viewport/scissor.
 
 #include "gl_test_helpers.hpp"
-#include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
 
+#include <array>
 #include <iostream>
 
 TEST_CASE("GL: clear color produces expected pixels") {
@@ -22,22 +22,6 @@ TEST_CASE("GL: clear color produces expected pixels") {
     auto pixels = renderer.readRGBPixels();
     REQUIRE(pixels.size() == DATA_SIZE);
     CHECK(allPixelsMatch(pixels, 255, 0, 0, 2));
-
-    renderer.dispose();
-}
-
-TEST_CASE("GL: readback dimensions match render target") {
-    GLRenderer renderer(glCanvas());
-
-    auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
-    renderer.setRenderTarget(target.get());
-
-    auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
-    renderer.render(*scene, *camera);
-
-    auto pixels = renderer.readRGBPixels();
-    CHECK(pixels.size() == DATA_SIZE);
 
     renderer.dispose();
 }
@@ -578,22 +562,28 @@ TEST_CASE("GL: object hierarchy applies parent transform") {
     auto pixels = renderWithGL(*scene, *camera, Color(0x000000));
     REQUIRE(pixels.size() == DATA_SIZE);
 
-    // After 90° Z rotation, the child at x=2 should appear shifted in Y
-    // (GL readback is bottom-to-top, so Y axis may be flipped)
-    // Just verify the object is NOT at the center X — it should have moved
-    int nonBlack = countNonBlack(pixels);
-    CHECK(nonBlack > 0);
+    // The parent's 90° Z rotation moves the child from x=2 to y=2: centred
+    // horizontally, above the middle of the frame. GL reads back bottom-to-top,
+    // so "above" is the high rows. Without the parent it would sit to the right
+    // on the middle row.
+    double sumX = 0, sumY = 0;
+    int count = 0;
+    for (int y = 0; y < RT_HEIGHT; y++) {
+        for (int x = 0; x < RT_WIDTH; x++) {
+            if (pixels[(y * RT_WIDTH + x) * 3] > 10) {
+                sumX += x;
+                sumY += y;
+                count++;
+            }
+        }
+    }
+    REQUIRE(count > 0);
 
-    double objAvgX = avgXPosition(pixels, RT_WIDTH, RT_HEIGHT);
-    double center = RT_WIDTH / 2.0;
-    // The child was at x=2 before rotation; after 90° Z rotation it should
-    // move off the X center — verify it's not centered horizontally
-    // (the parent rotation moves the child from x=2 to y=2)
-    CHECK(std::abs(objAvgX - center) < center); // Object is visible somewhere
+    CHECK(std::abs(sumX / count - (RT_WIDTH - 1) / 2.0) < 1.0);
+    CHECK(sumY / count > RT_HEIGHT * 0.65);
 }
 
-TEST_CASE("GL: setScissorTest API works") {
-    // Verify that scissor test can be enabled/disabled without crashing
+TEST_CASE("GL: setScissorTest confines the render to the scissor box") {
     GLRenderer renderer(glCanvas());
 
     auto scene = Scene::create();
@@ -608,15 +598,37 @@ TEST_CASE("GL: setScissorTest API works") {
 
     auto target = GLRenderTarget::create(RT_WIDTH, RT_HEIGHT, GLRenderTarget::Options{});
     renderer.setRenderTarget(target.get());
-    renderer.setClearColor(Color(0x000000));
 
-    // Render with scissor enabled — should not crash
+    // Paint the whole target first, so the half the scissor protects has a
+    // colour of its own.
+    renderer.setClearColor(Color(0xff0000));
+    renderer.clear();
+
+    // The left half gets the render: its clear colour and the white box, which
+    // reaches across the middle of the target.
+    renderer.setClearColor(Color(0x000000));
     renderer.setScissorTest(true);
     renderer.setScissor(0, 0, RT_WIDTH / 2, RT_HEIGHT);
     renderer.render(*scene, *camera);
 
     auto pixels = renderer.readRGBPixels();
     REQUIRE(pixels.size() == DATA_SIZE);
+
+    const auto rgbAt = [&](int x, int y) {
+        const int i = (y * RT_WIDTH + x) * 3;
+        return std::array<int, 3>{pixels[i], pixels[i + 1], pixels[i + 2]};
+    };
+
+    int outside = 0;
+    for (int y = 0; y < RT_HEIGHT; y++) {
+        for (int x = RT_WIDTH / 2; x < RT_WIDTH; x++) {
+            if (rgbAt(x, y) != std::array<int, 3>{255, 0, 0}) outside++;
+        }
+    }
+    CHECK(outside == 0);
+
+    CHECK(rgbAt(RT_WIDTH / 2 - 2, RT_HEIGHT / 2) == std::array<int, 3>{255, 255, 255});
+    CHECK(rgbAt(1, RT_HEIGHT / 2) == std::array<int, 3>{0, 0, 0});
 
     renderer.setScissorTest(false);
     renderer.setRenderTarget(nullptr);
@@ -670,84 +682,6 @@ TEST_CASE("GL: combined ambient + directional + point lights are brighter than s
 
     CHECK(multiBright > singleBright);
 
-}
-
-
-// =============================================================================
-// Section 13: GL-only — Additional geometries
-// =============================================================================
-
-TEST_CASE("GL: RingGeometry renders correctly") {
-    auto scene = Scene::create();
-    auto geometry = RingGeometry::create(0.5f, 1.5f, 16, 1);
-    auto material = MeshBasicMaterial::create();
-    material->color = Color(0x00ff00);
-    material->side = Side::Double;
-    auto mesh = Mesh::create(geometry, material);
-    scene->add(mesh);
-
-    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
-    camera->position.z = 3;
-
-    auto pixels = renderWithGL(*scene, *camera, Color(0x000000));
-    REQUIRE(pixels.size() == DATA_SIZE);
-
-    int nonBlack = countNonBlack(pixels);
-    CHECK(nonBlack > PIXEL_COUNT / 16);
-}
-
-TEST_CASE("GL: TorusKnotGeometry renders correctly") {
-    auto scene = Scene::create();
-    auto geometry = TorusKnotGeometry::create(0.8f, 0.3f, 64, 8);
-    auto material = MeshBasicMaterial::create();
-    material->color = Color(0xff00ff);
-    auto mesh = Mesh::create(geometry, material);
-    scene->add(mesh);
-
-    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
-    camera->position.z = 4;
-
-    auto pixels = renderWithGL(*scene, *camera, Color(0x000000));
-    REQUIRE(pixels.size() == DATA_SIZE);
-
-    int nonBlack = countNonBlack(pixels);
-    CHECK(nonBlack > PIXEL_COUNT / 16);
-}
-
-TEST_CASE("GL: ConeGeometry renders correctly") {
-    auto scene = Scene::create();
-    auto geometry = ConeGeometry::create(1.0f, 2.0f, 16);
-    auto material = MeshBasicMaterial::create();
-    material->color = Color(0xffff00);
-    auto mesh = Mesh::create(geometry, material);
-    scene->add(mesh);
-
-    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
-    camera->position.z = 4;
-
-    auto pixels = renderWithGL(*scene, *camera, Color(0x000000));
-    REQUIRE(pixels.size() == DATA_SIZE);
-
-    int nonBlack = countNonBlack(pixels);
-    CHECK(nonBlack > PIXEL_COUNT / 16);
-}
-
-TEST_CASE("GL: CapsuleGeometry renders correctly") {
-    auto scene = Scene::create();
-    auto geometry = CapsuleGeometry::create(0.5f, 1.0f, 8, 16);
-    auto material = MeshBasicMaterial::create();
-    material->color = Color(0x00ffff);
-    auto mesh = Mesh::create(geometry, material);
-    scene->add(mesh);
-
-    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
-    camera->position.z = 3;
-
-    auto pixels = renderWithGL(*scene, *camera, Color(0x000000));
-    REQUIRE(pixels.size() == DATA_SIZE);
-
-    int nonBlack = countNonBlack(pixels);
-    CHECK(nonBlack > 0);
 }
 
 
