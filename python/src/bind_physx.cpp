@@ -1338,8 +1338,21 @@ namespace threepp_py {
                          opts.driveLimitsAreForces = drive_limits_are_forces;
                          auto r = loadUsdArticulation(w, std::filesystem::path(path), opts);
                          if (!r.articulation) throw std::runtime_error("load_usd_articulation: " + r.error);
+                         py::list mimics;
+                         for (const auto& m : r.mimics) {
+                             py::dict d;
+                             d["joint"] = m.joint;
+                             d["reference_joint"] = m.referenceJoint;
+                             d["link"] = m.link;
+                             d["reference_link"] = m.referenceLink;
+                             d["gearing"] = m.gearing;
+                             d["offset"] = m.offset;
+                             d["natural_frequency"] = m.naturalFrequency;
+                             d["damping_ratio"] = m.dampingRatio;
+                             mimics.append(std::move(d));
+                         }
                          return std::make_tuple(std::move(r.articulation), std::move(r.meshes), std::move(r.jointNames),
-                                                std::move(r.diagnostics), std::move(r.scene));
+                                                std::move(r.diagnostics), std::move(r.scene), std::move(mimics));
                      },
                      py::arg("path"), py::arg("fixed_base") = py::none(), py::arg("self_collision") = py::none(),
                      py::arg("solver_position_iterations") = py::none(), py::arg("stiffness") = py::none(),
@@ -1350,10 +1363,13 @@ namespace threepp_py {
                      py::arg("drive_limits_are_forces") = true,
                      // No keep_alive, as for load_articulation: usd.py keeps the world alive.
                      "Import a USD robot as a finalized Articulation in the pose the file authors. Returns "
-                     "(articulation, meshes, joint_names, diagnostics, scene): the meshes are bound to the sim "
-                     "(add them to a scene to render), joint_names lists the actuated joints in drive-target "
-                     "order, diagnostics says what the file holds that could not be imported, and scene holds "
-                     "what is outside the robot's bodies. articulation.link(name) takes a body's prim path or "
+                     "(articulation, meshes, joint_names, diagnostics, scene, mimics): the meshes are bound to "
+                     "the sim (add them to a scene to render), joint_names lists the actuated joints in "
+                     "drive-target order, diagnostics says what the file holds that could not be imported, "
+                     "scene holds what is outside the robot's bodies, and mimics lists each PhysxMimicJointAPI "
+                     "coupling built as a dict (joint, reference_joint, link and reference_link as indices "
+                     "into meshes, gearing, offset, natural_frequency, damping_ratio), holding q + gearing * "
+                     "q_ref + offset = 0 in radians and metres. articulation.link(name) takes a body's prim path or "
                      "leaf name. An argument left None takes the file's value: fixed base from a fixed joint to "
                      "the world, drive gains and effort limits, solver iterations and self-collision from a "
                      "'PhysX' variant, which is selected. stiffness, damping and max_force override every drive, "

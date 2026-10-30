@@ -41,12 +41,30 @@ namespace threepp {
             float target = 0.f;   // rad or m
             bool acceleration = false;// physics:type "acceleration", else "force"
         };
+        /// A PhysxMimicJointAPI coupling: the joint moving `link` follows the
+        /// joint moving `referenceLink` so that q + gearing·qRef + offset = 0,
+        /// the rule PhysX enforces. In this description's units: USD authors
+        /// the coupling with angles in degrees, so a revolute joint's offset is
+        /// converted, and so is the gearing of a coupling between a revolute
+        /// and a prismatic joint. naturalFrequency and dampingRatio both above
+        /// zero make the coupling compliant; either at zero is a hard constraint.
+        struct Mimic {
+            std::string joint;         // prim path of the coupled joint
+            std::string referenceJoint;// prim path of the joint it follows
+            int link = -1;             // index into links: what the coupled joint moves
+            int referenceLink = -1;    // index into links: what the reference joint moves
+            float gearing = 1.f;
+            float offset = 0.f;// rad or m
+            float naturalFrequency = 0.f;// s^-1
+            float dampingRatio = 0.f;
+        };
         struct Link {
             std::string path;// prim path of the rigid body
             std::shared_ptr<Object3D> body;
 
             int parent = -1;// index into links; -1 = root
             std::string jointName;
+            std::string jointPath;// prim path of the joint that moves this link
             Robot::JointType jointType = Robot::JointType::Fixed;
             std::shared_ptr<Object3D> jointNode;
             Vector3 jointAnchor;                   // world
@@ -71,6 +89,7 @@ namespace threepp {
             std::vector<Collider> colliders;
         };
         std::vector<Link> links;
+        std::vector<Mimic> mimics;// couplings between two of the links' joints
         bool fixedBase = false;// a joint anchors the root to the world
         // From physxArticulation:*, when the file authors them.
         std::optional<bool> selfCollision;
@@ -92,7 +111,8 @@ namespace threepp {
         /// `scene` between each joint's two bodies, and it holds `scene` as its
         /// only child: add `robot` (not `scene`) to your scene and drive it with
         /// setJointValue(). Joint parent/child names are the bodies' prim paths.
-        /// Null when the file has no joints.
+        /// Null when the file has no joints. A mimic coupling between joints is
+        /// in `articulation`, not here: `robot` moves each joint on its own.
         std::shared_ptr<Robot> robot;
         /// The robot's mass, colliders and drives, set exactly when `robot` is.
         /// `body` and `jointNode` are the nodes `robot` is built from.

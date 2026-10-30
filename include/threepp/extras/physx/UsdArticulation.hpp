@@ -12,9 +12,10 @@
 // centre of mass and principal inertia, and one convex hull per collider mesh. A file's "PhysX"
 // variant is selected, which is where SimReady keeps solver iterations, self-collision and joint speed
 // limits. Revolute and prismatic joints become DOFs; a fixed joint stays a link with its own mass. A
-// link with no authored mass takes it from its colliders. What the description could not carry is in
-// `diagnostics`: spherical/D6 joints, mimic couplings, kinematic loops, a decomposition collider
-// cooked as one hull. Stage-level metersPerUnit and kilogramsPerUnit are not applied.
+// link with no authored mass takes it from its colliders. A PhysxMimicJointAPI coupling becomes a PhysX
+// mimic joint, so a gripper's follower fingers close with the finger its drive moves. What the
+// description could not carry is in `diagnostics`: spherical/D6 joints, kinematic loops, a decomposition
+// collider cooked as one hull. Stage-level metersPerUnit and kilogramsPerUnit are not applied.
 #ifndef THREEPP_PHYSX_USDARTICULATION_HPP
 #define THREEPP_PHYSX_USDARTICULATION_HPP
 
@@ -65,6 +66,9 @@ namespace threepp {
         std::vector<ArticulationLink> links;
         // Every link's prim path and its leaf name -> its articulation link.
         std::vector<std::pair<std::string, ArticulationLink>> linkForName;
+        // The couplings built, each between the joints moving two of `meshes`' links
+        // (by index): q + gearing·qRef + offset = 0, in radians and metres.
+        std::vector<USDArticulationDesc::Mimic> mimics;
         // Whatever the file holds outside the robot's bodies. Same world frame as `meshes`.
         std::shared_ptr<Group> scene;
 
@@ -208,6 +212,14 @@ namespace threepp {
             result.linkForName.emplace_back(L.path, link);
             result.linkForName.emplace_back(L.path.substr(L.path.rfind('/') + 1), link);
         }
+
+        // Couplings go on before the articulation enters the scene: PhysX makes no
+        // mimic joint on one that has.
+        for (const auto& m : desc.mimics) {
+            art->addMimicJoint(handles[static_cast<std::size_t>(m.link)], handles[static_cast<std::size_t>(m.referenceLink)],
+                               m.gearing, m.offset, m.naturalFrequency, m.dampingRatio);
+        }
+        result.mimics = desc.mimics;
 
         art->finalize();
 

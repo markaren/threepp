@@ -1152,6 +1152,7 @@ namespace threepp {
             link.jointNode = j.node;
             link.range = j.info.range;
             link.jointValue = j.authored;
+            link.jointPath = j.usd->prim_path;
 
             const auto prim = b.stage.GetPrimAtPath(j.usd->prim_path);
             if (!prim.IsValid() || j.info.type == Robot::JointType::Fixed) return;
@@ -1249,6 +1250,101 @@ namespace threepp {
             }
         }
 
+        // PhysxMimicJointAPI couples two joints: `physxMimicJoint:<axis>:*` on the
+        // coupled joint, its reference a relationship. The rule PhysX enforces is
+        // q + gearing·qRef + offset = 0, authored with USD's angles in degrees; the
+        // description is in radians and metres, so a revolute joint's offset is
+        // converted, and so is the gearing between a revolute and a prismatic
+        // joint. The API's instance axis names the coupled joint's DOF, of which a
+        // revolute or prismatic joint has exactly one: its kind (rot or trans) is
+        // checked, and the DOF is the joint's own.
+        static void readMimics(Build& b, USDArticulationDesc& desc) {
+            static const std::string api = "physxMimicJoint:";
+            const auto linkMovedBy = [&](const std::string& jointPath) {
+                for (size_t i = 0; i < desc.links.size(); ++i) {
+                    if (desc.links[i].parent >= 0 && desc.links[i].jointPath == jointPath) return static_cast<int>(i);
+                }
+                return -1;
+            };
+            const auto perDegree = [](Robot::JointType type) {
+                return type == Robot::JointType::Revolute ? 180.f / math::PI : 1.f;
+            };
+            const auto kindOf = [](Robot::JointType type) {
+                return std::string(type == Robot::JointType::Revolute ? "rot" : "trans");
+            };
+
+            for (size_t i = 0; i < desc.links.size(); ++i) {
+                const auto& link = desc.links[i];
+                if (link.parent < 0 || link.jointPath.empty()) continue;
+                const auto prim = b.stage.GetPrimAtPath(link.jointPath);
+                if (!prim.IsValid()) continue;
+
+                std::vector<std::string> instances;
+                const auto collect = [&](const std::string& name) {
+                    if (name.rfind(api, 0) != 0) return;
+                    const auto end = name.find(':', api.size());
+                    if (end == std::string::npos) return;
+                    const auto instance = name.substr(api.size(), end - api.size());
+                    if (std::ranges::find(instances, instance) == instances.end()) instances.push_back(instance);
+                };
+                for (const auto& name : prim.GetPropertyNames()) collect(name);
+                for (const auto& name : prim.GetRelationshipNames()) collect(name);
+
+                for (const auto& instance : instances) {
+                    const std::string prefix = api + instance + ":";
+                    const auto skip = [&](const std::string& why) {
+                        desc.diagnostics.push_back(link.jointPath + ": mimic coupling " + why);
+                    };
+                    if (link.jointType == Robot::JointType::Fixed) {
+                        skip("on a fixed joint is ignored");
+                        continue;
+                    }
+                    if (instance.rfind(kindOf(link.jointType), 0) != 0) {
+                        skip("names the " + instance + " axis, which a " +
+                             (link.jointType == Robot::JointType::Revolute ? "revolute" : "prismatic") + " joint has not");
+                        continue;
+                    }
+                    const auto* targets = prim.GetRelationship(prefix + "referenceJoint");
+                    if (!targets || targets->empty()) {
+                        skip("names no reference joint");
+                        continue;
+                    }
+                    const std::string reference = targets->front().str();
+                    const int ref = linkMovedBy(reference);
+                    if (ref < 0 || desc.links[ref].jointType == Robot::JointType::Fixed) {
+                        skip("follows " + reference + ", which is not a moving joint of this articulation");
+                        continue;
+                    }
+                    if (ref == static_cast<int>(i)) {
+                        skip("follows itself");
+                        continue;
+                    }
+                    const auto* axisValue = prim.GetPropertyValue(prefix + "referenceJointAxis");
+                    const std::string* axisToken = axisValue ? axisValue->as_token() : nullptr;
+                    if (axisToken && axisToken->rfind(kindOf(desc.links[ref].jointType), 0) != 0) {
+                        skip("follows the " + *axisToken + " axis of " + reference + ", which that joint has not");
+                        continue;
+                    }
+                    const float gearing = floatProperty(prim, prefix + "gearing").value_or(1.f);
+                    if (gearing == 0.f) {
+                        skip("has a gearing of zero");
+                        continue;
+                    }
+                    USDArticulationDesc::Mimic m;
+                    m.joint = link.jointPath;
+                    m.referenceJoint = reference;
+                    m.link = static_cast<int>(i);
+                    m.referenceLink = ref;
+                    const float k = perDegree(link.jointType);
+                    m.gearing = gearing * perDegree(desc.links[ref].jointType) / k;
+                    m.offset = floatProperty(prim, prefix + "offset").value_or(0.f) / k;
+                    m.naturalFrequency = floatProperty(prim, prefix + "naturalFrequency").value_or(0.f);
+                    m.dampingRatio = floatProperty(prim, prefix + "dampingRatio").value_or(0.f);
+                    desc.mimics.push_back(std::move(m));
+                }
+            }
+        }
+
         static USDArticulationDesc describeArticulation(Build& b, const std::vector<BuiltJoint>& joints,
                                                         const std::unordered_map<std::string, Matrix4>& world,
                                                         const Matrix4& stageToWorld, bool anchored,
@@ -1312,6 +1408,7 @@ namespace threepp {
                 }
             }
 
+            readMimics(b, desc);
             readColliders(b, desc, world, stageToWorld);
 
             for (const auto& path : b.scene.physics.articulation_roots) {
@@ -1347,11 +1444,10 @@ namespace threepp {
             std::vector<std::string> diagnostics;
             bool anchored = false;
             for (const auto& j : b.scene.physics.joints) {
-                for (const auto& property : j.extension_properties) {
-                    if (property.name.find("imic") == std::string::npos) continue;
-                    diagnostics.push_back(j.prim_path + ": mimic coupling is not represented");
-                    break;
-                }
+                // A variant switches a joint off with `active = false` (SimReady's
+                // parallel-grip grippers deactivate their five-bar joints); the
+                // annotation still lists it.
+                if (const auto prim = b.stage.GetPrimAtPath(j.prim_path); prim.IsValid() && !prim.IsActive()) continue;
                 Robot::JointType type;
                 if (j.type_name == "PhysicsRevoluteJoint") type = Robot::JointType::Revolute;
                 else if (j.type_name == "PhysicsPrismaticJoint") type = Robot::JointType::Prismatic;

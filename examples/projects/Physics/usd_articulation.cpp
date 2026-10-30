@@ -63,6 +63,10 @@ namespace {
                         robot.jointNames[i].c_str(), drive.stiffness, drive.damping, drive.maxForce,
                         limit.low, limit.high, joint->getMaxJointVelocity());
         }
+        for (const auto& m : robot.mimics) {
+            std::printf("  mimic: %s %+.4f * %s %+.4f = 0%s\n", m.joint.c_str(), m.gearing, m.referenceJoint.c_str(),
+                        m.offset, m.naturalFrequency > 0.f && m.dampingRatio > 0.f ? " (compliant)" : "");
+        }
         for (const auto& message : robot.diagnostics) std::printf("  diagnostic: %s\n", message.c_str());
     }
 

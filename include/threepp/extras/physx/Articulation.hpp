@@ -363,6 +363,32 @@ namespace threepp {
             convex->release();// the shape keeps its own reference
         }
 
+        // Couple two joints so that qA + gearRatio·qB + offset = 0, PhysX's rule: a
+        // gripper's follower finger on the finger its drive moves. `a` and `b` are the
+        // links the two joints move, and each DOF is the joint's own axis (eTWIST for
+        // revolute, eX for prismatic). naturalFrequency and dampingRatio both above
+        // zero make the coupling compliant, either at zero a hard constraint. Before
+        // finalize(): PhysX creates no mimic joint on an articulation in a scene.
+        ::physx::PxArticulationMimicJoint* addMimicJoint(const ArticulationLink& a, const ArticulationLink& b,
+                                                         float gearRatio, float offset,
+                                                         float naturalFrequency = 0.f, float dampingRatio = 0.f) {
+            using namespace ::physx;
+            if (finalized_) throw std::runtime_error("Articulation.add_mimic_joint: already finalized (the articulation is in the scene)");
+            if (a.isRoot() || b.isRoot()) throw std::runtime_error("Articulation.add_mimic_joint: the root link has no joint");
+            PxArticulationJointReducedCoordinate* jointA = a.raw()->getInboundJoint();
+            PxArticulationJointReducedCoordinate* jointB = b.raw()->getInboundJoint();
+            if (jointA->getJointType() == PxArticulationJointType::eFIX || jointB->getJointType() == PxArticulationJointType::eFIX)
+                throw std::runtime_error("Articulation.add_mimic_joint: a fixed joint has no DOF to couple");
+            if (gearRatio == 0.f) throw std::runtime_error("Articulation.add_mimic_joint: the gear ratio must not be zero");
+            PxArticulationMimicJoint* mimic = art_->createMimicJoint(*jointA, a.axis(), *jointB, b.axis(),
+                                                                     gearRatio, offset, naturalFrequency, dampingRatio);
+            if (!mimic) throw std::runtime_error("Articulation.add_mimic_joint: createMimicJoint failed");
+            mimicJoints_.push_back(mimic);
+            return mimic;
+        }
+        // Every coupling in add order; released with the articulation.
+        [[nodiscard]] const std::vector<::physx::PxArticulationMimicJoint*>& mimicJoints() const { return mimicJoints_; }
+
         // Every link in add order (root first) — small copyable handles, valid while
         // this articulation and its world live. This is how a caller reaches one
         // specific link (to add_force a tool link, attach a sensor) without having
@@ -518,6 +544,7 @@ namespace threepp {
         std::vector<::physx::PxArticulationAxis::Enum> jointAxes_;// each joint's motion axis (eTWIST rev / eX prism)
         std::vector<ArticulationLink> links_;                     // every link, add order (root first)
         std::vector<std::pair<std::string, std::size_t>> linkNames_;// registered name -> add-order index
+        std::vector<::physx::PxArticulationMimicJoint*> mimicJoints_;// couplings, add order
         bool finalized_ = false;
     };
 

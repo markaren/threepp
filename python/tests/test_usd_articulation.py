@@ -82,10 +82,101 @@ def Xform "arm" {{
 """
 
 
+# Two fingers on a base. The right finger's joint carries PhysxMimicJointAPI and follows
+# the left, which has the drive: q_right + (-1) * q_left = 0.
+GRIPPER = f"""#usda 1.0
+(
+    defaultPrim = "gripper"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "gripper" {{
+    def PhysicsFixedJoint "root_joint" (
+        prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+    ) {{
+        rel physics:body1 = </gripper/base>
+    }}
+
+    def Xform "base" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    ) {{
+        float physics:mass = 1
+        def Mesh "visual" {{{CUBE}        }}
+        def Mesh "collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"]
+        ) {{
+            uniform token physics:approximation = "convexHull"
+            uniform token purpose = "guide"{CUBE}        }}
+    }}
+
+    def Xform "left" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    ) {{
+        float physics:mass = 0.2
+        double3 xformOp:translate = (0.1, 0, 0.15)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Mesh "collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"]
+        ) {{
+            uniform token physics:approximation = "convexHull"
+            uniform token purpose = "guide"{CUBE}        }}
+    }}
+
+    def Xform "right" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    ) {{
+        float physics:mass = 0.2
+        double3 xformOp:translate = (-0.1, 0, 0.15)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Mesh "collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"]
+        ) {{
+            uniform token physics:approximation = "convexHull"
+            uniform token purpose = "guide"{CUBE}        }}
+    }}
+
+    def PhysicsRevoluteJoint "left_joint" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    ) {{
+        rel physics:body0 = </gripper/base>
+        rel physics:body1 = </gripper/left>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0.1, 0, 0.05)
+        point3f physics:localPos1 = (0, 0, -0.1)
+        float physics:lowerLimit = -60
+        float physics:upperLimit = 60
+        float drive:angular:physics:stiffness = 50
+        float drive:angular:physics:damping = 5
+    }}
+
+    def PhysicsRevoluteJoint "right_joint" (
+        prepend apiSchemas = ["PhysxMimicJointAPI:rotY"]
+    ) {{
+        rel physics:body0 = </gripper/base>
+        rel physics:body1 = </gripper/right>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (-0.1, 0, 0.05)
+        point3f physics:localPos1 = (0, 0, -0.1)
+        float physxMimicJoint:rotY:gearing = -1
+        float physxMimicJoint:rotY:offset = 0
+        rel physxMimicJoint:rotY:referenceJoint = </gripper/left_joint>
+    }}
+}}
+"""
+
+
 @pytest.fixture
 def path(tmp_path):
     file = tmp_path / "arm.usda"
     file.write_text(ARM)
+    return file
+
+
+@pytest.fixture
+def gripper(tmp_path):
+    file = tmp_path / "gripper.usda"
+    file.write_text(GRIPPER)
     return file
 
 
@@ -146,6 +237,25 @@ def test_base_pose_moves_the_whole_robot(path):
     robot = load_articulation(w, path, base_position=(1, 2, 3), base_rotation=(0, half, 0, half))
     p = robot.articulation.link("link").position
     assert np.allclose([p.x, p.y, p.z], [1, 2.3, 3], atol=1e-4)
+
+
+def test_a_mimic_coupling_closes_the_follower_with_the_driven_finger(gripper):
+    w = world()
+    robot = load_articulation(w, gripper)
+    assert robot.joint_names == ["left_joint", "right_joint"]
+    assert robot.mimics == [{
+        "joint": "/gripper/right_joint", "reference_joint": "/gripper/left_joint",
+        "link": 2, "reference_link": 1,
+        "gearing": -1.0, "offset": 0.0, "natural_frequency": 0.0, "damping_ratio": 0.0,
+    }]
+    assert not any("mimic" in d for d in robot.diagnostics)
+
+    robot.set_targets([0.6, 0.0])  # the follower's target is ignored: it has no drive
+    for _ in range(480):
+        w.step(1 / 240)
+    left, right = robot.positions()
+    assert left == pytest.approx(0.6, abs=2e-2)
+    assert right == pytest.approx(left, abs=1e-3)
 
 
 def test_an_articulation_may_outlive_its_world(path):

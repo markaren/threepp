@@ -17,8 +17,10 @@ iterations, self-collision and joint speed limits of a `PhysX` variant, which is
 comes in Y-up, matching `tp.PhysxWorld`'s default gravity.
 
 Revolute and prismatic joints become DOFs; a fixed joint between bodies stays a link with its own mass.
-`robot.diagnostics` lists what the file holds that could not be imported: spherical and D6 joints, mimic
-couplings, kinematic loops, a decomposition collider cooked as one hull.
+A PhysxMimicJointAPI coupling becomes a PhysX mimic joint, so a gripper's follower fingers close with the
+finger its drive moves; `robot.mimics` lists them. `robot.diagnostics` lists what the file holds that
+could not be imported: spherical and D6 joints, kinematic loops, a decomposition collider cooked as one
+hull.
 
 Needs a build with PhysX and `THREEPP_WITH_USD` (`tp.HAS_USD`).
 """
@@ -30,13 +32,17 @@ from .urdf import UrdfArticulation
 
 class UsdArticulation(UrdfArticulation):
     """Handle to a USD robot imported as a PhysX `Articulation`: `.articulation`, `.meshes` (bound to the
-    sim, add them to a scene), actuated `.joint_names`, `.diagnostics`, and `.scene`, whatever the file
-    holds outside the robot's bodies."""
+    sim, add them to a scene), actuated `.joint_names`, `.diagnostics`, `.scene`, whatever the file
+    holds outside the robot's bodies, and `.mimics`, the couplings built: one dict per coupling with
+    `joint`, `reference_joint`, `link` and `reference_link` (indices into `.meshes`), `gearing`,
+    `offset`, `natural_frequency` and `damping_ratio`, holding q + gearing * q_ref + offset = 0 in
+    radians and metres."""
 
-    def __init__(self, articulation, meshes, joint_names, diagnostics, scene, world):
+    def __init__(self, articulation, meshes, joint_names, diagnostics, scene, mimics, world):
         super().__init__(articulation, meshes, joint_names, world)
         self.diagnostics = diagnostics
         self.scene = scene
+        self.mimics = mimics
 
 
 def load_articulation(world, path, *, fixed_base=None, self_collision=None, solver_position_iterations=None,
@@ -54,7 +60,7 @@ def load_articulation(world, path, *, fixed_base=None, self_collision=None, solv
     """
     if not tp.HAS_USD:
         raise RuntimeError("threepp.usd.load_articulation needs a threepp build with PhysX and THREEPP_WITH_USD")
-    art, meshes, joint_names, diagnostics, scene = world.load_usd_articulation(
+    art, meshes, joint_names, diagnostics, scene, mimics = world.load_usd_articulation(
         os.fspath(path),
         fixed_base=fixed_base,
         self_collision=self_collision,
@@ -67,4 +73,4 @@ def load_articulation(world, path, *, fixed_base=None, self_collision=None, solv
         default_density=float(default_density),
         render_visuals=render_visuals,
         drive_limits_are_forces=drive_limits_are_forces)
-    return UsdArticulation(art, meshes, joint_names, diagnostics, scene, world)
+    return UsdArticulation(art, meshes, joint_names, diagnostics, scene, mimics, world)

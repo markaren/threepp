@@ -141,21 +141,28 @@ namespace {
         point3f physics:localPos1 = (0, 0, 0)
     }
 
+)";
+
+    // The passive joint takes extra properties (a mimic coupling), so every
+    // other case keeps it free.
+    std::string passiveJoint(const std::string& extra) {
+        return R"(
     def PhysicsRevoluteJoint "passive" {
         rel physics:body0 = </robot/base>
         rel physics:body1 = </robot/branch>
         uniform token physics:axis = "Y"
         point3f physics:localPos0 = (0, 0.3, 0.1)
         point3f physics:localPos1 = (0, 0, 0)
-    }
+)" + extra + R"(    }
 
     def PhysicsSphericalJoint "ball" {
         rel physics:body0 = </robot/tool>
         rel physics:body1 = </robot/branch>
     }
 )";
+    }
 
-    std::string document(const std::string& anchor) {
+    std::string document(const std::string& anchor, const std::string& passive = "") {
         return R"(#usda 1.0
 (
     defaultPrim = "robot"
@@ -169,7 +176,7 @@ def Xform "robot" (
     }
     prepend variantSets = ["PhysX"]
 ) {
-)" + anchor + body +
+)" + anchor + body + passiveJoint(passive) +
                R"(
     variantSet "PhysX" = {
         "Disabled" {
@@ -407,7 +414,53 @@ TEST_CASE("what cannot be imported is said", "[physx][usd]") {
         return std::ranges::any_of(robot.diagnostics, [&](const auto& d) { return d.find(text) != std::string::npos; });
     };
     CHECK(said("/robot/ball: PhysicsSphericalJoint is not represented"));
-    CHECK(said("/robot/slide: mimic coupling is not represented"));
+    CHECK(said("/robot/slide: mimic coupling names the rotZ axis, which a prismatic joint has not"));
+}
+
+TEST_CASE("a mimic coupling holds q + gearing * qRef + offset = 0", "[physx][usd]") {
+    PhysxWorld world(settings());
+    // The passive joint follows the hinge at half its angle, five degrees behind.
+    const std::string mimic = R"(        float physxMimicJoint:rotY:gearing = -0.5
+        float physxMimicJoint:rotY:offset = 5
+        rel physxMimicJoint:rotY:referenceJoint = </robot/hinge>
+)";
+    auto robot = loadUsdArticulation(world, writeFixture("usd_articulation_mimic.usda", document(rootJoint, mimic)));
+    REQUIRE(robot.articulation);
+    REQUIRE(robot.mimics.size() == 1);
+    CHECK(robot.mimics[0].joint == "/robot/passive");
+    CHECK(robot.mimics[0].referenceJoint == "/robot/hinge");
+    const auto& links = robot.articulation->links();
+    CHECK(&links[static_cast<std::size_t>(robot.mimics[0].link)] == robot.articulation->findLink("branch"));
+    CHECK(&links[static_cast<std::size_t>(robot.mimics[0].referenceLink)] == robot.articulation->findLink("upper"));
+    REQUIRE_THAT(robot.mimics[0].gearing, WithinAbs(-0.5f, 1e-6f));
+    REQUIRE_THAT(robot.mimics[0].offset, WithinAbs(math::degToRad(5.f), 1e-6f));// per degree in the file
+    CHECK(robot.articulation->mimicJoints().size() == 1);
+    CHECK(robot.diagnostics.size() == 2);// the ball joint and the slide's axis, nothing about the coupling
+
+    auto targets = robot.articulation->jointPositions();
+    targets[jointIndex(robot, "hinge")] = math::degToRad(60.f);
+    robot.articulation->setDriveTargets(targets.data(), targets.size());
+    for (int i = 0; i < 960; ++i) world.step(1.f / 240.f);
+
+    const auto q = robot.articulation->jointPositions();
+    const float hinge = q[jointIndex(robot, "hinge")];
+    const float passive = q[jointIndex(robot, "passive")];
+    REQUIRE_THAT(hinge, WithinAbs(math::degToRad(60.f), 2e-2f));
+    REQUIRE_THAT(passive - 0.5f * hinge + math::degToRad(5.f), WithinAbs(0.f, 1e-3f));
+}
+
+TEST_CASE("a mimic coupling that cannot be built is said, and the joint stays free", "[physx][usd]") {
+    PhysxWorld world(settings());
+    const std::string dangling = R"(        float physxMimicJoint:rotY:gearing = 1
+        rel physxMimicJoint:rotY:referenceJoint = </robot/ball>
+)";
+    auto robot = loadUsdArticulation(world, writeFixture("usd_articulation_mimic_dangling.usda", document(rootJoint, dangling)));
+    REQUIRE(robot.articulation);
+    CHECK(robot.mimics.empty());
+    CHECK(robot.articulation->mimicJoints().empty());
+    CHECK(std::ranges::any_of(robot.diagnostics, [](const auto& d) {
+        return d == "/robot/passive: mimic coupling follows /robot/ball, which is not a moving joint of this articulation";
+    }));
 }
 
 TEST_CASE("a file that holds no robot is an error, not an empty result", "[physx][usd]") {
