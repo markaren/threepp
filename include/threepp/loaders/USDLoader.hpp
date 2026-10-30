@@ -1,15 +1,83 @@
 #pragma once
 
 #include "threepp/loaders/MaterialVariants.hpp"
+#include "threepp/math/Quaternion.hpp"
+#include "threepp/math/Vector3.hpp"
+#include "threepp/objects/Robot.hpp"
 
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace threepp {
 
     class Group;
-    class Robot;
+    class Object3D;
     class Texture;
+
+    /// What a USD file says about simulating its robot, independent of any
+    /// physics engine (extras/physx/UsdArticulation.hpp builds a PhysX
+    /// articulation from it). Links are ordered parents first. Poses are the
+    /// loaded scene's world frame at joint zero, so a Z-up file reads Y-up here
+    /// unless the loader ignores the up direction. Revolute quantities are in
+    /// radians, not USD's degrees.
+    struct USDArticulationDesc {
+        struct Collider {
+            std::string path;
+            std::string approximation;// the file's physics:approximation
+            std::vector<float> points;// x,y,z in the link frame
+            // The bound physics material, when the file binds one.
+            bool hasMaterial = false;
+            float staticFriction = 0.f;
+            float dynamicFriction = 0.f;
+            float restitution = 0.f;
+        };
+        struct Drive {
+            float stiffness = 0.f;// N·m/rad, or N/m for prismatic
+            float damping = 0.f;  // N·m·s/rad, or N·s/m for prismatic
+            float maxForce = 0.f; // N·m or N; +inf when the file sets no limit
+            float target = 0.f;   // rad or m
+            bool acceleration = false;// physics:type "acceleration", else "force"
+        };
+        struct Link {
+            std::string path;// prim path of the rigid body
+            std::shared_ptr<Object3D> body;
+
+            int parent = -1;// index into links; -1 = root
+            std::string jointName;
+            Robot::JointType jointType = Robot::JointType::Fixed;
+            std::shared_ptr<Object3D> jointNode;
+            Vector3 jointAnchor;                   // world
+            Vector3 jointAxis{1.f, 0.f, 0.f};      // world
+            std::optional<Robot::JointRange> range;// radians or metres
+            float jointValue = 0.f;                // the pose the file was authored in
+            std::optional<Drive> drive;
+            std::optional<float> maxJointVelocity;// rad/s or m/s, from physxJoint:*
+            std::optional<float> armature;
+            float jointFriction = 0.f;
+
+            Vector3 position;     // link frame, world, without scale
+            Quaternion rotation;  // link frame, world
+            Vector3 scale{1, 1, 1};
+
+            float mass = 0.f;   // 0 = not authored
+            float density = 0.f;// 0 = not authored
+            std::optional<Vector3> centerOfMass;// link frame
+            Quaternion principalAxes;
+            std::optional<Vector3> diagonalInertia;
+
+            std::vector<Collider> colliders;
+        };
+        std::vector<Link> links;
+        bool fixedBase = false;// a joint anchors the root to the world
+        // From physxArticulation:*, when the file authors them.
+        std::optional<bool> selfCollision;
+        std::optional<int> solverPositionIterations;
+        // What the description leaves out or approximates.
+        std::vector<std::string> diagnostics;
+    };
 
     struct USDResult {
         std::shared_ptr<Group> scene;
@@ -26,6 +94,9 @@ namespace threepp {
         /// setJointValue(). Joint parent/child names are the bodies' prim paths.
         /// Null when the file has no joints.
         std::shared_ptr<Robot> robot;
+        /// The robot's mass, colliders and drives, set exactly when `robot` is.
+        /// `body` and `jointNode` are the nodes `robot` is built from.
+        std::optional<USDArticulationDesc> articulation;
     };
 
     class USDLoader {
@@ -38,6 +109,10 @@ namespace threepp {
         /// the mesh is being composed into an outer system (URDF/SDF/MJCF) that
         /// owns the coordinate frame.
         USDLoader& setIgnoreUpDirection(bool ignore);
+
+        /// Select `value` for every variant set named `set`, over the file's own
+        /// selection. A set the file does not have is ignored.
+        USDLoader& setVariant(const std::string& set, const std::string& value);
 
         /// Load a USD/USDA/USDC/USDZ file. Returns the scene root only.
         std::shared_ptr<Group> load(const std::filesystem::path& path);

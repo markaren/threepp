@@ -32,6 +32,8 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -425,6 +427,9 @@ namespace threepp {
         std::shared_ptr<Texture> _envTexture;
         // The latest load's articulated robot, when it has UsdPhysics joints.
         std::shared_ptr<Robot> _robot;
+        std::optional<USDArticulationDesc> _articulation;
+        // variantSet -> selection, over the file's own selections.
+        std::map<std::string, std::string> variants;
 
         // State of one load: the converted scene plus caches keyed by its ids.
         // The scene grows when a material rc4 skipped is converted on demand.
@@ -447,6 +452,7 @@ namespace threepp {
         std::shared_ptr<Group> load(const std::filesystem::path& path) {
             _envTexture.reset();
             _robot.reset();
+            _articulation.reset();
             const std::string pathStr = path.string();
             const std::filesystem::path baseDir = path.parent_path();
 
@@ -457,15 +463,18 @@ namespace threepp {
             lnext::AssetResolver resolver;
             resolver.SetWorkingDirectory(baseDir.string());
             registerHttpSchemes(resolver);
+            lnext::pcp::CompositionOptions composition;
+            composition.variant_overrides = variants;
+            const auto* compositionOptions = variants.empty() ? nullptr : &composition;
             bool ok;
             if (lowercaseExtension(path) == ".usdz") {
                 // The package's own entries resolve inside the archive; the
                 // composed load anchors on its root layer.
-                ok = lnext::LoadUSDComposed(pathStr, &stage, &warn, &err);
+                ok = lnext::LoadUSDComposed(pathStr, &stage, &warn, &err, compositionOptions);
             } else {
                 lnext::LoadUSDOptions options;
                 ok = lnext::LoadUSD(pathStr, &stage, options, &warn, &err) &&
-                     lnext::ComposeLoadedStage(&stage, resolver, pathStr, options, &warn, &err);
+                     lnext::ComposeLoadedStage(&stage, resolver, pathStr, options, &warn, &err, compositionOptions);
             }
             if (!ok) {
                 std::cerr << "[USDLoader] Failed to load '" << pathStr << "': " << err << "\n";
@@ -524,7 +533,7 @@ namespace threepp {
             }
 
             // --- UsdPhysics joints ---
-            _robot = buildRobot(build, root);
+            _robot = buildRobot(build, root, _articulation);
 
             return root;
         }
@@ -1111,6 +1120,210 @@ namespace threepp {
         }
 
         // -------------------------------------------------------------------
+        // UsdPhysics bodies, joints and drives → USDArticulationDesc.
+        //
+        // The joint walk in buildRobot has already reduced every joint to a
+        // frame on body0 and body1's pose at the joint's zero, so the tree is
+        // rebuilt from those: links come out parents first and at zero, which
+        // is the pose a reduced-coordinate articulation is built in. USD's
+        // angular drive gains and targets are per degree.
+        // -------------------------------------------------------------------
+
+        struct BuiltJoint {
+            const tnext::PhysicsJointAnnotation* usd;
+            std::shared_ptr<Object3D> node;
+            Robot::JointInfo info;
+            Matrix4 frame;// joint frame in body0
+            Matrix4 local;// body1 in the joint frame, at the joint's zero
+            float authored;
+        };
+
+        static std::optional<float> floatProperty(const lnext::UsdPrim& prim, const std::string& name) {
+            const auto* value = prim.GetPropertyValue(name);
+            const float* f = value ? value->as_float() : nullptr;
+            return f ? std::optional<float>(*f) : std::nullopt;
+        }
+
+        static void readJoint(Build& b, const BuiltJoint& j, USDArticulationDesc::Link& link) {
+            const bool revolute = j.info.type == Robot::JointType::Revolute;
+            const float perDegree = revolute ? 180.f / math::PI : 1.f;
+            link.jointName = j.info.name;
+            link.jointType = j.info.type;
+            link.jointNode = j.node;
+            link.range = j.info.range;
+            link.jointValue = j.authored;
+
+            const auto prim = b.stage.GetPrimAtPath(j.usd->prim_path);
+            if (!prim.IsValid() || j.info.type == Robot::JointType::Fixed) return;
+
+            const std::string drive = std::string("drive:") + (revolute ? "angular" : "linear") + ":physics:";
+            const auto stiffness = floatProperty(prim, drive + "stiffness");
+            const auto damping = floatProperty(prim, drive + "damping");
+            if (stiffness || damping) {
+                USDArticulationDesc::Drive d;
+                d.stiffness = stiffness.value_or(0.f) * perDegree;
+                d.damping = damping.value_or(0.f) * perDegree;
+                d.maxForce = floatProperty(prim, drive + "maxForce").value_or(std::numeric_limits<float>::infinity());
+                d.target = floatProperty(prim, drive + "targetPosition").value_or(0.f) / perDegree;
+                const auto* type = prim.GetPropertyValue(drive + "type");
+                const std::string* token = type ? type->as_token() : nullptr;
+                d.acceleration = token && *token == "acceleration";
+                link.drive = d;
+            }
+            if (const auto v = floatProperty(prim, "physxJoint:maxJointVelocity")) link.maxJointVelocity = *v / perDegree;
+            link.armature = floatProperty(prim, "physxJoint:armature");
+            link.jointFriction = floatProperty(prim, "physxJoint:jointFriction").value_or(0.f);
+        }
+
+        static void readBody(Build& b, USDArticulationDesc::Link& link) {
+            const auto& bodies = b.scene.physics.rigid_bodies;
+            const auto body = std::ranges::find(bodies, link.path, &tnext::PhysicsRigidBodyAnnotation::prim_path);
+            if (body == bodies.end() || !body->has_mass) return;
+            link.mass = body->mass;
+            link.density = body->density;
+            const auto& com = body->center_of_mass;
+            if (std::isfinite(com.x) && std::isfinite(com.y) && std::isfinite(com.z)) link.centerOfMass = Vector3(com.x, com.y, com.z);
+            const auto& inertia = body->diagonal_inertia;
+            if (inertia.x > 0 && inertia.y > 0 && inertia.z > 0) link.diagonalInertia = Vector3(inertia.x, inertia.y, inertia.z);
+            // Unauthored principalAxes are the invalid (0, 0, 0, 0).
+            const auto& axes = body->principal_axes;
+            if (axes.x != 0 || axes.y != 0 || axes.z != 0 || axes.w != 0) link.principalAxes.set(axes.y, axes.z, axes.w, axes.x);
+        }
+
+        // Each collider goes to its nearest body up the prim tree. Its mesh is
+        // expressed in the link frame: rigid, so the body's scale goes into the
+        // points. `bodyWorld` and `stageToWorld` are in the authored pose,
+        // which is where the collider prims' own transforms hold.
+        static void readColliders(Build& b, USDArticulationDesc& desc,
+                                  const std::unordered_map<std::string, Matrix4>& bodyWorld,
+                                  const Matrix4& stageToWorld) {
+            std::unordered_map<std::string, size_t> linkOf;
+            for (size_t i = 0; i < desc.links.size(); ++i) linkOf.emplace(desc.links[i].path, i);
+
+            for (const auto& c : b.scene.physics.colliders) {
+                if (!c.collision_enabled) continue;
+                auto owner = linkOf.end();
+                for (std::string path = c.prim_path; !path.empty() && owner == linkOf.end(); path.resize(path.rfind('/'))) {
+                    owner = linkOf.find(path);
+                }
+                if (owner == linkOf.end()) continue;
+                auto& link = desc.links[owner->second];
+
+                const auto node = b.scene.node_by_path.find(c.prim_path);
+                const auto* mesh = node == b.scene.node_by_path.end() ? nullptr : b.scene.get_mesh(b.scene.nodes[node->second].data_id);
+                if (!mesh || mesh->points.size() < 4 * 3) {
+                    desc.diagnostics.push_back(c.prim_path + ": a collider without a mesh is left out");
+                    continue;
+                }
+                if (c.approximation == "convexDecomposition" || c.approximation == "meshSimplification" || c.approximation == "sdf") {
+                    desc.diagnostics.push_back(c.prim_path + ": approximation " + c.approximation + " is cooked as one convex hull");
+                }
+
+                Matrix4 inverseBody = bodyWorld.at(link.path);
+                inverseBody.invert();
+                Matrix4 toLink = Matrix4().makeScale(link.scale.x, link.scale.y, link.scale.z);
+                toLink.multiply(inverseBody).multiply(stageToWorld).multiply(toMatrix4(b.scene.nodes[node->second].world_transform));
+
+                USDArticulationDesc::Collider collider;
+                collider.path = c.prim_path;
+                collider.approximation = c.approximation;
+                collider.points.resize(mesh->points.size());
+                mesh->points.copy_to(collider.points.data());
+                for (size_t i = 0; i + 2 < collider.points.size(); i += 3) {
+                    Vector3 p(collider.points[i], collider.points[i + 1], collider.points[i + 2]);
+                    p.applyMatrix4(toLink);
+                    collider.points[i] = p.x;
+                    collider.points[i + 1] = p.y;
+                    collider.points[i + 2] = p.z;
+                }
+
+                const auto bound = lnext::GetInheritedBoundMaterialPathForPurpose(b.stage, c.prim_path, "physics");
+                const auto& materials = b.scene.physics.materials;
+                if (const auto m = std::ranges::find(materials, bound, &tnext::PhysicsMaterialAnnotation::prim_path); m != materials.end()) {
+                    collider.hasMaterial = true;
+                    collider.staticFriction = m->static_friction;
+                    collider.dynamicFriction = m->dynamic_friction;
+                    collider.restitution = m->restitution;
+                }
+                link.colliders.push_back(std::move(collider));
+            }
+        }
+
+        static USDArticulationDesc describeArticulation(Build& b, const std::vector<BuiltJoint>& joints,
+                                                        const std::unordered_map<std::string, Matrix4>& world,
+                                                        const Matrix4& stageToWorld, bool anchored,
+                                                        std::vector<std::string> diagnostics) {
+            USDArticulationDesc desc;
+            desc.fixedBase = anchored;
+            desc.diagnostics = std::move(diagnostics);
+            if (b.scene.meters_per_unit != 1.f) {
+                desc.diagnostics.push_back("metersPerUnit is " + std::to_string(b.scene.meters_per_unit) + ": lengths are taken as authored");
+            }
+
+            // A second joint into a body closes a loop, which a tree cannot hold.
+            std::unordered_set<std::string> driven;
+            std::unordered_map<std::string, std::vector<const BuiltJoint*>> outbound;
+            for (const auto& j : joints) {
+                if (driven.insert(j.usd->body1).second) outbound[j.usd->body0].push_back(&j);
+                else desc.diagnostics.push_back(j.usd->prim_path + ": closes a kinematic loop and is left out");
+            }
+            std::vector<std::string> roots;
+            for (const auto& j : joints) {
+                if (!driven.count(j.usd->body0) && std::ranges::find(roots, j.usd->body0) == roots.end()) roots.push_back(j.usd->body0);
+            }
+            if (roots.empty()) {
+                desc.diagnostics.push_back("no root body: every body is moved by a joint");
+                return desc;
+            }
+            if (roots.size() > 1) desc.diagnostics.push_back("several root bodies: only " + roots.front() + " is described");
+
+            struct Pending {
+                std::string path;
+                int parent;
+                const BuiltJoint* joint;
+                Matrix4 jointWorld;
+                Matrix4 linkWorld;
+            };
+            std::vector<Pending> pending{{roots.front(), -1, nullptr, Matrix4(), world.at(roots.front())}};
+            for (size_t i = 0; i < pending.size(); ++i) {
+                const Pending item = pending[i];
+
+                USDArticulationDesc::Link link;
+                link.path = item.path;
+                link.body = b.objectByPath.at(item.path);
+                link.parent = item.parent;
+                item.linkWorld.decompose(link.position, link.rotation, link.scale);
+                readBody(b, link);
+                if (item.joint) {
+                    readJoint(b, *item.joint, link);
+                    Vector3 jointScale;
+                    Quaternion jointRotation;
+                    item.jointWorld.decompose(link.jointAnchor, jointRotation, jointScale);
+                    link.jointAxis.copy(item.joint->info.axis).applyQuaternion(jointRotation).normalize();
+                }
+                desc.links.push_back(std::move(link));
+
+                for (const auto* j : outbound[item.path]) {
+                    Matrix4 jointWorld;
+                    jointWorld.multiplyMatrices(item.linkWorld, j->frame);
+                    Matrix4 childWorld;
+                    childWorld.multiplyMatrices(jointWorld, j->local);
+                    pending.push_back({j->usd->body1, static_cast<int>(i), j, jointWorld, childWorld});
+                }
+            }
+
+            readColliders(b, desc, world, stageToWorld);
+
+            for (const auto& path : b.scene.physics.articulation_roots) {
+                const auto prim = b.stage.GetPrimAtPath(path);
+                if (!prim.IsValid()) continue;
+                if (const auto* v = prim.GetPropertyValue("physxArticulation:enabledSelfCollisions"); v && v->as_bool()) desc.selfCollision = *v->as_bool();
+                if (const auto* v = prim.GetPropertyValue("physxArticulation:solverPositionIterationCount"); v && v->as_int()) desc.solverPositionIterations = *v->as_int();
+            }
+            return desc;
+        }
+
+        // -------------------------------------------------------------------
         // UsdPhysics joints → Robot.
         //
         // A joint relates two bodies: its frame sits at localPos0/localRot0
@@ -1124,20 +1337,35 @@ namespace threepp {
         // and reports true joint angles. Revolute limits are degrees in USD.
         // -------------------------------------------------------------------
 
-        static std::shared_ptr<Robot> buildRobot(Build& b, const std::shared_ptr<Group>& root) {
+        static std::shared_ptr<Robot> buildRobot(Build& b, const std::shared_ptr<Group>& root,
+                                                 std::optional<USDArticulationDesc>& articulation) {
             struct Joint {
                 const tnext::PhysicsJointAnnotation* usd;
                 Robot::JointType type;
             };
             std::vector<Joint> joints;
+            std::vector<std::string> diagnostics;
+            bool anchored = false;
             for (const auto& j : b.scene.physics.joints) {
+                for (const auto& property : j.extension_properties) {
+                    if (property.name.find("imic") == std::string::npos) continue;
+                    diagnostics.push_back(j.prim_path + ": mimic coupling is not represented");
+                    break;
+                }
                 Robot::JointType type;
                 if (j.type_name == "PhysicsRevoluteJoint") type = Robot::JointType::Revolute;
                 else if (j.type_name == "PhysicsPrismaticJoint") type = Robot::JointType::Prismatic;
                 else if (j.type_name == "PhysicsFixedJoint") type = Robot::JointType::Fixed;
-                else continue;// spherical, distance, D6: no Robot equivalent
+                else {// spherical, distance, D6: no Robot equivalent
+                    diagnostics.push_back(j.prim_path + ": " + j.type_name + " is not represented");
+                    continue;
+                }
                 // A joint to the world (no body0) anchors the root; nothing to articulate.
-                if (!j.has_body0 || !j.has_body1) continue;
+                if (!j.has_body0 || !j.has_body1) {
+                    if (type == Robot::JointType::Fixed) anchored = true;
+                    else diagnostics.push_back(j.prim_path + ": a moving joint to the world is not represented");
+                    continue;
+                }
                 if (!b.objectByPath.count(j.body0) || !b.objectByPath.count(j.body1)) continue;
                 // body1 must not contain body0, or moving it under the joint
                 // would make a cycle.
@@ -1162,6 +1390,7 @@ namespace threepp {
 
             auto robot = Robot::create();
             std::vector<float> authoredValues;// parallel to the robot's joints
+            std::vector<BuiltJoint> built;
             std::unordered_set<std::string> links;
             auto addLink = [&](const std::string& path) {
                 if (links.insert(path).second) robot->addLink(b.objectByPath.at(path));
@@ -1249,7 +1478,10 @@ namespace threepp {
                 addLink(usd.body1);
                 robot->addJoint(jointNode, info);
                 authoredValues.push_back(authored);
+                built.push_back({&usd, jointNode, info, frame, local, authored});
             }
+
+            articulation = describeArticulation(b, built, world, *root->matrixWorld, anchored, std::move(diagnostics));
 
             robot->add(root);
             robot->finalizeInPlace();
@@ -1362,13 +1594,18 @@ namespace threepp {
         return *this;
     }
 
+    USDLoader& USDLoader::setVariant(const std::string& set, const std::string& value) {
+        pimpl_->variants[set] = value;
+        return *this;
+    }
+
     std::shared_ptr<Group> USDLoader::load(const std::filesystem::path& path) {
         return pimpl_->load(path);
     }
 
     USDResult USDLoader::loadFull(const std::filesystem::path& path) {
         auto group = pimpl_->load(path);
-        return {std::move(group), {}, pimpl_->_envTexture, pimpl_->_robot};
+        return {std::move(group), {}, pimpl_->_envTexture, pimpl_->_robot, pimpl_->_articulation};
     }
 
 }// namespace threepp

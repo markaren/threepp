@@ -2,6 +2,10 @@
 add_example(NAME "physx_demo" SOURCES main.cpp LINK_IMGUI LINK_PHYSX)
 add_example(NAME "physx_softbody" SOURCES softbody.cpp LINK_IMGUI LINK_PHYSX)
 
+if (THREEPP_WITH_USD)
+    add_example(NAME "usd_articulation" SOURCES usd_articulation.cpp LINK_PHYSX)
+endif ()
+
 # GPU PBD granular material (PxPBDParticleSystem). Builds everywhere PhysX is
 # found — the PBD headers ship with the SDK whether or not CUDA does — and
 # reports + exits 0 at runtime when GPU dynamics is unavailable. Where the SDK

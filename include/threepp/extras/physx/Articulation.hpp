@@ -147,6 +147,25 @@ namespace threepp {
         [[nodiscard]] float jointPosition() const { return joint()->getJointPosition(axis_); }
         [[nodiscard]] float jointVelocity() const { return joint()->getJointVelocity(axis_); }
 
+        // Joint speed cap in rad/s (m/s for prismatic). PhysX defaults to 100.
+        void setMaxJointVelocity(float v) { joint()->setMaxJointVelocity(v); }
+        // Reflected rotor inertia added to this joint's DOF, in kg·m² (kg for prismatic).
+        void setArmature(float a) { joint()->setArmature(axis_, a); }
+
+        // Authored mass properties, replacing what addLink derived from density x
+        // shape. `centerOfMass` and `principalAxes` are in the link's actor frame;
+        // `diagonalInertia` is about those axes, through the centre of mass.
+        void setMassProperties(float mass, const Vector3& centerOfMass, const Quaternion& principalAxes,
+                               const Vector3& diagonalInertia) {
+            link_->setMass(mass);
+            link_->setCMassLocalPose(::physx::PxTransform(toPxVec3(centerOfMass), toPxQuat(principalAxes)));
+            link_->setMassSpaceInertiaTensor(toPxVec3(diagonalInertia));
+        }
+        // Recompute mass, centre of mass and inertia from the attached shapes:
+        // the first scales them to a total mass, the second from a density.
+        void setMassFromShapes(float mass) { ::physx::PxRigidBodyExt::setMassAndUpdateInertia(*link_, mass); }
+        void setDensityFromShapes(float density) { ::physx::PxRigidBodyExt::updateMassAndInertia(*link_, density); }
+
         [[nodiscard]] ::physx::PxArticulationLink* raw() const { return link_; }
         [[nodiscard]] ::physx::PxTransform creationPose() const { return creationPose_; }
         // This joint's motion axis (eTWIST for revolute, eX for prismatic). A fixed
@@ -225,7 +244,8 @@ namespace threepp {
                                  bool limited, float lower, float upper,
                                  float stiffness, float damping, float maxForce, float driveTarget,
                                  const std::string& jointType, float jointFriction,
-                                 ::physx::PxMaterial* material) {
+                                 ::physx::PxMaterial* material,
+                                 ::physx::PxArticulationDriveType::Enum driveType = ::physx::PxArticulationDriveType::eFORCE) {
             using namespace ::physx;
             if (finalized_) throw std::runtime_error("Articulation.add_link: already finalized (no links after finalize)");
             auto* g = mesh.geometry().get();
@@ -278,21 +298,27 @@ namespace threepp {
             // Revolute (hinge, rotation about the axis) or prismatic (slider,
             // translation along the axis). For revolute the motion DOF is eTWIST
             // (rotation about joint-frame X); for prismatic it's eX (translation
-            // along joint-frame X) — same frame, different DOF.
+            // along joint-frame X) — same frame, different DOF. A fixed joint welds the
+            // link to its parent with no DOF: it stays a link of its own, with its own
+            // mass, and takes no slot in the batched joint I/O.
             const bool prismatic = (jointType == "prismatic");
+            const bool fixed = (jointType == "fixed");
             const PxArticulationAxis::Enum ax = prismatic ? PxArticulationAxis::eX : PxArticulationAxis::eTWIST;
 
             PxArticulationJointReducedCoordinate* joint = nullptr;
             if (parentLink) {
                 joint = link->getInboundJoint();
-                joint->setJointType(prismatic ? PxArticulationJointType::ePRISMATIC
-                                              : PxArticulationJointType::eREVOLUTE);
+                joint->setJointType(fixed       ? PxArticulationJointType::eFIX
+                                    : prismatic ? PxArticulationJointType::ePRISMATIC
+                                                : PxArticulationJointType::eREVOLUTE);
                 // Joint frame in world space: origin at the anchor, X axis along the
                 // hinge/slide axis (eTWIST rotates about X / eX translates along X).
                 const PxTransform jointWorld(toPxVec3(Vector3(anchor[0], anchor[1], anchor[2])),
                                              physx_detail::shortestArc(PxVec3(1, 0, 0), toPxVec3(Vector3(axis[0], axis[1], axis[2]))));
                 joint->setParentPose(parent->creationPose().getInverse() * jointWorld);
                 joint->setChildPose(linkPose.getInverse() * jointWorld);
+            }
+            if (parentLink && !fixed) {
                 joint->setMotion(ax, limited ? PxArticulationMotion::eLIMITED : PxArticulationMotion::eFREE);
                 // Joint friction holds a joint static until the applied torque exceeds it —
                 // which silently fakes balancing tasks (a near-upright pole's tiny gravity
@@ -302,8 +328,7 @@ namespace threepp {
                 joint->setArmature(ax, 0.0f);
                 if (limited) joint->setLimitParams(ax, PxArticulationLimit(lower, upper));
                 if (stiffness > 0.f || damping > 0.f) {
-                    joint->setDriveParams(ax,
-                                          PxArticulationDrive(stiffness, damping, maxForce, PxArticulationDriveType::eFORCE));
+                    joint->setDriveParams(ax, PxArticulationDrive(stiffness, damping, maxForce, driveType));
                     joint->setDriveTarget(ax, driveTarget, false);// autowake=false: pre-scene
                 }
                 joints_.push_back(joint);
@@ -315,6 +340,23 @@ namespace threepp {
             ArticulationLink handle(&world_, link, joint, linkPose, ax);
             links_.push_back(handle);
             return handle;
+        }
+
+        // A further convex hull on a link, for a body made of several colliders.
+        // `points` are x,y,z floats in the link's actor frame. Mass is not touched:
+        // set it once every shape is on (ArticulationLink::setMassProperties or
+        // setDensityFromShapes).
+        void addConvexHull(const ArticulationLink& link, const float* points, std::size_t count,
+                           ::physx::PxMaterial* material = nullptr) {
+            using namespace ::physx;
+            if (finalized_) throw std::runtime_error("Articulation.add_convex_hull: already finalized");
+            PxConvexMesh* convex = world_.cookConvexHull(points, count, 64);
+            if (!convex) throw std::runtime_error("Articulation.add_convex_hull: convex hull cook failed");
+            PxShape* s = world_.physics().createShape(PxConvexMeshGeometry(convex),
+                                                      material ? *material : world_.defaultMaterial(), true);
+            link.raw()->attachShape(*s);
+            s->release();
+            convex->release();// the shape keeps its own reference
         }
 
         // Every link in add order (root first) — small copyable handles, valid while

@@ -60,6 +60,11 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
         target_link_libraries(${name} PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endforeach ()
 
+    if (THREEPP_WITH_USD)
+        add_test_executable(UsdArticulation_test)
+        target_link_libraries(UsdArticulation_test PRIVATE unofficial::omniverse-physx-sdk::sdk)
+    endif ()
+
     # SoftBody_test also covers the CUDA->GL zero-copy feed of a GPU-skinned
     # body, which needs the CUDA toolkit (driver API). Without it that case is
     # compiled out. The macro is safe here: this binary has one translation
