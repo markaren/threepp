@@ -8,6 +8,7 @@
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/math/Matrix4.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <thread>
@@ -45,7 +46,7 @@ TEST_CASE("BufferAttribute accessors address elements by itemSize") {
 // interleaved garbage. The scratch is function-local now; this pins that.
 TEST_CASE("BufferAttribute transforms are safe on concurrent attributes") {
 
-    constexpr int kVerts = 512;
+    constexpr int kVerts = 100000;
     constexpr int kThreads = 4;
 
     std::vector<std::unique_ptr<FloatBufferAttribute>> attrs;
@@ -58,12 +59,18 @@ TEST_CASE("BufferAttribute transforms are safe on concurrent attributes") {
         attrs.push_back(FloatBufferAttribute::create(std::move(data), 3));
     }
 
-    // Each thread translates its own attribute by a distinct offset.
+    // Each thread translates its own attribute by a distinct offset. They wait
+    // for one another first: shared scratch only shows while two threads are
+    // inside applyMatrix4 at once, and a thread takes longer to spawn than a
+    // small attribute takes to transform.
+    std::atomic<int> arrived{0};
     std::vector<std::thread> threads;
     for (int t = 0; t < kThreads; ++t) {
-        threads.emplace_back([&attrs, t] {
+        threads.emplace_back([&attrs, &arrived, t] {
             Matrix4 m;
             m.setPosition(static_cast<float>(100 * t), 0, 0);
+            ++arrived;
+            while (arrived.load() < kThreads) std::this_thread::yield();
             attrs[t]->applyMatrix4(m);
         });
     }
@@ -71,10 +78,12 @@ TEST_CASE("BufferAttribute transforms are safe on concurrent attributes") {
 
     for (int t = 0; t < kThreads; ++t) {
         const float expectedX = static_cast<float>(t) + static_cast<float>(100 * t);
+        int wrong = 0;
         for (int i = 0; i < kVerts; ++i) {
-            REQUIRE(attrs[t]->getX(i) == expectedX);
-            REQUIRE(attrs[t]->getY(i) == static_cast<float>(t));
+            if (attrs[t]->getX(i) != expectedX || attrs[t]->getY(i) != static_cast<float>(t)) ++wrong;
         }
+        INFO("attribute " << t);
+        CHECK(wrong == 0);
     }
 }
 
