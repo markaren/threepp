@@ -231,7 +231,7 @@ namespace {
         int kind = -1;// the event this frame carries, -1 for a quiet frame
         int sinceEvent = 0;
         double wallMs = 0, cpuFrameMs = 0, cpuEnsureMs = 0, gpuMs = 0;
-        uint64_t structural = 0, history = 0;// deltas over this frame
+        uint64_t structural = 0, history = 0, landed = 0;// deltas over this frame
     };
 
 }// namespace
@@ -424,6 +424,7 @@ int main() {
             r.gpuMs = ft.gpuTotalMs;
             r.structural = after.structuralRebuilds - before.structuralRebuilds;
             r.history = after.historyResets - before.historyResets;
+            r.landed = after.admissionsLanded - before.admissionsLanded;
             return r;
         };
 
@@ -769,11 +770,27 @@ int main() {
                 for (const auto& c : cell->children) n += renderer.admitted(*c) ? 1 : 0;
                 return n;
             };
-            const double addMs = frame(-1, 0).wallMs;
+            // Verbose: the add frame, the one after, and every frame that lands
+            // an admission or passes 2 ms, so a gate's miss can be read off
+            // which frame carried what.
+            const auto rowOut = [&](const char* tag, int f, const FrameRow& r) {
+                if (!verbose) return;
+                std::printf("  hidden cell %-7s f%-3d wall %6.2f ensure %6.2f cpu %6.2f gpu %5.2f landed %llu\n", tag, f,
+                            r.wallMs, r.cpuEnsureMs, r.cpuFrameMs, r.gpuMs, static_cast<unsigned long long>(r.landed));
+            };
+            const FrameRow addRow = frame(-1, 0);
+            rowOut("add", 0, addRow);
+            const double addMs = addRow.wallMs;
             const int admittedAtAdd = admittedCount();
-            const double afterAddMs = frame(-1, 1).wallMs;
+            const FrameRow afterRow = frame(-1, 1);
+            rowOut("after", 1, afterRow);
+            const double afterAddMs = afterRow.wallMs;
             std::vector<double> between;// the frames the admission lands on
-            for (int f = 0; f < 180; ++f) between.push_back(frame(-1, kGap).wallMs);
+            for (int f = 0; f < 180; ++f) {
+                const FrameRow r = frame(-1, kGap);
+                between.push_back(r.wallMs);
+                if (r.landed != 0u || r.wallMs > 2.0) rowOut("between", f + 2, r);
+            }
             const int admittedBeforeShow = admittedCount();
             const auto a1 = renderer.tlasStats();
             cell->visible = true;
