@@ -1281,7 +1281,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // within reach, the one whose leg is nearest. Off, the march runs here.
 vec3 fogDirPrimary(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     if ((kRayBudget & kRayBudgetFogHalf) == 0u || !flagOn(1073741824u)) return volumetricDirScatter(ro, rd, tMax, px);
-    const ivec2 hsize = textureSize(fogHalfTex, 0);
+    const ivec2 hsize = paneHalfSize();// the pane's half extent, not textureSize
     const vec2  hp    = (vec2(px) + 0.5) * 0.5 - 0.5;
     const ivec2 b     = ivec2(floor(hp));
     const vec2  f     = hp - vec2(b);

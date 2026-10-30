@@ -73,6 +73,7 @@ layout(set = 0, binding = 63) uniform sampler2D cloudAuxPrevTex;                
 // Shared ShadePush block (vulkan_shared.h) — this pass reads only the
 // fields it names; the host zero-fills the rest.
 layout(push_constant) uniform Pc { ShadePush pc; };
+#include "pane_uv.glsl"// paneHalfToPhys: the history taps under a split-screen pane
 
 const float PI = 3.14159265358979;
 
@@ -199,10 +200,15 @@ void main() {
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
     // Depth-aware clip: sky (id 0) → unbounded; else the surface ray-distance.
-    const uint id = textureLod(gbufIdsTex, uv, 0.0).x;
+    // uv is pane-normalized; the ids image shares the depth image's extent, so
+    // one rescale serves both taps. The ratio goes first, not paneToPhys: these
+    // half-res centres sit on full-res texel EDGES, so fullscreen the uv must
+    // pass through to the bit or a nearest tap can flip to the next texel.
+    const vec2 guv = uv * (vec2(float(pc.width), float(pc.height)) / vec2(textureSize(gbufDepthTex, 0)));
+    const uint id = textureLod(gbufIdsTex, guv, 0.0).x;
     float tSceneMax = 1e30;
     if (id != 0u) {
-        const float depth = textureLod(gbufDepthTex, uv, 0.0).x;
+        const float depth = textureLod(gbufDepthTex, guv, 0.0).x;
         const vec4  viewH = cam.projInverse * vec4(ndc, depth, 1.0);
         const vec3  wp    = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
         tSceneMax = length(wp - camPos);
@@ -228,8 +234,8 @@ void main() {
             const vec2 pNdc = pClip.xy / pClip.w;
             const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
             if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
-                const vec4 prevC = texture(cloudColorPrevTex, pUv);
-                const vec4 prevA = texture(cloudAuxPrevTex, pUv);// r=depth, g=histLen, b=sceneDist, a=epoch
+                const vec4 prevC = texture(cloudColorPrevTex, paneHalfToPhys(cloudColorPrevTex, pUv));
+                const vec4 prevA = texture(cloudAuxPrevTex, paneHalfToPhys(cloudAuxPrevTex, pUv));// r=depth, g=histLen, b=sceneDist, a=epoch
                 const bool valid = prevA.g > 0.5 && prevA.g < 4096.0
                                  && abs(prevA.a - clouds.epoch) < 0.5
                                  && all(lessThan(abs(prevC.rgb), vec3(1e6)))

@@ -80,7 +80,7 @@ void main() {
         const vec2 prevNDC = ndc - cam.jitter.xy + mv;
         const vec2 pUv     = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
         if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
-            const vec4  prev = textureLod(fogHalfPrevTex, pUv, 0.0);
+            const vec4  prev = textureLod(fogHalfPrevTex, paneHalfToPhys(fogHalfPrevTex, pUv), 0.0);
             const float tol  = 0.08 * dist + pc.camDelta + 0.25;
             if (prev.a > 0.0 && abs(prev.a - dist) < tol && all(lessThan(abs(prev.rgb), vec3(6.0e4))))
                 fog = mix(prev.rgb, fog, kFogHistoryAlpha);

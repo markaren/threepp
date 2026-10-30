@@ -11,7 +11,7 @@
 // cloud-shadow textures live in their own spaces and take their uv raw.
 //
 // Needs the ShadePush block declared as `pc` before the include (the deferred
-// shade family and rtao.comp both bind it under that name).
+// shade family, rtao.comp and cloud_march.comp bind it under that name).
 vec2 paneToPhys(sampler2D t, vec2 paneUv) {
     return paneUv * vec2(float(pc.width), float(pc.height)) / vec2(textureSize(t, 0));
 }
