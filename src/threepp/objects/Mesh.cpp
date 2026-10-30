@@ -59,6 +59,7 @@ namespace {
             bool morphTargetsRelative,
             const FloatAttributeView* uv,
             const FloatAttributeView* uv2,
+            SkinnedMesh* skinned,
             unsigned int a, unsigned int b, unsigned int c) {
 
         static thread_local Vector3 _vA{};
@@ -124,7 +125,7 @@ namespace {
             }
         }
 
-        if (auto skinned = object.as<SkinnedMesh>()) {
+        if (skinned) {
             skinned->boneTransform(a, _vA);
             skinned->boneTransform(b, _vB);
             skinned->boneTransform(c, _vC);
@@ -236,6 +237,9 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
     const FloatAttributeView uv2View(geometry_->getAttribute("uv2"));
     const auto* uv = uvView ? &uvView : nullptr;
     const auto* uv2 = uv2View ? &uv2View : nullptr;
+    // Asked once here, not per triangle: a failed cast costs more than the
+    // ray-triangle test it would precede.
+    auto* const skinned = as<SkinnedMesh>();
     const auto groups = geometry_->groups;
     const auto drawRange = geometry_->drawRange;
 
@@ -260,7 +264,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
                     intersection = checkBufferGeometryIntersection(
                             *this, *groupMaterial, raycaster, _ray, *position,
-                            morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
+                            morphPosition, morphTargetsRelative, uv, uv2, skinned, a, b, c);
 
                     if (intersection) {
 
@@ -284,7 +288,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
                 intersection = checkBufferGeometryIntersection(
                         *this, *material(), raycaster, _ray, *position,
-                        morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
+                        morphPosition, morphTargetsRelative, uv, uv2, skinned, a, b, c);
 
                 if (intersection) {
 
@@ -315,7 +319,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
                     intersection = checkBufferGeometryIntersection(
                             *this, *groupMaterial, raycaster, _ray, *position,
-                            morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
+                            morphPosition, morphTargetsRelative, uv, uv2, skinned, a, b, c);
 
                     if (intersection) {
 
@@ -339,7 +343,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
                 intersection = checkBufferGeometryIntersection(
                         *this, *material(), raycaster, _ray, *position,
-                        morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
+                        morphPosition, morphTargetsRelative, uv, uv2, skinned, a, b, c);
 
                 if (intersection) {
 
