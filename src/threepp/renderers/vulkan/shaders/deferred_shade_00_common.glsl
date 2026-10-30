@@ -555,20 +555,7 @@ bool gShadowMapOnly = false;
 bool  gGiRayHitMoved = false;
 float gGiMovFrac     = 0.0;
 
-// ── Pane-UV → physical-UV rescale (split-screen) ────────────────────────────
-// Under a scissored pane render (setScissorTest + a sub-rect viewport) the
-// deferred pipeline renders PANE-SIZED content at the ORIGIN of the same
-// full-render-extent images used fullscreen. Every screen-space normalized
-// coordinate in this shader family ([0,1] over pc.width/height) must therefore
-// be rescaled by pane/physical before it touches a sampler, or the tap lands
-// at a stretched position — the visible symptom was shadow/GI history ghosts
-// offset from their casters in lidar_slam's split view. Fullscreen the ratio
-// is exactly 1.0 (w/w), so this is a no-op there. Applies ONLY to samplers
-// backed by render-extent images (gbuf*, *Prev, history); env/noise/froxel/
-// cloud-shadow textures live in their own spaces and take their uv raw.
-vec2 paneToPhys(sampler2D t, vec2 paneUv) {
-    return paneUv * vec2(float(pc.width), float(pc.height)) / vec2(textureSize(t, 0));
-}
+#include "pane_uv.glsl"// paneToPhys / paneHalfSize: split-screen pane lookups
 
 #include "emissive_lights.glsl"// emitter light table + coverage sample plan (the NEE loops below)
 // DEPTH-AWARE 2×2 bilateral upsample of the half-res RTAO at this full-res
@@ -579,7 +566,8 @@ vec2 paneToPhys(sampler2D t, vec2 paneUv) {
 // geometry between the half-res taps) → fully open (ao=1), the safe identity.
 void rtaoGather(ivec2 px, float centerViewZ, vec3 N,
                 out float ao, out float aoNear, out float skyVis, out vec3 bentN) {
-    const ivec2 hsz = textureSize(rtaoTex, 0);
+    // The pane's half extent, not textureSize (see paneHalfSize).
+    const ivec2 hsz = paneHalfSize();
     const vec2  size = vec2(float(pc.width), float(pc.height));
     const vec2  uv  = (vec2(px) + 0.5) / size;
     const vec2  pos = uv * vec2(hsz) - 0.5;

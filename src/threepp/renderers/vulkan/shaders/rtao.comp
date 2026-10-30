@@ -51,6 +51,7 @@ layout(set = 0, binding = 75, rgba16f) uniform writeonly image2D rtaoAuxImage;  
 layout(set = 0, binding = 76) uniform sampler2D rtaoAuxPrevTex;                  // prev-frame aux
 
 layout(push_constant) uniform Pc { ShadePush pc; };
+#include "pane_uv.glsl"// paneHalfToPhys: the history taps under a split-screen pane
 
 // AO gather radius (world units). Only occluders within this distance darken the
 // pixel — matches the deterministic gatherEnv AO_RADIUS so the look is familiar.
@@ -189,7 +190,10 @@ void main() {
     // ── Temporal reprojection + EMA ─────────────────────────────────────────
     // Reproject with the full-res motion vector (same convention as the shade's
     // GI reproject), validate against prev normal + prev depth, EMA-blend.
-    const vec2 mv     = textureLod(gbufMotionTex, uv, 0.0).rg;
+    // The anchor texel's own taps are texelFetch at pf (the samplers are
+    // NEAREST, so fullscreen this is the texel uv sampled; under a split-screen
+    // pane uv is pane-normalized and a sampler tap would land at a stretched x).
+    const vec2 mv     = texelFetch(gbufMotionTex, pf, 0).rg;
     const vec2 prevNDC = ndc - cam.jitter.xy + mv;// unjittered curr NDC + motion
     const vec2 pUv     = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
 
@@ -200,7 +204,7 @@ void main() {
     float histLen   = 1.0;
     float outSq     = curAo * curAo;
     if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
-        const float surfD = textureLod(gbufMotionTex, uv, 0.0).b;    // this surface's prev NDC depth
+        const float surfD = texelFetch(gbufMotionTex, pf, 0).b;    // this surface's prev NDC depth
         const vec4  svh = cam.projInverse * vec4(prevNDC, surfD, 1.0);
         const float svz = svh.z / svh.w;
         // JOINT normal+depth test over the 3x3 PREV neighbourhood, the same
@@ -217,8 +221,9 @@ void main() {
         // averages the two into a stable value. Only a GROSS flip (> 90 degrees)
         // is rejected on the normal; depth does the real surface discrimination,
         // and a truly vacated pixel still finds no match and resets.
-        const bool  dsided = ifDoubleSided(textureLod(gbufIdsTex, uv, 0.0).z);
-        const ivec2 pmx = textureSize(gbufNormalPrevTex, 0) - 1;
+        const bool  dsided = ifDoubleSided(texelFetch(gbufIdsTex, pf, 0).z);
+        // The pane's extent, as the shade's GI reproject has it (pUv is pane-normalized).
+        const ivec2 pmx = ivec2(int(pc.width), int(pc.height)) - 1;
         const ivec2 pip = clamp(ivec2(pUv * vec2(pmx + 1)), ivec2(0), pmx);
         bool sameSurface = false;
         for (int dy = -1; dy <= 1 && !sameSurface; ++dy) {
@@ -235,14 +240,14 @@ void main() {
             }
         }
         if (sameSurface) {
-            const vec4  prevR = textureLod(rtaoPrevTex, pUv, 0.0);
-            const vec4  prevA = textureLod(rtaoAuxPrevTex, pUv, 0.0);// (histLen, E[ao^2])
+            const vec4  prevR = textureLod(rtaoPrevTex, paneHalfToPhys(rtaoPrevTex, pUv), 0.0);
+            const vec4  prevA = textureLod(rtaoAuxPrevTex, paneHalfToPhys(rtaoAuxPrevTex, pUv), 0.0);// (histLen, E[ao^2])
             const bool  valid = prevA.x > 0.5 && prevA.x < 4096.0 &&
                                 prevR.a >= -0.01 && prevR.a <= 1.01;
             if (valid) {
                 // AO is view-independent → no motion-scaled cap. Deformers make
                 // the integrand non-stationary, so pin a short cap on them.
-                const uint  flagsZ = textureLod(gbufIdsTex, uv, 0.0).z;
+                const uint  flagsZ = texelFetch(gbufIdsTex, pf, 0).z;
                 const float cap = mix(32.0, 4.0, ifIrradianceReactivity(flagsZ));
                 histLen = min(prevA.x + 1.0, cap);
                 const float k = 1.0 / histLen;
