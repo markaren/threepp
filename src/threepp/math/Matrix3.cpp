@@ -10,53 +10,6 @@
 
 using namespace threepp;
 
-float& Matrix3::operator[](unsigned int index) {
-
-    if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
-
-    return elements[index];
-}
-
-Matrix3& Matrix3::set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33) {
-
-    auto& te = this->elements;
-
-    // clang-format off
-    te[ 0 ] = n11; te[ 1 ] = n21; te[ 2 ] = n31;
-    te[ 3 ] = n12; te[ 4 ] = n22; te[ 5 ] = n32;
-    te[ 6 ] = n13; te[ 7 ] = n23; te[ 8 ] = n33;
-    // clang-format on
-
-    return *this;
-}
-
-Matrix3& Matrix3::identity() {
-
-    this->set(
-
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1
-
-    );
-
-    return *this;
-}
-
-Matrix3& Matrix3::copy(const Matrix3& m) {
-
-    auto& te = this->elements;
-    const auto& me = m.elements;
-
-    // clang-format off
-    te[ 0 ] = me[ 0 ]; te[ 1 ] = me[ 1 ]; te[ 2 ] = me[ 2 ];
-    te[ 3 ] = me[ 3 ]; te[ 4 ] = me[ 4 ]; te[ 5 ] = me[ 5 ];
-    te[ 6 ] = me[ 6 ]; te[ 7 ] = me[ 7 ]; te[ 8 ] = me[ 8 ];
-    // clang-format on
-
-    return *this;
-}
-
 Matrix3& Matrix3::extractBasis(Vector3& xAxis, Vector3& yAxis, Vector3& zAxis) {
 
     xAxis.setFromMatrix3Column(*this, 0);
@@ -79,16 +32,6 @@ Matrix3& Matrix3::setFromMatrix4(const Matrix4& m) {
     );
 
     return *this;
-}
-
-Matrix3& Matrix3::multiply(const Matrix3& m) {
-
-    return this->multiplyMatrices(*this, m);
-}
-
-Matrix3& Matrix3::premultiply(const Matrix3& m) {
-
-    return this->multiplyMatrices(m, *this);
 }
 
 Matrix3& Matrix3::multiplyMatrices(const Matrix3& a, const Matrix3& b) {
@@ -116,19 +59,6 @@ Matrix3& Matrix3::multiplyMatrices(const Matrix3& a, const Matrix3& b) {
     te[2] = a31 * b11 + a32 * b21 + a33 * b31;
     te[5] = a31 * b12 + a32 * b22 + a33 * b32;
     te[8] = a31 * b13 + a32 * b23 + a33 * b33;
-
-    return *this;
-}
-
-Matrix3& Matrix3::multiplyScalar(float s) {
-
-    auto& te = this->elements;
-
-    // clang-format off
-    te[ 0 ] *= s; te[ 3 ] *= s; te[ 6 ] *= s;
-    te[ 1 ] *= s; te[ 4 ] *= s; te[ 7 ] *= s;
-    te[ 2 ] *= s; te[ 5 ] *= s; te[ 8 ] *= s;
-    // clang-format on
 
     return *this;
 }
@@ -179,20 +109,6 @@ Matrix3& Matrix3::invert() {
     return *this;
 }
 
-Matrix3& Matrix3::transpose() {
-
-    float tmp;
-    auto& m = this->elements;
-
-    // clang-format off
-    tmp = m[ 1 ]; m[ 1 ] = m[ 3 ]; m[ 3 ] = tmp;
-    tmp = m[ 2 ]; m[ 2 ] = m[ 6 ]; m[ 6 ] = tmp;
-    tmp = m[ 5 ]; m[ 5 ] = m[ 7 ]; m[ 7 ] = tmp;
-    // clang-format on
-
-    return *this;
-}
-
 Matrix3& Matrix3::getNormalMatrix(const Matrix4& m) {
 
     return this->setFromMatrix4(m).invert().transpose();
@@ -209,69 +125,4 @@ Matrix3& Matrix3::setUvTransform(float tx, float ty, float sx, float sy, float r
             0, 0, 1);
 
     return *this;
-}
-
-Matrix3& Matrix3::scale(float sx, float sy) {
-
-    auto& te = this->elements;
-
-    // clang-format off
-    te[ 0 ] *= sx; te[ 3 ] *= sx; te[ 6 ] *= sx;
-    te[ 1 ] *= sy; te[ 4 ] *= sy; te[ 7 ] *= sy;
-    // clang-format on
-
-    return *this;
-}
-
-Matrix3& Matrix3::rotate(float theta) {
-
-    const float c = std::cos(theta);
-    const float s = std::sin(theta);
-
-    auto& te = this->elements;
-
-    const float a11 = te[0], a12 = te[3], a13 = te[6];
-    const float a21 = te[1], a22 = te[4], a23 = te[7];
-
-    te[0] = c * a11 + s * a21;
-    te[3] = c * a12 + s * a22;
-    te[6] = c * a13 + s * a23;
-
-    te[1] = -s * a11 + c * a21;
-    te[4] = -s * a12 + c * a22;
-    te[7] = -s * a13 + c * a23;
-
-    return *this;
-}
-
-Matrix3& Matrix3::translate(float tx, float ty) {
-
-    auto& te = this->elements;
-
-    te[0] += tx * te[2];
-    te[3] += tx * te[5];
-    te[6] += tx * te[8];
-    te[1] += ty * te[2];
-    te[4] += ty * te[5];
-    te[7] += ty * te[8];
-
-    return *this;
-}
-
-bool Matrix3::equals(const Matrix3& matrix) const {
-
-    const auto& te = this->elements;
-    const auto& me = matrix.elements;
-
-    for (int i = 0; i < 9; i++) {
-
-        if (te[i] != me[i]) return false;
-    }
-
-    return true;
-}
-
-bool Matrix3::operator==(const Matrix3& matrix) const {
-
-    return equals(matrix);
 }

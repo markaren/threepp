@@ -623,7 +623,6 @@ set(sources
         "threepp/math/Triangle.cpp"
         "threepp/math/Vector2.cpp"
         "threepp/math/Vector3.cpp"
-        "threepp/math/Vector4.cpp"
         "threepp/math/Quaternion.cpp"
 
         "threepp/lights/AmbientLight.cpp"

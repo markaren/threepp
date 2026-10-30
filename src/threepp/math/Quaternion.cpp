@@ -12,49 +12,6 @@
 
 using namespace threepp;
 
-
-Quaternion::Quaternion(float x, float y, float z, float w)
-    : x(x), y(y), z(z), w(w) {}
-
-float Quaternion::operator[](unsigned int index) const {
-    switch (index) {
-        case 0:
-            return x;
-        case 1:
-            return y;
-        case 2:
-            return z;
-        case 3:
-            return w;
-        default:
-            throw std::runtime_error("index out of bound: " + std::to_string(index));
-    }
-}
-
-Quaternion& Quaternion::set(float x, float y, float z, float w) {
-
-    this->x.value_ = x;
-    this->y.value_ = y;
-    this->z.value_ = z;
-    this->w.value_ = w;
-
-    this->onChangeCallback_();
-
-    return *this;
-}
-
-Quaternion& Quaternion::copy(const Quaternion& quaternion) {
-
-    this->x.value_ = quaternion.x;
-    this->y.value_ = quaternion.y;
-    this->z.value_ = quaternion.z;
-    this->w.value_ = quaternion.w;
-
-    this->onChangeCallback_();
-
-    return *this;
-}
-
 Quaternion& Quaternion::setFromEuler(const Euler& euler, bool update) {
 
     const auto x = euler.x, y = euler.y, z = euler.z;
@@ -239,12 +196,6 @@ Quaternion& Quaternion::setFromUnitVectors(const Vector3& vFrom, const Vector3& 
     return this->normalize();
 }
 
-
-float Quaternion::angleTo(const Quaternion& q) const {
-
-    return 2 * std::acos(std::abs(std::clamp(this->dot(q), -1.0f, 1.0f)));
-}
-
 Quaternion& Quaternion::rotateTowards(const Quaternion& q, float step) {
 
     const float angle = this->angleTo(q);
@@ -329,128 +280,6 @@ void Quaternion::slerpQuaternions(const Quaternion& qa, const Quaternion& qb, fl
     copy(qa).slerp(qb, t);
 }
 
-Quaternion& Quaternion::identity() {
-
-    return this->set(0, 0, 0, 1);
-}
-
-Quaternion& Quaternion::invert() {
-
-    // Quaternion is assumed to have unit length
-
-    return this->conjugate();
-}
-
-Quaternion& Quaternion::conjugate() {
-
-    this->x.value_ *= -1;
-    this->y.value_ *= -1;
-    this->z.value_ *= -1;
-
-    this->onChangeCallback_();
-
-    return *this;
-}
-
-float Quaternion::dot(const Quaternion& v) const {
-
-    return this->x * v.x + this->y * v.y + this->z * v.z + this->w * v.w;
-}
-
-float Quaternion::lengthSq() const {
-
-    return this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w;
-}
-
-float Quaternion::length() const {
-
-    return std::sqrt(this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w);
-}
-
-Quaternion& Quaternion::normalize() {
-
-    auto l = length();
-
-    if (l == 0) {
-
-        this->x.value_ = 0;
-        this->y.value_ = 0;
-        this->z.value_ = 0;
-        this->w.value_ = 1;
-
-    } else {
-
-        l = 1.0f / l;
-
-        this->x.value_ = this->x * l;
-        this->y.value_ = this->y * l;
-        this->z.value_ = this->z * l;
-        this->w.value_ = this->w * l;
-    }
-
-    this->onChangeCallback_();
-
-    return *this;
-}
-
-Quaternion& Quaternion::multiply(const Quaternion& q) {
-
-    return this->multiplyQuaternions(*this, q);
-}
-
-Quaternion& Quaternion::premultiply(const Quaternion& q) {
-
-    return this->multiplyQuaternions(q, *this);
-}
-
-Quaternion& Quaternion::multiplyQuaternions(const Quaternion& a, const Quaternion& b) {
-
-    // from http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/code/index.htm
-
-    const auto qax = a.x, qay = a.y, qaz = a.z, qaw = a.w;
-    const auto qbx = b.x, qby = b.y, qbz = b.z, qbw = b.w;
-
-    this->x.value_ = qax * qbw + qaw * qbx + qay * qbz - qaz * qby;
-    this->y.value_ = qay * qbw + qaw * qby + qaz * qbx - qax * qbz;
-    this->z.value_ = qaz * qbw + qaw * qbz + qax * qby - qay * qbx;
-    this->w.value_ = qaw * qbw - qax * qbx - qay * qby - qaz * qbz;
-
-    this->onChangeCallback_();
-
-    return *this;
-}
-
-Quaternion Quaternion::clone() const {
-
-    return Quaternion(x.value_, y.value_, z.value_, w.value_);
-}
-
-bool Quaternion::equals(const Quaternion& v) const {
-
-    return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z) && (v.w == this->w));
-}
-
-Quaternion& Quaternion::_onChange(std::function<void()> callback) {
-
-    this->onChangeCallback_ = std::move(callback);
-    this->x.setCallback(this->onChangeCallback_);
-    this->y.setCallback(this->onChangeCallback_);
-    this->z.setCallback(this->onChangeCallback_);
-    this->w.setCallback(this->onChangeCallback_);
-
-    return *this;
-}
-
-bool Quaternion::operator==(const Quaternion& other) const {
-
-    return equals(other);
-}
-
-bool Quaternion::operator!=(const Quaternion& other) const {
-
-    return !equals(other);
-}
-
 void Quaternion::slerpFlat(std::vector<float>& dst, size_t dstOffset, const std::vector<float>& src0, size_t srcOffset0, const std::vector<float>& src1, size_t srcOffset1, float t) {
 
     // fuzz-free, array-based Quaternion SLERP operation
@@ -523,21 +352,4 @@ void Quaternion::slerpFlat(std::vector<float>& dst, size_t dstOffset, const std:
     dst[dstOffset + 1] = y0;
     dst[dstOffset + 2] = z0;
     dst[dstOffset + 3] = w0;
-}
-
-void Quaternion::multiplyQuaternionsFlat(std::vector<float>& dst, size_t dstOffset, const std::vector<float>& src0, size_t srcOffset0, const std::vector<float>& src1, size_t srcOffset1) {
-    const auto x0 = src0[srcOffset0];
-    const auto y0 = src0[srcOffset0 + 1];
-    const auto z0 = src0[srcOffset0 + 2];
-    const auto w0 = src0[srcOffset0 + 3];
-
-    const auto x1 = src1[srcOffset1];
-    const auto y1 = src1[srcOffset1 + 1];
-    const auto z1 = src1[srcOffset1 + 2];
-    const auto w1 = src1[srcOffset1 + 3];
-
-    dst[dstOffset] = x0 * w1 + w0 * x1 + y0 * z1 - z0 * y1;
-    dst[dstOffset + 1] = y0 * w1 + w0 * y1 + z0 * x1 - x0 * z1;
-    dst[dstOffset + 2] = z0 * w1 + w0 * z1 + x0 * y1 - y0 * x1;
-    dst[dstOffset + 3] = w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1;
 }

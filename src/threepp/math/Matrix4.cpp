@@ -65,78 +65,6 @@ namespace {
 
 }// namespace
 
-Matrix4::Matrix4(const std::array<float, 16>& elements): elements(elements) {}
-
-float& Matrix4::operator[](unsigned int index) {
-
-    if (index >= 16) throw std::runtime_error("index out of bounds: " + std::to_string(index));
-
-    return elements[index];
-}
-
-const float& Matrix4::operator[](unsigned int index) const {
-
-    if (index >= 16) throw std::runtime_error("index out of bounds: " + std::to_string(index));
-
-    return elements[index];
-}
-
-Matrix4& Matrix4::set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31,
-                      float n32, float n33, float n34, float n41, float n42, float n43, float n44) {
-
-    auto& te = this->elements;
-
-    // clang-format off
-    te[ 0 ] = n11; te[ 4 ] = n12; te[ 8 ] = n13; te[ 12 ] = n14;
-    te[ 1 ] = n21; te[ 5 ] = n22; te[ 9 ] = n23; te[ 13 ] = n24;
-    te[ 2 ] = n31; te[ 6 ] = n32; te[ 10 ] = n33; te[ 14 ] = n34;
-    te[ 3 ] = n41; te[ 7 ] = n42; te[ 11 ] = n43; te[ 15 ] = n44;
-    // clang-format on
-
-    return *this;
-}
-
-Matrix4& Matrix4::identity() {
-
-    this->set(
-
-            1, 0, 0, 0,
-            0, 1, 0, 0,
-            0, 0, 1, 0,
-            0, 0, 0, 1
-
-    );
-
-    return *this;
-}
-
-Matrix4& Matrix4::copy(const Matrix4& m) {
-
-    auto& te = this->elements;
-    const auto& me = m.elements;
-
-    // clang-format off
-    te[ 0 ] = me[ 0 ]; te[ 1 ] = me[ 1 ]; te[ 2 ] = me[ 2 ]; te[ 3 ] = me[ 3 ];
-    te[ 4 ] = me[ 4 ]; te[ 5 ] = me[ 5 ]; te[ 6 ] = me[ 6 ]; te[ 7 ] = me[ 7 ];
-    te[ 8 ] = me[ 8 ]; te[ 9 ] = me[ 9 ]; te[ 10 ] = me[ 10 ]; te[ 11 ] = me[ 11 ];
-    te[ 12 ] = me[ 12 ]; te[ 13 ] = me[ 13 ]; te[ 14 ] = me[ 14 ]; te[ 15 ] = me[ 15 ];
-    // clang-format on
-
-    return *this;
-}
-
-Matrix4& Matrix4::copyPosition(const Matrix4& m) {
-
-    auto& te = this->elements;
-    const auto& me = m.elements;
-
-    te[12] = me[12];
-    te[13] = me[13];
-    te[14] = me[14];
-
-    return *this;
-}
-
 Matrix4& Matrix4::setFromMatrix3(const Matrix3& m) {
 
     const auto& me = m.elements;
@@ -382,16 +310,6 @@ Matrix4& Matrix4::lookAt(const Vector3& eye, const Vector3& target, const Vector
     return *this;
 }
 
-Matrix4& Matrix4::multiply(const Matrix4& m) {
-
-    return this->multiplyMatrices(*this, m);
-}
-
-Matrix4& Matrix4::premultiply(const Matrix4& m) {
-
-    return this->multiplyMatrices(m, *this);
-}
-
 Matrix4& Matrix4::multiplyMatrices(const Matrix4& a, const Matrix4& b) {
 
     const auto& ae = a.elements;
@@ -441,20 +359,6 @@ Matrix4& Matrix4::multiplyMatrices(const Matrix4& a, const Matrix4& b) {
 #endif
 }
 
-Matrix4& Matrix4::multiplyScalar(float s) {
-
-    auto& te = this->elements;
-
-    // clang-format off
-    te[ 0 ] *= s; te[ 4 ] *= s; te[ 8 ] *= s; te[ 12 ] *= s;
-    te[ 1 ] *= s; te[ 5 ] *= s; te[ 9 ] *= s; te[ 13 ] *= s;
-    te[ 2 ] *= s; te[ 6 ] *= s; te[ 10 ] *= s; te[ 14 ] *= s;
-    te[ 3 ] *= s; te[ 7 ] *= s; te[ 11 ] *= s; te[ 15 ] *= s;
-    // clang-format on
-
-    return *this;
-}
-
 float Matrix4::determinant() const {
 
     const auto& te = this->elements;
@@ -480,39 +384,9 @@ float Matrix4::determinant() const {
     );
 }
 
-Matrix4& Matrix4::transpose() {
-
-    auto& te = this->elements;
-    float tmp;
-
-    // clang-format off
-    tmp = te[ 1 ]; te[ 1 ] = te[ 4 ]; te[ 4 ] = tmp;
-    tmp = te[ 2 ]; te[ 2 ] = te[ 8 ]; te[ 8 ] = tmp;
-    tmp = te[ 6 ]; te[ 6 ] = te[ 9 ]; te[ 9 ] = tmp;
-
-    tmp = te[ 3 ]; te[ 3 ] = te[ 12 ]; te[ 12 ] = tmp;
-    tmp = te[ 7 ]; te[ 7 ] = te[ 13 ]; te[ 13 ] = tmp;
-    tmp = te[ 11 ]; te[ 11 ] = te[ 14 ]; te[ 14 ] = tmp;
-    // clang-format on
-
-    return *this;
-}
-
 Matrix4& Matrix4::setPosition(const Vector3& v) {
 
     this->setPosition(v.x, v.y, v.z);
-
-    return *this;
-}
-
-Matrix4& Matrix4::setPosition(float x, float y, float z) {
-
-    auto& te = this->elements;
-
-    te[12] = x;
-    te[13] = y;
-    te[14] = z;
-
 
     return *this;
 }
@@ -531,7 +405,6 @@ Matrix4& Matrix4::invert() {
                 t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44,
                 t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44,
                 t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
-
 
     const float det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
 
@@ -588,71 +461,9 @@ float Matrix4::getMaxScaleOnAxis() const {
     return std::sqrt(std::max(scaleXSq, std::max(scaleYSq, scaleZSq)));
 }
 
-Matrix4& Matrix4::makeTranslation(float x, float y, float z) {
-
-    this->set(
-
-            1, 0, 0, x,
-            0, 1, 0, y,
-            0, 0, 1, z,
-            0, 0, 0, 1
-
-    );
-
-    return *this;
-}
-
 Matrix4& Matrix4::makeTranslation(const Vector3& v) {
 
     return makeTranslation(v.x, v.y, v.z);
-}
-
-Matrix4& Matrix4::makeRotationX(float theta) {
-
-    const float c = std::cos(theta), s = std::sin(theta);
-
-    this->set(
-
-            1, 0, 0, 0,
-            0, c, -s, 0,
-            0, s, c, 0,
-            0, 0, 0, 1
-
-    );
-
-    return *this;
-}
-
-Matrix4& Matrix4::makeRotationY(float theta) {
-
-    const float c = std::cos(theta), s = std::sin(theta);
-
-    this->set(
-
-            c, 0, s, 0,
-            0, 1, 0, 0,
-            -s, 0, c, 0,
-            0, 0, 0, 1
-
-    );
-
-    return *this;
-}
-
-Matrix4& Matrix4::makeRotationZ(float theta) {
-
-    const float c = std::cos(theta), s = std::sin(theta);
-
-    this->set(
-
-            c, -s, 0, 0,
-            s, c, 0, 0,
-            0, 0, 1, 0,
-            0, 0, 0, 1
-
-    );
-
-    return *this;
 }
 
 Matrix4& Matrix4::makeRotationAxis(const Vector3& axis, float angle) {
@@ -670,34 +481,6 @@ Matrix4& Matrix4::makeRotationAxis(const Vector3& axis, float angle) {
             tx * x + c, tx * y - s * z, tx * z + s * y, 0,
             tx * y + s * z, ty * y + c, ty * z - s * x, 0,
             tx * z - s * y, ty * z + s * x, t * z * z + c, 0,
-            0, 0, 0, 1
-
-    );
-
-    return *this;
-}
-
-Matrix4& Matrix4::makeScale(float x, float y, float z) {
-
-    this->set(
-
-            x, 0, 0, 0,
-            0, y, 0, 0,
-            0, 0, z, 0,
-            0, 0, 0, 1
-
-    );
-
-    return *this;
-}
-
-Matrix4& Matrix4::makeShear(float xy, float xz, float yx, float yz, float zx, float zy) {
-
-    this->set(
-
-            1, yx, zx, 0,
-            xy, 1, zy, 0,
-            xz, yz, 1, 0,
             0, 0, 0, 1
 
     );
@@ -825,27 +608,4 @@ Matrix4& Matrix4::makeOrthographic(float left, float right, float top, float bot
     // clang-format on
 
     return *this;
-}
-
-bool Matrix4::equals(const Matrix4& matrix) const {
-
-    const auto& te = this->elements;
-    const auto& me = matrix.elements;
-
-    for (int i = 0; i < 16; i++) {
-
-        if (te[i] != me[i]) return false;
-    }
-
-    return true;
-}
-
-bool Matrix4::operator==(const Matrix4& matrix) const {
-
-    return equals(matrix);
-}
-
-bool Matrix4::operator!=(const Matrix4& matrix) const {
-
-    return !equals(matrix);
 }

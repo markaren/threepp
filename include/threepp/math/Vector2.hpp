@@ -3,7 +3,13 @@
 #ifndef THREEPP_VECTOR2_HPP
 #define THREEPP_VECTOR2_HPP
 
+#include "threepp/math/Matrix3.hpp"
+
+#include <algorithm>
+#include <cmath>
 #include <ostream>
+#include <stdexcept>
+#include <string>
 
 namespace threepp {
 
@@ -28,37 +34,113 @@ namespace threepp {
 
         Vector2() = default;
 
-        Vector2(int x, int y);
+        Vector2(int x, int y)
+            : Vector2(static_cast<float>(x), static_cast<float>(y)) {}
 
-        Vector2(float x, float y);
+        Vector2(float x, float y)
+            : x(x), y(y) {}
 
-        Vector2(double x, double y);
+        Vector2(double x, double y)
+            : x(x), y(y) {}
 
-        Vector2& set(float x, float y);
+        Vector2& set(float x, float y) {
+            this->x = x;
+            this->y = y;
 
-        Vector2& setScalar(float value);
+            return *this;
+        }
 
-        Vector2& setX(float value);
+        Vector2& setScalar(float value) {
+            this->x = value;
+            this->y = value;
 
-        Vector2& setY(float value);
+            return *this;
+        }
 
-        float& operator[](unsigned int index);
+        Vector2& setX(float value) {
+            this->x = value;
 
-        float operator[](unsigned int index) const;
+            return *this;
+        }
 
-        Vector2& copy(const Vector2& v);
+        Vector2& setY(float value) {
+            this->y = value;
 
-        Vector2& add(const Vector2& v);
+            return *this;
+        }
 
-        Vector2& addScalar(float s);
+        float& operator[](unsigned int index) {
+            if (index >= 2) throw std::runtime_error("index out of bounds: " + std::to_string(index));
+            switch (index) {
+                case 0:
+                    return x;
+                case 1:
+                    return y;
+                default:
+                    throw std::runtime_error("index out of bound: " + std::to_string(index));
+            }
+        }
 
-        Vector2& addVectors(const Vector2& a, const Vector2& b);
+        float operator[](unsigned int index) const {
+            if (index >= 2) throw std::runtime_error("index out of bounds: " + std::to_string(index));
+            switch (index) {
+                case 0:
+                    return x;
+                case 1:
+                    return y;
+                default:
+                    throw std::runtime_error("index out of bound: " + std::to_string(index));
+            }
+        }
 
-        Vector2& addScaledVector(const Vector2& v, float s);
+        Vector2& copy(const Vector2& v) {
+            this->x = v.x;
+            this->y = v.y;
 
-        Vector2& sub(const Vector2& v);
+            return *this;
+        }
 
-        Vector2& subScalar(float s);
+        Vector2& add(const Vector2& v) {
+            this->x += v.x;
+            this->y += v.y;
+
+            return *this;
+        }
+
+        Vector2& addScalar(float s) {
+            this->x += s;
+            this->y += s;
+
+            return *this;
+        }
+
+        Vector2& addVectors(const Vector2& a, const Vector2& b) {
+            this->x = a.x + b.x;
+            this->y = a.y + b.y;
+
+            return *this;
+        }
+
+        Vector2& addScaledVector(const Vector2& v, float s) {
+            this->x += v.x * s;
+            this->y += v.y * s;
+
+            return *this;
+        }
+
+        Vector2& sub(const Vector2& v) {
+            this->x -= v.x;
+            this->y -= v.y;
+
+            return *this;
+        }
+
+        Vector2& subScalar(float s) {
+            this->x -= s;
+            this->y -= s;
+
+            return *this;
+        }
 
         template<class VectorA, class VectorB>
         Vector2& subVectors(const VectorA& a, const VectorB& b) {
@@ -76,85 +158,226 @@ namespace threepp {
             return *this;
         }
 
-        Vector2& multiplyScalar(float scalar);
+        Vector2& multiplyScalar(float scalar) {
+            this->x *= scalar;
+            this->y *= scalar;
 
-        Vector2& divide(const Vector2& v);
+            return *this;
+        }
 
-        Vector2& divideScalar(float scalar);
+        Vector2& divide(const Vector2& v) {
+            this->x /= v.x;
+            this->y /= v.y;
 
-        Vector2& applyMatrix3(const Matrix3& m);
+            return *this;
+        }
 
-        Vector2& min(const Vector2& v);
+        Vector2& divideScalar(float scalar) {
+            return this->multiplyScalar(1.0f / scalar);
+        }
 
-        Vector2& max(const Vector2& v);
+        Vector2& applyMatrix3(const Matrix3& m) {
+            const auto x_ = this->x, y_ = this->y;
+            const auto& e = m.elements;
 
-        Vector2& clamp(const Vector2& min, const Vector2& max);
+            this->x = e[0] * x_ + e[3] * y_ + e[6];
+            this->y = e[1] * x_ + e[4] * y_ + e[7];
 
-        Vector2& clampScalar(float minVal, float maxVal);
+            return *this;
+        }
 
-        Vector2& clampLength(float min, float max);
+        Vector2& min(const Vector2& v) {
+            this->x = std::min(this->x, v.x);
+            this->y = std::min(this->y, v.y);
 
-        Vector2& floor();
+            return *this;
+        }
 
-        Vector2& ceil();
+        Vector2& max(const Vector2& v) {
+            this->x = std::max(this->x, v.x);
+            this->y = std::max(this->y, v.y);
 
-        Vector2& round();
+            return *this;
+        }
 
-        Vector2& roundToZero();
+        Vector2& clamp(const Vector2& min, const Vector2& max) {
+            // assumes min < max, componentwise
 
-        Vector2& negate();
+            this->x = std::max(min.x, std::min(max.x, this->x));
+            this->y = std::max(min.y, std::min(max.y, this->y));
 
-        [[nodiscard]] float dot(const Vector2& v) const;
+            return *this;
+        }
 
-        [[nodiscard]] float cross(const Vector2& v) const;
+        Vector2& clampScalar(float minVal, float maxVal) {
+            this->x = std::max(minVal, std::min(maxVal, this->x));
+            this->y = std::max(minVal, std::min(maxVal, this->y));
 
-        [[nodiscard]] float lengthSq() const;
+            return *this;
+        }
 
-        [[nodiscard]] float length() const;
+        Vector2& clampLength(float min, float max) {
+            const auto length = this->length();
 
-        [[nodiscard]] float manhattanLength() const;
+            return this->divideScalar(std::isnan(length) ? 1 : length).multiplyScalar(std::max(min, std::min(max, length)));
+        }
 
-        Vector2& normalize();
+        Vector2& floor() {
+            this->x = std::floor(this->x);
+            this->y = std::floor(this->y);
+
+            return *this;
+        }
+
+        Vector2& ceil() {
+            this->x = std::ceil(this->x);
+            this->y = std::ceil(this->y);
+
+            return *this;
+        }
+
+        Vector2& round() {
+            this->x = std::round(this->x);
+            this->y = std::round(this->y);
+
+            return *this;
+        }
+
+        Vector2& roundToZero() {
+            this->x = (this->x < 0) ? std::ceil(this->x) : std::floor(this->x);
+            this->y = (this->y < 0) ? std::ceil(this->y) : std::floor(this->y);
+
+            return *this;
+        }
+
+        Vector2& negate() {
+            this->x = -this->x;
+            this->y = -this->y;
+
+            return *this;
+        }
+
+        [[nodiscard]] float dot(const Vector2& v) const {
+            return this->x * v.x + this->y * v.y;
+        }
+
+        [[nodiscard]] float cross(const Vector2& v) const {
+            return this->x * v.y - this->y * v.x;
+        }
+
+        [[nodiscard]] float lengthSq() const {
+            return this->x * this->x + this->y * this->y;
+        }
+
+        [[nodiscard]] float length() const {
+            return std::sqrt(this->x * this->x + this->y * this->y);
+        }
+
+        [[nodiscard]] float manhattanLength() const {
+            return std::abs(this->x) + std::abs(this->y);
+        }
+
+        Vector2& normalize() {
+            const auto len = this->length();
+            return this->divideScalar(std::isnan(len) ? 1 : len);
+        }
 
         [[nodiscard]] float angle() const;
 
         [[nodiscard]] float angleTo(const Vector2& v) const;
 
-        [[nodiscard]] float distanceTo(const Vector2& v) const;
+        [[nodiscard]] float distanceTo(const Vector2& v) const {
+            return std::sqrt(this->distanceToSquared(v));
+        }
 
-        [[nodiscard]] float distanceToSquared(const Vector2& v) const;
+        [[nodiscard]] float distanceToSquared(const Vector2& v) const {
+            const auto dx = this->x - v.x, dy = this->y - v.y;
+            return dx * dx + dy * dy;
+        }
 
-        [[nodiscard]] float manhattanDistanceTo(const Vector2& v) const;
+        [[nodiscard]] float manhattanDistanceTo(const Vector2& v) const {
+            return std::abs(this->x - v.x) + std::abs(this->y - v.y);
+        }
 
-        Vector2& setLength(float length);
+        Vector2& setLength(float length) {
+            return this->normalize().multiplyScalar(length);
+        }
 
-        Vector2& lerp(const Vector2& v, float alpha);
+        Vector2& lerp(const Vector2& v, float alpha) {
+            this->x += (v.x - this->x) * alpha;
+            this->y += (v.y - this->y) * alpha;
 
-        Vector2& lerpVectors(const Vector2& v1, const Vector2& v2, float alpha);
+            return *this;
+        }
 
-        Vector2& rotateAround(const Vector2& center, float angle);
+        Vector2& lerpVectors(const Vector2& v1, const Vector2& v2, float alpha) {
+            this->x = v1.x + (v2.x - v1.x) * alpha;
+            this->y = v1.y + (v2.y - v1.y) * alpha;
 
-        [[nodiscard]] bool isNan() const;
+            return *this;
+        }
 
-        Vector2& makeNan();
+        Vector2& rotateAround(const Vector2& center, float angle) {
+            float c = std::cos(angle), s = std::sin(angle);
 
-        [[nodiscard]] Vector2 clone() const;
+            float x = this->x - center.x;
+            float y = this->y - center.y;
 
-        [[nodiscard]] bool equals(const Vector2& v) const;
+            this->x = x * c - y * s + center.x;
+            this->y = x * s + y * c + center.y;
 
-        bool operator==(const Vector2& other) const;
-        bool operator!=(const Vector2& other) const;
+            return *this;
+        }
 
-        Vector2 operator+(const Vector2& other) const;
-        Vector2& operator+=(const Vector2& other);
+        [[nodiscard]] bool isNan() const {
+            return std::isnan(x) || std::isnan(y);
+        }
 
-        Vector2 operator-(const Vector2& other) const;
-        Vector2& operator-=(const Vector2& other);
+        Vector2& makeNan() {
+            return set(NAN, NAN);
+        }
 
-        Vector2 operator+(float value) const;
-        Vector2 operator-(float value) const;
-        Vector2 operator*(float value) const;
-        Vector2 operator/(float value) const;
+        [[nodiscard]] Vector2 clone() const {
+            return {x, y};
+        }
+
+        [[nodiscard]] bool equals(const Vector2& v) const {
+            return ((v.x == this->x) && (v.y == this->y));
+        }
+
+        bool operator==(const Vector2& other) const {
+            return equals(other);
+        }
+        bool operator!=(const Vector2& other) const {
+            return !equals(other);
+        }
+
+        Vector2 operator+(const Vector2& other) const {
+            return clone().add(other);
+        }
+        Vector2& operator+=(const Vector2& other) {
+            return add(other);
+        }
+
+        Vector2 operator-(const Vector2& other) const {
+            return clone().sub(other);
+        }
+        Vector2& operator-=(const Vector2& other) {
+            return sub(other);
+        }
+
+        Vector2 operator+(float value) const {
+            return Vector2(x, y).addScalar(value);
+        }
+        Vector2 operator-(float value) const {
+            return Vector2(x, y).subScalar(value);
+        }
+        Vector2 operator*(float value) const {
+            return Vector2(x, y).multiplyScalar(value);
+        }
+        Vector2 operator/(float value) const {
+            return Vector2(x, y).divideScalar(value);
+        }
 
         template<class ArrayLike>
         Vector2& fromArray(const ArrayLike& array, unsigned int offset = 0) {
@@ -192,4 +415,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_VECTOR3_HPP
+#endif//THREEPP_VECTOR2_HPP
