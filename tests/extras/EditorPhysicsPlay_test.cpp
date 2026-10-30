@@ -186,11 +186,10 @@ TEST_CASE("a soft body deforms and settles on the ground", "[editor][physx][gpu]
     if (!session.gpuAvailable()) {
         // No CUDA device on this machine: the rigid half must still have run,
         // and the soft body is simply absent.
-        std::cout << "[skip] no CUDA device - soft body simulation not exercised" << std::endl;
         CHECK(session.softBodyCount() == 0);
         CHECK(session.bodyCount() == 1);// the ground
         session.stop();
-        return;
+        SKIP("no CUDA device - soft body simulation not exercised");
     }
 
     CHECK(session.softBodyCount() == 1);

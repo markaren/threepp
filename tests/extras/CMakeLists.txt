@@ -65,6 +65,13 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
         target_link_libraries(UsdArticulation_test PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endif ()
 
+    # Every case of these two needs a CUDA device. Without one Catch2 exits 4,
+    # and ctest has to read that as a skip; the exit code alone cannot say so,
+    # because four failed assertions exit 4 as well. The other GPU cases share a
+    # binary with cases that run, which still exits 0 or the failure count.
+    set_tests_properties(PbdParticles_test SoftBody_test PROPERTIES
+            SKIP_REGULAR_EXPRESSION "no CUDA device")
+
     # SoftBody_test also covers the CUDA->GL zero-copy feed of a GPU-skinned
     # body, which needs the CUDA toolkit (driver API). Without it that case is
     # compiled out. The macro is safe here: this binary has one translation

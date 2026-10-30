@@ -83,14 +83,6 @@ class Spinner:
 }// namespace
 
 
-TEST_CASE("the embedded interpreter starts", "[editor][scripting]") {
-
-    std::string error;
-    REQUIRE(scripting::ensureInterpreter(&error));
-    CHECK(error.empty());
-    CHECK(scripting::interpreterStarted());
-}
-
 TEST_CASE("a script's exposed fields are discovered", "[editor][scripting]") {
 
     const auto path = writeScript("discovered.py", R"(

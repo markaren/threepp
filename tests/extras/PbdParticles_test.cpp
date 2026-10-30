@@ -175,10 +175,8 @@ namespace {
 TEST_CASE("a PBD granular bed is carried by a conveyor belt", "[physx][gpu]") {
 
     if (!gpuWorld()) {
-        std::cout << "[skip] no CUDA device - PxPBDParticleSystem has no CPU path, "
-                     "so PBD particles are not exercised"
-                  << std::endl;
-        return;
+        SKIP("no CUDA device - PxPBDParticleSystem has no CPU path, "
+             "so PBD particles are not exercised");
     }
 
     constexpr unsigned kCount = 5000;

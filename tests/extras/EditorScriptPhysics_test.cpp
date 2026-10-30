@@ -451,9 +451,8 @@ class Follow:
 
     physics.start(scene);
     if (!physics.gpuAvailable()) {
-        std::cout << "[skip] no CUDA device - soft body handle not exercised" << std::endl;
         physics.stop();
-        return;
+        SKIP("no CUDA device - soft body handle not exercised");
     }
     scripts.start(scene);
     REQUIRE(scripts.errorFor(ball->uuid).empty());

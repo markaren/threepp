@@ -106,8 +106,7 @@ TEST_CASE("a soft body reproduces the mesh it was built from", "[physx][gpu]") {
 
     auto world = gpuWorld();
     if (!world) {
-        std::cout << "[skip] no CUDA device - soft body binding not exercised" << std::endl;
-        return;
+        SKIP("no CUDA device - soft body binding not exercised");
     }
 
     const auto check = [&](const char* what, const std::shared_ptr<BufferGeometry>& geometry,
@@ -184,8 +183,7 @@ TEST_CASE("a GPU-skinned soft body is drawn from PhysX's device positions on GL"
 
     auto world = gpuWorld();
     if (!world) {
-        std::cout << "[skip] no CUDA device - GL tet interop not exercised" << std::endl;
-        return;
+        SKIP("no CUDA device - GL tet interop not exercised");
     }
 
     std::shared_ptr<Canvas> canvas;

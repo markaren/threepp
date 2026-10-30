@@ -128,10 +128,8 @@ namespace {
 TEST_CASE("an authored granular chute pours grains that land on the floor", "[physx][gpu]") {
 
     if (!cudaAvailable()) {
-        std::cout << "[skip] no CUDA device - PxPBDParticleSystem has no CPU path, "
-                     "so authored granular chutes are not exercised"
-                  << std::endl;
-        return;
+        SKIP("no CUDA device - PxPBDParticleSystem has no CPU path, "
+             "so authored granular chutes are not exercised");
     }
 
     Scene scene;
