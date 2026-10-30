@@ -49,7 +49,9 @@ jobs:
       # reasoned about. THREEPP_USE_EXTERNAL_GLFW stays ON and the code path under
       # test — find_package(glfw3 CONFIG) plus the imported target — is unchanged;
       # only who ships the library differs. The X11 dev headers stay, since that is
-      # what vcpkg builds glfw3 against.
+      # what vcpkg builds glfw3 against. python3-dev is CPython's Development.Embed:
+      # the editor's scripting tests exist only if CMake finds it, so it is declared
+      # rather than left to the runner image.
       - name: Install prerequisites
         run: |
           sudo apt-get update && sudo apt-get install -y \
@@ -60,6 +62,7 @@ jobs:
           pkg-config \
           ninja-build \
           libgl1-mesa-dri \
+          python3-dev \
           xvfb
 
       - name: Checkout vcpkg
