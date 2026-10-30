@@ -220,6 +220,16 @@
       "cacheVariables": {
         "THREEPP_USE_EXTERNAL_GLFW": "ON"
       }
+    },
+    {
+      "name": "ci-python-physx",
+      "inherits": "ci-python",
+      "displayName": "CI: Python bindings, GL + PhysX via vcpkg",
+      "description": "What the python-bindings CI job configures. As 'ci-python', plus the vcpkg 'physx' feature (CPU PhysX; the runners have no CUDA device), so the module is built with threepp.HAS_PHYSX and the PhysX binding tests run instead of skipping themselves. GLFW comes from the manifest's 'external-glfw' feature, as in 'ci-linux-physx', so the toolchain is the one provider. Needs VCPKG_ROOT in the environment.",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_FEATURES": "physx;external-glfw"
+      }
     }
   ],
   "buildPresets": [
@@ -319,6 +329,15 @@
     {
       "name": "ci-python",
       "configurePreset": "ci-python",
+      "configuration": "Release",
+      "jobs": 2,
+      "targets": [
+        "threepp_py"
+      ]
+    },
+    {
+      "name": "ci-python-physx",
+      "configurePreset": "ci-python-physx",
       "configuration": "Release",
       "jobs": 2,
       "targets": [

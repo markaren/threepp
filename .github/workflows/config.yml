@@ -680,15 +680,22 @@ jobs:
 
 
   # Build the pybind11 Python bindings (the `threepp` module) and run the binding
-  # test-suite. Like the Vulkan job, this can't exercise the GPU-only paths — the
-  # PhysX direct-GPU + CUDA/torch RL stuff needs a real GPU the runners don't have —
-  # so it builds GL-only: the module is compiled (catching binding breaks across the
-  # matrix of Python versions) and the GL + math/scene/loader/imgui tests run on
-  # Mesa's software rasteriser under a virtual display. The PhysX and Vulkan tests
-  # skip themselves on a GL-only build (pytest.mark.skipif on threepp.HAS_*).
+  # test-suite: GL on Mesa's software rasteriser under a virtual display, plus
+  # CPU PhysX from the same vcpkg feature and binary cache the Linux job uses,
+  # so test_physx / test_imu / test_articulation run here instead of skipping
+  # themselves (they skipped for months under the belief that PhysX needs a
+  # GPU; only its direct-GPU paths do, and those skip inside the tests). What
+  # still cannot run on a runner: the Vulkan tests (no device; the lavapipe job
+  # is where a software Vulkan device could carry them), the CUDA/torch/warp
+  # ones, and PhysX GPU dynamics. Those skip themselves (pytest.mark.skipif on
+  # threepp.HAS_* and the CUDA probes), so a build that silently lost PhysX
+  # would go green too: the assert step below closes that.
   python-bindings:
 
     runs-on: ubuntu-22.04
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     strategy:
       fail-fast: false
       matrix:
@@ -706,8 +713,6 @@ jobs:
           libglu1-mesa-dev \
           pkg-config \
           ninja-build \
-          libglfw3 \
-          libglfw3-dev \
           libgl1-mesa-dri \
           xvfb
 
@@ -718,16 +723,40 @@ jobs:
       - name: Install Python test deps
         run: python -m pip install --upgrade pip pytest numpy pillow
 
-      - name: Build the threepp module (GL only — PhysX/Vulkan need a GPU)
+      # The same release and cache key as the Linux job: PhysX 5.5 is restored
+      # prebuilt, and a bump of VCPKG_RELEASE moves both jobs together.
+      - name: Checkout vcpkg
         run: |
-          cmake --preset ci-python -DPython_EXECUTABLE=$(which python)
-          cmake --build --preset ci-python
+          git clone --depth 1 --branch "$VCPKG_RELEASE" \
+            https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+        env:
+          VCPKG_RELEASE: 2026.01.16
 
-      - name: Run binding tests (headless GL under Xvfb)
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-ubuntu-22.04-2026.01.16-${{ hashFiles('vcpkg.json') }}
+
+      - name: Build the threepp module (GL + CPU PhysX; Vulkan needs a device)
+        run: |
+          cmake --preset ci-python-physx -DPython_EXECUTABLE=$(which python)
+          cmake --build --preset ci-python-physx
+
+      # python/CMakeLists.txt takes a quiet `PhysX not found` branch when the
+      # feature did not take effect, and every PhysX test then skips itself.
+      - name: Assert the module carries PhysX
         working-directory: python
-        # The suite takes about ten seconds. A test that draws into the wrong GL context
+        run: |
+          python -c "import threepp; assert threepp.HAS_PHYSX, 'threepp.HAS_PHYSX is False: the vcpkg physx feature did not take effect'"
+
+      - name: Run binding tests (headless GL under Xvfb, CPU PhysX)
+        working-directory: python
+        # The suite takes under a minute. A test that draws into the wrong GL context
         # can hang at exit instead of failing, and the job default is six hours.
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: xvfb-run -a -s "-screen 0 1280x1024x24" python -m pytest -ra
