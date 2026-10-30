@@ -25,10 +25,7 @@ namespace {
 TEST_CASE("CubeTextureLoader reports a missing face instead of dereferencing nullopt") {
 
     const auto dir = cubeDir();
-    if (!std::filesystem::exists(dir / "posx.jpg")) {
-        SUCCEED("cube asset not present; nothing to load");
-        return;
-    }
+    REQUIRE(std::filesystem::exists(dir / "posx.jpg"));
 
     CubeTextureLoader loader;
 
@@ -43,10 +40,7 @@ TEST_CASE("CubeTextureLoader reports a missing face instead of dereferencing nul
 TEST_CASE("CubeTextureLoader loads six real faces") {
 
     const auto dir = cubeDir();
-    if (!std::filesystem::exists(dir / "posx.jpg")) {
-        SUCCEED("cube asset not present; nothing to load");
-        return;
-    }
+    REQUIRE(std::filesystem::exists(dir / "posx.jpg"));
 
     CubeTextureLoader loader;
     const auto tex = loader.load({dir / "posx.jpg", dir / "negx.jpg",
@@ -70,10 +64,8 @@ TEST_CASE("CubeTextureLoader decides the format for the whole set, not per face"
 
     const auto dir = cubeDir();
     const auto png = std::filesystem::path(DATA_FOLDER) / "textures" / "checker.png";
-    if (!std::filesystem::exists(dir / "posx.jpg") || !std::filesystem::exists(png)) {
-        SUCCEED("cube asset not present; nothing to load");
-        return;
-    }
+    REQUIRE(std::filesystem::exists(dir / "posx.jpg"));
+    REQUIRE(std::filesystem::exists(png));
 
     CubeTextureLoader loader;
 

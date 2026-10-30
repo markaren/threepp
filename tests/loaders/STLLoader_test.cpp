@@ -31,6 +31,18 @@ namespace {
         buf.insert(buf.end(), tmp, tmp + 4);
     }
 
+    std::vector<float> xyz(const TypedBufferAttribute<float>& attribute) {
+        std::vector<float> out;
+        for (unsigned i = 0; i < attribute.count(); ++i) {
+            out.insert(out.end(), {attribute.getX(i), attribute.getY(i), attribute.getZ(i)});
+        }
+        return out;
+    }
+
+    // No component repeats, so a swapped axis or a shifted vertex shows.
+    const std::vector<float> kVertices{1.f, 2.f, 3.f, 4.f, 5.f, 6.5f, 7.f, 8.5f, 9.f};
+    const std::vector<float> kNormals{0.f, 0.6f, 0.8f, 0.f, 0.6f, 0.8f, 0.f, 0.6f, 0.8f};
+
 }// namespace
 
 TEST_CASE("STLLoader parses ASCII STL without crashing") {
@@ -39,11 +51,11 @@ TEST_CASE("STLLoader parses ASCII STL without crashing") {
     // and try to allocate/index a huge vector -> crash. It must be detected as ASCII.
     const std::string stl =
             "solid triangle\n"
-            "  facet normal 0.0 0.0 1.0\n"
+            "  facet normal 0.0 0.6 0.8\n"
             "    outer loop\n"
-            "      vertex 0.0 0.0 0.0\n"
-            "      vertex 1.0 0.0 0.0\n"
-            "      vertex 0.0 1.0 0.0\n"
+            "      vertex 1.0 2.0 3.0\n"
+            "      vertex 4.0 5.0 6.5\n"
+            "      vertex 7.0 8.5 9.0\n"
             "    endloop\n"
             "  endfacet\n"
             "endsolid triangle\n";
@@ -57,6 +69,11 @@ TEST_CASE("STLLoader parses ASCII STL without crashing") {
     auto* position = geometry->getAttribute<float>("position");
     REQUIRE(position);
     CHECK(position->count() == 3);// one triangle -> three vertices
+    CHECK(xyz(*position) == kVertices);
+
+    auto* normal = geometry->getAttribute<float>("normal");
+    REQUIRE(normal);
+    CHECK(xyz(*normal) == kNormals);
 
     std::filesystem::remove(path);
 }
@@ -74,19 +91,9 @@ TEST_CASE("STLLoader parses binary STL without crashing") {
     bytes.insert(bytes.end(), countBytes, countBytes + 4);
 
     // normal
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 1.f);
+    for (size_t i = 0; i < 3; ++i) appendFloat(bytes, kNormals[i]);
     // v0, v1, v2
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 1.f);
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 0.f);
-    appendFloat(bytes, 1.f);
-    appendFloat(bytes, 0.f);
+    for (float v : kVertices) appendFloat(bytes, v);
     // attribute byte count
     bytes.push_back(0);
     bytes.push_back(0);
@@ -100,10 +107,12 @@ TEST_CASE("STLLoader parses binary STL without crashing") {
     auto* position = geometry->getAttribute<float>("position");
     REQUIRE(position);
     CHECK(position->count() == 3);
+    CHECK(xyz(*position) == kVertices);
 
     auto* normal = geometry->getAttribute<float>("normal");
     REQUIRE(normal);
     CHECK(normal->count() == 3);
+    CHECK(xyz(*normal) == kNormals);
 
     std::filesystem::remove(path);
 }

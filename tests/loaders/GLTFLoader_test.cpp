@@ -317,39 +317,9 @@ TEST_CASE("GLTFLoader builds independent graphs for scenes sharing a node") {
             CHECK(ma != mb);
     // ...but they share the cached geometry.
     CHECK(a[0]->geometry() == b[0]->geometry());
-}
-
-TEST_CASE("GLTFLoader shares geometry across nodes referencing one mesh") {
-    Bin bin;
-    size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
-    size_t idxOff = bin.put<uint16_t>({0, 1, 2});
-
-    std::string json = R"({
-      "asset":{"version":"2.0"},
-      "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
-      "bufferViews":[
-        {"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36},
-        {"buffer":0,"byteOffset":)" + std::to_string(idxOff) + R"(,"byteLength":6}],
-      "accessors":[
-        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
-        {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}],
-      "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
-      "nodes":[{"name":"A","mesh":0},{"name":"B","mesh":0}],
-      "scenes":[{"nodes":[0,1]}]
-    })";
-
-    auto path = writeTempGlb(makeGlb(json, bin.data));
-    GLTFLoader loader;
-    auto res = loader.load(path);
-    fs::remove(path);
-
-    REQUIRE(res);
-    std::vector<Mesh*> meshes;
-    collectMeshes(res->scene.get(), meshes);
-    REQUIRE(meshes.size() == 2);
-    // Distinct Mesh objects, shared (same shared_ptr) geometry.
-    CHECK(meshes[0] != meshes[1]);
-    CHECK(meshes[0]->geometry() == meshes[1]->geometry());
+    // Two nodes on one mesh in the same scene: distinct Mesh objects, same geometry.
+    CHECK(b[0] != b[1]);
+    CHECK(b[0]->geometry() == b[1]->geometry());
 }
 
 TEST_CASE("GLTFLoader maps a NEAREST sampler to Filter::Nearest") {

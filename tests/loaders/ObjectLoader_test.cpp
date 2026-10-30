@@ -595,6 +595,11 @@ TEST_CASE("Lossy cases are reported through warnings()") {
         CHECK(loader.parse("<not json>") == nullptr);
         REQUIRE(loader.warnings().size() == 1);
         CHECK(loader.warnings().front() == "malformed JSON");
+
+        CHECK(loader.parse("") == nullptr);
+        CHECK(loader.parse("[1,2,3]") == nullptr);
+        // valid JSON, but no object entry
+        CHECK(loader.parse(R"({"metadata":{"version":4.5,"type":"Object"}})") == nullptr);
     }
 }
 
@@ -814,21 +819,9 @@ TEST_CASE("Parametric geometry survives export/import with its segment counts") 
 }
 
 
-TEST_CASE("Malformed and unknown input is handled without crashing") {
+TEST_CASE("Unknown types are handled without crashing") {
 
     ObjectLoader loader;
-
-    SECTION("garbage text returns nullptr") {
-
-        CHECK(loader.parse("{ this is not json") == nullptr);
-        CHECK(loader.parse("") == nullptr);
-        CHECK(loader.parse("[1,2,3]") == nullptr);
-    }
-
-    SECTION("document without an object entry returns nullptr") {
-
-        CHECK(loader.parse(R"({"metadata":{"version":4.5,"type":"Object"}})") == nullptr);
-    }
 
     SECTION("unknown child type is skipped, the rest still loads") {
 

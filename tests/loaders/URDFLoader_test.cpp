@@ -81,9 +81,7 @@ TEST_CASE("URDFLoader handles truncated and padded rgba values") {
 TEST_CASE("URDFLoader loads a real robot with DAE visuals and STL collisions") {
 
     const auto path = std::filesystem::path(DATA_FOLDER) / "urdf" / "lbr_iiwa_14_r820.urdf";
-    if (!std::filesystem::exists(path)) {
-        SKIP("lbr_iiwa_14_r820.urdf not available");
-    }
+    REQUIRE(std::filesystem::exists(path));
 
     URDFLoader loader;
     auto robot = loader.load(path);
@@ -92,6 +90,10 @@ TEST_CASE("URDFLoader loads a real robot with DAE visuals and STL collisions") {
     int meshes = 0;
     robot->traverseType<Mesh>([&meshes](Mesh&) { ++meshes; });
     CHECK(meshes > 0);
+
+    // Seven revolute joints; the two fixed ones are not degrees of freedom.
+    CHECK(robot->numDOF() == 7);
+    CHECK(robot->getObjectByName("link_7") != nullptr);
 }
 
 TEST_CASE("parseArticulation turns a mesh collision into a convex hull") {
@@ -267,9 +269,7 @@ TEST_CASE("parseArticulation reports the FR3's dropped finger colliders") {
     // the first is the documented one-collider-per-link model, but a grasp built on it fails
     // silently, so the drop must be reported for both fingers.
     const auto path = std::filesystem::path(DATA_FOLDER) / "urdf" / "franka" / "fr3.urdf";
-    if (!std::filesystem::exists(path)) {
-        SKIP("fr3.urdf not available");
-    }
+    REQUIRE(std::filesystem::exists(path));
 
     URDFLoader loader;
     const auto desc = loader.parseArticulation(path, false);

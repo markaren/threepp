@@ -81,27 +81,18 @@ namespace {
 }// namespace
 
 
-TEST_CASE("SplatLoader: degree-3 cloud survives a PLY round trip") {
+TEST_CASE("SplatLoader: clouds of every SH degree survive a PLY round trip") {
 
-    // The one that matters: with 45 f_rest properties, a channel-major /
-    // coefficient-major mix-up is silent. Nothing else in the suite catches it.
-    const auto original = makeCloud(3);
-    const auto reloaded = load(splattest::writeSplatPly(original));
-
-    REQUIRE(reloaded.shDegree == 3);
-    REQUIRE(reloaded.coeffCount() == 16);
-    compare(original, reloaded);
-}
-
-TEST_CASE("SplatLoader: degree 0, 1 and 2 clouds survive a PLY round trip") {
-
-    for (int degree : {0, 1, 2}) {
+    // Degree 3 is the one that matters: with 45 f_rest properties, a
+    // channel-major / coefficient-major mix-up is silent.
+    for (int degree : {0, 1, 2, 3}) {
 
         INFO("degree " << degree);
         const auto original = makeCloud(degree);
         const auto reloaded = load(splattest::writeSplatPly(original));
 
         REQUIRE(reloaded.shDegree == degree);
+        REQUIRE(reloaded.coeffCount() == (degree + 1) * (degree + 1));
         compare(original, reloaded);
     }
 }
