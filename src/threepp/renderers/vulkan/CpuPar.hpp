@@ -188,9 +188,10 @@ namespace threepp::vulkan::par {
     // shadow maps) runs on the pool, every view at once and beside the
     // primary's graph build, instead of view after view between the
     // primary's build and theirs (VulkanCoreFrame, addSecondaryViewPasses).
-    // THREEPP_VK_CPU_VIEWS=1; off, the default, keeps the serial loop.
+    // THREEPP_VK_CPU_VIEWS=0 keeps the serial loop (on by default since
+    // 2026-10-30, once join() stopped sleeping; see Group below).
     inline bool viewsOn() {
-        static const bool on = env::flag("THREEPP_VK_CPU_VIEWS", false);
+        static const bool on = env::flag("THREEPP_VK_CPU_VIEWS", true);
         return on;
     }
 
