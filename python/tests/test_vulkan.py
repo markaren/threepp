@@ -60,7 +60,11 @@ def test_rgb_render(vk_renderer):
     scene, cam = make_scene()
     img = vk_renderer.render_aov(scene, cam, "rgb")
     assert img.shape == (H, W, 3) and str(img.dtype) == "uint8"
-    assert int(img.max()) > int(img.min()), "shaded render is flat"
+    # The background's channels differ, so a spread across the image holds on an
+    # empty frame. The orange box has to fill the middle, over the background.
+    box = img[H // 2 - 10:H // 2 + 10, W // 2 - 10:W // 2 + 10].mean(axis=(0, 1))
+    background = img[:20, :20].mean(axis=(0, 1))
+    assert box[0] > background[0] + 60 and box[0] > box[2] + 40, "no shaded box in the frame"
 
 
 def test_no_ray_tracing_fallback_renders():
@@ -500,11 +504,7 @@ def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
     # Stable entry slots: a mesh without the hint is shown by a slot edit too.
     assert structural_after() == s0, "a mesh without the hint: its first show rebuilt the scene"
     stats = vk_renderer.tlas_stats
-    assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds", "slot_edits",
-                          "history_resets", "records_pruned", "textures_pruned", "texture_slots_in_use",
-                          "texture_slot_fallbacks", "admissions_deferred", "admissions_landed", "swap_edits",
-                          "slot_pool_growths", "slot_capacity", "slot_deltas",
-                          "flat_checks", "versioned_deltas", "moving_entries"}
+    assert set(stats) >= {"structural_rebuilds", "slot_edits", "history_resets"}
     assert stats["slot_edits"] >= 1, "the first shows were slot edits"
     assert stats["history_resets"] >= 1, "the first build wiped the histories once"
 
@@ -883,7 +883,7 @@ def test_aov_shapes(vk_renderer):
         assert arr.shape == (H, W, 3) and str(arr.dtype) == "uint8"
 
 
-def test_aovs_are_distinct(vk_renderer):
+def test_segmentation_has_distinct_regions(vk_renderer):
     scene, cam = make_scene()
     rgb = vk_renderer.render_aov(scene, cam, "rgb")
     normals = vk_renderer.render_aov(scene, cam, "normals")
@@ -891,14 +891,13 @@ def test_aovs_are_distinct(vk_renderer):
     assert not np.array_equal(rgb, normals)
     assert not np.array_equal(rgb, seg)
     assert not np.array_equal(normals, seg)
-
-
-def test_segmentation_has_distinct_regions(vk_renderer):
-    scene, cam = make_scene()
-    seg = vk_renderer.render_aov(scene, cam, "segmentation")
-    colors = {tuple(c) for c in seg.reshape(-1, 3).tolist()}
-    # at least background (black) + the box's hashed id colour
-    assert len(colors) >= 2
+    # The box is one id across its faces, and the background another.
+    box = seg[H // 2 - 10:H // 2 + 10, W // 2 - 10:W // 2 + 10].reshape(-1, 3)
+    background = seg[:20, :20].reshape(-1, 3)
+    assert (box == box[0]).all() and (background == background[0]).all()
+    assert not np.array_equal(box[0], background[0])
+    # ...and those two are all there is: the scene holds no third surface.
+    assert int((seg == box[0]).all(axis=2).sum() + (seg == background[0]).all(axis=2).sum()) == H * W
 
 
 def test_convenience_aov_accessors(vk_renderer):

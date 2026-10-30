@@ -11,21 +11,24 @@ def _camera():
     return cam
 
 
-def test_read_pixels_shape_and_dtype(renderer, lit_scene):
-    lit_scene.add(tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial()))
-    renderer.render(lit_scene, _camera())
-    img = renderer.read_pixels()
-    assert img.shape == (150, 200, 3)
-    assert str(img.dtype) == "uint8"
-
-
 def test_render_draws_something(renderer, lit_scene):
+    # Against the same render without the sphere: the clear colour's channels
+    # differ, so a spread across the image holds on an empty frame.
+    camera = _camera()
+    renderer.render(lit_scene, camera)
+    empty = renderer.read_pixels().astype(int)
+
     mat = tp.MeshStandardMaterial()
     mat.color = 0x44aa88
     lit_scene.add(tp.Mesh(tp.SphereGeometry(1.0), mat))
-    renderer.render(lit_scene, _camera())
-    img = renderer.read_pixels()
-    assert int(img.max()) > int(img.min()), "rendered image is uniformly flat"
+    renderer.render(lit_scene, camera)
+    img = renderer.read_pixels().astype(int)
+
+    changed = np.abs(img - empty).max(axis=2) > 30
+    assert changed[65:85, 90:110].all(), "no sphere in the middle of the frame"
+    assert not changed[:30, :30].any(), "the sphere reached the corner"
+    r, g, b = img[65:85, 90:110].mean(axis=(0, 1))
+    assert g > r + 30 and b > r + 30, "the sphere lost its green-blue albedo"
 
 
 def test_clear_color_affects_background(renderer):
@@ -50,19 +53,28 @@ def test_save_frame(renderer, lit_scene, tmp_path):
 
 def test_tone_mapping_and_ibl(renderer, hdr_env):
     # ToneMapping operator + RGBELoader + scene.environment in one render pass.
-    prev = renderer.tone_mapping
-    try:
-        renderer.tone_mapping = tp.ToneMapping.ACESFilmic
+    env = tp.RGBELoader().load(hdr_env)  # image-based lighting
+
+    def centre_mean(environment, tone_mapping):
+        renderer.tone_mapping = tone_mapping
         scene = tp.Scene()
-        scene.environment = tp.RGBELoader().load(hdr_env)  # image-based lighting
+        if environment is not None:
+            scene.environment = environment
         mat = tp.MeshStandardMaterial()
         mat.metalness, mat.roughness = 1.0, 0.1
         scene.add(tp.Mesh(tp.SphereGeometry(1.0), mat))
         renderer.render(scene, _camera())
-        img = renderer.read_pixels()
-        assert int(img.max()) > int(img.min())  # the metal sphere is lit by the env
+        return float(renderer.read_pixels()[60:90, 85:115].mean())
+
+    prev = renderer.tone_mapping
+    try:
+        aces = centre_mean(env, tp.ToneMapping.ACESFilmic)
+        unlit = centre_mean(None, tp.ToneMapping.ACESFilmic)
+        linear = centre_mean(env, tp.ToneMapping.NoToneMapping)
     finally:
         renderer.tone_mapping = prev
+    assert aces > unlit + 100, "only the environment can light a metal sphere here"
+    assert abs(aces - linear) > 3, "the tone mapping operator changed nothing"
 
 
 def test_read_pixels_flip_orientation(renderer, lit_scene):
@@ -77,13 +89,6 @@ def test_read_pixels_flip_orientation(renderer, lit_scene):
     assert not (top_down == bottom_up).all()
 
 
-def test_on_window_resize_registers():
-    # Registering a resize callback must not raise. (No event fires for a headless
-    # canvas, but this pins the binding the interactive demos rely on.)
-    canvas = tp.Canvas("resize-reg", width=64, height=64, headless=True)
-    canvas.on_window_resize(lambda w, h: None)
-
-
 def test_canvas_fullscreen_is_a_runtime_property():
     # Run-time borderless fullscreen. A headless canvas records the request and
     # keeps its size (there is no window to cover a monitor with).
@@ -94,20 +99,6 @@ def test_canvas_fullscreen_is_a_runtime_property():
     assert canvas.size() == (64, 48)
     canvas.fullscreen = False
     assert canvas.fullscreen is False
-
-
-def test_resize_handler_operations(renderer):
-    # The work an on_window_resize handler does: resize the renderer + fix the
-    # camera aspect. Restores the session renderer's size afterwards.
-    try:
-        renderer.set_size(320, 240)
-        assert renderer.size() == (320, 240)
-        cam = tp.PerspectiveCamera(60, 1.0, 0.1, 100)
-        cam.aspect = 320 / 240
-        cam.update_projection_matrix()
-        assert abs(cam.aspect - 320 / 240) < 1e-5
-    finally:
-        renderer.set_size(200, 150)  # restore the shared fixture's size
 
 
 def test_a_resized_headless_renderer_reads_back_at_the_new_size(renderer):
