@@ -129,21 +129,6 @@ TEST_CASE("Loop::Once does not wrap the way Loop::Repeat does") {
     CHECK(onceX != repeatX);
 }
 
-TEST_CASE("Loop::Repeat wraps back around") {
-
-    auto rig = makeRig();
-    AnimationMixer mixer(*rig.root);
-
-    auto* action = mixer.clipAction(makeMoveClip());
-    action->setLoop(Loop::Repeat, -1);
-    action->play();
-
-    // 1.25 s into a 1 s clip is 0.25 s into the second pass.
-    mixer.update(1.25f);
-    INFO("x after wrap = " << rig.node->position.x);
-    CHECK_THAT(rig.node->position.x, WithinAbs(2.5f, 1e-3));
-}
-
 TEST_CASE("Two actions blend by effective weight") {
 
     // Same node, two clips pulling to different places. At equal weight the

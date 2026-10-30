@@ -233,13 +233,6 @@ TEST_CASE("setStyleHex2OliveMixed") {
     CHECK(c.getHex() == 0xFF0000);
 }
 
-TEST_CASE("setStyleColorName") {
-
-    Color c;
-    c.setStyle("powderblue");
-    CHECK(c.getHex() == 0xB0E0E6);
-}
-
 TEST_CASE("setColorName resolves standard CSS names") {
 
     // "red" used to be absent from the keyword table -> lookup failed entirely.

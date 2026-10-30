@@ -690,39 +690,6 @@ TEST_CASE("SplatData::reorderMorton: one stray does not flatten the grid") {
     CHECK(data.means[data.count() - 1].x == Approx(1000.f));
 }
 
-TEST_CASE("SplatData::reorderMorton: SH degree 3 and extras follow their splat") {
-
-    // The spot check the bijection test generalises: a full 48-float degree-3
-    // block, read coefficient by coefficient, against named extras.
-    const auto before = taggedCloud(64, 3);
-    REQUIRE(before.coeffCount() == 16);
-    REQUIRE(before.sh.size() == 64 * 16 * 3);
-
-    auto data = before;
-    const auto perm = data.reorderMorton();
-
-    REQUIRE(data.sh.size() == before.sh.size());
-    REQUIRE(data.extras.size() == 2);
-    REQUIRE(data.validate());
-
-    for (size_t i : {size_t{0}, size_t{1}, data.count() / 2, data.count() - 2, data.count() - 1}) {
-
-        const size_t old = perm[i];
-        INFO("new " << i << " <- old " << old);
-
-        // Every coefficient of the block, in order — a mis-strided permute
-        // shows up as a coefficient belonging to somebody else.
-        const float* c = data.shAt(i);
-        for (int k = 0; k < 16 * 3; ++k) {
-
-            REQUIRE(c[k] == Approx(static_cast<float>(old) * 100.f + static_cast<float>(k)));
-        }
-
-        REQUIRE(data.extras.at("tag")[i] == Approx(static_cast<float>(old)));
-        REQUIRE(data.extras.at("confidence")[i] == Approx(1000.f - static_cast<float>(old)));
-    }
-}
-
 TEST_CASE("SplatData::reorderMorton: degenerate clouds are no-ops") {
 
     SECTION("empty") {

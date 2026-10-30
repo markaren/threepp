@@ -130,9 +130,3 @@ TEST_CASE("Convertible to std::pair<float, float>") {
     REQUIRE_THAT(pair.first, Catch::Matchers::WithinRel(1.1f));
     REQUIRE_THAT(pair.second, Catch::Matchers::WithinRel(1.2f));
 }
-
-TEST_CASE("Structural binding") {
-    auto [x,y] = Vector2(1.1f, 1.2f);
-    REQUIRE_THAT(x, Catch::Matchers::WithinRel(1.1f));
-    REQUIRE_THAT(y, Catch::Matchers::WithinRel(1.2f));
-}

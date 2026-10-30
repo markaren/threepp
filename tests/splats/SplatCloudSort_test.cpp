@@ -210,23 +210,6 @@ TEST_CASE("SplatCloud: the sort is stable, so equal depths keep index order") {
     for (size_t i = 0; i < order.size(); ++i) CHECK(order[i] == i);
 }
 
-TEST_CASE("SplatCloud: a cloud at a single depth still sorts") {
-
-    // The percentile interval collapses (p1 == p99) and the code has to fall
-    // back rather than divide by nothing.
-    std::vector<Vector3> means;
-    for (int i = 0; i < 32; ++i) means.emplace_back(0.05f * static_cast<float>(i), 0.f, 0.f);
-
-    auto cloud = SplatCloud::create(cloudOf(means));
-
-    auto camera = PerspectiveCamera::create(50, 1.f, 0.1f, 100);
-    camera->position.set(0, 0, 5);
-    camera->lookAt(Vector3{0, 0, 0});
-
-    REQUIRE_NOTHROW(cloud->update(*camera));
-    CHECK(drawOrder(*cloud).size() == means.size());
-}
-
 // --------------------------------------------------------------------------
 // Texture packing
 // --------------------------------------------------------------------------

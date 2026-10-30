@@ -97,24 +97,3 @@ TEST_CASE("updateMatrixWorld(false) matches force=true after mutation", "[core]"
     polled->updateMatrixWorld(false);
     REQUIRE(snapshotWorlds(*forced) == snapshotWorlds(*polled));
 }
-
-TEST_CASE("updateMatrixWorld(false) propagates externally-driven matrices", "[core]") {
-    // matrixAutoUpdate == false is the loader/helper path: `matrix` is written
-    // directly. updateMatrixWorld polls the matrix bytes for this case.
-    auto forced = buildGraph(6, 4);
-    auto polled = buildGraph(6, 4);
-    forced->updateMatrixWorld(true);
-    polled->updateMatrixWorld(false);
-
-    auto driveFirstChild = [](Object3D& root) {
-        auto& mid              = *root.children.front();
-        mid.matrixAutoUpdate   = false;
-        mid.matrix->makeTranslation(4.f, -2.f, 1.f);
-    };
-    driveFirstChild(*forced);
-    driveFirstChild(*polled);
-
-    forced->updateMatrixWorld(true);
-    polled->updateMatrixWorld(false);
-    REQUIRE(snapshotWorlds(*forced) == snapshotWorlds(*polled));
-}

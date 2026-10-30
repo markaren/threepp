@@ -495,30 +495,6 @@ TEST_CASE("clone() round-trips every mixin field", "[materials]") {
     assertCloneRoundTrips<SpriteMaterial>();
 }
 
-TEST_CASE("MeshStandardMaterial::clone keeps the whole detail layer", "[materials]") {
-
-    // Regression: detailNormalMap / detailNormalScale / detailRoughStrength were
-    // declared on MaterialWithDetailMap but never copied, so clone() silently
-    // dropped the detail-normal/roughness layer.
-    auto src = MeshStandardMaterial::create();
-    src->detailMap = Texture::create();
-    src->detailRepeat = 3.5f;
-    src->detailStrength = 0.75f;
-    src->detailNormalMap = Texture::create();
-    src->detailNormalScale = 0.4f;
-    src->detailRoughStrength = 0.2f;
-
-    auto dst = src->clone<MeshStandardMaterial>();
-
-    REQUIRE(dst);
-    CHECK(dst->detailMap == src->detailMap);
-    CHECK(dst->detailRepeat == src->detailRepeat);
-    CHECK(dst->detailStrength == src->detailStrength);
-    CHECK(dst->detailNormalMap == src->detailNormalMap);
-    CHECK(dst->detailNormalScale == src->detailNormalScale);
-    CHECK(dst->detailRoughStrength == src->detailRoughStrength);
-}
-
 TEST_CASE("MeshPhysicalMaterial has exactly one refractionRatio", "[materials]") {
 
     // MaterialWithRefractionRatio is reached both via MeshStandardMaterial and

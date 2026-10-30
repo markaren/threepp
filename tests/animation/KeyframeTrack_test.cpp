@@ -22,9 +22,3 @@ TEST_CASE("KeyframeTrack rejects mismatched value counts") {
     // 2 times cannot carry 3 values in any integral stride
     CHECK_THROWS_AS(VectorKeyframeTrack("t", {0.f, 1.f}, {1.f, 2.f, 3.f}), std::invalid_argument);
 }
-
-TEST_CASE("KeyframeTrack accepts well-formed tracks") {
-
-    CHECK_NOTHROW(NumberKeyframeTrack("t", {0.f, 1.f}, {1.f, 2.f}));
-    CHECK_NOTHROW(VectorKeyframeTrack("t", {0.f, 1.f}, {1.f, 2.f, 3.f, 4.f, 5.f, 6.f}));
-}

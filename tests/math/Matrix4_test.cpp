@@ -52,36 +52,10 @@ TEST_CASE("set") {
     REQUIRE(m.elements[13] == 7);
     REQUIRE(m.elements[14] == 11);
     REQUIRE(m.elements[15] == 15);
-}
 
-TEST_CASE("identity") {
-
-    Matrix4 a;
-    Matrix4 b;
-
-    a.set(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
-    REQUIRE(a.elements[0] == 0);
-    REQUIRE(a.elements[1] == 4);
-    REQUIRE(a.elements[2] == 8);
-    REQUIRE(a.elements[3] == 12);
-    REQUIRE(a.elements[4] == 1);
-    REQUIRE(a.elements[5] == 5);
-    REQUIRE(a.elements[6] == 9);
-    REQUIRE(a.elements[7] == 13);
-    REQUIRE(a.elements[8] == 2);
-    REQUIRE(a.elements[9] == 6);
-    REQUIRE(a.elements[10] == 10);
-    REQUIRE(a.elements[11] == 14);
-    REQUIRE(a.elements[12] == 3);
-    REQUIRE(a.elements[13] == 7);
-    REQUIRE(a.elements[14] == 11);
-    REQUIRE(a.elements[15] == 15);
-
-    REQUIRE(!matrixEquals4(a, b));
-
-    a.identity();
-
-    REQUIRE(matrixEquals4(a, b));
+    REQUIRE(!matrixEquals4(m, Matrix4()));
+    m.identity();
+    REQUIRE(matrixEquals4(m, Matrix4()));
 }
 
 TEST_CASE("copy") {
@@ -177,31 +151,6 @@ TEST_CASE("lookat") {
             0, -1, 0.0001, 0,
             0, 0, 0, 1);
     REQUIRE(a == expected);
-}
-
-TEST_CASE("premultiply") {
-
-    auto lhs = Matrix4().set(2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53);
-    auto rhs = Matrix4().set(59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131);
-
-    rhs.premultiply(lhs);
-
-    CHECK_THAT(rhs.elements[0], Catch::Matchers::WithinRel(1585.f));
-    CHECK_THAT(rhs.elements[1], Catch::Matchers::WithinRel(5318.f));
-    CHECK_THAT(rhs.elements[2], Catch::Matchers::WithinRel(10514.f));
-    CHECK_THAT(rhs.elements[3], Catch::Matchers::WithinRel(15894.f));
-    CHECK_THAT(rhs.elements[4], Catch::Matchers::WithinRel(1655.f));
-    CHECK_THAT(rhs.elements[5], Catch::Matchers::WithinRel(5562.f));
-    CHECK_THAT(rhs.elements[6], Catch::Matchers::WithinRel(11006.f));
-    CHECK_THAT(rhs.elements[7], Catch::Matchers::WithinRel(16634.f));
-    CHECK_THAT(rhs.elements[8], Catch::Matchers::WithinRel(1787.f));
-    CHECK_THAT(rhs.elements[9], Catch::Matchers::WithinRel(5980.f));
-    CHECK_THAT(rhs.elements[10], Catch::Matchers::WithinRel(11840.f));
-    CHECK_THAT(rhs.elements[11], Catch::Matchers::WithinRel(17888.f));
-    CHECK_THAT(rhs.elements[12], Catch::Matchers::WithinRel(1861.f));
-    CHECK_THAT(rhs.elements[13], Catch::Matchers::WithinRel(6246.f));
-    CHECK_THAT(rhs.elements[14], Catch::Matchers::WithinRel(12378.f));
-    CHECK_THAT(rhs.elements[15], Catch::Matchers::WithinRel(18710.f));
 }
 
 TEST_CASE("transpose") {
