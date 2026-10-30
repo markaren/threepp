@@ -2218,8 +2218,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             if (sp.lodNonZero) {
                                 for (uint32_t j = 0; j < sp.count; ++j) {
                                     auto& en = entries[sp.first + j];
-                                    if (en.lodLevel != 0) lodChangedThisFrame_ = true;
-                                    en.lodLevel = 0;
+                                    if (en.lodLevel != 0) {
+                                        lodChangedThisFrame_ = true;
+                                        en.lodLevel          = 0;
+                                    }
                                 }
                                 sp.lodNonZero = false;
                             }
@@ -2337,7 +2339,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             }
                         }
                         if (en.lodRadius <= 0.f) {
-                            en.lodLevel = 0;// unknown bounds — stay at full detail
+                            if (en.lodLevel != 0) en.lodLevel = 0;// unknown bounds — stay at full detail
                             ++stats.entriesPerLevel[0];
                             continue;
                         }
@@ -2382,12 +2384,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             selected = next;
                         }
 
-                        if (selected != en.lodLevel) lodChangedThisFrame_ = true;
-                        en.lodLevel = selected;
+                        if (selected != en.lodLevel) {
+                            lodChangedThisFrame_ = true;
+                            en.lodLevel          = selected;
+                        }
                         if (selected != 0) spanNonZero = true;
                         ++stats.entriesPerLevel[std::min<uint8_t>(selected, 5)];
                         }// per-entry (Ready-chain spans only)
-                        sp.lodNonZero = spanNonZero;
+                        if (sp.lodNonZero != spanNonZero) sp.lodNonZero = spanNonZero;
                     }
                 } else {
                     // Feature off (or just turned off this frame): every
@@ -2403,8 +2407,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         if (sp.lodNonZero) {
                             for (uint32_t j = 0; j < sp.count; ++j) {
                                 auto& en = entries[sp.first + j];
-                                if (en.lodLevel != 0) lodChangedThisFrame_ = true;
-                                en.lodLevel = 0;
+                                if (en.lodLevel != 0) {
+                                    lodChangedThisFrame_ = true;
+                                    en.lodLevel          = 0;
+                                }
                             }
                             sp.lodNonZero = false;
                         }
