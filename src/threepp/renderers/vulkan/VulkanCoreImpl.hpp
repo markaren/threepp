@@ -5825,15 +5825,17 @@ namespace threepp {
         // A mesh that arrives hidden (resident, visible false) is neither drawn
         // nor traced until it shows, so its admission (the BLAS build, the
         // textures' encode and upload) need not be paid on the frame it was
-        // added: its slot edit places it with default rows and starts its
-        // textures' CPU half (prepareMaterialImage) on worker threads, and
-        // pumpHiddenAdmissions, after each frame's scene walk, lands the spans
-        // whose textures are ready, a few a frame: record, images, rows, and
-        // a full TLAS build as for any first show. Nothing visible changes. A
-        // mesh shown before its admission landed is placed again by that
-        // frame's slot edit, with the synchronous admission a mesh arriving
-        // visible gets (a texture still being prepared is waited for, not
-        // encoded twice). THREEPP_VULKAN_SYNC_ADMIT=1 admits hidden meshes
+        // added: its slot edit places it with default rows, and
+        // pumpHiddenAdmissions, after each frame's scene walk, starts its
+        // textures' CPU half (prepareMaterialImage) and its field's prep on
+        // worker threads, a few a frame (EntrySpan::prepStarted), then lands
+        // the spans whose jobs are ready, a few a frame: record, images, rows,
+        // and a full TLAS build as for any first show. Nothing visible
+        // changes. A mesh shown before its admission landed is placed again
+        // by that frame's slot edit, with the synchronous admission a mesh
+        // arriving visible gets (a texture still being prepared is waited
+        // for, not encoded twice; one not started yet is encoded there).
+        // THREEPP_VULKAN_SYNC_ADMIT=1 admits hidden meshes
         // synchronously too, and encodes a slot edit's textures one after the
         // other on the render thread (the A/B lane: the admission as it was).
         static bool syncAdmission();
@@ -5844,7 +5846,10 @@ namespace threepp {
         };
         std::unordered_map<const Texture*, PreparingTexture> preparingTextures_;
         uint32_t admitPendingSpans_ = 0;
-        void beginHiddenAdmission(Mesh& m);
+        // Starts a pending span's worker jobs (its mesh's textures' CPU half,
+        // a field's prep) and returns how many it started; pumpHiddenAdmissions
+        // calls it for a few spans a frame.
+        uint32_t beginHiddenAdmission(Mesh& m);
         // The lidar's entry -> stable id table (entryStableIds_) is written
         // read-only (stableIdIfAssigned) where entries are made, and a mesh's
         // auto id is assigned by the indirect draw builder the first time it
@@ -5858,9 +5863,11 @@ namespace threepp {
         bool stableIdsPending_ = false;
         // Start the CPU half of every texture of `m` that is not resident and
         // not already being prepared (worker threads); ensureMaterialTexture
-        // takes the result. The slot edit calls it for all its new meshes
-        // before building their descs, so their encodes run side by side.
-        void prepareTexturesAsync(Mesh& m);
+        // takes the result. Returns how many it started. The slot edit calls
+        // it for all a visible edit's new meshes before building their descs,
+        // so their encodes run side by side; a hidden span's start from
+        // pumpHiddenAdmissions, a few a frame.
+        uint32_t prepareTexturesAsync(Mesh& m);
         // Every map buildMaterialDesc would admit for `m` (null where unset).
         static std::vector<std::shared_ptr<Texture>> texturesOf(const Mesh& m);
         void pumpHiddenAdmissions();

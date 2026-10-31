@@ -564,6 +564,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 ns.fadeKnown = false;
                 ns.admitPending = (!deferredGeoms.empty() && deferredGeoms.count(bs.mesh->geometry().get()) != 0u) ||
                                   deferredGrass.count(bs.mesh) != 0u;
+                ns.prepStarted = false;
                 if (ns.admitPending) admitNow.push_back(bs.mesh);
                 if (ns.inst) {
                     ns.instColorAttr    = ns.inst->instanceColor();
@@ -613,7 +614,6 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 grassPlacedThisFrame_.push_back(gm);
             }
             seBlas.stop();
-            for (Mesh* m : admitNow) beginHiddenAdmission(*m);
             admitPendingSpans_ += static_cast<uint32_t>(admitNow.size());
             tlasStats_.admissionsDeferred += admitNow.size();
             // The material descs, whose first sight of a texture uploads it.
@@ -998,7 +998,6 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
                              deferredGrass.count(m) != 0u;
                 if (pending[b]) admitNow.push_back(m);
             }
-            for (Mesh* m : admitNow) beginHiddenAdmission(*m);
             admitPendingSpans_ += static_cast<uint32_t>(admitNow.size());
             tlasStats_.admissionsDeferred += admitNow.size();
             if (!syncAdmission()) {
@@ -1093,6 +1092,7 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
                 ns.parkedUntil = 0u;
                 ns.fadeKnown = false;
                 ns.admitPending = pending[b] != 0u;
+                ns.prepStarted = false;
                 if (ns.inst) {
                     ns.instColorAttr    = ns.inst->instanceColor();
                     ns.instColorVersion = ns.instColorAttr ? ns.instColorAttr->version : ~0u;
@@ -1386,15 +1386,20 @@ bool VulkanRenderer::Impl::syncAdmission() {
             return sync;
         }
 
-void VulkanRenderer::Impl::beginHiddenAdmission(Mesh& m) {
-            prepareTexturesAsync(m);
+uint32_t VulkanRenderer::Impl::beginHiddenAdmission(Mesh& m) {
+            uint32_t started = prepareTexturesAsync(m);
             // A field's state, prepared on a worker (its bytes are most of an
             // admission: ~10 ms a forest wind field on the render thread).
-            if (auto* gm = dynamic_cast<GrassMesh*>(&m)) beginGrassPrep(*gm);
+            if (auto* gm = dynamic_cast<GrassMesh*>(&m)) {
+                beginGrassPrep(*gm);
+                if (grassPrepPending(*gm)) ++started;
+            }
+            return started;
         }
 
-void VulkanRenderer::Impl::prepareTexturesAsync(Mesh& m) {
+uint32_t VulkanRenderer::Impl::prepareTexturesAsync(Mesh& m) {
             const bool bc7 = bc7SampledSupported();
+            uint32_t started = 0u;
             for (const auto& t : texturesOf(m)) {
                 if (!t) continue;
                 const Texture* key = t.get();
@@ -1411,13 +1416,42 @@ void VulkanRenderer::Impl::prepareTexturesAsync(Mesh& m) {
                 pt.job = std::async(std::launch::async,
                                     [this, t, bc7] { return prepareMaterialImage(t.get(), bc7); });
                 preparingTextures_.emplace(key, std::move(pt));
+                ++started;
             }
+            return started;
         }
 
 void VulkanRenderer::Impl::pumpHiddenAdmissions() {
             if (!grassPreps_.empty()) sweepGrassPreps(false);
             if (admitPendingSpans_ == 0u) return;
             THREEPP_CPUPROF("scene.3e_hiddenAdmission");
+            // The pending spans' worker jobs (their textures' encodes, a
+            // field's prep) start here, a few a frame and no more than
+            // kPrepsInFlight at once, not all on the frame that placed them.
+            // Twelve 512x512 encodes started on one frame ran that frame's
+            // other phases 10-40x slower (the record 0.17 -> 2.3 ms, the light
+            // UBO 0.02 -> 0.8 ms): an encode's first milliseconds are its
+            // memory-heavy ones, and twelve at once take the frame's working
+            // set out of the caches; started apart they also finish sooner
+            // (the first landing 47 -> 30 frames after the add). Measured
+            // 2026-10-31 on VulkanEntryChurn_test's hidden cell: the add frame
+            // 5.4 -> 1.6 ms, its slot edit on a quiet frame.
+            constexpr uint32_t kPrepsPerFrame = 3u;
+            constexpr uint32_t kPrepsInFlight = 8u;
+            uint32_t inFlight = 0u;
+            for (const auto& [tex, pt] : preparingTextures_)
+                if (pt.job.valid() && pt.job.wait_for(std::chrono::seconds(0)) != std::future_status::ready) ++inFlight;
+            for (const auto& [gm, gp] : grassPreps_)
+                if (gp.job.valid() && gp.job.wait_for(std::chrono::seconds(0)) != std::future_status::ready) ++inFlight;
+            uint32_t started = 0u;
+            for (EntrySpan& sp : entrySpans_) {
+                if (sp.isFree || !sp.admitPending || sp.prepStarted) continue;
+                if (started >= kPrepsPerFrame || inFlight >= kPrepsInFlight) break;
+                const uint32_t n = beginHiddenAdmission(*sp.mesh);
+                sp.prepStarted = true;
+                started += n;
+                inFlight += n;
+            }
             // A few spans a frame, and no more than this frame's share of the
             // work: a landing costs the BLAS build input and the upload of
             // encoded images, not the encode, and a field's whole state is
@@ -1471,7 +1505,8 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
             // edit took the change): every live span's mesh is alive.
             for (EntrySpan& sp : entrySpans_) {
                 if (sp.isFree || !sp.admitPending) continue;
-                if (landed >= kSpansPerFrame || (landed > 0u && spentMs() + estimateMs(sp) > kBudgetMs) ||
+                if (!sp.prepStarted || landed >= kSpansPerFrame ||
+                    (landed > 0u && spentMs() + estimateMs(sp) > kBudgetMs) ||
                     !texturesReady(*sp.mesh) ||
                     (entries[sp.first].isGrass && grassPrepPending(static_cast<const GrassMesh&>(*sp.mesh)))) {
                     ++pending;

@@ -291,11 +291,13 @@ namespace threepp::vulkan::impl {
         unsigned int meshId = 0;      // mesh->id at expansion (dangling-pointer guard)
         bool hidden = false;          // see MeshEntry::hidden
         // A hidden mesh new to the renderer (Object3D::resident) whose slot
-        // edit placed it without its assets: no BLAS record yet, default rows,
-        // its textures being prepared on worker threads. pumpHiddenAdmissions
-        // lands them over the following frames and clears this; shown before
-        // that, the span is placed again with today's synchronous admission.
+        // edit placed it without its assets: no BLAS record yet, default rows.
+        // pumpHiddenAdmissions starts its textures' encodes and its field's
+        // prep on worker threads, a few a frame (prepStarted), lands them over
+        // the following frames and clears this; shown before that, the span
+        // is placed again with today's synchronous admission.
         bool admitPending = false;
+        bool prepStarted = false;
         // Matrix change detection. A span's entry world matrices are a pure
         // function of (mesh->matrixWorld, instanceMatrix contents); the lean
         // path refreshes them ONLY when one of these moved. instanceMatrix
