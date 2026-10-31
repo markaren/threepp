@@ -31,6 +31,8 @@ examples/uav/x8.glb
 # Generated from m350_spec.json by examples/uav/build_m350_blender.py (headless Blender), and its stills
 examples/uav/m350.glb
 examples/uav/out/
+# Generated from racer_spec.json by examples/uav/build_racer_blender.py (headless Blender)
+examples/uav/racer.glb
 # Generated from babyshark_spec.json by examples/uav/build_babyshark_blender.py (headless Blender)
 examples/uav/babyshark.glb
 # Generated from aerosonde_spec.json by examples/uav/build_aerosonde_blender.py (headless Blender)

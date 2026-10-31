@@ -473,6 +473,127 @@ every new number a row of `--report`, the timbre still ASSUMED until step 7:
 - [ ] **8. Film v02.** The generator in the field as an object, its peak and the drone's both on the panel,
   the tracks labelled, the generator audible in the stereo track.
 
+# The racing quad
+
+The other multirotor for the examples, at the far end of the class from the Matrice: a 5 inch racing quad,
+0.68 kg, 9 to 1 thrust to weight. Where the Matrice is flown by an autopilot through a mission, this one is flown
+by sticks. There is no product behind it: the airframe is drawn from scratch, the flight is the core of a drone
+race game of ours, and every number in `racer_spec.json` is the class's, tuned for a simulator. Nothing is
+checked against a flight log or by a pilot.
+
+| file | what it is |
+|---|---|
+| `racer_spec.json` | every number: the airframe, the rotors' layout, the propulsion, the air, the pack, the propwash, what it hits, the flight controller's gains, the drawn model's scale and its discs |
+| `../rigs/racer_rig.py` | the aircraft for any scene: `Racer` (the rigid body and its four motors), `FlightController` (ours: the assists, attitude, the rate loop, the mixer), `Line` (a closed flown line and the speed it allows), `Visual` (the `.glb` posed from the model, the rotors as overlay discs); it uses `m350_rig.Wind` as it is; no threepp import |
+| `build_racer_blender.py` | builds the model in Blender, its textures with numpy, and exports `racer.glb` |
+| `racer_flight.py` | the checks, a flown lap's telemetry, and stills or a window of that lap |
+| `racer.glb` | generated, not committed |
+
+```
+blender --background --factory-startup --python build_racer_blender.py -- --spec racer_spec.json --out racer.glb
+python racer_flight.py --checks                    # the nine checks below
+python racer_flight.py --telemetry --wind 8 --from 250 [--laps 3] [--csv racer.csv]
+python racer_flight.py --stills 0.5,6,14 --out-dir out/racer [--cam chase|side|high]
+python racer_flight.py --window                    # the same flight in a window; C cycles the camera
+```
+
+The flight is off a pad, then laps of a 604 m closed line 4 to 12 m up on AUTO, over a field.
+
+## The 3D model
+
+`racer.glb`: X forward, Y up, Z right, metres, the origin on the arm tubes' axes between the four motors. A 500 mm
+carbon X frame on 10 inch props, modelled at that size and drawn at 0.45 of it, which is the 225 mm flown; the props
+come out 4.5 in. 20 500 faces, four textures made with numpy (a 2x2 twill carbon weave with its normals and
+roughness, a lathe finish for the bells). The cover's blue lights are paint, not emitters. No logos or lettering.
+
+Each motor's `bell_`, `vents_`, `prop_hub_`, `spinner_base_`, `spinner_` and `prop_blades_` nodes, suffixed `fr`, `fl`,
+`rl`, `rr`, turn about their local +Y. The build fails if a rotor leaves the spec's layout; there is no `--check`
+without Blender, since the plates' holes and the bevels are Blender's own.
+
+`Visual(root, tp=tp)` hides the modelled blades and draws each rotor as unlit transparent rings and faint ghost
+blades: a real blade at this rate comes out sharp and frozen under motion blur. Those materials are the combination
+the Vulkan renderer sends to its raster overlay, after the tone map and never traced. Without `tp` the blades stay
+and turn. The bells are drawn at no more than 88 rev/s, since anything faster only aliases.
+
+## The flight
+
+`Racer` is the airframe at 240 Hz, semi-implicit Euler, and `FlightController` the layers above it, top down. Each
+assist enters at its own height and everything below it is shared, so the autopilot and a pilot fly the same physics:
+
+| layer | what it does |
+|---|---|
+| `auto`, `arcade` | the line, or the sticks as a heading, a speed and a height over the ground, make a velocity |
+| velocity | a thrust vector, drag, gravity and the props' unloading included |
+| `angle`, attitude | a tilt to body rates |
+| `acro` | the sticks are body rates, through a radio's rate curve; the throttle is the collective |
+| rate loop | a PI on inertia: tens of milliseconds, a little overshoot |
+| mixer | a command per motor, airmode: the torques first, the collective shifted to make room, yaw from what is left |
+| motors | rotor speed lags its command, slower down than up; thrust goes with its square |
+| air | thrust falls as air comes into the discs faster; rotor drag across the discs; frame drag on each axis; propwash in a sink; the wind |
+| pack | thrust sags as the pack drains |
+| body | torque and gyroscopic terms on its inertia, thrust along its up axis, gravity, a sphere on the ground |
+
+State and frames are `m350_rig`'s: NED, body axes forward, right, down, the same `x` in the same order, so a scene
+reads either aircraft the same way. `Wind` is the Matrice's, Dryden turbulence and all.
+
+The flight controller is OURS, not any firmware's. It is fed the exact state and knows the wind: the drag in its
+velocity layer is the model's own, so `arcade` holds its ground speed in any steady wind. `arcade` has no position
+loop, and `auto` only follows. At a racing lean the Euler yaw says little: the body's plane of symmetry holds the
+direction of flight (2 deg of sideslip at the median, 6 at the most), so the nose points down it, and a camera should
+follow `FlightController.psi` and not the nose.
+
+Not in the model: ground effect, motor or gyro noise, a filter stack, dirty air behind another drone, the air
+density's change with height, a real camera's fisheye and latency. A hard hit is a crash and the motors stop, a
+game's rule where a real quad often flies on. It hits the ground you hand in and nothing else.
+
+## The checks (`racer_flight.py --checks`)
+
+1. 0.68 kg, 226 mm between diagonal motor axes, 60 N of static thrust. Hover at 11 % of it, stick 0.253, 9400 rpm.
+2. A full roll stick is 802 deg/s, 90 % in 71 ms with 15 % overshoot; 83 ms at full throttle, where the rotors have no
+   headroom, and 71 ms at zero throttle, where airmode adds thrust to find it. A full yaw stick is 516 deg/s, 90 % in
+   179 ms, the weak axis. A roll held for a second goes inverted twice.
+3. `arcade` holds 3.00 m and a standstill with the sticks at rest; full throttle is 33.0 m/s after 10 s at 68 deg of
+   tilt, the height held; 2.5 s of brake brings it to 6.0 m/s. `acro`'s hover stick holds 30.0 m for 2 s. `angle` at
+   half stick holds its 30 deg.
+4. Flat out at a held 76 deg lean: 0 to 100 km/h in 0.57 s, 153 km/h level after 7 s, the props at 47 % of their
+   static thrust. 15 m/s level at the hover's thrust falls to 5.4 m/s in 3 s, the rotors' drag. A drop and a catch at
+   0.42 stick goes 0.72 of the way into its own wash and shakes it to 69 deg/s.
+5. At 0.6 stick the pack is at 73 % after 90 s and empty after 5.8 min, with 16 % of the thrust gone.
+6. Into the ground at 6 m/s bounces; at 14 m/s is a crash and the motors stop; on its side on the ground is a crash;
+   parked it stays parked, and released on `arcade` it lifts to 2.71 m in 2 s.
+7. The line's speed profile runs 30.3 to 39.0 m/s, 15.79 s round at its own speed. `auto` (at the spec's 96 % of it)
+   laps in 17.10 s in still air, at most 3.0 m off the line, and 17.41 s in 8 m/s with turbulence, at most 5.1 m off.
+8. `arcade` at rest 10 m up in 4, 8 and 12 m/s of turbulent wind: no drift over the ground, 0.01 m rms off its height,
+   3.9, 10.6 and 19.2 deg of lean.
+9. Two runs of a lap in turbulence are bit-identical at every step; more than 70 times real time.
+
+Against the C++ core it was ported from, step by step over ten flights of 2.5 to 40 s in all four assists, with and
+without wind, into the wash and off the ground: position within 4e-12 m, attitude and rates within 3e-13. The core's
+random numbers are not reproduced, so the propwash's shake was off for that comparison and a crash's tumble was left
+out of it.
+
+## In another scene
+
+```python
+from racer_rig import Racer, FlightController, Line, Sticks, Wind, Visual, model_path
+
+r = Racer(wind=Wind(4.0, from_deg=250.0, turbulence=1.0, seed=3))     # ground=height(n, e) if it is not flat
+r.place_on_ground(0.0, 0.0, yaw=0.0)
+fc = FlightController(r, assist="arcade")                             # "acro", "angle", "arcade", "auto"
+visual = Visual(tp.GLTFLoader().load(model_path()).scene, tp=tp)
+r.release()
+# each step (r.dt = 1/240 s):
+fc.sticks = Sticks(throttle=0.5, yaw=0.2)
+fc.update()
+r.step()
+# each frame:
+visual.pose(r, h0=0.0)
+```
+
+`FlightController(r, assist="auto", line=Line([(n, e, h), ...]))` flies a closed line through those points.
+`r.world_position(h0)` and `r.world_rotation()` give the aircraft in the world for a camera, `r.thrust`, `r.charge`,
+`r.wash` and `r.rev_s()` what a sound or a HUD reads, `r.take_hit()` the hardest contact since the last take.
+
 # The Babyshark 260 VTOL
 
 A hybrid for the examples: the Foxtech Babyshark 260 VTOL, a 2.5 m quadplane (four lift rotors on two

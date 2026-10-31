@@ -1,0 +1,111 @@
+{
+ "note": "Every number of the racer example (racer.glb, ../rigs/racer_rig.py): a 5 inch racing quad on a 6S pack. There is no product behind it: these are the class's figures, tuned for a simulator, ASSUMED every one, none measured on one craft, nothing checked against a flight log or by a pilot. Frame of the layout and the .glb: X forward, Y up, Z right (starboard), metres; the origin on the centreline, midway between the four motor axes, on the arm tubes' axes.",
+ "airframe": {
+  "name": "5 inch racing quad",
+  "mass_kg": 0.68,
+  "thrust_to_weight": 9.0,
+  "arm_m": 0.080,
+  "arm_note": "a motor from the centre along each of the forward and side axes: 226 mm between diagonal motor axes. The drawing's are 225 mm (layout.rotors)",
+  "yaw_arm_m": 0.016,
+  "yaw_arm_note": "a rotor's reaction torque per newton of its thrust. Yaw is the weak axis, as on the class",
+  "inertia_kgm2": {"roll": 0.0024, "pitch": 0.0032, "yaw": 0.0052}
+ },
+ "atmosphere": {
+  "g": 9.81,
+  "note": "the drag's kg/m and the static thrust are sea level's: the density does not change with height here"
+ },
+ "layout": {
+  "note": "name: position of the disc centre on the drawn model, and the sense the propeller turns seen from above (+1 counter-clockwise), the order the M350's spec has. build_racer_blender.py fails if its nodes leave these",
+  "rotors": {
+   "fr": {"pos": [0.07955, 0.01562, 0.07955], "spin": 1},
+   "fl": {"pos": [0.07955, 0.01562, -0.07955], "spin": -1},
+   "rl": {"pos": [-0.07955, 0.01562, -0.07955], "spin": 1},
+   "rr": {"pos": [-0.07955, 0.01562, 0.07955], "spin": -1}
+  }
+ },
+ "propulsion": {
+  "max_rev_s": 470.0,
+  "max_rev_note": "a rotor at full speed; the rotor speed is a share of it, thrust goes with the share's square",
+  "motor_up_s": 0.022,
+  "motor_down_s": 0.034,
+  "motor_note": "a rotor's first-order lag toward its command: slower down than up, since a motor is driven up and only coasts or brakes down",
+  "idle": 0.04,
+  "idle_note": "the motors' floor in flight, a share of full thrust",
+  "pitch_speed_ms": 78.0,
+  "pitch_speed_note": "the air's speed into the discs where a rotor at full speed stops pulling: the props unload as the drone goes faster along its thrust"
+ },
+ "aero": {
+  "note": "the frame's quadratic drag on each body axis (0.5 rho Cd A), and the rotors' across their discs, linear in the speed and growing as the square root of the thrust over the weight",
+  "drag_kg_m": {"front": 0.0065, "side": 0.0085, "top": 0.0150},
+  "rotor_drag_ns_m": 0.17,
+  "rate_damp_nms": 0.0006
+ },
+ "pack": {
+  "note": "the pack's voltage sags as it drains, and takes full thrust with it. pack_s of full thrust is in the pack: three or four minutes of hard flying",
+  "sag": 0.16,
+  "pack_s": 70.0
+ },
+ "propwash": {
+  "note": "sinking along the thrust axis into its own wash: wash_speed is where it starts, wash_span how much more is the worst of it, wash_clear the speed across the discs that flies it out; the worst takes loss of the thrust and shakes the airframe at shake_rads2. Not a vortex ring model",
+  "wash_speed_ms": 2.5,
+  "wash_span_ms": 6.0,
+  "wash_clear_ms": 9.0,
+  "loss": 0.35,
+  "shake_rads2": 170.0
+ },
+ "contact": {
+  "note": "a sphere on the ground you hand in. A hit harder than crash_speed along the normal stops the motors, a game's rule where a real quad often flies on; so does lying on its side",
+  "radius_m": 0.17,
+  "bounce": 0.30,
+  "scrape": 0.18,
+  "crash_speed_ms": 11.0
+ },
+ "control": {
+  "note": "OURS, not any flight controller's firmware: the layers a racing quad's has, tuned by feel. Each assist enters at its own height and everything below it is shared",
+  "rate": {
+   "kp": 28.0, "ki": 22.0, "kp_yaw": 16.0, "ki_yaw": 12.0,
+   "integral_rads": 1.2,
+   "note": "the rate loop as an angular acceleration per rad/s of error, times the inertia"
+  },
+  "radio": {
+   "center_rads": 3.5, "max_rads": 14.0, "yaw_max_rads": 9.0,
+   "throttle_power": 1.6,
+   "note": "a stick to a body rate, s center + s^3 (max - center); the throttle stick to the collective as its power"
+  },
+  "attitude": {
+   "kp": 10.0, "rate_max_rads": 12.0,
+   "angle_max_rad": 1.05,
+   "note": "attitude error to rate; angle_max is ANGLE's tilt at full stick"
+  },
+  "velocity": {
+   "kp_arcade": 3.2, "kp_auto": 4.5,
+   "tilt_arcade_rad": 1.20, "tilt_auto_rad": 1.32,
+   "accel_h_ms2": 30.0, "accel_up_ms2": 28.0
+  },
+  "arcade": {
+   "v_max_ms": 33.0, "v_boost_ms": 40.0, "v_back_ms": 6.0,
+   "accel_ms2": 17.0, "brake_ms2": 34.0, "coast_ms2": 2.0,
+   "turn_rate_rads": 2.5, "turn_accel_ms2": 30.0,
+   "climb_ms": 11.0, "strafe_ms": 9.0,
+   "hold_gain": 2.2, "hold_min_m": 1.6, "hold_start_m": 2.6, "ceiling_m": 36.0,
+   "note": "the sticks as a heading, a speed along it and a height held over the ground"
+  },
+  "line": {
+   "look_min_m": 7.0, "look_t_s": 0.42,
+   "pace": 0.96,
+   "lateral_ms2": 26.0, "brake_ms2": 26.0, "gain_ms2": 22.0, "top_ms": 39.0,
+   "note": "AUTO: how far ahead on the line it aims, its share of the line's speed, and what the line's speed profile allows across the line, slowing and gaining"
+  }
+ },
+ "model": {
+  "note": "racer.glb: a 500 mm carbon X frame on 10 inch props, modelled at that size and drawn at drawn_scale, which is the 225 mm flown here (its props come out 4.5 in). The blades are hidden and each rotor drawn as overlay discs (racer_rig.Visual): a real blade at this rate is sharp and frozen under motion blur",
+  "drawn_scale": 0.45,
+  "prop_radius_m": 0.05715,
+  "bell_radius_m": 0.0108,
+  "visible_rev_s": 88.0,
+  "discs": {
+   "rings": 14, "color": "0xdcdee0", "rim_color": "0x8e9196", "opacity": 0.80, "falloff": 0.8,
+   "ghosts": 28, "ghost_color": "0x3c3e42", "ghost_opacity": 0.08, "ghost_rev_s": -0.35
+  }
+ }
+}
