@@ -202,6 +202,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanMovedInstances_test COMMAND VulkanMovedInstances_test)
     set_tests_properties(VulkanMovedInstances_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A large span's draw records, kept between frames, stay true to the entries
+    # through every kind of row edit (THREEPP_VK_SPAN_RECORDS_CHECK).
+    add_executable(VulkanSpanRecords_test VulkanSpanRecords_test.cpp)
+    target_link_libraries(VulkanSpanRecords_test PRIVATE threepp)
+    add_test(NAME VulkanSpanRecords_test COMMAND VulkanSpanRecords_test)
+    set_tests_properties(VulkanSpanRecords_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # InstancedMesh::setColorAt tints each instance (per-entry MaterialDesc
     # albedo), set before the first frame, created late, and edited in place.
     add_executable(VulkanInstanceColor_test VulkanInstanceColor_test.cpp)

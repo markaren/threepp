@@ -29,6 +29,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace threepp {
@@ -178,12 +179,16 @@ namespace threepp::vulkan::impl {
     struct DrawStats {
         uint64_t frames = 0, entries = 0, spans = 0, cachedSpans = 0, cachedRows = 0, cachedDrawn = 0,
                  otherDrawn = 0, cacheRebuildRows = 0, tlasRows = 0, tlasRewritten = 0, tlasFills = 0,
-                 tlasFullFills = 0;
+                 tlasFullFills = 0, cullWalks = 0, cullChunks = 0, cullBlocks = 0, cullRowsTested = 0,
+                 cullBoxedRows = 0, spanRecordRows = 0, spanRecordWhole = 0;
         DrawStats& operator+=(const DrawStats& o) {
             frames += o.frames; entries += o.entries; spans += o.spans; cachedSpans += o.cachedSpans;
             cachedRows += o.cachedRows; cachedDrawn += o.cachedDrawn; otherDrawn += o.otherDrawn;
             cacheRebuildRows += o.cacheRebuildRows; tlasRows += o.tlasRows; tlasRewritten += o.tlasRewritten;
             tlasFills += o.tlasFills; tlasFullFills += o.tlasFullFills;
+            cullWalks += o.cullWalks; cullChunks += o.cullChunks; cullBlocks += o.cullBlocks;
+            cullRowsTested += o.cullRowsTested; cullBoxedRows += o.cullBoxedRows;
+            spanRecordRows += o.spanRecordRows; spanRecordWhole += o.spanRecordWhole;
             return *this;
         }
     };
@@ -192,6 +197,84 @@ namespace threepp::vulkan::impl {
     // per-span draw cache (Impl::spanDrawCache_).
     struct SpanDrawPlan {
         uint32_t first, count, span;
+    };
+
+    // Per-span draw cache (buildIndirectDrawData): for a large plain
+    // instanced span, its rows' world matrices and occlusion records, kept
+    // contiguous so a frame whose span did not move builds its draw records
+    // from these and a per-span template, without reading the entries.
+    // By mesh id (a slot edit that renumbers the entries leaves a pool's
+    // instance matrices as they were); valid for the span's count, mesh
+    // world matrix and instance-matrix version, and on a version change
+    // with the rest equal only the rows meshMovedBits_ names are re-read.
+    // The occlusion half is keyed by the geometry box and cull-bit base too.
+    // A row's flag word (its LOD fade and the moving bit) and whether that
+    // fade draws at all live here as well. Every change to a row is stamped
+    // with the scene build that made it (rowStamp, and blockStamp over
+    // kSpanStampBlock rows), so that each frame slot's copy of the span's
+    // records (SpanRecordSlot) can catch up from whenever it last looked.
+    struct SpanDrawCache {
+        uint64_t lastUsed = 0;
+        uint32_t count = 0;
+        unsigned int instMatVersion = ~0u;
+        std::array<float, 16> meshWorld{};
+        std::vector<std::array<float, 16>> models;
+        std::vector<uint32_t> rowWords;// LOD fade | kInstFlagMoving
+        std::vector<uint8_t>  drawn;   // 1, or 0 for a row its fade draws with no pixel
+        std::vector<uint32_t> rowStamp, blockStamp;
+        uint32_t stamp = 0;     // the newest stamp of any row
+        uint32_t wholeStamp = 0;// every row changed then, none of rowStamp says so
+        bool     occlValid = false;
+        uint32_t occlStamp = 0;// occl made anew then
+        uint32_t occlCullBase = 0;
+        float    occlCenter[3]{}, occlHalf[3]{};
+        bool     occlBounds = false;
+        std::vector<vulkan::OcclusionCull::CullMeta> occl;
+    };
+    constexpr uint32_t kSpanStampBlockShift = 9;
+    constexpr uint32_t kSpanStampBlock      = 1u << kSpanStampBlockShift;
+
+    // One span's records in one frame slot's DrawInfo buffer, and their
+    // occlusion meta at the same index of its meta buffer: they stay at
+    // [base, base + count) from frame to frame, addressed by the commands'
+    // firstInstance, and a build writes only the rows stamped since this slot
+    // last saw the span. count 0: nothing written here yet.
+    struct SpanRecordSlot {
+        uint32_t base = 0, capacity = 0;
+        uint32_t count = 0, first = 0;// as written: first is the rows' entry index
+        uint32_t stamp = 0, occlStamp = 0;
+        bool     occlValid = false;// the meta is as written too
+        uint64_t lastUsed = 0;
+        DrawInfoGpu tmpl{};           // the record the rows were written from
+    };
+    // A frame slot's spans, by mesh id. Laid out from the buffer's start with
+    // a bump (a span outgrowing its place takes a new one, and a layout gone
+    // mostly to holes starts over); the frame's other records follow `end`.
+    struct SpanRecordPool {
+        std::unordered_map<unsigned int, SpanRecordSlot> spans;
+        uint32_t end = 0, live = 0;// past the last place; rows the places hold
+        uint32_t builds = 0;
+        // THREEPP_VK_SPAN_RECORDS_CHECK: all that was written, for the check to
+        // read (the buffers themselves are write-combined, a frame's reads a
+        // second's work).
+        std::vector<DrawInfoGpu> checkRecords;
+        std::vector<vulkan::OcclusionCull::CullMeta> checkMeta;
+    };
+
+    // What one cached span drew this build: its rows' template and its runs
+    // of drawn rows (ViewPrepScratch::spanRuns [runBegin, runEnd)).
+    struct SpanRun {
+        uint32_t row, count;
+        uint32_t bucketPos;// its first command, in the bucket
+    };
+    struct SpanEmit {
+        const SpanDrawCache* cache = nullptr;
+        SpanRecordSlot*      slot  = nullptr;// placed for the upload
+        unsigned int meshId = 0;
+        int          bucket = 0;
+        uint32_t     first = 0, count = 0, vertexCount = 0, firstVertex = 0;
+        uint32_t     runBegin = 0, runEnd = 0;
+        DrawInfoGpu  tmpl{};
     };
 
     // buildShadowDrawData's scratch: every caster once, then one command
@@ -217,6 +300,8 @@ namespace threepp::vulkan::impl {
         std::array<std::vector<vulkan::OcclusionCull::CullMeta>, 4> occl;
         std::array<std::vector<uint32_t>, 4>                        cpuPos;
         std::vector<SpanDrawPlan>                                   spanDrawPlans;
+        std::vector<SpanEmit>                                       spanEmits;
+        std::vector<SpanRun>                                        spanRuns;
         // The shadow maps' caster walk (buildShadowDrawData) and its chunk
         // bounds; the dynamic casters and each entry's span, listed by the
         // static-set hash walk (Impl::shadowStaticHash).
@@ -421,9 +506,12 @@ namespace threepp::vulkan::impl {
         // struct in gbuffer_indirect.vert: model matrix + buffer device
         // addresses + flags. Sized lazily; grows on demand. Per-view
         // because the contents are the FRUSTUM-CULLED draw list, and each
-        // camera culls differently.
+        // camera culls differently (the large spans' rows, kept from frame to
+        // frame at the front of the buffer, are there drawn or not).
         std::array<Buffer, kFramesInFlight> drawInfoBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> drawInfoBufferCapacity{};
+        // The large spans' records these buffers hold across frames.
+        std::array<SpanRecordPool, kFramesInFlight> spanRecords{};
         // Per-frame indirect command ring. Holds a contiguous array of
         // VkDrawIndirectCommand structs partitioned by cull mode (Front,
         // then Back, then Double). Counts + offsets per group recorded in

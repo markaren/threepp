@@ -356,6 +356,10 @@ namespace threepp::vulkan::impl {
         // classifies a whole chunk at a time and runs per-entry tests only
         // for chunks that straddle the frustum. min/max packed as [0..2]/[3..5].
         std::vector<std::array<float, 6>> chunkAabbs;
+        // The same over kCullBlock rows, the level under a chunk: a pool's rows
+        // hold whole map cells, so a block is a cell or a part of one where a
+        // chunk is several, and most blocks answer for all their rows.
+        std::vector<std::array<float, 6>> blockAabbs;
         // Each instance's world bounding sphere (centre, radius), derived with
         // chunkAabbs: the per-instance frustum test reads these 16 bytes
         // instead of the entry's matrix.

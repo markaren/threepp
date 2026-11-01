@@ -12,6 +12,8 @@
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 #include "threepp/renderers/vulkan/SpirvReflect.hpp"
 
+#include <bit>
+
 namespace threepp {
 
     bool VulkanRenderer::Impl::ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
@@ -84,11 +86,14 @@ namespace threepp {
         std::fprintf(stderr,
                      "[draw-stats] per frame over %llu: entries %.0f spans %.0f | cached spans %.0f rows %.0f drawn %.0f "
                      "rebuilt %.0f | other drawn %.0f | tlas rows %.0f rewritten %.0f fills %.2f full %.2f | "
-                     "geometry drains so far %llu\n",
+                     "cull walks %.2f chunks %.0f blocks %.0f rows tested %.0f boxed %.0f | "
+                     "span records written %.0f whole spans %.2f | geometry drains so far %llu\n",
                      static_cast<unsigned long long>(s.frames), s.entries / n, s.spans / n, s.cachedSpans / n,
                      s.cachedRows / n, s.cachedDrawn / n, s.cacheRebuildRows / n,
                      (double(s.otherDrawn) - double(s.cachedDrawn)) / n, s.tlasRows / n, s.tlasRewritten / n,
-                     s.tlasFills / n, s.tlasFullFills / n, static_cast<unsigned long long>(dynGeomStats_.drains));
+                     s.tlasFills / n, s.tlasFullFills / n, s.cullWalks / n, s.cullChunks / n, s.cullBlocks / n,
+                     s.cullRowsTested / n, s.cullBoxedRows / n, s.spanRecordRows / n, s.spanRecordWhole / n,
+                     static_cast<unsigned long long>(dynGeomStats_.drains));
         s = {};
     }
 
@@ -175,13 +180,13 @@ namespace threepp {
             }
             if (vc.cachedOcclActive && out.indirectTotalDraws > 0u) {
                 // Descriptor upkeep only: the records and the meta are the
-                // ones this slot already holds.
+                // ones this slot already holds (so no meta to make room for).
                 vulkan::OcclusionCull::FrameInputs oin{};
                 oin.srcCmds    = vc.indirectCmdBuffers[frame].handle;
                 oin.rasterCam  = vc.rasterCameraUbos[frame].handle;
                 oin.hizView    = occlHiz_->view();
                 oin.hizSampler = occlHiz_->sampler();
-                occl_->prepareFrame(frame, out.indirectTotalDraws, occlBitDomain_, oin);
+                occl_->prepareFrame(frame, out.indirectTotalDraws, 0u, occlBitDomain_, oin);
             }
             return;
         }
@@ -197,7 +202,7 @@ namespace threepp {
         // Where each visible ParticleField's DrawInfo landed, as (bucket,
         // position-in-bucket) — resolvable to a global index only after the
         // bucket offsets below are known.
-        struct PfSlot { const ParticleField* field; int bucket; uint32_t pos; VkCullModeFlags cull; };
+        struct PfSlot { const ParticleField* field; int bucket; uint32_t pos; uint32_t cpuIdx; VkCullModeFlags cull; };
         std::vector<PfSlot> pfSlots;
 
         // Records per bucket so far (the CPU's and the reserved GPU ranges),
@@ -388,6 +393,18 @@ namespace threepp {
                       [](const SpanDrawPlan& a, const SpanDrawPlan& b) { return a.first < b.first; });
         }
         size_t cacheNext = 0;
+        // The cached spans' records stay in this slot's DrawInfo buffer from
+        // frame to frame (SpanRecordPool): a build writes the rows that changed
+        // and only a command and an occlusion record per drawn row, the
+        // commands reaching their records through firstInstance. Not beside
+        // GPU-written records, which draw_gen.comp keeps at their commands'
+        // index. THREEPP_VK_SPAN_RECORDS=0: every record rebuilt (A/B).
+        static const bool spanRecordsOn = vulkan::env::flag("THREEPP_VK_SPAN_RECORDS", true);
+        const bool spanRecords = spanRecordsOn && !gpuDraws;
+        auto& spanEmits = vc.prep.spanEmits;
+        auto& spanRuns  = vc.prep.spanRuns;
+        spanEmits.clear();
+        spanRuns.clear();
         // One span through its cache. False: not cacheable after all (no
         // record, a LOD chain), and the per-entry loop takes it.
         const auto emitCachedSpan = [&](const SpanDrawPlan& cp) -> bool {
@@ -435,48 +452,91 @@ namespace threepp {
             const int b = isDecal ? 3 : bucketOf(wantCull);
 
             // The rows' matrices: the moved ones re-read, all of them on anything else.
-            // Only rows moved THIS frame are in meshMovedBits_: the per-row
-            // path needs the cache brought up to date last frame. The first
-            // build this frame does that, under the lock (views can build at
-            // once); the rows are read after it, when nothing writes them.
+            // Only rows moved THIS frame are in meshMovedBits_ (and rows whose
+            // flag word changed in drawRowFlagBits_): the per-row path needs
+            // the cache brought up to date last frame. The first build this
+            // frame does that, under the lock (views can build at once); the
+            // rows are read after it, when nothing writes them.
             std::unique_lock cacheLock(spanDrawCacheMutex_);
             SpanDrawCache& c = spanDrawCache_[sp.meshId];
             DrawStats& stats = drawStatsOut();
-            const bool lastFrame = c.lastUsed + 1u == sceneBuildSerial_ || c.lastUsed == sceneBuildSerial_;
+            const bool firstBuild = c.lastUsed != sceneBuildSerial_;
+            const bool lastFrame = c.lastUsed + 1u == sceneBuildSerial_ || !firstBuild;
             c.lastUsed = sceneBuildSerial_;
-            if (lastFrame && c.count == cp.count && c.meshWorld == sp.meshWorld && c.models.size() == cp.count &&
-                c.instMatVersion != sp.instMatVersion) {
-                c.instMatVersion = sp.instMatVersion;
-                for (uint32_t j = 0; j < cp.count; ++j) {
-                    const size_t i = size_t(cp.first) + j;
-                    if ((i >> 5) >= meshMovedBits_.size() || !(meshMovedBits_[i >> 5] & (1u << (i & 31u)))) continue;
-                    std::memcpy(c.models[j].data(), lastVisibleEntries_[i].worldMatrix.data(), 64);
-                    ++stats.cacheRebuildRows;
-                    if (c.occlValid && c.occlBounds) {
-                        const float* M = c.models[j].data();
-                        const float* ce = c.occlCenter;
-                        const float* ha = c.occlHalf;
-                        auto& cm = c.occl[j];
-                        const float cx = M[0]*ce[0] + M[4]*ce[1] + M[8]*ce[2] + M[12];
-                        const float cy = M[1]*ce[0] + M[5]*ce[1] + M[9]*ce[2] + M[13];
-                        const float cz = M[2]*ce[0] + M[6]*ce[1] + M[10]*ce[2] + M[14];
-                        const float hx = std::abs(M[0])*ha[0] + std::abs(M[4])*ha[1] + std::abs(M[8])*ha[2];
-                        const float hy = std::abs(M[1])*ha[0] + std::abs(M[5])*ha[1] + std::abs(M[9])*ha[2];
-                        const float hz = std::abs(M[2])*ha[0] + std::abs(M[6])*ha[1] + std::abs(M[10])*ha[2];
-                        cm.aabbMin[0] = cx - hx; cm.aabbMin[1] = cy - hy; cm.aabbMin[2] = cz - hz;
-                        cm.aabbMax[0] = cx + hx; cm.aabbMax[1] = cy + hy; cm.aabbMax[2] = cz + hz;
+            const auto stamp = static_cast<uint32_t>(sceneBuildSerial_);
+            // A row's word as the entries have it now, with whether it draws.
+            const auto readRowWord = [&](uint32_t j) {
+                const size_t i = size_t(cp.first) + j;
+                const uint32_t fade = i < entryLodFade_.size() ? entryLodFade_[i] : 0u;
+                const bool moving = i < meshMovedSticky_.size() && meshMovedSticky_[i] > 0u;
+                c.rowWords[j] = fade | (moving ? uint32_t(kInstFlagMoving) : 0u);
+                c.drawn[j] = lodFadeDrawsNone(fade) ? uint8_t{0} : uint8_t{1};
+            };
+            const auto stampRow = [&](uint32_t j) {
+                c.rowStamp[j] = stamp;
+                c.blockStamp[j >> kSpanStampBlockShift] = stamp;
+                c.stamp = stamp;
+            };
+            const bool sameRows = c.count == cp.count && c.meshWorld == sp.meshWorld && c.models.size() == cp.count;
+            if (lastFrame && sameRows) {
+                if (firstBuild) {
+                    c.instMatVersion = sp.instMatVersion;
+                    const size_t lastRow = size_t(cp.first) + cp.count - 1u;
+                    for (size_t w = cp.first >> 5; w <= (lastRow >> 5); ++w) {
+                        const uint32_t moved = w < meshMovedBits_.size() ? meshMovedBits_[w] : 0u;
+                        uint32_t bits = moved | (w < drawRowFlagBits_.size() ? drawRowFlagBits_[w] : 0u);
+                        if (w == (size_t(cp.first) >> 5)) bits &= ~0u << (cp.first & 31u);
+                        if (w == (lastRow >> 5)) bits &= ~0u >> (31u - (lastRow & 31u));
+                        for (; bits != 0u; bits &= bits - 1u) {
+                            const size_t i = (w << 5) + std::countr_zero(bits);
+                            const auto j = static_cast<uint32_t>(i - cp.first);
+                            readRowWord(j);
+                            stampRow(j);
+                            if (!(moved & (1u << (i & 31u)))) continue;
+                            std::memcpy(c.models[j].data(), lastVisibleEntries_[i].worldMatrix.data(), 64);
+                            ++stats.cacheRebuildRows;
+                            if (c.occlValid && c.occlBounds) {
+                                const float* M = c.models[j].data();
+                                const float* ce = c.occlCenter;
+                                const float* ha = c.occlHalf;
+                                auto& cm = c.occl[j];
+                                const float cx = M[0]*ce[0] + M[4]*ce[1] + M[8]*ce[2] + M[12];
+                                const float cy = M[1]*ce[0] + M[5]*ce[1] + M[9]*ce[2] + M[13];
+                                const float cz = M[2]*ce[0] + M[6]*ce[1] + M[10]*ce[2] + M[14];
+                                const float hx = std::abs(M[0])*ha[0] + std::abs(M[4])*ha[1] + std::abs(M[8])*ha[2];
+                                const float hy = std::abs(M[1])*ha[0] + std::abs(M[5])*ha[1] + std::abs(M[9])*ha[2];
+                                const float hz = std::abs(M[2])*ha[0] + std::abs(M[6])*ha[1] + std::abs(M[10])*ha[2];
+                                cm.aabbMin[0] = cx - hx; cm.aabbMin[1] = cy - hy; cm.aabbMin[2] = cz - hz;
+                                cm.aabbMax[0] = cx + hx; cm.aabbMax[1] = cy + hy; cm.aabbMax[2] = cz + hz;
+                            }
+                        }
                     }
                 }
-            } else if (c.count != cp.count || c.instMatVersion != sp.instMatVersion ||
-                c.meshWorld != sp.meshWorld || c.models.size() != cp.count) {
+            } else if (!sameRows || c.instMatVersion != sp.instMatVersion) {
                 c.count = cp.count;
                 c.instMatVersion = sp.instMatVersion;
                 c.meshWorld = sp.meshWorld;
                 c.models.resize(cp.count);
+                c.rowWords.resize(cp.count);
+                c.drawn.resize(cp.count);
+                c.rowStamp.resize(cp.count);
+                c.blockStamp.assign((cp.count + kSpanStampBlock - 1u) >> kSpanStampBlockShift, 0u);
                 stats.cacheRebuildRows += cp.count;
-                for (uint32_t j = 0; j < cp.count; ++j)
+                for (uint32_t j = 0; j < cp.count; ++j) {
                     std::memcpy(c.models[j].data(), lastVisibleEntries_[cp.first + j].worldMatrix.data(), 64);
+                    readRowWord(j);
+                }
                 c.occlValid = false;
+                c.wholeStamp = stamp;
+                c.stamp = stamp;
+            } else if (firstBuild) {
+                // Matrices as they were, but not built last frame: the flag
+                // words have had nobody watching them.
+                for (uint32_t j = 0; j < cp.count; ++j) {
+                    const uint32_t was = c.rowWords[j];
+                    readRowWord(j);
+                    if (c.rowWords[j] != was) stampRow(j);
+                }
             }
             if (wantOcclMeta) {
                 const uint32_t cullBase = occlCullBitFor(e0) - e0.instanceIndex;
@@ -506,6 +566,7 @@ namespace threepp {
                         c.occl[j] = cm;
                     }
                     c.occlValid = true;
+                    c.occlStamp = stamp;
                     c.occlCullBase = cullBase;
                     c.occlBounds = boundsValid;
                     std::memcpy(c.occlCenter, center, sizeof(center));
@@ -529,6 +590,68 @@ namespace threepp {
             tmpl.packedAttrs = rec->packedMask;
             tmpl.polygonOffset = polyOff;
             bool idsValid = false;
+            if (spanRecords) {
+                // The runs of drawn rows, eight bytes of cull and fade answers
+                // at a time; the commands and records go out with the upload.
+                SpanEmit& e = spanEmits.emplace_back();
+                e.cache  = &c;
+                e.meshId = sp.meshId;
+                e.bucket = b;
+                e.first  = cp.first;
+                e.count  = cp.count;
+                e.vertexCount = vcount;
+                e.firstVertex = vfirst;
+                e.runBegin = static_cast<uint32_t>(spanRuns.size());
+                // A view that never culled draws everything, as inView() says.
+                const uint8_t* vis  = cullBits.size() >= size_t(cp.first) + cp.count ? cullBits.data() + cp.first : c.drawn.data();
+                const uint8_t* draw = c.drawn.data();
+                constexpr uint64_t kAllDrawn = 0x0101010101010101ull;
+                uint32_t runStart = ~0u;
+                const auto endRun = [&](uint32_t j) {
+                    if (runStart == ~0u) return;
+                    spanRuns.push_back({runStart, j - runStart, bucketTotal[b]});
+                    bucketTotal[b] += j - runStart;
+                    runStart = ~0u;
+                };
+                for (uint32_t j = 0; j < cp.count;) {
+                    if (j + 8u <= cp.count) {
+                        uint64_t a, d;
+                        std::memcpy(&a, vis + j, 8);
+                        std::memcpy(&d, draw + j, 8);
+                        const uint64_t both = a & d;
+                        if (both == 0u) {
+                            endRun(j);
+                            j += 8u;
+                            continue;
+                        }
+                        if (both == kAllDrawn) {
+                            if (runStart == ~0u) runStart = j;
+                            j += 8u;
+                            continue;
+                        }
+                    }
+                    if ((vis[j] & draw[j]) != 0u) {
+                        if (runStart == ~0u) runStart = j;
+                    } else {
+                        endRun(j);
+                    }
+                    ++j;
+                }
+                endRun(cp.count);
+                e.runEnd = static_cast<uint32_t>(spanRuns.size());
+                if (e.runEnd != e.runBegin) {
+                    // Lazily, at the first drawn row, as the loop assigns them.
+                    const uint16_t classId = classIdForObject(*e0.mesh);
+                    tmpl.stableId = stableIdForObject(*e0.mesh);
+                    tmpl.flags    = matFlags | ((static_cast<uint32_t>(classId) & 0xFFu) << 8);
+                    for (uint32_t r = e.runBegin; r < e.runEnd; ++r) {
+                        drawnTriangles += uint64_t(spanRuns[r].count) * (vcount / 3u);
+                        stats.cachedDrawn += spanRuns[r].count;
+                    }
+                }
+                e.tmpl = tmpl;
+                return true;
+            }
             const VkDrawIndirectCommand cmd{vcount, 1u, vfirst, 0u};
             for (uint32_t j = 0; j < cp.count; ++j) {
                 const size_t i = size_t(cp.first) + j;
@@ -816,7 +939,8 @@ namespace threepp {
             cmd.firstInstance = 0u;// patched below to the final-position index
             cmds[b].push_back(cmd);
             if (en.isParticleField) {
-                pfSlots.push_back({static_cast<const ParticleField*>(en.mesh), b, cpuPos[b].back(), wantCull});
+                pfSlots.push_back({static_cast<const ParticleField*>(en.mesh), b, cpuPos[b].back(),
+                                   static_cast<uint32_t>(draws[b].size() - 1u), wantCull});
             }
 
             if (wantOcclMeta) {
@@ -922,11 +1046,57 @@ namespace threepp {
         profD.stop();
         THREEPP_CPUPROF("frame.F_uploadDrawInfo");
 
+        // Every cached span a place among the slot's kept records (the spans
+        // gone a while first let go of theirs). With the spans at the front,
+        // the frame's other records follow them; without any, a record and its
+        // command share an index and the whole buffer is rewritten.
+        SpanRecordPool& pool = vc.spanRecords[frame];
+        if (!spanRecords) {
+            if (pool.end != 0u) pool = {};
+        } else {
+            if ((++pool.builds & 255u) == 0u) {
+                for (auto it = pool.spans.begin(); it != pool.spans.end();) {
+                    if (sceneBuildSerial_ - it->second.lastUsed > 256u) {
+                        pool.live -= it->second.capacity;
+                        it = pool.spans.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            if (pool.end > pool.live * 2u + 65536u) {
+                pool.spans.clear();
+                pool.end = pool.live = 0u;
+            }
+            for (SpanEmit& e : spanEmits) {
+                auto [it, fresh] = pool.spans.try_emplace(e.meshId);
+                SpanRecordSlot& s = it->second;
+                if (e.count > s.capacity) {
+                    const uint32_t cap = fresh ? e.count : e.count + e.count / 2u;
+                    pool.live += cap - s.capacity;
+                    s.base = pool.end;
+                    s.capacity = cap;
+                    s.count = 0u;
+                    pool.end += cap;
+                }
+                s.lastUsed = sceneBuildSerial_;
+                e.slot = &s;
+            }
+        }
+        const uint32_t cpuBase = spanRecords ? pool.end : 0u;// where the other records start
+        uint32_t recordEnd = globalIdx;
+        if (spanRecords) {
+            recordEnd = cpuBase;
+            for (const auto& d : draws) recordEnd += static_cast<uint32_t>(d.size());
+        }
+
         // Concatenate buckets into the per-frame device buffers.
-        const VkDeviceSize drawBytes = sizeof(DrawInfoGpu) * globalIdx;
+        const VkDeviceSize drawBytes = sizeof(DrawInfoGpu) * recordEnd;
         const VkDeviceSize cmdBytes  = sizeof(VkDrawIndirectCommand) * globalIdx;
         const bool drawGrown = ensureDrawInfoCapacity(frame, drawBytes);
         ensureIndirectCmdCapacity(frame, cmdBytes);
+        // A new buffer holds nothing yet.
+        if (drawGrown) for (auto& [id, s] : pool.spans) s.count = 0u;
 
         // Occlusion culling: size the phase buffers + rewrite this fif's
         // sets if any input changed (AFTER the capacity calls above so
@@ -938,8 +1108,9 @@ namespace threepp {
             oin.rasterCam  = vc.rasterCameraUbos[frame].handle;
             oin.hizView    = occlHiz_->view();
             oin.hizSampler = occlHiz_->sampler();
-            occl_->prepareFrame(frame, globalIdx, occlBitDomain_, oin);
+            const bool metaGrown = occl_->prepareFrame(frame, globalIdx, recordEnd, occlBitDomain_, oin);
             occlMetaDst = occl_->metaPtr(frame);
+            if (metaGrown) for (auto& [id, s] : pool.spans) s.occlValid = false;
         }
 
         void* mappedDraws = nullptr;
@@ -950,6 +1121,8 @@ namespace threepp {
         uint8_t* dDst = static_cast<uint8_t*>(mappedDraws);
         uint8_t* cDst = static_cast<uint8_t*>(mappedCmds);
         uint32_t offset = 0;
+        uint32_t cpuRecord = cpuBase;// the next of the other records, with spanRecords
+        std::array<uint32_t, 4> cpuRecordBase{};
         const VkCullModeFlags cullForBucket[4] = {
                 VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE,
                 VK_CULL_MODE_NONE// decals: DecalGeometry wraps edges, don't cull
@@ -965,23 +1138,125 @@ namespace threepp {
             // order once we partition by cull mode — the VS reads
             // `draws[gl_InstanceIndex]` so the encoded index has to
             // be the FINAL position, not the bucket-order index.
-            // Copied in runs: a GPU span's reserved range splits them
-            // (draw_gen.comp fills it on the device).
+            // Copied in runs: a GPU span's reserved range or a cached span's
+            // commands split them (draw_gen.comp fills the first on the
+            // device, the loop below the second). With kept spans the records
+            // lie apart from their commands, one after the other.
+            cpuRecordBase[b] = cpuRecord;
             for (uint32_t k = 0; k < n;) {
                 uint32_t e = k + 1u;
                 while (e < n && cpuPos[b][e] == cpuPos[b][e - 1u] + 1u) ++e;
                 const uint32_t dst = offset + cpuPos[b][k];
-                for (uint32_t q = k; q < e; ++q) cmds[b][q].firstInstance = offset + cpuPos[b][q];
-                std::memcpy(dDst + size_t(dst) * sizeof(DrawInfoGpu), draws[b].data() + k,
+                const uint32_t rec = spanRecords ? cpuRecord : dst;
+                for (uint32_t q = k; q < e; ++q) cmds[b][q].firstInstance = rec + (q - k);
+                std::memcpy(dDst + size_t(rec) * sizeof(DrawInfoGpu), draws[b].data() + k,
                             size_t(e - k) * sizeof(DrawInfoGpu));
+                cpuRecord += e - k;
                 std::memcpy(cDst + size_t(dst) * sizeof(VkDrawIndirectCommand), cmds[b].data() + k,
                             size_t(e - k) * sizeof(VkDrawIndirectCommand));
                 if (occlMetaDst)
-                    std::memcpy(occlMetaDst + dst, occlMeta[b].data() + k,
+                    std::memcpy(occlMetaDst + rec, occlMeta[b].data() + k,
                                 size_t(e - k) * sizeof(vulkan::OcclusionCull::CullMeta));
                 k = e;
             }
             offset += bucketTotal[b];
+        }
+
+        // The kept spans: the rows this slot lacks, record and occlusion meta,
+        // then a command per drawn row. A span with no drawn row waits: its ids
+        // are only handed out at the first (see emitCachedSpan), and the stamps
+        // remember what it missed.
+        size_t recordsLo = size_t(cpuBase);
+        size_t recordsHi = size_t(recordEnd);
+        // THREEPP_VK_SPAN_RECORDS_CHECK: every kept row of a drawn span against
+        // what the entries say it should be now, each frame; a stale one ends
+        // the process. Reads the pool's copy of what was written.
+        static const bool spanRecordsCheck = vulkan::env::flag("THREEPP_VK_SPAN_RECORDS_CHECK");
+        if (spanRecordsCheck && spanRecords) {
+            pool.checkRecords.resize(pool.end);
+            pool.checkMeta.resize(pool.end);
+        }
+        for (const SpanEmit& e : spanEmits) {
+            if (e.runBegin == e.runEnd) continue;
+            SpanRecordSlot& s = *e.slot;
+            const SpanDrawCache& c = *e.cache;
+            auto* records = reinterpret_cast<DrawInfoGpu*>(dDst) + s.base;
+            auto* meta    = occlMetaDst ? occlMetaDst + s.base : nullptr;
+            const auto writeRow = [&](uint32_t j) {
+                DrawInfoGpu r = e.tmpl;// whole, once: `records` is write-combined memory
+                std::memcpy(r.model, c.models[j].data(), 64);
+                r.instanceCustomIndex = e.first + j;
+                r.flags = e.tmpl.flags | c.rowWords[j];
+                records[j] = r;
+                if (meta) meta[j] = c.occl[j];
+                if (spanRecordsCheck) {
+                    pool.checkRecords[s.base + j] = r;
+                    if (meta) pool.checkMeta[s.base + j] = c.occl[j];
+                }
+            };
+            DrawStats& stats = drawStatsOut();
+            uint32_t written = 0u;
+            const bool wholeRows = s.count != e.count || s.first != e.first || s.stamp < c.wholeStamp ||
+                                   std::memcmp(&s.tmpl, &e.tmpl, sizeof(DrawInfoGpu)) != 0;
+            if (wholeRows) {
+                for (uint32_t j = 0; j < e.count; ++j) writeRow(j);
+                written = e.count;
+                ++stats.spanRecordWhole;
+                s.tmpl = e.tmpl;
+            } else {
+                if (s.stamp != c.stamp) {
+                    for (uint32_t bk = 0; bk < c.blockStamp.size(); ++bk) {
+                        if (c.blockStamp[bk] <= s.stamp) continue;
+                        const uint32_t j0 = bk << kSpanStampBlockShift;
+                        const uint32_t j1 = std::min(e.count, j0 + kSpanStampBlock);
+                        for (uint32_t j = j0; j < j1; ++j) {
+                            if (c.rowStamp[j] <= s.stamp) continue;
+                            writeRow(j);
+                            ++written;
+                        }
+                    }
+                }
+                // Occlusion back on, or the boxes or bits made anew.
+                if (meta && (!s.occlValid || s.occlStamp != c.occlStamp)) {
+                    std::memcpy(meta, c.occl.data(), size_t(e.count) * sizeof(vulkan::OcclusionCull::CullMeta));
+                    written = std::max(written, 1u);
+                    if (spanRecordsCheck) std::copy(c.occl.begin(), c.occl.end(), pool.checkMeta.begin() + s.base);
+                }
+            }
+            if (written != 0u) {
+                stats.spanRecordRows += written;
+                recordsLo = std::min(recordsLo, size_t(s.base));
+                recordsHi = std::max(recordsHi, size_t(s.base) + e.count);
+            }
+            s.count = e.count;
+            s.first = e.first;
+            s.stamp = c.stamp;
+            s.occlValid = meta != nullptr;// a build without it left the rows' meta behind
+            s.occlStamp = c.occlStamp;
+            if (spanRecordsCheck) {
+                uint32_t stale = 0u;
+                for (uint32_t j = 0; j < e.count; ++j) {
+                    const size_t i = size_t(e.first) + j;
+                    DrawInfoGpu want = e.tmpl;
+                    std::memcpy(want.model, lastVisibleEntries_[i].worldMatrix.data(), 64);
+                    want.instanceCustomIndex = static_cast<uint32_t>(i);
+                    want.flags |= i < entryLodFade_.size() ? entryLodFade_[i] : 0u;
+                    if (i < meshMovedSticky_.size() && meshMovedSticky_[i] > 0u) want.flags |= kInstFlagMoving;
+                    if (std::memcmp(&want, &pool.checkRecords[s.base + j], sizeof(DrawInfoGpu)) != 0) ++stale;
+                    else if (meta && std::memcmp(&pool.checkMeta[s.base + j], &c.occl[j], sizeof(c.occl[j])) != 0) ++stale;
+                }
+                if (stale != 0u) {
+                    std::fprintf(stderr, "[span-records] mesh %u slot %u: %u of %u rows stale\n", e.meshId, frame, stale, e.count);
+                    std::abort();
+                }
+            }
+            const uint32_t groupBase = out.indirectGroups[e.bucket].offset;
+            for (uint32_t r = e.runBegin; r < e.runEnd; ++r) {
+                const SpanRun& run = spanRuns[r];
+                auto* cmd = reinterpret_cast<VkDrawIndirectCommand*>(cDst) + groupBase + run.bucketPos;
+                for (uint32_t q = 0; q < run.count; ++q)
+                    cmd[q] = VkDrawIndirectCommand{e.vertexCount, 1u, e.firstVertex, s.base + run.row + q};
+            }
         }
 
         // The GPU spans' record ranges are final too: the dispatch's input.
@@ -1023,16 +1298,21 @@ namespace threepp {
         // is not concatenated order.
         out.particleDrawSlots.reserve(pfSlots.size());
         for (const auto& s : pfSlots) {
-            out.particleDrawSlots.push_back(
-                    {s.field, out.indirectGroups[s.bucket].offset + s.pos, s.cull});
+            const uint32_t rec = spanRecords ? cpuRecordBase[s.bucket] + s.cpuIdx
+                                             : out.indirectGroups[s.bucket].offset + s.pos;
+            out.particleDrawSlots.push_back({s.field, rec, s.cull});
         }
 
-        // Bucket-offset writes above land in [0, globalIdx) of each buffer —
-        // flush exactly that; the occl meta rides its own persistently-mapped
-        // buffer, flushed through its owner.
-        flushHostWrites(ctx->allocator(), vc.drawInfoBuffers[frame].alloc, 0, drawBytes);
+        // Bucket-offset writes above land in [0, globalIdx) of the command
+        // buffer and in [recordsLo, recordsHi) of the records, the kept spans'
+        // unwritten rows left out where they can be; flush exactly that; the
+        // occl meta rides its own persistently-mapped buffer, flushed through
+        // its owner.
+        flushHostWrites(ctx->allocator(), vc.drawInfoBuffers[frame].alloc, sizeof(DrawInfoGpu) * recordsLo,
+                        sizeof(DrawInfoGpu) * (recordsHi - recordsLo));
         flushHostWrites(ctx->allocator(), vc.indirectCmdBuffers[frame].alloc, 0, cmdBytes);
-        if (occlMetaDst) occl_->flushMeta(frame, globalIdx);
+        if (occlMetaDst)
+            occl_->flushMeta(frame, static_cast<uint32_t>(recordsLo), static_cast<uint32_t>(recordsHi - recordsLo));
         vmaUnmapMemory(ctx->allocator(), vc.indirectCmdBuffers[frame].alloc);
         vmaUnmapMemory(ctx->allocator(), vc.drawInfoBuffers[frame].alloc);
 

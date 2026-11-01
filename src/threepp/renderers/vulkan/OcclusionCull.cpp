@@ -205,9 +205,9 @@ namespace threepp::vulkan {
         cullSets_.assign(all.begin() + framesInFlight_, all.end());
     }
 
-    void OcclusionCull::flushMeta(uint32_t frame, uint32_t drawCount) {
+    void OcclusionCull::flushMeta(uint32_t frame, uint32_t first, uint32_t count) {
         flushHostWrites(ctx_.allocator(), metaBufs_[frame].alloc,
-                        0, VkDeviceSize(drawCount) * sizeof(CullMeta));
+                        VkDeviceSize(first) * sizeof(CullMeta), VkDeviceSize(count) * sizeof(CullMeta));
     }
 
     void OcclusionCull::retireBuffer(Buffer& b) {
@@ -226,7 +226,7 @@ namespace threepp::vulkan {
         }
     }
 
-    void OcclusionCull::ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t bitDomain) {
+    bool OcclusionCull::ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t metaCount, uint32_t bitDomain) {
         const uint32_t needed = std::max(drawCount, 1u);
 
         // Per-instance visibility bits — grow with the cull-bit allocator's
@@ -246,8 +246,9 @@ namespace threepp::vulkan {
         }
 
         // Per-frame meta buffer (host-mapped, sequential writes).
-        const VkDeviceSize metaBytes = VkDeviceSize(needed) * sizeof(CullMeta);
-        if (metaBufs_[frame].size < metaBytes) {
+        const VkDeviceSize metaBytes = VkDeviceSize(std::max(metaCount, 1u)) * sizeof(CullMeta);
+        const bool metaGrown = metaBufs_[frame].size < metaBytes;
+        if (metaGrown) {
             destroyBuffer(ctx_.allocator(), metaBufs_[frame]);
             const VkDeviceSize cap = std::max<VkDeviceSize>(metaBytes * 2, 256 * sizeof(CullMeta));
             metaBufs_[frame] = createBuffer(ctx_.allocator(), ctx_.device(), cap,
@@ -275,6 +276,7 @@ namespace threepp::vulkan {
                                    VMA_MEMORY_USAGE_AUTO);
             capacity_ = static_cast<uint32_t>(cap / kCmdStride);
         }
+        return metaGrown;
     }
 
     void OcclusionCull::rewriteSets(uint32_t frame, const FrameInputs& in) {
@@ -312,10 +314,11 @@ namespace threepp::vulkan {
                  VK_IMAGE_LAYOUT_GENERAL);
     }
 
-    void OcclusionCull::prepareFrame(uint32_t frame, uint32_t drawCount, uint32_t bitDomain,
+    bool OcclusionCull::prepareFrame(uint32_t frame, uint32_t drawCount, uint32_t metaCount, uint32_t bitDomain,
                                      const FrameInputs& in) {
-        ensureCapacity(frame, drawCount, bitDomain);
+        const bool metaGrown = ensureCapacity(frame, drawCount, metaCount, bitDomain);
         rewriteSets(frame, in);
+        return metaGrown;
     }
 
     void OcclusionCull::recordFilter(VkCommandBuffer cb, uint32_t frame, uint32_t drawCount) {

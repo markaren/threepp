@@ -72,31 +72,35 @@ namespace threepp::vulkan {
         OcclusionCull(const OcclusionCull&) = delete;
         OcclusionCull& operator=(const OcclusionCull&) = delete;
 
-        // Grow the per-frame meta buffer + the shared phase buffers to hold
-        // `drawCount` records and the visBits store to hold `bitDomain` bits
-        // (the cull-bit allocator's high-water mark), then rewrite this
-        // frame's descriptor sets (safe: the frame's fence retired this
-        // fif's prior use). EVERY call rewrites them, on purpose: see
-        // rewriteSets. Call BEFORE filling metaPtr each frame. A grown visBits buffer is re-armed ALL-VISIBLE inside
-        // the next recordFilter (the fill needs a command buffer) — one
-        // conservative frame, never a hole.
+        // Grow the shared phase buffers to hold `drawCount` records, this
+        // frame's meta buffer to hold `metaCount` (a command reads the meta at
+        // its firstInstance, so this is the DrawInfo record count, which the
+        // caller's kept records can make larger than drawCount) and the visBits
+        // store to hold `bitDomain` bits (the cull-bit allocator's high-water
+        // mark), then rewrite this frame's descriptor sets (safe: the frame's
+        // fence retired this fif's prior use). EVERY call rewrites them, on
+        // purpose: see rewriteSets. Call BEFORE filling metaPtr each frame.
+        // A grown visBits buffer is re-armed ALL-VISIBLE inside the next
+        // recordFilter (the fill needs a command buffer) — one conservative
+        // frame, never a hole. True: this frame's meta buffer is new, and
+        // holds nothing the last frames wrote.
         struct FrameInputs {
             VkBuffer    srcCmds   = VK_NULL_HANDLE;// CPU-built indirect records
             VkBuffer    rasterCam = VK_NULL_HANDLE;// jittered-VP UBO
             VkImageView hizView   = VK_NULL_HANDLE;// farthest pyramid (all mips)
             VkSampler   hizSampler = VK_NULL_HANDLE;
         };
-        void prepareFrame(uint32_t frame, uint32_t drawCount, uint32_t bitDomain,
+        bool prepareFrame(uint32_t frame, uint32_t drawCount, uint32_t metaCount, uint32_t bitDomain,
                           const FrameInputs& in);
 
         // Persistently-mapped CullMeta array for this frame (valid after
-        // prepareFrame; capacity >= drawCount).
+        // prepareFrame; capacity >= metaCount).
         [[nodiscard]] CullMeta* metaPtr(uint32_t frame) { return metaPtrs_[frame]; }
 
-        // Flush the first `drawCount` records written through metaPtr — call
-        // once after the frame's write batch (non-coherent-heap portability;
-        // no-op on coherent memory).
-        void flushMeta(uint32_t frame, uint32_t drawCount);
+        // Flush the records [first, first + count) written through metaPtr —
+        // call once after the frame's write batch (non-coherent-heap
+        // portability; no-op on coherent memory).
+        void flushMeta(uint32_t frame, uint32_t first, uint32_t count);
 
         // Phase-1 filter dispatch. Leading barrier: prior frames' indirect
         // reads + this frame's host meta writes → compute.
@@ -151,7 +155,7 @@ namespace threepp::vulkan {
         // (deferred until its last in-flight frame's fence signals) or, if no
         // callback was wired, fall back to a full device drain + destroy.
         void retireBuffer(Buffer& b);
-        void ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t bitDomain);
+        bool ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t metaCount, uint32_t bitDomain);
         // Unconditional. This used to skip the writes when every handle
         // compared equal to the last ones written, and a handle VALUE is not
         // an identity: a buffer destroyed and recreated (the caller's indirect

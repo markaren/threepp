@@ -7,11 +7,17 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cfloat>
 #include <limits>
 #include <typeindex>
 #include <utility>
 #include <unordered_map>
+
+#if !defined(THREEPP_NO_SIMD) && (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2))
+#define THREEPP_CULL_SSE2
+#include <emmintrin.h>
+#endif
 
 namespace threepp {
 
@@ -1392,19 +1398,22 @@ bool VulkanRenderer::Impl::refreshSpanCullBounds(EntrySpan& sp) {
                     sp.aabbMin[0] = cx - hx; sp.aabbMin[1] = cy - hy; sp.aabbMin[2] = cz - hz;
                     sp.aabbMax[0] = cx + hx; sp.aabbMax[1] = cy + hy; sp.aabbMax[2] = cz + hz;
                 } else {
-                    // Chunked accumulation: one AABB per kCullChunk-entry
+                    // Chunked accumulation: one AABB per kCullBlock-entry
                     // run (union of world sphere centers dilated by
-                    // radius x chunk max scale) + the span AABB as the
-                    // union of the chunks.
-                    constexpr uint32_t kCullChunk = 512;
+                    // radius x block max scale), one per kCullChunk-entry
+                    // run as the union of its blocks, and the span AABB as
+                    // the union of the chunks.
                     const uint32_t nChunks = (sp.count + kCullChunk - 1u) / kCullChunk;
-                    sp.chunkAabbs.resize(nChunks);
+                    const uint32_t nBlocks = (sp.count + kCullBlock - 1u) / kCullBlock;
+                    drawStatsOut().cullBoxedRows += sp.count;
+                    sp.chunkAabbs.assign(nChunks, {FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX});
+                    sp.blockAabbs.resize(nBlocks);
                     sp.cullSpheres.resize(sp.count);
                     float smn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
                     float smx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
-                    for (uint32_t ch = 0; ch < nChunks; ++ch) {
-                        const uint32_t j0 = ch * kCullChunk;
-                        const uint32_t j1 = std::min(sp.count, j0 + kCullChunk);
+                    for (uint32_t bk = 0; bk < nBlocks; ++bk) {
+                        const uint32_t j0 = bk * kCullBlock;
+                        const uint32_t j1 = std::min(sp.count, j0 + kCullBlock);
                         float mn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
                         float mx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
                         float maxScaleSq = 0.f;
@@ -1424,12 +1433,15 @@ bool VulkanRenderer::Impl::refreshSpanCullBounds(EntrySpan& sp) {
                             sp.cullSpheres[j] = {cx, cy, cz, sp.localRadius * std::sqrt(sMax)};
                         }
                         const float r = sp.localRadius * std::sqrt(maxScaleSq);
-                        auto& cb = sp.chunkAabbs[ch];
+                        auto& bb = sp.blockAabbs[bk];
+                        auto& cb = sp.chunkAabbs[bk * kCullBlock / kCullChunk];
                         for (int k = 0; k < 3; ++k) {
-                            cb[k]     = mn[k] - r;
-                            cb[k + 3] = mx[k] + r;
-                            smn[k] = std::min(smn[k], cb[k]);
-                            smx[k] = std::max(smx[k], cb[k + 3]);
+                            bb[k]     = mn[k] - r;
+                            bb[k + 3] = mx[k] + r;
+                            cb[k]     = std::min(cb[k], bb[k]);
+                            cb[k + 3] = std::max(cb[k + 3], bb[k + 3]);
+                            smn[k] = std::min(smn[k], bb[k]);
+                            smx[k] = std::max(smx[k], bb[k + 3]);
                         }
                     }
                     for (int k = 0; k < 3; ++k) { sp.aabbMin[k] = smn[k]; sp.aabbMax[k] = smx[k]; }
@@ -1493,12 +1505,44 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             // from this frame's planes; here it keeps its span-level answer.
             const bool gpuCull = drawGenCullsOnGpu();
             if (!cullWouldWalk(vp, gpuCull)) return;
+            DrawStats& stats = drawStatsOut();
+            ++stats.cullWalks;
             cull.assign(lastVisibleEntries_.size(), uint8_t{1});
             Frustum frustum;
             frustum.setFromProjectionMatrix(vp);
             const auto& planes = frustum.planes();
             auto& entries = lastVisibleEntries_;
             bool anyGpuCulled = false;
+            // A box against the planes `mask` names: 0 fully outside one of
+            // them, 2 inside them all, else 1 with `mask` left naming the ones
+            // it straddles, the only planes that can reject anything in it.
+            float pl[6][4];
+            for (int k = 0; k < 6; ++k) {
+                pl[k][0] = planes[k].normal.x;
+                pl[k][1] = planes[k].normal.y;
+                pl[k][2] = planes[k].normal.z;
+                pl[k][3] = planes[k].constant;
+            }
+            const auto classify = [&pl](const float* mn, const float* mx, uint32_t& mask) {
+                uint32_t straddled = 0u;
+                for (uint32_t m = mask; m != 0u; m &= m - 1u) {
+                    const int k = std::countr_zero(m);
+                    const float* P = pl[k];
+                    // p-vertex (corner at max signed distance) below the plane
+                    // ⇒ the whole box is outside.
+                    const float px = P[0] > 0 ? mx[0] : mn[0];
+                    const float py = P[1] > 0 ? mx[1] : mn[1];
+                    const float pz = P[2] > 0 ? mx[2] : mn[2];
+                    if (P[0]*px + P[1]*py + P[2]*pz + P[3] < 0) return 0;
+                    // n-vertex below ⇒ the box straddles this plane.
+                    const float qx = P[0] > 0 ? mn[0] : mx[0];
+                    const float qy = P[1] > 0 ? mn[1] : mx[1];
+                    const float qz = P[2] > 0 ? mn[2] : mx[2];
+                    if (P[0]*qx + P[1]*qy + P[2]*qz + P[3] < 0) straddled |= 1u << k;
+                }
+                mask = straddled;
+                return straddled != 0u ? 1 : 2;
+            };
 
             // Per SPAN. The old per-entry loop paid a shared_ptr geometry()
             // fetch plus an 8-corner Box3::applyMatrix4 (with per-point
@@ -1563,21 +1607,8 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                 if (!refreshSpanCullBounds(sp)) continue;
                 // Span-level classify: 0 = fully outside, 2 = fully inside,
                 // 1 = straddles (per-entry tests decide).
-                int cls = 2;
-                for (const auto& plane : planes) {
-                    const auto& n = plane.normal;
-                    // p-vertex (corner at max signed distance) below the plane
-                    // ⇒ the whole box is outside.
-                    const float px = n.x > 0 ? sp.aabbMax[0] : sp.aabbMin[0];
-                    const float py = n.y > 0 ? sp.aabbMax[1] : sp.aabbMin[1];
-                    const float pz = n.z > 0 ? sp.aabbMax[2] : sp.aabbMin[2];
-                    if (n.x*px + n.y*py + n.z*pz + plane.constant < 0) { cls = 0; break; }
-                    // n-vertex below ⇒ the box straddles this plane.
-                    const float qx = n.x > 0 ? sp.aabbMin[0] : sp.aabbMax[0];
-                    const float qy = n.y > 0 ? sp.aabbMin[1] : sp.aabbMax[1];
-                    const float qz = n.z > 0 ? sp.aabbMin[2] : sp.aabbMax[2];
-                    if (n.x*qx + n.y*qy + n.z*qz + plane.constant < 0) cls = 1;
-                }
+                uint32_t spanPlanes = 0x3Fu;
+                const int cls = classify(sp.aabbMin, sp.aabbMax, spanPlanes);
                 if (cls == 0) {
                     std::fill(cull.begin() + sp.first, cull.begin() + sp.first + sp.count, uint8_t{0});
                     continue;
@@ -1588,41 +1619,78 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                     anyGpuCulled = true;
                     continue;
                 }
-                // Straddling instanced span: classify chunk AABBs first, then
-                // per-entry world-sphere tests only for straddling chunks.
-                constexpr uint32_t kCullChunk = 512;
+                // Straddling instanced span: classify chunk AABBs first, the
+                // blocks of a straddling chunk next, and per-entry world-sphere
+                // tests only for straddling blocks, against the planes they
+                // straddle (a box inside a plane has every row inside it).
                 for (uint32_t ch = 0; ch < sp.chunkAabbs.size(); ++ch) {
                     const auto& cb = sp.chunkAabbs[ch];
-                    int ccls = 2;
-                    for (const auto& plane : planes) {
-                        const auto& n = plane.normal;
-                        const float px = n.x > 0 ? cb[3] : cb[0];
-                        const float py = n.y > 0 ? cb[4] : cb[1];
-                        const float pz = n.z > 0 ? cb[5] : cb[2];
-                        if (n.x*px + n.y*py + n.z*pz + plane.constant < 0) { ccls = 0; break; }
-                        const float qx = n.x > 0 ? cb[0] : cb[3];
-                        const float qy = n.y > 0 ? cb[1] : cb[4];
-                        const float qz = n.z > 0 ? cb[2] : cb[5];
-                        if (n.x*qx + n.y*qy + n.z*qz + plane.constant < 0) ccls = 1;
-                    }
+                    uint32_t chunkPlanes = spanPlanes;
+                    const int ccls = classify(cb.data(), cb.data() + 3, chunkPlanes);
                     const uint32_t j0 = ch * kCullChunk;
                     const uint32_t j1 = std::min(sp.count, j0 + kCullChunk);
+                    ++stats.cullChunks;
                     if (ccls == 0) {
                         std::fill(cull.begin() + sp.first + j0, cull.begin() + sp.first + j1, uint8_t{0});
                         continue;
                     }
                     if (ccls == 2) continue;// whole chunk stays visible
-                    for (uint32_t j = j0; j < j1; ++j) {
-                        const size_t ci = size_t(sp.first) + j;
-                        // The world sphere the AABB pass derived (EntrySpan::cullSpheres).
-                        const auto& s = sp.cullSpheres[j];
-                        const float cx = s[0], cy = s[1], cz = s[2], r = s[3];
-                        uint8_t vis = 1;
-                        for (const auto& plane : planes) {
-                            const auto& n = plane.normal;
-                            if (n.x*cx + n.y*cy + n.z*cz + plane.constant < -r) { vis = 0; break; }
+                    for (uint32_t b0 = j0; b0 < j1; b0 += kCullBlock) {
+                        const auto& bb = sp.blockAabbs[b0 / kCullBlock];
+                        uint32_t blockPlanes = chunkPlanes;
+                        const int bcls = classify(bb.data(), bb.data() + 3, blockPlanes);
+                        const uint32_t b1 = std::min(sp.count, b0 + kCullBlock);
+                        ++stats.cullBlocks;
+                        if (bcls == 0) {
+                            std::fill(cull.begin() + sp.first + b0, cull.begin() + sp.first + b1, uint8_t{0});
+                            continue;
                         }
-                        cull[ci] = vis;
+                        if (bcls == 2) continue;// whole block stays visible
+                        stats.cullRowsTested += b1 - b0;
+                        int rowPlanes[6];
+                        int nPlanes = 0;
+                        for (uint32_t m = blockPlanes; m != 0u; m &= m - 1u) rowPlanes[nPlanes++] = std::countr_zero(m);
+                        uint32_t j = b0;
+#ifdef THREEPP_CULL_SSE2
+                        // Four rows at once and no branch on the answer: which
+                        // side of a straddled plane a row falls on is a coin
+                        // toss, and the mispredictions were most of this loop.
+                        // The same sums in the same order as the scalar test.
+                        uint8_t* rowOut = cull.data() + sp.first;
+                        for (; j + 4u <= b1; j += 4u) {
+                            const float* s = sp.cullSpheres[j].data();
+                            __m128 cx = _mm_loadu_ps(s), cy = _mm_loadu_ps(s + 4);
+                            __m128 cz = _mm_loadu_ps(s + 8), r = _mm_loadu_ps(s + 12);
+                            _MM_TRANSPOSE4_PS(cx, cy, cz, r);
+                            const __m128 negR = _mm_sub_ps(_mm_setzero_ps(), r);
+                            __m128 keep = _mm_castsi128_ps(_mm_set1_epi32(-1));
+                            for (int k = 0; k < nPlanes; ++k) {
+                                const float* P = pl[rowPlanes[k]];
+                                const __m128 d = _mm_add_ps(
+                                        _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(P[0]), cx), _mm_mul_ps(_mm_set1_ps(P[1]), cy)),
+                                                   _mm_mul_ps(_mm_set1_ps(P[2]), cz)),
+                                        _mm_set1_ps(P[3]));
+                                keep = _mm_and_ps(keep, _mm_cmpnlt_ps(d, negR));
+                            }
+                            const int bits = _mm_movemask_ps(keep);
+                            rowOut[j]      = static_cast<uint8_t>(bits & 1);
+                            rowOut[j + 1u] = static_cast<uint8_t>((bits >> 1) & 1);
+                            rowOut[j + 2u] = static_cast<uint8_t>((bits >> 2) & 1);
+                            rowOut[j + 3u] = static_cast<uint8_t>((bits >> 3) & 1);
+                        }
+#endif
+                        for (; j < b1; ++j) {
+                            const size_t ci = size_t(sp.first) + j;
+                            // The world sphere the AABB pass derived (EntrySpan::cullSpheres).
+                            const auto& s = sp.cullSpheres[j];
+                            const float cx = s[0], cy = s[1], cz = s[2], r = s[3];
+                            uint8_t vis = 1;
+                            for (int k = 0; k < nPlanes; ++k) {
+                                const float* P = pl[rowPlanes[k]];
+                                if (P[0]*cx + P[1]*cy + P[2]*cz + P[3] < -r) { vis = 0; break; }
+                            }
+                            cull[ci] = vis;
+                        }
                     }
                 }
             }
@@ -1695,6 +1763,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             refreshDirtyMaterialTextures();
 
             std::fill(meshMovedBits_.begin(), meshMovedBits_.end(), 0u);
+            std::fill(drawRowFlagBits_.begin(), drawRowFlagBits_.end(), 0u);
             hiddenFlippedThisFrame_ = false;
             slotsEditedThisFrame_ = false;
 
@@ -3620,7 +3689,47 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (classifyCutoutFar(rayCamPos)) instClassChanged = true;
                     profCutout.stop();
                     if (rayShadowChanged) instClassChanged = true;
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged) {
+                    const bool tlasRowsStale = !matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged;
+                    if (tlasRowsStale && !ctx->rayQuerySupported()) {
+                        // No ray query: no TLAS, so no instances to fill. The
+                        // fill's other duty stays, the GeometryDescs following
+                        // the level an entry draws (see the fill below): only
+                        // when a level or a chain changed (every such change
+                        // raises lodChangedThisFrame_) or a geometry did, and
+                        // only in a span whose LOD state did change.
+                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
+                        if (lodChangedThisFrame_ || geomDirtyAny) for (auto& sp : entrySpans_) {
+                            const MeshEntry& e0 = entries[sp.first];
+                            if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isTet || e0.isMorphed) continue;
+                            const BufferGeometry* geomKey = e0.mesh->geometry().get();
+                            auto it = blasCache.find(geomKey);
+                            if (it == blasCache.end()) continue;
+                            const BlasRecord* rec = it->second.get();
+                            const bool perEntryLod = !rec->lodLevels.empty();
+                            const LodGeomSel lodSel0 = selectLodGeom(*rec, 0);
+                            // What the span's rows are patched from, a word at a time.
+                            uint64_t sig = 1469598103934665603ull;
+                            const auto mixWord = [&sig](uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
+                            mixWord((uint64_t(sp.first) << 32) | sp.count);
+                            mixWord(reinterpret_cast<uintptr_t>(rec));
+                            mixWord(lodSel0.indexAddress);
+                            mixWord(rec->lodLevels.size());
+                            mixWord(perEntryLod ? lodLevelVersion_ : 0u);
+                            if (sig == sp.tlasSig) continue;
+                            sp.tlasSig = sig;
+                            for (uint32_t j = 0; j < sp.count; ++j) {
+                                const size_t i = size_t(sp.first) + j;
+                                if (i >= geomDescsCached_.size()) break;
+                                auto& gd = geomDescsCached_[i];
+                                const auto sel = perEntryLod ? selectLodGeom(*rec, entries[i].lodLevel) : lodSel0;
+                                if (gd.indexAddress != sel.indexAddress || geomFlag(gd, kGeomFlagIndexed) != sel.indexed) {
+                                    gd.indexAddress = sel.indexAddress;
+                                    setGeomFlag(gd, kGeomFlagIndexed, sel.indexed);
+                                    markGeomDescsDirty(static_cast<uint32_t>(i));
+                                }
+                            }
+                        }
+                    } else if (tlasRowsStale) {
                         THREEPP_CPUPROF("scene.7_tlasRefitFill");
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
@@ -5627,6 +5736,7 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                             markTlasRowDirty(i);
                         }
                         entryLodFade_[i] = w;
+                        markDrawRowFlags(i);
                     }
                     any = any || w != 0u;
                 }

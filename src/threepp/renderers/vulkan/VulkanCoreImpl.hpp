@@ -1155,6 +1155,14 @@ namespace threepp {
         // ground it vacated). Host-side only; see the stamping loop in
         // VulkanCoreFrame.cpp.
         std::vector<uint32_t> meshMovedSticky_;
+        // Entries whose flag word in the draw records changed this frame, a
+        // bit each like meshMovedBits_ and cleared with it: the LOD fades'
+        // refresh and the sticky walk mark them (SpanDrawCache::rowWords).
+        std::vector<uint32_t> drawRowFlagBits_;
+        void markDrawRowFlags(size_t i) {
+            if ((i >> 5) >= drawRowFlagBits_.size()) drawRowFlagBits_.resize((i >> 5) + 1u, 0u);
+            drawRowFlagBits_[i >> 5] |= 1u << (i & 31u);
+        }
 
         // Definition moved to VulkanSceneTypes.hpp.
         using MeshEntry = vulkan::impl::MeshEntry;
@@ -4466,6 +4474,9 @@ namespace threepp {
         // A span's world bounds for the cull, derived when cleared; false when
         // it has none (VulkanCoreScene.cpp).
         bool refreshSpanCullBounds(EntrySpan& sp);
+        // The rows a span's cull boxes cover (EntrySpan::chunkAabbs, blockAabbs).
+        static constexpr uint32_t kCullChunk = 512;
+        static constexpr uint32_t kCullBlock = 64;
         // Every span a cull walk would box, boxed now, ahead of culls and
         // shadow fits that run at once.
         void boxSpansForCull();
@@ -5142,27 +5153,8 @@ namespace threepp {
 
         // The frame prep's per-frame scratch (buildIndirectDrawData's bucket
         // vectors among it) is the view's own: ViewContext::prep.
-        // Per-span draw cache (buildIndirectDrawData): for a large plain
-        // instanced span, its rows' world matrices and occlusion records, kept
-        // contiguous so a frame whose span did not move builds its draw records
-        // from these and a per-span template, without reading the entries.
-        // By mesh id (a slot edit that renumbers the entries leaves a pool's
-        // instance matrices as they were); valid for the span's count, mesh
-        // world matrix and instance-matrix version, and on a version change
-        // with the rest equal only the rows meshMovedBits_ names are re-read.
-        // The occlusion half is keyed by the geometry box and cull-bit base too.
-        struct SpanDrawCache {
-            uint64_t lastUsed = 0;
-            uint32_t count = 0;
-            unsigned int instMatVersion = ~0u;
-            std::array<float, 16> meshWorld{};
-            std::vector<std::array<float, 16>> models;
-            bool     occlValid = false;
-            uint32_t occlCullBase = 0;
-            float    occlCenter[3]{}, occlHalf[3]{};
-            bool     occlBounds = false;
-            std::vector<vulkan::OcclusionCull::CullMeta> occl;
-        };
+        // Definition moved to VulkanViewContext.hpp.
+        using SpanDrawCache = vulkan::impl::SpanDrawCache;
         // Every view's build reads it, and the first this frame brings a span
         // up to date: under spanDrawCacheMutex_, the map and that refresh, as
         // views can build at once (THREEPP_VK_CPU_VIEWS); a span's rows are
@@ -5172,7 +5164,13 @@ namespace threepp {
         uint64_t spanDrawCacheFrame_ = 0;
         uint64_t sceneBuildSerial_ = 0;// ensureSceneBuilt calls: meshMovedBits_ holds one call's moves
         // Definition moved to VulkanViewContext.hpp.
-        using SpanDrawPlan = vulkan::impl::SpanDrawPlan;
+        using SpanDrawPlan   = vulkan::impl::SpanDrawPlan;
+        using SpanEmit       = vulkan::impl::SpanEmit;
+        using SpanRun        = vulkan::impl::SpanRun;
+        using SpanRecordSlot = vulkan::impl::SpanRecordSlot;
+        using SpanRecordPool = vulkan::impl::SpanRecordPool;
+        static constexpr uint32_t kSpanStampBlockShift = vulkan::impl::kSpanStampBlockShift;
+        static constexpr uint32_t kSpanStampBlock      = vulkan::impl::kSpanStampBlock;
         // Spans this short take the per-entry path (their entries are few).
         static constexpr uint32_t kSpanDrawCacheMinRows = 64;
 

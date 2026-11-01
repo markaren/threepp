@@ -1112,6 +1112,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                             // enough set promotes itself back to whole-array inside
                             // DescDirtyRanges::mark.
                             markGeomDescsDirty(static_cast<uint32_t>(i));
+                            markDrawRowFlags(i);
                             changed = true;
                         }
                     }

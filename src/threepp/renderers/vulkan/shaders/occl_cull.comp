@@ -119,8 +119,11 @@ void main() {
     if (i >= pc.drawCount) return;
 
     DrawCmd cmd = srcCmds[i];
-    const uint cullBit  = floatBitsToUint(meta[i].aabbMin.w);
-    const bool alwaysOn = (floatBitsToUint(meta[i].aabbMax.w) & 1u) != 0u;
+    // The meta sits with the draw's DrawInfo record, not its command: a large
+    // span keeps both from frame to frame while its commands are compacted.
+    const uint m = cmd.firstInstance;
+    const uint cullBit  = floatBitsToUint(meta[m].aabbMin.w);
+    const bool alwaysOn = (floatBitsToUint(meta[m].aabbMax.w) & 1u) != 0u;
 
     if (pc.mode == 0u) {
         // Phase 1: draw what was visible last frame (+ always-draw).
@@ -132,7 +135,7 @@ void main() {
     // Phase 2: test everything against the phase-1 farthest-HiZ; draw only
     // what phase 1 SKIPPED but is actually visible; refresh visBits.
     const bool wasVisible = alwaysOn || bitGet(cullBit);
-    const bool visible    = alwaysOn || hizVisible(meta[i].aabbMin.xyz, meta[i].aabbMax.xyz);
+    const bool visible    = alwaysOn || hizVisible(meta[m].aabbMin.xyz, meta[m].aabbMax.xyz);
     if (wasVisible || !visible) cmd.instanceCount = 0u;// already drawn, or hidden
     dstCmds[i] = cmd;
     bitSet(cullBit, visible);
