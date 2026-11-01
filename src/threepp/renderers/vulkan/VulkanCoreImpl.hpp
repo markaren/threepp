@@ -1387,6 +1387,7 @@ namespace threepp {
         bool     normalMapToksvig_ = true;
         bool     stochasticTilingIntegerHash_ = false;// setStochasticTilingIntegerHash
         bool     overlayColorGrade_ = false;          // setOverlayColorGrade
+        bool     overlayDepthFromGbuffer_ = false;    // setOverlayDepthFromGbuffer
         // This view's white balance and colour grade for the overlay passes
         // (OverlayGradeGpu), from its PostComposite; zero flags when the
         // switch is off or the view grades nothing.
@@ -3164,7 +3165,7 @@ namespace threepp {
         // depth and touches no entry (overlayDepthImportsGbuffer).
         [[nodiscard]] bool drawGenCullsOnGpu() const {
             return !view().secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
-                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_ && !sceneHasOverlayMeshes();
+                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_ && !overlayDepthNeedsSceneDraw();
         }
         void recordDrawGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyDrawGen(VulkanRenderer::DrawGenCheck& out);
@@ -3364,7 +3365,24 @@ namespace threepp {
         // sprites — the jitter-exact depth it buys matters for hard-edged
         // wireframes and lines, not for a soft sprite drawn outside TAA.
         [[nodiscard]] bool overlayDepthImportsGbuffer() const {
-            return overlayDepthImportPipeline_ != VK_NULL_HANDLE && !sceneHasOverlayMeshes();
+            return overlayDepthImportPipeline_ != VK_NULL_HANDLE && !overlayDepthNeedsSceneDraw();
+        }
+        // The overlay content for which the prepass must draw the scene itself.
+        // By default any overlay mesh, line or world sprite. With
+        // setOverlayDepthFromGbuffer the import serves them all but lines and
+        // wireframe materials: those sit ON a surface, and against the
+        // resampled (render-scale, jittered) depth they would flicker in and
+        // out of it; a pane or a sprite in front of the scene does not.
+        bool overlayDepthNeedsSceneDraw() const {
+            if (!overlayDepthFromGbuffer_) return sceneHasOverlayMeshes();
+            if (!lastVisibleLines_.empty()) return true;
+            for (const auto& sp : entrySpans_) {
+                const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+                if (!e0.isOverlay || e0.isParticle || !e0.mesh) continue;
+                const auto mat = e0.mesh->material();
+                if (auto* wf = dynamic_cast<const MaterialWithWireframe*>(mat.get()); wf && wf->wireframe) return true;
+            }
+            return false;
         }
         // G-buffer debug-view mode: blit one G-buffer channel onto the
         // swapchain instead of running the deferred shade. Lets us see the

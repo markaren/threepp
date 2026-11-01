@@ -1911,6 +1911,16 @@ namespace threepp_py {
                               "(set_white_balance, set_color_grade) as the frame does, so a sprite lands where a "
                               "graded surface colour would instead of flatter and greyer. Off by default; "
                               "changes nothing without a white balance or grade.")
+                .def_property("overlay_depth_from_gbuffer",
+                              [](PyVulkanRenderer& r) { return r.native().overlayDepthFromGbuffer(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setOverlayDepthFromGbuffer(v); },
+                              "The depth the overlay passes (world sprites, overlay-layer and unlit transparent "
+                              "meshes) test against comes from the G-buffer's depth, resampled by one fullscreen "
+                              "triangle, instead of a second rasterization of the whole scene at display resolution "
+                              "(one draw per visible entry: 1.1 ms of CPU and 0.95 ms of GPU a frame on a 265k-instance "
+                              "forest). The resampled depth is at render scale and TAA-jittered, so an overlay drawn on "
+                              "a surface can flicker against it: a scene with lines or wireframe materials keeps the "
+                              "drawn depth regardless. Off by default.")
                 .def_property("stochastic_tiling_integer_hash",
                               [](PyVulkanRenderer& r) { return r.native().stochasticTilingIntegerHash(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setStochasticTilingIntegerHash(v); },

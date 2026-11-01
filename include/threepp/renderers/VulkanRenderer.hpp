@@ -773,6 +773,21 @@ namespace threepp {
         void setOverlayColorGrade(bool enabled);
         [[nodiscard]] bool overlayColorGrade() const;
 
+        // The overlay passes (world sprites, overlay-layer and unlit transparent
+        // meshes, lines, wireframes) depth-test against a depth buffer of their
+        // own at display resolution. By default the scene is rasterized a second
+        // time to fill it, one draw per visible entry: on a forest of 265k
+        // instances that is 1.1 ms of CPU and 0.95 ms of GPU a frame for a
+        // couple of glass panes (2026-11-01). On: the G-buffer's depth is
+        // resampled into it instead (one fullscreen triangle), the form the
+        // renderer already takes when only particle billboards want it. The
+        // resampled depth is the render-scale, TAA-jittered one, so an overlay
+        // drawn ON a surface (a wireframe over its mesh, a line along an edge)
+        // can flicker against it: a scene with lines or wireframe materials
+        // keeps the drawn depth whatever this says. OFF by default.
+        void setOverlayDepthFromGbuffer(bool enabled);
+        [[nodiscard]] bool overlayDepthFromGbuffer() const;
+
         // ── Automatic mesh LOD (ON by default) ────────────────────────────
         // Per-geometry chains of simplified INDEX buffers (vertex positions/
         // normals/UVs untouched — index-only), generated in the background

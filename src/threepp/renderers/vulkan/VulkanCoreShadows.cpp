@@ -991,6 +991,11 @@ namespace threepp {
             // Overlays and particle sprites are not in the ray-traced scene, nor
             // are ParticleFields (particle_density.glsl shadows those).
             if (e0.isOverlay || e0.isParticle || e0.isParticleField) return false;
+            // Camera-attached geometry casts no shadow (MeshEntry::camAttached, a
+            // per-mesh fact): the whole span out here, not every entry in emit.
+            // A forest floor of 250k cards under a camera node paid the entry
+            // walk for nothing, 0.6 ms a frame (2026-11-01).
+            if (e0.camAttached) return false;
             si.rec = resolveBlasForEntry(e0);
             if (!si.rec || si.rec->vertex.handle == VK_NULL_HANDLE) return false;
             // Deformers' and interop meshes' bounds are stale: always kept, as

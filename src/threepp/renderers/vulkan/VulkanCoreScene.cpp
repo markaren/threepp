@@ -2933,6 +2933,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 }
                 if (structuralSame) {
                     if (bonesDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_bonesQueue");
                         // Re-skin every SkinnedMesh whose pose changed and
                         // rebuild its BLAS in place. The BLAS handle/address
                         // stays valid, but the BLAS's wrapping AABB grows when
@@ -2949,6 +2950,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     }
                     if (displacedDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_displacedQueue");
                         // Queue each DisplacedMesh water update (FFT chain →
                         // water_displace.comp → BLAS rebuild in place); the
                         // chain is recorded into the frame command buffer in
@@ -2971,6 +2973,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     }
                     if (grassDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_grassQueue");
                         // Queue each GrassMesh deform; the grass_wind dispatch +
                         // BLAS refit are recorded into the frame command buffer
                         // in recordCommandBuffer (no blocking submit), mirroring
@@ -2985,6 +2988,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     }
                     if (morphDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_morphQueue");
                         std::unordered_set<Mesh*> refreshed;
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryMorphDirty[i]) continue;
@@ -3136,6 +3140,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // scratch/orbitperf). A span whose first entry tore interop down walks
                         // its rest entry by entry, as before; spans that do not tile the
                         // entries (the slot editor keeps them contiguous) fall back to the walk.
+                        THREEPP_CPUPROF("scene.6c_interopSpans");
                         const bool spansTile = !entrySpans_.empty() &&
                                 size_t(entrySpans_.back().first) + entrySpans_.back().count == entries.size();
                         if (!spansTile) {
@@ -3154,12 +3159,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 if (sp.count == 1) continue;
                                 const auto cIt = blasCache.find(e0.mesh->geometry().get());
                                 const bool iop = cIt != blasCache.end() && cIt->second->interop;
-                                for (size_t i = i0 + 1; i < end; ++i) entries[i].isVertexInterop = iop;
+                                // The rest hold the first's answer already unless the record's
+                                // interop state moved since the last frame: two reads, not a
+                                // write per entry (a MeshEntry a cache line each, the writes
+                                // alone were 0.6 ms a frame at 167k entries, 2026-11-01).
+                                if (entries[i0 + 1].isVertexInterop != iop || entries[end - 1].isVertexInterop != iop)
+                                    for (size_t i = i0 + 1; i < end; ++i) entries[i].isVertexInterop = iop;
                             }
                         }
                     }
 
                     if (geomDirtyAny) {
+                        THREEPP_CPUPROF("scene.6d_geomDirtyScan");
                         // Re-upload vertex data for geometries whose
                         // BufferAttribute versions changed and rebuild their
                         // BLAS in-place. If any geometry changed its vertex or
@@ -3416,6 +3427,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // Skinned/displaced/tet own their own every-frame snapshot and
                     // never enter refreshGeomBlasBatch, so they are untouched.
                     {
+                        THREEPP_CPUPROF("scene.6e_resyncScan");
                         std::vector<BlasRecord*> resyncRecs;
                         for (auto& [geomKey, recPtr] : blasCache) {
                             BlasRecord* rec = recPtr.get();
@@ -3487,6 +3499,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // crossfade taking over the shadows changes ray masks,
                     // which is a class change (a full TLAS build).
                     {
+                        THREEPP_CPUPROF("scene.6f_lodFades");
                         const LodFadeChange fc = refreshLodFades(false);
                         if (fc.words) ++drawInputsVersion_;
                         if (fc.casters) instClassChanged = true;

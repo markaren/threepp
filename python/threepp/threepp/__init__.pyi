@@ -12423,6 +12423,14 @@ class VulkanRenderer:
     def overlay_color_grade(self, arg1: bool) -> None:
         ...
     @property
+    def overlay_depth_from_gbuffer(self) -> bool:
+        """
+        The depth the overlay passes (world sprites, overlay-layer and unlit transparent meshes) test against comes from the G-buffer's depth, resampled by one fullscreen triangle, instead of a second rasterization of the whole scene at display resolution (one draw per visible entry: 1.1 ms of CPU and 0.95 ms of GPU a frame on a 265k-instance forest). The resampled depth is at render scale and TAA-jittered, so an overlay drawn on a surface can flicker against it: a scene with lines or wireframe materials keeps the drawn depth regardless. Off by default.
+        """
+    @overlay_depth_from_gbuffer.setter
+    def overlay_depth_from_gbuffer(self, arg1: bool) -> None:
+        ...
+    @property
     def pass_timings(self) -> list:
         """
         Per-pass GPU times of the last completed frame: a list of (name, view, gpu_ms) tuples in render-graph execution order, every view included (view 0 is the primary, otherwise the add_view handle). A row spans the pass and the barriers before it; rows meet rather than overlap, so their sum is the render graph's span and gpu_total_ms minus that sum is the work outside the graph (HUD passes, sprites, ImGui, present). The first and last rows, graph.entry and graph.exit, are the graph's boundary barriers. Empty when the device has no timestamps.

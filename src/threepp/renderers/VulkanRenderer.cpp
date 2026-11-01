@@ -3017,6 +3017,14 @@ namespace threepp {
         return core()->overlayColorGrade_;
     }
 
+    void VulkanRenderer::setOverlayDepthFromGbuffer(bool enabled) {
+        core()->overlayDepthFromGbuffer_ = enabled;
+    }
+
+    bool VulkanRenderer::overlayDepthFromGbuffer() const {
+        return core()->overlayDepthFromGbuffer_;
+    }
+
     void VulkanRenderer::setAutoLod(bool enabled) {
         core()->autoLod_ = enabled;
     }
