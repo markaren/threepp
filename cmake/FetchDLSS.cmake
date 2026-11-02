@@ -51,10 +51,14 @@ set(_ngx_lib_dir "${dlss_sdk_SOURCE_DIR}/lib/Windows_x86_64/x64")
 set(_ngx_lib_rel "${_ngx_lib_dir}/nvsdk_ngx_d.lib")
 set(_ngx_lib_dbg "${_ngx_lib_dir}/nvsdk_ngx_d_dbg.lib")
 # Signed production DLSS runtime (rel/). dev/ carries the watermarked debug
-# runtime — deliberately not used.
+# runtime — deliberately not used. nvngx_dlssd.dll beside it is DLSS Ray
+# Reconstruction (the NGX feature DlssUpscaler creates when
+# setDlssRayReconstruction is on); NGX finds it through the same module-dir
+# search path, so it is staged wherever nvngx_dlss.dll is.
 set(_ngx_dll "${dlss_sdk_SOURCE_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll")
+set(_ngx_dlssd_dll "${dlss_sdk_SOURCE_DIR}/lib/Windows_x86_64/rel/nvngx_dlssd.dll")
 
-foreach (_f IN ITEMS "${_ngx_lib_rel}" "${_ngx_lib_dbg}" "${_ngx_dll}")
+foreach (_f IN ITEMS "${_ngx_lib_rel}" "${_ngx_lib_dbg}" "${_ngx_dll}" "${_ngx_dlssd_dll}")
     if (NOT EXISTS "${_f}")
         message(FATAL_ERROR
             "DLSS SDK: expected file missing: ${_f}. URL was: ${_dlss_url}")
@@ -66,8 +70,10 @@ set(NGX_INCLUDE_DIR "${_ngx_inc}"     CACHE INTERNAL "NVIDIA NGX include dir")
 set(NGX_LIBRARY_REL "${_ngx_lib_rel}" CACHE INTERNAL "NGX static import lib (/MD)")
 set(NGX_LIBRARY_DBG "${_ngx_lib_dbg}" CACHE INTERNAL "NGX static import lib (/MDd)")
 set(NGX_DLSS_DLL    "${_ngx_dll}"     CACHE INTERNAL "Signed DLSS runtime DLL")
+set(NGX_DLSSD_DLL   "${_ngx_dlssd_dll}" CACHE INTERNAL "Signed DLSS Ray Reconstruction runtime DLL")
 set(NGX_LICENSE     "${dlss_sdk_SOURCE_DIR}/LICENSE.txt" CACHE INTERNAL "DLSS SDK license")
 
 message(STATUS "DLSS SDK: include = ${NGX_INCLUDE_DIR}")
 message(STATUS "DLSS SDK: lib     = ${NGX_LIBRARY_REL}")
 message(STATUS "DLSS SDK: dll     = ${NGX_DLSS_DLL}")
+message(STATUS "DLSS SDK: dlssd   = ${NGX_DLSSD_DLL}")

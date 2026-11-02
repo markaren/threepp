@@ -1179,7 +1179,10 @@ if (THREEPP_WITH_VULKAN)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${NGX_DLSS_DLL}"
                     "${_ngx_dll_dest}/nvngx_dlss.dll"
-                COMMENT "Copying nvngx_dlss.dll to output directory"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NGX_DLSSD_DLL}"
+                    "${_ngx_dll_dest}/nvngx_dlssd.dll"
+                COMMENT "Copying nvngx_dlss.dll and nvngx_dlssd.dll to output directory"
             )
         endif ()
     endif ()

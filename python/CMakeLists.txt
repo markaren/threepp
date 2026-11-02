@@ -124,7 +124,8 @@ if (THREEPP_WITH_DLSS)
     if (WIN32 AND NGX_DLSS_DLL AND NOT DEFINED SKBUILD)
         add_custom_command(TARGET threepp_py POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NGX_DLSS_DLL}" $<TARGET_FILE_DIR:threepp_py>
-                COMMENT "Copying nvngx_dlss.dll next to the Python module (dev build only)")
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NGX_DLSSD_DLL}" $<TARGET_FILE_DIR:threepp_py>
+                COMMENT "Copying nvngx_dlss.dll and nvngx_dlssd.dll next to the Python module (dev build only)")
     endif ()
 endif ()
 
