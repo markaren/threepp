@@ -469,7 +469,7 @@ namespace threepp_py {
 
         py::class_<Articulation>(m, "Articulation",
                                  "A reduced-coordinate articulation (robot): a tree of links joined by "
-                                 "motorized revolute joints. Build with add_link (root first), then "
+                                 "revolute, prismatic or fixed joints. Build with add_link (root first), then "
                                  "finalize(); stepping the world drives the bound meshes.")
                 .def("add_link",
                      [](Articulation& a, Mesh& mesh, const py::object& parent, float density,
@@ -495,8 +495,10 @@ namespace threepp_py {
                      py::arg("material") = py::none(),
                      py::keep_alive<1, 2>(), py::keep_alive<0, 1>(),
                      "Add a link. parent=None → the fixed/free root; otherwise attach an inbound joint at "
-                     "world-space `anchor` along world-space `axis`. joint_type='revolute' (hinge about axis) "
-                     "or 'prismatic' (slider along axis). lower/upper set the joint limits (radians for "
+                     "world-space `anchor` along world-space `axis`. joint_type='revolute' (hinge about axis), "
+                     "'prismatic' (slider along axis) or 'fixed' (welded to the parent: a link of its own, with "
+                     "its own collider and mass, and no DOF, so it takes no place in joint_positions or "
+                     "set_drive_targets); any other name raises. lower/upper set the joint limits (radians for "
                      "revolute, metres for prismatic; omit both for a free axis); stiffness/damping/max_force "
                      "configure the PD drive (stiffness>0 motorizes it; leave 0 for a passive/force-controlled "
                      "joint). Shape is inferred from the mesh (Box/Sphere/Capsule). `material` (from "

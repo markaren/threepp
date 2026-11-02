@@ -37,6 +37,45 @@ def test_two_link_arm_reaches_drive_targets():
     assert link2.joint_position == pytest.approx(-0.3, abs=0.05)
 
 
+def test_fixed_joint_welds_and_takes_no_dof():
+    # base -fixed- arm -revolute- tip, under gravity. The weld holds its 1 m cantilever and adds a
+    # link but no DOF, so the one joint in the batched I/O is the hinge past it.
+    world = tp.PhysxWorld(gravity=tp.Vector3(0, -9.81, 0))
+    art = world.create_articulation(fixed_base=True)
+    base = art.add_link(box(0.2, 0.2, 0.2, (0, 3, 0)))
+    arm = art.add_link(box(1.0, 0.2, 0.2, (0.6, 3, 0)), parent=base, joint_type="fixed",
+                       axis=(0, 0, 1), anchor=(0.1, 3, 0))
+    tip = art.add_link(box(0.4, 0.2, 0.2, (1.3, 3, 0)), parent=arm,
+                       axis=(0, 0, 1), anchor=(1.1, 3, 0),
+                       lower=-1.6, upper=1.6, stiffness=2e4, damping=2e3, max_force=1e7)
+    art.finalize()
+
+    assert len(art.links) == 3
+    assert len(art.joint_positions()) == 1
+
+    art.set_drive_targets([0.5])
+    for _ in range(300):
+        world.step(1 / 60)
+
+    assert tip.joint_position == pytest.approx(0.5, abs=0.05)
+    assert arm.position.x == pytest.approx(0.6, abs=1e-3)
+    assert arm.position.y == pytest.approx(3.0, abs=1e-3)
+
+
+@pytest.mark.parametrize("name", ["fix", "Fixed", "hinge", ""])
+def test_unknown_joint_type_raises(name):
+    # A name the joint switch does not know must not become a revolute joint: a link meant to be
+    # rigid would swing free. Refused before the link exists, so the articulation stays usable.
+    world = tp.PhysxWorld()
+    art = world.create_articulation(fixed_base=True)
+    base = art.add_link(box(0.2, 0.2, 0.2, (0, 2, 0)))
+    with pytest.raises(RuntimeError, match="joint_type"):
+        art.add_link(box(1.0, 0.2, 0.2, (0.6, 2, 0)), parent=base, joint_type=name,
+                     axis=(0, 0, 1), anchor=(0.1, 2, 0))
+    assert len(art.links) == 1
+    art.finalize()
+
+
 def test_free_joint_swings_under_gravity():
     # A horizontal arm on a free (undriven) hinge must swing down under gravity.
     world = tp.PhysxWorld(gravity=tp.Vector3(0, -9.81, 0))

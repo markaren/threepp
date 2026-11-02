@@ -1,7 +1,7 @@
 // Reduced-coordinate articulation (a robot) built on PhysX, wired to the threepp
 // scene graph through PhysxWorld. Add links (root first, then children, each with
-// an inbound revolute/prismatic joint), then finalize() to add it to the world's
-// scene; world.step() drives the bound visual meshes.
+// an inbound revolute, prismatic or fixed joint), then finalize() to add it to the
+// world's scene; world.step() drives the bound visual meshes.
 //
 // This is the library type used by BOTH the Python bindings (bind_physx.cpp wraps
 // the numpy/torch hot path on top) and C++ consumers (e.g. the URDF articulation
@@ -252,6 +252,11 @@ namespace threepp {
                                  ::physx::PxArticulationDriveType::Enum driveType = ::physx::PxArticulationDriveType::eFORCE) {
             using namespace ::physx;
             if (finalized_) throw std::runtime_error("Articulation.add_link: already finalized (no links after finalize)");
+            // Checked before anything is created: the tests below take any other name for a revolute joint,
+            // and a link meant to be rigid would build as a free hinge.
+            if (jointType != "revolute" && jointType != "prismatic" && jointType != "fixed") {
+                throw std::runtime_error("Articulation.add_link: joint_type must be 'revolute', 'prismatic' or 'fixed', got '" + jointType + "'");
+            }
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("Articulation.add_link: mesh has no geometry");
 
