@@ -10,7 +10,7 @@ namespace threepp {
      *
      * Coordinate convention used by LidarSensor:
      *   azimuth  = 0   → sensor's forward direction (local -Z)
-     *   azimuth  increases counter-clockwise when viewed from above (+Y)
+     *   azimuth  increases toward local +X: clockwise when viewed from above (+Y)
      *   elevation = 0  → horizontal
      *   elevation > 0  → upward
      */

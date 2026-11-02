@@ -4857,6 +4857,9 @@ class LidarBeam:
     def __init__(self, origin: Vector3 = ..., direction: Vector3 = ...) -> None:
         ...
 class LidarModel:
+    """
+    A spinning LIDAR's beam pattern: the beams' elevations and the azimuth sweep, for PathTracedLidarSensor(model) and LidarSensor. Conventions: azimuth 0 is the sensor's local -Z (forward) and positive azimuth turns toward local +X, i.e. clockwise seen from above; elevation > 0 is upward. The sweep is HALF-OPEN, [azimuth_min, azimuth_max): see azimuth_max. Presets: vlp16(), hdl32e(), os1_64(), os0_128().
+    """
     @staticmethod
     def hdl32e() -> LidarModel:
         """
@@ -4883,19 +4886,25 @@ class LidarModel:
         ...
     @property
     def azimuth_max(self) -> float:
-        ...
+        """
+        Where the sweep ends, degrees, EXCLUDED: columns run from azimuth_min in steps of azimuth_resolution up to but not including azimuth_max, so -180..180 at 0.5 deg is 720 columns with no doubled seam. For a grid that includes both ends (Gazebo's N samples over a sweep) use azimuth_resolution = sweep / (N - 1) and azimuth_max = azimuth_min + N * azimuth_resolution. Default 180.
+        """
     @azimuth_max.setter
     def azimuth_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def azimuth_min(self) -> float:
-        ...
+        """
+        Where the sweep starts, degrees: 0 = local -Z (forward), positive toward local +X (clockwise seen from above). Default -180.
+        """
     @azimuth_min.setter
     def azimuth_min(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def azimuth_resolution(self) -> float:
-        ...
+        """
+        Step between azimuth columns, degrees. The scan has round((azimuth_max - azimuth_min) / azimuth_resolution) columns.
+        """
     @azimuth_resolution.setter
     def azimuth_resolution(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...

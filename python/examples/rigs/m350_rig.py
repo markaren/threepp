@@ -22,7 +22,8 @@ Six things, and nothing scene-specific:
                      low-altitude form, as shaping filters on seeded white noise.
   * ``Autopilot`` -- OURS, not DJI's: the cascade multirotor autopilots are built as (position
                      P, velocity PI, thrust vector with a tilt limit, quaternion attitude P,
-                     body-rate PID, mixer). It does not know the wind: it rejects it by
+                     body-rate PID, mixer), or, ``acceleration_only``, an acceleration and a
+                     yaw rate flown as they are. It does not know the wind: it rejects it by
                      feedback. Its state feedback is EXACT: no estimator, no sensor noise.
   * ``Mission``   -- OURS: straight legs between waypoints on a jerk-limited S-curve, the yaw
                      setpoint inside a rate and an acceleration, take-off and landing.
@@ -755,17 +756,38 @@ class M350:
             self.step()
 
     # ---- setting a state
-    def set_state(self, n=0.0, e=0.0, h=0.0, yaw=0.0, roll=0.0, pitch=0.0, velocity=(0.0, 0.0, 0.0),
+    def set_state(self, n=0.0, e=0.0, h=0.0, yaw=0.0, roll=None, pitch=None, velocity=(0.0, 0.0, 0.0),
                   rates=(0.0, 0.0, 0.0), rotor_speed=None):
-        """The state: position (h up), zyx Euler angles (rad), NED velocity, body rates, and all
-        four rotors at rotor_speed (default: the hover's), commanded to stay there."""
-        w = self.hover_speed() if rotor_speed is None else rotor_speed
+        """The state: position (h up), zyx Euler angles (rad), NED velocity, body rates, and the
+        four rotors commanded to stay where they are. By default the rotors, the roll and the pitch
+        are the TRIM for that velocity and heading in still air at that height (``trim``): the
+        centre of gravity is off the rotors' centre, so four equal speeds pitch and roll the
+        aircraft within a second and flip it in three without an autopilot, and with one every run
+        began with a wrong-way transient. ``rotor_speed`` gives all four rotors that one speed
+        instead, with roll and pitch 0 unless given; a given roll or pitch is used as given."""
+        rho = self.rho_at(-h)
+        sol = None
+        if rotor_speed is None:
+            try:
+                sol = self.trim(air_velocity=velocity, yaw=yaw, rho=rho)
+                if not (math.isfinite(sol["residual"]) and sol["residual"] < 1e-6):
+                    sol = None
+            except (ZeroDivisionError, ValueError, FloatingPointError, np.linalg.LinAlgError):
+                sol = None
+        if rotor_speed is not None:
+            ws = [float(rotor_speed)] * 4
+        elif sol is not None:
+            ws = [float(a) for a in sol["omega"]]
+        else:
+            ws = [self.hover_speed(rho=rho)] * 4
+        roll = (sol["roll"] if sol is not None else 0.0) if roll is None else roll
+        pitch = (sol["pitch"] if sol is not None else 0.0) if pitch is None else pitch
         q = quat_wxyz(rot_nb(roll, pitch, yaw))
         self.x = [n, e, -h, velocity[0], velocity[1], velocity[2], q[0], q[1], q[2], q[3],
-                  rates[0], rates[1], rates[2], w, w, w, w]
-        self.cmd = [w, w, w, w]
+                  rates[0], rates[1], rates[2], ws[0], ws[1], ws[2], ws[3]]
+        self.cmd = list(ws)
         self._anchor = [None, None, None, None]
-        self._air(self.rho_at(-h))
+        self._air(rho)
 
     def place_on_ground(self, n=0.0, e=0.0, yaw=0.0, rotor_speed=0.0):
         """At rest on its skids at (n, e), lying on the ground's slope, the rotors stopped (or
@@ -1024,7 +1046,16 @@ class Autopilot:
     yaw_rate=rad/s): what is not given is kept. With a position, velocity and acceleration are
     feed-forward (None: zero). position=None switches the position loop off and flies the
     velocity. All in NED axes with the third component UP (a height, a climb rate).
-    ``idle`` True holds the rotors at idle with the loops reset (on the ground)."""
+    ``idle`` True holds the rotors at idle with the loops reset (on the ground).
+
+    ``acceleration_only`` True skips the position and velocity loops: ``acc_c`` is then the
+    acceleration flown (NED, third component up), not a feed-forward the velocity PI would fight,
+    gravity compensated (zero is a hover that holds nothing), and ``yaw_c`` follows ``yaw_rate_c``
+    inside the airframe's yaw rate limit. The vertical range, the tilt limit, the attitude and
+    rate loops and the mixer are the same ones. The thrust the air through the discs takes away
+    at this speed along the rotor axis (the kz term of the rotor model) is fed forward, which the
+    velocity loop's integral otherwise absorbs. This is the plant an acceleration-commanded
+    autonomy stack sees (Gazebo's multicopter acceleration control takes the same command)."""
 
     def __init__(self, m350):
         self.m350 = m = m350
@@ -1051,6 +1082,7 @@ class Autopilot:
         self._mix = [tuple(float(a) for a in row) for row in np.linalg.inv(B)]
         self._Id = (float(m.I[0, 0]), float(m.I[1, 1]), float(m.I[2, 2]))
         self.idle = False
+        self.acceleration_only = False
         self.reset()
 
     def reset(self):
@@ -1097,6 +1129,9 @@ class Autopilot:
             self.i_r = [0.0, 0.0, 0.0]
             self._w_prev = (x[10], x[11], x[12])
             return
+        if self.acceleration_only:
+            self._update_acceleration_only()
+            return
         n, e, d, vn, ve, vd, qw, qx, qy, qz, p, q, r = x[:13]
         vh = -vd
         # position -> velocity
@@ -1138,6 +1173,36 @@ class Autopilot:
             iv[1] = clamp(iv[1] + self.ki_v * clamp(ee, -ei, ei) * dt, -self.i_xy_max, self.i_xy_max)
         if not sat_h or eh * iv[2] < 0.0:
             iv[2] = clamp(iv[2] + self.ki_vh * clamp(eh, -ei, ei) * dt, -self.i_h_max, self.i_h_max)
+        self._thrust_vector(an, ae, fz)
+
+    def _update_acceleration_only(self):
+        """acc_c flown as it is, through the same vertical range and tilt limit as the loops."""
+        m = self.m350
+        x, g, dt = m.x, m.g, m.dt
+        an, ae, ah = self.acc_c
+        rate = clamp(self.yaw_rate_c, -self.yaw_rate_max, self.yaw_rate_max)
+        self.yaw_c = wrap(self.yaw_c + rate * dt)
+        self.vel_sp = (x[3], x[4], -x[5])
+        self.i_v = [0.0, 0.0, 0.0]                        # the velocity loop starts clean when it returns
+        # the thrust the air through the discs takes: T = kT w^2 + kz w viz per rotor, viz the air's
+        # speed along the rotor axis (body z, down); its vertical part, as an acceleration, fed forward
+        wn, we, wd = m._w
+        R = m.rotation()
+        viz = R[0, 2] * (x[3] - wn) + R[1, 2] * (x[4] - we) + R[2, 2] * (x[5] - wd)
+        loss = -m._kz * (x[13] + x[14] + x[15] + x[16]) * viz / m.m * R[2, 2]
+        fz = clamp(ah + loss + g, 0.3 * g, 2.0 * g)
+        fh = math.hypot(an, ae)
+        fmax = fz * math.tan(self.tilt_max)
+        if fh > fmax:
+            an, ae = an * fmax / fh, ae * fmax / fh
+        self._thrust_vector(an, ae, fz)
+
+    def _thrust_vector(self, an, ae, fz):
+        """The tail both modes share: the attitude from the specific force (an, ae, fz: NED, fz up),
+        the rate loop, the collective, the mixer; writes the M350's rotor speed commands."""
+        m = self.m350
+        x, dt = m.x, m.dt
+        qw, qx, qy, qz, p, q, r = x[6:13]
         fn_ = math.sqrt(an * an + ae * ae + fz * fz)
         b3n, b3e, b3d = -an / fn_, -ae / fn_, fz / fn_
         self.tilt_c = math.acos(clamp(b3d, -1.0, 1.0))

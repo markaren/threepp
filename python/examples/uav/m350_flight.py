@@ -4,7 +4,7 @@ The Matrice 350 RTK's flight model on the command line: its checks and a short f
 The aircraft, the wind, the autopilot and the mission are rigs/m350_rig.py; this file runs them
 without a window or a renderer (numpy only). The film scene that flies the model is elsewhere.
 
-    python m350_flight.py --checks                    # the eight checks, each line numbered
+    python m350_flight.py --checks                    # the nine checks, each line numbered
     python m350_flight.py --checks 3,5                # some of them
     python m350_flight.py --telemetry                 # take off, 60 m out, a slow pass, back, land: a line a second
     python m350_flight.py --telemetry --wind 8 --from 250 --turbulence 1.5 --csv m350.csv
@@ -30,7 +30,7 @@ DEG = 180.0 / math.pi
 
 def parse(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--checks", nargs="?", const="all", default=None, help="all, or a comma-separated list of 1..8")
+    ap.add_argument("--checks", nargs="?", const="all", default=None, help="all, or a comma-separated list of 1..9")
     ap.add_argument("--telemetry", action="store_true")
     ap.add_argument("--wind", type=float, default=6.0, help="wind speed 10 m up, m/s")
     ap.add_argument("--from", dest="from_deg", type=float, default=270.0, help="the direction the wind blows from, deg (0 north, 90 east)")
@@ -394,8 +394,56 @@ def check_speed(spec):
             f"real time ({el / 9000 * 1e6:.0f} us a step; asked: more than 10 x)")
 
 
+# --------------------------------------------------------------------------- #
+#  9 acceleration commands: the plant an autonomy stack flies
+# --------------------------------------------------------------------------- #
+def check_acceleration(spec):
+    """Autopilot.acceleration_only: an acceleration and a yaw rate flown as they are, which is
+    what an acceleration-commanded autonomy stack (Gazebo's multicopter acceleration control
+    takes the same command) asks of its plant. The spec's own gains; nothing is tuned here."""
+    lim = spec["aircraft"]["limits"]
+
+    def start():
+        m, ap = hover(spec)
+        fly(m, ap, 2.0)
+        ap.acceleration_only = True
+        return m, ap
+
+    def slope(a, col):
+        """The acceleration delivered: the velocity's slope over 0.05 s, and its times."""
+        k = int(round(0.05 / (a[1, 0] - a[0, 0])))
+        return 0.5 * (a[k:, 0] + a[:-k, 0]), (a[k:, col] - a[:-k, col]) / (a[k:, 0] - a[:-k, 0])
+
+    m, ap = start()
+    ap.command(acceleration=(1.0, 0.0, 0.0), yaw_rate=0.0)
+    t0, rows = m.t, []
+    fly(m, ap, 3.0, lambda m: rows.append((m.t - t0, m.x[3], -m.x[2], m.tilt())))
+    a = np.array(rows)
+    t, acc = slope(a, 1)
+    i90 = int(np.argmax(acc >= 0.9))
+    line(9, f"acceleration mode, a step of 1 m/s^2 north from a hover: 90 % of it at {t[i90]:.2f} s, {float(np.interp(0.5, t, acc)):.2f} m/s^2 "
+            f"at 0.5 s, {float(acc[t >= 2.0].mean()):.3f} m/s^2 over the last second (the airframe's drag is not fed forward), "
+            f"height within {np.abs(a[:, 2] - 30.0).max():.3f} m, tilt to {a[:, 3].max() * DEG:.1f} deg")
+    m, ap = start()
+    ap.command(acceleration=(0.0, 0.0, 1.0))
+    t0, rows = m.t, []
+    fly(m, ap, 3.0, lambda m: rows.append((m.t - t0, -m.x[5])))
+    t, acc = slope(np.array(rows), 1)
+    line(9, f"a step of 1 m/s^2 up (the thrust the air through the discs takes as the climb speeds up is fed forward, the airframe's drag is not): "
+            f"{float(np.interp(0.5, t, acc)):.2f} m/s^2 at 0.5 s, {float(acc[t >= 2.0].mean()):.3f} m/s^2 over the last second")
+    m, ap = start()
+    ap.command(acceleration=(0.0, 0.0, 0.0), yaw_rate=3.0)
+    t0, rows = m.t, []
+    fly(m, ap, 4.0, lambda m: rows.append((m.t - t0, m.x[12], m.tilt(), -m.x[2])))
+    a = np.array(rows)
+    late = a[a[:, 0] > 1.0]
+    line(9, f"a yaw rate of 3 rad/s asked ({3.0 * DEG:.0f} deg/s; the airframe's limit {lim['max_yaw_rate_dps']:.0f}): turned at "
+            f"{late[:, 1].mean() * DEG:.0f} deg/s after 1 s, never under {late[:, 1].min() * DEG:.0f} deg/s (the setpoint stays inside the "
+            f"limit, so it never turns back), tilt to {a[:, 2].max() * DEG:.1f} deg, height within {np.abs(a[:, 3] - 30.0).max():.3f} m")
+
+
 CHECKS = {1: check_mass, 2: check_calibration, 3: check_steps, 4: check_hover, 5: check_gust, 6: check_takeoff,
-          7: check_integrity, 8: check_speed}
+          7: check_integrity, 8: check_speed, 9: check_acceleration}
 
 
 # --------------------------------------------------------------------------- #

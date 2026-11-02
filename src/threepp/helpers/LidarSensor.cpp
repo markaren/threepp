@@ -199,7 +199,7 @@ void LidarSensor::buildBeamTable(const LidarModel& model) {
             const float elevation = elevDeg * math::DEG2RAD;
             const float cosElev = std::cos(elevation);
 
-            // azimuth=0 → forward (-Z), increases CCW from above
+            // azimuth=0 → forward (-Z); positive azimuth turns toward +X: clockwise seen from above (+Y)
             const float dx = cosElev * std::sin(azimuth);
             const float dy = std::sin(elevation);
             const float dz = -cosElev * std::cos(azimuth);

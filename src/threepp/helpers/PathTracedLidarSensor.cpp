@@ -78,7 +78,8 @@ void PathTracedLidarSensor::buildModelBeams(const LidarModel& model) {
             const float elevation = elevDeg * math::DEG2RAD;
             const float cosE = std::cos(elevation);
             const float sinE = std::sin(elevation);
-            // azimuth = 0 → sensor-local -Z (forward); CCW from above.
+            // azimuth = 0 → sensor-local -Z (forward); positive azimuth turns toward local +X,
+            // i.e. clockwise seen from above (+Y).
             directions_.emplace_back(cosE * sinA, sinE, -cosE * cosA);
         }
     }

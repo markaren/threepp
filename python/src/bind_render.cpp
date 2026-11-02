@@ -138,13 +138,22 @@ namespace threepp_py {
                                "difference IS the degradation. PathTracedLidarSensor.scan() "
                                "returns the clean leg under the 'clean' key.");
 
-        py::class_<LidarModel>(m, "LidarModel")
+        py::class_<LidarModel>(m, "LidarModel",
+                               "A spinning LIDAR's beam pattern: the beams' elevations and the azimuth sweep, for PathTracedLidarSensor(model) and LidarSensor. "
+                               "Conventions: azimuth 0 is the sensor's local -Z (forward) and positive azimuth turns toward local +X, i.e. clockwise seen from above; "
+                               "elevation > 0 is upward. The sweep is HALF-OPEN, [azimuth_min, azimuth_max): see azimuth_max. "
+                               "Presets: vlp16(), hdl32e(), os1_64(), os0_128().")
                 .def(py::init<>())
                 .def_readwrite("elevation_angles", &LidarModel::elevationAngles,
                                "Beam elevations in degrees. A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.")
-                .def_readwrite("azimuth_resolution", &LidarModel::azimuthResolution)
-                .def_readwrite("azimuth_min", &LidarModel::azimuthMin)
-                .def_readwrite("azimuth_max", &LidarModel::azimuthMax)
+                .def_readwrite("azimuth_resolution", &LidarModel::azimuthResolution,
+                               "Step between azimuth columns, degrees. The scan has round((azimuth_max - azimuth_min) / azimuth_resolution) columns.")
+                .def_readwrite("azimuth_min", &LidarModel::azimuthMin,
+                               "Where the sweep starts, degrees: 0 = local -Z (forward), positive toward local +X (clockwise seen from above). Default -180.")
+                .def_readwrite("azimuth_max", &LidarModel::azimuthMax,
+                               "Where the sweep ends, degrees, EXCLUDED: columns run from azimuth_min in steps of azimuth_resolution up to but not including azimuth_max, "
+                               "so -180..180 at 0.5 deg is 720 columns with no doubled seam. For a grid that includes both ends (Gazebo's N samples over a sweep) "
+                               "use azimuth_resolution = sweep / (N - 1) and azimuth_max = azimuth_min + N * azimuth_resolution. Default 180.")
                 .def_static("vlp16", &LidarModel::VLP16, "Velodyne VLP-16: 16 beams, +/-15deg elevation.")
                 .def_static("hdl32e", &LidarModel::HDL32E, "Velodyne HDL-32E: 32 beams, -30.67..+10.67deg.")
                 .def_static("os1_64", &LidarModel::OS1_64, "Ouster OS1-64: 64 beams, +/-22.5deg elevation, 1024 columns/rev.")

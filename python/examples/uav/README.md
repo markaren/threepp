@@ -260,7 +260,7 @@ Nothing is validated against a flight log.
 ```
 blender --background --factory-startup --python build_m350_blender.py -- --spec m350_spec.json --out m350.glb
 python build_m350_blender.py --check             # the geometry's gates and projected areas, without Blender
-python m350_flight.py --checks                   # the eight checks below
+python m350_flight.py --checks                   # the nine checks below
 python m350_flight.py --telemetry --wind 8 --from 250 [--csv m350.csv]
 ```
 
@@ -324,6 +324,10 @@ a real aircraft holds. `Mission` flies straight legs on jerk-limited profiles, t
 - A torque-free tumble keeps energy and angular momentum to 1e-10; in a still-air flight the change in
   energy equals the work of the non-conservative forces to 0.001 %.
 - 45 to 60 times real time, autopilot and wind included.
+- Acceleration commands (`Autopilot.acceleration_only`: an acceleration and a yaw rate flown as they are,
+  the plant an acceleration-commanded autonomy stack sees): a 1 m/s^2 step is 90 % delivered at 0.5 s and
+  0.93 m/s^2 held against the airframe's drag; a 1 m/s^2 climb holds 0.84 with the discs' thrust loss fed
+  forward; a 3 rad/s yaw rate asked turns at the airframe's 100 deg/s and never turns back.
 
 Not in the model: ground effect, vortex ring state in a descent, blade flapping, the rotors' wash on the
 airframe, any sensor.
