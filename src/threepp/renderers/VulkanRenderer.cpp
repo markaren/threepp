@@ -1730,6 +1730,18 @@ namespace threepp {
         return core()->dlssAvailable();
     }
 
+    void VulkanRenderer::setDlssRayReconstruction(bool enabled) {
+        core()->setDlssRayReconstruction(enabled);
+    }
+
+    bool VulkanRenderer::dlssRayReconstruction() const {
+        return core()->useDlssRayReconstruction();
+    }
+
+    bool VulkanRenderer::dlssRayReconstructionAvailable() const {
+        return core()->dlssRayReconstructionAvailable();
+    }
+
     void VulkanRenderer::setTextureAnisotropy(float aniso) {
         core()->setTextureAnisotropy(aniso);
     }

@@ -2680,6 +2680,10 @@ namespace threepp {
         // Self-heal budget for sticky NGX evaluate failures (renderFrame);
         // replenished by the display-resize recreate funnel.
         uint32_t dlssHealTries_ = 0;
+        // DLSS Ray Reconstruction (setDlssRayReconstruction). Default off; it
+        // runs only while DLSS itself runs (useDlss), and renderFrame creates
+        // and releases its NGX feature to follow this flag (syncDlssRayReconstruction).
+        bool   dlssRrEnabled_ = false;
 #endif
         // An external upscaler (FSR/DLSS) compiled in AND created (available).
         // Gates the HDR-mode plumbing both reuse — hdrOut_ stays allocated
@@ -2777,6 +2781,46 @@ namespace threepp {
             (void) enabled;
 #endif
         }
+        // Runtime DLSS Ray Reconstruction on/off. Honoured only while DLSS
+        // runs (useDlss); renderFrame creates or releases the DLSSD feature
+        // on the next frame (syncDlssRayReconstruction). Flipping resets the
+        // temporal history like setDlss: RR and SR keep separate histories.
+        void setDlssRayReconstruction(bool enabled) {
+#if defined(THREEPP_WITH_DLSS)
+            if (dlssRrEnabled_ == enabled) return;
+            dlssRrEnabled_ = enabled;
+            dlssResetNext_ = true;
+            if (view().taa_) view().taa_->invalidateHistory();
+            if (enabled && dlssActive_ && dlss_ && !dlss_->rayReconstructionAvailable()) {
+                std::fprintf(stderr,
+                             "[threepp] DLSS Ray Reconstruction requested, but NGX reports it unavailable "
+                             "(nvngx_dlssd.dll missing, or the GPU/driver refused it); SR runs.\n");
+            }
+#else
+            (void) enabled;
+#endif
+        }
+        // RR is the DLSS evaluate this frame: knob on, DLSS running, the
+        // DLSSD feature live and not in a failure streak.
+        [[nodiscard]] bool useDlssRayReconstruction() const {
+#if defined(THREEPP_WITH_DLSS)
+            return dlssRrEnabled_ && useDlss() && dlss_ && dlss_->rayReconstructionValid() &&
+                   !dlss_->rayReconstructionFailing();
+#else
+            return false;
+#endif
+        }
+        [[nodiscard]] bool dlssRayReconstructionAvailable() const {
+#if defined(THREEPP_WITH_DLSS)
+            return dlssActive_ && dlss_ && dlss_->rayReconstructionAvailable();
+#else
+            return false;
+#endif
+        }
+        // Brings the DLSSD feature in line with the knob, the DLSS state and
+        // the render extent; renderFrame calls it once a frame before the
+        // frame records. Defined in VulkanCoreFrame.cpp.
+        void syncDlssRayReconstruction();
         // (bloom_ and post_ moved to ViewContext — bloom_ owns sceneHdr, the
         //  render-extent HDR target every view needs its own copy of, and
         //  post_ owns the display-extent hdrOut fed from it.)

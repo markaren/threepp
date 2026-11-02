@@ -4,8 +4,18 @@
 // taa_resolve.comp) on Windows + Vulkan + RTX, sitting beside (and outranking)
 // the FSR 3.1 path: same seam, same inputs, same output slot. Only DLSS
 // Super Resolution is used — Frame Generation is deliberately never touched
-// (interpolated frames are not valid sensor data for this platform). The same
-// NGX plumbing is the doorway to DLSS Ray Reconstruction (nvngx_dlssd) later.
+// (interpolated frames are not valid sensor data for this platform).
+//
+// DLSS Ray Reconstruction (DLSS-D, nvngx_dlssd.dll) is a second NGX feature on
+// the same seam, opt-in through VulkanRenderer::setDlssRayReconstruction. It
+// replaces the SR evaluate on the frames it runs (the RR guide: "when DLSS-RR
+// is enabled, DLSS-SR is no longer being executed") and takes SR's inputs plus
+// guide images: diffuse and specular albedo, and the normals with roughness in
+// .w (the packed roughness mode). The SR feature stays alive beside it, so the
+// fallback after a sticky RR failure is SR, not the TAA. The guides are
+// placeholders for now (diffuse 1, specular 0, the G-buffer normal image),
+// which proves the feature's lifecycle; the shade writes real ones later
+// (plans/dlss-ray-reconstruction.md).
 //
 // This class encapsulates ALL NGX usage so the rest of the renderer never sees
 // an NGX type. Unlike the FFX runtime there is no dllexport trap: the NGX entry
@@ -42,6 +52,7 @@
 // NGX forward declarations (kept out of the renderer's headers).
 struct NVSDK_NGX_Parameter;
 struct NVSDK_NGX_Handle;
+struct NVSDK_NGX_Resource_VK;
 
 namespace threepp::vulkan {
 
@@ -155,11 +166,53 @@ namespace threepp::vulkan {
             VkImageView   idsView       = VK_NULL_HANDLE;
             bool          reactive      = false;
             float         reactiveValue = 0.6f;
+
+            // Ray Reconstruction. When set and rayReconstructionValid(), the
+            // DLSSD evaluate runs instead of SR's. normal* is the G-buffer
+            // normal (rgba16f, linear roughness in .w: the packed roughness
+            // mode reads it there), left in its layout when that is already
+            // SHADER_READ_ONLY_OPTIMAL. The matrices are the camera's view and
+            // projection: NGX wants them row-major for row vectors (v * M),
+            // which is the transpose of threepp's column-vector matrices and
+            // so exactly their column-major element arrays. NGX reads them
+            // only with a specular hit distance, which nothing feeds yet.
+            bool          rayReconstruction = false;
+            VkImage       normalImage  = VK_NULL_HANDLE;
+            VkImageView   normalView   = VK_NULL_HANDLE;
+            VkFormat      normalFormat = VK_FORMAT_UNDEFINED;
+            VkImageLayout normalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            float worldToView[16]{};
+            float viewToClip[16]{};
         };
 
         // Record the DLSS evaluate into in.cmd. No-op if !valid(). See the
         // layout contract in the class header comment.
         void recordDispatch(const DispatchInputs& in);
+
+        // ── Ray Reconstruction (DLSS-D) ───────────────────────────────────
+        // The DLSSD feature lives beside SR's and is created and released by
+        // the frame loop, which calls rayReconstructionNeedsSync() once a
+        // frame with the knob's state and the render extent. The RR guide
+        // states that RR has no dynamic resolution, so unlike SR the feature
+        // is created AT the render extent and recreated when it changes. A
+        // failed creation, or an evaluate failure the self-heal could not
+        // clear (giveUpRayReconstruction), keeps RR off until the next
+        // create(), i.e. the next display resize or preset change; SR runs
+        // in the meantime.
+        [[nodiscard]] bool rayReconstructionAvailable() const { return rrAvailable_; }
+        [[nodiscard]] bool rayReconstructionValid() const { return featureRR_ != nullptr; }
+        [[nodiscard]] bool rayReconstructionFailing() const { return rrEvalFails_ >= 3; }
+        [[nodiscard]] bool rayReconstructionNeedsSync(bool wanted,
+                                                      uint32_t renderWidth, uint32_t renderHeight) const;
+        // Creates the DLSSD feature (releasing any old one first) and its
+        // placeholder guide images, recording the NGX init work and the guide
+        // clears into initCb, which the caller submits and waits. Needs a
+        // live SR feature (create() succeeded). The caller idles the device
+        // before replacing a feature that may still be in flight.
+        bool createRayReconstruction(VkCommandBuffer initCb,
+                                     uint32_t renderWidth, uint32_t renderHeight);
+        void destroyRayReconstruction();
+        void giveUpRayReconstruction();
 
         // NGX evaluate has entered a sticky failure state (≥3 consecutive
         // failures, e.g. 0xBAD00005 InvalidParameter after an extent transition
@@ -183,6 +236,28 @@ namespace threepp::vulkan {
         uint32_t displayW_ = 0, displayH_ = 0;
         int      quality_  = -1;// the created feature's preset (see quality())
         uint32_t evalFails_ = 0;// consecutive evaluate failures (see failing())
+
+        // Ray Reconstruction state (see the RR block above). rrAvailable_ is
+        // NGX's SuperSamplingDenoising capability (driver + nvngx_dlssd.dll),
+        // read once in ensureNgx(). rrBlocked_ holds RR off after a failed
+        // create or an exhausted self-heal, cleared by create().
+        NVSDK_NGX_Handle*    featureRR_ = nullptr;
+        NVSDK_NGX_Parameter* paramsRR_  = nullptr;// RR's own map (see createRayReconstruction)
+        bool     rrAvailable_  = false;
+        bool     rrBlocked_    = false;
+        uint32_t rrRenderW_ = 0, rrRenderH_ = 0;
+        uint32_t rrEvalFails_ = 0;
+        // Placeholder guides at the RR render extent: diffuse albedo 1 and
+        // specular albedo 0 (rgba8 unorm, cleared once at creation, then
+        // SHADER_READ_ONLY_OPTIMAL for good).
+        Image2D rrDiffuseAlbedo_;
+        Image2D rrSpecularAlbedo_;
+        void createGuideImage(Image2D& img, uint32_t width, uint32_t height, const char* name);
+        void recordRayReconstruction(const DispatchInputs& in,
+                                     NVSDK_NGX_Resource_VK& color, NVSDK_NGX_Resource_VK& depth,
+                                     NVSDK_NGX_Resource_VK& motion, NVSDK_NGX_Resource_VK& output,
+                                     NVSDK_NGX_Resource_VK* mask);
+        void restoreInputs(const DispatchInputs& in);
 
         // Module directory (wide) kept alive for NGX's PathListInfo.
         std::wstring modulePathW_;

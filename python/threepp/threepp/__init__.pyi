@@ -12190,6 +12190,19 @@ class VulkanRenderer:
         True when DLSS was compiled in and NGX created its feature on this GPU.
         """
     @property
+    def dlss_ray_reconstruction(self) -> bool:
+        """
+        NVIDIA DLSS Ray Reconstruction on/off (default off). Honoured only while dlss runs; the feature is created on the next rendered frame, so this reads True from then on. Its guide images are placeholders for now: not a look to judge.
+        """
+    @dlss_ray_reconstruction.setter
+    def dlss_ray_reconstruction(self, arg1: bool) -> None:
+        ...
+    @property
+    def dlss_ray_reconstruction_available(self) -> bool:
+        """
+        True when DLSS runs and NGX reports Ray Reconstruction supported (driver + nvngx_dlssd.dll).
+        """
+    @property
     def downwash(self) -> Downwash:
         """
         The rotor downwash (threepp.Downwash) the water (MeshStandardMaterial.ripples), every GrassMesh and the Renderer-owned particle emitters react to, or None (the default). Read every frame: move a jet by editing its Source.

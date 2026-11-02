@@ -458,6 +458,12 @@ void VulkanRenderer::Impl::resetAccumulation() {
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// FSR treats the next dispatch as a camera cut
 #endif
+#if defined(THREEPP_WITH_DLSS)
+            // Ray Reconstruction takes the same camera cut (InReset). SR's
+            // dispatch does not take it here today; giving it one changes the
+            // SR frames that follow a reset, which is a look change of its own.
+            if (dlssRrEnabled_) dlssResetNext_ = true;
+#endif
             if (frameState_ != FrameState::Idle) {
                 pendingAccumulationReset_ = true;
                 return;
@@ -1789,6 +1795,42 @@ void VulkanRenderer::Impl::endFrame() {
             frameState_   = FrameState::Idle;
         }
 
+void VulkanRenderer::Impl::syncDlssRayReconstruction() {
+#if defined(THREEPP_WITH_DLSS)
+            if (!dlss_ || !dlssActive_) return;
+            // An RR evaluate failure streak: release the feature so the code
+            // below recreates it at the current extents, from the same heal
+            // budget SR's self-heal spends; once that is gone RR is given up
+            // until the next display resize or preset change, and SR runs.
+            if (dlss_->rayReconstructionFailing()) {
+                vkDeviceWaitIdle(ctx->device());
+                if (dlssHealTries_ < 3) {
+                    ++dlssHealTries_;
+                    dlss_->destroyRayReconstruction();
+                } else {
+                    dlss_->giveUpRayReconstruction();
+                }
+                dlssResetNext_ = true;
+                if (view().taa_) view().taa_->invalidateHistory();
+            }
+            // The DLSSD feature follows the knob, DLSS itself and the render
+            // extent (RR is created at the render size; see DlssUpscaler).
+            const bool wanted = dlssRrEnabled_ && useDlss();
+            const VkExtent2D render = renderExtent();
+            if (!dlss_->rayReconstructionNeedsSync(wanted, render.width, render.height)) return;
+            vkDeviceWaitIdle(ctx->device());// the feature being replaced may still be in flight
+            if (wanted) {
+                VkCommandBuffer initCb = beginOneShot();
+                dlss_->createRayReconstruction(initCb, render.width, render.height);
+                endAndSubmitOneShot(initCb, "DLSS-RR feature create");
+            } else {
+                dlss_->destroyRayReconstruction();
+            }
+            dlssResetNext_ = true;
+            if (view().taa_) view().taa_->invalidateHistory();
+#endif
+        }
+
 void VulkanRenderer::Impl::advanceHeadlessClock() {
             if (simTimeSec_ >= 0.0 || !ctx || !ctx->presentSuppressed()) return;
             if (headlessClockSec_ < 0.0) {
@@ -1868,6 +1910,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                                          "disabled until the next display resize (FSR/TAA fallback).\n");
                         }
                     }
+                    syncDlssRayReconstruction();
 #endif
                     if (!beginDeferredFrame(scene, camera)) return;
                     frameState_ = FrameState::RecordingPostShade;

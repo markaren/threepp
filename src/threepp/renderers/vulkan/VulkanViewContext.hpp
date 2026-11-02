@@ -140,6 +140,9 @@ namespace threepp::vulkan::impl {
         float fsrJitterX = 0.f, fsrJitterY = 0.f; // FSR dispatch: this frame's sub-pixel offset
         float fsrCamNear = 0.1f, fsrCamFar = 1000.f, fsrCamFovY = 1.0f;
         float dlssJitterX = 0.f, dlssJitterY = 0.f;
+        // DLSS Ray Reconstruction dispatch: the camera's view and (unjittered)
+        // projection matrices, column-major element arrays as threepp keeps them.
+        std::array<float, 16> dlssWorldToView{}, dlssViewToClip{};
         float deferredCamRotAngle = 0.f;          // the camera's rotation since last frame
 
         // A NaN no assignment in the renderer produces, as "not written".
@@ -153,6 +156,7 @@ namespace threepp::vulkan::impl {
             tanHalfFovY = filmHeightM = u;
             fsrJitterX = fsrJitterY = fsrCamNear = fsrCamFar = fsrCamFovY = u;
             dlssJitterX = dlssJitterY = u;
+            dlssWorldToView[0] = dlssViewToClip[0] = u;
         }
         void inheritFrom(const ViewPrepOut& prev) {
             for (size_t b = 0; b < indirectGroups.size(); ++b)
@@ -171,6 +175,14 @@ namespace threepp::vulkan::impl {
             keep(fsrCamFovY, prev.fsrCamFovY);
             keep(dlssJitterX, prev.dlssJitterX);
             keep(dlssJitterY, prev.dlssJitterY);
+            // A matrix is written whole, so its first element marks it.
+            const auto keepMatrix = [](std::array<float, 16>& mine, const std::array<float, 16>& theirs) {
+                uint32_t bits;
+                std::memcpy(&bits, &mine[0], sizeof(bits));
+                if (bits == kUnwrittenBits) mine = theirs;
+            };
+            keepMatrix(dlssWorldToView, prev.dlssWorldToView);
+            keepMatrix(dlssViewToClip, prev.dlssViewToClip);
         }
     };
 

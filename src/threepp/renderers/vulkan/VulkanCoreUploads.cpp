@@ -724,6 +724,8 @@ namespace threepp {
         if (useDlss()) {
             prepOut().dlssJitterX = jx;
             prepOut().dlssJitterY = jy;
+            prepOut().dlssWorldToView = camera.matrixWorldInverse.elements;
+            prepOut().dlssViewToClip  = camera.projectionMatrix.elements;
         }
 #endif
     }

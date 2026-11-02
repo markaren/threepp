@@ -599,6 +599,18 @@ namespace threepp {
         [[nodiscard]] bool dlss() const;          // DLSS is the active upscaler now
         [[nodiscard]] bool dlssAvailable() const; // compiled in + feature created
 
+        // ── NVIDIA DLSS Ray Reconstruction runtime toggle ────────────────
+        // A second NGX feature (nvngx_dlssd.dll) that denoises and upscales
+        // in one evaluate, replacing DLSS Super Resolution's on the frames it
+        // runs. Honoured only while DLSS runs (dlss() == true); the feature is
+        // created on the next rendered frame, so dlssRayReconstruction() turns
+        // true from then on. Default off. Its guide images are placeholders
+        // for now (plans/dlss-ray-reconstruction.md, phase 0): the picture is
+        // not a look to judge yet.
+        void setDlssRayReconstruction(bool enabled);
+        [[nodiscard]] bool dlssRayReconstruction() const;          // RR is the DLSS evaluate now
+        [[nodiscard]] bool dlssRayReconstructionAvailable() const; // driver + nvngx_dlssd.dll
+
         // ── Ray tracing ──────────────────────────────────────────────────
         // True when the device has inline ray queries and acceleration
         // structures (VK_KHR_ray_query + VK_KHR_acceleration_structure), and

@@ -1098,6 +1098,18 @@ namespace threepp_py {
                 .def_property_readonly("dlss_available",
                               [](PyVulkanRenderer& r) { return r.native().dlssAvailable(); },
                               "True when DLSS was compiled in and NGX created its feature on this GPU.")
+                // DLSS Ray Reconstruction: off by default, and its guide images
+                // are placeholders until the shade writes real ones.
+                .def_property("dlss_ray_reconstruction",
+                              [](PyVulkanRenderer& r) { return r.native().dlssRayReconstruction(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setDlssRayReconstruction(v); },
+                              "NVIDIA DLSS Ray Reconstruction on/off (default off). Honoured only while dlss "
+                              "runs; the feature is created on the next rendered frame, so this reads True from "
+                              "then on. Its guide images are placeholders for now: not a look to judge.")
+                .def_property_readonly("dlss_ray_reconstruction_available",
+                              [](PyVulkanRenderer& r) { return r.native().dlssRayReconstructionAvailable(); },
+                              "True when DLSS runs and NGX reports Ray Reconstruction supported "
+                              "(driver + nvngx_dlssd.dll).")
                 .def_property_readonly("ray_tracing",
                               [](PyVulkanRenderer& r) { return r.native().rayTracingSupported(); },
                               "True when the device traces rays (ray query + acceleration structures) and "

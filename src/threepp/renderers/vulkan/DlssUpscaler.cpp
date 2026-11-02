@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 // NOMINMAX/WIN32_LEAN_AND_MEAN keep <windows.h> (needed for the module-dir
 // lookup) from polluting the TU.
@@ -19,6 +20,7 @@
 
 #include <nvsdk_ngx_vk.h>
 #include <nvsdk_ngx_helpers_vk.h>
+#include <nvsdk_ngx_helpers_dlssd_vk.h>
 
 namespace threepp::vulkan {
 
@@ -196,11 +198,16 @@ namespace threepp::vulkan {
         // Capability check: driver present + DLSS supported on this GPU.
         NVSDK_NGX_Parameter* caps = nullptr;
         r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&caps);
+        // The same map says whether Ray Reconstruction can run: the driver
+        // supports it and NGX found nvngx_dlssd.dll on the search path.
         int available = 0;
+        int rrAvailable = 0;
         if (NVSDK_NGX_SUCCEED(r) && caps) {
             NVSDK_NGX_Parameter_GetI(caps, NVSDK_NGX_Parameter_SuperSampling_Available, &available);
+            NVSDK_NGX_Parameter_GetI(caps, NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &rrAvailable);
             NVSDK_NGX_VULKAN_DestroyParameters(caps);
         }
+        rrAvailable_ = available && rrAvailable;
         if (!available) {
             std::fprintf(stderr,
                          "[threepp] DLSS: not available on this GPU/driver - "
@@ -223,6 +230,10 @@ namespace threepp::vulkan {
     }
 
     void DlssUpscaler::shutdownNgx() {
+        if (paramsRR_) {
+            NVSDK_NGX_VULKAN_DestroyParameters(paramsRR_);
+            paramsRR_ = nullptr;
+        }
         if (params_) {
             NVSDK_NGX_VULKAN_DestroyParameters(params_);
             params_ = nullptr;
@@ -248,6 +259,7 @@ namespace threepp::vulkan {
                               uint32_t displayWidth, uint32_t displayHeight,
                               uint32_t renderWidth, uint32_t renderHeight) {
         destroy();
+        rrBlocked_ = false;// new extents or preset: Ray Reconstruction may try again
         if (displayWidth == 0 || displayHeight == 0) return false;
         if (!ensureNgx()) return false;
 
@@ -298,6 +310,7 @@ namespace threepp::vulkan {
     }
 
     void DlssUpscaler::destroy() {
+        destroyRayReconstruction();
         if (feature_) {
             NVSDK_NGX_VULKAN_ReleaseFeature(feature_);
             feature_ = nullptr;
@@ -365,6 +378,15 @@ namespace threepp::vulkan {
             transition(in.cmd, in.motionImage, in.motionLayout,
                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         }
+        // Ray Reconstruction replaces the SR evaluate this frame when the
+        // caller asks for it and its feature is live and not failing.
+        const bool rr = in.rayReconstruction && featureRR_ && paramsRR_ && !rayReconstructionFailing() &&
+                        in.normalView != VK_NULL_HANDLE;
+        const bool rrNormalBorrowed = rr && in.normalLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (rrNormalBorrowed) {
+            transition(in.cmd, in.normalImage, in.normalLayout,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        }
 
         NVSDK_NGX_Resource_VK color = wrapView(in.colorView, in.colorImage, in.colorFormat,
                                                in.renderWidth, in.renderHeight,
@@ -378,6 +400,23 @@ namespace threepp::vulkan {
         NVSDK_NGX_Resource_VK output = wrapView(in.outputView, in.outputImage, in.outputFormat,
                                                 in.displayWidth, in.displayHeight,
                                                 VK_IMAGE_ASPECT_COLOR_BIT, true);
+
+        NVSDK_NGX_Resource_VK mask;
+        if (maskImg != VK_NULL_HANDLE) {
+            mask = wrapView(maskView, maskImg, VK_FORMAT_R8_UNORM,
+                            in.renderWidth, in.renderHeight,
+                            VK_IMAGE_ASPECT_COLOR_BIT, false);
+        }
+        if (rr) {
+            recordRayReconstruction(in, color, depth, motion, output,
+                                    maskImg != VK_NULL_HANDLE ? &mask : nullptr);
+            if (rrNormalBorrowed) {
+                transition(in.cmd, in.normalImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           in.normalLayout, VK_IMAGE_ASPECT_COLOR_BIT);
+            }
+            restoreInputs(in);
+            return;
+        }
 
         NVSDK_NGX_VK_DLSS_Eval_Params ev{};
         ev.Feature.pInColor  = &color;
@@ -393,13 +432,7 @@ namespace threepp::vulkan {
         ev.InMVScaleY        = in.motionScaleY;
         ev.InPreExposure     = in.preExposure > 0.f ? in.preExposure : 1.f;
         ev.InFrameTimeDeltaInMsec = in.frameTimeDeltaMs > 0.f ? in.frameTimeDeltaMs : 16.6f;
-        NVSDK_NGX_Resource_VK mask;
-        if (maskImg != VK_NULL_HANDLE) {
-            mask = wrapView(maskView, maskImg, VK_FORMAT_R8_UNORM,
-                            in.renderWidth, in.renderHeight,
-                            VK_IMAGE_ASPECT_COLOR_BIT, false);
-            ev.pInBiasCurrentColorMask = &mask;
-        }
+        if (maskImg != VK_NULL_HANDLE) ev.pInBiasCurrentColorMask = &mask;
 
         const NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSS_EXT(in.cmd, feature_, params_, &ev);
         if (NVSDK_NGX_FAILED(r)) {
@@ -421,7 +454,10 @@ namespace threepp::vulkan {
         } else {
             evalFails_ = 0;
         }
+        restoreInputs(in);
+    }
 
+    void DlssUpscaler::restoreInputs(const DispatchInputs& in) {
         // Restore the borrowed inputs to their steady-state layouts. UNDEFINED
         // old layout: their contents aren't needed after the upscale.
         transition(in.cmd, in.colorImage, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -434,6 +470,213 @@ namespace threepp::vulkan {
         }
         // The output is left in GENERAL with the upscale's writes; the caller
         // barriers it before PostComposite reads it.
+    }
+
+    void DlssUpscaler::recordRayReconstruction(const DispatchInputs& in,
+                                               NVSDK_NGX_Resource_VK& color,
+                                               NVSDK_NGX_Resource_VK& depth,
+                                               NVSDK_NGX_Resource_VK& motion,
+                                               NVSDK_NGX_Resource_VK& output,
+                                               NVSDK_NGX_Resource_VK* mask) {
+        // The guides are read at the render extent, as the colour is. The
+        // packed roughness mode takes linear roughness from normals.w, which
+        // is where the G-buffer keeps it; the G-buffer stores the normal
+        // remapped to [0, 1] (n * 0.5 + 0.5), not the signed unit vector the
+        // RR guide asks for, which the placeholder accepts.
+        NVSDK_NGX_Resource_VK normals = wrapView(in.normalView, in.normalImage, in.normalFormat,
+                                                 in.renderWidth, in.renderHeight,
+                                                 VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK diffuse = wrapView(rrDiffuseAlbedo_.view, rrDiffuseAlbedo_.image,
+                                                 rrDiffuseAlbedo_.format, in.renderWidth, in.renderHeight,
+                                                 VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK specular = wrapView(rrSpecularAlbedo_.view, rrSpecularAlbedo_.image,
+                                                  rrSpecularAlbedo_.format, in.renderWidth, in.renderHeight,
+                                                  VK_IMAGE_ASPECT_COLOR_BIT, false);
+        // NGX takes the matrices through non-const pointers it only reads.
+        float worldToView[16];
+        float viewToClip[16];
+        std::memcpy(worldToView, in.worldToView, sizeof(worldToView));
+        std::memcpy(viewToClip, in.viewToClip, sizeof(viewToClip));
+
+        NVSDK_NGX_VK_DLSSD_Eval_Params ev{};
+        ev.pInDiffuseAlbedo  = &diffuse;
+        ev.pInSpecularAlbedo = &specular;
+        ev.pInNormals        = &normals;
+        ev.pInColor          = &color;
+        ev.pInOutput         = &output;
+        ev.pInDepth          = &depth;
+        ev.pInMotionVectors  = &motion;
+        ev.InJitterOffsetX   = jitterSignX() * in.jitterX;
+        ev.InJitterOffsetY   = jitterSignY() * in.jitterY;
+        ev.InRenderSubrectDimensions = {in.renderWidth, in.renderHeight};
+        ev.InReset           = in.reset ? 1 : 0;
+        ev.InMVScaleX        = in.motionScaleX;
+        ev.InMVScaleY        = in.motionScaleY;
+        ev.InPreExposure     = in.preExposure > 0.f ? in.preExposure : 1.f;
+        ev.InFrameTimeDeltaInMsec = in.frameTimeDeltaMs > 0.f ? in.frameTimeDeltaMs : 16.6f;
+        ev.pInBiasCurrentColorMask = mask;
+        ev.pInWorldToViewMatrix = worldToView;
+        ev.pInViewToClipMatrix  = viewToClip;
+
+        const NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSSD_EXT(in.cmd, featureRR_, paramsRR_, &ev);
+        if (NVSDK_NGX_FAILED(r)) {
+            // Same diagnosis line as SR's, with the RR feature's own render
+            // extent (it is created at the render size, not the display's).
+            if (rrEvalFails_ == 0) {
+                std::fprintf(stderr,
+                             "[threepp] DLSS-RR: evaluate failed (0x%08x) - render %ux%u, "
+                             "display %ux%u, feature %ux%u -> %ux%u; will self-heal after 3 failures.\n",
+                             static_cast<unsigned>(r),
+                             in.renderWidth, in.renderHeight,
+                             in.displayWidth, in.displayHeight,
+                             rrRenderW_, rrRenderH_, displayW_, displayH_);
+            }
+            ++rrEvalFails_;
+        } else {
+            rrEvalFails_ = 0;
+        }
+    }
+
+    bool DlssUpscaler::rayReconstructionNeedsSync(bool wanted,
+                                                  uint32_t renderWidth, uint32_t renderHeight) const {
+        if (!feature_) return false;
+        if (!wanted) return featureRR_ != nullptr;
+        if (!rrAvailable_ || rrBlocked_) return false;
+        return featureRR_ == nullptr || rrRenderW_ != renderWidth || rrRenderH_ != renderHeight;
+    }
+
+    bool DlssUpscaler::createRayReconstruction(VkCommandBuffer initCb,
+                                               uint32_t renderWidth, uint32_t renderHeight) {
+        destroyRayReconstruction();
+        if (!feature_ || !rrAvailable_ || rrBlocked_ || renderWidth == 0 || renderHeight == 0) return false;
+
+        // A parameter map of its own: the evaluate helpers write every input
+        // they take into the map they are given, and an SR evaluate after an
+        // RR one (or the other way round) must not find the other feature's
+        // stale resource pointers in it.
+        if (!paramsRR_) {
+            const NVSDK_NGX_Result pr = NVSDK_NGX_VULKAN_AllocateParameters(&paramsRR_);
+            if (NVSDK_NGX_FAILED(pr) || !paramsRR_) {
+                std::fprintf(stderr, "[threepp] DLSS-RR: parameter allocation failed (0x%08x) - SR runs.\n",
+                             static_cast<unsigned>(pr));
+                paramsRR_  = nullptr;
+                rrBlocked_ = true;
+                return false;
+            }
+        }
+
+        // The RR guide's creation contract: the DLUnified denoise mode (the
+        // only one), hardware depth (our reversed-Z D32), roughness packed in
+        // normals.w, no render preset pinned (the guide recommends the
+        // default). The input and output sizes are the real render and
+        // display extents: RR has no dynamic resolution. The feature flags
+        // are SR's without AutoExposure, which the RR guide lists as not
+        // supported along with the exposure texture.
+        NVSDK_NGX_DLSSD_Create_Params cp{};
+        cp.InDenoiseMode      = NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;
+        cp.InRoughnessMode    = NVSDK_NGX_DLSS_Roughness_Mode_Packed;
+        cp.InUseHWDepth       = NVSDK_NGX_DLSS_Depth_Type_HW;
+        cp.InWidth            = renderWidth;
+        cp.InHeight           = renderHeight;
+        cp.InTargetWidth      = displayW_;
+        cp.InTargetHeight     = displayH_;
+        cp.InPerfQualityValue = static_cast<NVSDK_NGX_PerfQuality_Value>(quality_);
+        cp.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR |
+                                  NVSDK_NGX_DLSS_Feature_Flags_MVLowRes |
+                                  NVSDK_NGX_DLSS_Feature_Flags_DepthInverted;
+
+        const NVSDK_NGX_Result r = NGX_VULKAN_CREATE_DLSSD_EXT1(
+                ctx_.device(), initCb, 1u, 1u, &featureRR_, paramsRR_, &cp);
+        if (NVSDK_NGX_FAILED(r) || !featureRR_) {
+            std::fprintf(stderr,
+                         "[threepp] DLSS-RR: feature creation failed (0x%08x) - render %ux%u, "
+                         "display %ux%u, quality mode %d; SR runs.\n",
+                         static_cast<unsigned>(r), renderWidth, renderHeight,
+                         displayW_, displayH_, quality_);
+            featureRR_ = nullptr;
+            rrBlocked_ = true;
+            return false;
+        }
+
+        createGuideImage(rrDiffuseAlbedo_, renderWidth, renderHeight, "dlss.rr.diffuseAlbedo");
+        createGuideImage(rrSpecularAlbedo_, renderWidth, renderHeight, "dlss.rr.specularAlbedo");
+        // Placeholder guides, cleared once and then read for good: diffuse
+        // albedo 1 (the colour is its own demodulation), specular albedo 0.
+        const VkClearColorValue one{{1.f, 1.f, 1.f, 1.f}};
+        const VkClearColorValue zero{{0.f, 0.f, 0.f, 0.f}};
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.levelCount = 1;
+        range.layerCount = 1;
+        for (const auto& [img, value] : {std::pair{&rrDiffuseAlbedo_, one}, std::pair{&rrSpecularAlbedo_, zero}}) {
+            transition(initCb, img->image, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            vkCmdClearColorImage(initCb, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
+            transition(initCb, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+
+        rrRenderW_   = renderWidth;
+        rrRenderH_   = renderHeight;
+        rrEvalFails_ = 0;
+        std::fprintf(stderr,
+                     "[threepp] DLSS Ray Reconstruction active (%ux%u render, %ux%u display, quality mode %d).\n",
+                     renderWidth, renderHeight, displayW_, displayH_, quality_);
+        return true;
+    }
+
+    void DlssUpscaler::destroyRayReconstruction() {
+        if (featureRR_) {
+            NVSDK_NGX_VULKAN_ReleaseFeature(featureRR_);
+            featureRR_ = nullptr;
+            std::fprintf(stderr, "[threepp] DLSS Ray Reconstruction feature released.\n");
+        }
+        VkDevice d = ctx_.device();
+        destroyImage2D(ctx_.allocator(), d, rrDiffuseAlbedo_);
+        destroyImage2D(ctx_.allocator(), d, rrSpecularAlbedo_);
+        rrRenderW_ = rrRenderH_ = 0;
+        rrEvalFails_ = 0;
+    }
+
+    void DlssUpscaler::giveUpRayReconstruction() {
+        destroyRayReconstruction();
+        rrBlocked_ = true;
+        std::fprintf(stderr,
+                     "[threepp] DLSS-RR: persistent evaluate failure - off until the next display "
+                     "resize or preset change (SR runs).\n");
+    }
+
+    void DlssUpscaler::createGuideImage(Image2D& img, uint32_t width, uint32_t height, const char* name) {
+        destroyImage2D(ctx_.allocator(), ctx_.device(), img);
+        img.width = width; img.height = height; img.format = VK_FORMAT_R8G8B8A8_UNORM;
+        VkImageCreateInfo ici{};
+        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = img.format;
+        ici.extent        = {width, height, 1};
+        ici.mipLevels     = 1;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &img.image, &img.alloc, nullptr),
+              "vmaCreateImage(dlss.rr.guide)");
+        VkImageViewCreateInfo vci{};
+        vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image    = img.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = img.format;
+        vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vci.subresourceRange.levelCount = 1;
+        vci.subresourceRange.layerCount = 1;
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &img.view),
+              "vulkan::createImageView(dlss.rr.guide)");
+        ctx_.setObjectName(img.image, name);
+        ctx_.setObjectName(img.view, name);
     }
 
     void DlssUpscaler::createReactivePipeline() {

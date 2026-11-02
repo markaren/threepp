@@ -1833,6 +1833,20 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 din.idsView       = gb[f].ids.view;
                 din.reactive      = true;
                 din.reactiveValue = 0.6f;
+                // Ray Reconstruction (setDlssRayReconstruction): the DLSSD
+                // evaluate replaces SR's, with the G-buffer normal (roughness
+                // in .w) as its normal guide and the camera matrices. Its
+                // albedo guides are DlssUpscaler's own placeholders.
+                const bool dlssRr = useDlssRayReconstruction();
+                if (dlssRr) {
+                    din.rayReconstruction = true;
+                    din.normalImage  = gb[f].normal.image;
+                    din.normalView   = gb[f].normal.view;
+                    din.normalFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+                    din.normalLayout = kShaderRO;
+                    std::copy(prepOut().dlssWorldToView.begin(), prepOut().dlssWorldToView.end(), din.worldToView);
+                    std::copy(prepOut().dlssViewToClip.begin(), prepOut().dlssViewToClip.end(), din.viewToClip);
+                }
                 dlssResetNext_ = false;
 
                 auto pass = g.addPass("dlss", [this, din, f](VkCommandBuffer c) mutable {
@@ -1842,6 +1856,10 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                     gpuTimings_->end(c, TP_TAA, f);
                 });
                 declareUpscaler(pass, history);
+                if (dlssRr) {
+                    pass.use(g.importImage("gbuf.normal", gb[f].normal.image, kColor, 1, kShaderRO),
+                             rg::sampled(kShaderRO));
+                }
                 addHdrPostAndFinalize(history);
             }
 #endif
