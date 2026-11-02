@@ -2810,6 +2810,21 @@ namespace threepp {
             return false;
 #endif
         }
+        // This view's frame goes through Ray Reconstruction: the primary, the
+        // DLSSD feature live, the guide images at this frame's render extent.
+        // The shade's permutation, the filters' mode and the record path's
+        // evaluate all key on it, so they agree within a frame. Defined in
+        // VulkanRenderer.cpp beside the shade dispatch.
+        [[nodiscard]] bool rrShadeActive();
+        // The knob is on and RR can run (DLSS runs, NGX reports RR): what the
+        // DLSSD feature and the shade's guide images follow.
+        [[nodiscard]] bool dlssRrWanted() const {
+#if defined(THREEPP_WITH_DLSS)
+            return dlssRrEnabled_ && useDlss() && dlss_ && dlss_->rayReconstructionAvailable();
+#else
+            return false;
+#endif
+        }
         [[nodiscard]] bool dlssRayReconstructionAvailable() const {
 #if defined(THREEPP_WITH_DLSS)
             return dlssActive_ && dlss_ && dlss_->rayReconstructionAvailable();
@@ -5539,6 +5554,11 @@ namespace threepp {
         void createRasterGbufRenderPassMS(VkSampleCountFlagBits samples);
 
         void createRasterGbufImages(uint32_t w, uint32_t h);
+        // DLSS Ray Reconstruction's guide images for this view (RasterGbufImages
+        // rr*): the render extent while the view feeds RR, 1x1 otherwise.
+        // Returns true when it (re)created them, so the caller rewrites the
+        // shade's descriptors. Idles nothing itself: the caller does.
+        bool ensureRrGuides();
 
         void createRasterCameraUbos();
 

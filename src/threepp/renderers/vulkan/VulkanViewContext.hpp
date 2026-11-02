@@ -73,6 +73,17 @@ namespace threepp::vulkan::impl {
         Image2D       fogHalf;      // rgba16f HALF-res, the sun fog march (setFogMarchHalfRes): rgb in-scatter, a = leg length; STORAGE (fog_march) + SAMPLED (shade upsample + prev-fif history), ping-ponged
         Image2D       rtaoAux;      // rgba16f HALF-res — RTAO temporal aux (.r=histLen, .g=E[ao^2], .b=near-field ao, .a=skyVis); STORAGE (rtao pass) + SAMPLED (prev-fif history), ping-ponged
         Image2D       splatDepth;   // r32f — Gaussian-splat expected view distance in world units, 0 where no cloud owns the pixel (SplatPass); FULL-RES only under setSplatDepthAov, 1x1 otherwise. STORAGE + TRANSFER (clear + AOV copy), GENERAL for its whole life
+        // DLSS Ray Reconstruction's guides, written by the shade's kRayRecon
+        // permutation and read by the DLSSD evaluate in the same frame:
+        // diffuse albedo (rgba8), specular albedo (rgba16f), signed normal +
+        // linear roughness (rgba16f), specular hit distance (r16f). STORAGE,
+        // current frame only, one copy for every slot like demodColor; render
+        // extent while RR runs on the primary view, 1x1 otherwise
+        // (VulkanRenderer::Impl::ensureRrGuides).
+        Image2D       rrDiffuseAlbedo;
+        Image2D       rrSpecularAlbedo;
+        Image2D       rrNormalRough;
+        Image2D       rrHitDist;
         Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
         // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
         // an extra depth-only prepass (overlay_depth.vert) right after

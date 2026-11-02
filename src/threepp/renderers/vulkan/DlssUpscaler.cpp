@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <utility>
 
 // NOMINMAX/WIN32_LEAN_AND_MEAN keep <windows.h> (needed for the module-dir
 // lookup) from polluting the TU.
@@ -380,12 +379,17 @@ namespace threepp::vulkan {
         }
         // Ray Reconstruction replaces the SR evaluate this frame when the
         // caller asks for it and its feature is live and not failing.
-        const bool rr = in.rayReconstruction && featureRR_ && paramsRR_ && !rayReconstructionFailing() &&
-                        in.normalView != VK_NULL_HANDLE;
-        const bool rrNormalBorrowed = rr && in.normalLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        if (rrNormalBorrowed) {
-            transition(in.cmd, in.normalImage, in.normalLayout,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        const DispatchInputs::Guide* const guides[4] = {&in.diffuseAlbedo, &in.specularAlbedo,
+                                                        &in.normalRough, &in.hitDistance};
+        bool rr = in.rayReconstruction && featureRR_ && paramsRR_ && !rayReconstructionFailing();
+        for (const auto* gd : guides) rr = rr && gd->view != VK_NULL_HANDLE;
+        // The guides rest in GENERAL (the shade's storage writes): borrowed
+        // into the sampled-read layout like the colour, handed back below.
+        if (rr) {
+            for (const auto* gd : guides) {
+                transition(in.cmd, gd->image, VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            }
         }
 
         NVSDK_NGX_Resource_VK color = wrapView(in.colorView, in.colorImage, in.colorFormat,
@@ -410,9 +414,10 @@ namespace threepp::vulkan {
         if (rr) {
             recordRayReconstruction(in, color, depth, motion, output,
                                     maskImg != VK_NULL_HANDLE ? &mask : nullptr);
-            if (rrNormalBorrowed) {
-                transition(in.cmd, in.normalImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                           in.normalLayout, VK_IMAGE_ASPECT_COLOR_BIT);
+            // UNDEFINED old layout: the next frame's shade rewrites them whole.
+            for (const auto* gd : guides) {
+                transition(in.cmd, gd->image, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
             }
             restoreInputs(in);
             return;
@@ -479,19 +484,15 @@ namespace threepp::vulkan {
                                                NVSDK_NGX_Resource_VK& output,
                                                NVSDK_NGX_Resource_VK* mask) {
         // The guides are read at the render extent, as the colour is. The
-        // packed roughness mode takes linear roughness from normals.w, which
-        // is where the G-buffer keeps it; the G-buffer stores the normal
-        // remapped to [0, 1] (n * 0.5 + 0.5), not the signed unit vector the
-        // RR guide asks for, which the placeholder accepts.
-        NVSDK_NGX_Resource_VK normals = wrapView(in.normalView, in.normalImage, in.normalFormat,
-                                                 in.renderWidth, in.renderHeight,
-                                                 VK_IMAGE_ASPECT_COLOR_BIT, false);
-        NVSDK_NGX_Resource_VK diffuse = wrapView(rrDiffuseAlbedo_.view, rrDiffuseAlbedo_.image,
-                                                 rrDiffuseAlbedo_.format, in.renderWidth, in.renderHeight,
-                                                 VK_IMAGE_ASPECT_COLOR_BIT, false);
-        NVSDK_NGX_Resource_VK specular = wrapView(rrSpecularAlbedo_.view, rrSpecularAlbedo_.image,
-                                                  rrSpecularAlbedo_.format, in.renderWidth, in.renderHeight,
-                                                  VK_IMAGE_ASPECT_COLOR_BIT, false);
+        // packed roughness mode takes linear roughness from normals.w.
+        auto guide = [&](const DispatchInputs::Guide& gd) {
+            return wrapView(gd.view, gd.image, gd.format, in.renderWidth, in.renderHeight,
+                            VK_IMAGE_ASPECT_COLOR_BIT, false);
+        };
+        NVSDK_NGX_Resource_VK normals  = guide(in.normalRough);
+        NVSDK_NGX_Resource_VK diffuse  = guide(in.diffuseAlbedo);
+        NVSDK_NGX_Resource_VK specular = guide(in.specularAlbedo);
+        NVSDK_NGX_Resource_VK hitDist  = guide(in.hitDistance);
         // NGX takes the matrices through non-const pointers it only reads.
         float worldToView[16];
         float viewToClip[16];
@@ -515,8 +516,9 @@ namespace threepp::vulkan {
         ev.InPreExposure     = in.preExposure > 0.f ? in.preExposure : 1.f;
         ev.InFrameTimeDeltaInMsec = in.frameTimeDeltaMs > 0.f ? in.frameTimeDeltaMs : 16.6f;
         ev.pInBiasCurrentColorMask = mask;
-        ev.pInWorldToViewMatrix = worldToView;
-        ev.pInViewToClipMatrix  = viewToClip;
+        ev.pInSpecularHitDistance = &hitDist;
+        ev.pInWorldToViewMatrix   = worldToView;
+        ev.pInViewToClipMatrix    = viewToClip;
 
         const NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSSD_EXT(in.cmd, featureRR_, paramsRR_, &ev);
         if (NVSDK_NGX_FAILED(r)) {
@@ -598,24 +600,6 @@ namespace threepp::vulkan {
             return false;
         }
 
-        createGuideImage(rrDiffuseAlbedo_, renderWidth, renderHeight, "dlss.rr.diffuseAlbedo");
-        createGuideImage(rrSpecularAlbedo_, renderWidth, renderHeight, "dlss.rr.specularAlbedo");
-        // Placeholder guides, cleared once and then read for good: diffuse
-        // albedo 1 (the colour is its own demodulation), specular albedo 0.
-        const VkClearColorValue one{{1.f, 1.f, 1.f, 1.f}};
-        const VkClearColorValue zero{{0.f, 0.f, 0.f, 0.f}};
-        VkImageSubresourceRange range{};
-        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        range.levelCount = 1;
-        range.layerCount = 1;
-        for (const auto& [img, value] : {std::pair{&rrDiffuseAlbedo_, one}, std::pair{&rrSpecularAlbedo_, zero}}) {
-            transition(initCb, img->image, VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-            vkCmdClearColorImage(initCb, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
-            transition(initCb, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-        }
-
         rrRenderW_   = renderWidth;
         rrRenderH_   = renderHeight;
         rrEvalFails_ = 0;
@@ -631,9 +615,6 @@ namespace threepp::vulkan {
             featureRR_ = nullptr;
             std::fprintf(stderr, "[threepp] DLSS Ray Reconstruction feature released.\n");
         }
-        VkDevice d = ctx_.device();
-        destroyImage2D(ctx_.allocator(), d, rrDiffuseAlbedo_);
-        destroyImage2D(ctx_.allocator(), d, rrSpecularAlbedo_);
         rrRenderW_ = rrRenderH_ = 0;
         rrEvalFails_ = 0;
     }
@@ -644,39 +625,6 @@ namespace threepp::vulkan {
         std::fprintf(stderr,
                      "[threepp] DLSS-RR: persistent evaluate failure - off until the next display "
                      "resize or preset change (SR runs).\n");
-    }
-
-    void DlssUpscaler::createGuideImage(Image2D& img, uint32_t width, uint32_t height, const char* name) {
-        destroyImage2D(ctx_.allocator(), ctx_.device(), img);
-        img.width = width; img.height = height; img.format = VK_FORMAT_R8G8B8A8_UNORM;
-        VkImageCreateInfo ici{};
-        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ici.imageType     = VK_IMAGE_TYPE_2D;
-        ici.format        = img.format;
-        ici.extent        = {width, height, 1};
-        ici.mipLevels     = 1;
-        ici.arrayLayers   = 1;
-        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
-        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &img.image, &img.alloc, nullptr),
-              "vmaCreateImage(dlss.rr.guide)");
-        VkImageViewCreateInfo vci{};
-        vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vci.image    = img.image;
-        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format   = img.format;
-        vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        vci.subresourceRange.levelCount = 1;
-        vci.subresourceRange.layerCount = 1;
-        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &img.view),
-              "vulkan::createImageView(dlss.rr.guide)");
-        ctx_.setObjectName(img.image, name);
-        ctx_.setObjectName(img.view, name);
     }
 
     void DlssUpscaler::createReactivePipeline() {

@@ -41,6 +41,13 @@ namespace threepp {
     // shade rays traverse them via ray query from COMPUTE) and the previous
     // frame-in-flight's writes to the GI/shadow/reflection histories this
     // frame reprojects from.
+    bool VulkanRenderer::Impl::rrShadeActive() {
+        const auto& g0 = view().rasterGbufs[0];
+        return !view().secondary && useDlssRayReconstruction() &&
+               g0.rrDiffuseAlbedo.width == regionRenderExt_.width &&
+               g0.rrDiffuseAlbedo.height == regionRenderExt_.height;
+    }
+
     void VulkanRenderer::Impl::addSceneDispatchPasses(vulkan::rg::RenderGraph& g, DispatchPart part) {
         namespace rg = vulkan::rg;
         using Stage  = vulkan::DeferredShade::Stage;
@@ -296,6 +303,11 @@ namespace threepp {
                                 (fogMarchSteps_ != 16u || fogMarchRtRange_ > 0.f ? kRayBudgetFog : 0u) |
                                 (shadeParams.fogHalf ? kRayBudgetFogHalf : 0u) |
                                 (sunSoftDistance_ > 0.f ? kRayBudgetSoftSun : 0u);
+        // DLSS Ray Reconstruction denoises this frame (the primary view only,
+        // and only once its guide images are the render extent): the shade's
+        // kRayRecon permutation stores raw channels and the guides, and the
+        // filters below only recombine.
+        shadeParams.rayRecon = rrShadeActive();
 
         {
             auto pass = g.addPass("shade", [this, f, shadeParams](VkCommandBuffer c) {
@@ -332,7 +344,13 @@ namespace threepp {
         // the filter reads the indirect 5×5 neighbourhood and read-modify-
         // writes sceneHdr.
         if (denoiseEnabled_) {
-            const uint32_t lightingView = view().secondary ? 0u : lightingView_;
+            // Under Ray Reconstruction the lit frame (view 0) takes the chain's
+            // unfiltered mode, lighting view 7: one recombine of the raw
+            // channels, no a-trous and no history feedback in the GI filter,
+            // and the reflections added as they are (the mirror band's
+            // pass-through, for every roughness). RR is the denoiser.
+            uint32_t lightingView = view().secondary ? 0u : lightingView_;
+            if (shadeParams.rayRecon && lightingView == 0u) lightingView = 7u;
             auto pass = g.addPass("denoise", [this, f, viewMsaaSamples, shadeBActive, lightingView](VkCommandBuffer c) {
                 gpuTimings_->begin(c, TP_Denoise, f);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
                 view().deferredShade_->recordFilterAndComposite(c, f, regionRenderExt_.width, regionRenderExt_.height,

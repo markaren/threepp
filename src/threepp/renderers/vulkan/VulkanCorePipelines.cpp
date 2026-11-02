@@ -230,7 +230,11 @@ void VulkanRenderer::Impl::destroyRasterGbufImages() {
                                          std::pair{&g.demodColor, &g0.demodColor},
                                          std::pair{&g.shadowAtrousA, &g0.shadowAtrousA},
                                          std::pair{&g.shadowAtrousB, &g0.shadowAtrousB},
-                                         std::pair{&g.froxelLut, &g0.froxelLut}}) {
+                                         std::pair{&g.froxelLut, &g0.froxelLut},
+                                         std::pair{&g.rrDiffuseAlbedo, &g0.rrDiffuseAlbedo},
+                                         std::pair{&g.rrSpecularAlbedo, &g0.rrSpecularAlbedo},
+                                         std::pair{&g.rrNormalRough, &g0.rrNormalRough},
+                                         std::pair{&g.rrHitDist, &g0.rrHitDist}}) {
                     if (img->image == img0->image) *img = {};
                 }
             }
@@ -268,6 +272,10 @@ void VulkanRenderer::Impl::destroyRasterGbufImages() {
                 destroyImage2D(ctx->allocator(), d, g.rtaoAux);
                 destroyImage2D(ctx->allocator(), d, g.fogHalf);
                 destroyImage2D(ctx->allocator(), d, g.splatDepth);
+                destroyImage2D(ctx->allocator(), d, g.rrDiffuseAlbedo);
+                destroyImage2D(ctx->allocator(), d, g.rrSpecularAlbedo);
+                destroyImage2D(ctx->allocator(), d, g.rrNormalRough);
+                destroyImage2D(ctx->allocator(), d, g.rrHitDist);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 destroyImage2D(ctx->allocator(), d, g.normalMS);
@@ -1050,6 +1058,69 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                                      0, 1, &mb, 0, nullptr, 0, nullptr);
             }
             endAndSubmitOneShot(initCb, "rasterGbuf init layouts");
+            ensureRrGuides();
+        }
+
+bool VulkanRenderer::Impl::ensureRrGuides() {
+            // Render extent while this view feeds DLSS Ray Reconstruction, 1x1
+            // otherwise: four full-size images no frame writes would be memory
+            // for nothing, and the descriptors only need something bound.
+            const bool wanted = !view().secondary && dlssRrWanted();
+            const VkExtent2D ext = wanted ? renderExtent() : VkExtent2D{1u, 1u};
+            auto& g0 = view().rasterGbufs[0];
+            if (g0.rrDiffuseAlbedo.image != VK_NULL_HANDLE && g0.rrDiffuseAlbedo.width == ext.width &&
+                g0.rrDiffuseAlbedo.height == ext.height) return false;
+            VkDevice d = ctx->device();
+            for (size_t fi = 1; fi < view().rasterGbufs.size(); ++fi) {
+                auto& g = view().rasterGbufs[fi];
+                g.rrDiffuseAlbedo = {};
+                g.rrSpecularAlbedo = {};
+                g.rrNormalRough = {};
+                g.rrHitDist = {};
+            }
+            destroyImage2D(ctx->allocator(), d, g0.rrDiffuseAlbedo);
+            destroyImage2D(ctx->allocator(), d, g0.rrSpecularAlbedo);
+            destroyImage2D(ctx->allocator(), d, g0.rrNormalRough);
+            destroyImage2D(ctx->allocator(), d, g0.rrHitDist);
+            // Written by the shade and read by the DLSSD evaluate in the same
+            // frame: one copy for every slot, as demodColor.
+            const VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            g0.rrDiffuseAlbedo  = createAttachmentImage2D(ext.width, ext.height, VK_FORMAT_R8G8B8A8_UNORM, usage,
+                                                          VK_IMAGE_ASPECT_COLOR_BIT, "rasterGbuf.rrDiffuseAlbedo");
+            g0.rrSpecularAlbedo = createAttachmentImage2D(ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT, usage,
+                                                          VK_IMAGE_ASPECT_COLOR_BIT, "rasterGbuf.rrSpecularAlbedo");
+            g0.rrNormalRough    = createAttachmentImage2D(ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT, usage,
+                                                          VK_IMAGE_ASPECT_COLOR_BIT, "rasterGbuf.rrNormalRough");
+            g0.rrHitDist        = createAttachmentImage2D(ext.width, ext.height, VK_FORMAT_R16_SFLOAT, usage,
+                                                          VK_IMAGE_ASPECT_COLOR_BIT, "rasterGbuf.rrHitDist");
+            for (size_t fi = 1; fi < view().rasterGbufs.size(); ++fi) {
+                auto& g = view().rasterGbufs[fi];
+                g.rrDiffuseAlbedo  = g0.rrDiffuseAlbedo;
+                g.rrSpecularAlbedo = g0.rrSpecularAlbedo;
+                g.rrNormalRough    = g0.rrNormalRough;
+                g.rrHitDist        = g0.rrHitDist;
+            }
+            // Storage images rest in GENERAL, as the shade's other outputs.
+            VkCommandBuffer initCb = beginOneShot();
+            VkImageMemoryBarrier b[4]{};
+            const VkImage images[4] = {g0.rrDiffuseAlbedo.image, g0.rrSpecularAlbedo.image,
+                                       g0.rrNormalRough.image, g0.rrHitDist.image};
+            for (int i = 0; i < 4; ++i) {
+                b[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b[i].image = images[i];
+                b[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                b[i].subresourceRange.levelCount = 1;
+                b[i].subresourceRange.layerCount = 1;
+                b[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            }
+            vkCmdPipelineBarrier(initCb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0, 0, nullptr, 0, nullptr, 4, b);
+            endAndSubmitOneShot(initCb, "RR guide images init layouts");
+            return true;
         }
 
 void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {

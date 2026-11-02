@@ -230,6 +230,10 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             std::array<VkImageView, kFramesInFlight> rtaoViews{};
             std::array<VkImageView, kFramesInFlight> rtaoAuxViews{};
             std::array<VkImageView, kFramesInFlight> fogHalfViews{};
+            std::array<VkImageView, kFramesInFlight> rrDiffuseAlbedoViews{};
+            std::array<VkImageView, kFramesInFlight> rrSpecularAlbedoViews{};
+            std::array<VkImageView, kFramesInFlight> rrNormalRoughViews{};
+            std::array<VkImageView, kFramesInFlight> rrHitDistViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
             std::array<VkBuffer, kFramesInFlight> cloudBufs{};
@@ -278,6 +282,10 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 rtaoViews[f]          = view().rasterGbufs[f].rtao.view;
                 rtaoAuxViews[f]       = view().rasterGbufs[f].rtaoAux.view;
                 fogHalfViews[f]       = view().rasterGbufs[f].fogHalf.view;
+                rrDiffuseAlbedoViews[f]  = view().rasterGbufs[f].rrDiffuseAlbedo.view;
+                rrSpecularAlbedoViews[f] = view().rasterGbufs[f].rrSpecularAlbedo.view;
+                rrNormalRoughViews[f]    = view().rasterGbufs[f].rrNormalRough.view;
+                rrHitDistViews[f]        = view().rasterGbufs[f].rrHitDist.view;
                 sceneHdrViews[f] = view().bloom_->sceneHdrView(f);
                 const bool haveMS = gbufMsaaSamples_ > 1 && view().rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
                 normalMSViews[f] = haveMS ? view().rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
@@ -323,6 +331,10 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.rtao             = rtaoViews.data();
             in.rtaoAux          = rtaoAuxViews.data();
             in.fogHalf          = fogHalfViews.data();
+            in.rrDiffuseAlbedo  = rrDiffuseAlbedoViews.data();
+            in.rrSpecularAlbedo = rrSpecularAlbedoViews.data();
+            in.rrNormalRough    = rrNormalRoughViews.data();
+            in.rrHitDist        = rrHitDistViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.fogBuf           = fogBufs.data();
             in.fogRange         = sizeof(GpuFogUbo);

@@ -714,8 +714,10 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     // binary boil (seen on the Bistro awning wall). No confidence → no top-up
     // (poor ROI on a minority term) → gShadowSunTopUp stays false → the
     // temporal's release path stays disabled and history grows normally.
+    // Not under Ray Reconstruction (kRR): RR denoises the one-ray estimate
+    // itself and has no history to protect from a sweeping shadow.
     gShadowSunTopUp = false;
-    if (!flagOn(512u) && lights.dirCount > 0u && lw[0] > 0.5 * wSum) {
+    if (!kRR && !flagOn(512u) && lights.dirCount > 0u && lw[0] > 0.5 * wSum) {
         bool topUp = gShadowMovingOccluder;
         // Prev-aux fetch deferred behind the cheaper predicates: most pixels
         // (sun-minor, or flagged already) never pay it.

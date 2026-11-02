@@ -1834,16 +1834,16 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 din.reactive      = true;
                 din.reactiveValue = 0.6f;
                 // Ray Reconstruction (setDlssRayReconstruction): the DLSSD
-                // evaluate replaces SR's, with the G-buffer normal (roughness
-                // in .w) as its normal guide and the camera matrices. Its
-                // albedo guides are DlssUpscaler's own placeholders.
-                const bool dlssRr = useDlssRayReconstruction();
+                // evaluate replaces SR's, with the four guides this frame's
+                // shade wrote (its kRayRecon permutation, the same
+                // rrShadeActive verdict) and the camera matrices.
+                const bool dlssRr = rrShadeActive();
                 if (dlssRr) {
                     din.rayReconstruction = true;
-                    din.normalImage  = gb[f].normal.image;
-                    din.normalView   = gb[f].normal.view;
-                    din.normalFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-                    din.normalLayout = kShaderRO;
+                    din.diffuseAlbedo  = {gb[f].rrDiffuseAlbedo.image, gb[f].rrDiffuseAlbedo.view, VK_FORMAT_R8G8B8A8_UNORM};
+                    din.specularAlbedo = {gb[f].rrSpecularAlbedo.image, gb[f].rrSpecularAlbedo.view, VK_FORMAT_R16G16B16A16_SFLOAT};
+                    din.normalRough    = {gb[f].rrNormalRough.image, gb[f].rrNormalRough.view, VK_FORMAT_R16G16B16A16_SFLOAT};
+                    din.hitDistance    = {gb[f].rrHitDist.image, gb[f].rrHitDist.view, VK_FORMAT_R16_SFLOAT};
                     std::copy(prepOut().dlssWorldToView.begin(), prepOut().dlssWorldToView.end(), din.worldToView);
                     std::copy(prepOut().dlssViewToClip.begin(), prepOut().dlssViewToClip.end(), din.viewToClip);
                 }
@@ -1857,8 +1857,15 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 });
                 declareUpscaler(pass, history);
                 if (dlssRr) {
-                    pass.use(g.importImage("gbuf.normal", gb[f].normal.image, kColor, 1, kShaderRO),
-                             rg::sampled(kShaderRO));
+                    // Borrowed from GENERAL and handed back with UNDEFINED as the
+                    // old layout, like the colour (declareUpscaler): to the
+                    // graph a discarding read.
+                    const rg::Access discard{VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, kGeneral, true};
+                    pass.use(g.importImage("rr.diffuseAlbedo", gb[f].rrDiffuseAlbedo.image, kColor, 1, kGeneral), discard)
+                            .use(g.importImage("rr.specularAlbedo", gb[f].rrSpecularAlbedo.image, kColor, 1, kGeneral), discard)
+                            .use(g.importImage("rr.normalRough", gb[f].rrNormalRough.image, kColor, 1, kGeneral), discard)
+                            .use(g.importImage("rr.hitDist", gb[f].rrHitDist.image, kColor, 1, kGeneral), discard);
                 }
                 addHdrPostAndFinalize(history);
             }

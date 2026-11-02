@@ -80,6 +80,9 @@
 //   --static 1       knot does not rotate
 //   --frames N, --w W, --h H, --autolod 1, --autoexp 0,
 //   --restir 0|1, --ao 0|1, --denoise 0|1
+//   --rr 1           DLSS Ray Reconstruction on (where the scene runs DLSS:
+//                    room_fx, room_dlss); never a baseline, its output moves
+//                    with every NGX DLL
 //   --time N         after the run, N more frames; prints the median GPU frame
 //                    time and CPU record time (first 8 dropped), then a PASS
 //                    line per render-graph pass (median row, frames seen) and
@@ -532,7 +535,7 @@ int main(int argc, char** argv) {
     bool noViews = false;// --noviews 1: skip addView (the primary alone)
     bool selfCheck = false;
     int probe = -1, restir = -1, ao = -1, denoise = -1;// -1 = renderer default
-    int occl = 0, msaa = 0;
+    int occl = 0, msaa = 0, rayRecon = 0;
     std::string auditPath;
     int staticScene = 0;
     int frames = 48, W = 640, H = 400;
@@ -553,6 +556,7 @@ int main(int argc, char** argv) {
         else if (const char* s = val("--audit")) auditPath = s;
         else if (const char* s = val("--static")) staticScene = std::atoi(s);
         else if (const char* s = val("--msaa")) msaa = std::atoi(s);
+        else if (const char* s = val("--rr")) rayRecon = std::atoi(s);
         else if (const char* s = val("--time")) timeFrames = std::atoi(s);
         else if (const char* s = val("--aa")) aa = std::atoi(s);
         else if (const char* s = val("--noviews")) noViews = std::atoi(s) != 0;
@@ -702,6 +706,7 @@ int main(int argc, char** argv) {
     }
     renderer.setAutoLod(autoLod != 0);
     if (denoise >= 0) renderer.setDenoise(denoise != 0);
+    if (rayRecon) renderer.setDlssRayReconstruction(true);
     if (occl) renderer.setOcclusionCulling(true);
     if (msaa > 1) renderer.setGbufferMsaa(static_cast<uint32_t>(msaa));
     if (ao >= 0) renderer.setDeferredAO(ao != 0);

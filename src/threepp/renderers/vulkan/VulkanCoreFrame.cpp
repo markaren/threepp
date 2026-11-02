@@ -1815,10 +1815,19 @@ void VulkanRenderer::Impl::syncDlssRayReconstruction() {
             }
             // The DLSSD feature follows the knob, DLSS itself and the render
             // extent (RR is created at the render size; see DlssUpscaler).
-            const bool wanted = dlssRrEnabled_ && useDlss();
+            const bool wanted = dlssRrWanted();
             const VkExtent2D render = renderExtent();
-            if (!dlss_->rayReconstructionNeedsSync(wanted, render.width, render.height)) return;
-            vkDeviceWaitIdle(ctx->device());// the feature being replaced may still be in flight
+            // The shade's guide images follow the same state (ensureRrGuides):
+            // render-sized while RR runs, 1x1 otherwise.
+            const auto& g0 = view().rasterGbufs[0];
+            const VkExtent2D guides = wanted ? render : VkExtent2D{1u, 1u};
+            const bool guidesStale = g0.rrDiffuseAlbedo.width != guides.width ||
+                                     g0.rrDiffuseAlbedo.height != guides.height;
+            const bool featureStale = dlss_->rayReconstructionNeedsSync(wanted, render.width, render.height);
+            if (!featureStale && !guidesStale) return;
+            vkDeviceWaitIdle(ctx->device());// what is being replaced may still be in flight
+            if (guidesStale && ensureRrGuides()) rewriteDeferredDescriptors();
+            if (!featureStale) return;
             if (wanted) {
                 VkCommandBuffer initCb = beginOneShot();
                 dlss_->createRayReconstruction(initCb, render.width, render.height);

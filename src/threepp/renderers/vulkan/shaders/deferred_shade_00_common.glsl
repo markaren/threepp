@@ -78,6 +78,14 @@ float gPdLegT = 1.0;
 // default, every one, keeps their runtime tests: the shade's other pipelines
 // (fog_march.comp) take it unspecialized.
 layout(constant_id = 4) const uint kRayBudget = kRayBudgetAll;
+// 1 = this dispatch feeds DLSS Ray Reconstruction (setDlssRayReconstruction):
+// every channel stores this frame's raw sample (no temporal accumulation, no
+// checkerboard, one GI and one shadow ray, no sun top-up) and the shade writes
+// RR's guide images (deferred_shade.comp, bindings 87-90). RR denoises one
+// independent sample per pixel; a history it did not make would be smeared
+// twice. 0, the default, is the kernel without any of it.
+layout(constant_id = 5) const uint kRayRecon = 0u;
+const bool kRR = kRayRecon != 0u;
 
 // Ray-query counters (VulkanRenderer::setCountRays, frame_timings rays_*):
 // lights.rayCountAddr names this frame's kRayCountSlots uints (0 = off). Every

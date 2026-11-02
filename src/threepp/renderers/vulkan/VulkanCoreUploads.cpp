@@ -677,6 +677,9 @@ namespace threepp {
         // Phase count scales with the upscale ratio (FSR2-style) so the
         // sequence covers the output grid when renderScale < 1.
         uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
+        // DLSS Ray Reconstruction asks for many more jitter positions than the
+        // upscaler's 8 at native scale ("at least 32", the RR guide's 3.6).
+        if (dlssRrWanted()) phaseCount = std::max(phaseCount, 32u);
 #if defined(THREEPP_WITH_FSR)
         // When FSR is the active upscaler, drive the jitter from FSR's own
         // sequence (its phase count tracks the render/display ratio). The raster
@@ -725,7 +728,9 @@ namespace threepp {
             prepOut().dlssJitterX = jx;
             prepOut().dlssJitterY = jy;
             prepOut().dlssWorldToView = camera.matrixWorldInverse.elements;
-            prepOut().dlssViewToClip  = camera.projectionMatrix.elements;
+            // The projection the raster ran with, unjittered: reverse-Z, as the
+            // depth buffer RR is given (the shade's projInverse, inverted back).
+            prepOut().dlssViewToClip  = reverseZVk(camera.projectionMatrix).elements;
         }
 #endif
     }

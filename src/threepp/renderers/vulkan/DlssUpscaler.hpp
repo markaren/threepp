@@ -10,12 +10,11 @@
 // the same seam, opt-in through VulkanRenderer::setDlssRayReconstruction. It
 // replaces the SR evaluate on the frames it runs (the RR guide: "when DLSS-RR
 // is enabled, DLSS-SR is no longer being executed") and takes SR's inputs plus
-// guide images: diffuse and specular albedo, and the normals with roughness in
-// .w (the packed roughness mode). The SR feature stays alive beside it, so the
-// fallback after a sticky RR failure is SR, not the TAA. The guides are
-// placeholders for now (diffuse 1, specular 0, the G-buffer normal image),
-// which proves the feature's lifecycle; the shade writes real ones later
-// (plans/dlss-ray-reconstruction.md).
+// guide images the deferred shade writes in its Ray Reconstruction
+// permutation: diffuse and specular albedo, the normal with roughness in .w
+// (the packed roughness mode) and the specular hit distance. The SR feature
+// stays alive beside it, so the fallback after a sticky RR failure is SR, not
+// the TAA (plans/dlss-ray-reconstruction.md).
 //
 // This class encapsulates ALL NGX usage so the rest of the renderer never sees
 // an NGX type. Unlike the FFX runtime there is no dllexport trap: the NGX entry
@@ -168,19 +167,23 @@ namespace threepp::vulkan {
             float         reactiveValue = 0.6f;
 
             // Ray Reconstruction. When set and rayReconstructionValid(), the
-            // DLSSD evaluate runs instead of SR's. normal* is the G-buffer
-            // normal (rgba16f, linear roughness in .w: the packed roughness
-            // mode reads it there), left in its layout when that is already
-            // SHADER_READ_ONLY_OPTIMAL. The matrices are the camera's view and
-            // projection: NGX wants them row-major for row vectors (v * M),
-            // which is the transpose of threepp's column-vector matrices and
-            // so exactly their column-major element arrays. NGX reads them
-            // only with a specular hit distance, which nothing feeds yet.
-            bool          rayReconstruction = false;
-            VkImage       normalImage  = VK_NULL_HANDLE;
-            VkImageView   normalView   = VK_NULL_HANDLE;
-            VkFormat      normalFormat = VK_FORMAT_UNDEFINED;
-            VkImageLayout normalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            // DLSSD evaluate runs instead of SR's, with the shade's four guide
+            // images (render extent, resting in GENERAL, borrowed and handed
+            // back like the colour): diffuse and specular albedo, the signed
+            // normal with linear roughness in .w (the packed roughness mode)
+            // and the specular hit distance. The matrices are the camera's
+            // view and its unjittered reverse-Z projection: NGX wants them
+            // row-major for row vectors (v * M), the transpose of threepp's
+            // column-vector matrices and so exactly their column-major element
+            // arrays. NGX reads them with the hit distance, to move the
+            // reflected content by its own parallax.
+            struct Guide {
+                VkImage     image  = VK_NULL_HANDLE;
+                VkImageView view   = VK_NULL_HANDLE;
+                VkFormat    format = VK_FORMAT_UNDEFINED;
+            };
+            bool  rayReconstruction = false;
+            Guide diffuseAlbedo, specularAlbedo, normalRough, hitDistance;
             float worldToView[16]{};
             float viewToClip[16]{};
         };
@@ -204,11 +207,10 @@ namespace threepp::vulkan {
         [[nodiscard]] bool rayReconstructionFailing() const { return rrEvalFails_ >= 3; }
         [[nodiscard]] bool rayReconstructionNeedsSync(bool wanted,
                                                       uint32_t renderWidth, uint32_t renderHeight) const;
-        // Creates the DLSSD feature (releasing any old one first) and its
-        // placeholder guide images, recording the NGX init work and the guide
-        // clears into initCb, which the caller submits and waits. Needs a
-        // live SR feature (create() succeeded). The caller idles the device
-        // before replacing a feature that may still be in flight.
+        // Creates the DLSSD feature (releasing any old one first), recording
+        // the NGX init work into initCb, which the caller submits and waits.
+        // Needs a live SR feature (create() succeeded). The caller idles the
+        // device before replacing a feature that may still be in flight.
         bool createRayReconstruction(VkCommandBuffer initCb,
                                      uint32_t renderWidth, uint32_t renderHeight);
         void destroyRayReconstruction();
@@ -247,12 +249,6 @@ namespace threepp::vulkan {
         bool     rrBlocked_    = false;
         uint32_t rrRenderW_ = 0, rrRenderH_ = 0;
         uint32_t rrEvalFails_ = 0;
-        // Placeholder guides at the RR render extent: diffuse albedo 1 and
-        // specular albedo 0 (rgba8 unorm, cleared once at creation, then
-        // SHADER_READ_ONLY_OPTIMAL for good).
-        Image2D rrDiffuseAlbedo_;
-        Image2D rrSpecularAlbedo_;
-        void createGuideImage(Image2D& img, uint32_t width, uint32_t height, const char* name);
         void recordRayReconstruction(const DispatchInputs& in,
                                      NVSDK_NGX_Resource_VK& color, NVSDK_NGX_Resource_VK& depth,
                                      NVSDK_NGX_Resource_VK& motion, NVSDK_NGX_Resource_VK& output,

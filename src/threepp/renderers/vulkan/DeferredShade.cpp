@@ -40,7 +40,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 86;
+    constexpr uint32_t kDeferredBindingCount = 90;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -287,6 +287,12 @@ namespace threepp::vulkan {
         set(84, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // fogHalf CUR
         set(85, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // fogHalf PREV
         set(86, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // fogHalf CUR sampled
+        // DLSS Ray Reconstruction's guides, written by the shade's kRayRecon
+        // permutation and read by the DLSSD evaluate (1x1 images while off).
+        set(87, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // RR diffuse albedo (rgba8)
+        set(88, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // RR specular albedo (rgba16f)
+        set(89, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // RR normal + roughness (rgba16f)
+        set(90, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // RR specular hit distance (r16f)
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -1139,6 +1145,15 @@ namespace threepp::vulkan {
             setw(83, 84, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &fogCurInfo,        nullptr);
             setw(84, 85, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogPrevInfo,       nullptr);
             setw(85, 86, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogCurSampledInfo, nullptr);
+            // DLSS Ray Reconstruction's guides (87-90), storage in GENERAL.
+            VkDescriptorImageInfo rrInfo[4]{};
+            const VkImageView* const rrViews[4] = {in.rrDiffuseAlbedo, in.rrSpecularAlbedo,
+                                                   in.rrNormalRough, in.rrHitDist};
+            for (uint32_t i = 0; i < 4; ++i) {
+                rrInfo[i].imageView   = rrViews[i][f];
+                rrInfo[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                setw(86 + static_cast<int>(i), 87u + i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &rrInfo[i], nullptr);
+            }
             // Without ray query the layout has no binding 8: drop its write.
             uint32_t writeCount = static_cast<uint32_t>(w.size());
             if (!ctx_.rayQuerySupported()) {
@@ -1202,15 +1217,18 @@ namespace threepp::vulkan {
 
     // The shade pipeline for this dispatch: the permutation for
     // key = (flags & mask) | probe state << 32 | shadow maps << 40 | the ray
-    // budget features << 41, built on first use (see createPipeline). With no
-    // knob set the key is the MSAA code and the shadow mode alone, so an app
-    // holds one pipeline per G-buffer sample count and shadow mode its views
-    // use, and one more for each set of ray-budget knobs it turns on.
-    VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget) {
+    // budget features << 41 | Ray Reconstruction << 45, built on first use
+    // (see createPipeline). With no knob set the key is the MSAA code and the
+    // shadow mode alone, so an app holds one pipeline per G-buffer sample count
+    // and shadow mode its views use, and one more for each set of ray-budget
+    // knobs it turns on.
+    VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget,
+                                            bool rayRecon) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
-                             (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u);
+                             (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u) |
+                             (rayRecon ? (1ull << 45u) : 0ull);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1220,13 +1238,14 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 5> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+        const std::array<uint32_t, 6> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
                                             static_cast<uint32_t>((key >> 40u) & 1u),
-                                            static_cast<uint32_t>((key >> 41u) & kRayBudgetAll)};
-        std::array<VkSpecializationMapEntry, 5> entries{};
-        for (uint32_t i = 0; i < 5; ++i) {
-            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget
+                                            static_cast<uint32_t>((key >> 41u) & kRayBudgetAll),
+                                            static_cast<uint32_t>((key >> 45u) & 1u)};
+        std::array<VkSpecializationMapEntry, 6> entries{};
+        for (uint32_t i = 0; i < 6; ++i) {
+            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon
             entries[i].offset     = i * sizeof(uint32_t);
             entries[i].size       = sizeof(uint32_t);
         }
@@ -1321,7 +1340,8 @@ namespace threepp::vulkan {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         const ShadePush push = shadePush(p);
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget));
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget, p.rayRecon));
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
     }

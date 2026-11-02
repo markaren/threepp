@@ -162,6 +162,14 @@ namespace threepp::vulkan {
             // setFogMarchHalfRes (84 storage, 85 prev, 86 sampled): the half-res
             // sun march, (rgb, leg length), ping-ponged like rtao.
             const VkImageView* fogHalf = nullptr;// [framesInFlight] rgba16f half-res
+            // DLSS Ray Reconstruction's guides (87-90, storage, written by
+            // the shade's kRayRecon permutation): diffuse albedo (rgba8),
+            // specular albedo (rgba16f), normal + roughness (rgba16f) and
+            // specular hit distance (r16f). 1x1 images while RR is off.
+            const VkImageView* rrDiffuseAlbedo  = nullptr;// [framesInFlight]
+            const VkImageView* rrSpecularAlbedo = nullptr;// [framesInFlight]
+            const VkImageView* rrNormalRough    = nullptr;// [framesInFlight]
+            const VkImageView* rrHitDist        = nullptr;// [framesInFlight]
             // ParticleField density volumes (bindings 67/68) — plan §3.3. A
             // FIXED-SIZE array of r32ui 3D images sampled by the froxel passes
             // through mediumExtinction, plus the small std140 UBO that says
@@ -331,6 +339,9 @@ namespace threepp::vulkan {
             // The kRayBudget* features whose knobs are on (vulkan_shared.h):
             // the shade's kRayBudget permutation (constant_id 4).
             uint32_t rayBudget = 0;
+            // This dispatch feeds DLSS Ray Reconstruction: the shade's
+            // kRayRecon permutation (constant_id 5), raw channels and guides.
+            bool rayRecon = false;
         };
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
@@ -471,7 +482,7 @@ namespace threepp::vulkan {
         bool                  specProbe_    = false;// THREEPP_VK_SHADE_SPEC_PROBE
         VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept for the lazy creates
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
-        VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget);
+        VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget, bool rayRecon);
         VkPipeline createShadePipeline(uint64_t key);
         // What the pipeline-cache blob holds of the shade, kept in a text file
         // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"
