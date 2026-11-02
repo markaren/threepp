@@ -243,16 +243,13 @@ void main() {
         imageStore(shadowVisImage, px, vec4(0.0));// water shadows its own lighting inline
         imageStore(directUImage, px, vec4(0.0));
         imageStore(demodColorImage, px, vec4(0.0));
-        // Water for RR: no diffuse, the Fresnel of an F0 0.02 surface at the
-        // roughness the chop banked, and the last trace shadeWater made as
-        // the hit distance. An approximation until water has its own guides
-        // (plans/dlss-ray-reconstruction.md, phase 2).
-        if (kRR) {
-            const float wr = clamp(sqrt(max(fineKernelSq, 0.0)) + 0.03, 0.0, 1.0);
-            const vec2  wab = envBRDFApprox(max(dot(N, V), 1e-4), wr);
-            storeRRGuides(px, vec3(0.0), vec3(0.02 * wab.x + wab.y), N, wr,
-                          gTraceHitT > 0.0 ? gTraceHitT : kRRMissDist);
-        }
+        // Water for RR: a pure specular surface (no diffuse albedo; the RR
+        // guide names none for one), shadeWater's own Fresnel as the specular
+        // albedo, the effective roughness its reflection lobe was traced with,
+        // and that reflection ray's hit distance (shadeWater latches all three
+        // before its refraction rays run).
+        storeRRGuides(px, vec3(0.0), gRRSpecF, N, gRRSpecRough,
+                      gRRReflHitT > 0.0 ? gRRReflHitT : kRRMissDist);
         return;
     }
 
@@ -794,6 +791,7 @@ void main() {
     vec3 reflOut = vec3(0.0);
     float reflHitT = -1.0;// reflected-content distance (see the trace below)
     float rrHitT   = 0.0;// the same for RR's guide: 0 untraced, kRRMissDist on an escape
+    float rrGlassT = 0.0;// RR: the glass share of this pixel (its transmission), 0 off glass
     // CHECKERBOARD reflections (OPPOSITE parity to giSkip → an eligible pixel
     // traces exactly ONE indirect channel per frame): with ≥4 frames of usable
     // history, skip the whole traceRadiance chain and HOLD the accumulation.
@@ -1089,7 +1087,11 @@ void main() {
                                                       primUv, vec3(1.0)).r,
                                              0.0, 1.0);
                 const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, roughMat, shadowsOn, maxLod, seed);
-                if (kRR) rrHitT = gTraceHitT > 0.0 ? gTraceHitT : kRRMissDist;// the glass's last trace
+                if (kRR) {
+                    // The glass's reflection ray, not its last (transmission) trace.
+                    rrHitT   = gRRReflHitT > 0.0 ? gRRReflHitT : kRRMissDist;
+                    rrGlassT = gt;
+                }
                 if (denoiseOn) {
                     // Demodulate the mix(): hand glassCol·t to the reflection denoise
                     // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
@@ -1714,10 +1716,12 @@ void main() {
     // share of a transmissive surface). Specular albedo: the split-sum's
     // single-scattering F0 * A + B, the RR guide's appendix estimator. The
     // shading normal and the specular-AA-widened roughness the lobes were
-    // evaluated with.
+    // evaluated with. On refractive glass the glass share (rrGlassT) takes
+    // shadeGlass's Fresnel and its frost roughness instead.
     if (kRR) {
         const float opaqueShare = 1.0 - clamp(pm.transmission, 0.0, 1.0);
-        storeRRGuides(px, albedo * (1.0 - metalness) * opaqueShare, F0 * ab.x + ab.y,
-                      N, roughness, rrHitT);
+        storeRRGuides(px, albedo * (1.0 - metalness) * opaqueShare,
+                      mix(F0 * ab.x + ab.y, gRRSpecF, rrGlassT),
+                      N, rrGlassT > 0.5 ? gRRSpecRough : roughness, rrHitT);
     }
 }

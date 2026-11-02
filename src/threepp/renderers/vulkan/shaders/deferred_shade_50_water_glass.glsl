@@ -235,6 +235,15 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
 }
 #endif// THREEPP_NO_RAY_QUERY
 
+// DLSS Ray Reconstruction's guides for a water or glass pixel (kRR only):
+// the Fresnel the reflection is weighted by, the roughness of the lobe it
+// was traced with, and the reflection ray's own hit distance (< 0: it
+// escaped), latched where the reflection is traced, before the refraction or
+// bottom rays that follow overwrite gTraceHitT.
+vec3  gRRSpecF     = vec3(0.0);
+float gRRSpecRough = 1.0;
+float gRRReflHitT  = -1.0;
+
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
@@ -372,6 +381,11 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                                       /*envInt=*/pm.envMapIntensity);
 #endif
     gTraceSkipWater = false;
+    if (kRR) {
+        gRRSpecF     = vec3(F);
+        gRRSpecRough = effRough;
+        gRRReflHitT  = gTraceHitT;
+    }
     // Reflected GEOMETRY strength, on specularIntensity (KHR_materials_specular).
     //
     // DELIBERATE DEVIATION, do not "correct" it: the glTF extension scales the whole
@@ -1175,6 +1189,11 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
                                           /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
                                           /*probeHitFill=*/true,
                                           /*envInt=*/pm.envMapIntensity);
+        if (kRR) {
+            gRRSpecF     = F;
+            gRRSpecRough = gr;
+            gRRReflHitT  = gTraceHitT;
+        }
         // Splats in the mirror, the glass leg — the shadeWater block's twin, on
         // this path's own origin/direction and bounded by its own traced hit
         // distance. See that block for the argument; flags bit 12 is the same
