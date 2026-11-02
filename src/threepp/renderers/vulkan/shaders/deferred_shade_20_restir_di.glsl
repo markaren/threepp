@@ -133,7 +133,14 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     // per-frame sample thus accumulates into an effective many-sample estimate that
     // converges to SMOOTH via this temporal accumulation.
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-    {
+    // Under DLSS Ray Reconstruction (kRR) neither reuse stage runs: the
+    // reservoir is plain RIS over this frame's fresh candidates. RR assumes an
+    // independent sample per pixel per frame, and both stages break that: a
+    // reservoir carried for up to 20 frames (temporal) or shared with its
+    // neighbours (spatial) is noise RR keeps as a static grain (lights45's
+    // neon floor: high-pass 3.7 with temporal reuse, 0.8 without, SR 1.0).
+    // Fresh candidates are also the cheapest arm measured (2026-11-03).
+    if (!kRR) {
         const vec2 uv   = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
         const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
         const vec2 cNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
@@ -189,7 +196,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     // path couldn't fix). M-cap 4/neighbour; spMax 5 static / 2 in motion (fewer
     // stale taps under motion). Reads prev-frame neighbours so there's no second
     // dispatch / barrier.
-    {
+    if (!kRR) {
         const vec2  size   = vec2(float(pc.width), float(pc.height));
         const float distC  = length(P - gPrimaryOrigin);// view leg of THIS pixel's ray
         const float mvLen  = length(texture(gbufMotionTex, paneToPhys(gbufMotionTex, (vec2(px) + 0.5) / size)).rg);
@@ -244,7 +251,9 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     const LightInfoD li = evalLightInfoEm(int(r.lightType), r.lightPos, P);
     const float NdotL = max(dot(N, li.dir), 0.0);
     if (NdotL <= 0.0) return vec3(0.0);
-    if (doShadows && restirOccluded(shadowOrig, li.dir, li.maxDist)) return vec3(0.0);
+    // Under RR the sample is the one the visibility test above already traced
+    // (nothing merged since), so its ray is not cast twice.
+    if (doShadows && !kRR && restirOccluded(shadowOrig, li.dir, li.maxDist)) return vec3(0.0);
 
     // DEMOD irradiance: (1-F)·NdotL·Le·W/π. The (1-F) diffuse Fresnel (specular takes F,
     // the diffuse lobe gets the rest) restores the term emissiveNEE's kd=(1-Fr)(1-metal)
