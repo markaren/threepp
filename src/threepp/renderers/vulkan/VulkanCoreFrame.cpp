@@ -768,6 +768,19 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
                     dlssResetNext_ = true;
                     dlssHealTries_ = 0;// fresh extents → fresh self-heal budget
                 }
+                // The Ray Reconstruction feature follows: the SR recreate above
+                // released it along with the old feature, and a render-extent
+                // change leaves one at the old size stale either way (RR is
+                // created at the render size). Brought in line here, with the
+                // device idle, not left to the next frame's sync: a
+                // setRenderScale made while a frame is open (inside the canvas
+                // animate loop, after render()) reaches this funnel from
+                // beginDeferredFrame AFTER renderFrame's sync ran, and the
+                // frame about to record then shaded without RR — one frame on
+                // the plain shade variant, which on a fresh build is that
+                // variant's two-minute pipeline compile, taken for a freeze
+                // (render scale to 1.0, 2026-11-03).
+                if (!view().secondary) syncDlssRayReconstruction();
             }
 #endif
             view().bloom_->createImages(renderExtent().width, renderExtent().height);
@@ -1919,7 +1932,11 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                                          "disabled until the next display resize (FSR/TAA fallback).\n");
                         }
                     }
-                    syncDlssRayReconstruction();
+                    // A deferred setRenderScale / setGbufferMsaa is applied in
+                    // beginDeferredFrame, after this point; the reallocation
+                    // funnel syncs RR itself at the new extent, so a sync here
+                    // would only create a feature the funnel releases again.
+                    if (!pendingRenderScaleRealloc_) syncDlssRayReconstruction();
 #endif
                     if (!beginDeferredFrame(scene, camera)) return;
                     frameState_ = FrameState::RecordingPostShade;
