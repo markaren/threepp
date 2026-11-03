@@ -7,7 +7,8 @@
 // (interpolated frames are not valid sensor data for this platform).
 //
 // DLSS Ray Reconstruction (DLSS-D, nvngx_dlssd.dll) is a second NGX feature on
-// the same seam, opt-in through VulkanRenderer::setDlssRayReconstruction. It
+// the same seam, on by default through VulkanRenderer::setDlssRayReconstruction
+// (while DLSS and the denoiser run). It
 // replaces the SR evaluate on the frames it runs (the RR guide: "when DLSS-RR
 // is enabled, DLSS-SR is no longer being executed") and takes SR's inputs plus
 // guide images the deferred shade writes in its Ray Reconstruction

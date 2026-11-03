@@ -2680,10 +2680,11 @@ namespace threepp {
         // Self-heal budget for sticky NGX evaluate failures (renderFrame);
         // replenished by the display-resize recreate funnel.
         uint32_t dlssHealTries_ = 0;
-        // DLSS Ray Reconstruction (setDlssRayReconstruction). Default off; it
-        // runs only while DLSS itself runs (useDlss), and renderFrame creates
-        // and releases its NGX feature to follow this flag (syncDlssRayReconstruction).
-        bool   dlssRrEnabled_ = false;
+        // DLSS Ray Reconstruction (setDlssRayReconstruction). Default on; it
+        // runs only while DLSS itself runs (useDlss) and the denoiser is on
+        // (denoiseEnabled_: RR takes the denoiser's place), and renderFrame
+        // creates and releases its NGX feature to follow (syncDlssRayReconstruction).
+        bool   dlssRrEnabled_ = true;
 #endif
         // An external upscaler (FSR/DLSS) compiled in AND created (available).
         // Gates the HDR-mode plumbing both reuse — hdrOut_ stays allocated
@@ -2782,9 +2783,10 @@ namespace threepp {
 #endif
         }
         // Runtime DLSS Ray Reconstruction on/off. Honoured only while DLSS
-        // runs (useDlss); renderFrame creates or releases the DLSSD feature
-        // on the next frame (syncDlssRayReconstruction). Flipping resets the
-        // temporal history like setDlss: RR and SR keep separate histories.
+        // runs (useDlss) and the denoiser is on; renderFrame creates or
+        // releases the DLSSD feature on the next frame
+        // (syncDlssRayReconstruction). Flipping resets the temporal history
+        // like setDlss: RR and SR keep separate histories.
         void setDlssRayReconstruction(bool enabled) {
 #if defined(THREEPP_WITH_DLSS)
             if (dlssRrEnabled_ == enabled) return;
@@ -2801,10 +2803,10 @@ namespace threepp {
 #endif
         }
         // RR is the DLSS evaluate this frame: knob on, DLSS running, the
-        // DLSSD feature live and not in a failure streak.
+        // denoiser on, the DLSSD feature live and not in a failure streak.
         [[nodiscard]] bool useDlssRayReconstruction() const {
 #if defined(THREEPP_WITH_DLSS)
-            return dlssRrEnabled_ && useDlss() && dlss_ && dlss_->rayReconstructionValid() &&
+            return dlssRrEnabled_ && denoiseEnabled_ && useDlss() && dlss_ && dlss_->rayReconstructionValid() &&
                    !dlss_->rayReconstructionFailing();
 #else
             return false;
@@ -2816,11 +2818,11 @@ namespace threepp {
         // evaluate all key on it, so they agree within a frame. Defined in
         // VulkanRenderer.cpp beside the shade dispatch.
         [[nodiscard]] bool rrShadeActive();
-        // The knob is on and RR can run (DLSS runs, NGX reports RR): what the
-        // DLSSD feature and the shade's guide images follow.
+        // The knob is on and RR can run (DLSS runs, the denoiser is on, NGX
+        // reports RR): what the DLSSD feature and the shade's guide images follow.
         [[nodiscard]] bool dlssRrWanted() const {
 #if defined(THREEPP_WITH_DLSS)
-            return dlssRrEnabled_ && useDlss() && dlss_ && dlss_->rayReconstructionAvailable();
+            return dlssRrEnabled_ && denoiseEnabled_ && useDlss() && dlss_ && dlss_->rayReconstructionAvailable();
 #else
             return false;
 #endif

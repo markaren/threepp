@@ -12149,7 +12149,7 @@ class VulkanRenderer:
     @property
     def denoise(self) -> bool:
         """
-        Toggle the deferred denoiser (SVGF + temporal). Default on. Off uses the deterministic 64-ray AO (noise-free, no GI colour).
+        Toggle the deferred denoiser (SVGF + temporal). Default on; while dlss runs, DLSS Ray Reconstruction takes its place (dlss_ray_reconstruction). Off uses the deterministic 64-ray AO (noise-free, no GI colour) and no Ray Reconstruction.
         """
     @denoise.setter
     def denoise(self, arg1: bool) -> None:
@@ -12192,7 +12192,7 @@ class VulkanRenderer:
     @property
     def dlss_ray_reconstruction(self) -> bool:
         """
-        NVIDIA DLSS Ray Reconstruction on/off (default off). Honoured only while dlss runs; the feature is created on the next rendered frame, so this reads True from then on. Replaces the denoiser: one ray per denoised term, guided by the shade's albedo, normal, roughness and hit distance. Pays where the sun, GI, emitters or reflections are traced; a frame with nothing noisy to denoise only pays its resolve.
+        NVIDIA DLSS Ray Reconstruction on/off (default on). Honoured only while dlss and denoise are both on; the feature is created on the next rendered frame, so this reads True from then on. Replaces the denoiser: one ray per denoised term, guided by the shade's albedo, normal, roughness and hit distance. Pays where the sun, GI, emitters or reflections are traced; a frame with nothing noisy to denoise only pays its resolve. Known gap: dense, noisy foliage resolves about 9 % brighter than the mean of its input. Its output moves with every NGX DLL update: set False for image baselines.
         """
     @dlss_ray_reconstruction.setter
     def dlss_ray_reconstruction(self, arg1: bool) -> None:

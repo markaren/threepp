@@ -1098,17 +1098,21 @@ namespace threepp_py {
                 .def_property_readonly("dlss_available",
                               [](PyVulkanRenderer& r) { return r.native().dlssAvailable(); },
                               "True when DLSS was compiled in and NGX created its feature on this GPU.")
-                // DLSS Ray Reconstruction: off by default. In place of the
-                // denoiser it takes one ray per denoised term, with the shade's
-                // albedo, normal, roughness and hit-distance guides.
+                // DLSS Ray Reconstruction: on by default, while DLSS and the
+                // denoiser run. In place of the denoiser it takes one ray per
+                // denoised term, with the shade's albedo, normal, roughness and
+                // hit-distance guides.
                 .def_property("dlss_ray_reconstruction",
                               [](PyVulkanRenderer& r) { return r.native().dlssRayReconstruction(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDlssRayReconstruction(v); },
-                              "NVIDIA DLSS Ray Reconstruction on/off (default off). Honoured only while dlss "
-                              "runs; the feature is created on the next rendered frame, so this reads True from "
-                              "then on. Replaces the denoiser: one ray per denoised term, guided by the shade's "
-                              "albedo, normal, roughness and hit distance. Pays where the sun, GI, emitters or "
-                              "reflections are traced; a frame with nothing noisy to denoise only pays its resolve.")
+                              "NVIDIA DLSS Ray Reconstruction on/off (default on). Honoured only while dlss and "
+                              "denoise are both on; the feature is created on the next rendered frame, so this "
+                              "reads True from then on. Replaces the denoiser: one ray per denoised term, guided "
+                              "by the shade's albedo, normal, roughness and hit distance. Pays where the sun, GI, "
+                              "emitters or reflections are traced; a frame with nothing noisy to denoise only pays "
+                              "its resolve. Known gap: dense, noisy foliage resolves about 9 % brighter than the "
+                              "mean of its input. Its output moves with every NGX DLL update: set False for "
+                              "image baselines.")
                 .def_property_readonly("dlss_ray_reconstruction_available",
                               [](PyVulkanRenderer& r) { return r.native().dlssRayReconstructionAvailable(); },
                               "True when DLSS runs and NGX reports Ray Reconstruction supported "
@@ -1915,8 +1919,9 @@ namespace threepp_py {
                 .def_property("denoise",
                               [](PyVulkanRenderer& r) { return r.native().denoise(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDenoise(v); },
-                              "Toggle the deferred denoiser (SVGF + temporal). Default on. "
-                              "Off uses the deterministic 64-ray AO (noise-free, no GI colour).")
+                              "Toggle the deferred denoiser (SVGF + temporal). Default on; while dlss runs, DLSS "
+                              "Ray Reconstruction takes its place (dlss_ray_reconstruction). Off uses the "
+                              "deterministic 64-ray AO (noise-free, no GI colour) and no Ray Reconstruction.")
                 // Ray-traced env ambient-occlusion / 1-bounce diffuse GI. ON by
                 // default. Off drops the per-pixel occlusion rays (flat ambient IBL).
                 .def_property("overlay_color_grade",

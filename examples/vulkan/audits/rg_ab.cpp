@@ -82,7 +82,8 @@
 //   --restir 0|1, --ao 0|1, --denoise 0|1
 //   --rr 1           DLSS Ray Reconstruction on (where the scene runs DLSS:
 //                    room_fx, room_dlss, or any scene with --dlss 1); never a
-//                    baseline, its output moves with every NGX DLL
+//                    baseline, its output moves with every NGX DLL.
+//                    Off by default here, though the renderer's own default is on
 //   --dlss 0|1       DLSS off or on whatever the scene sets (render scale as
 //                    the scene has it: 1, DLAA, unless noted)
 //   --time N         after the run, N more frames; prints the median GPU frame
@@ -710,7 +711,7 @@ int main(int argc, char** argv) {
     renderer.setAutoLod(autoLod != 0);
     if (denoise >= 0) renderer.setDenoise(denoise != 0);
     if (dlss >= 0) renderer.setDlss(dlss != 0);
-    if (rayRecon) renderer.setDlssRayReconstruction(true);
+    renderer.setDlssRayReconstruction(rayRecon != 0);// off unless --rr 1; the renderer's default is on
     if (occl) renderer.setOcclusionCulling(true);
     if (msaa > 1) renderer.setGbufferMsaa(static_cast<uint32_t>(msaa));
     if (ao >= 0) renderer.setDeferredAO(ao != 0);

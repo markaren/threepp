@@ -602,12 +602,21 @@ namespace threepp {
         // ── NVIDIA DLSS Ray Reconstruction runtime toggle ────────────────
         // A second NGX feature (nvngx_dlssd.dll) that denoises and upscales
         // in one evaluate, replacing DLSS Super Resolution's on the frames it
-        // runs. Honoured only while DLSS runs (dlss() == true); the feature is
-        // created on the next rendered frame, so dlssRayReconstruction() turns
-        // true from then on. Default off. In place of the deferred denoiser it
-        // takes one ray per denoised term (soft sun, GI, emitters, reflections)
-        // with the shade's albedo, normal, roughness and hit-distance guides;
-        // a frame with nothing noisy to denoise only pays its resolve.
+        // runs. Default on. Honoured only while DLSS runs (dlss() == true) and
+        // the denoiser is on (denoise() == true: RR takes its place); the
+        // feature is created on the next rendered frame, so
+        // dlssRayReconstruction() turns true from then on. In place of the
+        // deferred denoiser it takes one ray per denoised term (soft sun, GI,
+        // emitters, reflections) with the shade's albedo, normal, roughness
+        // and hit-distance guides; a frame with nothing noisy to denoise only
+        // pays its resolve.
+        // Known gap: dense, noisy foliage (a forest under a traced sun with
+        // AO and GI) resolves about 9 % brighter than the mean of the input
+        // RR was given, most in the darkest areas. The lift is inside the NGX
+        // evaluate: its exposure scale, the MSAA G-buffer and the specular
+        // guides were ruled out.
+        // RR's output moves with every NGX DLL update: image baselines pin it
+        // off with setDlssRayReconstruction(false).
         void setDlssRayReconstruction(bool enabled);
         [[nodiscard]] bool dlssRayReconstruction() const;          // RR is the DLSS evaluate now
         [[nodiscard]] bool dlssRayReconstructionAvailable() const; // driver + nvngx_dlssd.dll
@@ -719,7 +728,8 @@ namespace threepp {
         //         APPEARANCE, not just noise.
         // Intended as an A/B discriminator between the two shading paths
         // (equivalent to THREEPP_DENOISE=0), NOT a quality/perf dial. Probe GI
-        // requires it ON.
+        // requires it ON. While DLSS runs, ON brings in DLSS Ray
+        // Reconstruction in place of the filters (setDlssRayReconstruction).
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
