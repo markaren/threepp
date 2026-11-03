@@ -12192,7 +12192,7 @@ class VulkanRenderer:
     @property
     def dlss_ray_reconstruction(self) -> bool:
         """
-        NVIDIA DLSS Ray Reconstruction on/off (default off). Honoured only while dlss runs; the feature is created on the next rendered frame, so this reads True from then on. Its guide images are placeholders for now: not a look to judge.
+        NVIDIA DLSS Ray Reconstruction on/off (default off). Honoured only while dlss runs; the feature is created on the next rendered frame, so this reads True from then on. Replaces the denoiser: one ray per denoised term, guided by the shade's albedo, normal, roughness and hit distance. Pays where the sun, GI, emitters or reflections are traced; a frame with nothing noisy to denoise only pays its resolve.
         """
     @dlss_ray_reconstruction.setter
     def dlss_ray_reconstruction(self, arg1: bool) -> None:

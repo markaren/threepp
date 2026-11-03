@@ -604,9 +604,10 @@ namespace threepp {
         // in one evaluate, replacing DLSS Super Resolution's on the frames it
         // runs. Honoured only while DLSS runs (dlss() == true); the feature is
         // created on the next rendered frame, so dlssRayReconstruction() turns
-        // true from then on. Default off. Its guide images are placeholders
-        // for now (plans/dlss-ray-reconstruction.md, phase 0): the picture is
-        // not a look to judge yet.
+        // true from then on. Default off. In place of the deferred denoiser it
+        // takes one ray per denoised term (soft sun, GI, emitters, reflections)
+        // with the shade's albedo, normal, roughness and hit-distance guides;
+        // a frame with nothing noisy to denoise only pays its resolve.
         void setDlssRayReconstruction(bool enabled);
         [[nodiscard]] bool dlssRayReconstruction() const;          // RR is the DLSS evaluate now
         [[nodiscard]] bool dlssRayReconstructionAvailable() const; // driver + nvngx_dlssd.dll
