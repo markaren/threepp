@@ -1827,7 +1827,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (deltaApplied && useVersions) ++tlasStats_.versionedDeltas;
                 if (deltaApplied && useVersions && !flatSnapshotCheck(scene, camera)) {
                     // A state change inside a subtree the versions skipped: the
-                    // replay (flips) or one complete diff.
+                    // replay (flips) or one complete diff. When neither takes
+                    // it, the full expansion below does, over the rows the
+                    // delta left: its structural branch starts them over (see
+                    // slotsEditedThisFrame_ there).
                     if (!sceneSnapshotMatches(scene, camera)) {
                         SceneDelta again;
                         deltaApplied = diffSceneWalk(scene, camera, again, false) && trySlotDelta(again);
@@ -2201,6 +2204,17 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (!built[i].hidden) probeGridDirty_ = true;// shown: see setSpanHidden
                 }
             }
+            // The entries are laid out anew: whatever a slot delta did to the
+            // rows earlier in this build is superseded, and the frame is the
+            // structural one the fingerprint compare below finds it to be. A
+            // versioned delta that applied, whose state check then failed and
+            // whose complete diff found nothing to apply (a group hidden in
+            // the same frame as a removal elsewhere), reaches here with the
+            // flag set; left set, it made the frame lean, the lean diff read
+            // the old fingerprints by the new spans' rows, and every entry
+            // after the removed one drew with its neighbour's material record
+            // (the M350 at Trollstigen, 2026-11-03).
+            slotsEditedThisFrame_ = false;
             lastVisibleEntries_ = std::move(built);
             lastVisibleLines_   = std::move(builtLines);
             entrySpans_         = std::move(builtSpans);

@@ -1241,6 +1241,124 @@ int main() {
         // No TLAS instance at all: the TLAS must be rebuilt empty, never left
         // with the removed instances, whose desc rows are zeroed (a ray that
         // hits one reads its geometry at address 0 and loses the device).
+        // ── A removal and a field shown in one frame ─────────────────────────
+        // The removal moves the scene's structure version, so the edit is a
+        // versioned slot delta that copies the untouched subtrees; the field
+        // shown is a state change in one of them that neither the flat check
+        // nor the replay takes, and the complete diff cannot (a field is no
+        // delta), so the frame ends in the full expansion, over the rows the
+        // delta left. That frame has to be the structural one it is: left
+        // lean, every entry after the removed one drew with its neighbour's
+        // material record (the M350 at Trollstigen, 2026-11-03). The rig's
+        // six colours, read off the picture, say which.
+        {
+            struct Swatch {
+                Color colour;
+                std::array<bool, 3> high;// which channels the paint drives
+            };
+            const std::array<Swatch, 6> swatches = {Swatch{Color(0.85f, 0.08f, 0.06f), {true, false, false}},
+                                                    Swatch{Color(0.08f, 0.75f, 0.10f), {false, true, false}},
+                                                    Swatch{Color(0.08f, 0.12f, 0.90f), {false, false, true}},
+                                                    Swatch{Color(0.85f, 0.80f, 0.06f), {true, true, false}},
+                                                    Swatch{Color(0.85f, 0.08f, 0.85f), {true, false, true}},
+                                                    Swatch{Color(0.06f, 0.80f, 0.85f), {false, true, true}}};
+            auto rig = Group::create();
+            std::vector<std::shared_ptr<Mesh>> rigMeshes;
+            for (size_t k = 0; k < swatches.size(); ++k) {
+                auto m = Mesh::create(BoxGeometry::create(3.f, 3.f, 3.f), paint(swatches[k].colour));
+                m->position.set(-15.f + 6.f * static_cast<float>(k), 1.5f, 0.f);
+                rig->add(m);
+                rigMeshes.push_back(m);
+            }
+            scene.add(rig);
+            auto removable = Mesh::create(cellGeoms[0], cellMats[0]);
+            removable->position.set(30.f, 1.f, -20.f);
+            scene.add(removable);
+            std::shared_ptr<ParticleField> shownLater;
+            {
+                ParticleField::Config cfg;
+                cfg.capacity = kFieldParticles;
+                cfg.uniformRadius = 0.4f;
+                cfg.orientations = true;
+                shownLater = ParticleField::create(cfg);
+                shownLater->setMeshRepr(BoxGeometry::create(0.8f, 0.8f, 0.8f), paint(Color(0.95f, 0.75f, 0.2f)));
+                std::vector<float> quats(static_cast<size_t>(kFieldParticles) * 4u, 0.f);
+                for (uint32_t i = 0; i < kFieldParticles; ++i) quats[static_cast<size_t>(i) * 4u + 3u] = 1.f;
+                shownLater->setOrientations(quats.data(), kFieldParticles);
+                shownLater->position.set(0.f, 12.f, -40.f);
+                shownLater->visible = false;
+                scene.add(shownLater);
+            }
+            // The rig's colours as the picture shows them: for each mesh, the
+            // mean over a few pixels about its projected centre, and whether
+            // the channels its paint drives are the bright ones.
+            const auto rigReadsRight = [&](std::string& why) {
+                const auto im = renderer.readRGBPixels();
+                if (im.size() < static_cast<size_t>(kW) * kH * 3) {
+                    why = "no pixels";
+                    return false;
+                }
+                for (size_t k = 0; k < rigMeshes.size(); ++k) {
+                    Vector3 p = rigMeshes[k]->position;
+                    rigMeshes[k]->parent->localToWorld(p);
+                    p.project(camera);
+                    const int px = static_cast<int>((p.x + 1.f) * 0.5f * static_cast<float>(kW));
+                    const int py = static_cast<int>((1.f - p.y) * 0.5f * static_cast<float>(kH));
+                    float sum[3] = {0.f, 0.f, 0.f};
+                    int n = 0;
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int x = px + dx, y = py + dy;
+                            if (x < 0 || y < 0 || x >= kW || y >= kH) continue;
+                            const size_t at = (static_cast<size_t>(y) * kW + x) * 3u;
+                            for (int c = 0; c < 3; ++c) sum[c] += static_cast<float>(im[at + c]);
+                            ++n;
+                        }
+                    }
+                    if (n == 0) {
+                        why = "mesh " + std::to_string(k) + " off screen";
+                        return false;
+                    }
+                    float lo = 255.f, hi = 0.f;
+                    for (int c = 0; c < 3; ++c) {
+                        const float v = sum[c] / static_cast<float>(n);
+                        if (swatches[k].high[c]) lo = std::min(lo, v);
+                        else hi = std::max(hi, v);
+                    }
+                    if (lo <= hi * 1.5f + 8.f) {
+                        char buf[96];
+                        std::snprintf(buf, sizeof(buf), "mesh %zu reads %.0f %.0f %.0f", k,
+                                      sum[0] / static_cast<float>(n), sum[1] / static_cast<float>(n),
+                                      sum[2] / static_cast<float>(n));
+                        why = buf;
+                        return false;
+                    }
+                }
+                return true;
+            };
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);// the rig's and the field's arrival
+            std::string why;
+            const bool before = rigReadsRight(why);
+            check("a removal and a field shown: the rig's colours before (" + why + ")", before);
+            scene.remove(*removable);
+            shownLater->visible = true;
+            const FrameRow ev = frame(-1, 0);
+            std::string whyEvent;
+            const bool atEvent = rigReadsRight(whyEvent);
+            for (int f = 1; f < kGap; ++f) frame(-1, f);
+            std::string whyAfter;
+            const bool after = rigReadsRight(whyAfter);
+            std::printf("\na removal and a field shown in one frame: %llu structural rebuild(s) on the frame, "
+                        "rig right at the event %d, after %d\n",
+                        static_cast<unsigned long long>(ev.structural), int(atEvent), int(after));
+            check("a removal and a field shown: the rig's colours on the frame (" + whyEvent + ")", atEvent);
+            check("a removal and a field shown: the rig's colours after (" + whyAfter + ")", after);
+            check("a removal and a field shown: the frame is a structural rebuild", ev.structural == 1u);
+            scene.remove(*rig);
+            scene.remove(*shownLater);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            shownLater.reset();
+        }
         {
             const auto s0 = renderer.tlasStats();
             scene.remove(*ground);
