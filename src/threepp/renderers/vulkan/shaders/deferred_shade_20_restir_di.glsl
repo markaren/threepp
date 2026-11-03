@@ -413,6 +413,11 @@ float blueNoiseDef(uvec2 px, uint frame, uint salt) {
 bool gSunFixedPattern = false;
 float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
+    // Under DLSS Ray Reconstruction (kRR) every caller's sun is the cheapHit
+    // one: a single jittered ray, animated with the frame, at every pixel.
+    // RR integrates it over frames; the static patterns and the 3 + 13 (or 5
+    // + 16) ray tiers exist to look settled without a denoiser.
+    cheapHit = cheapHit || kRR;
     const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 t  = normalize(cross(up, L));
     const vec3 b  = cross(L, t);

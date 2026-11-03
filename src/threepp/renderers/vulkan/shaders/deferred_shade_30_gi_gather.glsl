@@ -362,11 +362,14 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         // speckle on the reflections of distant metals. Per-frame rotation
                         // lets SVGF integrate the single sample into a smooth soft shadow
                         // (it joins the GGX ray + light pick, already animated via reflSeed).
+                        // Under DLSS Ray Reconstruction (kRR) the primary takes the
+                        // reflection hits' single animated ray too: RR integrates it.
+                        const bool  oneRay = cheapHit || kRR;
                         vec2 fpx = vec2(gl_GlobalInvocationID.xy);
-                        if (cheapHit) fpx += float(pc.frame & 0xFFFFu) * vec2(0.7548776662, 0.5698402910);
+                        if (oneRay) fpx += float(pc.frame & 0xFFFFu) * vec2(0.7548776662, 0.5698402910);
                         const float jx  = fract(52.9829189 * fract(dot(fpx,    vec2(0.06711056, 0.00583715))));
                         const float jy  = fract(52.9829189 * fract(dot(fpx.yx, vec2(0.06711056, 0.00583715)) + 0.5));
-                        const uint SIDE = cheapHit ? 1u : 4u;// 1-ray jittered at reflection hits
+                        const uint SIDE = oneRay ? 1u : 4u;// 1-ray jittered at reflection hits
                         float vsum = 0.0;
                         for (uint sj = 0u; sj < SIDE; ++sj)
                         for (uint si = 0u; si < SIDE; ++si) {
@@ -435,8 +438,9 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     // but REFLECTED hits (traceRadiance) ALWAYS add it — reservoirs are per-screen-pixel
     // and don't exist for reflected surfaces, so without this metals reflecting an
     // emissive-lit room lose their reflected lighting (= "metals lost their color").
+    // RR (kRR): the reflection hits' small plan at every hit.
     if (addEmissive)
-        lit += emissiveNEE(cheapHit ? 4 : 16, P, N, V, NdotV, F0, albedo, roughness, metalness, k, seed, doShadows);
+        lit += emissiveNEE((cheapHit || kRR) ? 4 : 16, P, N, V, NdotV, F0, albedo, roughness, metalness, k, seed, doShadows);
 
     // Diffuse indirect (caller-supplied): visibility-gated env irradiance for
     // the primary surface, crude env IBL for reflected hits. Only modulates the

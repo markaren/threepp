@@ -190,6 +190,10 @@ void main() {
     }
 
 #include "deferred_shade_06_prologue_surface.glsl"
+    // Under DLSS Ray Reconstruction the pixel's stream (the emitter NEE, the
+    // glass and blend traces, the water's rays) moves with the frame: a
+    // stream fixed per pixel is a static pattern RR keeps as texture.
+    if (kRR) seed = pcgHash(seed ^ pcgHash(pc.frame * 2654435761u + 5u));
 
     // ── OCEAN water surface only: analytic deep-water shade (Fresnel reflect ⊕
     // absorption-tinted body + foam), replacing the opaque shade entirely. Gated
@@ -537,7 +541,9 @@ void main() {
         float openness;
         gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
         rayCatSet(kRayCatGi);
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, pm.envMapIntensity, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
+        // Under RR the inline pixels (glass, blends) take the stochastic gather
+        // too, one ray, in place of the deterministic 64: RR denoises them.
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect || kRR, giSpp, pm.envMapIntensity, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
         rayCatSet(kRayCatOther);
     } else {
         diffInd = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);

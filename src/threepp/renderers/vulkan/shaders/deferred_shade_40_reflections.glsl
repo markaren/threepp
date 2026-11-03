@@ -331,11 +331,17 @@ vec3 paneHitGather(vec3 hitP, vec3 hitN, bool doShadows, float maxLod, inout uin
     const vec3 fOrg = hitP + hitN * SHADOW_EPS;
     vec3  sum   = vec3(0.0);
     float missN = 0.0;
-    for (int s = 0; s < kPaneFillRays; ++s) {
+    // Under DLSS Ray Reconstruction (kRR) the fixed set's reason is gone: RR
+    // is the history the pane lacked. One cosine-distributed ray, its
+    // direction drawn fresh per pixel and per frame.
+    const int nRays = kRR ? 1 : kPaneFillRays;
+    const uint rrSeed = pcgHash(uint(gl_GlobalInvocationID.x) + pcgHash(uint(gl_GlobalInvocationID.y) +
+                                                                       pcgHash(pc.frame * 2654435761u + 11u)));
+    for (int s = 0; s < nRays; ++s) {
         // A Fibonacci spiral on the cosine-weighted disc, as gatherEnv's
         // deterministic path lays its rays out.
-        const float u1  = (float(s) + 0.5) / float(kPaneFillRays);
-        const float phi = float(s) * 2.39996323;
+        const float u1  = kRR ? float(rrSeed & 0xFFFFu) / 65536.0 : (float(s) + 0.5) / float(kPaneFillRays);
+        const float phi = kRR ? TWO_PI * float(rrSeed >> 16u) / 65536.0 : float(s) * 2.39996323;
         const float r   = sqrt(u1);
         const vec3  fd  = normalize(fT * (r * cos(phi)) + fB * (r * sin(phi))
                                     + hitN * sqrt(max(0.0, 1.0 - u1)));
@@ -347,8 +353,8 @@ vec3 paneHitGather(vec3 hitP, vec3 hitN, bool doShadows, float maxLod, inout uin
         sum += gi;
         if (fMissed) missN += 1.0;
     }
-    open = missN / float(kPaneFillRays);
-    return sum * (1.0 / float(kPaneFillRays));
+    open = missN / float(nRays);
+    return sum * (1.0 / float(nRays));
 }
 
 // Weight of the traced fill at a FIRST-bounce reflection hit whose probe
@@ -643,7 +649,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                     const vec3 fB   = cross(hitN, fT);
                     const vec3 fOrg = hitP + hitN * SHADOW_EPS;
                     vec3 gSum = vec3(0.0);
-                    const int kStarvedRays = 2;
+                    const int kStarvedRays = kRR ? 1 : 2;// RR integrates one
                     for (int s = 0; s < kStarvedRays; ++s) {
                         const float u1  = rnd(seed);
                         const float phi = TWO_PI * rnd(seed);
