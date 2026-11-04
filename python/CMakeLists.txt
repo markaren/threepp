@@ -53,6 +53,20 @@ pybind11_add_module(threepp_py
 target_link_libraries(threepp_py PRIVATE threepp threepp_editor_core)
 target_compile_features(threepp_py PRIVATE cxx_std_20)
 
+# A shared threepp (BUILD_SHARED_LIBS=ON) leaves the module importing
+# threepp.dll and glfw3.dll, and Python resolves a module's DLLs only beside
+# the module or in a directory given to os.add_dll_directory, never through
+# PATH. Stage them next to it, as the PhysX runtime is below. The interpreter's
+# own python3xx.dll is in that list too and is already loaded by the time the
+# module is, so it stays out.
+if (WIN32 AND BUILD_SHARED_LIBS)
+    add_custom_command(TARGET threepp_py POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<FILTER:$<TARGET_RUNTIME_DLLS:threepp_py>,EXCLUDE,/python[0-9]+(_d)?[.]dll>"
+                $<TARGET_FILE_DIR:threepp_py>
+            COMMAND_EXPAND_LISTS)
+endif ()
+
 # threepp is a static lib; linking it into this shared module requires every
 # object to be position-independent on ELF platforms. Without it the link fails
 # with e.g. "relocation R_X86_64_TPOFF32 against `stbi__g_failure_reason` can

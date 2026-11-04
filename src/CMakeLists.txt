@@ -984,6 +984,11 @@ add_library(threepp::threepp ALIAS threepp)
 if (BUILD_SHARED_LIBS)
     target_compile_definitions(threepp PUBLIC THREEPP_SHARED)
 endif ()
+# On MSVC the DLL's export list is CMake's export-all list without the std::
+# template instantiations, which an import library has no room for (LNK1189
+# at 65 535 exports) and no consumer ever resolves through it.
+include(${PROJECT_SOURCE_DIR}/cmake/WindowsDllExports.cmake)
+threepp_windows_dll_exports(threepp)
 target_compile_features(threepp PUBLIC "cxx_std_20")
 
 if (UNIX)
