@@ -10,6 +10,7 @@
 #include "threepp/utils/RegexUtil.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <list>
@@ -786,11 +787,18 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
         int length;
         glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
 
-        if (length != 0) {
-
-            std::string msg;
+        std::string msg;
+        if (length > 0) {
             msg.resize(length);
-            glGetProgramInfoLog(program, length, nullptr, &msg.front());
+            GLsizei written = 0;
+            glGetProgramInfoLog(program, length, &written, &msg.front());
+            msg.resize(std::max<GLsizei>(0, written));
+        }
+        // A clean link can still report a length of 1 (WebGL does: the log is just its
+        // terminating zero), so only a log with something in it is worth printing.
+        const bool blank = msg.find_first_not_of(std::string(" \t\r\n\0", 5)) == std::string::npos;
+
+        if (!blank) {
 
             std::cerr << (linked == GL_TRUE ? "[threepp] shader program warning: "
                                             : "[threepp] shader program failed to LINK: ")
