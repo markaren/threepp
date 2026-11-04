@@ -175,9 +175,29 @@ namespace threepp {
         // either. Chassis boxes still collide with chassis boxes either way:
         // that is what keeps two cars apart, and what a car landing on top of
         // another sits on. A single vehicle runs the same whichever way this
-        // is set. Wheels are not collision shapes, so they still pass through
-        // other wheels.
+        // is set. Wheels are not collision shapes unless `wheelShapes` is on.
         bool wheelsHitOtherVehicles = false;
+
+        // Whether each wheel is a collision shape against OTHER vehicles.
+        // Off (the default): the wheels are suspension queries only, and pass
+        // through other cars' wheels and bodies (two cars side by side touch
+        // with their chassis boxes, wheels interleaved).
+        //
+        // On: each wheel gets a convex cylinder of wheelRadius x 2 *
+        // wheelHalfWidth (16 sides, axle along the chassis' lateral axis) on
+        // the chassis actor, moved to the wheel's suspension and steer pose
+        // every step (without the spin, which a round wheel does not need).
+        // It collides with other vehicles' wheel shapes and chassis boxes only
+        // (kVehicleWheelFilterBit): never with the ground, a static, a prop or
+        // a trigger, since the suspension owns the ground. It is no scene
+        // query shape, so no wheel query (this vehicle's or another's) and no
+        // raycast finds it. It is frictionless against what it touches (its
+        // material combines friction by min), and the chassis' mass, centre of
+        // mass and inertia are computed before it is switched on, so they are
+        // unchanged. A contact watcher on the chassis actor (watchContacts,
+        // ContactSensor) hears the wheels' contacts as the chassis'. A single
+        // vehicle runs bit-identical with this on or off.
+        bool wheelShapes = false;
     };
 
     // Drive-agnostic core of a 4-wheel vehicle built on PxVehicle2 components —
@@ -706,11 +726,15 @@ namespace threepp {
             PxShape* chassisShape = physics.createShape(chassisGeom, world_->defaultMaterial(), true);
             // Marks it for every vehicle's wheel queries: see kVehicleChassisQueryBit.
             chassisShape->setQueryFilterData(PxFilterData(0, 0, 0, kVehicleChassisQueryBit));
+            // What other vehicles' wheel shapes collide with: see kVehicleChassisFilterBit.
+            chassisShape->setSimulationFilterData(PxFilterData(0, 0, 0, kVehicleChassisFilterBit));
             chassisActor_->attachShape(*chassisShape);
             chassisShape->release();
 
-            // Per-wheel sphere shapes. eSCENE_QUERY_SHAPE off so wheel raycasts ignore them
+            // Per-wheel shapes. eSCENE_QUERY_SHAPE off so wheel raycasts ignore them
             // (the prefilter callback also rejects the chassis actor as a belt-and-suspenders).
+            // Without Settings::wheelShapes they are spheres that never simulate (the debug
+            // view's wheels); with it, cylinders that collide with other vehicles.
             wheelShapeMaterial_ = physics.createMaterial(0.f, 0.f, 0.f);
             const float halfTrack = settings_.trackWidth * 0.5f;
             const float halfBase = settings_.wheelbase * 0.5f;
@@ -721,24 +745,75 @@ namespace threepp {
                     PxVec3(+halfTrack, ay, -halfBase),
                     PxVec3(-halfTrack, ay, -halfBase),
             };
-            const PxSphereGeometry wheelGeom(settings_.wheelRadius);
+            const PxSphereGeometry sphereGeom(settings_.wheelRadius);
+            PxConvexMesh* wheelMesh = settings_.wheelShapes ? cookWheelCylinder() : nullptr;
+            if (settings_.wheelShapes && !wheelMesh) {
+                throw std::runtime_error("PhysxVehicle: cooking the wheel cylinder failed");
+            }
+            if (wheelMesh) {
+                wheelShapeMaterial_->setFrictionCombineMode(PxCombineMode::eMIN);
+            }
             for (PxU32 i = 0; i < 4; ++i) {
-                PxShape* ws = physics.createShape(wheelGeom, *wheelShapeMaterial_, true);
+                PxShape* ws = wheelMesh
+                                      ? physics.createShape(PxConvexMeshGeometry(wheelMesh), *wheelShapeMaterial_, true)
+                                      : physics.createShape(sphereGeom, *wheelShapeMaterial_, true);
                 ws->setLocalPose(PxTransform(wheelInitial[i]));
                 ws->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, false);
                 ws->setFlag(PxShapeFlag::eSIMULATION_SHAPE, false);
+                if (wheelMesh) {
+                    ws->setSimulationFilterData(PxFilterData(0, 0, 0, kVehicleWheelFilterBit));
+                }
                 chassisActor_->attachShape(*ws);
                 wheelShapeLocalPoses_[i] = ws->getLocalPose();
                 physxActor_.wheelShapes[i] = ws;
                 ws->release();
             }
+            if (wheelMesh) wheelMesh->release();// the shapes hold their own references
             physxActor_.rigidBody = chassisActor_;
 
+            // Mass properties from the chassis box alone: the wheel shapes are not
+            // simulation shapes yet, so they add nothing (setMassAndUpdateInertia
+            // skips non-simulation shapes).
             PxRigidBodyExt::setMassAndUpdateInertia(*chassisActor_, settings_.chassisMass);
+            if (wheelMesh) {
+                for (PxU32 i = 0; i < 4; ++i) {
+                    physxActor_.wheelShapes[i]->setFlag(PxShapeFlag::eSIMULATION_SHAPE, true);
+                }
+            }
             world_->scene().addActor(*chassisActor_);
 
             queryFilter_.ignored = chassisActor_;
             queryFilter_.ignoreVehicles = !settings_.wheelsHitOtherVehicles;
+        }
+
+        // The wheel's collision cylinder (Settings::wheelShapes): 16 sides, axle
+        // along the chassis' lateral axis (+X), centred on the wheel.
+        ::physx::PxConvexMesh* cookWheelCylinder() const {
+            constexpr int kSides = 16;
+            const float r = settings_.wheelRadius;
+            const float hw = settings_.wheelHalfWidth;
+            std::array<float, kSides * 2 * 3> pts{};
+            for (int k = 0; k < kSides; ++k) {
+                const float a = 2.f * 3.14159265358979f * static_cast<float>(k) / kSides;
+                const float y = r * std::cos(a);
+                const float z = r * std::sin(a);
+                for (int side = 0; side < 2; ++side) {
+                    float* p = &pts[static_cast<std::size_t>((k * 2 + side) * 3)];
+                    p[0] = side ? hw : -hw;
+                    p[1] = y;
+                    p[2] = z;
+                }
+            }
+            return world_->cookConvexHull(pts.data(), kSides * 2, kSides * 2);
+        }
+
+        // Where a wheel shape sits (Settings::wheelShapes): the wheel's pose on its
+        // suspension and steer, without the spin about the axle.
+        ::physx::PxTransform wheelShapePose(::physx::PxU32 i) const {
+            return ::physx::vehicle2::PxVehicleComputeWheelLocalPose(
+                    simContext_.frame, suspensionParams_[i], suspensionStates_[i],
+                    suspensionComplianceStates_[i].camber, suspensionComplianceStates_[i].toe,
+                    steerResponseStates_[i], 0.f);
         }
 
         void createPhysxConstraints() {
@@ -811,9 +886,13 @@ namespace threepp {
             // PxVehicle's component sequence updates wheelLocalPoses_ but doesn't
             // push them onto the chassis-attached wheel shapes — debug visualization
             // would otherwise stay frozen at the initial rest pose. Sync explicitly.
+            // A collision wheel (Settings::wheelShapes) takes the pose without the
+            // spin: the cylinder is round, and a turning 16-gon would only rattle
+            // its contacts.
             for (::physx::PxU32 i = 0; i < 4; ++i) {
                 if (auto* shape = physxActor_.wheelShapes[i]) {
-                    shape->setLocalPose(wheelLocalPoses_[i].localPose);
+                    shape->setLocalPose(settings_.wheelShapes ? wheelShapePose(i)
+                                                              : wheelLocalPoses_[i].localPose);
                 }
             }
         }

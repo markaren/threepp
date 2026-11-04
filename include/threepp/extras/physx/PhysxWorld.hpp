@@ -369,6 +369,17 @@ namespace threepp {
     // which pairs collide, only whether they are reported.
     inline constexpr ::physx::PxU32 kContactReportFilterBit = 1u << 31;
 
+    // SIMULATION filter data (word3) bits of a PhysxVehicle's shapes. Every
+    // chassis box carries kVehicleChassisFilterBit; a vehicle built with
+    // wheelShapes carries kVehicleWheelFilterBit on its four wheel shapes. A
+    // pair with a wheel shape in it collides only when the other shape is a
+    // vehicle's too (a wheel or a chassis): the suspension owns the ground, and
+    // a wheel shape that also touched the terrain or a prop would fight it.
+    // Pairs without a wheel shape go through the stock shader untouched, so
+    // the chassis bit alone changes nothing.
+    inline constexpr ::physx::PxU32 kVehicleChassisFilterBit = 1u << 30;
+    inline constexpr ::physx::PxU32 kVehicleWheelFilterBit = 1u << 29;
+
     /**
      * The stock filter shader plus opt-in contact reporting.
      *
@@ -398,12 +409,22 @@ namespace threepp {
             ::physx::PxPairFlags& pairFlags, const void* constantBlock,
             ::physx::PxU32 constantBlockSize) {
         using namespace ::physx;
+        const bool trigger = PxFilterObjectIsTrigger(attributes0) ||
+                             PxFilterObjectIsTrigger(attributes1);
+
+        // A vehicle's wheel shape meets other vehicles' wheels and chassis
+        // only (see kVehicleWheelFilterBit): nothing static, no prop, no
+        // trigger volume (the chassis box is what drives through those).
+        if ((filterData0.word3 | filterData1.word3) & kVehicleWheelFilterBit) {
+            constexpr PxU32 vehicle = kVehicleChassisFilterBit | kVehicleWheelFilterBit;
+            if (trigger || !(filterData0.word3 & vehicle) || !(filterData1.word3 & vehicle)) {
+                return PxFilterFlag::eKILL;
+            }
+        }
+
         const PxFilterFlags flags = PxDefaultSimulationFilterShader(
                 attributes0, filterData0, attributes1, filterData1,
                 pairFlags, constantBlock, constantBlockSize);
-
-        const bool trigger = PxFilterObjectIsTrigger(attributes0) ||
-                             PxFilterObjectIsTrigger(attributes1);
 
         if (!trigger && ((filterData0.word3 | filterData1.word3) & kContactReportFilterBit)) {
             pairFlags |= PxPairFlag::eNOTIFY_TOUCH_FOUND |
