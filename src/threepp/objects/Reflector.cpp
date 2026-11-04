@@ -1,4 +1,5 @@
 
+#include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -206,6 +207,12 @@ struct Reflector::Impl {
         return *slot;
     }
 
+    void setSize(unsigned int width, unsigned int height) {
+
+        renderTarget->setSize(width, height);
+        renderTarget->texture->generateMipmaps = math::isPowerOfTwo(static_cast<int>(width)) && math::isPowerOfTwo(static_cast<int>(height));
+    }
+
 private:
     Reflector& reflector_;
 
@@ -234,6 +241,11 @@ Reflector::Reflector(const std::shared_ptr<BufferGeometry>& geometry, Reflector:
 Camera& Reflector::getReflectionCamera(Camera& camera) {
 
     return pimpl_->reflectionCamera(camera);
+}
+
+void Reflector::setSize(unsigned int textureWidth, unsigned int textureHeight) {
+
+    pimpl_->setSize(std::max(1u, textureWidth), std::max(1u, textureHeight));
 }
 
 const std::string& threepp::Reflector::type() const {

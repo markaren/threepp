@@ -36,6 +36,11 @@ namespace threepp {
         // on a layer this camera is then told not to look at.
         [[nodiscard]] Camera& getReflectionCamera(Camera& camera);
 
+        // Resizes the texture the mirror image is drawn into (three.js leaves this
+        // to the caller via getRenderTarget().setSize; here the target is private).
+        // Call it when the canvas is resized, with the size the mirror should have.
+        void setSize(unsigned int textureWidth, unsigned int textureHeight);
+
         static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options());
 
         ~Reflector() override;
