@@ -314,7 +314,10 @@ gl::GLState::GLState(): maxTextures(glGetParameteri(GL_MAX_COMBINED_TEXTURE_IMAG
     glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lineWidthRange);
     maxLineWidth = lineWidthRange[1];
     GLint contextFlags = 0;
+#ifndef __EMSCRIPTEN__
+    // desktop GL only: WebGL has no GL_CONTEXT_FLAGS, and asking logs an INVALID_ENUM
     glGetIntegerv(0x821E /* GL_CONTEXT_FLAGS */, &contextFlags);
+#endif
     const bool forwardCompatible = (contextFlags & 0x00000001 /* GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT */) != 0;
     lineWidthAvailable = !forwardCompatible && maxLineWidth > 1.f;
 
