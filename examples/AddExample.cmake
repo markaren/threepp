@@ -62,8 +62,11 @@ function(add_example)
 
         # HEAPF32: miniaudio's Web Audio callback copies its samples through it,
         # and aborts on every buffer if it is not exported.
-        set(LINK_FLAGS " --bind -sUSE_GLFW=3 -sASSERTIONS -sALLOW_MEMORY_GROWTH -sNO_DISABLE_EXCEPTION_CATCHING -sWASM=1 -sEXPORTED_RUNTIME_METHODS=[requestFullscreen,HEAPF32]")
-        set(LINK_FLAGS "${LINK_FLAGS} -sGL_DEBUG=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3")
+        set(LINK_FLAGS " --bind -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH -sNO_DISABLE_EXCEPTION_CATCHING -sWASM=1 -sEXPORTED_RUNTIME_METHODS=[requestFullscreen,HEAPF32]")
+        set(LINK_FLAGS "${LINK_FLAGS} -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3")
+        # Runtime checks for Debug builds only: GL_DEBUG checks (and logs) every GL call and
+        # ASSERTIONS guards every heap access, which together slow a heavy page several-fold.
+        target_link_options(${arg_NAME} PRIVATE "$<$<CONFIG:Debug>:-sASSERTIONS>" "$<$<CONFIG:Debug>:-sGL_DEBUG=1>")
         set(LINK_FLAGS "${LINK_FLAGS} --shell-file \"${PROJECT_SOURCE_DIR}/examples/emshell.html\"")
         if (arg_WEB_EMBED)
             foreach (path ${arg_WEB_EMBED})
