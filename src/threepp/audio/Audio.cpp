@@ -12,6 +12,22 @@
 #pragma GCC diagnostic ignored "-Wpedantic"  // Disables pedantic warnings
 #endif
 
+#ifdef __EMSCRIPTEN__
+// In a browser the mixing runs on the page's own thread, on the program's one
+// stack (64 KB unless the app links a bigger one), on top of whatever main()
+// keeps alive under emscripten_set_main_loop. miniaudio sizes its scratch for
+// a desktop audio thread: 4 KB arrays at every node a buffer passes through,
+// three of them in each data converter, 20 KB in a sound that converts its
+// samples, and two 254-pointer arrays at every node. One mix of a sound behind
+// a send to the reverb bus took 53 KB (a dry one 41 KB), ran off the end of
+// the stack into the heap, and the page trapped in malloc a frame later. With
+// these it takes 15 KB (dry 13 KB). Smaller scratch costs a few more loop
+// turns, nothing else (miniaudio derives every chunk size from these); no node
+// here has more than 2 buses. A desktop audio thread has stack to spare.
+#define MA_DATA_CONVERTER_STACK_BUFFER_SIZE 1024
+#define MA_MAX_NODE_BUS_COUNT 4
+#endif
+
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
@@ -111,10 +127,14 @@ namespace {
 
         auto* node = reinterpret_cast<ReverbNode*>(pNode);
 
-        const float* in = ppFramesIn[0];
+        // NULL only with MA_NODE_FLAG_ALLOW_NULL_INPUT, which this node does not
+        // set; read as silence all the same rather than through a null pointer.
+        const float* in = ppFramesIn ? ppFramesIn[0] : nullptr;
         float* out = ppFramesOut[0];
 
-        const ma_uint32 frames = *pFrameCountOut;
+        // One frame in, one frame out: never read more input than was handed
+        // in, nor write more output than there is room for.
+        const ma_uint32 frames = (std::min)(*pFrameCountIn, *pFrameCountOut);
         const ma_uint32 channels = node->channels;
 
         const float feedback = node->roomSize.load(std::memory_order_relaxed);
@@ -124,7 +144,7 @@ namespace {
         for (ma_uint32 frame = 0; frame < frames; ++frame) {
             for (ma_uint32 c = 0; c < channels; ++c) {
 
-                const float input = in[frame * channels + c] * _reverbInputGain;
+                const float input = in ? in[frame * channels + c] * _reverbInputGain : 0.f;
 
                 float acc = 0.f;
                 for (auto& comb : node->combs[c]) acc += comb.process(input, feedback, damp);
