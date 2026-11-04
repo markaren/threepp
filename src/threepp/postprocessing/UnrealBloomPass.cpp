@@ -50,12 +50,19 @@ namespace {
     // Separable Gaussian, one axis per draw. The kernel radius is a define
     // rather than a uniform so the loop unrolls — it grows with the mip index,
     // which is what makes the largest mip the widest blur in screen space.
+    constexpr std::array<int, 5> kernelSizes{3, 5, 7, 9, 11};
+
+    void setKernel(ShaderMaterial& material, int kernelRadius, bool smooth) {
+
+        material.defines["KERNEL_RADIUS"] = std::to_string(smooth ? 2 * kernelRadius : kernelRadius);
+        material.defines["SIGMA"] = smooth ? std::to_string(2.f * static_cast<float>(kernelRadius) / 3.f) : std::to_string(kernelRadius);
+    }
+
     std::shared_ptr<ShaderMaterial> blurMaterial(int kernelRadius) {
 
         auto material = ShaderMaterial::create();
 
-        material->defines["KERNEL_RADIUS"] = std::to_string(kernelRadius);
-        material->defines["SIGMA"] = std::to_string(kernelRadius);
+        setKernel(*material, kernelRadius, false);
 
         material->uniforms = UniformMap{
                 {"colorTexture", Uniform()},
@@ -199,7 +206,19 @@ UnrealBloomPass::UnrealBloomPass(const Vector2& resolution, float strength, floa
     highPassMaterial_->depthTest = false;
     highPassMaterial_->depthWrite = false;
 
-    const std::array<int, nMips> kernelSizes{3, 5, 7, 9, 11};
+    highPassMaterial_->uniforms["maxBrightness"] = Uniform(0.f);
+    {
+        auto& fs = highPassMaterial_->fragmentShader;
+        const std::string from = "gl_FragColor = mix( outputColor, texel, alpha );";
+        const auto at = fs.find(from);
+        if (at != std::string::npos) {
+            fs.replace(at, from.size(), R"(vec4 o = mix( outputColor, texel, alpha );
+                    if (maxBrightness > 0.0) o.rgb /= 1.0 + dot( o.rgb, luma ) / maxBrightness;
+                    gl_FragColor = o;)");
+            fs = "uniform float maxBrightness;\n" + fs;
+        }
+    }
+
     for (int i = 0; i < nMips; i++) {
         blurMaterials_.emplace_back(blurMaterial(kernelSizes[i]));
     }
@@ -231,6 +250,14 @@ UnrealBloomPass::UnrealBloomPass(const Vector2& resolution, float strength, floa
 
     // setSize does the rest; the composer calls it when the pass is added.
     setSize(static_cast<unsigned int>(resolution.x), static_cast<unsigned int>(resolution.y));
+}
+
+void UnrealBloomPass::setSmoothKernel(bool smooth) {
+
+    for (int i = 0; i < nMips; i++) {
+        setKernel(*blurMaterials_[i], kernelSizes[i], smooth);
+        blurMaterials_[i]->needsUpdate();
+    }
 }
 
 void UnrealBloomPass::setSize(unsigned int width, unsigned int height) {
@@ -282,6 +309,7 @@ void UnrealBloomPass::render(GLRenderer& renderer, RenderTarget*, RenderTarget* 
 
     highPassMaterial_->uniforms.at("tDiffuse").setValue(readBuffer ? readBuffer->texture.get() : static_cast<Texture*>(nullptr));
     highPassMaterial_->uniforms.at("luminosityThreshold").setValue(threshold);
+    highPassMaterial_->uniforms.at("maxBrightness").setValue(maxBrightness);
     fsQuad_->setMaterial(highPassMaterial_);
 
     renderer.setRenderTarget(renderTargetBright_.get());

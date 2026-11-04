@@ -39,12 +39,22 @@ namespace threepp {
         // neutral small ones is what gives a lens its character.
         std::array<Vector3, 5> tintColors{};
 
+        // > 0: the bright pass rolls off luminance above this smoothly (l / (1 + l / max)),
+        // so one extremely bright HDR pixel cannot dominate the glow. 0 (default) = off.
+        float maxBrightness = 0;
+
         // `resolution` is the size the internal chain is built for — the
         // composer overrides it through setSize as soon as the pass is added.
         explicit UnrealBloomPass(const Vector2& resolution = Vector2(256, 256),
                                  float strength = 1.f,
                                  float radius = 0.f,
                                  float threshold = 0.f);
+
+        // true: each mip's blur is a full Gaussian (sigma = a third of its radius, twice the
+        // taps), so its tails fall to ~1 %. false (default, three.js's kernel): sigma equals
+        // the radius and the kernel stops there, so the edge tap still weighs 0.6 of the
+        // centre: nearly a box, and two box passes turn a very bright HDR point into a square.
+        void setSmoothKernel(bool smooth);
 
         void setSize(unsigned int width, unsigned int height) override;
 
