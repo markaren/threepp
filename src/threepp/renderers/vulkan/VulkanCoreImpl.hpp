@@ -1401,6 +1401,9 @@ namespace threepp {
         // (OverlayGradeGpu), from its PostComposite; zero flags when the
         // switch is off or the view grades nothing.
         vulkan::OverlayGradeGpu overlayGrade() const;
+        // What a PostComposite applies (its white balance and grade) as that
+        // block, whatever the overlay switch; the path trace's resolve too.
+        static vulkan::OverlayGradeGpu gradeOf(const vulkan::PostComposite& post);
 
         // ── Automatic mesh LOD (setAutoLod; ON by default) ──────────────────
         // Measured: Bistro (per-pixel-bound worst case) neutral, fjord flight

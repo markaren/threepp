@@ -428,8 +428,9 @@ def path_trace(scene, camera, *, samples: int = 1024, backend: Union[str, Any] =
     A progressive trace over the scene the frame renders (``VulkanRenderer.path_trace``):
     ``samples`` camera paths per pixel, ``samples_per_frame`` of them per frame drawn (a
     Python render() draws ``flush_frames`` frames per call, 3 by default). ``Frame.image`` is
-    the picture through the renderer's own display transform (``tone_mapping``,
-    ``tone_mapping_exposure``), as a frame of the window would be; ``Frame.hdr`` is the
+    the picture through the renderer's own display transform (white balance, ``tone_mapping``,
+    ``tone_mapping_exposure``, the colour grade), as a frame of the window would be without its
+    bloom; ``Frame.hdr`` is the
     averaged linear (H, W, 3) float32 picture. ``Frame.frames`` is the number of render()
     calls it took.
 

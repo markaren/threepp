@@ -1182,7 +1182,8 @@ namespace threepp_py {
                          return arr;
                      },
                      "The averaged picture so far through the renderer's display transform "
-                     "(tone_mapping, tone_mapping_exposure, sRGB) as (H, W, 3) uint8, top row first, "
+                     "(white balance, tone_mapping, tone_mapping_exposure, sRGB, the colour grade; "
+                     "not the bloom) as (H, W, 3) uint8, top row first, "
                      "as read_pixels() gives a frame; (0, 0, 3) before the first sample. Drains the device.")
                 .def("path_trace_to_file",
                      [](PyVulkanRenderer& r, Object3D& scene, Camera& camera, const std::string& path,

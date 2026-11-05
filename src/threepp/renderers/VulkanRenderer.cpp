@@ -133,7 +133,7 @@ namespace threepp {
             auto pass = g.addPass("pathTrace", [this, f, sunTan, sunExtracted](VkCommandBuffer c) {
                 pathTracer_->recordDispatch(c, f, emissiveTriCountThisFrame_,
                                             emissiveTotalPowerThisFrame_, envImage.mipLevels, sunTan,
-                                            sunExtracted);
+                                            sunExtracted, oceanFineTileSize);
             });
             pathTracer_->declare(g, pass, f);
         }
@@ -3296,8 +3296,12 @@ namespace threepp {
         auto* pt   = impl.pathTracer_.get();
         if (!pt || !pt->available() || !impl.ctx) return false;
         vkDeviceWaitIdle(impl.ctx->device());
+        // The primary view's white balance and colour grade, as its
+        // PostComposite applies them to a frame.
+        const auto* post = impl.primaryView().post_.get();
+        const vulkan::OverlayGradeGpu grade = post ? impl.gradeOf(*post) : vulkan::OverlayGradeGpu{};
         uint32_t uw = 0, uh = 0;
-        if (!pt->readRGB(rgb, uw, uh, static_cast<uint32_t>(toneMapping), toneMappingExposure)) return false;
+        if (!pt->readRGB(rgb, uw, uh, static_cast<uint32_t>(toneMapping), toneMappingExposure, grade)) return false;
         w = static_cast<int>(uw);
         h = static_cast<int>(uh);
         return true;

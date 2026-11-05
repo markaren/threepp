@@ -2,7 +2,8 @@
 // renderer's scene state (path_trace.comp). A FEATURE of VulkanRenderer, not a
 // renderer: it binds what the deferred shade binds (TLAS, geometry and
 // material records, bindless textures, lights, environment, emitter table,
-// fog block, the primary view's camera), runs as one pass of the frame graph
+// fog block, ParticleField density volumes, cloud block, the ocean's fine
+// cascade, the primary view's camera), runs as one pass of the frame graph
 // while a session is active, and sums its samples into an accumulation buffer
 // the host reads back: averaged linear floats (read), or through the
 // renderer's display transform to 8-bit (readRGB, path_trace_resolve.comp).
@@ -32,6 +33,7 @@
 namespace threepp::vulkan {
 
     class VulkanContext;
+    struct OverlayGradeGpu;
 
     class PathTracer {
 
@@ -57,6 +59,20 @@ namespace threepp::vulkan {
             uint32_t        materialTexCount = 0;
             const VkBuffer* emissiveTriBuf = nullptr;// [framesInFlight] EmTri[]
             const VkBuffer* fogUbo      = nullptr;// [framesInFlight] the air medium
+            // ParticleField density volumes (bindings 67-69, as the deferred
+            // set has them): kMaxDensityFields views each, every slot filled
+            // (the caller's 1x1x1 dummies for the unused ones), and the
+            // per-frame box/medium block.
+            const VkImageView* particleDensity    = nullptr;// integer volumes
+            const VkImageView* particleDensityLin = nullptr;// r16f mirrors
+            const VkBuffer*    particleDensityUbo = nullptr;// [framesInFlight]
+            // The cloud + height-fog block (binding 58, GpuCloudUbo).
+            const VkBuffer*    cloudUbo           = nullptr;// [framesInFlight]
+            VkDeviceSize       cloudRange         = VK_WHOLE_SIZE;
+            // The ocean's FFT fine-cascade height (binding 13, GENERAL): the
+            // chop the wave mesh cannot resolve. A dummy without an ocean.
+            VkImageView        oceanFineView      = VK_NULL_HANDLE;
+            VkSampler          oceanFineSampler   = VK_NULL_HANDLE;
         };
 
         PathTracer(VulkanContext& ctx, uint32_t framesInFlight);
@@ -91,9 +107,11 @@ namespace threepp::vulkan {
         void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
         // sunExtracted: the environment's sun disc was extracted into a
         // directional light, so bounce rays read the sun-clamped mip 1.
+        // oceanFineTileSize: the fine cascade's tile (m), 0 without an ocean.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t emissiveCount, float emissiveTotalPower,
-                            uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted);
+                            uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted,
+                            float oceanFineTileSize);
 
         // ── Readback ────────────────────────────────────────────────────────
         // Both submit on the graphics queue and wait; the caller drains the
@@ -102,11 +120,13 @@ namespace threepp::vulkan {
         // The averaged picture: linear RGB, three floats per pixel, top row
         // first.
         bool read(std::vector<float>& rgb, uint32_t& w, uint32_t& h);
-        // The averaged picture through the display transform: exposure, the
-        // tone-map operator (threepp::ToneMapping's value) and the sRGB
-        // encode, three bytes per pixel, top row first.
+        // The averaged picture through the display transform: the white
+        // balance, exposure, the tone-map operator (threepp::ToneMapping's
+        // value), the sRGB encode and the colour grade (`grade`, as the
+        // primary view's PostComposite applies them), three bytes per pixel,
+        // top row first.
         bool readRGB(std::vector<uint8_t>& rgb, uint32_t& w, uint32_t& h,
-                     uint32_t toneMapping, float exposure);
+                     uint32_t toneMapping, float exposure, const OverlayGradeGpu& grade);
 
     private:
         VulkanContext& ctx_;
@@ -118,6 +138,10 @@ namespace threepp::vulkan {
         VkPipeline                   pipe_       = VK_NULL_HANDLE;
         VkDescriptorPool             descPool_   = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
+        // The density volumes' samplers: nearest for the integer volumes
+        // (texelFetch), linear clamp for the r16f mirrors.
+        VkSampler nearestSampler_ = VK_NULL_HANDLE;
+        VkSampler linearSampler_  = VK_NULL_HANDLE;
 
         // The resolve (path_trace_resolve.comp): its own set, written per
         // readRGB from the accumulator and a transient output buffer.

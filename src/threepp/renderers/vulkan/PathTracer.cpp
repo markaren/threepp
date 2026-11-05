@@ -1,12 +1,14 @@
 #include "threepp/renderers/vulkan/PathTracer.hpp"
 
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/ParticleFieldPass.hpp"// OverlayGradeGpu
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
 #include "threepp/renderers/vulkan/shaders/path_trace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/path_trace_resolve.comp.spv.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 namespace threepp::vulkan {
@@ -27,19 +29,22 @@ namespace threepp::vulkan {
             float    fireflyClamp;
             float    sunTanHalfAngle;
             uint32_t seed;
+            float    oceanFineTileSize;
         };
-        static_assert(sizeof(PushConstants) == 48);
+        static_assert(sizeof(PushConstants) == 52);
 
-        // path_trace_resolve.comp's.
+        // path_trace_resolve.comp's: the display transform and the post
+        // stack's white balance and grade (OverlayGrade).
         struct ResolvePush {
-            uint32_t width;
-            uint32_t height;
-            uint32_t toneMapping;
-            float    exposure;
+            uint32_t        width;
+            uint32_t        height;
+            uint32_t        toneMapping;
+            float           exposure;
+            OverlayGradeGpu grade;
         };
-        static_assert(sizeof(ResolvePush) == 16);
+        static_assert(sizeof(ResolvePush) == 112);
 
-        constexpr uint32_t kNumBindings = 10;
+        constexpr uint32_t kNumBindings = 15;// 0-9, then 67-69, 58 and 13
 
         VkPipeline makeComputePipeline(VulkanContext& ctx, const uint32_t* spv, size_t bytes,
                                        VkPipelineLayout layout, const char* what) {
@@ -69,6 +74,19 @@ namespace threepp::vulkan {
     PathTracer::PathTracer(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         if (!ctx_.rayQuerySupported()) return;
+        for (int i = 0; i < 2; ++i) {
+            VkSamplerCreateInfo sci{};
+            sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sci.magFilter    = i == 0 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+            sci.minFilter    = sci.magFilter;
+            sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sci.maxLod       = 0.f;
+            check(vkCreateSampler(ctx_.device(), &sci, nullptr, i == 0 ? &nearestSampler_ : &linearSampler_),
+                  "vkCreateSampler(pathTracer)");
+        }
         createPipeline();
         createResolvePipeline();
         createDescriptorPool();
@@ -88,6 +106,8 @@ namespace threepp::vulkan {
         if (resolvePipe_) vkDestroyPipeline(d, resolvePipe_, nullptr);
         if (resolvePipeLayout_) vkDestroyPipelineLayout(d, resolvePipeLayout_, nullptr);
         if (resolveLayout_) vkDestroyDescriptorSetLayout(d, resolveLayout_, nullptr);
+        if (nearestSampler_) vkDestroySampler(d, nearestSampler_, nullptr);
+        if (linearSampler_) vkDestroySampler(d, linearSampler_, nullptr);
     }
 
     void PathTracer::createPipeline() {
@@ -100,6 +120,16 @@ namespace threepp::vulkan {
             b[i].descriptorCount = 1;
             b[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
         };
+        // The rest sit at the deferred set's binding numbers, where the
+        // includes the two share declare them: the ParticleField density
+        // volumes (67-69, particle_density.glsl), the cloud block (58,
+        // cloud_ubo.glsl) and the ocean's fine-cascade height (13).
+        auto setAt = [&](uint32_t slot, uint32_t binding, VkDescriptorType t, uint32_t count) {
+            b[slot].binding         = binding;
+            b[slot].descriptorType  = t;
+            b[slot].descriptorCount = count;
+            b[slot].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        };
         set(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);            // camera (the primary view's)
         set(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);            // lights
         set(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);    // env (PMREM)
@@ -111,6 +141,11 @@ namespace threepp::vulkan {
         set(7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // EmTri[]
         set(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // accumulation
         set(9, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);            // fog (the air medium)
+        setAt(10, 67, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDensityFields);// density volumes
+        setAt(11, 68, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1);                         // their boxes + medium
+        setAt(12, 69, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDensityFields);// r16f mirrors
+        setAt(13, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1);                         // clouds (GpuCloudUbo)
+        setAt(14, 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // ocean fine-cascade height
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -170,9 +205,9 @@ namespace threepp::vulkan {
     void PathTracer::createDescriptorPool() {
         VkDescriptorPoolSize sizes[4]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = framesInFlight_ * 3;// camera + lights + fog
+        sizes[0].descriptorCount = framesInFlight_ * 5;// camera + lights + fog + density + clouds
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (1 + kMaxMaterialTextures);// env + bindless
+        sizes[1].descriptorCount = framesInFlight_ * (2 + kMaxMaterialTextures + 2 * kMaxDensityFields);// env + ocean + bindless + volumes
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sizes[2].descriptorCount = framesInFlight_ * 4 + 2;// materials + geometry + emissive + accumulation; the resolve's two
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -238,7 +273,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures    = &tlasLocal;
 
-            VkWriteDescriptorSet w[9]{};
+            VkWriteDescriptorSet w[14]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -265,7 +300,46 @@ namespace threepp::vulkan {
             setw(7, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &emInfo);
             setw(8, 9, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &fogInfo);
             // Binding 8, the session's accumulator, is prepare()'s.
-            updateDescriptorSets(ctx_.device(), 9, w, 0, nullptr);
+            uint32_t nw = 9;
+            std::array<VkDescriptorImageInfo, kMaxDensityFields> pdInfos{};
+            std::array<VkDescriptorImageInfo, kMaxDensityFields> pdLinInfos{};
+            VkDescriptorBufferInfo pdUboInfo{};
+            if (in.particleDensity && in.particleDensityLin && in.particleDensityUbo) {
+                for (uint32_t i = 0; i < kMaxDensityFields; ++i) {
+                    pdInfos[i]    = {nearestSampler_, in.particleDensity[i], VK_IMAGE_LAYOUT_GENERAL};
+                    pdLinInfos[i] = {linearSampler_, in.particleDensityLin[i], VK_IMAGE_LAYOUT_GENERAL};
+                }
+                pdUboInfo.buffer = in.particleDensityUbo[f];
+                pdUboInfo.range  = VK_WHOLE_SIZE;
+                w[9].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[9].dstSet          = sets_[f];
+                w[9].dstBinding      = 67;
+                w[9].descriptorCount = kMaxDensityFields;
+                w[9].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[9].pImageInfo      = pdInfos.data();
+                setw(10, 68, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &pdUboInfo);
+                w[11].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[11].dstSet          = sets_[f];
+                w[11].dstBinding      = 69;
+                w[11].descriptorCount = kMaxDensityFields;
+                w[11].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[11].pImageInfo      = pdLinInfos.data();
+                nw = 12;
+            }
+            VkDescriptorBufferInfo cloudInfo{};
+            if (in.cloudUbo) {
+                cloudInfo.buffer = in.cloudUbo[f];
+                cloudInfo.range  = in.cloudRange;
+                setw(static_cast<int>(nw), 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &cloudInfo);
+                ++nw;
+            }
+            VkDescriptorImageInfo oceanInfo{};
+            if (in.oceanFineView != VK_NULL_HANDLE && in.oceanFineSampler != VK_NULL_HANDLE) {
+                oceanInfo = {in.oceanFineSampler, in.oceanFineView, VK_IMAGE_LAYOUT_GENERAL};
+                setw(static_cast<int>(nw), 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanInfo, nullptr);
+                ++nw;
+            }
+            updateDescriptorSets(ctx_.device(), nw, w, 0, nullptr);
         }
     }
 
@@ -349,7 +423,8 @@ namespace threepp::vulkan {
 
     void PathTracer::recordDispatch(VkCommandBuffer cb, uint32_t frame,
                                     uint32_t emissiveCount, float emissiveTotalPower,
-                                    uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted) {
+                                    uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted,
+                                    float oceanFineTileSize) {
         if (!available() || !active_ || accum_.handle == VK_NULL_HANDLE || frame >= framesInFlight_) return;
         PushConstants pc{};
         pc.width              = width_;
@@ -364,6 +439,7 @@ namespace threepp::vulkan {
         pc.fireflyClamp       = params_.fireflyClamp;
         pc.sunTanHalfAngle    = sunTanHalfAngle;
         pc.seed               = seed_;
+        pc.oceanFineTileSize  = oceanFineTileSize;
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -455,7 +531,7 @@ namespace threepp::vulkan {
     }
 
     bool PathTracer::readRGB(std::vector<uint8_t>& rgb, uint32_t& w, uint32_t& h,
-                             uint32_t toneMapping, float exposure) {
+                             uint32_t toneMapping, float exposure, const OverlayGradeGpu& grade) {
         w = h = 0;
         if (!available() || accum_.handle == VK_NULL_HANDLE || samples_ == 0) return false;
         const size_t       px    = size_t(width_) * height_;
@@ -490,6 +566,7 @@ namespace threepp::vulkan {
             pc.height      = height_;
             pc.toneMapping = toneMapping;
             pc.exposure    = exposure;
+            pc.grade       = grade;
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, resolvePipe_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, resolvePipeLayout_, 0, 1, &resolveSet_, 0, nullptr);
             vkCmdPushConstants(cb, resolvePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);

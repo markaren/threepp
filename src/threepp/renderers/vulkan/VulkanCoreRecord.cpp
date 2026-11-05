@@ -2436,9 +2436,12 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
         }
 
 vulkan::OverlayGradeGpu VulkanRenderer::Impl::overlayGrade() const {
+            if (!overlayColorGrade_ || !view().post_) return {};
+            return gradeOf(*view().post_);
+        }
+
+vulkan::OverlayGradeGpu VulkanRenderer::Impl::gradeOf(const vulkan::PostComposite& post) {
             vulkan::OverlayGradeGpu g{};
-            if (!overlayColorGrade_ || !view().post_) return g;
-            const vulkan::PostComposite& post = *view().post_;
             if (post.whiteBalanceActive()) {
                 const float* m = post.whiteBalanceMatrix();
                 for (int c = 0; c < 3; ++c) {

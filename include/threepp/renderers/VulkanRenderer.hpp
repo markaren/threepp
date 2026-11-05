@@ -1811,14 +1811,23 @@ namespace threepp {
         // off (a level switch mid-session changes what the rays hit). A
         // change of the render extent restarts the accumulation.
         //
-        // What the trace models: Lambert + GGX surfaces with their albedo,
-        // roughness, metalness and emissive maps; dielectric transmission
-        // with ior, thin-walled and Beer-Lambert attenuation; the analytic
-        // lights (the sun as a cone of setSunAngularRadius) and emissive
-        // meshes as area lights; the environment on a miss. Not modelled:
-        // clearcoat, sheen, iridescence, normal and detail maps, vertex
-        // colours, terrain splats, fog and froxel media, particle fields,
-        // clouds, the ocean as a water surface.
+        // What the trace models: the surface the raster G-buffer shades
+        // (albedo, roughness, metalness and emissive maps, normal maps,
+        // per-vertex colours, the detail layer and the terrain bands) under
+        // Lambert + GGX, with sheen, clearcoat and foliage translucency as a
+        // transmission lobe; dielectric transmission with ior, thin-walled
+        // and Beer-Lambert attenuation; the analytic lights (the sun as a
+        // cone of setSunAngularRadius) and emissive meshes as area lights;
+        // the background (its blurriness and intensity) on a camera miss and
+        // the environment on any other; the air medium (scene.fog and
+        // setHeightFog) on every leg as the frame fogs its camera leg, with
+        // the sun's in-scatter traced to the shadows of the scene; and the
+        // ParticleField density volumes; the underwater murk below the water
+        // surface (a submerged surface lit by the refracted sun), and an ocean
+        // surface as a water interface. pathTraceReadRGB goes through the
+        // frame's white balance and colour grade, not its bloom. Not
+        // modelled: iridescence, clouds, the ocean's foam and fine chop,
+        // caustics.
         struct PathTraceParams {
             uint32_t samplesPerFrame = 8;  // camera paths per pixel per render()
             uint32_t maxBounces      = 6;  // scattering events after the primary hit (<= 64)
@@ -1836,8 +1845,9 @@ namespace threepp {
         // before the first sample lands.
         bool pathTraceRead(std::vector<float>& rgb, int& w, int& h);
         // The same picture through the display transform the frame goes
-        // through (toneMapping, toneMappingExposure, sRGB): three bytes per
-        // pixel, top row first. Resolved on the GPU; drains the device.
+        // through (white balance, toneMapping, toneMappingExposure, sRGB,
+        // the colour grade; not the bloom): three bytes per pixel, top row
+        // first. Resolved on the GPU; drains the device.
         bool pathTraceReadRGB(std::vector<unsigned char>& rgb, int& w, int& h);
         // Blocking form: begin, render() until `samples` per pixel are in,
         // read, stop. False when no frame added samples (a debug view, or no

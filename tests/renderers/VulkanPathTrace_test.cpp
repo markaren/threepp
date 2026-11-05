@@ -10,7 +10,10 @@
 //       agree on brightness and layout (a sanity gate, not a golden — the two
 //       are different estimators of the same light), and the trace is the
 //       right way up;
-//   [4] no validation errors.
+//   [4] fog fades the far floor toward the fog colour;
+//   [5] the surface the G-buffer shades: a sphere takes its vertex colours,
+//       and a card lit from behind glows through only when translucent;
+//   [6] no validation errors.
 //
 // Exit 42 (SKIP) without a Vulkan device; a device without ray query checks
 // that pathTraceBegin refuses and skips the rest.
@@ -340,7 +343,80 @@ int main() {
         scene.fog.reset();
     }
 
-    // ── 5. Validation ───────────────────────────────────────────────────────
+    // ── 5. The surface the G-buffer shades ──────────────────────────────────
+    // A sphere whose colour is in its vertices (the GeometryDesc's colour
+    // buffer), and a card lit from behind that only a translucent material
+    // shows from the front.
+    std::printf("\n[5] vertex colours, and a translucent card lit from behind\n");
+    {
+        Scene s2;
+        auto white     = constantEnv(1.f, 1.f, 1.f);
+        s2.environment = white;
+        s2.background  = white;
+        auto geom      = SphereGeometry::create(1.f, 48, 32);
+        const int nv   = geom->getAttribute<float>("position")->count();
+        std::vector<float> cols(std::size_t(nv) * 3);
+        for (int i = 0; i < nv; ++i) {
+            cols[std::size_t(i) * 3 + 0] = 1.f;
+            cols[std::size_t(i) * 3 + 1] = 0.25f;
+            cols[std::size_t(i) * 3 + 2] = 0.25f;
+        }
+        geom->setAttribute("color", FloatBufferAttribute::create(cols, 3));
+        auto ballMat          = MeshStandardMaterial::create();
+        ballMat->color        = Color(0.5f, 0.5f, 0.5f);
+        ballMat->roughness    = 1.f;
+        ballMat->vertexColors = true;
+        auto ball             = Mesh::create(geom, ballMat);
+        s2.add(ball);
+        renderer.render(s2, *camera);
+        VulkanRenderer::PathTraceParams p;
+        p.samplesPerFrame = 8;
+        p.maxBounces      = 4;
+        std::vector<float> rgb;
+        int w = 0, h = 0;
+        bool ok = renderer.pathTrace(s2, *camera, 32, rgb, w, h, p);
+        check(ok && w == kW && h == kH, "a trace of the vertex-coloured sphere");
+        if (ok && w == kW && h == kH) {
+            const Rgb c = meanLinear(rgb, kW, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10);
+            std::printf("  sphere centre (%.3f %.3f %.3f)\n", c.r, c.g, c.b);
+            check(c.r > 2.5 * c.g && c.r > 2.5 * c.b, "the sphere takes its vertices' red");
+        }
+        s2.remove(*ball);
+
+        auto black     = constantEnv(0.f, 0.f, 0.f);
+        s2.environment = black;
+        s2.background  = black;
+        auto back      = DirectionalLight::create(Color(1.f, 1.f, 1.f), 3.f);
+        back->position.set(0, 0, -5);// behind the card, lighting its far face
+        s2.add(back);
+        // The card faces the camera; the light reaches only its back.
+        const auto cardLum = [&](float translucency) {
+            auto mat               = MeshStandardMaterial::create();
+            mat->color             = Color(0.2f, 0.6f, 0.2f);
+            mat->roughness         = 1.f;
+            mat->side              = Side::Double;
+            mat->translucency      = translucency;
+            mat->translucencyColor = Color(1.f, 1.f, 1.f);
+            auto card              = Mesh::create(PlaneGeometry::create(2.f, 2.f), mat);
+            s2.add(card);
+            renderer.render(s2, *camera);
+            std::vector<float> img;
+            int iw = 0, ih = 0;
+            Rgb c;
+            if (renderer.pathTrace(s2, *camera, 32, img, iw, ih, p) && iw == kW && ih == kH)
+                c = meanLinear(img, kW, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10);
+            s2.remove(*card);
+            return c;
+        };
+        const Rgb off = cardLum(0.f);
+        const Rgb on  = cardLum(1.f);
+        std::printf("  card opaque (%.3f %.3f %.3f) translucent (%.3f %.3f %.3f)\n",
+                    off.r, off.g, off.b, on.r, on.g, on.b);
+        check(off.lum() < 0.01, "an opaque card is dark on its unlit face");
+        check(on.g > 0.05 && on.g > 2.0 * on.r, "a translucent one glows through, in its own green");
+    }
+
+    // ── 6. Validation ───────────────────────────────────────────────────────
     if (!vulkan::validationActive()) {
         std::printf("\n[note] VK_LAYER_KHRONOS_validation is not installed: the zero-error\n"
                     "       check is skipped.\n");

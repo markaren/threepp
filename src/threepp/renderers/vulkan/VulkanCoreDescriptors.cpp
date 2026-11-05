@@ -514,6 +514,13 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 tin.materialTexCount = kMaxMaterialTextures;
                 tin.emissiveTriBuf   = emBufs.data();
                 tin.fogUbo           = fogBufs.data();
+                tin.particleDensity    = pdViews.data();
+                tin.particleDensityLin = pdLinViews.data();
+                tin.particleDensityUbo = pdUbos.data();
+                tin.cloudUbo           = cloudBufs.data();
+                tin.cloudRange         = sizeof(GpuCloudUbo);
+                tin.oceanFineView      = oceanFineHeightView;
+                tin.oceanFineSampler   = oceanFineHeightSampler;
                 pathTracer_->rewriteDescriptors(tin, onlyFrame);
             }
         }
