@@ -2,8 +2,9 @@
 
 A model of Maritime Robotics' Mariner sea drone (MKII) for the USV demos, built the
 way the TP-1 rover is (`../rover/`): one spec file, a headless-Blender generator, and a
-`.glb` that threepp loads with `GLTFLoader`. The Otter X and the Otter catamarans are built
-the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the end.
+`.glb` that threepp loads with `GLTFLoader`. The Otter X is built the same way; the Otter
+is built from a model NTNU publishes, which the generator fetches. See
+[The Otter X](#the-otter-x) and [The Otter](#the-otter) at the end.
 
 | file | what it is |
 |---|---|
@@ -240,38 +241,68 @@ two fixed electric pods (she steers on differential thrust).
 
 | file | what it is |
 |---|---|
-| `otter_spec.json` | every number: the product page's figures, the lines and fittings read off the vendor's side and front renders, the mass budget, the materials |
-| `build_otter_blender.py` | builds the geometry with `../build_common.py`'s mesh, hydrostatics and export code and the Otter X's demihull lines, exports `otter.glb` through Blender, and integrates `otter_hydro.json` |
+| `otter_spec.json` | the source model (URL, pinned sha256, licence, attribution, how its parts map to the nodes and materials), every position measured on it, the product page's figures, the mass budget, the materials |
+| `build_otter_blender.py` | fetches the source model, turns it into the vessel frame and the nodes below, exports `otter.glb` through Blender, and integrates `otter_hydro.json` from its pontoons, with `../build_common.py`'s fetch, glTF reader, hydrostatics and export code |
 | `otter.glb`, `otter_hydro.json` | generated, not committed |
+
+The geometry is the Otter Jan Henrik Lenes made for his USV simulator
+([jhlenes/usv_simulator](https://github.com/jhlenes/usv_simulator)) from Maritime Robotics'
+data, as NTNU's ITK publishes it with the Gemini data
+([3d_models/Otter](https://www.itk.ntnu.no/milliampere-data/gemini/3d_models/Otter/)), under
+the MIT licence. It is not in this repository. The first build fetches it (12 MB) into
+`~/.cache/threepp/models/otter_ntnu/` (`$THREEPP_MODEL_CACHE` moves the cache) with its
+`LICENSE.txt` and an `ATTRIBUTION.txt`; every build checks it against the sha256 the spec
+pins, so a model republished under the same URL stops the build rather than changing the
+boat. `otter.glb` carries the copyright and the attribution in its asset copyright and its
+root's extras, and the licence text in the extras too; keep them if you pass it on.
 
 ```
 blender --background --factory-startup --python build_otter_blender.py -- --spec otter_spec.json --out otter.glb
 ```
 
-`python build_otter_blender.py --hydro-only` rebuilds just `otter_hydro.json`. The build
-fails if the budget does not add up to 62 kg, if the height or the length leave the
-vendor's, if any condition trims more than 2 deg or puts the pontoon decks within 5 cm
-of the water.
+About 15 s. `python build_otter_blender.py --hydro-only` rebuilds just `otter_hydro.json`
+(it fetches the model too, without Blender). `--source PATH` builds from a copy you
+already have, checked against the same hash. The build fails if the budget does not add
+up to 62 kg; if the spec's length, beam, height, lowest point, pontoon deck, rotor axes,
+blade tips or struts leave the model's own by more than a few millimetres; or if any
+condition trims more than 2 deg or puts the pontoon decks within 5 cm of the water.
 
-Frame as the others; the origin is at the lowest point of the pontoon keel line, the
-thruster guards reach y = -0.178. The root node `otter` sits at identity.
+Frame as the others; the origin is at the lowest point of the pontoons' keel line. The
+source is Y up with her bow toward -Z; the generator turns it and lifts it 0.718 m. The
+thruster guards reach y = -0.073, the propeller tips y = -0.052 and the housing on the
+centre mount y = -0.026. The root node `otter` sits at identity.
 
-- `pontoons`, `body` (pod, deck plate, orange side panels), `frame` (the tube frames, the
-  thruster struts and guards, the cable loops), `deck_fittings`, `gantry`: meshes.
-- `thruster_port`, `thruster_stbd`: the pods, fixed. Each has a `thruster_<side>_rotor`
-  that spins about local +X and a `thrust_<side>` empty at the propeller.
-- Empties: `camera_main` (under the gantry's top plate), `gnss_fore`, `gnss_aft` (1.6 m
-  fore-and-aft baseline), `ais_vhf_antenna`, `lte_antenna`, `imu`, `transducer`,
+- `pontoons`, `body` (deck plate, orange hatches, the pontoons' fittings, lettering),
+  `frame` (the black frames fore and aft, the thruster guards, the centre mount),
+  `deck_fittings` (GNSS antennas, whip, the pucks and glands on the deck), `gantry`
+  (A-frame, box, posts, the camera arch, sidelights): meshes. The source's 346 parts go
+  to these by name for the listed ones and by where they sit for the rest
+  (`source.parts`); its six colour swatches and its uncoloured parts map onto the spec's
+  materials (`source.material_map`).
+- `thruster_port`, `thruster_stbd`: the pods and their struts, fixed. Each has a
+  `thruster_<side>_rotor` (the source's two-bladed propeller, centred on its axis) that
+  spins about local +X and a `thrust_<side>` empty at the propeller.
+- Empties: `camera_main` (the front of the round camera in the gantry's arch),
+  `gnss_fore`, `gnss_aft` (1.74 m fore-and-aft baseline), `ais_vhf_antenna`,
+  `lte_antenna`, `imu`, `transducer` (the bottom of the housing on the centre mount),
   `nav_light_port`, `nav_light_stbd`.
 
-Lightship 62 kg, survey (77 kg, the design condition) and full load (92 kg, the vendor's
-30 kg payload). At the survey load she floats at 0.185 m on the pontoons (0.36 m to the
-guards' feet), 0.9 deg by the stern, GM_T 1.56 m.
+The hydrostatics come from the source's pontoons. They are open where their battery wells
+and a few glands are (and at T-junctions of the tessellation), so the column integrator
+would find columns with no top; `build_common.capped` closes every boundary loop with a
+fan, which caps the wells at their rims, as the hatches do. Lightship 62 kg, survey (77 kg,
+the design condition) and full load (92 kg, the vendor's 30 kg payload). At the survey
+load she floats at 0.209 m on the pontoons (0.276 m to the guards' feet), 0.4 deg by the
+head, GM_T 1.10 m.
 
 From the vendor: the three dimensions, dry weight, speed, endurance, payload, the battery
-and thruster count. Read off the two renders (3.18 mm/px in the side one), to a few
-centimetres: everything else. Assumed, and marked in the spec: the mass budget, thrust,
-the fore frame's plan form, where the thruster struts pass the pontoons. No vendor marks.
+and thruster count. From the source model: the geometry and every position in the spec;
+it agrees with the vendor's 2000 x 1080 x 1065 mm. Assumed, and marked in the spec: the
+mass budget, thrust, sensor models, which deck antenna is which, the transducer. The
+budget's centroids are still the earlier hand-drawn model's: the source's battery wells
+are amidships and low, and the packs moved there with the rest of the budget as it is
+trim her 2.5 to 3.5 deg by the stern, past the gate, so the budget waits for a weighed
+figure.
 
 ### Otter demo
 
@@ -288,9 +319,9 @@ Her drive, `usv_rig.FixedPods`, is the Otter X's at her size with fixed pods: th
 the spot. 110 N per pod at bollard (assumed), 60 % of it at the top speed and astern; the
 resistance is tuned so full throttle makes the vendor's 4.5 kn. The cameras stand at 0.45
 of the distances the larger boats use. In flat water she settles on the solver's pose
-(0.378 m to the guards' feet and +0.87 deg against 0.378 and +0.88). In the scripted run
-she reaches 4.4 kn, trims about 3 deg by the stern at that speed (the pods push 0.3 m
-below her centre of gravity), turns at about 22 deg/s under way and 38 deg/s on the spot,
+(0.275 m to the guards' feet and -0.42 deg against 0.276 and -0.42). In the scripted run
+she reaches 4.4 kn, trims 2 to 3.5 deg by the stern at that speed (the pods push 0.27 m
+below her centre of gravity), turns at about 21 deg/s under way and 37 deg/s on the spot,
 and stops from 2.5 kn in under 2 s. She rides the default sea (7 m/s over 30 km) within
 5 deg of roll.
 

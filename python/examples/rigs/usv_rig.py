@@ -893,7 +893,7 @@ class FixedPods(_Pods):
         super().__init__(hull)
         spec = hull.spec
         th = spec["propulsion"]["thrusters"]
-        self._setup(th, spec["propulsion"]["top_speed_kn"] * 0.5144, spec["frame_tubes"]["aft"]["arm_z"],
+        self._setup(th, spec["propulsion"]["top_speed_kn"] * 0.5144, th["pod_z"],
                     th["strut_x"] + th["rotor"]["x"], th["pod_y"])
         self.steer_max = 1.0
         self.disc_r = th["rotor"]["blade_tip_r"]

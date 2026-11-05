@@ -1,5 +1,7 @@
 """What the build_*_blender.py generators share: the mesh accumulator and its primitives, the
-hydrostatics, and the Blender export.
+hydrostatics, the Blender export, and for a generator that builds from a model someone else
+published, fetching it (`fetch_source`), reading it (`read_glb`) and closing its hulls
+(`capped`).
 
 A generator builds its model with numpy in the frame of its spec (X forward, Y up, Z starboard,
 metres), floats it if it is a boat (`hydrostatics`), and hands the parts to Blender
@@ -558,6 +560,157 @@ def check_gates(spec, hydro):
     if not lo <= d["gm_t"] <= hi:
         errs.append(f"GM_T {d['gm_t']:.3f} outside {lo}..{hi}")
     assert not errs, ("hydrostatic gates failed", errs)
+
+# ---------------------------------------------------------------- published source models (numpy only)
+MODEL_CACHE = os.environ.get("THREEPP_MODEL_CACHE",
+                             os.path.join(os.path.expanduser("~"), ".cache", "threepp", "models"))
+
+
+def _download(url, path):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "threepp-build"})
+    with urllib.request.urlopen(req, timeout=120) as r, open(path + ".part", "wb") as f:
+        while True:
+            b = r.read(1 << 20)
+            if not b:
+                break
+            f.write(b)
+    os.replace(path + ".part", path)
+
+
+def fetch_source(src, local=None, log=print):
+    """A model someone else published that a generator builds from, rather than a copy kept in
+    the repository. src: the spec's "source" block (url, sha256, cache, licence_url,
+    attribution). The file is fetched once into MODEL_CACHE/<cache>/ ($THREEPP_MODEL_CACHE,
+    default ~/.cache/threepp/models) with its licence and an ATTRIBUTION.txt beside it; every
+    build checks it against the pinned sha256, so a model republished under the same URL
+    stops the build instead of changing it. local: a copy to use instead (checked too).
+    Returns (path, licence text)."""
+    import hashlib
+    d = os.path.join(MODEL_CACHE, src["cache"])
+    os.makedirs(d, exist_ok=True)
+    path = local or os.path.join(d, src["url"].rsplit("/", 1)[1])
+    if not os.path.exists(path):
+        if local:
+            raise FileNotFoundError(local)
+        log(f"fetching {src['url']}")
+        _download(src["url"], path)
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    if h.hexdigest() != src["sha256"]:
+        raise RuntimeError(f"{path}: sha256 {h.hexdigest()}, the spec pins {src['sha256']}. The published "
+                           f"model is not the one this generator was written against: look at what changed, "
+                           f"then update the spec's source block.")
+    lic = os.path.join(d, "LICENSE.txt")
+    if not os.path.exists(lic):
+        _download(src["licence_url"], lic)
+    with open(os.path.join(d, "ATTRIBUTION.txt"), "w", encoding="utf-8") as f:
+        f.write(src["attribution"] + "\n")
+    with open(lic, "r", encoding="utf-8") as f:
+        return path, f.read()
+
+
+def read_glb(path):
+    """The triangle meshes of a binary glTF in its scene's frame, node transforms applied: one
+    dict per primitive with the node's name, positions (n, 3), faces (m, 3), and its material's
+    base colour texture (the image's name up to its first dot, or None) and factor."""
+    import json
+    import struct
+    with open(path, "rb") as f:
+        data = f.read()
+    magic, _, _ = struct.unpack_from("<4sII", data, 0)
+    assert magic == b"glTF", (path, "not a binary glTF")
+    chunks, off = [], 12
+    while off < len(data):
+        n, _ = struct.unpack_from("<I4s", data, off)
+        chunks.append(data[off + 8:off + 8 + n])
+        off += 8 + n
+    J, BIN = json.loads(chunks[0]), chunks[1]
+
+    def accessor(i):
+        a = J["accessors"][i]
+        assert "sparse" not in a, "sparse accessors are not read"
+        bv = J["bufferViews"][a["bufferView"]]
+        k = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[a["type"]]
+        dt = np.dtype({5121: np.uint8, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}[a["componentType"]])
+        o = bv.get("byteOffset", 0) + a.get("byteOffset", 0)
+        stride = bv.get("byteStride", k * dt.itemsize)
+        raw = np.frombuffer(BIN, np.uint8, count=stride * (a["count"] - 1) + k * dt.itemsize, offset=o)
+        rows = np.lib.stride_tricks.as_strided(raw, (a["count"], k * dt.itemsize), (stride, 1))
+        return np.ascontiguousarray(rows).view(dt).reshape(a["count"], k)
+
+    def local(nd):
+        if "matrix" in nd:
+            return np.array(nd["matrix"], float).reshape(4, 4).T
+        x, y, z, w = nd.get("rotation", (0.0, 0.0, 0.0, 1.0))
+        M = np.eye(4)
+        M[:3, :3] = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                              [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                              [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]) @ np.diag(nd.get("scale", (1.0, 1.0, 1.0)))
+        M[:3, 3] = nd.get("translation", (0.0, 0.0, 0.0))
+        return M
+
+    out = []
+
+    def walk(i, M):
+        nd = J["nodes"][i]
+        W = M @ local(nd)
+        for pr in (J["meshes"][nd["mesh"]]["primitives"] if "mesh" in nd else []):
+            assert pr.get("mode", 4) == 4, (nd.get("name"), "not triangles")
+            P = accessor(pr["attributes"]["POSITION"]).astype(float) @ W[:3, :3].T + W[:3, 3]
+            F = accessor(pr["indices"]).astype(np.int64).reshape(-1, 3) if "indices" in pr else np.arange(len(P)).reshape(-1, 3)
+            pbr = J["materials"][pr["material"]].get("pbrMetallicRoughness", {}) if "material" in pr else {}
+            tex = None
+            if "baseColorTexture" in pbr:
+                tex = J["images"][J["textures"][pbr["baseColorTexture"]["index"]]["source"]].get("name", "").split(".")[0]
+            out.append({"name": nd.get("name"), "positions": P, "faces": F, "texture": tex,
+                        "color": pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])})
+        for c in nd.get("children", []):
+            walk(c, W)
+    for r in J["scenes"][J.get("scene", 0)]["nodes"]:
+        walk(r, np.eye(4))
+    return out
+
+
+def weld(P, F, tol=1e-6):
+    """Vertices within tol merged; faces that collapse dropped. Returns (V, F)."""
+    _, first, inv = np.unique(np.round(P / tol).astype(np.int64), axis=0, return_index=True, return_inverse=True)
+    F = inv.ravel()[F]
+    F = F[(F[:, 0] != F[:, 1]) & (F[:, 1] != F[:, 2]) & (F[:, 2] != F[:, 0])]
+    return P[first], F
+
+
+def capped(P, F, tol=1e-6):
+    """A published mesh's triangles with its holes closed, for the hydrostatics: vertices welded
+    within tol, and every boundary loop fanned from its centroid with the winding that pairs
+    its edges. A hull modelled with open wells under its hatches leaves the column integrator
+    columns with no top; capped at their rims they hold air, as the hatches make them. Loops
+    left by T-junctions (a face's edge running past its neighbours' vertices) close up slivers
+    of no area. Returns (triangles (n, 3, 3), caps (k, 3, 3))."""
+    V, F = weld(P, F, tol)
+    he = set()
+    for a, b, c in F.tolist():
+        he.update(((a, b), (b, c), (c, a)))
+    nxt = {}
+    for a, b in he:
+        if (b, a) not in he:
+            nxt.setdefault(a, []).append(b)
+    caps = []
+    while nxt:
+        a = next(iter(nxt))
+        loop = [a]
+        while a in nxt:                       # every vertex has as many boundary edges out as in
+            b = nxt[a].pop()
+            if not nxt[a]:
+                del nxt[a]
+            loop.append(b)
+            a = b
+        Q = V[loop[:-1]]
+        c = Q.mean(axis=0)
+        caps += [[c, Q[(i + 1) % len(Q)], Q[i]] for i in range(len(Q))]
+    return V[F], np.array(caps, float).reshape(-1, 3, 3)
 
 # ---------------------------------------------------------------- Blender side
 def C_MAT():

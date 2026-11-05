@@ -1,11 +1,59 @@
 {
   "schema": "threepp.usv_spec/1",
   "name": "Otter",
-  "description": "A model of Maritime Robotics' Otter, the 2 m electric catamaran USV, for the USV demos. One file drives the Blender generator (build_otter_blender.py -> otter.glb + otter_hydro.json) and the physics.",
+  "description": "A model of Maritime Robotics' Otter, the 2 m electric catamaran USV, for the USV demos. One file drives the Blender generator (build_otter_blender.py: the published source model -> otter.glb + otter_hydro.json) and the physics.",
   "reference": {
     "vendor_figures": "Product page (maritimerobotics.com/otter): 2000 x 1080 x 1065 mm, dry weight 62 kg, top speed 4.5 kn, endurance 20 h at 2 kn, payload capacity 30 kg, four interchangeable battery packs, two electric thrusters, 5 GHz MIMO radio / WiFi, camera, AIS class B; modules under 20 kg each, assembled by one person.",
-    "geometry_source": "No drawings are public. Every other number is read off the vendor's side render (otter-usv-side.png, 716 x 400) and front render (otter-usv-front.png, 428 x 400). The side render is close to orthographic: 3.18 mm/px (the 2.0 m pontoon over 629 px), which puts the vendor's 1065 mm between the thruster guards' feet and the tops of the gantry's antenna posts. The front render is a perspective from above the bow and gives the athwartships positions and the pontoon section, to a few centimetres. Treat anything not in vendor_figures as an estimate.",
-    "assumed": "Mass budget and loading conditions, thrust, sensor models and fields of view, the transducer position, where the thruster struts pass the pontoons, and the plan form of the fore frame (the front render shows a chevron; no view from above is public)."
+    "geometry_source": "The source model (source, below): the Otter Jan Henrik Lenes made from Maritime Robotics' data. Every position in this file is measured on it, in the vessel frame. It agrees with the vendor's figures: 2.0 m long, 1.08 m wide, and 1.065 m from the thruster guards' feet to the top of the camera arch.",
+    "assumed": "Mass budget and loading conditions (the centroids are the earlier hand-drawn model's, not refitted to this geometry: see mass.note), thrust, sensor models and fields of view, the camera's tilt, which deck antenna is which, and that the housing on the centre mount is the echo sounder's transducer."
+  },
+  "source": {
+    "note": "The geometry is not drawn here and not kept in the repository. It is the Otter Jan Henrik Lenes made for his USV simulator (github.com/jhlenes/usv_simulator) from Maritime Robotics' data, converted from COLLADA to glTF by NTNU's ITK and published with the Gemini data under the MIT licence. build_otter_blender.py fetches it once into the model cache and checks it against sha256 on every build; a model republished under the same URL stops the build until this block is updated.",
+    "url": "https://www.itk.ntnu.no/milliampere-data/gemini/3d_models/Otter/otter.glb",
+    "sha256": "bccc7cb6ab735ea864e45260084683685a27e10a657ba7fb372f3a8f188a9dd1",
+    "licence": "MIT",
+    "licence_url": "https://www.itk.ntnu.no/milliampere-data/gemini/3d_models/Otter/LICENSE.txt",
+    "copyright": "Copyright (c) 2025 Jan Henrik Lenes",
+    "attribution": "This work uses data from Maritime Robotics (USV simulator, https://github.com/jhlenes/usv_simulator) by Jan Henrik Lenes. Data available at https://www.itk.ntnu.no/milliampere-data/gemini/, licensed under MIT (https://opensource.org/license/mit).",
+    "cache": "otter_ntnu",
+    "to_vessel": {
+      "note": "The source is Y up, her bow toward -Z and starboard toward +X, centred on its bounding box. axes: each vessel axis (X forward, Y up, Z starboard) as a source axis, a rotation. The generator then lifts it so the pontoons' lowest point is at y = 0 (0.7178 m).",
+      "axes": ["-z", "y", "x"]
+    },
+    "parts": {
+      "note": "Which of the source's 346 parts go in which node, by the source's node names (stable for the pinned file). Parts not listed go by where the centre of their bounds is: inside gantry_box, the gantry; above deck_top_y, deck_fittings; below it, the black ones in frame and the rest in body. Revolv_183 is a degenerate speck at the source's origin.",
+      "nodes": {
+        "pontoons": ["NONE_170", "NONE_212"],
+        "thruster_port": ["NONE_161", "NONE_162"],
+        "thruster_stbd": ["NONE_202", "NONE_203"],
+        "thruster_port_rotor": ["NONE_156", "NONE_159"],
+        "thruster_stbd_rotor": ["NONE_197", "NONE_199"],
+        "drop": ["Revolv_183"]
+      },
+      "gantry_box": {"x": [-0.35, 0.15], "y_min": 0.55, "half_z": 0.34},
+      "deck_top_y": 0.51
+    },
+    "material_map": {
+      "note": "The source's materials are flat colour swatches (the textures black4, al, white2, ral2008, red and Green), and 211 of its parts have none (it leaves them its default 0.8 grey: none here). Each part takes one of this spec's materials by its texture, the node's own choice first.",
+      "by_texture": {
+        "black4": "frame_black",
+        "al": "deck_alu",
+        "white2": "antenna_white",
+        "ral2008": "livery_orange",
+        "red": "nav_red",
+        "Green": "nav_green",
+        "none": "fitting_grey"
+      },
+      "by_node": {
+        "pontoons": {"black4": "pontoon_pe_black"},
+        "gantry": {"black4": "gantry_black", "al": "bracket_alu"},
+        "deck_fittings": {"white2": "gnss_white", "al": "bracket_alu"},
+        "thruster_port": {"black4": "pod_black"},
+        "thruster_stbd": {"black4": "pod_black"},
+        "thruster_port_rotor": {"ral2008": "prop_orange", "black4": "pod_black"},
+        "thruster_stbd_rotor": {"ral2008": "prop_orange", "black4": "pod_black"}
+      }
+    }
   },
   "units": "SI: metres, kilograms, newtons, seconds. Keys ending in _deg are degrees.",
   "frame": {
@@ -14,83 +62,65 @@
     "up": "+Y",
     "right": "+Z (starboard)",
     "left": "-Z (port)",
-    "origin": "On the centreline, at the lowest point of the pontoon keel line (y = 0), halfway along the length overall (pontoon bows x = +1.0, sterns x = -1.0).",
-    "appendages_below_baseline": "The thruster guards reach y = -0.178 and the propeller tips y = -0.065.",
+    "origin": "On the centreline, at the lowest point of the pontoons' keel line (y = 0), halfway along the length overall (pontoon bows x = +1.0, sterns x = -1.0).",
+    "appendages_below_baseline": "The thruster guards reach y = -0.073, the propeller tips y = -0.052 and the housing on the centre mount y = -0.026.",
     "gltf": "otter.glb is Y-up, same axes and metres as this frame. Node 'otter' is the root and sits at identity."
   },
   "principal": {
     "loa": 2.0,
     "beam": 1.08,
     "height": 1.065,
-    "height_note": "Thruster guard feet (y = -0.178) to the gantry antenna posts (y = 0.887). The whip reaches y = 1.0.",
-    "lowest_point_y": -0.178
+    "height_note": "Thruster guard feet (y = -0.073) to the top of the camera arch on the gantry (y = 0.992), measured on the source: the vendor's 1065 mm. The whip reaches y = 1.509.",
+    "lowest_point_y": -0.073
   },
   "pontoons": {
-    "note": "Two rotomoulded PE demihulls, 0.27 m wide and 0.345 m deep: a deep U section (front render), a banana keel line with the lowest point amidships (side render), a bluff round bow, and a stern that rises under the thruster and ends in a short raked transom. They narrow a little toward both ends.",
-    "keel_z": 0.405,
-    "outer_z": 0.54,
-    "inner_z_deck": 0.27,
-    "inner_z_bilge": 0.27,
-    "bilge_y_outer": 0.3,
-    "bilge_y_inner": 0.3,
-    "deck_y": 0.345,
-    "keel_profile": [[-0.97, 0.213], [-0.9, 0.185], [-0.75, 0.13], [-0.56, 0.08], [-0.35, 0.035], [-0.15, 0.008], [0.0, 0.0], [0.15, 0.004], [0.35, 0.022], [0.55, 0.055], [0.69, 0.09], [0.8, 0.13], [0.89, 0.185], [0.95, 0.225], [0.985, 0.25], [1.0, 0.275]],
-    "keel_profile_note": "Keel line (x, y) from the side silhouette.",
-    "stem_profile": [[0.9, 0.345], [0.95, 0.338], [0.98, 0.322], [0.995, 0.302], [1.0, 0.275]],
-    "stem_profile_note": "Top of the pontoon forward of x = 0.9: the deck rounding down into the bow.",
-    "transom": {"bottom": [-0.97, 0.213], "top": [-1.0, 0.345]},
-    "taper_start_x": 0.45,
-    "taper_min": 0.3,
-    "aft_taper": {"start_x": -0.55, "min": 0.75},
-    "stations": {"dx": 0.025, "fine": [[0.88, 0.99, 0.01], [0.99, 1.0, 0.002], [-0.97, -0.9, 0.01]]},
-    "tow_eyes": {"note": "The moulded-in holes near each end (side render), drawn as dark discs on the outer wall.", "xy": [[0.9, 0.285], [-0.91, 0.28]], "radius": 0.012}
-  },
-  "body": {
-    "note": "The electronics and battery pod between the pontoons, standing on their decks: a dark box under an aluminium deck plate, with an orange panel down each side that leans out from the deck edge to the pontoon's outer edge.",
-    "pod": {"x_range": [-0.5, 0.5], "y_range": [0.36, 0.49], "halfwidth": 0.38},
-    "deck_plate": {"x_range": [-0.508, 0.508], "y_range": [0.49, 0.498], "halfwidth": 0.385},
-    "side_panel": {"note": "Side view polygon (x, y): the forward edge is cut back and under, as the side render shows. z runs from z_bottom at y_bottom to z_top at y_top.", "profile_xy": [[0.46, 0.498], [-0.508, 0.498], [-0.508, 0.345], [0.266, 0.345], [0.374, 0.384]], "z_bottom": 0.525, "z_top": 0.385, "thickness": 0.006}
-  },
-  "frame_tubes": {
-    "note": "Black 40 mm square tube at deck height, carrying the antennas and the thrusters. Aft: a cross beam at the pod's end, an arm over each pontoon to the thruster strut and beyond, and a cross bar with the aft GNSS antenna. Fore: a cross beam on two feet on the pontoon decks, arms converging to a short front bar (the chevron in the front render), and a centre spine with the fore GNSS antenna.",
-    "size": 0.04,
-    "top_y": 0.498,
-    "fore": {"beam_x": 0.58, "beam_halfwidth": 0.46, "feet_z": 0.405, "arm_root_z": 0.4, "front_x": 0.897, "front_halfwidth": 0.1},
-    "aft": {"beam_x": -0.58, "beam_halfwidth": 0.46, "arm_z": 0.405, "arm_end_x": -0.923, "bar_x": -0.815},
-    "cable_loops": {"note": "The thruster cables arch up from each pontoon deck ahead of the strut (both renders).", "x": [-0.62, -0.72], "z": 0.405, "top_y": 0.6, "radius": 0.009}
-  },
-  "gantry": {
-    "note": "A-frame amidships: two plates leaning in from the deck edges to a top plate, a camera and electronics box under the plate, sidelights at its ends, and on top two antenna posts and an upright bracket with a small round camera.",
-    "leg": {"front_xy": [[0.11, 0.498], [0.045, 0.498], [-0.03, 0.735], [0.035, 0.735]], "aft_xy": [[-0.02, 0.498], [-0.065, 0.498], [-0.075, 0.735], [-0.03, 0.735]], "rung_y": [0.6, 0.64], "z_foot": 0.37, "z_head": 0.19, "thickness": 0.008},
-    "top_plate": {"x_range": [-0.3, 0.045], "y_range": [0.735, 0.75], "halfwidth": 0.2},
-    "box": {"x_range": [-0.25, -0.02], "y_range": [0.665, 0.735], "halfwidth": 0.14},
-    "posts": {"x": -0.2, "z": 0.11, "radius": 0.012, "top_y": 0.887},
-    "bracket": {"x": -0.05, "base_halfwidth": 0.1, "apex_y": 0.88, "thickness": 0.005, "eye_y": 0.8, "eye_r": 0.022}
+    "note": "The source's two PE demihulls (NONE_170 port, NONE_212 starboard): 2.0 m long, 0.25 m wide and 0.361 m deep, the lowest point amidships. Each deck has two battery wells (x -0.24..0.04 and 0.05..0.33, floors at y 0.12) and a smaller one aft, open under the orange hatches; the hydrostatics cap them at their rims.",
+    "keel_z": 0.395,
+    "inner_z": 0.269,
+    "outer_z": 0.521,
+    "deck_y": 0.361
   },
   "sensors": {
     "convention": "Empties look down local -Z with local +Y up (threepp/glTF camera convention). Positions in the vessel frame.",
-    "camera_main": {"position": [-0.015, 0.7, 0.0], "look": [1.0, 0.0, 0.0], "pitch_down_deg": 5.0, "hfov_deg": 60.0, "resolution": [1920, 1080], "fps": 30, "lens_radius": 0.016, "assumed": "hfov, resolution, fps, tilt; the lens is in the front of the box under the gantry's top plate"},
-    "gnss_fore": {"position": [0.787, 0.63, 0.0], "post_radius": 0.012, "disc_radius": 0.08, "disc_y": [0.6, 0.66]},
-    "gnss_aft": {"position": [-0.815, 0.63, 0.0], "post_radius": 0.012, "disc_radius": 0.08, "disc_y": [0.6, 0.66]},
-    "gnss_baseline": 1.602,
-    "ais_vhf_antenna": {"base": [0.2, 0.498, 0.0], "length": 0.5, "radius": 0.003, "note": "Whip on the deck plate ahead of the gantry."},
-    "lte_antenna": {"position": [0.374, 0.498, 0.15], "radius": 0.04, "height": 0.032, "note": "The low black puck on the fore deck."},
-    "imu": {"position": [0.0, 0.42, 0.0], "assumed": "inside the pod on the centreline"},
-    "transducer": {"position": [0.0, 0.3, 0.0], "look": [0.0, -1.0, 0.0], "assumed": "the sonar bay under the pod, between the pontoons; no geometry"}
+    "camera_main": {
+      "position": [-0.046, 0.819, 0.0],
+      "look": [1.0, 0.0, 0.0],
+      "pitch_down_deg": 5.0,
+      "hfov_deg": 60.0,
+      "resolution": [1920, 1080],
+      "fps": 30,
+      "note": "The front of the round camera in the gantry's arch.",
+      "assumed": "hfov, resolution, fps, tilt"
+    },
+    "gnss_fore": {"position": [0.849, 0.64, 0.0], "note": "Mid-radome of the fore antenna, on its post over the fore frame."},
+    "gnss_aft": {"position": [-0.887, 0.64, 0.0], "note": "Mid-radome of the aft antenna, over the aft frame."},
+    "gnss_baseline": 1.736,
+    "ais_vhf_antenna": {"base": [0.206, 0.505, 0.0], "length": 1.004, "note": "The whip on the fore deck plate, ahead of the gantry."},
+    "lte_antenna": {"position": [0.406, 0.508, 0.0], "note": "The low black puck on the fore deck's centreline.", "assumed": "which antenna it is"},
+    "imu": {"position": [0.0, 0.48, 0.0], "assumed": "inside the deck slab on the centreline"},
+    "transducer": {
+      "position": [-0.428, -0.026, 0.0],
+      "look": [0.0, -1.0, 0.0],
+      "note": "The bottom of the round housing (NONE) on the centre mount under the aft deck, between the pontoons.",
+      "assumed": "that it is the echo sounder's transducer, looking down"
+    }
   },
   "lights": {
-    "nav_light_stbd": {"position": [-0.19, 0.725, 0.215], "colour": "green", "look": [1.0, 0.0, 0.3]},
-    "nav_light_port": {"position": [-0.19, 0.725, -0.215], "colour": "red", "look": [1.0, 0.0, -0.3]}
+    "nav_light_stbd": {"position": [-0.217, 0.746, 0.198], "colour": "green", "look": [1.0, 0.0, 0.3]},
+    "nav_light_port": {"position": [-0.217, 0.746, -0.198], "colour": "red", "look": [1.0, 0.0, -0.3]}
   },
   "propulsion": {
     "thrusters": {
-      "note": "Two fixed electric pods (she steers on differential thrust), one under each pontoon's rising stern on a strut that comes down from the aft arm, each inside a tube guard from the keel to the transom. Node thruster_<side> sits at the pod on the strut axis and does not turn; thruster_<side>_rotor spins about its local +X.",
-      "strut_x": -0.79,
-      "pod_y": 0.005,
-      "strut_radius": 0.014,
-      "pod": {"x_range": [-0.04, 0.19], "radius": 0.04},
-      "rotor": {"x": -0.08, "hub_r": 0.018, "hub_length": 0.05, "blades": 2, "blade_tip_r": 0.07, "blade_chord": 0.045, "pitch_deg": 30.0},
-      "guard": {"path_xy": [[-0.545, 0.078], [-0.93, -0.17], [-1.01, -0.17], [-0.99, 0.26]], "radius": 0.008},
+      "note": "Two fixed electric pods (she steers on differential thrust), one under each pontoon's rising stern on a strut down from the aft frame, each inside a guard that runs from under the hull to the transom. Node thruster_<side> sits on the strut axis at the pod's centreline and does not turn; thruster_<side>_rotor (a two-bladed propeller) spins about its local +X. Measured on the source; the generator checks the rotors' axis and tips against these.",
+      "strut_x": -0.809,
+      "pod_y": 0.048,
+      "pod_z": 0.395,
+      "rotor": {"x": -0.106, "blades": 2, "blade_tip_r": 0.1},
+      "guard": {
+        "path_xy": [[-0.55, 0.108], [-0.9, -0.068], [-0.99, -0.068], [-0.99, 0.308]],
+        "radius": 0.005,
+        "note": "Side view of the guard's centreline; its feet are the boat's lowest points."
+      },
       "power_kw": 0.5,
       "bollard_thrust_n": 110.0,
       "astern_fraction": 0.6,
@@ -99,7 +129,7 @@
     "top_speed_kn": 4.5
   },
   "mass": {
-    "note": "Component budget: estimates that add up to the vendor's 62 kg dry weight. Centroids are where each component sits in this model. The generator recomputes the CoM and the hydrostatic equilibrium for each loading condition.",
+    "note": "Component budget: estimates that add up to the vendor's 62 kg dry weight. Centroids are where each component sits in this model. The generator recomputes the CoM and the hydrostatic equilibrium for each loading condition. They are where the components sat in the earlier model drawn from the vendor's renders, not refitted to the source geometry: its pontoons have battery wells amidships (pontoons.note), and the packs moved there with the rest of the budget as it stands trim her 2.5 to 3.5 deg by the stern, past the trim gate. Until there is a weighed figure, the budget stays.",
     "dry": 62.0,
     "budget": [
       {"item": "2 pontoons (PE)", "mass": 18.0, "centroid": [0.0, 0.17, 0.0]},
@@ -125,7 +155,7 @@
     "grid": {"dx": 0.01, "dz": 0.01, "dy": 0.0025, "x_range": [-1.04, 1.04], "z_range": [-0.56, 0.56], "y_range": [-0.02, 0.6]},
     "trim_limit_deg": 2.0,
     "bonjean": {"station_dx": 0.1, "x_range": [-1.0, 1.0], "heights": [-0.02, 0.6, 0.01]},
-    "note": "Computed by the generator from the buoyant closed meshes (the pontoons and the pod) by column integration of the winding number. The thruster pods and the guards are left out. Written to otter_hydro.json."
+    "note": "Computed by the generator from the source's pontoons, their wells capped at the rims (build_common.capped), by column integration of the winding number. The pods, the guards and the centre mount are left out. Written to otter_hydro.json."
   },
   "strip_model": {
     "probe_z": 0.37,
@@ -135,22 +165,19 @@
     "note": "For usv_rig.StripHull. probe_z: the half-breadth where each side's water level is read, mid-pontoon (the Otter X's ratio to the pontoon keel line). footprint: the ocean's hull displacement footprint (half length, half beam, waterplane centre x): one plan form over both pontoons, as the Otter X's. roll_zeta, roll_added (estimates): she rolls by heaving her pontoons against each other, so her roll takes the rig's heave figures at the pontoons' arm, 0.35 of critical and 0.80 m x 0.405^2 = 0.7 of her own roll inertia, in place of a monohull's 0.15 and 0.25. With 0.15 and 0.25 she rolled about 3x the water's own slope at her 0.77 s period on the Norvasundet sea (sigma 1.1 deg ahead, 2.6 deg abeam, Hs 0.044 m); with these 1.7x (0.56 and 1.5 deg)."
   },
   "materials": {
-    "note": "Linear RGB. Colours read off the vendor renders, pulled toward plausible albedos.",
+    "note": "Linear RGB. Colours read off the vendor renders, pulled toward plausible albedos. fitting_grey is for the parts the source leaves without a colour (lettering, glands, the camera's housing): a light grey, as the source shows them (ASSUMED).",
     "pontoon_pe_black": {"color": [0.026, 0.026, 0.027], "metallic": 0.0, "roughness": 0.6},
-    "pod_dark": {"color": [0.05, 0.05, 0.052], "metallic": 0.0, "roughness": 0.5},
     "deck_alu": {"color": [0.55, 0.56, 0.57], "metallic": 0.9, "roughness": 0.45},
     "livery_orange": {"color": [0.8, 0.2, 0.08], "metallic": 0.0, "roughness": 0.42},
     "frame_black": {"color": [0.03, 0.03, 0.03], "metallic": 0.0, "roughness": 0.55},
     "gantry_black": {"color": [0.028, 0.028, 0.028], "metallic": 0.0, "roughness": 0.42},
     "bracket_alu": {"color": [0.6, 0.61, 0.62], "metallic": 1.0, "roughness": 0.35},
-    "strut_steel": {"color": [0.62, 0.62, 0.64], "metallic": 1.0, "roughness": 0.3},
     "gnss_white": {"color": [0.72, 0.7, 0.62], "metallic": 0.0, "roughness": 0.45},
     "antenna_white": {"color": [0.8, 0.8, 0.78], "metallic": 0.0, "roughness": 0.45},
-    "lens_glass": {"color": [0.01, 0.014, 0.02], "metallic": 0.0, "roughness": 0.05},
     "nav_red": {"color": [0.5, 0.02, 0.02], "metallic": 0.0, "roughness": 0.3, "emissive": [1.0, 0.05, 0.03], "emissive_strength": 3.0},
     "nav_green": {"color": [0.02, 0.4, 0.05], "metallic": 0.0, "roughness": 0.3, "emissive": [0.05, 1.0, 0.2], "emissive_strength": 3.0},
     "pod_black": {"color": [0.035, 0.035, 0.037], "metallic": 0.0, "roughness": 0.35},
     "prop_orange": {"color": [0.8, 0.22, 0.06], "metallic": 0.0, "roughness": 0.4},
-    "tunnel_dark": {"color": [0.01, 0.01, 0.01], "metallic": 0.0, "roughness": 0.9}
+    "fitting_grey": {"color": [0.5, 0.5, 0.5], "metallic": 0.0, "roughness": 0.5}
   }
 }
