@@ -26,7 +26,7 @@
       ]
     },
     "vulkan": {
-      "description": "Build with Vulkan backend (headers + loader + VMA + glslang). Validation layers still require a Vulkan SDK install.",
+      "description": "Build with Vulkan backend (headers + loader + VMA + glslang + spirv-opt). Validation layers still require a Vulkan SDK install.",
       "dependencies": [
         "vulkan-headers",
         {
@@ -47,6 +47,11 @@
         {
           "name": "glslang",
           "features": ["tools", "opt"]
+        },
+        {
+          "$comment": "cmake/CompileVulkanShaders.cmake optimizes every shader with spirv-opt and an explicit pass list, not glslangValidator -Os (whose recipe changed in glslang 16.5 and no longer fits deferred_shade.comp). The tools feature installs the spirv-opt executable under tools/spirv-tools/.",
+          "name": "spirv-tools",
+          "features": ["tools"]
         }
       ]
     }

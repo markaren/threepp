@@ -143,16 +143,17 @@ jobs:
           #
           # Vulkan comes entirely from vcpkg (no SDK install on the runner):
           # CMAKE_PREFIX_PATH lets FindVulkan see the headers + loader lib and
-          # find_path see vk_mem_alloc.h; GLSLANG_VALIDATOR points straight at
-          # the tool so the shader-embed step never depends on PATH. Wrong paths
-          # fail the CONFIGURE loudly — never a silently degraded wheel.
+          # find_path see vk_mem_alloc.h; GLSLANG_VALIDATOR and SPIRV_OPT point
+          # straight at the tools so the shader-embed step never depends on
+          # PATH. Wrong paths fail the CONFIGURE loudly — never a silently
+          # degraded wheel.
           #
           # THREEPP_WITH_FSR builds the FSR upscaler in; the SDK it needs is the
           # slim copy the FidelityFX steps below prepare (ffx-sdk/), handed over
           # as FETCHCONTENT_SOURCE_DIR so the configure downloads nothing.
           $root = $pwd.Path -replace '\\', '/'
           $vi = "$root/vcpkg_installed/x64-windows"
-          "CMAKE_ARGS=-DTHREEPP_WITH_VULKAN=ON -DTHREEPP_WITH_FSR=ON -DFETCHCONTENT_SOURCE_DIR_FIDELITYFX_SDK=$root/ffx-sdk -DCMAKE_PREFIX_PATH=$vi -DGLSLANG_VALIDATOR=$vi/tools/glslang/glslangValidator.exe -Dunofficial-omniverse-physx-sdk_DIR=$vi/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
+          "CMAKE_ARGS=-DTHREEPP_WITH_VULKAN=ON -DTHREEPP_WITH_FSR=ON -DFETCHCONTENT_SOURCE_DIR_FIDELITYFX_SDK=$root/ffx-sdk -DCMAKE_PREFIX_PATH=$vi -DGLSLANG_VALIDATOR=$vi/tools/glslang/glslangValidator.exe -DSPIRV_OPT=$vi/tools/spirv-tools/spirv-opt.exe -Dunofficial-omniverse-physx-sdk_DIR=$vi/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
 
       # The FidelityFX SDK for FSR (Windows wheels only). The release archive is
       # 470 MB and unpacks to 1.1 GB of samples and media; the build reads 15
@@ -303,6 +304,7 @@ jobs:
             CMAKE_ARGS="-DTHREEPP_WITH_VULKAN=ON
             -DCMAKE_PREFIX_PATH=/opt/vcpkg_installed/x64-linux
             -DGLSLANG_VALIDATOR=/opt/vcpkg_installed/x64-linux/tools/glslang/glslangValidator
+            -DSPIRV_OPT=/opt/vcpkg_installed/x64-linux/tools/spirv-tools/spirv-opt
             -Dunofficial-omniverse-physx-sdk_DIR=/opt/vcpkg_installed/x64-linux/share/unofficial-omniverse-physx-sdk"
             SKBUILD_BUILD_DIR="/tmp/skb-shared"
             LD_LIBRARY_PATH="/opt/vcpkg_installed/x64-linux/lib"
