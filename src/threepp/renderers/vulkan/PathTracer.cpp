@@ -31,8 +31,19 @@ namespace threepp::vulkan {
             uint32_t seed;
             float    oceanFineTileSize;
             float    starIntensity;
+            float    volDensity;
+            float    volAniso;
+            float    lensK[4];
+            float    lensRadial[4];
+            float    lensTangential[2];
+            float    lensOverscan;
+            float    lensRadius;
+            float    focusDistance;
+            float    aspectScale;
+            uint32_t rows;// first row | count << 16
+            float    domeRadius;
         };
-        static_assert(sizeof(PushConstants) == 56);
+        static_assert(sizeof(PushConstants) == 128);// the least maxPushConstantsSize a device has
 
         // path_trace_resolve.comp's: the display transform and the post
         // stack's white balance and grade (OverlayGrade).
@@ -404,16 +415,27 @@ namespace threepp::vulkan {
         params_                 = params;
         params_.samplesPerFrame = std::max(1u, params_.samplesPerFrame);
         params_.maxBounces      = std::min(params_.maxBounces, 64u);
+        params_.height          = std::min(params_.height, 65535u);
+        params_.domePort        = std::max(params_.domePort, 0.f);
         active_       = true;
         resetPending_ = true;
         samples_      = 0;
+        rowCursor_    = 0;
         ++seed_;
     }
 
-    void PathTracer::prepare(uint32_t frame, uint32_t width, uint32_t height, uint64_t frameSerial) {
+    void PathTracer::prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial) {
         if (!available() || !active_) return;
         freeRetired(frameSerial, false);
-        if (width == 0 || height == 0) return;
+        if (renderWidth == 0 || renderHeight == 0) return;
+        const bool     own    = params_.width > 0 && params_.height > 0;
+        const uint32_t width  = own ? params_.width : renderWidth;
+        const uint32_t height = std::min(own ? params_.height : renderHeight, 65535u);
+        renderWidth_  = renderWidth;
+        renderHeight_ = renderHeight;
+        // A band no larger than the frame: the dispatch the samples-per-frame
+        // count was chosen against.
+        bandRows_ = std::clamp<uint32_t>(uint32_t((uint64_t(renderWidth) * renderHeight) / width), 1u, height);
         if (width != width_ || height != height_ || accum_.handle == VK_NULL_HANDLE) {
             if (accum_.handle != VK_NULL_HANDLE) retired_.emplace_back(accum_, frameSerial);
             accum_ = Buffer{};
@@ -426,6 +448,7 @@ namespace threepp::vulkan {
             ++accumSerial_;
             resetPending_ = true;
             samples_      = 0;
+            rowCursor_    = 0;
         }
         bindAccumulator(frame);
     }
@@ -435,34 +458,58 @@ namespace threepp::vulkan {
         declareDescriptorSet(graph, pass, sets_[frame], 0, refl_, rg::kCompute);
     }
 
-    void PathTracer::recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                                    uint32_t emissiveCount, float emissiveTotalPower,
-                                    uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted,
-                                    float oceanFineTileSize, float starIntensity) {
+    void PathTracer::recordDispatch(VkCommandBuffer cb, uint32_t frame, const FrameInputs& in) {
         if (!available() || !active_ || accum_.handle == VK_NULL_HANDLE || frame >= framesInFlight_) return;
-        PushConstants pc{};
+        const uint32_t rows = std::min(bandRows_, height_ - rowCursor_);
+        PushConstants  pc{};
         pc.width              = width_;
         pc.height             = height_;
         pc.sampleIndex        = samples_;
         pc.samples            = params_.samplesPerFrame;
         pc.maxBounces         = params_.maxBounces;
-        pc.flags              = (resetPending_ ? 1u : 0u) | (sunExtracted ? 2u : 0u);
-        pc.emissiveCount      = emissiveCount;
-        pc.emissiveTotalPower = emissiveTotalPower;
-        pc.envMipCount        = std::max(1u, envMipCount);
+        // The reset holds for every band of the first pass: each overwrites
+        // its own rows once.
+        pc.flags              = (resetPending_ ? 1u : 0u) | (in.sunExtracted ? 2u : 0u) | ((in.lensModel & 3u) << 2);
+        pc.emissiveCount      = in.emissiveCount;
+        pc.emissiveTotalPower = in.emissiveTotalPower;
+        pc.envMipCount        = std::max(1u, in.envMipCount);
         pc.fireflyClamp       = params_.fireflyClamp;
-        pc.sunTanHalfAngle    = sunTanHalfAngle;
+        pc.sunTanHalfAngle    = in.sunTanHalfAngle;
         pc.seed               = seed_;
-        pc.oceanFineTileSize  = oceanFineTileSize;
-        pc.starIntensity      = starIntensity;
+        pc.oceanFineTileSize  = in.oceanFineTileSize;
+        pc.starIntensity      = in.starIntensity;
+        pc.volDensity         = in.volDensity;
+        pc.volAniso           = in.volAniso;
+        // A picture of another shape than the frame keeps the vertical field:
+        // its horizontal NDC span is the aspect ratio of the two, and the
+        // normalised intrinsics of the lens follow (fx/W and the principal
+        // point's offset from the centre over it).
+        const double frameAspect = renderHeight_ ? double(renderWidth_) / renderHeight_ : 1.0;
+        const float  k = (height_ && frameAspect > 0.0) ? float((double(width_) / height_) / frameAspect) : 1.f;
+        pc.aspectScale    = k;
+        pc.lensK[0]       = in.lensK[0] / k;
+        pc.lensK[1]       = in.lensK[1];
+        pc.lensK[2]       = 0.5f - (0.5f - in.lensK[2]) / k;
+        pc.lensK[3]       = in.lensK[3];
+        std::copy(in.lensRadial, in.lensRadial + 4, pc.lensRadial);
+        std::copy(in.lensTangential, in.lensTangential + 2, pc.lensTangential);
+        pc.lensOverscan   = in.lensOverscan;
+        pc.lensRadius     = in.lensRadius;
+        pc.focusDistance  = in.focusDistance;
+        pc.rows           = rowCursor_ | (rows << 16);
+        pc.domeRadius     = params_.domePort;
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-        vkCmdDispatch(cb, (width_ + 7) / 8, (height_ + 7) / 8, 1);
+        vkCmdDispatch(cb, (width_ + 7) / 8, (rows + 7) / 8, 1);
 
-        resetPending_ = false;
-        samples_ += params_.samplesPerFrame;
+        rowCursor_ += rows;
+        if (rowCursor_ >= height_) {
+            rowCursor_    = 0;
+            resetPending_ = false;
+            samples_ += params_.samplesPerFrame;
+        }
     }
 
     template<class F>

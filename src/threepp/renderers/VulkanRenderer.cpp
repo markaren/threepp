@@ -128,12 +128,47 @@ namespace threepp {
         // frame shows. The accumulator follows the render extent.
         if (pathTracer_ && pathTracer_->active() && asyncPart && !view().secondary) {
             pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, frameSerial_);
-            const float sunTan      = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
-            const bool  sunExtracted = envSun_.found;
-            auto pass = g.addPass("pathTrace", [this, f, sunTan, sunExtracted](VkCommandBuffer c) {
-                pathTracer_->recordDispatch(c, f, emissiveTriCountThisFrame_,
-                                            emissiveTotalPowerThisFrame_, envImage.mipLevels, sunTan,
-                                            sunExtracted, oceanFineTileSize, deferredStarIntensity_);
+            vulkan::PathTracer::FrameInputs pin;
+            pin.sunTanHalfAngle   = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
+            pin.sunExtracted      = envSun_.found;
+            pin.starIntensity     = deferredStarIntensity_;
+            pin.volDensity        = deferredVolDensity_;
+            pin.volAniso          = deferredVolAniso_;
+            // The camera as the frame forms its image: the lens the sensor
+            // pass warps with (buildSensorParams' intrinsics, the output
+            // camera's), and the thin lens of the DoF pass (its focal length
+            // from the output camera's vertical field on its own sensor).
+            const auto& po = prepOut();
+            if (lens_.active()) {
+                pin.lensModel         = static_cast<uint32_t>(lens_.model);
+                pin.lensK[0]          = 0.5f * po.projP0;
+                pin.lensK[1]          = 0.5f * po.projP5;
+                pin.lensK[2]          = 0.5f * (1.f - po.projP8);
+                pin.lensK[3]          = 0.5f * (1.f + po.projP9);
+                pin.lensRadial[0]     = lens_.k1;
+                pin.lensRadial[1]     = lens_.k2;
+                pin.lensRadial[2]     = lens_.k3;
+                pin.lensRadial[3]     = lens_.k4;
+                pin.lensTangential[0] = lens_.p1;
+                pin.lensTangential[1] = lens_.p2;
+                pin.lensOverscan      = effectiveOverscan();
+            }
+            if (dofEnabled_ && !view().orthoFrame_ && std::abs(po.projP5) > 1e-6f) {
+                const float fl = po.filmHeightM * 0.5f * std::abs(po.projP5);
+                const float S  = std::max(focusDistance_, fl * 2.f);
+                // f/(2N), widened by S/(S - f): the frame's circle of
+                // confusion is the thin lens's on a sensor at the image
+                // distance, this one's on the pinhole's at f.
+                pin.lensRadius    = fl / (2.f * std::max(camAperture_, 0.1f)) * S / (S - fl);
+                pin.focusDistance = S;
+            }
+            auto pass = g.addPass("pathTrace", [this, f, pin](VkCommandBuffer c) {
+                auto in               = pin;
+                in.emissiveCount      = emissiveTriCountThisFrame_;
+                in.emissiveTotalPower = emissiveTotalPowerThisFrame_;
+                in.envMipCount        = envImage.mipLevels;
+                in.oceanFineTileSize  = oceanFineTileSize;
+                pathTracer_->recordDispatch(c, f, in);
             });
             pathTracer_->declare(g, pass, f);
         }
@@ -3258,6 +3293,9 @@ namespace threepp {
         p.samplesPerFrame = params.samplesPerFrame;
         p.maxBounces      = params.maxBounces;
         p.fireflyClamp    = params.fireflyClamp;
+        p.width           = params.width;
+        p.height          = params.height;
+        p.domePort        = params.domePort;
         pt->begin(p);
     }
 
@@ -3273,6 +3311,11 @@ namespace threepp {
     uint32_t VulkanRenderer::pathTraceSamples() const {
         const auto* pt = core()->pathTracer_.get();
         return pt ? pt->samples() : 0u;
+    }
+
+    double VulkanRenderer::pathTraceProgress() const {
+        const auto* pt = core()->pathTracer_.get();
+        return pt ? pt->progress() : 0.0;
     }
 
     bool VulkanRenderer::pathTraceRead(std::vector<float>& rgb, int& w, int& h) {
@@ -3300,8 +3343,11 @@ namespace threepp {
         // PostComposite applies them to a frame.
         const auto* post = impl.primaryView().post_.get();
         const vulkan::OverlayGradeGpu grade = post ? impl.gradeOf(*post) : vulkan::OverlayGradeGpu{};
+        // The exposure the frame tone-maps with: auto exposure's while it is
+        // on, the physical camera's (setCameraExposure) while that is, else
+        // toneMappingExposure.
         uint32_t uw = 0, uh = 0;
-        if (!pt->readRGB(rgb, uw, uh, static_cast<uint32_t>(toneMapping), toneMappingExposure, grade)) return false;
+        if (!pt->readRGB(rgb, uw, uh, static_cast<uint32_t>(toneMapping), impl.currentExposure(), grade)) return false;
         w = static_cast<int>(uw);
         h = static_cast<int>(uh);
         return true;
@@ -3314,9 +3360,9 @@ namespace threepp {
             r.pathTraceBegin(params);
             samples = std::max(1u, samples);
             while (r.pathTraceSamples() < samples) {
-                const uint32_t before = r.pathTraceSamples();
+                const double before = r.pathTraceProgress();
                 r.render(scene, camera);
-                if (r.pathTraceSamples() == before) break;// a debug view, or no ray query
+                if (r.pathTraceProgress() == before) break;// a debug view, or no ray query
             }
         }
     }// namespace

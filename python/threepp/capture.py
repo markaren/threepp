@@ -422,14 +422,15 @@ def encode_srgb(hdr, exposure: float = 1.0) -> np.ndarray:
 
 def path_trace(scene, camera, *, samples: int = 1024, backend: Union[str, Any] = "vulkan",
                size: Sequence[int] = (640, 360), samples_per_frame: int = 16, max_bounces: int = 6,
-               firefly_clamp: float = 0.0, path=None, before_frame=None) -> Frame:
+               firefly_clamp: float = 0.0, path=None, before_frame=None,
+               trace_size: Optional[Sequence[int]] = None, dome_port: float = 0.0) -> Frame:
     """Path-trace ``scene`` from ``camera`` headless on the Vulkan renderer and return the picture.
 
     A progressive trace over the scene the frame renders (``VulkanRenderer.path_trace``):
     ``samples`` camera paths per pixel, ``samples_per_frame`` of them per frame drawn (a
     Python render() draws ``flush_frames`` frames per call, 3 by default). ``Frame.image`` is
-    the picture through the renderer's own display transform (white balance, ``tone_mapping``,
-    ``tone_mapping_exposure``, the colour grade), as a frame of the window would be without its
+    the picture through the renderer's own display transform (white balance, the frame's exposure,
+    ``tone_mapping``, the colour grade), as a frame of the window would be without its
     bloom; ``Frame.hdr`` is the
     averaged linear (H, W, 3) float32 picture. ``Frame.frames`` is the number of render()
     calls it took.
@@ -438,6 +439,10 @@ def path_trace(scene, camera, *, samples: int = 1024, backend: Union[str, Any] =
         while it accumulates: pin the sim time and turn auto-LOD off on a renderer you pass in.
     before_frame: ``before_frame(i)`` is called before frame i, for a scene that must step
         between frames (then the picture averages over what it did -- motion blur).
+    trace_size: ``(width, height)`` of the picture when it is not the canvas's -- larger than
+        the screen allows a canvas to be, say; another shape keeps the camera's vertical field.
+    dome_port: a dome port's radius about the lens in metres (0 = none): every camera ray starts where it
+        leaves the dome, so a camera at the waterline traces the over-under picture.
     """
     renderer = make_renderer(backend, size) if isinstance(backend, str) else backend
     name = _backend_name(renderer)
@@ -452,17 +457,19 @@ def path_trace(scene, camera, *, samples: int = 1024, backend: Union[str, Any] =
     if isinstance(backend, str):
         renderer.auto_lod = False
     samples = max(1, int(samples))
+    tw, th = (int(trace_size[0]), int(trace_size[1])) if trace_size is not None else (0, 0)
     renderer.path_trace_begin(samples_per_frame=max(1, int(samples_per_frame)),
-                              max_bounces=int(max_bounces), firefly_clamp=float(firefly_clamp))
+                              max_bounces=int(max_bounces), firefly_clamp=float(firefly_clamp),
+                              width=tw, height=th, dome_port=float(dome_port))
     frames = 0
     try:
         while renderer.path_trace_samples < samples:
-            before = renderer.path_trace_samples
+            before = renderer.path_trace_progress
             if before_frame is not None:
                 before_frame(frames)
             renderer.render(scene, camera)
             frames += 1
-            if renderer.path_trace_samples == before:
+            if renderer.path_trace_progress == before:
                 break
         hdr = renderer.path_trace_read()
         img = renderer.path_trace_read_rgb()

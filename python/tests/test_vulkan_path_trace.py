@@ -117,3 +117,17 @@ def test_capture_path_trace(vk_renderer):
     # sRGB of linear 1.0 is 255; of ~0.5 is ~188
     assert int(frame.image[4, 4, 0]) == 255
     assert 170 < int(frame.image[H // 2, W // 2, 0]) < 205
+
+
+def test_path_trace_own_extent(vk_renderer):
+    """A picture of its own extent, larger than the canvas: traced band by band, counted in whole passes."""
+    skip_without_ray_tracing(vk_renderer)
+    from threepp import capture
+
+    scene, cam = furnace_scene()
+    frame = capture.path_trace(scene, cam, samples=16, samples_per_frame=8, backend=vk_renderer,
+                               trace_size=(2 * W, 2 * H))
+    assert frame.image.shape == (2 * H, 2 * W, 3)
+    assert frame.hdr.shape == (2 * H, 2 * W, 3)
+    # The sphere at its albedo (0.5 + the 4% lobe), as at the canvas's extent.
+    assert 0.46 < float(frame.hdr[H, W].mean()) < 0.62

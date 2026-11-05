@@ -13,7 +13,11 @@
 //   [4] fog fades the far floor toward the fog colour;
 //   [5] the surface the G-buffer shades: a sphere takes its vertex colours,
 //       and a card lit from behind glows through only when translucent;
-//   [6] no validation errors.
+//   [6] the frame's camera and lamps: a picture of its own extent (larger
+//       than the frame, traced in bands), the physical camera's exposure,
+//       a thin lens, the lens distortion, and a spot light's beam in clear
+//       air;
+//   [7] no validation errors.
 //
 // Exit 42 (SKIP) without a Vulkan device; a device without ray query checks
 // that pathTraceBegin refuses and skips the rest.
@@ -416,7 +420,249 @@ int main() {
         check(on.g > 0.05 && on.g > 2.0 * on.r, "a translucent one glows through, in its own green");
     }
 
-    // ── 6. Validation ───────────────────────────────────────────────────────
+    // ── 6. The frame's camera and lamps; a picture of its own extent ────────
+    std::printf("\n[6] the frame's camera and lamps; a picture larger than the frame\n");
+    {
+        VulkanRenderer::PathTraceParams p;
+        p.samplesPerFrame = 8;
+        p.maxBounces      = 3;
+
+        // A picture twice the frame each way: bands of the frame's size, four
+        // render() calls a pass, and the same picture as at the frame's extent.
+        {
+            VulkanRenderer::PathTraceParams big = p;
+            big.width  = 2 * kW;
+            big.height = 2 * kH;
+            renderer.pathTraceBegin(big);
+            renderer.render(scene, *camera);
+            check(renderer.pathTraceSamples() == 0 && renderer.pathTraceProgress() > 0.0,
+                  "one band in: progress, no whole pass yet");
+            for (int i = 0; i < 3; ++i) renderer.render(scene, *camera);
+            check(renderer.pathTraceSamples() == 8,
+                  "four bands make a pass (" + std::to_string(renderer.pathTraceSamples()) + " spp)");
+            renderer.pathTraceStop();
+            std::vector<float> large, small;
+            int lw = 0, lh = 0, sw = 0, sh = 0;
+            const bool okL = renderer.pathTrace(scene, *camera, 64, large, lw, lh, big);
+            const bool okS = renderer.pathTrace(scene, *camera, 64, small, sw, sh, p);
+            check(okL && lw == 2 * kW && lh == 2 * kH, "pathTrace returns it at its own extent (" +
+                                                           std::to_string(lw) + "x" + std::to_string(lh) + ")");
+            if (okL && okS && lw == 2 * kW && sw == kW) {
+                std::vector<float> down(std::size_t(kW) * kH * 3);
+                for (int y = 0; y < kH; ++y)
+                    for (int x = 0; x < kW; ++x)
+                        for (int c = 0; c < 3; ++c) {
+                            float s = 0.f;
+                            for (int q = 0; q < 4; ++q)
+                                s += large[(std::size_t(2 * y + (q >> 1)) * lw + 2 * x + (q & 1)) * 3 + c];
+                            down[(std::size_t(y) * kW + x) * 3 + c] = 0.25f * s;
+                        }
+                const double db = psnr(small, down, false, kW, kH);
+                std::printf("  2x picture, box-filtered down, vs the frame-sized one: %.2f dB\n", db);
+                check(db > 28.0, "the same picture, at twice the detail (PSNR > 28 dB)");
+            }
+        }
+
+        // The frame's exposure: a physical camera's (ISO 200 at f/1, 1 s:
+        // EV100 = -1, x1.67) brightens the trace as it brightens the frame.
+        {
+            const auto meanBytes = [](const std::vector<unsigned char>& b) {
+                double s = 0;
+                for (auto v : b) s += srgbToLinear(v);
+                return b.empty() ? 0.0 : s / double(b.size());
+            };
+            const auto tracedBytes = [&] {
+                std::vector<unsigned char> b;
+                int bw = 0, bh = 0;
+                renderer.pathTraceBegin(p);
+                for (int i = 0; i < 4; ++i) renderer.render(scene, *camera);
+                renderer.pathTraceReadRGB(b, bw, bh);
+                renderer.pathTraceStop();
+                return b;
+            };
+            const double plain = meanBytes(tracedBytes());
+            renderer.setPhysicalCamera(true);
+            renderer.setCameraExposure(1.f, 1.f, 200.f);
+            for (int i = 0; i < 30; ++i) renderer.render(scene, *camera);
+            const double frame = meanBytes(renderer.readRGBPixels());
+            const double phys  = meanBytes(tracedBytes());
+            renderer.setPhysicalCamera(false);
+            std::printf("  mean linear: trace %.3f, under the physical camera %.3f, its frame %.3f\n", plain, phys, frame);
+            check(phys > 1.3 * plain, "the physical camera's exposure reaches the trace");
+            check(phys > 0.7 * frame && phys < 1.4 * frame, "and agrees with the frame's");
+        }
+
+        // A thin lens: focused far in front of the sphere at f/1 its edge
+        // spreads over a dozen pixels; focused on it, it stays sharp. The
+        // edge is the sphere's red against the floor's grey (r - g), its
+        // steepest step over a row-averaged profile across both sides.
+        {
+            const auto edgeStep = [&](bool dof, float focus) {
+                renderer.setDepthOfField(dof);
+                renderer.setFocusDistance(focus);
+                renderer.setCameraExposure(1.f, 1.f / 125.f, 100.f);
+                std::vector<float> img;
+                int iw = 0, ih = 0;
+                double best = 0;
+                if (renderer.pathTrace(scene, *camera, 64, img, iw, ih, p) && iw == kW) {
+                    std::vector<double> prof(kW, 0.0);
+                    for (int y = kH / 2 - 10; y < kH / 2 + 10; ++y)
+                        for (int x = 0; x < kW; ++x) {
+                            const float* q = &img[(std::size_t(y) * kW + x) * 3];
+                            prof[x] += (q[0] - q[1]) / 20.0;
+                        }
+                    for (int x = 50; x < kW - 50; ++x) best = std::max(best, std::abs(prof[x + 1] - prof[x]));
+                }
+                renderer.setDepthOfField(false);
+                return best;
+            };
+            const double pin    = edgeStep(false, 10.f);
+            const double blur   = edgeStep(true, 0.4f);
+            const double sharp  = edgeStep(true, camera->position.length() - 1.f);
+            std::printf("  steepest edge step: pinhole %.3f, focused short %.3f, focused on the sphere %.3f\n",
+                        pin, blur, sharp);
+            check(blur < 0.5 * pin, "out of focus, the sphere's edge spreads");
+            check(sharp > 0.6 * pin, "in focus, it stays sharp");
+        }
+
+        // Lens distortion, traced: a grid of dark bars on a white wall, whose
+        // straight lines a barrel lens bends most toward the edges. The trace
+        // agrees with the frame's warped picture far better with the lens
+        // than without it.
+        {
+            Scene s5;
+            auto grey      = constantEnv(0.8f, 0.8f, 0.8f);
+            s5.environment = grey;
+            s5.background  = grey;
+            auto wallMat       = MeshStandardMaterial::create();
+            wallMat->color     = Color(0.9f, 0.9f, 0.9f);
+            wallMat->roughness = 1.f;
+            s5.add(Mesh::create(PlaneGeometry::create(12.f, 9.f), wallMat));
+            auto barMat       = MeshStandardMaterial::create();
+            barMat->color     = Color(0.02f, 0.02f, 0.02f);
+            barMat->roughness = 1.f;
+            for (int i = -4; i <= 4; ++i) {
+                auto v        = Mesh::create(BoxGeometry::create(0.08f, 9.f, 0.02f), barMat);
+                v->position.x = 0.7f * float(i);
+                s5.add(v);
+                auto hz        = Mesh::create(BoxGeometry::create(12.f, 0.08f, 0.02f), barMat);
+                hz->position.y = 0.55f * float(i);
+                s5.add(hz);
+            }
+            auto cam5 = PerspectiveCamera::create(50, float(kW) / float(kH), 0.1f, 100.f);
+            cam5->position.set(0, 0, 4);
+            cam5->lookAt(0, 0, 0);
+            cam5->updateMatrixWorld();
+            auto& scene  = s5;
+            auto& camera = cam5;
+            for (int i = 0; i < 2; ++i) renderer.render(scene, *camera);
+            std::vector<float> straight;
+            int w = 0, h = 0;
+            renderer.pathTrace(scene, *camera, 32, straight, w, h, p);
+            LensDistortion lens;
+            lens.model = LensModel::BrownConrady;
+            lens.k1    = -0.3f;
+            lens.k2    = 0.08f;
+            renderer.setLensDistortion(lens);
+            renderer.setLensOverscan(1.3f);
+            for (int i = 0; i < 30; ++i) renderer.render(scene, *camera);
+            const std::vector<float> frame = toLinear(renderer.readRGBPixels());
+            std::vector<float> bent;
+            const bool ok = renderer.pathTrace(scene, *camera, 32, bent, w, h, p);
+            renderer.setLensDistortion(LensDistortion{});
+            renderer.setLensOverscan(1.f);
+            if (ok && bent.size() == frame.size() && straight.size() == frame.size()) {
+                const double withLens = psnr(frame, bent, false, kW, kH);
+                const double without  = psnr(frame, straight, false, kW, kH);
+                std::printf("  vs the frame's barrel-warped picture: traced with the lens %.2f dB, without %.2f dB\n",
+                            withLens, without);
+                check(withLens > without + 2.0, "the trace bends with the frame's lens");
+            } else {
+                check(false, "traces with and without the lens");
+            }
+        }
+
+        // A spot light's beam in clear air (setDeferredVolumetrics): none
+        // without the beam density, about the frame's with it, and cut where a
+        // slab stands in the cone, which the frame's beam march does not do.
+        {
+            Scene s4;
+            auto black     = constantEnv(0.f, 0.f, 0.f);
+            s4.environment = black;
+            s4.background  = black;
+            auto spot      = SpotLight::create(Color(1.f, 1.f, 1.f), 150.f, 20.f, 0.3f, 0.f, 2.f);
+            spot->position.set(0, 4, 0);
+            s4.add(spot);
+            auto cam4 = PerspectiveCamera::create(50, float(kW) / float(kH), 0.1f, 100.f);
+            cam4->position.set(0, 0, 6);
+            cam4->lookAt(0, 0, 0);
+            cam4->updateMatrixWorld();
+            const auto beam = [&](const std::vector<float>& img) {
+                return meanLinear(img, kW, kW / 2 - 4, kW / 2 + 4, kH / 2 - 15, kH / 2 + 15);
+            };
+            const auto traced = [&] {
+                std::vector<float> img;
+                int iw = 0, ih = 0;
+                for (int i = 0; i < 2; ++i) renderer.render(s4, *cam4);
+                return renderer.pathTrace(s4, *cam4, 64, img, iw, ih, p) ? beam(img) : Rgb{};
+            };
+            renderer.setDeferredVolumetrics(0.f);
+            const Rgb none = traced();
+            renderer.setDeferredVolumetrics(0.15f, 0.3f);
+            for (int i = 0; i < 30; ++i) renderer.render(s4, *cam4);
+            const Rgb frame = beam(toLinear(renderer.readRGBPixels()));
+            const Rgb lit   = traced();
+            auto slabMat       = MeshStandardMaterial::create();
+            slabMat->roughness = 1.f;
+            auto slab          = Mesh::create(BoxGeometry::create(2.f, 0.2f, 2.f), slabMat);
+            slab->position.y   = 2.f;
+            s4.add(slab);
+            const Rgb cut = traced();
+            renderer.setDeferredVolumetrics(0.f);
+            std::printf("  beam: no density %.4f, frame %.4f, traced %.4f, under a slab %.4f\n",
+                        none.lum(), frame.lum(), lit.lum(), cut.lum());
+            check(none.lum() < 1e-3, "no beam without a medium");
+            check(lit.lum() > 0.01, "the beam is traced in clear air");
+            check(lit.lum() > 0.5 * frame.lum() && lit.lum() < 2.0 * frame.lum(), "about as bright as the frame's");
+            check(cut.lum() < 0.3 * lit.lum(), "and shadowed by what stands in the cone");
+        }
+
+        // A dome port: the camera shut in a closed 0.6 m box sees its black
+        // inside; with a dome of 1 m about the lens every ray starts outside
+        // the box and sees the white environment.
+        {
+            Scene s6;
+            auto white     = constantEnv(1.f, 1.f, 1.f);
+            s6.environment = white;
+            s6.background  = white;
+            auto boxMat       = MeshStandardMaterial::create();
+            boxMat->color     = Color(0.5f, 0.5f, 0.5f);
+            boxMat->roughness = 1.f;
+            boxMat->side      = Side::Double;
+            s6.add(Mesh::create(BoxGeometry::create(0.6f, 0.6f, 0.6f), boxMat));
+            auto cam6 = PerspectiveCamera::create(50, float(kW) / float(kH), 0.01f, 100.f);
+            cam6->position.set(0, 0, 0);
+            cam6->lookAt(0, 0, -1);
+            cam6->updateMatrixWorld();
+            const auto centre = [&](float dome) {
+                VulkanRenderer::PathTraceParams q = p;
+                q.domePort = dome;
+                std::vector<float> img;
+                int iw = 0, ih = 0;
+                renderer.render(s6, *cam6);
+                return renderer.pathTrace(s6, *cam6, 16, img, iw, ih, q) && iw == kW
+                               ? meanLinear(img, kW, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10)
+                               : Rgb{};
+            };
+            const Rgb shut = centre(0.f);
+            const Rgb dome = centre(1.f);
+            std::printf("  inside a closed box: no dome %.3f, a 1 m dome %.3f\n", shut.lum(), dome.lum());
+            check(shut.lum() < 0.02, "shut in the box, the camera sees its dark inside");
+            check(dome.lum() > 0.9, "a dome port larger than the box starts every ray outside it");
+        }
+    }
+
+    // ── 7. Validation ───────────────────────────────────────────────────────
     if (!vulkan::validationActive()) {
         std::printf("\n[note] VK_LAYER_KHRONOS_validation is not installed: the zero-error\n"
                     "       check is skipped.\n");

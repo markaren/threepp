@@ -10,9 +10,12 @@
 // The frame on screen is untouched.
 //
 // Driven by VulkanRenderer::pathTraceBegin / pathTraceRead / pathTraceStop:
-// each render() while active adds params().samplesPerFrame paths per pixel.
-// The session's extent is the primary view's render extent at the time of
-// each dispatch; a change of extent restarts the accumulation.
+// each render() while active traces params().samplesPerFrame paths per pixel
+// over one band of rows. The picture is params().width x height, or the
+// primary view's render extent at each dispatch when those are 0 (a change of
+// it restarts the accumulation). A band holds at most as many pixels as the
+// render extent, so a picture larger than the frame takes several render()
+// calls a pass and no dispatch runs longer than a frame-sized one would.
 //
 // Needs ray query (VulkanContext::rayQuerySupported); without it the object
 // holds no pipeline and available() is false.
@@ -42,6 +45,39 @@ namespace threepp::vulkan {
             uint32_t samplesPerFrame = 8; // camera paths per pixel per render()
             uint32_t maxBounces      = 6; // scattering events after the primary hit
             float    fireflyClamp    = 0.f;// per-sample luminance cap, 0 = off
+            uint32_t width           = 0;  // the picture's extent, 0 = the render extent
+            uint32_t height          = 0;  // (at most 65535 rows)
+            float    domePort        = 0.f;// a dome port's radius about the lens (m), 0 = none
+        };
+
+        // What a dispatch reads from the frame besides its descriptor set.
+        struct FrameInputs {
+            uint32_t emissiveCount      = 0;
+            float    emissiveTotalPower = 0.f;
+            uint32_t envMipCount        = 1;
+            // tan of the sun's angular radius, 0 = a delta sun; sunExtracted:
+            // the environment's sun disc was extracted into a directional
+            // light, so bounce rays read the sun-clamped mip 1.
+            float    sunTanHalfAngle    = 0.f;
+            bool     sunExtracted       = false;
+            float    oceanFineTileSize  = 0.f;// the fine cascade's tile (m), 0 = no ocean
+            float    starIntensity      = 0.f;// the procedural star field, 0 = none
+            // setDeferredVolumetrics: the lamps' beam medium in clear air and its g.
+            float    volDensity         = 0.f;
+            float    volAniso           = 0.f;
+            // The camera's lens as the frame forms its image: the
+            // distortion (threepp::LensModel, 0 = none) with the frame's
+            // normalised intrinsics (fx/W, fy/H, cx/W, cy/H, top-left
+            // origin) and the overscan the camera block's frustum carries,
+            // and the thin lens (aperture radius in m, 0 = a pinhole) focused
+            // at focusDistance.
+            uint32_t lensModel          = 0;
+            float    lensK[4]{0.5f, 0.5f, 0.5f, 0.5f};
+            float    lensRadial[4]{};
+            float    lensTangential[2]{};
+            float    lensOverscan       = 1.f;
+            float    lensRadius         = 0.f;
+            float    focusDistance      = 10.f;
         };
 
         // The subset of DeferredShade's set the paths need, plus the primary
@@ -100,25 +136,25 @@ namespace threepp::vulkan {
         void stop() { active_ = false; }
         [[nodiscard]] bool          active() const { return active_; }
         [[nodiscard]] const Params& params() const { return params_; }
-        // Samples per pixel accumulated so far (0 until the first dispatch).
+        // Samples per pixel accumulated over the whole picture so far (0
+        // until the first pass is in).
         [[nodiscard]] uint32_t samples() const { return samples_; }
+        // The same with the pass in progress counted by the share of its
+        // rows traced: rises with every dispatch.
+        [[nodiscard]] double progress() const {
+            return height_ ? samples_ + double(params_.samplesPerFrame) * rowCursor_ / height_ : samples_;
+        }
         [[nodiscard]] uint32_t width() const { return width_; }
         [[nodiscard]] uint32_t height() const { return height_; }
 
         // ── Frame graph ─────────────────────────────────────────────────────
-        // Size the accumulator for this frame's extent (a change restarts
-        // the session) and bind it in frame `frame`'s set. Call at graph
-        // build, before declare().
-        void prepare(uint32_t frame, uint32_t width, uint32_t height, uint64_t frameSerial);
+        // Size the accumulator for the picture (params' extent, or this
+        // frame's render extent; a change restarts the session) and bind it
+        // in frame `frame`'s set. Call at graph build, before declare().
+        void prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial);
         void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
-        // sunExtracted: the environment's sun disc was extracted into a
-        // directional light, so bounce rays read the sun-clamped mip 1.
-        // oceanFineTileSize: the fine cascade's tile (m), 0 without an ocean.
-        // starIntensity: the procedural star field's strength, 0 = none.
-        void recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                            uint32_t emissiveCount, float emissiveTotalPower,
-                            uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted,
-                            float oceanFineTileSize, float starIntensity);
+        // Trace the next band of rows.
+        void recordDispatch(VkCommandBuffer cb, uint32_t frame, const FrameInputs& in);
 
         // ── Readback ────────────────────────────────────────────────────────
         // Both submit on the graphics queue and wait; the caller drains the
@@ -160,6 +196,12 @@ namespace threepp::vulkan {
         Buffer   accum_{};
         uint32_t width_  = 0;
         uint32_t height_ = 0;
+        // The render extent the picture is framed against and the band size
+        // it allows; the next row to trace.
+        uint32_t renderWidth_  = 0;
+        uint32_t renderHeight_ = 0;
+        uint32_t bandRows_     = 0;
+        uint32_t rowCursor_    = 0;
         // Which accumulator each frame's set names (binding 8); 0 = none.
         std::vector<uint64_t> boundAccum_;
         uint64_t              accumSerial_ = 0;

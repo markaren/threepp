@@ -16,8 +16,9 @@
 // camera paths per pixel per dispatch, summed into an rgba32f accumulation
 // buffer the host averages on readback.
 //
-// Each path: a jittered primary ray from the view's CameraUbo (camera_ray.glsl),
-// then up to pc.maxBounces scattering events. At every opaque hit the direct
+// Each path: a jittered primary ray from the view's CameraUbo (camera_ray.glsl)
+// through the frame's lens (ptCameraRay: setLensDistortion, a thin lens under
+// setDepthOfField), then up to pc.maxBounces scattering events. At every opaque hit the direct
 // light is estimated by next-event estimation — the analytic lights of the
 // lights block (the sun as a cone of pc.sunTanHalfAngle, lamps through the
 // falloff and range window gi_bounce.glsl defines) and one point on an
@@ -47,7 +48,9 @@
 // pixel; here each sample draws one point on the leg in proportion to the
 // medium's density and transmittance and traces its own shadow ray toward
 // the sun, so the shafts converge to the shadows of the geometry exactly.
-// A leg that escapes takes the sky's transmittance (applySkyFog) and the
+// The point and spot lights scatter in the same air, and in the beam density
+// setDeferredVolumetrics gives clear air, as the frame's beam march and froxel glow
+// scatter them (airLampScatter). A leg that escapes takes the sky's transmittance (applySkyFog) and the
 // sun's scatter out to the medium's optical horizon. Shadow rays are not
 // attenuated by the air, as in the deferred march. The ParticleField density
 // volumes (dust, mist, smoke, fire) are marched on every leg as the deferred
@@ -66,7 +69,7 @@
 // side, as the raster culls them — except transmissive ones, whose far wall
 // is the refraction out. The cloud layer (setClouds) is cloud_march.comp's
 // march on every leg that crosses it, and it dims the sun's shadow rays. Not
-// modelled here: iridescence, the ocean's foam and fine-chop normal map.
+// modelled here: iridescence, the ocean's whitecap foam.
 //
 // Shadow rays trace the frame's occlusion mask (kRayMaskOpaque): alpha-cutouts
 // tested, blended and transmissive surfaces pass (no caustic path exists to
@@ -134,6 +137,8 @@ layout(set = 0, binding = 9, scalar) uniform FogUbo {
 } fog;
 #include "height_fog.glsl"// heightFogLegOpticalDepth
 #include "hg_phase.glsl"// hgPhase
+#include "spot_cone.glsl"// spotConeInterval
+#include "lens_distortion.glsl"// lensUndistort
 
 // ParticleField density volumes (DensityRepr) at the deferred set's own
 // bindings 67-69: the integer volumes, their box/medium block and the r16f
@@ -147,13 +152,14 @@ layout(set = 0, binding = 9, scalar) uniform FogUbo {
 #include "cloud_density.glsl"
 
 layout(push_constant) uniform Pc {
-    uint  width;
+    uint  width;             // the picture's extent
     uint  height;
     uint  sampleIndex;       // samples already in the accumulator (the RNG stream position)
     uint  samples;           // paths per pixel this dispatch
     uint  maxBounces;        // scattering events after the primary hit
     uint  flags;             // bit 0 = reset: overwrite the accumulator instead of adding
                              // bit 1 = the environment's sun was extracted into a directional light
+                             // bits 2-3 = the lens model (LENS_MODEL_*), 0 = none
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
     uint  envMipCount;       // PMREM mip levels (>= 1)
@@ -162,6 +168,17 @@ layout(push_constant) uniform Pc {
     uint  seed;              // per-session salt
     float oceanFineTileSize; // the ocean's fine cascade tile (m), 0 = no ocean
     float starIntensity;     // the procedural star field's strength (setStarfield), 0 = none
+    float volDensity;        // setDeferredVolumetrics: the lamps' beam medium in clear air (1/m)
+    float volAniso;          // its HG g, where no fog gives one
+    vec4  lensK;             // the output camera's (fx/W, fy/H, cx/W, cy/H), top-left origin
+    vec4  lensRadial;        // k1..k4
+    vec2  lensTangential;    // p1, p2
+    float lensOverscan;      // the frustum widening the camera block carries (setLensOverscan)
+    float lensRadius;        // thin-lens aperture radius (m), 0 = a pinhole
+    float focusDistance;     // the plane in focus, view depth (m)
+    float aspectScale;       // the picture's aspect over the camera's
+    uint  rows;              // this dispatch's band: its first row (low 16 bits), how many (high 16)
+    float domeRadius;        // a dome port's radius about the lens (m), 0 = none
 } pc;
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
@@ -301,6 +318,34 @@ bool murkSunDir(vec3 x, vec3 L, out vec3 Lw, out vec3 trSun) {
     Lw    = -sd;
     trSun = exp(-fog.murkSigma * depth / sy);
     return true;
+}
+
+// The braid of the sun under a moving sea: the deferred shade's crest proxy
+// (murkSunScatter, murkSunCaustic), with its constants. Walk from x up the
+// in-water sun direction Lw to the surface plane, take the FFT fine cascade's
+// height where that light came in, and shape it: in the medium the shafts'
+// form, which lets the mean rise with the crests (a shaft is light added), on
+// a surface the dapple's, centred so it moves the sun about and adds none,
+// ramped in under the surface and faded out with depth. A proxy, as the frame
+// labels it: crest height for the focusing a real caustic is. 1 with no ocean.
+const float kPtCausticBite     = 0.9;
+const float kPtCausticScale    = 9.0;
+const float kPtCausticPeak     = 2.6;
+const float kPtCausticSurfBite = 0.45;
+const float kPtCausticSurfNear = 0.55;// m: no dapple above this, full below it
+const float kPtCausticSurfFade = 7.0; // m: its contrast gone by here
+float murkCaustic(vec3 x, vec3 Lw, bool medium) {
+    if (pc.oceanFineTileSize <= 0.0) return 1.0;
+    const float depth = fog.waterSurfaceY - x.y;
+    if (depth <= (medium ? 0.0 : kPtCausticSurfNear * 0.5)) return 1.0;
+    const vec3  sd = -Lw;
+    const float sy = max(-dot(sd, airUp()), 0.08);
+    const vec2  sp = (x.xz - sd.xz * (depth / sy)) / pc.oceanFineTileSize;
+    const float s  = smoothstep(-0.10, 0.55, textureLod(oceanFineHeight, sp, 0.0).r * kPtCausticScale);
+    if (medium) return mix(1.0, s * kPtCausticPeak, kPtCausticBite);
+    const float bite = kPtCausticSurfBite * smoothstep(kPtCausticSurfNear * 0.5, kPtCausticSurfNear, depth)
+                     * (1.0 - smoothstep(0.0, kPtCausticSurfFade, depth));
+    return 1.0 + bite * (2.0 * s - 1.0);
 }
 
 
@@ -680,7 +725,7 @@ vec3 analyticNee(const Surf s, vec3 V, inout uint seed) {
             vec3 Lw, trSun;
             if (!murkSunDir(s.P, L, Lw, trSun)) continue;
             L = Lw;
-            col *= trSun;
+            col *= trSun * murkCaustic(s.P, Lw, false);
         }
         const vec3 fc = evalBsdfCos(s, V, L);
         if (max(max(fc.r, fc.g), fc.b) <= 0.0) continue;
@@ -751,6 +796,116 @@ vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, inout uint seed) {
     return sum * airAlbedo() * (1.0 - Tend);
 }
 
+// ── The lamps in the air ────────────────────────────────────────────────────
+// The point and spot lights' single scatter along a leg: the frame's beam
+// march (volumetricSpotScatter) and its froxels' point-light glow, with their
+// terms. The medium is the air (airSigma), or the beam density
+// setDeferredVolumetrics gives clear air where that is thicker, with the air's
+// albedo and its HG g (setDeferredVolumetrics's anisotropy where there is no fog);
+// a lamp's light falls off as 1/max(d², 1 m²) under the frame's range window
+// (200 m for a lamp without a range) and a spot's cone. Each sample draws one
+// lamp by the luminance of its colour times the angle the leg's stretch in its
+// reach subtends at it over the distance (the inverse square's integral along
+// the stretch), one point on that stretch equi-angularly about the lamp
+// (Kulla and Fajardo 2012, as the frame's march steps), and traces the point's
+// shadow ray, so a beam is cut by what stands in it, which the frame's march
+// does not do. Above the water only: a submerged leg is the murk's (murkLeg).
+const uint kPtLampCap = 16u;// 8 point + 8 spot lights in the lights block
+
+float lampLegDepth(vec3 a, vec3 b) {
+    return max(airOn() ? airOpticalDepth(a, b) : 0.0, pc.volDensity * distance(a, b));
+}
+
+// Lamp i's stretch [t0, t1] of the leg o + t·d, t in [0, tTop]: inside its
+// reach (and its cone); tc the leg's closest approach, h (>= 1 m) its distance
+// there. The weight it is drawn by; 0 when the leg misses it.
+float lampStretch(vec3 o, vec3 d, float tTop, uint i, out float t0, out float t1, out float tc, out float h) {
+    t0 = t1 = tc = 0.0;
+    h = 1.0;
+    const bool spot = i >= lights.pointCount;
+    const uint j    = spot ? i - lights.pointCount : i;
+    const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+    if (fog.waterSurfaceY < 1e29 && pos.y < fog.waterSurfaceY) return 0.0;
+    const float rng   = spot ? lights.spotLights[j].range : lights.pointLights[j].range;
+    const float range = rng > 0.0 ? rng : 200.0;
+    const vec3  oc    = o - pos;
+    const float b     = dot(oc, d);
+    const float disc  = b * b - (dot(oc, oc) - range * range);
+    if (disc <= 0.0) return 0.0;
+    const float sq = sqrt(disc);
+    t0 = max(-b - sq, 0.0);
+    t1 = min(-b + sq, tTop);
+    if (spot) {
+        const vec2 cone = spotConeInterval(o, d, pos, lights.spotLights[j].direction, lights.spotLights[j].cosAngleOuter);
+        t0 = max(t0, cone.x);
+        t1 = min(t1, cone.y);
+    }
+    if (t1 <= t0) return 0.0;
+    tc = -b;
+    h  = max(length(oc + d * tc), 1.0);
+    const vec3 col = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+    const float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    return lum * (atan((t1 - tc) / h) - atan((t0 - tc) / h)) / h;
+}
+
+vec3 airLampScatter(vec3 o, vec3 d, float tEnd, inout uint seed) {
+    const uint n = min(lights.pointCount + lights.spotCount, kPtLampCap);
+    if (n == 0u || (!airOn() && pc.volDensity <= 0.0)) return vec3(0.0);
+    float tTop = min(tEnd, 1e5);
+    if (fog.waterSurfaceY < 1e29) {
+        if (o.y < fog.waterSurfaceY) return vec3(0.0);
+        if (d.y < -1e-6) tTop = min(tTop, (fog.waterSurfaceY - o.y) / d.y);
+    }
+    float w[kPtLampCap];
+    float W = 0.0;
+    float t0, t1, tc, h;
+    for (uint i = 0u; i < n; ++i) {
+        w[i] = lampStretch(o, d, tTop, i, t0, t1, tc, h);
+        W += w[i];
+    }
+    if (W <= 0.0) return vec3(0.0);
+    float xi   = rnd(seed) * W;
+    uint  pick = 0u;
+    for (uint i = 0u; i < n; ++i) {
+        if (w[i] <= 0.0) continue;
+        pick = i;
+        if (xi < w[i]) break;
+        xi -= w[i];
+    }
+    const float pPick = w[pick] / W;
+    lampStretch(o, d, tTop, pick, t0, t1, tc, h);
+    // Equi-angular: t = tc + h·tan(θ), θ uniform over the stretch's angle, so
+    // the pdf is h / ((θb − θa)(h² + (t − tc)²)).
+    const float thA = atan((t0 - tc) / h);
+    const float thB = atan((t1 - tc) / h);
+    const float t   = clamp(tc + h * tan(mix(thA, thB, rnd(seed))), t0, t1);
+    const float u   = t - tc;
+    const float invPdf = (thB - thA) * (h * h + u * u) / h;
+    const vec3  x   = o + d * t;
+
+    const bool spot = pick >= lights.pointCount;
+    const uint j    = spot ? pick - lights.pointCount : pick;
+    const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+    vec3        toL  = pos - x;
+    const float dist = length(toL);
+    if (dist < 1e-3) return vec3(0.0);
+    toL /= dist;
+    float atten = 1.0 / max(dist * dist, 1.0);
+    const float rng   = spot ? lights.spotLights[j].range : lights.pointLights[j].range;
+    const float tr    = dist / (rng > 0.0 ? rng : 200.0);
+    const float wnd   = max(1.0 - tr * tr * tr * tr, 0.0);
+    atten *= wnd * wnd;
+    if (spot) atten *= smoothstep(lights.spotLights[j].cosAngleOuter, lights.spotLights[j].cosAngleInner,
+                                  dot(-toL, lights.spotLights[j].direction));
+    if (atten <= 0.0) return vec3(0.0);
+    const float g     = (airOn() || fog.enabled > 0.5) ? fog.anisotropy : pc.volAniso;
+    const float sigma = max(airOn() ? airSigma(x) : 0.0, pc.volDensity);
+    const float T     = exp(-lampLegDepth(o, x) - lampLegDepth(x, pos));
+    const vec3  col   = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+    const float vis   = shadowVis(x, toL, dist - 1e-2);
+    return col * airAlbedo() * (sigma * atten * hgPhase(dot(toL, d), g) * T * vis * invPdf / pPick);
+}
+
 // ── The underwater murk (setUnderwaterMurk) ─────────────────────────────────
 // The deferred shade's water column: a homogeneous medium below
 // waterSurfaceY with sigma_t per channel (murkSigma) and murkColor as its
@@ -758,8 +913,8 @@ vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, inout uint seed) {
 // in-scatter murkColor · ambient · grade · (1 − T) (graded by the leg's
 // elevation as applyMurk grades it: a column is lit from above) and the sun's
 // single scatter, the sun refracted at a flat surface and attenuated by the
-// water over it (murkSunScatter, with kMurkShaftGain). Caustics are not
-// modelled.
+// water over it (murkSunScatter, with kMurkShaftGain), braided by the frame's
+// crest proxy (murkCaustic). True caustics are not modelled.
 // The murk on one leg: its transmittance (per channel) and what it adds.
 vec3 murkLeg(vec3 o, vec3 d, float tEnd, inout vec3 add, inout uint seed) {
     float t0, t1;
@@ -783,7 +938,8 @@ vec3 murkLeg(vec3 o, vec3 d, float tEnd, inout vec3 add, inout uint seed) {
         for (uint i = 0u; i < lights.dirCount; ++i) {
             vec3 Lw, trSun;
             if (!murkSunDir(x, normalize(lights.dirLights[i].direction), Lw, trSun)) continue;
-            sun += lights.dirLights[i].color * trSun * (hgPhase(dot(Lw, d), g) * shadowVis(x, Lw, 1e30));
+            sun += lights.dirLights[i].color * trSun *
+                   (hgPhase(dot(Lw, d), g) * shadowVis(x, Lw, 1e30) * murkCaustic(x, Lw, true));
         }
         add += sun * w * fog.murkColor * kPtMurkShaftGain;
         // The point and spot lights in the water too: a floodlight over the
@@ -1021,6 +1177,8 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                     legT = exp(-od);
                 }
             }
+            if (!inside && (airOn() || pc.volDensity > 0.0))
+                L += throughput * airLampScatter(o, d, miss ? 1e30 : tHit, seed);
             if (!inside && pd.counts.x > 0u) {
                 const DustLeg dl = dustLeg(o, d, miss ? 1e30 : tHit, seed);
                 const float   Ta = airOn() ? exp(-airOpticalDepth(o, dl.xPick)) : 1.0;
@@ -1185,10 +1343,15 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
             // is water whatever its material's ior.
             // The ocean's material is thin-walled for the deferred shade's
-            // thin-shell BSDF; here it is a real interface, entered going down.
+            // thin-shell BSDF; here it is a real interface, entered through
+            // the wave face's upper side: its geometric normal turned up. Not
+            // by the ray's own direction: a ray at a grazing angle just under
+            // the surface (a camera at the waterline) meets a steep face from
+            // below while still heading down, and leaves the water there.
             const float ior = isOcean ? 1.333 : max(hm.ior, 1.0001);
             const bool  thin = hm.thinWalled != 0 && !isOcean;
-            const bool  entering = isOcean ? dot(d, airUp()) < 0.0 : front;
+            const vec3  NgUp = dot(hh.Ng, airUp()) >= 0.0 ? hh.Ng : -hh.Ng;
+            const bool  entering = isOcean ? dot(d, NgUp) < 0.0 : front;
             const float eta  = thin ? 1.0 : (entering ? 1.0 / ior : ior);
             // Microfacet normal for rough glass; the shading one when smooth.
             vec3 H = N;
@@ -1211,14 +1374,27 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             // Total internal reflection
             const float sin2t = eta * eta * (1.0 - VdotH * VdotH);
             if (sin2t >= 1.0) F = 1.0;
+            // A facet turned past the view (a grazing ray on a rough or choppy
+            // face: most of them, at the waterline) would send the ray into
+            // the face it came from. Killing that path drew a black band where
+            // water is nearly a perfect mirror; the face's own refraction or
+            // mirror takes it instead (and its refraction's total internal
+            // reflection, the mirror).
             vec3 next;
-            if (rnd(seed) < F) {
+            bool reflected = rnd(seed) < F;
+            if (!reflected && !thin) {
+                next = refract(-V, H, eta);
+                if (dot(next, next) < 1e-6 || dot(next, Ng) >= 0.0) {
+                    next = refract(-V, Ng, eta);
+                    reflected = dot(next, next) < 1e-6;
+                }
+            }
+            if (reflected) {
                 next = reflect(-V, H);
-                if (dot(next, Ng) <= 0.0) break;
+                if (dot(next, Ng) <= 0.0) next = reflect(-V, Ng);
                 o = P + Ng * SHADOW_EPS;
             } else {
-                next = thin ? d : refract(-V, H, eta);
-                if (length(next) < 1e-6) break;
+                if (thin) next = d;
                 next = normalize(next);
                 if (dot(next, Ng) >= 0.0) break;
                 throughput *= albedo;
@@ -1302,9 +1478,61 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     return L;
 }
 
+// ── The camera ──────────────────────────────────────────────────────────────
+// The primary ray through a point of the picture (uv, top-left origin), as
+// the frame's camera forms its image. The lens distortion first, as the
+// frame's sensor pass warps it (setLensDistortion, about the output camera's
+// principal point, into the frustum the camera block holds, widened by
+// setLensOverscan); every ray here is traced, so a barrel lens's corners are
+// real whatever the overscan. Then the picture's aspect over the camera's: a
+// picture of another shape keeps the vertical field and widens or narrows the
+// horizontal. Then a thin lens under setDepthOfField: a disc of lensRadius
+// (the camera's focal length over twice setCameraExposure's f-number) focused
+// on the plane at focusDistance, the frame's circle of confusion to within
+// S/(S − f); a pinhole when the radius is 0, and always for a parallel
+// projection. Last, a dome port: a glass hemisphere centred on the lens, as
+// an underwater housing has, refracts nothing on a ray from its centre, so
+// each ray simply starts where it leaves the dome, in whatever medium is
+// there. Half under the water, the lower part of the picture starts in the
+// sea and the upper in the air, split along the line the waves draw across
+// the dome: the over-under picture.
+void ptCameraRay(vec2 uv, inout uint seed, out vec3 ro, out vec3 rd) {
+    const int model = int((pc.flags >> 2) & 3u);
+    if (model != LENS_MODEL_NONE) {
+        const vec2 pd = (uv - pc.lensK.zw) / pc.lensK.xy;
+        const vec2 p  = lensUndistort(model, pc.lensRadial, pc.lensTangential, pd);
+        uv = p * pc.lensK.xy + pc.lensK.zw;
+        if (pc.lensOverscan != 1.0) uv = pc.lensK.zw + (uv - pc.lensK.zw) / pc.lensOverscan;
+    }
+    const vec2 ndc = vec2((uv.x * 2.0 - 1.0) * pc.aspectScale, 1.0 - uv.y * 2.0);
+    ro = camRayOrigin(ndc);
+    rd = camRayDir(ndc);
+    if (cam.camAux.x > 0.5) return;
+    if (pc.lensRadius > 0.0) {
+        const vec4  tVS = cam.projInverse * vec4(ndc, 1.0, 1.0);
+        const vec3  v   = normalize(tVS.xyz / tVS.w);// view space, -z ahead
+        const vec3  pf  = v * (pc.focusDistance / max(-v.z, 1e-6));
+        const float r   = pc.lensRadius * sqrt(rnd(seed));
+        const float phi = TWO_PI * rnd(seed);
+        const vec3  lp  = vec3(r * cos(phi), r * sin(phi), 0.0);
+        ro = (cam.viewInverse * vec4(lp, 1.0)).xyz;
+        rd = normalize((cam.viewInverse * vec4(pf - lp, 0.0)).xyz);
+    }
+    if (pc.domeRadius > 0.0) {
+        // Where the ray leaves the sphere about the lens's centre (a thin
+        // lens's rays start a few millimetres off it).
+        const vec3  oc = ro - cam.viewInverse[3].xyz;
+        const float b  = dot(oc, rd);
+        const float c  = dot(oc, oc) - pc.domeRadius * pc.domeRadius;
+        ro += rd * (-b + sqrt(max(b * b - c, 0.0)));
+    }
+}
+
 void main() {
-    const uvec2 px = gl_GlobalInvocationID.xy;
-    if (px.x >= pc.width || px.y >= pc.height) return;
+    // One band of rows a dispatch: a picture larger than the frame is traced
+    // band by band, each pass over all of them one more set of samples.
+    const uvec2 px = uvec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + (pc.rows & 0xFFFFu));
+    if (px.x >= pc.width || px.y >= pc.height || gl_GlobalInvocationID.y >= (pc.rows >> 16)) return;
     const uint idx = px.y * pc.width + px.x;
 
     vec3 sum = vec3(0.0);
@@ -1314,8 +1542,9 @@ void main() {
         // Sub-pixel jitter; pixel (0,0) is the top-left, NDC y = +1 the top.
         const vec2 jit = vec2(rnd(seed), rnd(seed));
         const vec2 uv  = (vec2(px) + jit) / vec2(float(pc.width), float(pc.height));
-        const vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-        vec3 Ls = tracePath(camRayOrigin(ndc), camRayDir(ndc), seed);
+        vec3 ro, rd;
+        ptCameraRay(uv, seed, ro, rd);
+        vec3 Ls = tracePath(ro, rd, seed);
         if (any(isnan(Ls)) || any(isinf(Ls))) Ls = vec3(0.0);
         if (pc.fireflyClamp > 0.0) {
             const float lum = max(max(Ls.r, Ls.g), Ls.b);
