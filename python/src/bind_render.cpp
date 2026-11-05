@@ -18,6 +18,9 @@
 #include "threepp/helpers/LidarModel.hpp"
 #include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/helpers/SonarModel.hpp"
+#include "threepp/helpers/ImagingSonarModel.hpp"
+#include "threepp/helpers/MarineRadarModel.hpp"
+#include "threepp/textures/Texture.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
@@ -242,6 +245,302 @@ namespace threepp_py {
         }, py::arg("model"),
            "Sensor-local unit ray directions, (beams * vertical_samples, 3), beam-major. The table "
            "a SonarSensor traces; also what to feed renderer.scan_lidar for a hand-rolled fan.");
+
+        // ---- Imaging sonar + marine radar physics (helpers/ImagingSonarModel.hpp,
+        //      helpers/MarineRadarModel.hpp) ------------------------------------
+        // The renderer-free halves of ImagingSonar and MarineRadar: the models,
+        // their materials, the frames they produce and the displays that draw them.
+        auto f32 = [](const std::vector<float>& v, py::ssize_t rows, py::ssize_t cols) {
+            py::array_t<float> a({rows, cols});
+            if (!v.empty()) std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(float));
+            return a;
+        };
+        auto i32 = [](const std::vector<std::int32_t>& v, py::ssize_t rows, py::ssize_t cols) {
+            py::array_t<std::int32_t> a({rows, cols});
+            if (!v.empty()) std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(std::int32_t));
+            return a;
+        };
+        // A display's RGBA (top row first) into a uint8 texture of the same size,
+        // flipped to the texture's bottom-up rows, marked dirty.
+        auto uploadRgba = [](const std::vector<std::uint8_t>& src, unsigned w, unsigned h, Texture& t) {
+            if (t.images().empty() || t.image().isFloat() || t.image().isHalfFloat())
+                throw std::runtime_error("upload: not a uint8 texture (see tp.data_texture)");
+            auto& img = t.image();
+            if (img.width() != w || img.height() != h)
+                throw std::runtime_error("upload: the texture must be the display's size");
+            auto& dst = img.data<unsigned char>();
+            dst.resize(static_cast<std::size_t>(w) * h * 4);
+            const std::size_t row = static_cast<std::size_t>(w) * 4;
+            for (unsigned y = 0; y < h; ++y) std::memcpy(&dst[(h - 1 - y) * row], &src[y * row], row);
+            t.needsUpdate();
+        };
+        auto rgbaArray = [](const std::vector<std::uint8_t>& v, unsigned w, unsigned h) {
+            py::array_t<std::uint8_t> a({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), static_cast<py::ssize_t>(4)});
+            if (!v.empty()) std::memcpy(a.mutable_data(), v.data(), v.size());
+            return a;
+        };
+
+        py::enum_<echo::Taper>(m, "ArrayTaper", "Aperture taper of a line array: the sidelobe level / beamwidth trade.")
+                .value("Uniform", echo::Taper::Uniform)
+                .value("Hann", echo::Taper::Hann)
+                .value("Hamming", echo::Taper::Hamming)
+                .value("Taylor25", echo::Taper::Taylor25);
+        py::enum_<echo::PulseKind>(m, "PulseKind", "Transmitted pulse: CW (triangle range response) or a Hann-weighted chirp.")
+                .value("CW", echo::PulseKind::CW)
+                .value("Chirp", echo::PulseKind::Chirp);
+        py::enum_<RadarPolarization>(m, "RadarPolarization")
+                .value("HH", RadarPolarization::HH)
+                .value("VV", RadarPolarization::VV);
+        py::enum_<SonarEchoKind>(m, "SonarEchoKind")
+                .value("NoEcho", SonarEchoKind::None)
+                .value("Direct", SonarEchoKind::Direct)
+                .value("Multipath", SonarEchoKind::Multipath)
+                .value("Volume", SonarEchoKind::Volume);
+
+        py::class_<WaterProperties>(m, "WaterProperties",
+                                    "Iso-velocity water: Mackenzie (1981) sound speed, Francois & Garrison (1982) absorption.")
+                .def(py::init<>())
+                .def_readwrite("temperature", &WaterProperties::temperature, "deg C")
+                .def_readwrite("salinity", &WaterProperties::salinity, "PSU")
+                .def_readwrite("depth", &WaterProperties::depth, "m")
+                .def_readwrite("ph", &WaterProperties::pH)
+                .def("sound_speed", &WaterProperties::soundSpeed, "m/s")
+                .def("absorption_db_per_km", &WaterProperties::absorptionDbPerKm, py::arg("frequency_hz"));
+
+        py::class_<AcousticMaterial>(m, "AcousticMaterial",
+                                     "Backscatter per unit area: Lambert mu cos^2 plus a Kirchhoff facet glint.")
+                .def(py::init<>())
+                .def(py::init([](float lambert, float reflection, float slope) {
+                         return AcousticMaterial{lambert, reflection, slope};
+                     }),
+                     py::arg("lambert_db"), py::arg("reflection_loss_db") = -10.f, py::arg("rms_slope") = 0.15f)
+                .def_readwrite("lambert_db", &AcousticMaterial::lambertDb)
+                .def_readwrite("reflection_loss_db", &AcousticMaterial::reflectionLossDb)
+                .def_readwrite("rms_slope", &AcousticMaterial::rmsSlope)
+                .def("sigma0", &AcousticMaterial::sigma0, py::arg("cos_theta"))
+                .def_static("mud", &AcousticMaterial::Mud)
+                .def_static("sand", &AcousticMaterial::Sand)
+                .def_static("gravel", &AcousticMaterial::Gravel)
+                .def_static("rock", &AcousticMaterial::Rock)
+                .def_static("concrete", &AcousticMaterial::Concrete)
+                .def_static("steel", &AcousticMaterial::Steel)
+                .def_static("fish", &AcousticMaterial::Fish)
+                .def_static("net", &AcousticMaterial::Net)
+                .def_static("sea_surface", &AcousticMaterial::SeaSurface);
+
+        py::class_<AcousticMaterials>(m, "AcousticMaterials", "Acoustic material per stable instance id.")
+                .def(py::init<>())
+                .def_readwrite("default_material", &AcousticMaterials::defaultMaterial)
+                .def("set", &AcousticMaterials::set, py::arg("instance_id"), py::arg("material"))
+                .def("get", [](const AcousticMaterials& a, std::int32_t id) { return a.of(id); }, py::arg("instance_id"))
+                .def("clear", [](AcousticMaterials& a) { a.byInstance.clear(); });
+
+        py::class_<ImagingSonarModel>(m, "ImagingSonarModel",
+                                      "A forward-looking multibeam imaging sonar: transducer, fan geometry (baked "
+                                      "at rebuild), range, water, noise, surface multipath and display controls.")
+                .def(py::init<>())
+                .def_readwrite("frequency", &ImagingSonarModel::frequency, "Hz")
+                .def_readwrite("source_level_db", &ImagingSonarModel::sourceLevelDb, "dB re 1 uPa at 1 m")
+                .def_readwrite("horizontal_fov", &ImagingSonarModel::horizontalFov)
+                .def_readwrite("beams", &ImagingSonarModel::beams)
+                .def_readwrite("horizontal_beamwidth", &ImagingSonarModel::horizontalBeamwidth)
+                .def_readwrite("horizontal_taper", &ImagingSonarModel::horizontalTaper)
+                .def_readwrite("vertical_beamwidth", &ImagingSonarModel::verticalBeamwidth)
+                .def_readwrite("azimuth_oversample", &ImagingSonarModel::azimuthOversample)
+                .def_readwrite("vertical_samples", &ImagingSonarModel::verticalSamples)
+                .def_readwrite("pattern_span_beamwidths", &ImagingSonarModel::patternSpanBeamwidths)
+                .def_readwrite("seed", &ImagingSonarModel::seed)
+                .def_readwrite("min_range", &ImagingSonarModel::minRange)
+                .def_readwrite("housing_range", &ImagingSonarModel::housingRange,
+                               "Where the trace starts (the transducer's face); the blind zone still occludes.")
+                .def_readwrite("max_range", &ImagingSonarModel::maxRange)
+                .def_readwrite("range_bins", &ImagingSonarModel::rangeBins)
+                .def_readwrite("range_resolution", &ImagingSonarModel::rangeResolution)
+                .def_readwrite("pulse", &ImagingSonarModel::pulse)
+                .def_readwrite("water", &ImagingSonarModel::water)
+                .def_readwrite("volume_backscatter_db", &ImagingSonarModel::volumeBackscatterDb)
+                .def_readwrite("noise_spectrum_level_db", &ImagingSonarModel::noiseSpectrumLevelDb)
+                .def_readwrite("surface_multipath", &ImagingSonarModel::surfaceMultipath)
+                .def_readwrite("surface_y", &ImagingSonarModel::surfaceY)
+                .def_readwrite("surface_rms_height", &ImagingSonarModel::surfaceRmsHeight)
+                .def_readwrite("incoherent_surface_loss_db", &ImagingSonarModel::incoherentSurfaceLossDb)
+                .def_readwrite("tvg_spreading", &ImagingSonarModel::tvgSpreading)
+                .def_readwrite("gain_db", &ImagingSonarModel::gainDb)
+                .def_readwrite("dynamic_range_db", &ImagingSonarModel::dynamicRangeDb)
+                .def_property_readonly("wavelength", &ImagingSonarModel::wavelength)
+                .def_property_readonly("bin_width", &ImagingSonarModel::binWidth)
+                .def("beam_bearing_deg", &ImagingSonarModel::beamBearingDeg, py::arg("beam"))
+                .def_static("oculus_m750d", &ImagingSonarModel::OculusM750d, "750 kHz: 130 x 20 deg, 512 beams, 1 deg.")
+                .def_static("oculus_m750d_high", &ImagingSonarModel::OculusM750dHigh, "1.2 MHz: 70 x 12 deg, 512 beams, 0.6 deg.")
+                .def_static("gemini_720is", &ImagingSonarModel::Gemini720is, "720 kHz: 120 x 20 deg, 512 beams, 0.5 deg.")
+                .def_static("blueview_m900", &ImagingSonarModel::BlueViewM900, "900 kHz: 130 x 20 deg, 768 beams, 1 deg.");
+
+        py::class_<SonarFrame>(m, "SonarFrame", "One ping: echo level, display value and ground-truth label per (beam, bin).")
+                .def(py::init<>())
+                .def_readonly("beams", &SonarFrame::beams)
+                .def_readonly("bins", &SonarFrame::bins)
+                .def_readonly("min_range", &SonarFrame::minRange)
+                .def_readonly("max_range", &SonarFrame::maxRange)
+                .def_readonly("time", &SonarFrame::time)
+                .def_readonly("noise_level_db", &SonarFrame::noiseLevelDb)
+                .def_property_readonly("bearings_deg", [](const SonarFrame& f) {
+                    py::array_t<float> a(static_cast<py::ssize_t>(f.bearingsDeg.size()));
+                    if (!f.bearingsDeg.empty()) std::memcpy(a.mutable_data(), f.bearingsDeg.data(), f.bearingsDeg.size() * sizeof(float));
+                    return a;
+                })
+                .def_property_readonly("level_db", [f32](const SonarFrame& f) { return f32(f.levelDb, f.beams, f.bins); },
+                                       "(beams, bins) float32, dB re 1 uPa.")
+                .def_property_readonly("display", [f32](const SonarFrame& f) { return f32(f.display, f.beams, f.bins); },
+                                       "(beams, bins) float32 in [0, 1] after TVG, gain and log compression.")
+                .def_property_readonly("label", [i32](const SonarFrame& f) { return i32(f.label, f.beams, f.bins); },
+                                       "(beams, bins) int32: instance id of the strongest echo, -1 none, -2 volume.")
+                .def_property_readonly("label_kind", [](const SonarFrame& f) {
+                    py::array_t<std::uint8_t> a({static_cast<py::ssize_t>(f.beams), static_cast<py::ssize_t>(f.bins)});
+                    if (!f.labelKind.empty()) std::memcpy(a.mutable_data(), f.labelKind.data(), f.labelKind.size());
+                    return a;
+                }, "(beams, bins) uint8 SonarEchoKind of the strongest echo.")
+                .def("range_of_bin", &SonarFrame::rangeOfBin, py::arg("bin"));
+
+        py::class_<SonarFanDisplay>(m, "SonarFanDisplay", "Draws a SonarFrame as the operator's fan (RGBA, top row first).")
+                .def(py::init<unsigned, unsigned>(), py::arg("width") = 640, py::arg("height") = 400)
+                .def_readwrite("show_labels", &SonarFanDisplay::showLabels)
+                .def_readwrite("ring_step", &SonarFanDisplay::ringStep)
+                .def("draw", &SonarFanDisplay::draw, py::arg("frame"), py::arg("fov_deg"))
+                .def_property_readonly("width", &SonarFanDisplay::width)
+                .def_property_readonly("height", &SonarFanDisplay::height)
+                .def("rgba", [rgbaArray](const SonarFanDisplay& d) { return rgbaArray(d.rgba(), d.width(), d.height()); },
+                     "(height, width, 4) uint8 copy.")
+                .def("upload", [uploadRgba](const SonarFanDisplay& d, Texture& t) { uploadRgba(d.rgba(), d.width(), d.height(), t); },
+                     py::arg("texture"), "Write the fan into a same-sized tp.data_texture (rows flipped) and mark it dirty.");
+
+        m.def("nrl_sea_clutter_db", &nrlSeaClutterDb, py::arg("grazing_deg"), py::arg("frequency_ghz"),
+              py::arg("sea_state"), py::arg("polarization") = RadarPolarization::HH,
+              "NRL sea clutter reflectivity sigma0 (dB m^2/m^2), Gregers-Hansen & Mital 2012.");
+        m.def("douglas_wave_height", &douglasWaveHeight, py::arg("sea_state"),
+              "Mid-band significant wave height (m) of a Douglas sea state.");
+
+        py::class_<RadarMaterial>(m, "RadarMaterial",
+                                  "Radar backscatter per unit area: Lambert + Kirchhoff glint + an isotropic term, or the NRL sea.")
+                .def(py::init<>())
+                .def_readwrite("lambert_db", &RadarMaterial::lambertDb)
+                .def_readwrite("reflection_loss_db", &RadarMaterial::reflectionLossDb)
+                .def_readwrite("rms_slope", &RadarMaterial::rmsSlope)
+                .def_readwrite("isotropic_db", &RadarMaterial::isotropicDb)
+                .def_readwrite("sea", &RadarMaterial::sea)
+                .def("sigma0", &RadarMaterial::sigma0, py::arg("cos_theta"))
+                .def_static("sea_surface", &RadarMaterial::Sea)
+                .def_static("metal", &RadarMaterial::Metal)
+                .def_static("fibreglass", &RadarMaterial::Fibreglass)
+                .def_static("rock", &RadarMaterial::Rock)
+                .def_static("vegetation", &RadarMaterial::Vegetation)
+                .def_static("concrete", &RadarMaterial::Concrete)
+                .def_static("radar_reflector", &RadarMaterial::RadarReflector);
+
+        py::class_<RadarMaterials>(m, "RadarMaterials", "Radar material per stable instance id.")
+                .def(py::init<>())
+                .def_readwrite("default_material", &RadarMaterials::defaultMaterial)
+                .def("set", &RadarMaterials::set, py::arg("instance_id"), py::arg("material"))
+                .def("get", [](const RadarMaterials& a, std::int32_t id) { return a.of(id); }, py::arg("instance_id"))
+                .def("clear", [](RadarMaterials& a) { a.byInstance.clear(); });
+
+        py::class_<RainCell>(m, "RainCell", "A rain shower: Gaussian rain rate across (sigma = radius), sea to top.")
+                .def(py::init([](float x, float z, float radius, float top, float rate) {
+                         RainCell c;
+                         c.centre.set(x, 0.f, z);
+                         c.radius = radius;
+                         c.top = top;
+                         c.rainRate = rate;
+                         return c;
+                     }),
+                     py::arg("x"), py::arg("z"), py::arg("radius") = 300.f, py::arg("top") = 1500.f, py::arg("rain_rate") = 8.f)
+                .def_readwrite("centre", &RainCell::centre)
+                .def_readwrite("radius", &RainCell::radius)
+                .def_readwrite("top", &RainCell::top)
+                .def_readwrite("rain_rate", &RainCell::rainRate, "mm/h at the centre");
+
+        py::class_<MarineRadarModel>(m, "MarineRadarModel",
+                                     "A rotating marine radar: transmitter, antenna (geometry baked at rebuild), "
+                                     "receiver, the sea and rain it sees, and the operator's controls.")
+                .def(py::init<>())
+                .def_readwrite("frequency", &MarineRadarModel::frequency)
+                .def_readwrite("peak_power_w", &MarineRadarModel::peakPowerW)
+                .def_readwrite("polarization", &MarineRadarModel::polarization)
+                .def_readwrite("horizontal_beamwidth", &MarineRadarModel::horizontalBeamwidth)
+                .def_readwrite("horizontal_taper", &MarineRadarModel::horizontalTaper)
+                .def_readwrite("vertical_beamwidth", &MarineRadarModel::verticalBeamwidth)
+                .def_readwrite("antenna_efficiency", &MarineRadarModel::antennaEfficiency)
+                .def_readwrite("rpm", &MarineRadarModel::rpm)
+                .def_readwrite("spokes", &MarineRadarModel::spokes)
+                .def_readwrite("min_range", &MarineRadarModel::minRange)
+                .def_readwrite("housing_range", &MarineRadarModel::housingRange,
+                               "Where the trace starts (the radome); the blind zone still occludes.")
+                .def_readwrite("max_range", &MarineRadarModel::maxRange)
+                .def_readwrite("range_bins", &MarineRadarModel::rangeBins)
+                .def_readwrite("pulse_length", &MarineRadarModel::pulseLength, "s")
+                .def_readwrite("noise_figure_db", &MarineRadarModel::noiseFigureDb)
+                .def_readwrite("system_loss_db", &MarineRadarModel::systemLossDb)
+                .def_readwrite("azimuth_samples", &MarineRadarModel::azimuthSamples)
+                .def_readwrite("elevation_samples", &MarineRadarModel::elevationSamples)
+                .def_readwrite("horizon_share", &MarineRadarModel::horizonShare)
+                .def_readwrite("above_horizon_share", &MarineRadarModel::aboveHorizonShare,
+                               "Share of the elevation samples just above the horizon (masts, reflectors).")
+                .def_readwrite("pattern_span_beamwidths", &MarineRadarModel::patternSpanBeamwidths)
+                .def_readwrite("seed", &MarineRadarModel::seed)
+                .def_readwrite("sea_level", &MarineRadarModel::seaLevel)
+                .def_readwrite("sea_state", &MarineRadarModel::seaState)
+                .def_readwrite("multipath", &MarineRadarModel::multipath)
+                .def_property("rain", [](const MarineRadarModel& r) { return r.rain; },
+                              [](MarineRadarModel& r, const std::vector<RainCell>& v) { r.rain = v; },
+                              "List of RainCell (a copy: assign a new list to change it).")
+                .def_readwrite("gain_db", &MarineRadarModel::gainDb)
+                .def_readwrite("threshold_db", &MarineRadarModel::thresholdDb)
+                .def_readwrite("dynamic_range_db", &MarineRadarModel::dynamicRangeDb)
+                .def_readwrite("sea_clutter_db", &MarineRadarModel::seaClutterDb, "STC depth at min range")
+                .def_readwrite("stc_range", &MarineRadarModel::stcRange)
+                .def_readwrite("rain_clutter", &MarineRadarModel::rainClutter, "FTC 0..1")
+                .def_property_readonly("wavelength", &MarineRadarModel::wavelength)
+                .def_property_readonly("antenna_gain", &MarineRadarModel::antennaGain)
+                .def_property_readonly("revolution_period", &MarineRadarModel::revolutionPeriod)
+                .def_static("open_array_4ft", &MarineRadarModel::OpenArray4ft, "4 ft open array, 4 kW: 1.8 x 22 deg.")
+                .def_static("open_array_6ft", &MarineRadarModel::OpenArray6ft, "6 ft open array, 12 kW: 1.2 x 22 deg.")
+                .def_static("radome_24in", &MarineRadarModel::Radome24in, "24 in radome, 4 kW: 3.9 x 25 deg.");
+
+        py::class_<RadarPolarImage>(m, "RadarPolarImage", "The last revolution, spoke by spoke (relative bearing).")
+                .def_readonly("spokes", &RadarPolarImage::spokes)
+                .def_readonly("bins", &RadarPolarImage::bins)
+                .def_readonly("min_range", &RadarPolarImage::minRange)
+                .def_readonly("max_range", &RadarPolarImage::maxRange)
+                .def_property_readonly("display", [f32](const RadarPolarImage& p) { return f32(p.display, p.spokes, p.bins); })
+                .def_property_readonly("snr_db", [f32](const RadarPolarImage& p) { return f32(p.snrDb, p.spokes, p.bins); })
+                .def_property_readonly("label", [i32](const RadarPolarImage& p) { return i32(p.label, p.spokes, p.bins); },
+                                       "(spokes, bins) int32: instance id of the strongest contributor, -1 none, -3 rain.")
+                .def_property_readonly("time", [](const RadarPolarImage& p) {
+                    py::array_t<double> a(static_cast<py::ssize_t>(p.time.size()));
+                    if (!p.time.empty()) std::memcpy(a.mutable_data(), p.time.data(), p.time.size() * sizeof(double));
+                    return a;
+                })
+                .def_property_readonly("world_bearing_deg", [](const RadarPolarImage& p) {
+                    py::array_t<float> a(static_cast<py::ssize_t>(p.worldBearingDeg.size()));
+                    if (!p.worldBearingDeg.empty()) std::memcpy(a.mutable_data(), p.worldBearingDeg.data(), p.worldBearingDeg.size() * sizeof(float));
+                    return a;
+                });
+
+        py::class_<RadarPpiDisplay::Style>(m, "RadarPpiStyle")
+                .def(py::init<>())
+                .def_readwrite("afterglow_seconds", &RadarPpiDisplay::Style::afterglowSeconds)
+                .def_readwrite("trail_seconds", &RadarPpiDisplay::Style::trailSeconds)
+                .def_readwrite("ring_step", &RadarPpiDisplay::Style::ringStep)
+                .def_readwrite("show_labels", &RadarPpiDisplay::Style::showLabels);
+        py::class_<RadarPpiDisplay>(m, "RadarPpiDisplay", "Draws a RadarPolarImage as a PPI scope (RGBA square, top row first).")
+                .def(py::init<unsigned>(), py::arg("size") = 512)
+                .def_readwrite("style", &RadarPpiDisplay::style)
+                .def("draw", &RadarPpiDisplay::draw, py::arg("image"), py::arg("now"), py::arg("heading_deg"),
+                     py::arg("sweep_deg"), py::arg("north_up"), py::arg("range_shown"))
+                .def_property_readonly("size", &RadarPpiDisplay::size)
+                .def("rgba", [rgbaArray](const RadarPpiDisplay& d) { return rgbaArray(d.rgba(), d.size(), d.size()); },
+                     "(size, size, 4) uint8 copy.")
+                .def("upload", [uploadRgba](const RadarPpiDisplay& d, Texture& t) { uploadRgba(d.rgba(), d.size(), d.size(), t); },
+                     py::arg("texture"), "Write the scope into a same-sized tp.data_texture (rows flipped) and mark it dirty.");
 
         // ---- EglContext ------------------------------------------------------
         // Registered BEFORE GLRenderer on purpose: pybind11 bakes a signature at

@@ -43,6 +43,8 @@
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/helpers/SonarSensor.hpp"
+#include "threepp/helpers/ImagingSonar.hpp"
+#include "threepp/helpers/MarineRadar.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Downwash.hpp"
 #include "threepp/renderers/vulkan/ExitPolicy.hpp"
@@ -2722,6 +2724,97 @@ namespace threepp_py {
                     return returns_to_dict(self.lastReturns());
                 }, "Per-ray hits of the last scan as the scan_lidar dict layout, beam-major.")
                 .def_property_readonly("last_origin", &SonarSensor::lastOrigin);
+
+        py::class_<ImagingSonar, Object3D, Sensor, std::shared_ptr<ImagingSonar>>(
+                m, "ImagingSonar",
+                "Forward-looking multibeam imaging sonar on the ray tracer, with the acoustics done "
+                "properly: the sonar equation (source level, spreading + Francois-Garrison absorption, "
+                "Lambert + facet-glint backscatter), coherent beamforming through a tapered array "
+                "(sidelobes, conical beams, speckle), the pulse's matched filter, volume reverberation, "
+                "noise after the array gain, and sea-surface multipath. A SonarFrame carries the level, "
+                "the display value and the ground-truth label of every (beam, bin).\n\n"
+                "Forward is local -Z, the array along local X; look_at() aims it. `materials` maps stable "
+                "instance ids to AcousticMaterial. Pipelined: ping_begin after render(), ping_collect on a "
+                "later frame. Vulkan only; render() once before the first ping.")
+                .def(py::init([](const ImagingSonarModel& model) { return std::make_shared<ImagingSonar>(model); }),
+                     py::arg("model") = ImagingSonarModel::OculusM750d())
+                .def_readwrite("model", &ImagingSonar::model, "ImagingSonarModel; mutate in place (geometry: then rebuild()).")
+                .def_readwrite("materials", &ImagingSonar::materials, "AcousticMaterials; mutate in place.")
+                .def_readwrite("params", &ImagingSonar::params, "The tracer's LidarParams (set up for the sonar).")
+                .def_readwrite("threads", &ImagingSonar::threads)
+                .def("rebuild", &ImagingSonar::rebuild, "Re-bake the ray table and beam patterns from model's geometry.")
+                .def_property_readonly("ray_count", &ImagingSonar::rayCount)
+                .def_property_readonly("ping_count", &ImagingSonar::pingCount)
+                .def("reset_noise", &ImagingSonar::resetNoise)
+                .def("ping", [](ImagingSonar& self, PyVulkanRenderer& r) {
+                    self.updateWorldMatrix(true, true);
+                    SonarFrame f;
+                    {
+                        py::gil_scoped_release release;
+                        self.ping(r.native(), f);
+                    }
+                    return f;
+                }, py::arg("renderer"), "One ping from the current pose -> SonarFrame. Blocks on the trace.")
+                .def("ping_begin", [](ImagingSonar& self, PyVulkanRenderer& r) {
+                    self.updateWorldMatrix(true, true);
+                    self.pingBegin(r.native());
+                    return self.pingFired();
+                }, py::arg("renderer"))
+                .def("ping_ready", [](const ImagingSonar& self, PyVulkanRenderer& r) { return self.pingReady(r.native()); },
+                     py::arg("renderer"))
+                .def("ping_collect", [](ImagingSonar& self, PyVulkanRenderer& r) -> py::object {
+                    SonarFrame f;
+                    bool ok;
+                    {
+                        py::gil_scoped_release release;
+                        ok = self.pingCollect(r.native(), f);
+                    }
+                    if (!ok) return py::none();
+                    return py::cast(std::move(f));
+                }, py::arg("renderer"), "The fired ping's SonarFrame, or None when nothing was fired.")
+                .def("ping_collect_async", [](ImagingSonar& self, PyVulkanRenderer& r) {
+                    py::gil_scoped_release release;
+                    return self.pingCollectAsync(r.native());
+                }, py::arg("renderer"),
+                   "Take delivery of the trace and fold it on a worker thread; poll frame_ready, then take_frame().")
+                .def_property_readonly("folding", &ImagingSonar::folding)
+                .def_property_readonly("frame_ready", &ImagingSonar::frameReady)
+                .def("take_frame", [](ImagingSonar& self) -> py::object {
+                    SonarFrame f;
+                    if (!self.takeFrame(f)) return py::none();
+                    return py::cast(std::move(f));
+                }, "The asynchronously folded SonarFrame, or None while it is still folding.")
+                .def_property_readonly("ping_pending", &ImagingSonar::pingFired)
+                .def("last_returns", [returns_to_dict](const ImagingSonar& self) {
+                    return returns_to_dict(self.lastReturns());
+                }, "Per-ray hits of the last ping (scan_lidar dict layout).")
+                .def_property_readonly("last_origin", &ImagingSonar::lastOrigin);
+
+        py::class_<MarineRadar, Object3D, Sensor, std::shared_ptr<MarineRadar>>(
+                m, "MarineRadar",
+                "A rotating marine navigation radar on the ray tracer: the radar equation per ray (NRL sea "
+                "clutter on the rendered waves, per-material RCS, two-ray multipath over the sea, rain volume "
+                "echoes and attenuation), coherent range profiles through the pulse's matched filter, the "
+                "antenna's two-way azimuth pattern across slots, kTBF noise, and the operator's gain / sea / "
+                "rain controls. `image` holds the last revolution.\n\n"
+                "The node turns about local +Y (clockwise from above), bearing 0 = local -Z (the bow). Drive "
+                "its sim clock (set_sim_time) and call update(renderer) once per frame after render().")
+                .def(py::init([](const MarineRadarModel& model) { return std::make_shared<MarineRadar>(model); }),
+                     py::arg("model") = MarineRadarModel::OpenArray4ft())
+                .def_readwrite("model", &MarineRadar::model, "MarineRadarModel; mutate in place (geometry: then rebuild()).")
+                .def_readwrite("materials", &MarineRadar::materials, "RadarMaterials; mutate in place.")
+                .def_readwrite("params", &MarineRadar::params)
+                .def_readwrite("max_slots_per_batch", &MarineRadar::maxSlotsPerBatch)
+                .def("rebuild", &MarineRadar::rebuild)
+                .def("update", [](MarineRadar& self, PyVulkanRenderer& r) {
+                    self.updateWorldMatrix(true, true);
+                    py::gil_scoped_release release;
+                    return self.update(r.native());
+                }, py::arg("renderer"), "Collect, form the swept spokes, fire the next slots. Returns spokes formed.")
+                .def_property_readonly("image", &MarineRadar::image, py::return_value_policy::reference_internal)
+                .def_property_readonly("antenna_bearing_deg", &MarineRadar::antennaBearingDeg)
+                .def_property_readonly("heading_deg", &MarineRadar::headingDeg)
+                .def_property_readonly("rays_per_slot", &MarineRadar::raysPerSlot);
 
         // The layer an acoustic / sensor-only proxy opts into (VulkanRenderer::kSensorOnlyLayer):
         //     mesh.layers.set(threepp.SENSOR_ONLY_LAYER); renderer.set_sensor_only_surfaces(True)
