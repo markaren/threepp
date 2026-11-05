@@ -3367,6 +3367,15 @@ namespace threepp {
         }
     }// namespace
 
+    void VulkanRenderer::pathTraceBegin() {
+        pathTraceBegin(PathTraceParams{});
+    }
+
+    bool VulkanRenderer::pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
+                                   std::vector<float>& rgb, int& w, int& h) {
+        return pathTrace(scene, camera, samples, rgb, w, h, PathTraceParams{});
+    }
+
     bool VulkanRenderer::pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
                                    std::vector<float>& rgb, int& w, int& h,
                                    const PathTraceParams& params) {
@@ -3374,6 +3383,11 @@ namespace threepp {
         const bool ok = pathTraceRead(rgb, w, h);
         pathTraceStop();
         return ok;
+    }
+
+    bool VulkanRenderer::pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
+                                         uint32_t samples) {
+        return pathTraceToFile(scene, camera, file, samples, PathTraceParams{});
     }
 
     bool VulkanRenderer::pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,

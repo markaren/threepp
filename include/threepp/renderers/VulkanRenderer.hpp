@@ -1871,9 +1871,15 @@ namespace threepp {
             // not draw it.
             float    domePort        = 0.f;
         };
+        // The forms without PathTraceParams are overloads, not `= {}`
+        // defaults: GCC forms a nested class's default member initializers
+        // only once the outermost class is complete, so inside VulkanRenderer
+        // `{}` cannot yet make a PathTraceParams (see FireEffect::create).
+        //
         // Start (or restart) a session. Throws std::runtime_error without
         // ray query support.
-        void pathTraceBegin(const PathTraceParams& params = {});
+        void pathTraceBegin();
+        void pathTraceBegin(const PathTraceParams& params);
         void pathTraceStop();
         [[nodiscard]] bool pathTraceActive() const;
         // Samples per pixel accumulated over the whole picture so far.
@@ -1894,13 +1900,17 @@ namespace threepp {
         // read, stop. False when no frame added samples (a debug view, or no
         // ray query) or the read failed.
         bool pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
+                       std::vector<float>& rgb, int& w, int& h);
+        bool pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
                        std::vector<float>& rgb, int& w, int& h,
-                       const PathTraceParams& params = {});
+                       const PathTraceParams& params);
         // The blocking form to a file: trace `samples` per pixel and write
         // the tone-mapped picture as .png / .jpg / .bmp (by extension).
         // Throws on a write failure; false when no frame added samples.
         bool pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
-                             uint32_t samples = 1024, const PathTraceParams& params = {});
+                             uint32_t samples = 1024);
+        bool pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
+                             uint32_t samples, const PathTraceParams& params);
 
         // Per-frame timings (milliseconds). See FrameTimings.
         struct FrameTimings {
