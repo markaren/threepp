@@ -77,7 +77,8 @@ makes the brochure's 24 kn with about 4 deg of running trim.
 python usv_radar_sonar.py                           # the loop on autopilot; W/S/A/D take the helm
 python usv_radar_sonar.py --rain --array             # a squall over the basin, a 4 ft open array
 python usv_radar_sonar.py --shot 12 --out rs.png     # headless: the frame, both displays, their labels,
-                                                     # and the ground-truth report (below)
+                                                     # and the ground-truth report (below); it first
+                                                     # lets the terrain stream in round the start (~30 s)
 ```
 
 The Mariner runs a loop round the harbour basin south of Alesund town on the 14 m depth
@@ -128,12 +129,16 @@ bearing. For the sonar: per beam, the seabed's leading edge against where the ve
 first meets the height field; the wreck's and the rocks' strongest echoes against their true
 range and bearing. The numbers go to `_truth.json`, and `_radar_bscan.png` /
 `_sonar_bscan.png` draw the truth over the echoes. The tolerances are the sensors' resolution
-and the targets' size, not tuned to pass. The survey's buildings, pier decks and moored boats
-carry their own ids (61000-61002) so the report can tell a pier from the shore. A target that
-is not seen is checked for why: a radar target with no line of sight over the height field, or a
-sonar target outside the vertical fan, is reported as not expected. Her antenna is only 1.8 m
-above the water: inside the harbour, quays and piers taller than that hide what lies behind them,
-and low hulls hide behind the waves at range. A real radar on a boat this size does the same.
+and the targets' size, not tuned to pass. The shot first lets the terrain stream in round the
+start: GeoScene begins with 2 km tiles and refines a level at a time, and on a coarse tile a
+quay wall is a ramp that reaches the sea a few metres out. The radar draws that ramp, as it
+should, and the check against the fine height field then reads it as land over water. The
+survey's buildings, pier decks and moored boats carry their own ids (61000-61002) so the
+report can tell a pier from the shore. A target that is not seen is checked for why: a radar
+target with no line of sight over the height field, or a sonar target outside the vertical
+fan, is reported as not expected. Her antenna is only 1.8 m above the water: inside the
+harbour, quays and piers taller than that hide what lies behind them, and low hulls hide
+behind the waves at range. A real radar on a boat this size does the same.
 
 What is assumed: the scattering strengths are class values, not a calibration of any seabed,
 hull or quay; the radar is flat-earth with no ducting and no target-to-target bounces; the

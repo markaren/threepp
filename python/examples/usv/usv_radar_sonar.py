@@ -26,7 +26,7 @@ and every sonar (beam, bin) carries the instance id of what made its echo
 (L shows it as colour). That label comes from the renderer, not a detector.
 
     python usv_radar_sonar.py                       # drive; the loop runs on autopilot until you steer
-    python usv_radar_sonar.py --shot 12 --out rs.png  # headless: run the loop 12 s, write the frame + both displays
+    python usv_radar_sonar.py --shot 12 --out rs.png  # headless: settle the terrain, run the loop 12 s, write the frame + both displays
 
 Options: --pack <dir> (default geodata/aalesund), --sea-state 3, --rain (a squall
 over the basin), --array (a 4 ft open array instead of the Mariner's radome),
@@ -142,6 +142,25 @@ scene.add(GEO)
 print(f"terrain: {os.path.basename(PACK)} {GEO.pack_world_size:.0f} m loaded in {time.perf_counter() - _t0:.1f} s "
       f"({GEO.stats['buildings']} buildings, {GEO.stats['boats']} boats)")
 print(GEO.attribution)
+
+
+def settle_terrain(pos, budget_s=180.0):
+    """Let the terrain tiles stream in around `pos`; returns the seconds it took.
+    GeoScene starts from 2 km tiles and refines a level at a time on worker
+    threads. A 12 s shot started at once still has a 5 m lattice around the boat
+    at its end, on which a quay wall is a ramp reaching the sea a few metres out,
+    and the radar draws that ramp."""
+    t0 = time.perf_counter()
+    last, still = None, 0
+    while time.perf_counter() - t0 < budget_s:
+        GEO.update(pos)
+        st = GEO.stats
+        still = still + 1 if st["baking"] == 0 and st["tiles"] == last else 0
+        last = st["tiles"]
+        if still >= 20:
+            break
+        time.sleep(0.02)
+    return time.perf_counter() - t0
 
 
 def label_subtree(root, ident):
@@ -709,7 +728,8 @@ def ground_truth(stem):
           f"error median {fm(c['median_err_m'])} m, p10 {fm(c['p10_err_m'])}, p90 {fm(c['p90_err_m'])}")
     for ex in c.get("early_examples", []):
         print(f"    early: bearing {ex['world_bearing_deg']:.1f}, echo {ex['echo_m']:.0f} m, shore {ex['shore_m']:.0f} m, "
-              f"label {ex['label']}")
+              f"label {ex['label']}; within one beamwidth the shore {ex['beam_shore_offset_deg']:+.1f} deg off "
+              f"is at {ex['beam_shore_m']:.0f} m")
     for ident, r in rt["targets"].items():
         if r["seen"]:
             print(f"    {r['name']:8s} range {r['range_true_m']:6.0f} m: error {r['range_err_m']:+5.1f} m "
@@ -774,6 +794,7 @@ if HEADLESS:
     fps = 30
     step(1.0 / fps)
     chase_camera(1.0 / fps, first=True)
+    print(f"terrain: settled around the start in {settle_terrain(camera.position):.1f} s ({GEO.stats['tiles']} tiles)")
     n = int(round(SHOT_T * fps))
     for i in range(n):
         renderer.render(scene, camera)

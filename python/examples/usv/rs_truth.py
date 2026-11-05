@@ -191,9 +191,23 @@ def radar_truth(img, model, history, grid, targets, not_land, threshold_db):
     ex = np.where(early)[0]
     if ex.size:
         worst = ex[np.argsort((r_echo - r_near)[ex])[:5]]
-        out["coast"]["early_examples"] = [
-            {"world_bearing_deg": float(wbear[s]), "echo_m": float(r_echo[s]), "shore_m": float(r_shore[s]),
-             "label": int(lab[s, int(np.argmax(land_echo[s]))])} for s in worst]
+        # Past the smear window but inside one full beamwidth: the shore that
+        # comes nearest the echo's range, and how far off the spoke it lies.
+        m2 = int(math.ceil(beam / (360.0 / spokes)))
+
+        def side_shore(s):
+            ks = np.arange(-m2, m2 + 1)
+            r = r_shore[(s + ks) % spokes]
+            k = int(ks[int(np.argmin(np.abs(r - r_echo[s])))])
+            return wrap180(float(wbear[(s + k) % spokes] - wbear[s])), float(r_shore[(s + k) % spokes])
+
+        out["coast"]["early_examples"] = []
+        for s in worst:
+            off, r_side = side_shore(s)
+            out["coast"]["early_examples"].append(
+                {"world_bearing_deg": float(wbear[s]), "echo_m": float(r_echo[s]), "shore_m": float(r_shore[s]),
+                 "label": int(lab[s, int(np.argmax(land_echo[s]))]),
+                 "beam_shore_offset_deg": off, "beam_shore_m": r_side})
     out["_arrays"] = {"r_shore": r_shore, "r_near": r_near, "r_echo": r_echo, "ax": ax, "az": az, "rng": rng}
     return out
 
@@ -325,8 +339,8 @@ def sonar_bscan(frame, truth, objects_true):
     for key, col in (("r_first_null", (0, 90, 110)), ("r_first3", (0, 230, 255)), ("r_axis", (240, 220, 0)),
                      ("r_edge", (40, 255, 60))):
         arr = a[key]
-        j = np.round((arr - rng[0]) / bin_w).astype(np.int64)
-        b = np.where(np.isfinite(arr) & (j >= 0) & (j < len(rng)))[0]
+        j = np.round((np.where(np.isfinite(arr), arr, rng[0] - bin_w) - rng[0]) / bin_w).astype(np.int64)
+        b = np.where((j >= 0) & (j < len(rng)))[0]
         if key == "r_edge":
             b = b[b % 4 == 0]
         rgb[b, j[b]] = col
