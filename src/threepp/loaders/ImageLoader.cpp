@@ -16,6 +16,7 @@
 #pragma GCC diagnostic pop
 #endif
 
+#include "threepp/loaders/tiff/TiffDecode.hpp"
 #include "webp/decode.h"
 
 #include <cstring>
@@ -151,12 +152,13 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
     }
 
     // Sniff the magic rather than the extension, so a webp byte stream loads out of a file
-    // named .png the same way SplatLoader trusts a PLY header over a file name.
+    // named .png the same way SplatLoader trusts a PLY header over a file name. stb reads
+    // neither WebP nor TIFF; both go to their own decoders.
     {
         std::ifstream in(imagePath, std::ios::binary);
         unsigned char magic[kWebpMagicSize]{};
         if (in.read(reinterpret_cast<char*>(magic), kWebpMagicSize) &&
-            isWebp(magic, kWebpMagicSize)) {
+            (isWebp(magic, kWebpMagicSize) || detail::isTiff(magic, kWebpMagicSize))) {
 
             in.seekg(0, std::ios::end);
             const auto size = in.tellg();
@@ -166,6 +168,9 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
             std::vector<unsigned char> data(static_cast<size_t>(size));
             if (!in.read(reinterpret_cast<char*>(data.data()), size)) {
                 return std::nullopt;
+            }
+            if (detail::isTiff(data.data(), data.size())) {
+                return detail::decodeTiff(data.data(), data.size(), channels, flipY);
             }
             return loadWebp(data.data(), data.size(), channels, flipY);
         }
@@ -184,6 +189,9 @@ std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, i
 
     if (isWebp(data)) {
         return loadWebp(data.data(), data.size(), channels, flipY);
+    }
+    if (detail::isTiff(data.data(), data.size())) {
+        return detail::decodeTiff(data.data(), data.size(), channels, flipY);
     }
 
     ImageStruct image{data, channels};

@@ -79,6 +79,83 @@ namespace {
             224, 127, 166, 247, 143, 246, 132, 127, 249, 21, 231, 60,
             230, 214, 172, 52, 11, 158, 181, 190, 71, 182, 0, 0};
 
+    // --- TIFF fixtures -------------------------------------------------------
+    //
+    // The same 2x2 kPattern colours, alphas 255/128/255/0 where there is alpha. Produced
+    // with Pillow 12.2.0 (libtiff) and tifffile 2026.6.1, and read back by them before
+    // embedding.
+
+    // Pillow: RGBA, LZW, horizontal predictor (tiffinfo={317: 2}), little-endian strips.
+    // ExtraSamples = 2 (unassociated alpha).
+    constexpr std::array<unsigned char, 182> kTiffLzwPredictorRgba{
+            73, 73, 42, 0, 24, 0, 0, 0, 128, 63, 192, 0, 7, 248, 6, 4,
+            129, 129, 191, 225, 80, 32, 12, 4, 12, 0, 0, 1, 3, 0, 1, 0,
+            0, 0, 2, 0, 0, 0, 1, 1, 3, 0, 1, 0, 0, 0, 2, 0,
+            0, 0, 2, 1, 3, 0, 4, 0, 0, 0, 174, 0, 0, 0, 3, 1,
+            3, 0, 1, 0, 0, 0, 5, 0, 0, 0, 6, 1, 3, 0, 1, 0,
+            0, 0, 2, 0, 0, 0, 17, 1, 4, 0, 1, 0, 0, 0, 8, 0,
+            0, 0, 21, 1, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0, 22, 1,
+            3, 0, 1, 0, 0, 0, 2, 0, 0, 0, 23, 1, 4, 0, 1, 0,
+            0, 0, 16, 0, 0, 0, 28, 1, 3, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 61, 1, 3, 0, 1, 0, 0, 0, 2, 0, 0, 0, 82, 1,
+            3, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 8, 0,
+            8, 0, 8, 0, 8, 0
+    };
+
+    // tifffile: RGBA as 16-bit samples (value * 257), big-endian, planar (one plane per
+    // sample), Deflate with the predictor, ExtraSamples = 0 ("unspecified", what Blender
+    // writes for a texture's cutout mask).
+    constexpr std::array<unsigned char, 384> kTiffBigEndianPlanar16{
+            77, 77, 0, 42, 0, 0, 0, 8, 0, 17, 1, 0, 0, 4, 0, 0,
+            0, 1, 0, 0, 0, 2, 1, 1, 0, 4, 0, 0, 0, 1, 0, 0,
+            0, 2, 1, 2, 0, 3, 0, 0, 0, 4, 0, 0, 0, 218, 1, 3,
+            0, 3, 0, 0, 0, 1, 0, 8, 0, 0, 1, 6, 0, 3, 0, 0,
+            0, 1, 0, 2, 0, 0, 1, 14, 0, 2, 0, 0, 0, 21, 0, 0,
+            0, 226, 1, 17, 0, 4, 0, 0, 0, 4, 0, 0, 1, 6, 1, 21,
+            0, 3, 0, 0, 0, 1, 0, 4, 0, 0, 1, 22, 0, 4, 0, 0,
+            0, 1, 0, 0, 0, 2, 1, 23, 0, 3, 0, 0, 0, 4, 0, 0,
+            1, 22, 1, 26, 0, 5, 0, 0, 0, 1, 0, 0, 1, 30, 1, 27,
+            0, 5, 0, 0, 0, 1, 0, 0, 1, 38, 1, 28, 0, 3, 0, 0,
+            0, 1, 0, 2, 0, 0, 1, 40, 0, 3, 0, 0, 0, 1, 0, 1,
+            0, 0, 1, 49, 0, 2, 0, 0, 0, 12, 0, 0, 1, 46, 1, 61,
+            0, 3, 0, 0, 0, 1, 0, 2, 0, 0, 1, 82, 0, 3, 0, 0,
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 16, 0, 16,
+            0, 16, 123, 34, 115, 104, 97, 112, 101, 34, 58, 32, 91, 52, 44, 32,
+            50, 44, 32, 50, 93, 125, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 64, 0, 0, 1, 80, 0, 0,
+            1, 96, 0, 0, 1, 112, 0, 16, 0, 16, 0, 16, 0, 16, 0, 0,
+            0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 116, 105,
+            102, 102, 102, 105, 108, 101, 46, 112, 121, 0, 0, 0, 0, 0, 0, 0,
+            120, 156, 251, 255, 159, 129, 145, 129, 225, 255, 127, 0, 17, 251, 3, 254,
+            120, 156, 99, 96, 248, 255, 159, 129, 225, 255, 127, 0, 13, 250, 3, 253,
+            120, 156, 99, 96, 96, 96, 248, 255, 159, 129, 1, 0, 7, 1, 1, 255,
+            120, 156, 251, 255, 191, 161, 241, 255, 127, 6, 70, 0, 27, 120, 4, 255
+    };
+
+    // tifffile: RGB, one 16x16 Deflate tile holding the 2x2 image.
+    constexpr std::array<unsigned char, 316> kTiffTiledDeflateRgb{
+            73, 73, 42, 0, 8, 0, 0, 0, 16, 0, 0, 1, 4, 0, 1, 0,
+            0, 0, 2, 0, 0, 0, 1, 1, 4, 0, 1, 0, 0, 0, 2, 0,
+            0, 0, 2, 1, 3, 0, 3, 0, 0, 0, 206, 0, 0, 0, 3, 1,
+            3, 0, 1, 0, 0, 0, 8, 0, 0, 0, 6, 1, 3, 0, 1, 0,
+            0, 0, 2, 0, 0, 0, 14, 1, 2, 0, 21, 0, 0, 0, 212, 0,
+            0, 0, 21, 1, 3, 0, 1, 0, 0, 0, 3, 0, 0, 0, 26, 1,
+            5, 0, 1, 0, 0, 0, 248, 0, 0, 0, 27, 1, 5, 0, 1, 0,
+            0, 0, 0, 1, 0, 0, 28, 1, 3, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 40, 1, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 49, 1,
+            2, 0, 12, 0, 0, 0, 8, 1, 0, 0, 66, 1, 4, 0, 1, 0,
+            0, 0, 16, 0, 0, 0, 67, 1, 4, 0, 1, 0, 0, 0, 16, 0,
+            0, 0, 68, 1, 4, 0, 1, 0, 0, 0, 32, 1, 0, 0, 69, 1,
+            4, 0, 1, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 8, 0,
+            8, 0, 8, 0, 123, 34, 115, 104, 97, 112, 101, 34, 58, 32, 91, 50,
+            44, 32, 50, 44, 32, 51, 93, 125, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+            1, 0, 0, 0, 1, 0, 0, 0, 116, 105, 102, 102, 102, 105, 108, 101,
+            46, 112, 121, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            120, 156, 251, 207, 192, 192, 240, 159, 129, 20, 240, 255, 255, 127, 210, 52,
+            140, 130, 81, 192, 48, 88, 1, 0, 32, 209, 5, 251
+    };
+
     template<size_t N>
     std::vector<unsigned char> bytesOf(const std::array<unsigned char, N>& a) {
         return {a.begin(), a.end()};
@@ -281,6 +358,78 @@ TEST_CASE("ImageLoader decodes WebP") {
         // Legal for the stb path, used by no caller; libwebp has no grey output mode.
         CHECK_FALSE(loader.load(bytesOf(kWebpLosslessRgb), 1, false).has_value());
         CHECK_FALSE(loader.load(bytesOf(kWebpLosslessRgb), 2, false).has_value());
+    }
+}
+
+TEST_CASE("ImageLoader decodes TIFF") {
+
+    ImageLoader loader;
+
+    SECTION("LZW + predictor, RGBA: colours and alpha byte-exact") {
+        auto img = loader.load(bytesOf(kTiffLzwPredictorRgba), 4, false);
+        REQUIRE(img.has_value());
+        CHECK(img->width() == 2);
+        CHECK(img->height() == 2);
+        CHECK(rgbAt(*img, 0, 0, 4) == std::array<unsigned char, 3>{255, 0, 0});
+        CHECK(rgbAt(*img, 1, 0, 4) == std::array<unsigned char, 3>{0, 255, 0});
+        CHECK(rgbAt(*img, 0, 1, 4) == std::array<unsigned char, 3>{0, 0, 255});
+        CHECK(rgbAt(*img, 1, 1, 4) == std::array<unsigned char, 3>{255, 255, 255});
+        CHECK(alphaAt(*img, 0, 0) == 255);
+        CHECK(alphaAt(*img, 1, 0) == 128);
+        CHECK(alphaAt(*img, 0, 1) == 255);
+        CHECK(alphaAt(*img, 1, 1) == 0);
+    }
+
+    SECTION("big-endian, planar, 16-bit, Deflate + predictor: the 'unspecified' extra sample is alpha") {
+        auto img = loader.load(bytesOf(kTiffBigEndianPlanar16), 4, false);
+        REQUIRE(img.has_value());
+        CHECK(rgbAt(*img, 0, 0, 4) == std::array<unsigned char, 3>{255, 0, 0});
+        CHECK(rgbAt(*img, 1, 0, 4) == std::array<unsigned char, 3>{0, 255, 0});
+        CHECK(rgbAt(*img, 0, 1, 4) == std::array<unsigned char, 3>{0, 0, 255});
+        CHECK(rgbAt(*img, 1, 1, 4) == std::array<unsigned char, 3>{255, 255, 255});
+        CHECK(alphaAt(*img, 1, 0) == 128);
+        CHECK(alphaAt(*img, 1, 1) == 0);
+    }
+
+    SECTION("tiled Deflate RGB, flipY=true and 4 channels: mirrored, opaque") {
+        auto img = loader.load(bytesOf(kTiffTiledDeflateRgb), 4, true);
+        REQUIRE(img.has_value());
+        CHECK(img->width() == 2);
+        CHECK(img->height() == 2);
+        CHECK(rgbAt(*img, 0, 0, 4) == std::array<unsigned char, 3>{0, 0, 255});// blue now on top
+        CHECK(rgbAt(*img, 1, 0, 4) == std::array<unsigned char, 3>{255, 255, 255});
+        CHECK(rgbAt(*img, 0, 1, 4) == std::array<unsigned char, 3>{255, 0, 0});
+        CHECK(alphaAt(*img, 0, 0) == 255);
+    }
+
+    SECTION("3 and 1 channels") {
+        auto rgb = loader.load(bytesOf(kTiffLzwPredictorRgba), 3, false);
+        REQUIRE(rgb.has_value());
+        CHECK(rgb->channels() == 3);
+        CHECK(rgbAt(*rgb, 1, 0, 3) == std::array<unsigned char, 3>{0, 255, 0});
+
+        auto grey = loader.load(bytesOf(kTiffTiledDeflateRgb), 1, false);
+        REQUIRE(grey.has_value());
+        CHECK(grey->channels() == 1);
+        const auto& d = grey->data();
+        CHECK(d[0] == (255 * 77) >> 8);// red, stb's luma weights
+        CHECK(d[3] == 255);            // white
+    }
+
+    SECTION("file overload matches memory overload") {
+        const auto path = writeBytes(kTiffLzwPredictorRgba, "threepp_imageloader_test.tif");
+        auto fromFile = loader.load(path, 4, true);
+        auto fromMemory = loader.load(bytesOf(kTiffLzwPredictorRgba), 4, true);
+        REQUIRE(fromFile.has_value());
+        REQUIRE(fromMemory.has_value());
+        CHECK(fromFile->data() == fromMemory->data());
+    }
+
+    SECTION("truncated data is rejected, not read past") {
+        for (size_t keep : {4, 8, 20, 100}) {
+            std::vector<unsigned char> truncated(kTiffBigEndianPlanar16.begin(), kTiffBigEndianPlanar16.begin() + keep);
+            CHECK_FALSE(loader.load(truncated, 4, false).has_value());
+        }
     }
 }
 

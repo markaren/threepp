@@ -346,6 +346,7 @@ set(privateHeaders
         "threepp/loaders/gltf/GLTFParser.hpp"
 
         "threepp/loaders/exr/PizDecode.hpp"
+        "threepp/loaders/tiff/TiffDecode.hpp"
 
         "threepp/loaders/xacro/Diagnostics.hpp"
         "threepp/loaders/xacro/Expand.hpp"
@@ -562,6 +563,7 @@ set(sources
         "threepp/loaders/DDSLoader.cpp"
         "threepp/loaders/EXRLoader.cpp"
         "threepp/loaders/exr/PizDecode.cpp"
+        "threepp/loaders/tiff/TiffDecode.cpp"
         "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/GLTFLoader.cpp"
         "threepp/loaders/gltf/GLTFMaterials.cpp"
