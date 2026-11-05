@@ -1818,16 +1818,17 @@ namespace threepp {
         // transmission lobe; dielectric transmission with ior, thin-walled
         // and Beer-Lambert attenuation; the analytic lights (the sun as a
         // cone of setSunAngularRadius) and emissive meshes as area lights;
-        // the background (its blurriness and intensity) on a camera miss and
-        // the environment on any other; the air medium (scene.fog and
-        // setHeightFog) on every leg as the frame fogs its camera leg, with
-        // the sun's in-scatter traced to the shadows of the scene; and the
-        // ParticleField density volumes; the underwater murk below the water
-        // surface (a submerged surface lit by the refracted sun), and an ocean
-        // surface as a water interface. pathTraceReadRGB goes through the
-        // frame's white balance and colour grade, not its bloom. Not
-        // modelled: iridescence, clouds, the ocean's foam and fine chop,
-        // caustics.
+        // the background (its blurriness and intensity, and the procedural
+        // star field) on a camera miss and the environment on any other;
+        // the air medium (scene.fog and setHeightFog) on every leg as the
+        // frame fogs its camera leg, with the sun's in-scatter traced to the
+        // shadows of the scene; the ParticleField density volumes; the
+        // underwater murk below the water surface (a submerged surface lit
+        // by the refracted sun); an ocean surface as a water interface with
+        // its fine-cascade chop; and the cloud layer, which also shadows the
+        // sun. pathTraceReadRGB goes through the frame's white balance and
+        // colour grade, not its bloom. Not modelled: iridescence, the
+        // ocean's foam and wakes, caustics, billboard particles (rain).
         struct PathTraceParams {
             uint32_t samplesPerFrame = 8;  // camera paths per pixel per render()
             uint32_t maxBounces      = 6;  // scattering events after the primary hit (<= 64)

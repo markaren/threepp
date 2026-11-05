@@ -30,8 +30,9 @@ namespace threepp::vulkan {
             float    sunTanHalfAngle;
             uint32_t seed;
             float    oceanFineTileSize;
+            float    starIntensity;
         };
-        static_assert(sizeof(PushConstants) == 52);
+        static_assert(sizeof(PushConstants) == 56);
 
         // path_trace_resolve.comp's: the display transform and the post
         // stack's white balance and grade (OverlayGrade).
@@ -424,7 +425,7 @@ namespace threepp::vulkan {
     void PathTracer::recordDispatch(VkCommandBuffer cb, uint32_t frame,
                                     uint32_t emissiveCount, float emissiveTotalPower,
                                     uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted,
-                                    float oceanFineTileSize) {
+                                    float oceanFineTileSize, float starIntensity) {
         if (!available() || !active_ || accum_.handle == VK_NULL_HANDLE || frame >= framesInFlight_) return;
         PushConstants pc{};
         pc.width              = width_;
@@ -440,6 +441,7 @@ namespace threepp::vulkan {
         pc.sunTanHalfAngle    = sunTanHalfAngle;
         pc.seed               = seed_;
         pc.oceanFineTileSize  = oceanFineTileSize;
+        pc.starIntensity      = starIntensity;
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);

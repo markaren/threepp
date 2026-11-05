@@ -133,7 +133,7 @@ namespace threepp {
             auto pass = g.addPass("pathTrace", [this, f, sunTan, sunExtracted](VkCommandBuffer c) {
                 pathTracer_->recordDispatch(c, f, emissiveTriCountThisFrame_,
                                             emissiveTotalPowerThisFrame_, envImage.mipLevels, sunTan,
-                                            sunExtracted, oceanFineTileSize);
+                                            sunExtracted, oceanFineTileSize, deferredStarIntensity_);
             });
             pathTracer_->declare(g, pass, f);
         }

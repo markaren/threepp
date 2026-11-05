@@ -108,10 +108,11 @@ namespace threepp::vulkan {
         // sunExtracted: the environment's sun disc was extracted into a
         // directional light, so bounce rays read the sun-clamped mip 1.
         // oceanFineTileSize: the fine cascade's tile (m), 0 without an ocean.
+        // starIntensity: the procedural star field's strength, 0 = none.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t emissiveCount, float emissiveTotalPower,
                             uint32_t envMipCount, float sunTanHalfAngle, bool sunExtracted,
-                            float oceanFineTileSize);
+                            float oceanFineTileSize, float starIntensity);
 
         // ── Readback ────────────────────────────────────────────────────────
         // Both submit on the graphics queue and wait; the caller drains the

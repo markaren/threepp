@@ -32,7 +32,8 @@
 // (attenuationColor / attenuationDistance), thin-walled passes straight
 // through. A camera ray that misses (or one it continued through glass)
 // shows the background as the frame draws it (backgroundBlurriness,
-// backgroundIntensity, backgroundRotation); any other miss reads the
+// backgroundIntensity, backgroundRotation, the procedural star field); any
+// other miss reads the
 // environment, mip 1 when the sun was extracted into a directional light
 // (flags bit 1), so the disc is not counted twice. Unlit materials
 // (roughness < 0) return their albedo.
@@ -157,6 +158,7 @@ layout(push_constant) uniform Pc {
     float sunTanHalfAngle;   // tan of the sun's angular radius, 0 = a delta sun
     uint  seed;              // per-session salt
     float oceanFineTileSize; // the ocean's fine cascade tile (m), 0 = no ocean
+    float starIntensity;     // the procedural star field's strength (setStarfield), 0 = none
 } pc;
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
@@ -173,6 +175,29 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
 }
+// The deferred shade's procedural star field (proceduralStars): hashed stars
+// in direction space over the sky, faded into the horizon. Camera rays only.
+float starHash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+vec3 proceduralStars(vec3 dir) {
+    if (pc.starIntensity <= 0.0 || dir.y <= 0.0) return vec3(0.0);
+    const vec2 g = vec2(atan(dir.z, dir.x), asin(clamp(dir.y, -1.0, 1.0))) * 220.0;
+    vec3 sum = vec3(0.0);
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            const vec2 cell = floor(g) + vec2(float(dx), float(dy));
+            if (starHash(cell * 0.193 + 11.71) > 0.02) continue;
+            const vec2  sp     = cell + vec2(starHash(cell + 31.7), starHash(cell + 57.3));
+            const vec2  dd     = g - sp;
+            const float bright = 0.4 + 2.4 * pow(starHash(cell + 91.1), 8.0);
+            sum += vec3(1.0, 1.0, 1.06) * (bright * exp(-dot(dd, dd) * 24.0));
+        }
+    return sum * (pc.starIntensity * smoothstep(0.0, 0.05, dir.y));
+}
+
 // The visible background along a camera ray, as the deferred shade's
 // sampleBackground draws it: scene.backgroundRotation, backgroundIntensity,
 // and backgroundBlurriness as a level of the prefiltered chain. Lighting
@@ -951,7 +976,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             // alone); counting the disc twice put a firefly on every glossy
             // leaf that escaped toward it.
             if (camChain) {
-                L += throughput * sampleBackground(d);
+                L += throughput * (sampleBackground(d) + proceduralStars(d));
             } else {
                 const bool  sunExtracted = (pc.flags & 2u) != 0u;
                 const float lod = (!sunExtracted || pc.envMipCount < 2u) ? 0.0 : 1.0;
