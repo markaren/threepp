@@ -1824,11 +1824,16 @@ namespace threepp {
         // frame fogs its camera leg, with the sun's in-scatter traced to the
         // shadows of the scene; the ParticleField density volumes; the
         // underwater murk below the water surface (a submerged surface lit
-        // by the refracted sun); an ocean surface as a water interface with
-        // its fine-cascade chop; and the cloud layer, which also shadows the
-        // sun. pathTraceReadRGB goes through the frame's white balance and
-        // colour grade, not its bloom. Not modelled: iridescence, the
-        // ocean's foam and wakes, caustics, billboard particles (rain).
+        // by the refracted sun, the column lit by lamps over it); an ocean
+        // surface as a water interface with its fine-cascade chop, its wake
+        // (calm lane, boil, ripples, foam and aeration) and the lamps' glints;
+        // and the cloud layer, which also shadows the sun. Alpha-blended
+        // surfaces are hit with the probability of their alpha; shadow rays
+        // follow the frame's occlusion mask (no blended, transmissive or
+        // camera-attached caster). pathTraceReadRGB goes through the frame's
+        // white balance and colour grade, not its bloom. Not modelled:
+        // iridescence, the ocean's whitecap foam, caustics, billboard
+        // particles (rain).
         struct PathTraceParams {
             uint32_t samplesPerFrame = 8;  // camera paths per pixel per render()
             uint32_t maxBounces      = 6;  // scattering events after the primary hit (<= 64)

@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         };
         static_assert(sizeof(ResolvePush) == 112);
 
-        constexpr uint32_t kNumBindings = 15;// 0-9, then 67-69, 58 and 13
+        constexpr uint32_t kNumBindings = 17;// 0-9, then 67-69, 58, 13, 78 and 79
 
         VkPipeline makeComputePipeline(VulkanContext& ctx, const uint32_t* spv, size_t bytes,
                                        VkPipelineLayout layout, const char* what) {
@@ -124,7 +124,8 @@ namespace threepp::vulkan {
         // The rest sit at the deferred set's binding numbers, where the
         // includes the two share declare them: the ParticleField density
         // volumes (67-69, particle_density.glsl), the cloud block (58,
-        // cloud_ubo.glsl) and the ocean's fine-cascade height (13).
+        // cloud_ubo.glsl), the ocean's fine-cascade height (13) and its wake
+        // field and ripples (78, 79, ocean_wake.glsl).
         auto setAt = [&](uint32_t slot, uint32_t binding, VkDescriptorType t, uint32_t count) {
             b[slot].binding         = binding;
             b[slot].descriptorType  = t;
@@ -147,6 +148,8 @@ namespace threepp::vulkan {
         setAt(12, 69, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDensityFields);// r16f mirrors
         setAt(13, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1);                         // clouds (GpuCloudUbo)
         setAt(14, 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // ocean fine-cascade height
+        setAt(15, 78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // ocean wake field
+        setAt(16, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // its ripples
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -208,7 +211,7 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 5;// camera + lights + fog + density + clouds
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (2 + kMaxMaterialTextures + 2 * kMaxDensityFields);// env + ocean + bindless + volumes
+        sizes[1].descriptorCount = framesInFlight_ * (4 + kMaxMaterialTextures + 2 * kMaxDensityFields);// env + ocean x3 + bindless + volumes
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sizes[2].descriptorCount = framesInFlight_ * 4 + 2;// materials + geometry + emissive + accumulation; the resolve's two
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -274,7 +277,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures    = &tlasLocal;
 
-            VkWriteDescriptorSet w[14]{};
+            VkWriteDescriptorSet w[16]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -338,6 +341,16 @@ namespace threepp::vulkan {
             if (in.oceanFineView != VK_NULL_HANDLE && in.oceanFineSampler != VK_NULL_HANDLE) {
                 oceanInfo = {in.oceanFineSampler, in.oceanFineView, VK_IMAGE_LAYOUT_GENERAL};
                 setw(static_cast<int>(nw), 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanInfo, nullptr);
+                ++nw;
+            }
+            VkDescriptorImageInfo wakeInfo{}, rippleInfo{};
+            if (in.oceanWakeView != VK_NULL_HANDLE && in.oceanWakeSampler != VK_NULL_HANDLE &&
+                in.oceanRippleView != VK_NULL_HANDLE && in.oceanRippleSampler != VK_NULL_HANDLE) {
+                wakeInfo   = {in.oceanWakeSampler, in.oceanWakeView, VK_IMAGE_LAYOUT_GENERAL};
+                rippleInfo = {in.oceanRippleSampler, in.oceanRippleView, VK_IMAGE_LAYOUT_GENERAL};
+                setw(static_cast<int>(nw), 78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &wakeInfo, nullptr);
+                ++nw;
+                setw(static_cast<int>(nw), 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rippleInfo, nullptr);
                 ++nw;
             }
             updateDescriptorSets(ctx_.device(), nw, w, 0, nullptr);

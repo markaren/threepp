@@ -73,6 +73,12 @@ namespace threepp::vulkan {
             // chop the wave mesh cannot resolve. A dummy without an ocean.
             VkImageView        oceanFineView      = VK_NULL_HANDLE;
             VkSampler          oceanFineSampler   = VK_NULL_HANDLE;
+            // The ocean's wake field and its ripples (bindings 78 and 79,
+            // GENERAL): 1x1 dummies without one.
+            VkImageView        oceanWakeView      = VK_NULL_HANDLE;
+            VkSampler          oceanWakeSampler   = VK_NULL_HANDLE;
+            VkImageView        oceanRippleView    = VK_NULL_HANDLE;
+            VkSampler          oceanRippleSampler = VK_NULL_HANDLE;
         };
 
         PathTracer(VulkanContext& ctx, uint32_t framesInFlight);

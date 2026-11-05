@@ -521,6 +521,12 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 tin.cloudRange         = sizeof(GpuCloudUbo);
                 tin.oceanFineView      = oceanFineHeightView;
                 tin.oceanFineSampler   = oceanFineHeightSampler;
+                if (wakeField_) {
+                    tin.oceanWakeView      = oceanWakeView;
+                    tin.oceanWakeSampler   = wakeField_->sampler();
+                    tin.oceanRippleView    = oceanRippleView;
+                    tin.oceanRippleSampler = wakeField_->rippleSampler();
+                }
                 pathTracer_->rewriteDescriptors(tin, onlyFrame);
             }
         }

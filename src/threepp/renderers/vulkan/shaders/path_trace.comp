@@ -61,16 +61,19 @@
 // (path_trace_surface.glsl): normal maps, per-vertex colours, the detail
 // layer and the terrain bands. On top of the base BSDF: sheen, clearcoat
 // and foliage translucency (a Lambertian transmission lobe). Alpha-cutout
-// surfaces are tested per candidate; alpha-BLEND surfaces are hit as
-// opaque. Front/back-only materials pass the ray through their culled
+// surfaces are tested per candidate; alpha-BLEND surfaces are hit with the
+// probability of their alpha (stochastic transparency). Front/back-only materials pass the ray through their culled
 // side, as the raster culls them — except transmissive ones, whose far wall
 // is the refraction out. The cloud layer (setClouds) is cloud_march.comp's
 // march on every leg that crosses it, and it dims the sun's shadow rays. Not
 // modelled here: iridescence, the ocean's foam and fine-chop normal map.
 //
-// Shadow rays: alpha-cutouts tested, transmissive surfaces pass (no caustic
-// path exists to light what a blocking glass would darken), every other
-// surface blocks — emitters included, unlike the deferred shade's test.
+// Shadow rays trace the frame's occlusion mask (kRayMaskOpaque): alpha-cutouts
+// tested, blended and transmissive surfaces pass (no caustic path exists to
+// light what a blocking glass would darken), nothing under a camera node
+// casts; every other surface blocks — emitters included, unlike the deferred
+// shade's test. An ocean surface carries its wake (ocean_wake.glsl) and,
+// like every dielectric interface, the point and spot lights' glints.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -164,6 +167,14 @@ layout(push_constant) uniform Pc {
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
 // (the deferred set's binding 13; a dummy and tile size 0 without an ocean).
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
+// Its wake field (R foam, G aeration, B turbulence, A lane) and the patches'
+// ripples, read through the table an ocean's GeometryDesc::foamAddress names
+// (> 1; the deferred set's 78 and 79, 1x1 dummies without one).
+layout(set = 0, binding = 78) uniform sampler2DArray oceanWakeField;
+#define OCEAN_WAKE_SAMPLER oceanWakeField
+layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
+#define OCEAN_WAKE_RIPPLE_SAMPLER oceanWakeRipple
+#include "ocean_wake.glsl"
 
 #include "pcg_rng.glsl"
 
@@ -294,13 +305,15 @@ bool murkSunDir(vec3 x, vec3 L, out vec3 Lw, out vec3 trSun) {
 
 
 // ── Shadow test ─────────────────────────────────────────────────────────────
-// Alpha-cutouts are tested at the candidate; transmissive surfaces let the
-// ray through (there is no caustic path to light what they would shadow);
-// everything else — emitters included — blocks.
+// The deferred shade's occlusion rule: shadow rays trace the opaque mask
+// (kRayMaskOpaque: no alpha-blend or transmissive instance, nothing under a
+// camera node); alpha-cutouts are tested at the candidate; transmissive and
+// blended surfaces let the ray through (there is no caustic path to light
+// what a glass would shadow); everything else — emitters included — blocks.
 bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     const MaterialDesc m = entryMat(instIdx);
     if (m.transmission > 0.0) return false;
-    if (m.alphaCutoff < 0.0) return true;// blend: treated as an opaque surface here, as the camera ray does
+    if (m.alphaCutoff < 0.0) return false;// blend
     if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
@@ -311,7 +324,7 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
-                          kRayMaskAll, origin, 0.0, dir, tMax);
+                          kRayMaskOpaque, origin, 0.0, dir, tMax);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
             shadowOccludes(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
@@ -757,9 +770,9 @@ vec3 murkLeg(vec3 o, vec3 d, float tEnd, inout vec3 add, inout uint seed) {
     const float elev  = clamp(dot(d, up), -1.0, 1.0);
     const float grade = elev >= 0.0 ? mix(1.0, 1.55, elev) : mix(1.0, 0.30, -elev);
     add += fog.murkColor * airAmbientLight(up) * grade * (vec3(1.0) - T);
-    // The sun: one point drawn on the submerged part by the clearest channel's
-    // e^(−σ0 t), weighted per channel.
-    if (lights.dirCount > 0u) {
+    // The lights: one point drawn on the submerged part by the clearest
+    // channel's e^(−σ0 t), weighted per channel.
+    if (lights.dirCount + lights.pointCount + lights.spotCount > 0u) {
         const float s0   = fog.murkDensity;
         const float E    = 1.0 - exp(-s0 * len);
         const float t    = -log(max(1.0 - rnd(seed) * E, 1e-30)) / s0;
@@ -773,6 +786,31 @@ vec3 murkLeg(vec3 o, vec3 d, float tEnd, inout vec3 add, inout uint seed) {
             sun += lights.dirLights[i].color * trSun * (hgPhase(dot(Lw, d), g) * shadowVis(x, Lw, 1e30));
         }
         add += sun * w * fog.murkColor * kPtMurkShaftGain;
+        // The point and spot lights in the water too: a floodlight over the
+        // surface lights the column under it (straight through the surface,
+        // dimmed by the water between), the pool of light the water shows.
+        vec3 lamps = vec3(0.0);
+        for (uint i = 0u; i < lights.pointCount + lights.spotCount; ++i) {
+            const bool spot = i >= lights.pointCount;
+            const uint j    = spot ? i - lights.pointCount : i;
+            const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+            vec3        toL  = pos - x;
+            const float dist = length(toL);
+            if (dist < 1e-3) continue;
+            toL /= dist;
+            float atten = spot ? smoothstep(lights.spotLights[j].cosAngleOuter, lights.spotLights[j].cosAngleInner,
+                                            dot(-toL, lights.spotLights[j].direction))
+                               : 1.0;
+            if (atten <= 0.0) continue;
+            atten /= max(distFalloff(dist, spot ? lights.spotLights[j].decay : lights.pointLights[j].decay), 0.01);
+            atten *= lightRangeWindow(dist, spot ? lights.spotLights[j].range : lights.pointLights[j].range);
+            if (atten <= 1e-6) continue;
+            const float wet = toL.y > 1e-4 ? min((fog.waterSurfaceY - x.y) / toL.y, dist) : dist;
+            const vec3  trL = exp(-fog.murkSigma * max(wet, 0.0));
+            const vec3  col = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+            lamps += col * trL * (atten * hgPhase(dot(toL, d), g) * shadowVis(x, toL, dist - 1e-2));
+        }
+        add += lamps * w * fog.murkColor;
     }
     return T;
 }
@@ -873,8 +911,46 @@ DustLeg dustLeg(vec3 ro, vec3 rd, float tMax, inout uint seed) {
     return r;
 }
 
+// The point and spot lights reflected off a dielectric interface (water,
+// glass): f = GGX(N, alpha²) with the interface's Fresnel, each light's
+// falloff, range window and cone, and its shadow ray.
+vec3 dielectricGlints(vec3 P, vec3 N, vec3 Ng, vec3 V, float ior, float rough) {
+    vec3 sum = vec3(0.0);
+    const float f0 = (ior - 1.0) / (ior + 1.0);
+    const vec3  F0 = vec3(f0 * f0);
+    const float a  = rough * rough;
+    const vec3  o  = P + Ng * SHADOW_EPS;
+    for (uint i = 0u; i < lights.pointCount + lights.spotCount; ++i) {
+        const bool spot = i >= lights.pointCount;
+        const uint j    = spot ? i - lights.pointCount : i;
+        const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+        vec3        toL  = pos - P;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float NdotL = dot(N, toL);
+        if (NdotL <= 0.0 || dot(Ng, toL) <= 0.0) continue;
+        float atten = spot ? smoothstep(lights.spotLights[j].cosAngleOuter, lights.spotLights[j].cosAngleInner,
+                                        dot(-toL, lights.spotLights[j].direction))
+                           : 1.0;
+        if (atten <= 0.0) continue;
+        atten /= max(distFalloff(dist, spot ? lights.spotLights[j].decay : lights.pointLights[j].decay), 0.01);
+        atten *= lightRangeWindow(dist, spot ? lights.spotLights[j].range : lights.pointLights[j].range);
+        if (atten <= 1e-6) continue;
+        const vec3 f = ggxEval(N, a, F0, V, toL);
+        if (max(max(f.r, f.g), f.b) <= 0.0) continue;
+        const vec3 col = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+        sum += f * col * (NdotL * atten * shadowVis(o, toL, dist - 1e-2));
+    }
+    return sum;
+}
+
 // ── The camera ray's hit: alpha-cutouts tested, culled sides passed ─────────
-bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front) {
+// An alpha-BLEND texel is hit with the probability of its alpha (stochastic
+// transparency, the trace's form of the raster's screen-door): over the
+// samples of a pixel the surface covers what its alpha says. rayKey is this
+// ray's own random key, so a candidate's draw does not move the path's RNG.
+bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front, uint rayKey) {
     const MaterialDesc m = entryMat(instIdx);
     // The side the raster culls is not there for the ray either — except on a
     // transmissive surface, whose far wall is the refraction out: a ray inside
@@ -883,11 +959,13 @@ bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front) {
         if (m.sideMode == 0 && !front) return false;
         if (m.sideMode == 1 && front) return false;
     }
-    if (m.albedoTexIndex < 0 || m.alphaCutoff <= 0.0) return true;// opaque or blend
+    if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
     const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
-    return a >= m.alphaCutoff;
+    if (m.alphaCutoff > 0.0) return a >= m.alphaCutoff;
+    const uint h = pcgHash(rayKey ^ pcgHash(uint(primId) * 0x9e3779b9u + uint(instIdx) * 0x85ebca6bu));
+    return float(h) * (1.0 / 4294967296.0) < a;
 }
 
 // ── One path ────────────────────────────────────────────────────────────────
@@ -903,13 +981,14 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
 
     for (uint bounce = 0u; bounce <= pc.maxBounces; ++bounce) {
         rayQueryEXT rq;
+        const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
         while (rayQueryProceedEXT(rq)) {
             if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
                 cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
                                     rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
                                     rayQueryGetIntersectionBarycentricsEXT(rq, false),
-                                    rayQueryGetIntersectionFrontFaceEXT(rq, false)))
+                                    rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
                 rayQueryConfirmIntersectionEXT(rq);
         }
         const bool  miss = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT;
@@ -1006,7 +1085,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         const vec3 Ng = dot(hh.Ng, V) >= 0.0 ? hh.Ng : -hh.Ng;
         const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
         const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
-        const vec3 albedo  = sf.albedo;
+        vec3 albedo = sf.albedo;
         if (sf.roughness < 0.0) {// unlit
             L += throughput * albedo;
             break;
@@ -1022,24 +1101,68 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         // mesh's normal, as the deferred shade's prologue tilts it, at full
         // strength (the samples of a pixel integrate the chop the frame has to
         // filter into roughness).
+        // The wake (DisplacedMesh::WakeField) on it, as the deferred shade
+        // reads it: the lane a hull leaves calms the chop, turbulent water
+        // boils, the hulls' ripples run on it; and where the field holds foam
+        // or aeration the surface is, with the share the deferred shade blends
+        // them in by, a diffuse film or the milky body just under it (an
+        // opaque diffuse layer here, in place of the water's interface).
         const bool isOcean = geoms[hitId].foamAddress != 0ul;
-        if (isOcean && pc.oceanFineTileSize > 0.0) {
-            const float invTile = 1.0 / pc.oceanFineTileSize;
-            const float eps     = pc.oceanFineTileSize / 32.0;
-            const float dUV     = eps * invTile;
-            const vec2  uvW     = P.xz * invTile;
-            const float hL = textureLod(oceanFineHeight, uvW + vec2(-dUV, 0.0), 0.0).r * invTile;
-            const float hR = textureLod(oceanFineHeight, uvW + vec2( dUV, 0.0), 0.0).r * invTile;
-            const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -dUV), 0.0).r * invTile;
-            const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  dUV), 0.0).r * invTile;
-            const vec2  grad = vec2(hR - hL, hU - hD) / (2.0 * eps);
-            const float sgn  = N.y >= 0.0 ? 1.0 : -1.0;// tilt in the upward frame, face V after
-            N = sgn * normalize(sgn * N + vec3(-grad.x, 0.0, -grad.y));
+        const bool hasWake = geoms[hitId].foamAddress > 1ul;
+        float rough = sf.roughness;
+        float metal = sf.metalness;
+        bool  wakeLayer = false;
+        if (isOcean) {
+            vec2 g = vec2(0.0);
+            if (pc.oceanFineTileSize > 0.0) {
+                const float invTile = 1.0 / pc.oceanFineTileSize;
+                const float eps     = pc.oceanFineTileSize / 32.0;
+                const float dUV     = eps * invTile;
+                const vec2  uvW     = P.xz * invTile;
+                const float hL = textureLod(oceanFineHeight, uvW + vec2(-dUV, 0.0), 0.0).r * invTile;
+                const float hR = textureLod(oceanFineHeight, uvW + vec2( dUV, 0.0), 0.0).r * invTile;
+                const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -dUV), 0.0).r * invTile;
+                const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  dUV), 0.0).r * invTile;
+                g = vec2(hR - hL, hU - hD) / (2.0 * eps);
+            }
+            vec4 wk = vec4(0.0);
+            if (hasWake) {
+                const uint64_t wt = geoms[hitId].foamAddress;
+                wk = oceanWakeSample(wt, P.xz, 0.0);
+                g *= 1.0 - 0.9 * clamp(wk.a, 0.0, 1.0);
+                if (wk.b > 2e-3) {
+                    const float t   = WakeTable(wt).timeSec;
+                    const float amp = min(1.1 * wk.b, 0.24);
+                    g += amp * (0.6 * oceanWakeNoised(vec3(P.xz * 3.1, t * 1.7)).yz +
+                                0.4 * oceanWakeNoised(vec3(P.xz * 8.3 + 11.0, t * 2.9)).yz);
+                }
+                g += oceanWakeRipples(wt, P.xz, vec2(0.01, 0.0), vec2(0.0, 0.01)).xy;
+            }
+            const float sgn = N.y >= 0.0 ? 1.0 : -1.0;// tilt in the upward frame, face V after
+            N = sgn * normalize(sgn * N + vec3(-g.x, 0.0, -g.y));
             const float nv = dot(N, V);
             if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+            if (hasWake && (wk.r > 4e-3 || wk.g > 2e-3)) {
+                const bool  below = dot(V, airUp()) < 0.0;// seen from under the surface
+                const float wA    = WakeTable(geoms[hitId].foamAddress).albedo;
+                const float cover = smoothstep(0.10, 0.45, wk.r) * (below ? 0.12 : 1.0);
+                const float aer   = (!below && wk.g > 2e-3) ? 1.0 - exp(-1.8 * wk.g) : 0.0;
+                const float u     = rnd(seed);
+                if (u < cover) {
+                    albedo    = wA * mix(vec3(0.66, 0.72, 0.75), vec3(0.97, 0.99, 1.00), smoothstep(0.15, 0.85, wk.r));
+                    rough     = 0.8;
+                    wakeLayer = true;
+                } else if (u < cover + (1.0 - cover) * aer) {
+                    vec3 hue = max(hm.attenuationColor, vec3(1e-4));
+                    hue      = mix(vec3(1.0), hue / max(max(hue.r, hue.g), hue.b), 0.7);
+                    albedo   = 0.30 * wA * hue;
+                    rough    = 1.0;
+                    N        = Nv;// a volume under the surface: the chop is not in it
+                    wakeLayer = true;
+                }
+                if (wakeLayer) metal = 0.0;
+            }
         }
-        const float rough = sf.roughness;
-        const float metal = sf.metalness;
 
         // Emission at the hit, once: whole after a camera or delta ray, else
         // weighted against the triangle NEE that could have found this point.
@@ -1058,7 +1181,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
 
         // ── Transmission: a dielectric slab or shell ────────────────────────
-        if (hm.transmission > 0.0 && rnd(seed) < hm.transmission) {
+        if (hm.transmission > 0.0 && !wakeLayer && rnd(seed) < hm.transmission) {
             // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
             // is water whatever its material's ior.
             // The ocean's material is thin-walled for the deferred shade's
@@ -1076,6 +1199,12 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 const vec3 Ht = sampleGgxVndf(Vt, rough * rough, vec2(rnd(seed), rnd(seed)));
                 H = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
             }
+            // The point and spot lights' glints on the interface: a GGX
+            // reflection lobe at the surface's roughness (at least 0.03), by
+            // next-event estimation, since a delta light is never found by the
+            // mirror ray the interface samples. The sun's glint is the
+            // background's disc on that mirror ray, so it is left out here.
+            if (!thin) L += throughput * dielectricGlints(P, N, Ng, V, ior, max(rough, 0.03));
             const float VdotH = clamp(dot(V, H), 0.0, 1.0);
             const float F0    = (ior - 1.0) / (ior + 1.0);
             float F = F0 * F0 + (1.0 - F0 * F0) * pow(1.0 - VdotH, 5.0);
@@ -1132,7 +1261,8 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         s.sheenAlpha = max(hm.sheenRoughness * hm.sheenRoughness, 1e-3);
         s.cc         = 0.0;
         s.ccAlpha    = 1.0;
-        if (hm.clearcoat > 0.0) {
+        if (wakeLayer) s.sheen = vec3(0.0);
+        if (hm.clearcoat > 0.0 && !wakeLayer) {
             float cc = hm.clearcoat, ccr = hm.clearcoatRoughness;
             if (hm.clearcoatTexIndex >= 0)
                 cc *= ptTex(hm.clearcoatTexIndex, (hm.uvTransformClearcoat * vec3(hh.uv, 1.0)).xy).r;
