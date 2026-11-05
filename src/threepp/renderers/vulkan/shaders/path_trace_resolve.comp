@@ -1,0 +1,37 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// The path tracer's display resolve: the accumulation buffer's running sum,
+// averaged, through the renderer's own display transform (exposure and the
+// tone-map operator of tonemap.glsl, the curves the frame goes through, then
+// the sRGB encode) to 8-bit RGB the host writes straight to a file. One
+// thread per pixel.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "tonemap.glsl"
+
+layout(set = 0, binding = 0, scalar) readonly buffer AccumBuf { vec4 accum[]; };
+// Packed rgb, 3 bytes per pixel as 4 bytes would waste nothing worth a
+// second copy: one uint per pixel, the host unpacks.
+layout(set = 0, binding = 1, scalar) writeonly buffer OutBuf { uint outRgb[]; };
+
+layout(push_constant) uniform Pc {
+    uint  width;
+    uint  height;
+    uint  toneMapping;// threepp::ToneMapping as the frame's composite takes it
+    float exposure;
+} pc;
+
+void main() {
+    const uvec2 px = gl_GlobalInvocationID.xy;
+    if (px.x >= pc.width || px.y >= pc.height) return;
+    const uint idx = px.y * pc.width + px.x;
+    const vec4 a   = accum[idx];
+    const vec3 lin = a.a > 0.0 ? a.rgb / a.a : vec3(0.0);
+    vec3 c = pc.toneMapping == 0u ? lin * pc.exposure : toneMap(lin, pc.toneMapping, pc.exposure);
+    c = clamp(linearToSRGB(clamp(c, 0.0, 1.0)), 0.0, 1.0);
+    const uvec3 b = uvec3(c * 255.0 + 0.5);
+    outRgb[idx] = b.r | (b.g << 8) | (b.b << 16);
+}

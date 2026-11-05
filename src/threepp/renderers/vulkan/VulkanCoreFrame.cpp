@@ -1245,6 +1245,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 if (primaryView().deferredShade_) {
                     probeGI_->rewriteEmissive(currentFrame,
                                               emissiveTriBuffers[currentFrame].handle);
+                    if (pathTracer_)
+                        pathTracer_->rewriteEmissive(currentFrame,
+                                                     emissiveTriBuffers[currentFrame].handle);
                 }
             }
             // Same key as above: the registry sums a name across call sites, and

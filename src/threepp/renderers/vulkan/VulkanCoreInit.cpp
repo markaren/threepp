@@ -178,6 +178,9 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // probes stay off.
             probeGI_ = std::make_unique<vulkan::ProbeGI>(*ctx, kFramesInFlight);
             if (!ctx->rayQuerySupported()) probeGIEnabled_ = false;
+            // The path-trace feature over the same scene state (no pipeline
+            // without ray query; pathTraceBegin then throws).
+            pathTracer_ = std::make_unique<vulkan::PathTracer>(*ctx, kFramesInFlight);
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)

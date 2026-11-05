@@ -6,8 +6,11 @@
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <unordered_set>
 
 using namespace threepp;
@@ -16,12 +19,34 @@ namespace fs = std::filesystem;
 
 int main(int argc, char** argv) {
 
-    if (argc != 2) {
-        std::cout << "Usage: " << argv[0] << " <path_to_bistro_folder>" << std::endl;
+    // Headless capture: `vulkan_bistro <folder> --shot out.png [--frames N]
+    // [--cam x y z] [--target x y z] [--pathtrace N] [--ptclamp X]` renders N
+    // frames once both halves are loaded, writes the shot and exits;
+    // --pathtrace N also path-traces the same view with N samples per pixel
+    // (pathTraceToFile) to <shot>.pt.png.
+    std::string shotPath;
+    int         shotFrames = 240;
+    int         ptSamples  = 0;
+    float       ptClamp    = 0.f;
+    float       camArg[3]  = {-10.f, 3.f, -5.f};
+    float       tgtArg[3]  = {0.f, 2.f, 0.f};
+    fs::path    modelFolder;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
+        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--pathtrace") == 0 && i + 1 < argc) ptSamples = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--ptclamp") == 0 && i + 1 < argc) ptClamp = std::stof(argv[++i]);
+        else if (std::strcmp(argv[i], "--cam") == 0 && i + 3 < argc) {
+            for (float& c : camArg) c = std::stof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--target") == 0 && i + 3 < argc) {
+            for (float& c : tgtArg) c = std::stof(argv[++i]);
+        } else modelFolder = argv[i];
+    }
+    if (modelFolder.empty()) {
+        std::cout << "Usage: " << argv[0] << " <path_to_bistro_folder> [--shot out.png ...]" << std::endl;
         return 1;
     }
-
-    fs::path modelFolder = argv[1];
+    const bool capturing = !shotPath.empty();
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
         return 1;
@@ -50,9 +75,10 @@ int main(int argc, char** argv) {
 
     // ---- Camera ----
     PerspectiveCamera camera(60.f, canvas.aspect(), 0.01f, 1000.f);// 100k far/near is fine now: reversed-Z raster (was z-fighting before; near was bumped to 0.1 as a workaround)
-    camera.position.set(-10.f, 3.f, -5.f);
+    camera.position.set(camArg[0], camArg[1], camArg[2]);
     OrbitControls controls{camera, canvas};
     controls.enableKeys = false;
+    controls.target.set(tgtArg[0], tgtArg[1], tgtArg[2]);
     controls.update();
 
     // ---- Async model loading ----
@@ -120,11 +146,25 @@ int main(int argc, char** argv) {
         camera.updateProjectionMatrix();
     });
 
+    int shotFrame = 0;
     canvas.animate([&] {
         controls.update();
 
         renderer.render(scene, camera);
 
-        ui.render();
+        if (!capturing) {
+            ui.render();
+        } else if (interior->isLoaded() && exterior->isLoaded() && ++shotFrame >= shotFrames) {
+            const fs::path out{shotPath};
+            renderer.writeFramebuffer(out);
+            std::cout << "wrote " << fs::absolute(out).string() << std::endl;
+            if (ptSamples > 0) {
+                fs::path ptOut = out;
+                ptOut.replace_extension(".pt.png");
+                renderer.pathTraceToFile(scene, camera, ptOut, static_cast<uint32_t>(ptSamples), {.fireflyClamp = ptClamp});
+                std::cout << "path traced " << ptSamples << " spp, wrote " << fs::absolute(ptOut).string() << std::endl;
+            }
+            std::exit(0);
+        }
     });
 }

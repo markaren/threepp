@@ -1777,6 +1777,80 @@ namespace threepp {
         bool scanLidarCollect(int handle, std::vector<LidarReturn>& results,
                               std::vector<LidarReturn>* cleanResults = nullptr);
 
+        // ── Path trace of the current view ──────────────────────────────────
+        // A progressive path trace over the scene the frame renders — the
+        // same TLAS, materials, textures, lights, environment, emitters and
+        // fog the deferred shade reads, from the primary camera — accumulated
+        // across render() calls and read back as a picture. A feature of this
+        // renderer, not a renderer: the frame on screen is untouched, and the
+        // trace costs one compute dispatch per render() while a session is
+        // active. Needs rayTracingSupported().
+        //
+        // The one-liner, for a reference still of what the window shows:
+        //
+        //   renderer.pathTraceToFile(scene, camera, "shot.png", 2048);
+        //
+        // which traces 2048 samples per pixel and writes the picture through
+        // the renderer's own display transform (toneMapping, toneMappingExposure).
+        // The session form, for a loop of your own:
+        //
+        //   renderer.pathTraceBegin({.samplesPerFrame = 16, .maxBounces = 6});
+        //   while (renderer.pathTraceSamples() < 1024) renderer.render(scene, camera);
+        //   renderer.pathTraceReadRGB(rgb, w, h);// tone-mapped 8-bit, or
+        //   renderer.pathTraceRead(hdr, w, h);   // averaged linear floats
+        //   renderer.pathTraceStop();
+        //
+        // It is an offline tool: spend samples. Measured on an RTX 4060 laptop
+        // at 640x400 with 6 bounces, 528 samples per pixel took 0.5 s. One
+        // dispatch traces samplesPerFrame paths per pixel and must stay well
+        // under the OS's GPU timeout (about 2 s on Windows), so raise the
+        // per-frame count with the extent in mind: 32 at 1080p is ~0.3 s.
+        //
+        // The picture converges only over a still scene: pin the sim time,
+        // keep the camera and the lights where they are, and turn auto-LOD
+        // off (a level switch mid-session changes what the rays hit). A
+        // change of the render extent restarts the accumulation.
+        //
+        // What the trace models: Lambert + GGX surfaces with their albedo,
+        // roughness, metalness and emissive maps; dielectric transmission
+        // with ior, thin-walled and Beer-Lambert attenuation; the analytic
+        // lights (the sun as a cone of setSunAngularRadius) and emissive
+        // meshes as area lights; the environment on a miss. Not modelled:
+        // clearcoat, sheen, iridescence, normal and detail maps, vertex
+        // colours, terrain splats, fog and froxel media, particle fields,
+        // clouds, the ocean as a water surface.
+        struct PathTraceParams {
+            uint32_t samplesPerFrame = 8;  // camera paths per pixel per render()
+            uint32_t maxBounces      = 6;  // scattering events after the primary hit (<= 64)
+            float    fireflyClamp    = 0.f;// per-sample luminance cap, 0 = off (biased, quieter)
+        };
+        // Start (or restart) a session. Throws std::runtime_error without
+        // ray query support.
+        void pathTraceBegin(const PathTraceParams& params = {});
+        void pathTraceStop();
+        [[nodiscard]] bool pathTraceActive() const;
+        // Samples per pixel accumulated so far.
+        [[nodiscard]] uint32_t pathTraceSamples() const;
+        // The averaged picture so far: linear RGB, three floats per pixel,
+        // top row first, at the render extent. Drains the device. False
+        // before the first sample lands.
+        bool pathTraceRead(std::vector<float>& rgb, int& w, int& h);
+        // The same picture through the display transform the frame goes
+        // through (toneMapping, toneMappingExposure, sRGB): three bytes per
+        // pixel, top row first. Resolved on the GPU; drains the device.
+        bool pathTraceReadRGB(std::vector<unsigned char>& rgb, int& w, int& h);
+        // Blocking form: begin, render() until `samples` per pixel are in,
+        // read, stop. False when no frame added samples (a debug view, or no
+        // ray query) or the read failed.
+        bool pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
+                       std::vector<float>& rgb, int& w, int& h,
+                       const PathTraceParams& params = {});
+        // The blocking form to a file: trace `samples` per pixel and write
+        // the tone-mapped picture as .png / .jpg / .bmp (by extension).
+        // Throws on a write failure; false when no frame added samples.
+        bool pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
+                             uint32_t samples = 1024, const PathTraceParams& params = {});
+
         // Per-frame timings (milliseconds). See FrameTimings.
         struct FrameTimings {
             float pathTraceMs    = 0.f;// deferred shade compute

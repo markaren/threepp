@@ -53,6 +53,7 @@
 #include "TlasGen.hpp"
 #include "OcclusionCull.hpp"
 #include "ParticleFieldPass.hpp"
+#include "PathTracer.hpp"
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
@@ -2986,6 +2987,9 @@ namespace threepp {
         // probeGridDirty_ re-fits the grid to the scene AABB after each
         // structural scene rebuild (new/removed meshes ⇒ new bounds).
         std::unique_ptr<vulkan::ProbeGI> probeGI_;
+        // Progressive path trace of the primary view (pathTraceBegin / pathTraceRead):
+        // a pass of the frame graph while a session is active. See vulkan/PathTracer.hpp.
+        std::unique_ptr<vulkan::PathTracer> pathTracer_;
         bool probeGIEnabled_  = true;
         bool probeGridDirty_  = true;
         // The primary camera's world position this frame: the centre the
