@@ -20,6 +20,8 @@
 // the same class of proxy UUV Simulator, Stonefish and HoloOcean's
 // ray-based sonars are — a labelled range/bearing image with the right
 // geometry and a plausible intensity, honest about its provenance.
+// ImagingSonar (ImagingSonarModel.hpp) is the acoustic model: the sonar
+// equation, coherent beamforming, speckle, multipath and reverberation.
 //
 // The max-reduction is deliberate twice over. Physically, a bin's echo is
 // dominated by its brightest reflector at this level of modelling. And a
