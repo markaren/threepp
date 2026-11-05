@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -306,8 +307,16 @@ int main(int argc, char** argv) {
     float tgtArg[3] = {0.f, 6.f, 0.f};
     std::optional<GraphicsAPI> api;// unset → interactive backend menu
     float fogScale = 1.f;
+    // `--pathtrace N` (Vulkan, with --shot): after the shot, path-trace the
+    // same view with N samples per pixel (VulkanRenderer::pathTraceToFile) and
+    // write it next to the shot as <shot>.pt.png. `--ptclamp X` caps a
+    // sample's luminance at X (fireflies; 0 = off).
+    int   ptSamples = 0;
+    float ptClamp   = 0.f;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--fog") == 0 && i + 1 < argc) { fogScale = std::stof(argv[++i]); continue; }
+        if (std::strcmp(argv[i], "--pathtrace") == 0 && i + 1 < argc) { ptSamples = std::atoi(argv[++i]); continue; }
+        if (std::strcmp(argv[i], "--ptclamp") == 0 && i + 1 < argc) { ptClamp = std::stof(argv[++i]); continue; }
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--cam") == 0 && i + 3 < argc) {
@@ -816,6 +825,16 @@ int main(int argc, char** argv) {
             const std::filesystem::path out{shotPath};
             renderer->writeFramebuffer(out);
             std::cout << "wrote " << std::filesystem::absolute(out).string() << std::endl;
+#ifdef THREEPP_WITH_VULKAN
+            if (vk && ptSamples > 0) {
+                // The same view, path traced, written through the frame's
+                // own tone mapping next to the shot.
+                std::filesystem::path ptOut = out;
+                ptOut.replace_extension(".pt.png");
+                vk->pathTraceToFile(scene, camera, ptOut, static_cast<uint32_t>(ptSamples), {.fireflyClamp = ptClamp});
+                std::cout << "path traced " << ptSamples << " spp, wrote " << std::filesystem::absolute(ptOut).string() << std::endl;
+            }
+#endif
             std::exit(0);
         }
     });

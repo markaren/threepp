@@ -786,8 +786,8 @@ namespace threepp::vulkan::impl {
         // one record per Material: a forest tints every tree. The same
         // single float multiply the host used to fold into a per-entry desc,
         // so the albedo is the same to the bit. These twelve bytes held a
-        // vertex-colour address no shader read (kGeomFlagVertexColor keeps
-        // the host's decision) and the indexed word (kGeomFlagIndexed).
+        // vertex-colour address (now colorAddress, at the end) and the
+        // indexed word (kGeomFlagIndexed).
         float instanceColor[3];
         // kGeomFlag* (shaders/vulkan_shared.h, where both languages take the
         // bits from): the sticky moved flag stamped per frame by the loop in
@@ -808,8 +808,16 @@ namespace threepp::vulkan::impl {
         // thousand indices here and at most one record there. 0 is the
         // all-zero record that an entry without a material (an overlay, a
         // tombstone, a span still being admitted) reads. In this word rather
-        // than a field of its own so the record stays 64 bytes.
+        // than a field of its own.
         uint32_t flags;
+        // The per-vertex colour buffer when kGeomFlagVertexColor is set (the
+        // material asked for vertexColors and the geometry has a "color"
+        // attribute), else 0: unorm8x4 per vertex under kGeomFlagPackedColor,
+        // tight float xyz otherwise. Read at a ray hit by the path tracer
+        // (path_trace.comp), which shades the hit's albedo the way gbuffer.frag
+        // shades the raster's. After `flags` so every word offset the shaders
+        // index by (kGeomDescColorWord, kGeomDescFlagsWord) stays where it was.
+        VkDeviceAddress colorAddress;
     };
 
     struct LodJob {

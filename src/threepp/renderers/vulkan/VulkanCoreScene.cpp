@@ -5063,6 +5063,7 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
                 const auto mat = en.mesh->material();
                 useVtxColor = rec.color.handle != VK_NULL_HANDLE && mat && mat->vertexColors;
             }
+            gdesc.colorAddress = useVtxColor ? rec.color.address : 0ull;
             setGeomInstanceColor(gdesc, en);
             // kGeomFlagMoved is stamped per frame in VulkanCoreFrame; it is
             // seeded 0 here, with the packed bits above it.

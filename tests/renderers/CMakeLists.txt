@@ -396,6 +396,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanSky_test COMMAND VulkanSky_test)
     set_tests_properties(VulkanSky_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The path-trace feature (pathTraceBegin / pathTraceRead): a furnace, the
+    # session API, a lit scene against the deferred frame, no validation errors.
+    add_executable(VulkanPathTrace_test VulkanPathTrace_test.cpp)
+    target_link_libraries(VulkanPathTrace_test PRIVATE threepp)
+    target_include_directories(VulkanPathTrace_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanPathTrace_test COMMAND VulkanPathTrace_test)
+    set_tests_properties(VulkanPathTrace_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A material's aoMap (glTF occlusionTexture) darkens its indirect light,
     # never a light's: a split map under a uniform environment and under a
     # sun, the glTF strength, a map of 1, an unlit surface. Twice: ray traced

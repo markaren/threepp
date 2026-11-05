@@ -928,6 +928,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ShadowMapPass.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
+            "threepp/renderers/vulkan/PathTracer.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
             "threepp/renderers/vulkan/OcclusionCull.cpp"
             "threepp/renderers/vulkan/InstanceExpand.cpp"
@@ -1445,6 +1446,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv
         _probe_update_spv_h)
+    # Progressive path trace of the current view (VulkanRenderer::pathTraceBegin) —
+    # see PathTracer.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace.comp"
+        kPathTraceCompSpv
+        _path_trace_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace_resolve.comp"
+        kPathTraceResolveCompSpv
+        _path_trace_resolve_spv_h)
     # HiZ depth pyramid (occlusion-culling farthest-reduce) — see
     # HiZPyramid.{hpp,cpp}.
     compile_vulkan_shader(threepp

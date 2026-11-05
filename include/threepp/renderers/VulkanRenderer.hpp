@@ -1777,6 +1777,141 @@ namespace threepp {
         bool scanLidarCollect(int handle, std::vector<LidarReturn>& results,
                               std::vector<LidarReturn>* cleanResults = nullptr);
 
+        // ── Path trace of the current view ──────────────────────────────────
+        // A progressive path trace over the scene the frame renders — the
+        // same TLAS, materials, textures, lights, environment, emitters and
+        // fog the deferred shade reads, from the primary camera — accumulated
+        // across render() calls and read back as a picture. A feature of this
+        // renderer, not a renderer: the frame on screen is untouched, and the
+        // trace costs one compute dispatch per render() while a session is
+        // active. Needs rayTracingSupported().
+        //
+        // The one-liner, for a reference still of what the window shows:
+        //
+        //   renderer.pathTraceToFile(scene, camera, "shot.png", 2048);
+        //
+        // which traces 2048 samples per pixel and writes the picture through
+        // the renderer's own display transform (the frame's exposure and
+        // toneMapping). The session form, for a loop of your own:
+        //
+        //   renderer.pathTraceBegin({.samplesPerFrame = 16, .maxBounces = 6});
+        //   while (renderer.pathTraceSamples() < 1024) renderer.render(scene, camera);
+        //   renderer.pathTraceReadRGB(rgb, w, h);// tone-mapped 8-bit, or
+        //   renderer.pathTraceRead(hdr, w, h);   // averaged linear floats
+        //   renderer.pathTraceStop();
+        //
+        // The picture is the render extent unless PathTraceParams gives it
+        // a width and height of its own, which may be larger than the
+        // window or the screen can be (a 4K still from a 1080p window). A
+        // picture of another shape keeps the camera's vertical field. One
+        // render() then traces a band of rows no larger than the frame, so a
+        // pass over a picture four times the frame takes four render() calls
+        // and pathTraceSamples() counts whole passes (pathTraceProgress()
+        // counts the rows of the pass in progress too).
+        //
+        // It is an offline tool: spend samples. Measured on an RTX 4060 laptop
+        // at 640x400 with 6 bounces, 528 samples per pixel took 0.5 s. One
+        // dispatch traces samplesPerFrame paths per pixel and must stay well
+        // under the OS's GPU timeout (about 2 s on Windows), so raise the
+        // per-frame count with the extent in mind: 32 at 1080p is ~0.3 s.
+        //
+        // The picture converges only over a still scene: pin the sim time,
+        // keep the camera and the lights where they are, and turn auto-LOD
+        // off (a level switch mid-session changes what the rays hit). A
+        // change of the render extent restarts the accumulation (with no
+        // extent of the session's own). The samples average over whatever
+        // the scene does between render() calls, so motion blur is the
+        // scene stepped through the shutter interval while it accumulates
+        // (camera, objects and deformation alike); setMotionBlur, the
+        // frame's post filter, is not read.
+        //
+        // What the trace models: the surface the raster G-buffer shades
+        // (albedo, roughness, metalness and emissive maps, normal maps,
+        // per-vertex colours, the detail layer and the terrain bands) under
+        // Lambert + GGX, with sheen, clearcoat and foliage translucency as a
+        // transmission lobe; dielectric transmission with ior, thin-walled
+        // and Beer-Lambert attenuation; the analytic lights (the sun as a
+        // cone of setSunAngularRadius) and emissive meshes as area lights;
+        // the camera's lens as the frame forms its image (setLensDistortion
+        // traced through, so a barrel lens's corners are real without
+        // overscan; setDepthOfField as a thin lens of setCameraExposure's
+        // f-number focused at setFocusDistance); the background (its
+        // blurriness and intensity, and the procedural star field) on a
+        // camera miss and the environment on any other;
+        // the air medium (scene.fog and setHeightFog) on every leg as the
+        // frame fogs its camera leg, with the sun's in-scatter traced to the
+        // shadows of the scene, and the point and spot lights' beams in it
+        // and in setDeferredVolumetrics's clear-air density, shadowed where the
+        // frame's beam march is not; the ParticleField density volumes; the
+        // underwater murk below the water surface (a submerged surface lit
+        // by the refracted sun, the column lit by lamps over it); an ocean
+        // surface as a water interface with its fine-cascade chop, its wake
+        // (calm lane, boil, ripples, foam and aeration) and the lamps' glints;
+        // and the cloud layer, which also shadows the sun. Alpha-blended
+        // surfaces are hit with the probability of their alpha; shadow rays
+        // follow the frame's occlusion mask (no blended, transmissive or
+        // camera-attached caster). pathTraceReadRGB goes through the frame's
+        // exposure (auto exposure's or the physical camera's when on), white
+        // balance and colour grade, not its bloom, sensor noise or motion
+        // blur. Not modelled:
+        // iridescence, the ocean's whitecap foam, caustics, billboard
+        // particles (rain).
+        struct PathTraceParams {
+            uint32_t samplesPerFrame = 8;  // camera paths per pixel per render()
+            uint32_t maxBounces      = 6;  // scattering events after the primary hit (<= 64)
+            float    fireflyClamp    = 0.f;// per-sample luminance cap, 0 = off (biased, quieter)
+            uint32_t width           = 0;  // the picture's extent; 0 = the render extent
+            uint32_t height          = 0;  // (at most 65535 rows)
+            // A dome port about the lens (radius in m; 0 = none): a glass
+            // hemisphere centred on it, as an underwater camera housing has,
+            // bends no ray from its centre, so each camera ray starts where it
+            // leaves the dome, in whatever medium is there. With the camera at
+            // the waterline the lower part of the picture starts in the sea
+            // and the upper in the air: the over-under picture. The frame does
+            // not draw it.
+            float    domePort        = 0.f;
+        };
+        // The forms without PathTraceParams are overloads, not `= {}`
+        // defaults: GCC forms a nested class's default member initializers
+        // only once the outermost class is complete, so inside VulkanRenderer
+        // `{}` cannot yet make a PathTraceParams (see FireEffect::create).
+        //
+        // Start (or restart) a session. Throws std::runtime_error without
+        // ray query support.
+        void pathTraceBegin();
+        void pathTraceBegin(const PathTraceParams& params);
+        void pathTraceStop();
+        [[nodiscard]] bool pathTraceActive() const;
+        // Samples per pixel accumulated over the whole picture so far.
+        [[nodiscard]] uint32_t pathTraceSamples() const;
+        // The same with the band pass in progress counted by its share of
+        // the rows: rises with every render() that traces.
+        [[nodiscard]] double pathTraceProgress() const;
+        // The averaged picture so far: linear RGB, three floats per pixel,
+        // top row first, at the session's extent. Drains the device. False
+        // before the first pass is in.
+        bool pathTraceRead(std::vector<float>& rgb, int& w, int& h);
+        // The same picture through the display transform the frame goes
+        // through (white balance, the frame's exposure, toneMapping, sRGB,
+        // the colour grade; not the bloom): three bytes per pixel, top row
+        // first. Resolved on the GPU; drains the device.
+        bool pathTraceReadRGB(std::vector<unsigned char>& rgb, int& w, int& h);
+        // Blocking form: begin, render() until `samples` per pixel are in,
+        // read, stop. False when no frame added samples (a debug view, or no
+        // ray query) or the read failed.
+        bool pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
+                       std::vector<float>& rgb, int& w, int& h);
+        bool pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
+                       std::vector<float>& rgb, int& w, int& h,
+                       const PathTraceParams& params);
+        // The blocking form to a file: trace `samples` per pixel and write
+        // the tone-mapped picture as .png / .jpg / .bmp (by extension).
+        // Throws on a write failure; false when no frame added samples.
+        bool pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
+                             uint32_t samples = 1024);
+        bool pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
+                             uint32_t samples, const PathTraceParams& params);
+
         // Per-frame timings (milliseconds). See FrameTimings.
         struct FrameTimings {
             float pathTraceMs    = 0.f;// deferred shade compute

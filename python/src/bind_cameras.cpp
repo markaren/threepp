@@ -62,6 +62,14 @@ namespace threepp_py {
                 .def_readwrite("film_offset", &PerspectiveCamera::filmOffset)
                 .def("set_focal_length", &PerspectiveCamera::setFocalLength, py::arg("focal_length"))
                 .def("get_focal_length", &PerspectiveCamera::getFocalLength)
+                .def("set_view_offset", &PerspectiveCamera::setViewOffset,
+                     py::arg("full_width"), py::arg("full_height"), py::arg("x"), py::arg("y"),
+                     py::arg("width"), py::arg("height"),
+                     "Render the window (x, y, width, height) of a full_width x full_height picture with this "
+                     "camera's frustum: tiles of one large picture, or a multi-monitor wall (three.js's "
+                     "setViewOffset). Updates the projection matrix.")
+                .def("clear_view_offset", &PerspectiveCamera::clearViewOffset,
+                     "Back to the whole frustum (three.js's clearViewOffset).")
                 .def("update_projection_matrix", &PerspectiveCamera::updateProjectionMatrix);
 
         // ---- OrthographicCamera ---------------------------------------------

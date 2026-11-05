@@ -2147,6 +2147,7 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                     // read here either.
                     setGeomFlag(gd, kGeomFlagVertexColor,
                                 geomFlag(gd, kGeomFlagVertexColor) && recPtr->color.handle != VK_NULL_HANDLE);
+                    gd.colorAddress = geomFlag(gd, kGeomFlagVertexColor) ? recPtr->color.address : 0ull;
                     setGeomFlag(gd, kGeomFlagIndexed, lodSel0.indexed);
                     // Only the packed bits change: the fresh record is unpacked,
                     // so they clear. kGeomFlagMoved, kGeomFlagRtProxy and

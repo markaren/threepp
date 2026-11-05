@@ -495,6 +495,40 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 pin.emissiveTriBuf   = emBufs.data();
                 probeGI_->rewriteDescriptors(pin, onlyFrame);
             }
+            // The path tracer binds the same scene inputs plus the PRIMARY
+            // view's camera block (it traces the primary view whichever
+            // view's set this rewrite is for).
+            if (pathTracer_ && pathTracer_->available()) {
+                std::array<VkBuffer, kFramesInFlight> ptCamBufs{};
+                for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                    ptCamBufs[f] = primaryView().cameraUbos[f].handle;
+                vulkan::PathTracer::DescriptorWriteInputs tin{};
+                tin.cameraUbo        = ptCamBufs.data();
+                tin.lightsUbo        = lightBufs.data();
+                tin.envView          = envImage.view;
+                tin.envSampler       = envImage.sampler;
+                tin.tlas             = tlas;
+                tin.materialBuf      = matBufs.data();
+                tin.geomDescBuf      = geomBufs.data();
+                tin.materialTex      = matTexInfos.data();
+                tin.materialTexCount = kMaxMaterialTextures;
+                tin.emissiveTriBuf   = emBufs.data();
+                tin.fogUbo           = fogBufs.data();
+                tin.particleDensity    = pdViews.data();
+                tin.particleDensityLin = pdLinViews.data();
+                tin.particleDensityUbo = pdUbos.data();
+                tin.cloudUbo           = cloudBufs.data();
+                tin.cloudRange         = sizeof(GpuCloudUbo);
+                tin.oceanFineView      = oceanFineHeightView;
+                tin.oceanFineSampler   = oceanFineHeightSampler;
+                if (wakeField_) {
+                    tin.oceanWakeView      = oceanWakeView;
+                    tin.oceanWakeSampler   = wakeField_->sampler();
+                    tin.oceanRippleView    = oceanRippleView;
+                    tin.oceanRippleSampler = wakeField_->rippleSampler();
+                }
+                pathTracer_->rewriteDescriptors(tin, onlyFrame);
+            }
         }
 
 void VulkanRenderer::Impl::fitProbeGridToScene() {

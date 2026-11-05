@@ -367,7 +367,12 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
   GPU pass timings (`capture.render(scene, camera, backend="vulkan", frames=60,
   path="out.png").report()`), compares two pictures with the golden test's
   metric and gate (`capture.compare(a, b).passes()`: PSNR and per-channel max
-  delta), and reads and writes PNGs with the standard library alone.
+  delta), path-traces a still scene on the Vulkan renderer for a reference
+  picture (`capture.path_trace(scene, camera, samples=4096)`, the same TLAS,
+  materials, lights and environment the frame renders; also
+  `renderer.path_trace_begin()` / `path_trace_read()` for a session driven by
+  your own render loop), and reads and writes PNGs with the standard library
+  alone.
   `threepp.lesson` is the experimental explainer-video toolkit (see below).
 
 Naming follows Python conventions (`snake_case` methods/properties), e.g.

@@ -1,0 +1,1558 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "vulkan_shared.h"// MaterialDesc, kRayMask*, kGeomFlag*, kMaxMaterialTextures
+
+// Progressive path tracer over the deferred renderer's scene state — a
+// FEATURE of VulkanRenderer (pathTraceBegin / pathTraceRead), not a renderer:
+// it binds the same TLAS, geometry and material records, bindless textures,
+// lights block, environment, emitter table and fog block the deferred shade
+// reads, and writes nothing the frame shows. One thread per pixel, pc.samples
+// camera paths per pixel per dispatch, summed into an rgba32f accumulation
+// buffer the host averages on readback.
+//
+// Each path: a jittered primary ray from the view's CameraUbo (camera_ray.glsl)
+// through the frame's lens (ptCameraRay: setLensDistortion, a thin lens under
+// setDepthOfField), then up to pc.maxBounces scattering events. At every opaque hit the direct
+// light is estimated by next-event estimation — the analytic lights of the
+// lights block (the sun as a cone of pc.sunTanHalfAngle, lamps through the
+// falloff and range window gi_bounce.glsl defines) and one point on an
+// emissive triangle picked by power from the emitter table — and the path
+// continues along a sample of the material's BSDF: a Lambert lobe plus a GGX
+// lobe (VNDF-sampled), chosen by their Fresnel-weighted albedo. Emitters a
+// bounce ray hits are weighted against the triangle NEE with the power
+// heuristic, so a lamp seen in a mirror and a lamp lighting a wall both come
+// out once. A transmissive material (transmission > 0) is a dielectric with
+// the material's ior: Fresnel reflect or refract through the GGX microfacet
+// normal, tinted by the albedo, Beer-Lambert attenuation over the inside leg
+// (attenuationColor / attenuationDistance), thin-walled passes straight
+// through. A camera ray that misses (or one it continued through glass)
+// shows the background as the frame draws it (backgroundBlurriness,
+// backgroundIntensity, backgroundRotation, the procedural star field); any
+// other miss reads the
+// environment, mip 1 when the sun was extracted into a directional light
+// (flags bit 1), so the disc is not counted twice. Unlit materials
+// (roughness < 0) return their albedo.
+//
+// The air is the deferred shade's air medium (scene.fog and setHeightFog
+// feed it: an exponential height profile, height_fog.glsl, with fog.color
+// as its single-scattering albedo and fog.anisotropy as its HG g), applied
+// to every leg of the path as the deferred shade applies it to the camera
+// leg: L = T·L_beyond + albedo·ambient·(1 − T) + the sun's single scatter
+// along the leg. The deferred shade marches that last term in a few steps a
+// pixel; here each sample draws one point on the leg in proportion to the
+// medium's density and transmittance and traces its own shadow ray toward
+// the sun, so the shafts converge to the shadows of the geometry exactly.
+// The point and spot lights scatter in the same air, and in the beam density
+// setDeferredVolumetrics gives clear air, as the frame's beam march and froxel glow
+// scatter them (airLampScatter). A leg that escapes takes the sky's transmittance (applySkyFog) and the
+// sun's scatter out to the medium's optical horizon. Shadow rays are not
+// attenuated by the air, as in the deferred march. The ParticleField density
+// volumes (dust, mist, smoke, fire) are marched on every leg as the deferred
+// shade's applyParticleFog marches them (dustLeg). The underwater murk
+// (setUnderwaterMurk) is the half-space below the water surface, a medium of
+// its own on the submerged part of every leg (murkLeg); a surface under it
+// is lit by the sun refracted at a flat surface and dimmed by the water above
+// it. An ocean surface refracts with water's ior. Caustics are not modelled.
+//
+// The surface at a hit is the one gbuffer.frag makes of a raster fragment
+// (path_trace_surface.glsl): normal maps, per-vertex colours, the detail
+// layer and the terrain bands. On top of the base BSDF: sheen, clearcoat
+// and foliage translucency (a Lambertian transmission lobe). Alpha-cutout
+// surfaces are tested per candidate; alpha-BLEND surfaces are hit with the
+// probability of their alpha (stochastic transparency). Front/back-only materials pass the ray through their culled
+// side, as the raster culls them — except transmissive ones, whose far wall
+// is the refraction out. The cloud layer (setClouds) is cloud_march.comp's
+// march on every leg that crosses it, and it dims the sun's shadow rays. Not
+// modelled here: iridescence, the ocean's whitecap foam.
+//
+// Shadow rays trace the frame's occlusion mask (kRayMaskOpaque): alpha-cutouts
+// tested, blended and transmissive surfaces pass (no caustic path exists to
+// light what a blocking glass would darken), nothing under a camera node
+// casts; every other surface blocks — emitters included, unlike the deferred
+// shade's test. An ocean surface carries its wake (ocean_wake.glsl) and,
+// like every dielectric interface, the point and spot lights' glints.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717959;
+float SHADOW_EPS   = 1e-3;// rescaled per hit from |P|
+
+#include "camera_ray.glsl"// set 0 binding 0: the view's CameraUbo, camRayOrigin / camRayDir
+#include "lights_ubo.glsl"// set 0 binding 1
+
+layout(set = 0, binding = 2) uniform sampler2D envTex;// prefiltered PMREM mip chain
+layout(set = 0, binding = 3) uniform accelerationStructureEXT topAS;
+layout(set = 0, binding = 4, scalar) readonly buffer MatBuf { MaterialDesc mats[]; };
+
+#include "geometry_fetch.glsl"// GeometryDesc, the vertex/index buffer references, gfetch*
+layout(set = 0, binding = 5, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+// An entry's MaterialDesc: its material's table record with the entry's
+// instance colour on the albedo (deferred_shade_00_common's entryMat).
+MaterialDesc entryMat(int entry) {
+    MaterialDesc m = mats[geoms[entry].flags >> kGeomFlagMaterialShift];
+    precise vec3 tinted = m.albedo * geoms[entry].instanceColor;
+    m.albedo = tinted;
+    return m;
+}
+
+layout(set = 0, binding = 6) uniform sampler2D albedoMaps[kMaxMaterialTextures];
+#include "hit_fetch.glsl"// fetchUvAt / hitTex at a traced hit
+#include "path_trace_surface.glsl"// ptFetchHit / ptSurface: the hit as gbuffer.frag would shade it
+
+struct EmTri {
+    vec4 v0;       // xyz = pos, w = area
+    vec4 v1;       // xyz = pos, w = cumPower (inclusive running power CDF)
+    vec4 v2;       // xyz = pos, w = power (lum × area)
+    vec4 emission; // xyz = emissive × intensity
+};
+layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
+
+// The accumulation: one vec4 per pixel, rgb = the sum of every sample so far,
+// a = how many. Row-major, top row first.
+layout(set = 0, binding = 8, scalar) buffer AccumBuf { vec4 accum[]; };
+
+// The scene-fog block (GpuFogUbo) as far as the deferred shade reads it: the
+// air medium and the underwater murk.
+layout(set = 0, binding = 9, scalar) uniform FogUbo {
+    vec3  sigmaT;        // per-channel extinction of the homogeneous scene fog
+    float enabled;       // 1.0 = scene.fog set
+    vec3  color;         // the air's single-scattering albedo
+    float anisotropy;    // HG g
+    float waterSurfaceY; // world-Y of the water surface (the murk's clip); 1e30 = none
+    vec3  worldUp;
+    float hfDensity;     // air-medium sigma_t at hfBaseY
+    float hfBaseY;
+    float hfFalloff;     // its exponential height scale (m)
+    float murkDensity;   // the murk's clearest channel; 0 = no murk
+    vec3  murkColor;     // its single-scattering albedo
+    vec3  murkSigma;     // sigma_t per channel
+    float murkAmbientK;  // setUnderwaterAmbientFalloff (not modelled here)
+} fog;
+#include "height_fog.glsl"// heightFogLegOpticalDepth
+#include "hg_phase.glsl"// hgPhase
+#include "spot_cone.glsl"// spotConeInterval
+#include "lens_distortion.glsl"// lensUndistort
+
+// ParticleField density volumes (DensityRepr) at the deferred set's own
+// bindings 67-69: the integer volumes, their box/medium block and the r16f
+// mirrors the dust march samples.
+#define PD_LINEAR 1
+#include "particle_density.glsl"
+
+// The cloud layer (setClouds) at the deferred set's binding 58: its block and
+// the analytic density field cloud_march.comp marches.
+#include "cloud_ubo.glsl"
+#include "cloud_density.glsl"
+
+layout(push_constant) uniform Pc {
+    uint  width;             // the picture's extent
+    uint  height;
+    uint  sampleIndex;       // samples already in the accumulator (the RNG stream position)
+    uint  samples;           // paths per pixel this dispatch
+    uint  maxBounces;        // scattering events after the primary hit
+    uint  flags;             // bit 0 = reset: overwrite the accumulator instead of adding
+                             // bit 1 = the environment's sun was extracted into a directional light
+                             // bits 2-3 = the lens model (LENS_MODEL_*), 0 = none
+    uint  emissiveCount;     // triangles in the emitter table (0 = none)
+    float emissiveTotalPower;// the table's power-CDF total
+    uint  envMipCount;       // PMREM mip levels (>= 1)
+    float fireflyClamp;      // per-sample luminance cap, 0 = off
+    float sunTanHalfAngle;   // tan of the sun's angular radius, 0 = a delta sun
+    uint  seed;              // per-session salt
+    float oceanFineTileSize; // the ocean's fine cascade tile (m), 0 = no ocean
+    float starIntensity;     // the procedural star field's strength (setStarfield), 0 = none
+    float volDensity;        // setDeferredVolumetrics: the lamps' beam medium in clear air (1/m)
+    float volAniso;          // its HG g, where no fog gives one
+    vec4  lensK;             // the output camera's (fx/W, fy/H, cx/W, cy/H), top-left origin
+    vec4  lensRadial;        // k1..k4
+    vec2  lensTangential;    // p1, p2
+    float lensOverscan;      // the frustum widening the camera block carries (setLensOverscan)
+    float lensRadius;        // thin-lens aperture radius (m), 0 = a pinhole
+    float focusDistance;     // the plane in focus, view depth (m)
+    float aspectScale;       // the picture's aspect over the camera's
+    uint  rows;              // this dispatch's band: its first row (low 16 bits), how many (high 16)
+    float domeRadius;        // a dome port's radius about the lens (m), 0 = none
+} pc;
+
+// The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
+// (the deferred set's binding 13; a dummy and tile size 0 without an ocean).
+layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
+// Its wake field (R foam, G aeration, B turbulence, A lane) and the patches'
+// ripples, read through the table an ocean's GeometryDesc::foamAddress names
+// (> 1; the deferred set's 78 and 79, 1x1 dummies without one).
+layout(set = 0, binding = 78) uniform sampler2DArray oceanWakeField;
+#define OCEAN_WAKE_SAMPLER oceanWakeField
+layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
+#define OCEAN_WAKE_RIPPLE_SAMPLER oceanWakeRipple
+#include "ocean_wake.glsl"
+
+#include "pcg_rng.glsl"
+
+// ── Environment ─────────────────────────────────────────────────────────────
+vec3 sampleEnvLod(vec3 dir, float lod) {
+    // scene.environmentRotation (world -> env) and environmentIntensity.
+    if ((lights.envKnobFlags & 1u) != 0u) dir = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * dir;
+    const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
+}
+// The deferred shade's procedural star field (proceduralStars): hashed stars
+// in direction space over the sky, faded into the horizon. Camera rays only.
+float starHash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+vec3 proceduralStars(vec3 dir) {
+    if (pc.starIntensity <= 0.0 || dir.y <= 0.0) return vec3(0.0);
+    const vec2 g = vec2(atan(dir.z, dir.x), asin(clamp(dir.y, -1.0, 1.0))) * 220.0;
+    vec3 sum = vec3(0.0);
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            const vec2 cell = floor(g) + vec2(float(dx), float(dy));
+            if (starHash(cell * 0.193 + 11.71) > 0.02) continue;
+            const vec2  sp     = cell + vec2(starHash(cell + 31.7), starHash(cell + 57.3));
+            const vec2  dd     = g - sp;
+            const float bright = 0.4 + 2.4 * pow(starHash(cell + 91.1), 8.0);
+            sum += vec3(1.0, 1.0, 1.06) * (bright * exp(-dot(dd, dd) * 24.0));
+        }
+    return sum * (pc.starIntensity * smoothstep(0.0, 0.05, dir.y));
+}
+
+// The visible background along a camera ray, as the deferred shade's
+// sampleBackground draws it: scene.backgroundRotation, backgroundIntensity,
+// and backgroundBlurriness as a level of the prefiltered chain. Lighting
+// rays read the environment (sampleEnvLod) instead.
+vec3 sampleBackground(vec3 dir) {
+    if ((lights.envKnobFlags & 2u) != 0u) dir = mat3(lights.bgRotC0, lights.bgRotC1, lights.bgRotC2) * dir;
+    const float u   = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v   = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    const float lod = lights.bgBlurriness * float(max(pc.envMipCount, 1u) - 1u);
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.bgIntensity;
+}
+
+// ── The air medium ──────────────────────────────────────────────────────────
+// The deferred shade's one air medium (scene.fog and setHeightFog both feed
+// it): sigma_t = hfDensity · e^(−max(y − hfBaseY, 0) / hfFalloff), stopping
+// at the waterline, with fog.color as its single-scattering albedo (white
+// for a height fog without a scene.fog) and fog.anisotropy as its HG g.
+bool airOn() { return fog.hfDensity > 0.0; }
+float airSigma(vec3 x) {
+    return fog.hfDensity * exp(-max(x.y - fog.hfBaseY, 0.0) / max(fog.hfFalloff, 1e-3));
+}
+float airOpticalDepth(vec3 a, vec3 b) {
+    return heightFogLegOpticalDepth(a, b, fog.hfDensity, fog.hfFalloff, fog.hfBaseY, fog.waterSurfaceY);
+}
+vec3 airAlbedo() { return fog.enabled > 0.5 ? fog.color : vec3(1.0); }
+// The light the deferred shade lights the medium's ambient part with
+// (applySceneFog's fogLight): the scene's ambient plus the environment's mean.
+vec3 airAmbientLight(vec3 up) {
+    return lights.ambient + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+}
+vec3 airUp() {
+    return dot(fog.worldUp, fog.worldUp) > 1e-6 ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+}
+// What is left of the sky along a ray from o (applySkyFog): a layered fog's
+// closed-form column to infinity; a near-uniform one, whose column would be
+// infinite, the bounded horizon band the deferred shade uses.
+float airSkyTransmittance(vec3 o, vec3 dir) {
+    const float sigma = fog.hfDensity;
+    if (sigma <= 0.0) return 1.0;
+    if (fog.hfFalloff < 4000.0) {
+        const float H    = max(fog.hfFalloff, 1e-3);
+        const float hCam = o.y - fog.hfBaseY;
+        const float m    = max(dir.y, 0.02);
+        const float od   = hCam >= 0.0 ? sigma * H / m * exp(-hCam / H) : sigma / m * (H - hCam);
+        return exp(-min(od, 80.0));
+    }
+    const float elev     = clamp(dot(dir, airUp()), 0.0, 1.0);
+    const float band     = exp(-elev * 2.5);
+    const float strength = 1.0 - exp(-sigma * 45.0);
+    return 1.0 - band * strength;
+}
+// How far a sky leg carries the sun's in-scatter: to the optical-depth
+// horizon (six free paths at the leg's start), at most 2000 m, as the
+// deferred shade's sun march goes.
+float airSkyLegLength(vec3 o) {
+    return min(2000.0, 6.0 / max(airSigma(o), 1e-6));
+}
+
+const float kPtMurkEta      = 1.0 / 1.333;
+const float kPtMurkShaftG   = 0.65;
+const float kPtMurkShaftGain = 1.5;
+const float kPtMurkIsWater  = 0.01;// the deferred's kMurkIsWater: below this the murk is a haze, not the water body
+
+bool murkOn() { return fog.murkDensity > 0.0 && fog.waterSurfaceY < 1e29; }
+
+// The submerged part [t0, t1] of the leg o + d·[0, tEnd]; false when none.
+bool murkClip(vec3 o, vec3 d, float tEnd, out float t0, out float t1) {
+    const float y0 = o.y - fog.waterSurfaceY;
+    t0 = 0.0;
+    t1 = min(tEnd, 1.0e4);
+    if (abs(d.y) > 1e-6) {
+        const float tc = -y0 / d.y;
+        if (y0 < 0.0) { if (d.y > 0.0) t1 = min(t1, tc); }
+        else if (d.y < 0.0) t0 = max(t0, tc);
+        else return false;
+    } else if (y0 >= 0.0) return false;
+    return t1 > t0;
+}
+
+// The sun's direction under the surface and how much of it the water above x
+// lets through; false when the sun is below the horizon.
+bool murkSunDir(vec3 x, vec3 L, out vec3 Lw, out vec3 trSun) {
+    const vec3 up = airUp();
+    if (dot(L, up) <= 0.02) return false;
+    vec3 sd = refract(-L, up, kPtMurkEta);
+    if (dot(sd, sd) < 1e-6) return false;
+    sd = normalize(sd);
+    const float sy    = max(-dot(sd, up), 0.08);
+    const float depth = max(fog.waterSurfaceY - x.y, 0.0);
+    Lw    = -sd;
+    trSun = exp(-fog.murkSigma * depth / sy);
+    return true;
+}
+
+// The braid of the sun under a moving sea: the deferred shade's crest proxy
+// (murkSunScatter, murkSunCaustic), with its constants. Walk from x up the
+// in-water sun direction Lw to the surface plane, take the FFT fine cascade's
+// height where that light came in, and shape it: in the medium the shafts'
+// form, which lets the mean rise with the crests (a shaft is light added), on
+// a surface the dapple's, centred so it moves the sun about and adds none,
+// ramped in under the surface and faded out with depth. A proxy, as the frame
+// labels it: crest height for the focusing a real caustic is. 1 with no ocean.
+const float kPtCausticBite     = 0.9;
+const float kPtCausticScale    = 9.0;
+const float kPtCausticPeak     = 2.6;
+const float kPtCausticSurfBite = 0.45;
+const float kPtCausticSurfNear = 0.55;// m: no dapple above this, full below it
+const float kPtCausticSurfFade = 7.0; // m: its contrast gone by here
+float murkCaustic(vec3 x, vec3 Lw, bool medium) {
+    if (pc.oceanFineTileSize <= 0.0) return 1.0;
+    const float depth = fog.waterSurfaceY - x.y;
+    if (depth <= (medium ? 0.0 : kPtCausticSurfNear * 0.5)) return 1.0;
+    const vec3  sd = -Lw;
+    const float sy = max(-dot(sd, airUp()), 0.08);
+    const vec2  sp = (x.xz - sd.xz * (depth / sy)) / pc.oceanFineTileSize;
+    const float s  = smoothstep(-0.10, 0.55, textureLod(oceanFineHeight, sp, 0.0).r * kPtCausticScale);
+    if (medium) return mix(1.0, s * kPtCausticPeak, kPtCausticBite);
+    const float bite = kPtCausticSurfBite * smoothstep(kPtCausticSurfNear * 0.5, kPtCausticSurfNear, depth)
+                     * (1.0 - smoothstep(0.0, kPtCausticSurfFade, depth));
+    return 1.0 + bite * (2.0 * s - 1.0);
+}
+
+
+// ── Shadow test ─────────────────────────────────────────────────────────────
+// The deferred shade's occlusion rule: shadow rays trace the opaque mask
+// (kRayMaskOpaque: no alpha-blend or transmissive instance, nothing under a
+// camera node); alpha-cutouts are tested at the candidate; transmissive and
+// blended surfaces let the ray through (there is no caustic path to light
+// what a glass would shadow); everything else — emitters included — blocks.
+bool shadowOccludes(int instIdx, int primId, vec2 bary) {
+    const MaterialDesc m = entryMat(instIdx);
+    if (m.transmission > 0.0) return false;
+    if (m.alphaCutoff < 0.0) return false;// blend
+    if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
+    const vec2  uv = fetchUvAt(instIdx, primId, bary);
+    const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
+    return a >= m.alphaCutoff;
+}
+
+float shadowVis(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                          kRayMaskOpaque, origin, 0.0, dir, tMax);
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            shadowOccludes(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                           rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                           rayQueryGetIntersectionBarycentricsEXT(rq, false)))
+            rayQueryConfirmIntersectionEXT(rq);
+    }
+    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
+
+// ── BSDF ────────────────────────────────────────────────────────────────────
+// The base is Lambert + GGX (Smith, separable), VNDF-sampled. On top of it,
+// as three.js layers them: sheen (Charlie distribution, Neubelt visibility,
+// the base scaled by 1 − 0.157·max(sheenColor)), and clearcoat (a GGX coat
+// with F0 = 0.04 on the vertex normal, the layer below dimmed by the coat's
+// Fresnel toward the view). Foliage translucency (MaterialWithTranslucency)
+// is a Lambertian transmission lobe on the far side of the surface:
+// kt = π · translucency · albedo · translucencyColor, the term the deferred
+// shade adds for a back-lit card (translucency × tint × light × cos, with
+// no 1/π), scaled down where kd + kt would pass 0.98. Directions are kept on the
+// geometric side they belong to: a reflection must leave on V's side of the
+// triangle, a transmission on the other, whatever the shading normal says.
+struct Surf {
+    vec3  P;
+    vec3  N;         // shading normal (maps applied), on V's side
+    vec3  Ng;        // geometric normal, on V's side
+    vec3  Nc;        // clearcoat normal (the vertex normal), on V's side
+    vec3  kd;        // diffuse albedo: albedo · (1 − metalness)
+    vec3  F0;        // specular reflectance at normal incidence
+    float alpha;     // roughness²
+    vec3  kt;        // diffuse transmission albedo, 0 = none
+    vec3  sheen;     // sheen colour, 0 = none
+    float sheenAlpha;// sheenRoughness²
+    float cc;        // clearcoat weight, 0 = none
+    float ccAlpha;   // clearcoatRoughness²
+    vec4  pick;      // lobe probabilities: specular, diffuse, transmission, clearcoat
+};
+
+const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
+
+float ggxD(float NdotH, float a2) {
+    const float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(PI * d * d, 1e-8);
+}
+float smithG1(float NdotX, float a2) {
+    return 2.0 * NdotX / max(NdotX + sqrt(a2 + (1.0 - a2) * NdotX * NdotX), 1e-8);
+}
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    const float f = pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+    return F0 + (1.0 - F0) * f;
+}
+float coatFresnel(float cosTheta) {
+    return 0.04 + 0.96 * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+void tangentFrame(vec3 N, out vec3 T, out vec3 B) {
+    const vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    T = normalize(cross(up, N));
+    B = cross(N, T);
+}
+
+// A GGX lobe about Nx: f (no cosine) and the VNDF pdf of L.
+vec3 ggxEval(vec3 Nx, float alpha, vec3 F0, vec3 V, vec3 L) {
+    const float NdotL = dot(Nx, L);
+    const float NdotV = dot(Nx, V);
+    if (NdotL <= 0.0 || NdotV <= 0.0) return vec3(0.0);
+    const vec3  H  = normalize(V + L);
+    const float a2 = alpha * alpha;
+    const vec3  F  = fresnelSchlick(max(dot(V, H), 0.0), F0);
+    const float D  = ggxD(max(dot(Nx, H), 0.0), a2);
+    const float G  = smithG1(NdotV, a2) * smithG1(NdotL, a2);
+    return F * (D * G / max(4.0 * NdotL * NdotV, 1e-6));
+}
+float ggxPdf(vec3 Nx, float alpha, vec3 V, vec3 L) {
+    const float NdotL = dot(Nx, L);
+    const float NdotV = dot(Nx, V);
+    if (NdotL <= 0.0 || NdotV <= 0.0) return 0.0;
+    const vec3  H  = normalize(V + L);
+    const float a2 = alpha * alpha;
+    return smithG1(NdotV, a2) * ggxD(max(dot(Nx, H), 0.0), a2) / max(4.0 * NdotV, 1e-6);
+}
+
+float charlieD(float NdotH, float alpha) {
+    const float invR = 1.0 / max(alpha, 1e-4);
+    const float sin2 = max(1.0 - NdotH * NdotH, 0.0078125);
+    return (2.0 + invR) * pow(sin2, invR * 0.5) / TWO_PI;
+}
+float neubeltV(float NdotV, float NdotL) {
+    return clamp(1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV)), 0.0, 1.0);
+}
+
+// The lobe probabilities for this view: each lobe's reflected (or
+// transmitted) energy, by luminance.
+void surfLobes(inout Surf s, vec3 V) {
+    const float NdotV = max(dot(s.N, V), 1e-4);
+    const float ws    = dot(fresnelSchlick(NdotV, s.F0), LUM);
+    const float wd    = dot(s.kd, LUM);
+    const float wt    = dot(s.kt, LUM);
+    const float wc    = s.cc > 0.0 ? s.cc * coatFresnel(max(dot(s.Nc, V), 1e-4)) : 0.0;
+    const float sum   = ws + wd + wt + wc;
+    s.pick = sum > 1e-6 ? vec4(ws, wd, wt, wc) / sum : vec4(0.0, 1.0, 0.0, 0.0);
+}
+
+// f(V, L) · |N·L| for every lobe together; 0 when L leaves on the wrong side.
+vec3 evalBsdfCos(const Surf s, vec3 V, vec3 L) {
+    const float NdotV = dot(s.N, V);
+    if (NdotV <= 0.0) return vec3(0.0);
+    const float NdotL = dot(s.N, L);
+    const float NgL   = dot(s.Ng, L);
+    const float coatV = s.cc > 0.0 ? 1.0 - s.cc * coatFresnel(max(dot(s.Nc, V), 0.0)) : 1.0;
+    if (NdotL > 0.0 && NgL > 0.0) {
+        vec3 f = s.kd * (1.0 / PI) + ggxEval(s.N, s.alpha, s.F0, V, L);
+        if (max(max(s.sheen.r, s.sheen.g), s.sheen.b) > 0.0) {
+            const vec3 H = normalize(V + L);
+            f = f * (1.0 - 0.157 * max(max(s.sheen.r, s.sheen.g), s.sheen.b)) +
+                s.sheen * (charlieD(max(dot(s.N, H), 0.0), s.sheenAlpha) * neubeltV(NdotV, NdotL));
+        }
+        if (s.cc > 0.0) f = f * coatV + s.cc * ggxEval(s.Nc, s.ccAlpha, vec3(0.04), V, L);
+        return f * NdotL;
+    }
+    if (NdotL < 0.0 && NgL < 0.0 && max(max(s.kt.r, s.kt.g), s.kt.b) > 0.0)
+        return s.kt * (coatV * -NdotL / PI);
+    return vec3(0.0);
+}
+
+// The pdf of L under the lobe mix (the value the MIS weights compare).
+float pdfBsdf(const Surf s, vec3 V, vec3 L) {
+    if (dot(s.N, V) <= 0.0) return 0.0;
+    const float NdotL = dot(s.N, L);
+    if (NdotL > 0.0) {
+        float p = s.pick.x * ggxPdf(s.N, s.alpha, V, L) + s.pick.y * NdotL / PI;
+        if (s.pick.w > 0.0) p += s.pick.w * ggxPdf(s.Nc, s.ccAlpha, V, L);
+        return p;
+    }
+    return s.pick.z * -NdotL / PI;
+}
+
+// Heitz 2018: a GGX microfacet normal distributed by the visible normals.
+// Ve is the view direction in the tangent frame (z = N).
+vec3 sampleGgxVndf(vec3 Ve, float a, vec2 u) {
+    const vec3  Vh    = normalize(vec3(a * Ve.x, a * Ve.y, Ve.z));
+    const float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    const vec3  T1    = lensq > 0.0 ? vec3(-Vh.y, Vh.x, 0.0) / sqrt(lensq) : vec3(1.0, 0.0, 0.0);
+    const vec3  T2    = cross(Vh, T1);
+    const float r     = sqrt(u.x);
+    const float phi   = TWO_PI * u.y;
+    const float t1    = r * cos(phi);
+    float       t2    = r * sin(phi);
+    const float sc    = 0.5 * (1.0 + Vh.z);
+    t2 = (1.0 - sc) * sqrt(max(0.0, 1.0 - t1 * t1)) + sc * t2;
+    const vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0, 1.0 - t1 * t1 - t2 * t2)) * Vh;
+    return normalize(vec3(a * Nh.x, a * Nh.y, max(0.0, Nh.z)));
+}
+
+vec3 sampleGgxReflect(vec3 Nx, float alpha, vec3 V, inout uint seed) {
+    vec3 T, B;
+    tangentFrame(Nx, T, B);
+    const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, Nx));
+    const vec3 Ht = sampleGgxVndf(Vt, alpha, vec2(rnd(seed), rnd(seed)));
+    return reflect(-V, T * Ht.x + B * Ht.y + Nx * Ht.z);
+}
+
+vec3 sampleCosine(vec3 Nx, inout uint seed) {
+    vec3 T, B;
+    tangentFrame(Nx, T, B);
+    const float r1  = rnd(seed), r2 = rnd(seed);
+    const float r   = sqrt(r1);
+    const float phi = TWO_PI * r2;
+    return normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + Nx * sqrt(max(0.0, 1.0 - r1)));
+}
+
+// A direction from the lobe mix; false when it left on the wrong side or
+// carries nothing. `weight` = f · |cos| / pdf for the path throughput.
+bool sampleBsdf(const Surf s, vec3 V, inout uint seed, out vec3 L, out float pdf, out vec3 weight) {
+    if (dot(s.N, V) <= 0.0) return false;
+    const float xi = rnd(seed);
+    if (xi < s.pick.x)                               L = sampleGgxReflect(s.N, s.alpha, V, seed);
+    else if (xi < s.pick.x + s.pick.y)               L = sampleCosine(s.N, seed);
+    else if (xi < s.pick.x + s.pick.y + s.pick.z)    L = sampleCosine(-s.N, seed);
+    else                                             L = sampleGgxReflect(s.Nc, s.ccAlpha, V, seed);
+    pdf = pdfBsdf(s, V, L);
+    if (pdf <= 1e-8) return false;
+    const vec3 fc = evalBsdfCos(s, V, L);
+    if (max(max(fc.r, fc.g), fc.b) <= 0.0) return false;
+    weight = fc / pdf;
+    return true;
+}
+
+// A shadow or continuation ray leaves from the side of the triangle its
+// direction points to.
+vec3 offsetOrigin(const Surf s, vec3 L) {
+    return s.P + s.Ng * (dot(s.Ng, L) >= 0.0 ? SHADOW_EPS : -SHADOW_EPS);
+}
+
+// ── Emitter next-event estimation ───────────────────────────────────────────
+// Picks a triangle by power (the table's inclusive CDF, as emissive_lights.glsl
+// walks it), then a uniform point on it. Two-sided: the table's power counts
+// both faces. The MIS partner is a bounce ray that lands on an emitter
+// (emitterHitPdf), the area pdf converted to solid angle at the hit.
+float emitterHitPdf(vec3 Le, float dist2, float cosL) {
+    const float lum = dot(Le, LUM);
+    if (pc.emissiveTotalPower <= 0.0 || lum <= 0.0 || cosL <= 1e-4) return 0.0;
+    // pdfArea = (lum·area / total) / area = lum / total
+    return lum / pc.emissiveTotalPower * dist2 / cosL;
+}
+
+vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    const float xi = rnd(seed) * pc.emissiveTotalPower;
+    uint lo = 0u, hi = pc.emissiveCount - 1u;
+    while (lo < hi) {
+        const uint mid = (lo + hi) >> 1u;
+        if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
+    }
+    const EmTri tri = emissiveTris[lo];
+    if (tri.v2.w <= 0.0 || tri.v0.w <= 0.0) return vec3(0.0);
+    const float r1 = rnd(seed), r2 = rnd(seed);
+    const float su = sqrt(r1);
+    const vec3  p  = (1.0 - su) * tri.v0.xyz + su * (1.0 - r2) * tri.v1.xyz + su * r2 * tri.v2.xyz;
+    vec3        nL = cross(tri.v1.xyz - tri.v0.xyz, tri.v2.xyz - tri.v0.xyz);
+    const float nl = length(nL);
+    if (nl <= 1e-12) return vec3(0.0);
+    nL /= nl;
+    vec3        toL   = p - s.P;
+    const float dist2 = dot(toL, toL);
+    const float dist  = sqrt(dist2);
+    if (dist < 1e-4) return vec3(0.0);
+    toL /= dist;
+    const float cosL = abs(dot(nL, -toL));
+    if (cosL <= 1e-4) return vec3(0.0);
+    const float pdfSolid = (tri.v2.w / pc.emissiveTotalPower) / tri.v0.w * dist2 / cosL;
+    if (pdfSolid <= 1e-12) return vec3(0.0);
+    const vec3 fc = evalBsdfCos(s, V, toL);
+    if (max(max(fc.r, fc.g), fc.b) <= 0.0) return vec3(0.0);
+    const float tMax = dist - SHADOW_EPS - dist * 1e-3;
+    if (tMax <= 1e-4) return vec3(0.0);
+    if (shadowVis(offsetOrigin(s, toL), toL, tMax) <= 0.0) return vec3(0.0);
+    const float pdfB = pdfBsdf(s, V, toL);
+    const float w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
+    return fc * (w / pdfSolid) * tri.emission.xyz;
+}
+
+// gi_bounce.glsl asks the includer for these. emissiveIrradiance is the
+// Lambert-only form giHitDirect would call; this shader's own NEE
+// (emitterNee) carries the full BSDF, so only the falloff helpers and the
+// analytic-light pick are used from the include.
+vec3 emissiveIrradiance(vec3 P, vec3 N, int samples, bool doShadows) { return vec3(0.0); }
+vec3 giSunLeg(vec3 P, inout vec3 L) { return vec3(1.0); }
+#include "gi_bounce.glsl"// distFalloff, lightRangeWindow, pickAnalyticLight
+
+// A direction inside the sun's cone around L (uniform over the disc).
+vec3 sunConeDir(vec3 L, inout uint seed) {
+    if (pc.sunTanHalfAngle <= 0.0) return L;
+    vec3 T, B;
+    tangentFrame(L, T, B);
+    const float r   = sqrt(rnd(seed)) * pc.sunTanHalfAngle;
+    const float phi = TWO_PI * rnd(seed);
+    return normalize(L + T * (r * cos(phi)) + B * (r * sin(phi)));
+}
+
+// ── The cloud layer (setClouds) ─────────────────────────────────────────────
+// cloud_march.comp's march along a leg: the shell between bottomY and topY,
+// the sun lit through a short march toward it (with the powder term), the
+// dual-lobe phase and the ambient from the environment, and the aerial haze
+// over its distance. A camera ray takes its 48 steps; a lighting ray a cheaper
+// 16, as the frame's own GI never sees the clouds at all. The sun's shadow
+// rays are dimmed by the clouds they cross (cloudSunTransmittance), the
+// shadows the frame takes from its cloud shadow map.
+bool cloudsOn() { return clouds.enabled > 0.5; }
+
+vec4 cloudLeg(vec3 ro, vec3 rd, float tMax, bool cheap, inout uint seed) {
+    if (abs(rd.y) < 1e-4) return vec4(0.0, 0.0, 0.0, 1.0);
+    const float tA = (clouds.bottomY - ro.y) / rd.y;
+    const float tB = (clouds.topY - ro.y) / rd.y;
+    const float t0 = max(min(tA, tB), 0.0);
+    const float t1 = min(max(tA, tB), min(tMax, 42000.0));
+    if (t1 <= t0) return vec4(0.0, 0.0, 0.0, 1.0);
+    const int   STEPS = cheap ? 16 : 48;
+    const int   LSTEPS = cheap ? 3 : 5;
+    const float dt    = (t1 - t0) / float(STEPS);
+    const float jit   = rnd(seed);
+    const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
+    const vec3  sunDir = lights.dirCount > 0u ? normalize(lights.dirLights[0].direction) : normalize(vec3(0.3, 0.85, 0.2));
+    const vec3  sunCol = lights.dirCount > 0u ? lights.dirLights[0].color : vec3(1.6);
+    const vec3  ambTop = sampleEnvLod(vec3(0.0, 1.0, 0.0), max(maxLod - 1.0, 0.0));
+    const vec3  ambBot = sampleEnvLod(vec3(0.0, -0.3, 0.0), maxLod) * 0.6 + lights.ambient;
+    const float mu     = dot(rd, sunDir);
+    const float phase  = mix(hgPhase(mu, 0.80), hgPhase(mu, -0.15), 0.5) * 4.0 * PI;
+    const float time   = clouds.timeSec;
+    const float lightStep = 90.0;
+    vec3  scat = vec3(0.0);
+    float T    = 1.0;
+    for (int i = 0; i < STEPS; ++i) {
+        const vec3  p    = ro + rd * (t0 + (float(i) + jit) * dt);
+        const float dens = cloudDensity(p, time);
+        if (dens <= 0.001) continue;
+        const float sigma = dens * kCloudSigmaMul;
+        float sunDepth = 0.0;
+        for (int j = 0; j < LSTEPS; ++j) {
+            sunDepth += cloudDensity(p + sunDir * ((float(j) + 0.5) * lightStep), time);
+            if (sunDepth * kCloudSigmaMul * lightStep > 12.0) break;
+        }
+        const float sunT   = exp(-sunDepth * kCloudSigmaMul * lightStep);
+        const float powder = 1.0 - exp(-dens * 3.2);
+        const vec3  sunLit = sunCol * (sunT * phase * mix(1.0, powder, 0.6));
+        const vec3  amb    = mix(ambBot, ambTop, clamp((p.y - clouds.bottomY) / max(clouds.topY - clouds.bottomY, 1.0), 0.0, 1.0));
+        const float stepT  = exp(-sigma * dt);
+        scat += (sunLit + amb) * (T * (1.0 - stepT));
+        T *= stepT;
+        if (T < 0.02) break;
+    }
+    const float aerial = 1.0 - exp(-t0 * 2.2e-5);
+    if (aerial > 0.001) {
+        const vec3 haze = sampleEnvLod(rd, maxLod) + lights.ambient;
+        scat = mix(scat, haze * (1.0 - T), aerial);
+        T    = mix(T, 1.0, aerial * 0.6);
+    }
+    return vec4(scat, T);
+}
+
+// The clouds' transmittance along a sun ray from x (1 with no clouds).
+float cloudSunTransmittance(vec3 x, vec3 L) {
+    if (!cloudsOn() || L.y <= 1e-4) return 1.0;
+    const float t0 = max((clouds.bottomY - x.y) / L.y, 0.0);
+    const float t1 = (clouds.topY - x.y) / L.y;
+    if (t1 <= t0) return 1.0;
+    const int   N  = 12;
+    const float dt = (t1 - t0) / float(N);
+    float od = 0.0;
+    for (int i = 0; i < N; ++i) od += cloudDensity(x + L * (t0 + (float(i) + 0.5) * dt), clouds.timeSec);
+    return exp(-od * kCloudSigmaMul * dt);
+}
+
+// Direct light from the analytic lights with the full BSDF (both sides of a
+// translucent surface). Up to eight lights are looped; past that one is
+// picked by delivered weight (pickAnalyticLight) and compensated, as
+// giHitDirect does.
+vec3 analyticNee(const Surf s, vec3 V, inout uint seed) {
+    vec3 lit = vec3(0.0);
+    const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
+    if (nLights == 0u) return lit;
+    const bool pickOne = nLights > 8u;
+    float wL = 1.0;
+    const uint pick = pickOne ? pickAnalyticLight(s.P, seed, wL) : 0xFFFFFFFFu;
+    if (pickOne && pick == 0xFFFFFFFFu) return lit;
+
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        if (pickOne && i != pick) continue;
+        vec3 L   = sunConeDir(normalize(lights.dirLights[i].direction), seed);
+        vec3 col = lights.dirLights[i].color;
+        if (murkOn() && s.P.y < fog.waterSurfaceY) {// under the water: refracted, attenuated (murkSunLeg)
+            vec3 Lw, trSun;
+            if (!murkSunDir(s.P, L, Lw, trSun)) continue;
+            L = Lw;
+            col *= trSun * murkCaustic(s.P, Lw, false);
+        }
+        const vec3 fc = evalBsdfCos(s, V, L);
+        if (max(max(fc.r, fc.g), fc.b) <= 0.0) continue;
+        const float vis = shadowVis(offsetOrigin(s, L), L, 1e30) * cloudSunTransmittance(s.P, L);
+        lit += fc * col * (vis * wL);
+    }
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        if (pickOne && (lights.dirCount + i) != pick) continue;
+        vec3        toL  = lights.pointLights[i].position - s.P;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        float atten = 1.0 / max(distFalloff(dist, lights.pointLights[i].decay), 0.01);
+        atten *= lightRangeWindow(dist, lights.pointLights[i].range);
+        if (atten <= 1e-6) continue;
+        const vec3 fc = evalBsdfCos(s, V, toL);
+        if (max(max(fc.r, fc.g), fc.b) <= 0.0) continue;
+        const float vis = shadowVis(offsetOrigin(s, toL), toL, dist - 1e-2);
+        lit += fc * lights.pointLights[i].color * (atten * vis * wL);
+    }
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        if (pickOne && (lights.dirCount + lights.pointCount + i) != pick) continue;
+        vec3        toL  = lights.spotLights[i].position - s.P;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                           lights.spotLights[i].cosAngleInner, spotCos);
+        if (spotAtten <= 0.0) continue;
+        float atten = spotAtten / max(distFalloff(dist, lights.spotLights[i].decay), 0.01);
+        atten *= lightRangeWindow(dist, lights.spotLights[i].range);
+        if (atten <= 1e-6) continue;
+        const vec3 fc = evalBsdfCos(s, V, toL);
+        if (max(max(fc.r, fc.g), fc.b) <= 0.0) continue;
+        const float vis = shadowVis(offsetOrigin(s, toL), toL, dist - 1e-2);
+        lit += fc * lights.spotLights[i].color * (atten * vis * wL);
+    }
+    return lit;
+}
+
+// The sun's single scatter in the air along [o, o + d·tEnd] (odEnd its
+// optical depth): ∫ σ_s(t) T(t) Σ sun · phase · visibility dt, estimated
+// with one distance drawn in proportion to σ(t) T(t), so the estimate is
+// (1 − T(tEnd)) · albedo · Σ sun · phase · visibility there. The deferred
+// shade marches the same integral in 16 steps a pixel; here every sample
+// draws its own point and shadow ray, so the shafts between trunks and
+// through the crowns converge to their exact shape. The sun reaches the
+// point unattenuated by the air, as in the deferred march.
+vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, inout uint seed) {
+    if (lights.dirCount == 0u || odEnd <= 1e-6 || tEnd <= 0.0) return vec3(0.0);
+    const float Tend   = exp(-odEnd);
+    const float target = -log(max(1.0 - rnd(seed) * (1.0 - Tend), 1e-30));
+    float lo = 0.0, hi = tEnd;
+    for (int i = 0; i < 20; ++i) {
+        const float mid = 0.5 * (lo + hi);
+        if (airOpticalDepth(o, o + d * mid) < target) lo = mid; else hi = mid;
+    }
+    const vec3 x = o + d * (0.5 * (lo + hi));
+    if (fog.waterSurfaceY < 1e29 && x.y < fog.waterSurfaceY) return vec3(0.0);
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3 L = sunConeDir(normalize(lights.dirLights[i].direction), seed);
+        const float ph = hgPhase(dot(L, d), fog.anisotropy);
+        if (ph <= 0.0) continue;
+        sum += lights.dirLights[i].color * (ph * shadowVis(x, L, 1e30) * cloudSunTransmittance(x, L));
+    }
+    return sum * airAlbedo() * (1.0 - Tend);
+}
+
+// ── The lamps in the air ────────────────────────────────────────────────────
+// The point and spot lights' single scatter along a leg: the frame's beam
+// march (volumetricSpotScatter) and its froxels' point-light glow, with their
+// terms. The medium is the air (airSigma), or the beam density
+// setDeferredVolumetrics gives clear air where that is thicker, with the air's
+// albedo and its HG g (setDeferredVolumetrics's anisotropy where there is no fog);
+// a lamp's light falls off as 1/max(d², 1 m²) under the frame's range window
+// (200 m for a lamp without a range) and a spot's cone. Each sample draws one
+// lamp by the luminance of its colour times the angle the leg's stretch in its
+// reach subtends at it over the distance (the inverse square's integral along
+// the stretch), one point on that stretch equi-angularly about the lamp
+// (Kulla and Fajardo 2012, as the frame's march steps), and traces the point's
+// shadow ray, so a beam is cut by what stands in it, which the frame's march
+// does not do. Above the water only: a submerged leg is the murk's (murkLeg).
+const uint kPtLampCap = 16u;// 8 point + 8 spot lights in the lights block
+
+float lampLegDepth(vec3 a, vec3 b) {
+    return max(airOn() ? airOpticalDepth(a, b) : 0.0, pc.volDensity * distance(a, b));
+}
+
+// Lamp i's stretch [t0, t1] of the leg o + t·d, t in [0, tTop]: inside its
+// reach (and its cone); tc the leg's closest approach, h (>= 1 m) its distance
+// there. The weight it is drawn by; 0 when the leg misses it.
+float lampStretch(vec3 o, vec3 d, float tTop, uint i, out float t0, out float t1, out float tc, out float h) {
+    t0 = t1 = tc = 0.0;
+    h = 1.0;
+    const bool spot = i >= lights.pointCount;
+    const uint j    = spot ? i - lights.pointCount : i;
+    const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+    if (fog.waterSurfaceY < 1e29 && pos.y < fog.waterSurfaceY) return 0.0;
+    const float rng   = spot ? lights.spotLights[j].range : lights.pointLights[j].range;
+    const float range = rng > 0.0 ? rng : 200.0;
+    const vec3  oc    = o - pos;
+    const float b     = dot(oc, d);
+    const float disc  = b * b - (dot(oc, oc) - range * range);
+    if (disc <= 0.0) return 0.0;
+    const float sq = sqrt(disc);
+    t0 = max(-b - sq, 0.0);
+    t1 = min(-b + sq, tTop);
+    if (spot) {
+        const vec2 cone = spotConeInterval(o, d, pos, lights.spotLights[j].direction, lights.spotLights[j].cosAngleOuter);
+        t0 = max(t0, cone.x);
+        t1 = min(t1, cone.y);
+    }
+    if (t1 <= t0) return 0.0;
+    tc = -b;
+    h  = max(length(oc + d * tc), 1.0);
+    const vec3 col = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+    const float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    return lum * (atan((t1 - tc) / h) - atan((t0 - tc) / h)) / h;
+}
+
+vec3 airLampScatter(vec3 o, vec3 d, float tEnd, inout uint seed) {
+    const uint n = min(lights.pointCount + lights.spotCount, kPtLampCap);
+    if (n == 0u || (!airOn() && pc.volDensity <= 0.0)) return vec3(0.0);
+    float tTop = min(tEnd, 1e5);
+    if (fog.waterSurfaceY < 1e29) {
+        if (o.y < fog.waterSurfaceY) return vec3(0.0);
+        if (d.y < -1e-6) tTop = min(tTop, (fog.waterSurfaceY - o.y) / d.y);
+    }
+    float w[kPtLampCap];
+    float W = 0.0;
+    float t0, t1, tc, h;
+    for (uint i = 0u; i < n; ++i) {
+        w[i] = lampStretch(o, d, tTop, i, t0, t1, tc, h);
+        W += w[i];
+    }
+    if (W <= 0.0) return vec3(0.0);
+    float xi   = rnd(seed) * W;
+    uint  pick = 0u;
+    for (uint i = 0u; i < n; ++i) {
+        if (w[i] <= 0.0) continue;
+        pick = i;
+        if (xi < w[i]) break;
+        xi -= w[i];
+    }
+    const float pPick = w[pick] / W;
+    lampStretch(o, d, tTop, pick, t0, t1, tc, h);
+    // Equi-angular: t = tc + h·tan(θ), θ uniform over the stretch's angle, so
+    // the pdf is h / ((θb − θa)(h² + (t − tc)²)).
+    const float thA = atan((t0 - tc) / h);
+    const float thB = atan((t1 - tc) / h);
+    const float t   = clamp(tc + h * tan(mix(thA, thB, rnd(seed))), t0, t1);
+    const float u   = t - tc;
+    const float invPdf = (thB - thA) * (h * h + u * u) / h;
+    const vec3  x   = o + d * t;
+
+    const bool spot = pick >= lights.pointCount;
+    const uint j    = spot ? pick - lights.pointCount : pick;
+    const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+    vec3        toL  = pos - x;
+    const float dist = length(toL);
+    if (dist < 1e-3) return vec3(0.0);
+    toL /= dist;
+    float atten = 1.0 / max(dist * dist, 1.0);
+    const float rng   = spot ? lights.spotLights[j].range : lights.pointLights[j].range;
+    const float tr    = dist / (rng > 0.0 ? rng : 200.0);
+    const float wnd   = max(1.0 - tr * tr * tr * tr, 0.0);
+    atten *= wnd * wnd;
+    if (spot) atten *= smoothstep(lights.spotLights[j].cosAngleOuter, lights.spotLights[j].cosAngleInner,
+                                  dot(-toL, lights.spotLights[j].direction));
+    if (atten <= 0.0) return vec3(0.0);
+    const float g     = (airOn() || fog.enabled > 0.5) ? fog.anisotropy : pc.volAniso;
+    const float sigma = max(airOn() ? airSigma(x) : 0.0, pc.volDensity);
+    const float T     = exp(-lampLegDepth(o, x) - lampLegDepth(x, pos));
+    const vec3  col   = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+    const float vis   = shadowVis(x, toL, dist - 1e-2);
+    return col * airAlbedo() * (sigma * atten * hgPhase(dot(toL, d), g) * T * vis * invPdf / pPick);
+}
+
+// ── The underwater murk (setUnderwaterMurk) ─────────────────────────────────
+// The deferred shade's water column: a homogeneous medium below
+// waterSurfaceY with sigma_t per channel (murkSigma) and murkColor as its
+// albedo. A leg's submerged part is dimmed by e^(−σ·len), takes the ambient
+// in-scatter murkColor · ambient · grade · (1 − T) (graded by the leg's
+// elevation as applyMurk grades it: a column is lit from above) and the sun's
+// single scatter, the sun refracted at a flat surface and attenuated by the
+// water over it (murkSunScatter, with kMurkShaftGain), braided by the frame's
+// crest proxy (murkCaustic). True caustics are not modelled.
+// The murk on one leg: its transmittance (per channel) and what it adds.
+vec3 murkLeg(vec3 o, vec3 d, float tEnd, inout vec3 add, inout uint seed) {
+    float t0, t1;
+    if (!murkOn() || !murkClip(o, d, tEnd, t0, t1)) return vec3(1.0);
+    const float len = t1 - t0;
+    const vec3  T   = exp(-fog.murkSigma * len);
+    const vec3  up  = airUp();
+    const float elev  = clamp(dot(d, up), -1.0, 1.0);
+    const float grade = elev >= 0.0 ? mix(1.0, 1.55, elev) : mix(1.0, 0.30, -elev);
+    add += fog.murkColor * airAmbientLight(up) * grade * (vec3(1.0) - T);
+    // The lights: one point drawn on the submerged part by the clearest
+    // channel's e^(−σ0 t), weighted per channel.
+    if (lights.dirCount + lights.pointCount + lights.spotCount > 0u) {
+        const float s0   = fog.murkDensity;
+        const float E    = 1.0 - exp(-s0 * len);
+        const float t    = -log(max(1.0 - rnd(seed) * E, 1e-30)) / s0;
+        const vec3  x    = o + d * (t0 + t);
+        const vec3  w    = fog.murkSigma * exp(-fog.murkSigma * t) * (E / (s0 * exp(-s0 * t)));
+        const float g    = fog.enabled > 0.5 ? fog.anisotropy : kPtMurkShaftG;
+        vec3 sun = vec3(0.0);
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            vec3 Lw, trSun;
+            if (!murkSunDir(x, normalize(lights.dirLights[i].direction), Lw, trSun)) continue;
+            sun += lights.dirLights[i].color * trSun *
+                   (hgPhase(dot(Lw, d), g) * shadowVis(x, Lw, 1e30) * murkCaustic(x, Lw, true));
+        }
+        add += sun * w * fog.murkColor * kPtMurkShaftGain;
+        // The point and spot lights in the water too: a floodlight over the
+        // surface lights the column under it (straight through the surface,
+        // dimmed by the water between), the pool of light the water shows.
+        vec3 lamps = vec3(0.0);
+        for (uint i = 0u; i < lights.pointCount + lights.spotCount; ++i) {
+            const bool spot = i >= lights.pointCount;
+            const uint j    = spot ? i - lights.pointCount : i;
+            const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+            vec3        toL  = pos - x;
+            const float dist = length(toL);
+            if (dist < 1e-3) continue;
+            toL /= dist;
+            float atten = spot ? smoothstep(lights.spotLights[j].cosAngleOuter, lights.spotLights[j].cosAngleInner,
+                                            dot(-toL, lights.spotLights[j].direction))
+                               : 1.0;
+            if (atten <= 0.0) continue;
+            atten /= max(distFalloff(dist, spot ? lights.spotLights[j].decay : lights.pointLights[j].decay), 0.01);
+            atten *= lightRangeWindow(dist, spot ? lights.spotLights[j].range : lights.pointLights[j].range);
+            if (atten <= 1e-6) continue;
+            const float wet = toL.y > 1e-4 ? min((fog.waterSurfaceY - x.y) / toL.y, dist) : dist;
+            const vec3  trL = exp(-fog.murkSigma * max(wet, 0.0));
+            const vec3  col = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+            lamps += col * trL * (atten * hgPhase(dot(toL, d), g) * shadowVis(x, toL, dist - 1e-2));
+        }
+        add += lamps * w * fog.murkColor;
+    }
+    return T;
+}
+
+// ── ParticleField density volumes: dust, mist, smoke, fire ──────────────────
+// The deferred shade's applyParticleFog, per path leg: the same march over
+// the union of the volume boxes (a step under the finest volume's voxel, the
+// faces feathered), the same transmittance e^-tau, the same in-scatter
+// albedo · (ambient + sun) · ∫σT and the same blackbody emission. Where the
+// deferred shade lights the sun's share at the march's σ-weighted centroid,
+// each sample here draws one station in proportion to its σT weight and
+// traces its shadow ray and the medium's own transmittance toward the sun
+// from there, so the plume's self-shadow and the shafts through it converge
+// to the real thing.
+struct DustLeg {
+    float T;    // transmittance of the dust along the leg
+    vec3  add;  // radiance the dust adds in front of what lies beyond
+    vec3  xPick;// the station the sun was lit at
+};
+
+DustLeg dustLeg(vec3 ro, vec3 rd, float tMax, inout uint seed) {
+    DustLeg r;
+    r.T     = 1.0;
+    r.add   = vec3(0.0);
+    r.xPick = ro;
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    if (n == 0u) return r;
+    float t0 = 1e30, t1 = 0.0;
+    const vec3 inv = 1.0 / rd;
+    for (uint i = 0u; i < n; ++i) {
+        const vec3  bmin  = pd.boxMin[i].xyz;
+        const vec3  bsize = 1.0 / pd.boxInvSize[i].xyz;
+        const vec3  ta = (bmin - ro) * inv;
+        const vec3  tb = (bmin + bsize - ro) * inv;
+        const vec3  lo = min(ta, tb), hi = max(ta, tb);
+        const float e  = max(max(lo.x, lo.y), max(lo.z, 0.0));
+        const float x  = min(min(hi.x, hi.y), hi.z);
+        if (x > e) { t0 = min(t0, e); t1 = max(t1, x); }
+    }
+    t1 = min(t1, tMax);
+    if (t1 <= t0) return r;
+
+    float vmin = 1e30;
+    for (uint i = 0u; i < n; ++i) {
+        const vec3 bsz = 1.0 / pd.boxInvSize[i].xyz;
+        const vec3 res = vec3(textureSize(particleDensityLinTex[i], 0));
+        vmin = min(vmin, min(min(bsz.x / res.x, bsz.y / res.y), bsz.z / res.z));
+    }
+    const float span   = t1 - t0;
+    const float want   = min(0.75 * vmin, 1.0);
+    const int   STEPS  = clamp(int(ceil(span / max(want, 0.05))), 16, 256);
+    const float dt     = span / float(STEPS);
+    const float jitter = rnd(seed);
+    const bool  emissive = pd.counts.y != 0u;
+
+    float tau = 0.0, wsum = 0.0, gW = 0.0;
+    vec3  albW = vec3(0.0), emis = vec3(0.0);
+    for (int s = 0; s < STEPS; ++s) {
+        const vec3 x = ro + rd * (t0 + (float(s) + jitter) * dt);
+        float sig = 0.0, gStep = 0.0;
+        vec3  albStep = vec3(0.0), emStep = vec3(0.0);
+        for (uint i = 0u; i < n; ++i) {
+            const vec3 tt = (x - pd.boxMin[i].xyz) * pd.boxInvSize[i].xyz;
+            if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
+            const vec3  fw = smoothstep(vec3(0.0), vec3(0.045), tt) * smoothstep(vec3(0.0), vec3(0.045), 1.0 - tt);
+            const float si = texture(particleDensityLinTex[i], tt).r * (fw.x * fw.y * fw.z);
+            sig += si;
+            albStep += pd.albedoAniso[i].rgb * si;
+            gStep   += pd.albedoAniso[i].a * si;
+            if (emissive && pd.emission[i].x > 0.0) emStep += pdEmissionAt(i, tt.y, si);
+        }
+        if (sig <= 0.0) continue;
+        const float tr = exp(-tau);
+        const float w  = sig * tr * dt;
+        tau  += sig * dt;
+        wsum += w;
+        albW += albStep * (tr * dt);
+        gW   += gStep * (tr * dt);
+        if (emissive) emis += emStep * (tr * dt);
+        if (rnd(seed) * wsum < w) r.xPick = x;// one station, drawn by its weight
+        if (tau > 8.0) break;
+    }
+    r.T = exp(-tau);
+    if (wsum <= 0.0) {
+        r.add = emis;
+        return r;
+    }
+    const vec3  medAlbedo = albW / wsum;
+    const float medG      = gW / wsum;
+    vec3 sun = vec3(0.0);
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3 L = sunConeDir(normalize(lights.dirLights[i].direction), seed);
+        sun += lights.dirLights[i].color *
+               (hgPhase(dot(L, rd), medG) * shadowVis(r.xPick, L, 1e30) * pdLightTransmittance(r.xPick, L));
+    }
+    const vec3 amb = lights.ambient + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    r.add = medAlbedo * (amb + sun) * wsum + emis;
+    return r;
+}
+
+// The point and spot lights reflected off a dielectric interface (water,
+// glass): f = GGX(N, alpha²) with the interface's Fresnel, each light's
+// falloff, range window and cone, and its shadow ray.
+vec3 dielectricGlints(vec3 P, vec3 N, vec3 Ng, vec3 V, float ior, float rough) {
+    vec3 sum = vec3(0.0);
+    const float f0 = (ior - 1.0) / (ior + 1.0);
+    const vec3  F0 = vec3(f0 * f0);
+    const float a  = rough * rough;
+    const vec3  o  = P + Ng * SHADOW_EPS;
+    for (uint i = 0u; i < lights.pointCount + lights.spotCount; ++i) {
+        const bool spot = i >= lights.pointCount;
+        const uint j    = spot ? i - lights.pointCount : i;
+        const vec3 pos  = spot ? lights.spotLights[j].position : lights.pointLights[j].position;
+        vec3        toL  = pos - P;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float NdotL = dot(N, toL);
+        if (NdotL <= 0.0 || dot(Ng, toL) <= 0.0) continue;
+        float atten = spot ? smoothstep(lights.spotLights[j].cosAngleOuter, lights.spotLights[j].cosAngleInner,
+                                        dot(-toL, lights.spotLights[j].direction))
+                           : 1.0;
+        if (atten <= 0.0) continue;
+        atten /= max(distFalloff(dist, spot ? lights.spotLights[j].decay : lights.pointLights[j].decay), 0.01);
+        atten *= lightRangeWindow(dist, spot ? lights.spotLights[j].range : lights.pointLights[j].range);
+        if (atten <= 1e-6) continue;
+        const vec3 f = ggxEval(N, a, F0, V, toL);
+        if (max(max(f.r, f.g), f.b) <= 0.0) continue;
+        const vec3 col = spot ? lights.spotLights[j].color : lights.pointLights[j].color;
+        sum += f * col * (NdotL * atten * shadowVis(o, toL, dist - 1e-2));
+    }
+    return sum;
+}
+
+// ── The camera ray's hit: alpha-cutouts tested, culled sides passed ─────────
+// An alpha-BLEND texel is hit with the probability of its alpha (stochastic
+// transparency, the trace's form of the raster's screen-door): over the
+// samples of a pixel the surface covers what its alpha says. rayKey is this
+// ray's own random key, so a candidate's draw does not move the path's RNG.
+bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front, uint rayKey) {
+    const MaterialDesc m = entryMat(instIdx);
+    // The side the raster culls is not there for the ray either — except on a
+    // transmissive surface, whose far wall is the refraction out: a ray inside
+    // a front-only glass sphere has to find the back face it leaves through.
+    if (m.transmission <= 0.0) {
+        if (m.sideMode == 0 && !front) return false;
+        if (m.sideMode == 1 && front) return false;
+    }
+    if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
+    const vec2  uv = fetchUvAt(instIdx, primId, bary);
+    const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
+    if (m.alphaCutoff > 0.0) return a >= m.alphaCutoff;
+    const uint h = pcgHash(rayKey ^ pcgHash(uint(primId) * 0x9e3779b9u + uint(instIdx) * 0x85ebca6bu));
+    return float(h) * (1.0 / 4294967296.0) < a;
+}
+
+// ── One path ────────────────────────────────────────────────────────────────
+vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
+    vec3  L          = vec3(0.0);
+    vec3  throughput = vec3(1.0);
+    float lastPdf    = 0.0;  // BSDF pdf of the bounce that produced the current ray
+    bool  delta      = true; // the current ray came from the camera or a delta event: emitters count whole
+    bool  camChain   = true; // the camera ray, or one it continued through glass: a miss shows the background
+    bool  inside     = false;// travelling inside a dielectric (Beer-Lambert on the next leg)
+    vec3  insideAtt  = vec3(1.0);// per-metre transmittance while inside
+    float insideDist = 0.0;      // attenuationDistance of that medium
+
+    for (uint bounce = 0u; bounce <= pc.maxBounces; ++bounce) {
+        rayQueryEXT rq;
+        const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                    rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, false),
+                                    rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
+                rayQueryConfirmIntersectionEXT(rq);
+        }
+        const bool  miss = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT;
+        const float tHit = miss ? 1e30 : rayQueryGetIntersectionTEXT(rq, true);
+
+        // ── The air on this leg ─────────────────────────────────────────────
+        // As the deferred shade fogs a leg: what lies beyond is dimmed by the
+        // leg's transmittance T, the medium adds albedo · ambient · (1 − T)
+        // (the sky's share of its light) and the sun's single scatter along
+        // the leg, here with exact shadows. A leg that escapes takes the
+        // sky's transmittance (applySkyFog) and carries the sun's scatter to
+        // the medium's optical horizon.
+        // The dust (ParticleField volumes) on the same leg adds its own
+        // in-scatter, dimmed by the air between the camera and where the sun
+        // lit it, and its transmittance on everything beyond.
+        {
+            float legT = 1.0;
+            if (!inside && airOn()) {
+                const vec3 up = airUp();
+                if (miss) {
+                    const float Tsky = airSkyTransmittance(o, d);
+                    const float tEnd = airSkyLegLength(o);
+                    L += throughput * (airAlbedo() * airAmbientLight(up) * (1.0 - Tsky) +
+                                       airSunScatter(o, d, tEnd, airOpticalDepth(o, o + d * tEnd), seed));
+                    legT = Tsky;
+                } else {
+                    const float od = airOpticalDepth(o, o + d * tHit);
+                    L += throughput * (airAlbedo() * airAmbientLight(up) * (1.0 - exp(-od)) +
+                                       airSunScatter(o, d, tHit, od, seed));
+                    legT = exp(-od);
+                }
+            }
+            if (!inside && (airOn() || pc.volDensity > 0.0))
+                L += throughput * airLampScatter(o, d, miss ? 1e30 : tHit, seed);
+            if (!inside && pd.counts.x > 0u) {
+                const DustLeg dl = dustLeg(o, d, miss ? 1e30 : tHit, seed);
+                const float   Ta = airOn() ? exp(-airOpticalDepth(o, dl.xPick)) : 1.0;
+                L += throughput * dl.add * Ta;
+                legT *= dl.T;
+            }
+            if (cloudsOn() && !inside) {
+                // The cloud layer on the leg, behind the air in front of it.
+                const vec4 cl = cloudLeg(o, d, miss ? 1e30 : tHit, !camChain, seed);
+                L += throughput * cl.rgb * legT;
+                legT *= cl.a;
+            }
+            vec3 legTc = vec3(legT);
+            if (murkOn()) {
+                // Air and water hold disjoint parts of the leg: whichever the
+                // leg starts in is in front of the other.
+                vec3 murkAdd = vec3(0.0);
+                const vec3 Tm = murkLeg(o, d, miss ? 1e30 : tHit, murkAdd, seed);
+                L += throughput * murkAdd * (o.y >= fog.waterSurfaceY ? legT : 1.0);
+                legTc *= Tm;
+            }
+            throughput *= legTc;
+            if (max(max(throughput.r, throughput.g), throughput.b) < 1e-4) break;
+        }
+
+        if (miss) {
+            // The camera ray shows the background as the frame draws it
+            // (blurriness, intensity, rotation). A lighting ray reads the
+            // environment: mip 0, or mip 1 when a sun was extracted (flags
+            // bit 1), whose disc already arrives as a directional light
+            // through NEE (EnvPrefilter keeps the original pixels in mip 0
+            // alone); counting the disc twice put a firefly on every glossy
+            // leaf that escaped toward it.
+            if (camChain) {
+                L += throughput * (sampleBackground(d) + proceduralStars(d));
+            } else {
+                const bool  sunExtracted = (pc.flags & 2u) != 0u;
+                const float lod = (!sunExtracted || pc.envMipCount < 2u) ? 0.0 : 1.0;
+                L += throughput * sampleEnvLod(d, lod);
+            }
+            break;
+        }
+
+        const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const MaterialDesc hm     = entryMat(hitId);
+        const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        const mat4x3 o2w    = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
+        const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+        const bool   front  = rayQueryGetIntersectionFrontFaceEXT(rq, true);
+        const PtHit  hh     = ptFetchHit(hitId, primId, bary, o2w, w2o);
+        const vec3   P      = o + d * tHit;
+        const vec3   V      = -d;
+
+        // Beer-Lambert inside a dielectric, unless the murk is the water body
+        // (the leg's submerged part was dimmed by it above).
+        if (inside && insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater))
+            throughput *= pow(insideAtt, vec3(tHit / insideDist));
+
+        // The triangle's side the ray came from, and the vertex normal turned
+        // to it (gbuffer.frag flips the normal of a back face before it maps it).
+        const vec3 Ng = dot(hh.Ng, V) >= 0.0 ? hh.Ng : -hh.Ng;
+        const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
+        const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
+        vec3 albedo = sf.albedo;
+        if (sf.roughness < 0.0) {// unlit
+            L += throughput * albedo;
+            break;
+        }
+        // A map can tip the normal past the view; lean it back to graze it.
+        vec3 N = sf.N;
+        {
+            const float nv = dot(N, V);
+            if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+        }
+        // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
+        // is the water's interface: the fine cascade's slope tilts the wave
+        // mesh's normal, as the deferred shade's prologue tilts it, at full
+        // strength (the samples of a pixel integrate the chop the frame has to
+        // filter into roughness).
+        // The wake (DisplacedMesh::WakeField) on it, as the deferred shade
+        // reads it: the lane a hull leaves calms the chop, turbulent water
+        // boils, the hulls' ripples run on it; and where the field holds foam
+        // or aeration the surface is, with the share the deferred shade blends
+        // them in by, a diffuse film or the milky body just under it (an
+        // opaque diffuse layer here, in place of the water's interface).
+        const bool isOcean = geoms[hitId].foamAddress != 0ul;
+        const bool hasWake = geoms[hitId].foamAddress > 1ul;
+        float rough = sf.roughness;
+        float metal = sf.metalness;
+        bool  wakeLayer = false;
+        if (isOcean) {
+            vec2 g = vec2(0.0);
+            if (pc.oceanFineTileSize > 0.0) {
+                const float invTile = 1.0 / pc.oceanFineTileSize;
+                const float eps     = pc.oceanFineTileSize / 32.0;
+                const float dUV     = eps * invTile;
+                const vec2  uvW     = P.xz * invTile;
+                const float hL = textureLod(oceanFineHeight, uvW + vec2(-dUV, 0.0), 0.0).r * invTile;
+                const float hR = textureLod(oceanFineHeight, uvW + vec2( dUV, 0.0), 0.0).r * invTile;
+                const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -dUV), 0.0).r * invTile;
+                const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  dUV), 0.0).r * invTile;
+                g = vec2(hR - hL, hU - hD) / (2.0 * eps);
+            }
+            vec4 wk = vec4(0.0);
+            if (hasWake) {
+                const uint64_t wt = geoms[hitId].foamAddress;
+                wk = oceanWakeSample(wt, P.xz, 0.0);
+                g *= 1.0 - 0.9 * clamp(wk.a, 0.0, 1.0);
+                if (wk.b > 2e-3) {
+                    const float t   = WakeTable(wt).timeSec;
+                    const float amp = min(1.1 * wk.b, 0.24);
+                    g += amp * (0.6 * oceanWakeNoised(vec3(P.xz * 3.1, t * 1.7)).yz +
+                                0.4 * oceanWakeNoised(vec3(P.xz * 8.3 + 11.0, t * 2.9)).yz);
+                }
+                g += oceanWakeRipples(wt, P.xz, vec2(0.01, 0.0), vec2(0.0, 0.01)).xy;
+            }
+            const float sgn = N.y >= 0.0 ? 1.0 : -1.0;// tilt in the upward frame, face V after
+            N = sgn * normalize(sgn * N + vec3(-g.x, 0.0, -g.y));
+            const float nv = dot(N, V);
+            if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+            if (hasWake && (wk.r > 4e-3 || wk.g > 2e-3)) {
+                const bool  below = dot(V, airUp()) < 0.0;// seen from under the surface
+                const float wA    = WakeTable(geoms[hitId].foamAddress).albedo;
+                const float cover = smoothstep(0.10, 0.45, wk.r) * (below ? 0.12 : 1.0);
+                const float aer   = (!below && wk.g > 2e-3) ? 1.0 - exp(-1.8 * wk.g) : 0.0;
+                const float u     = rnd(seed);
+                if (u < cover) {
+                    albedo    = wA * mix(vec3(0.66, 0.72, 0.75), vec3(0.97, 0.99, 1.00), smoothstep(0.15, 0.85, wk.r));
+                    rough     = 0.8;
+                    wakeLayer = true;
+                } else if (u < cover + (1.0 - cover) * aer) {
+                    vec3 hue = max(hm.attenuationColor, vec3(1e-4));
+                    hue      = mix(vec3(1.0), hue / max(max(hue.r, hue.g), hue.b), 0.7);
+                    albedo   = 0.30 * wA * hue;
+                    rough    = 1.0;
+                    N        = Nv;// a volume under the surface: the chop is not in it
+                    wakeLayer = true;
+                }
+                if (wakeLayer) metal = 0.0;
+            }
+        }
+
+        // Emission at the hit, once: whole after a camera or delta ray, else
+        // weighted against the triangle NEE that could have found this point.
+        {
+            const vec3 Le = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hh.uv, hm.emissive * hm.emissiveIntensity);
+            if (max(max(Le.r, Le.g), Le.b) > 0.0) {
+                float w = 1.0;
+                if (!delta && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u) {
+                    const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, max(dot(Ng, V), 0.0));
+                    w = lastPdf * lastPdf / max(lastPdf * lastPdf + pdfL * pdfL, 1e-20);
+                }
+                L += throughput * Le * w;
+            }
+        }
+
+        SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+
+        // ── Transmission: a dielectric slab or shell ────────────────────────
+        if (hm.transmission > 0.0 && !wakeLayer && rnd(seed) < hm.transmission) {
+            // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
+            // is water whatever its material's ior.
+            // The ocean's material is thin-walled for the deferred shade's
+            // thin-shell BSDF; here it is a real interface, entered through
+            // the wave face's upper side: its geometric normal turned up. Not
+            // by the ray's own direction: a ray at a grazing angle just under
+            // the surface (a camera at the waterline) meets a steep face from
+            // below while still heading down, and leaves the water there.
+            const float ior = isOcean ? 1.333 : max(hm.ior, 1.0001);
+            const bool  thin = hm.thinWalled != 0 && !isOcean;
+            const vec3  NgUp = dot(hh.Ng, airUp()) >= 0.0 ? hh.Ng : -hh.Ng;
+            const bool  entering = isOcean ? dot(d, NgUp) < 0.0 : front;
+            const float eta  = thin ? 1.0 : (entering ? 1.0 / ior : ior);
+            // Microfacet normal for rough glass; the shading one when smooth.
+            vec3 H = N;
+            if (rough > 0.05) {
+                vec3 T, B;
+                tangentFrame(N, T, B);
+                const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
+                const vec3 Ht = sampleGgxVndf(Vt, rough * rough, vec2(rnd(seed), rnd(seed)));
+                H = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+            }
+            // The point and spot lights' glints on the interface: a GGX
+            // reflection lobe at the surface's roughness (at least 0.03), by
+            // next-event estimation, since a delta light is never found by the
+            // mirror ray the interface samples. The sun's glint is the
+            // background's disc on that mirror ray, so it is left out here.
+            if (!thin) L += throughput * dielectricGlints(P, N, Ng, V, ior, max(rough, 0.03));
+            const float VdotH = clamp(dot(V, H), 0.0, 1.0);
+            const float F0    = (ior - 1.0) / (ior + 1.0);
+            float F = F0 * F0 + (1.0 - F0 * F0) * pow(1.0 - VdotH, 5.0);
+            // Total internal reflection
+            const float sin2t = eta * eta * (1.0 - VdotH * VdotH);
+            if (sin2t >= 1.0) F = 1.0;
+            // A facet turned past the view (a grazing ray on a rough or choppy
+            // face: most of them, at the waterline) would send the ray into
+            // the face it came from. Killing that path drew a black band where
+            // water is nearly a perfect mirror; the face's own refraction or
+            // mirror takes it instead (and its refraction's total internal
+            // reflection, the mirror).
+            vec3 next;
+            bool reflected = rnd(seed) < F;
+            if (!reflected && !thin) {
+                next = refract(-V, H, eta);
+                if (dot(next, next) < 1e-6 || dot(next, Ng) >= 0.0) {
+                    next = refract(-V, Ng, eta);
+                    reflected = dot(next, next) < 1e-6;
+                }
+            }
+            if (reflected) {
+                next = reflect(-V, H);
+                if (dot(next, Ng) <= 0.0) next = reflect(-V, Ng);
+                o = P + Ng * SHADOW_EPS;
+            } else {
+                if (thin) next = d;
+                next = normalize(next);
+                if (dot(next, Ng) >= 0.0) break;
+                throughput *= albedo;
+                o = P - Ng * SHADOW_EPS;
+                if (!thin) {
+                    inside = entering;// entering on a front face, leaving on a back face
+                    if (inside) {
+                        insideDist = hm.attenuationDistance;
+                        insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                    }
+                }
+            }
+            d       = next;
+            delta   = true;
+            lastPdf = 0.0;
+            continue;
+        }
+
+        // ── Opaque (or translucent): NEE + a BSDF bounce ────────────────────
+        Surf s;
+        s.P     = P;
+        s.N     = N;
+        s.Ng    = Ng;
+        s.Nc    = Nv;
+        s.kd    = albedo * (1.0 - metal);
+        s.F0    = mix(vec3(0.04) * hm.specularIntensity * hm.specularColor, albedo, metal);
+        s.alpha = rough * rough;
+        s.kt    = vec3(0.0);
+        if (hm.translucency > 0.0) {
+            // Scaled as a whole (not clamped per channel, which would shift
+            // its hue) until no channel reflects and transmits more than 98 %.
+            const vec3 kt   = PI * hm.translucency * albedo * hm.translucencyColor;
+            const vec3 room = max(vec3(0.98) - s.kd, vec3(0.0));
+            float      sc   = 1.0;
+            for (int c = 0; c < 3; ++c)
+                if (kt[c] > room[c]) sc = min(sc, room[c] / kt[c]);
+            s.kt = kt * sc;
+        }
+        s.sheen      = max(hm.sheenColor, vec3(0.0));
+        s.sheenAlpha = max(hm.sheenRoughness * hm.sheenRoughness, 1e-3);
+        s.cc         = 0.0;
+        s.ccAlpha    = 1.0;
+        if (wakeLayer) s.sheen = vec3(0.0);
+        if (hm.clearcoat > 0.0 && !wakeLayer) {
+            float cc = hm.clearcoat, ccr = hm.clearcoatRoughness;
+            if (hm.clearcoatTexIndex >= 0)
+                cc *= ptTex(hm.clearcoatTexIndex, (hm.uvTransformClearcoat * vec3(hh.uv, 1.0)).xy).r;
+            if (hm.clearcoatRoughnessTexIndex >= 0)
+                ccr *= ptTex(hm.clearcoatRoughnessTexIndex, (hm.uvTransformClearcoatRough * vec3(hh.uv, 1.0)).xy).g;
+            s.cc      = clamp(cc, 0.0, 1.0);
+            const float ca = clamp(ccr, 0.04, 1.0);
+            s.ccAlpha = ca * ca;
+        }
+        surfLobes(s, V);
+
+        L += throughput * analyticNee(s, V, seed);
+        L += throughput * emitterNee(s, V, seed);
+
+        if (bounce == pc.maxBounces) break;
+
+        vec3 wi; float pdf; vec3 wgt;
+        if (!sampleBsdf(s, V, seed, wi, pdf, wgt)) break;
+        throughput *= wgt;
+
+        // Russian roulette from the third bounce
+        if (bounce >= 2u) {
+            const float q = clamp(max(max(throughput.r, throughput.g), throughput.b), 0.05, 0.95);
+            if (rnd(seed) > q) break;
+            throughput /= q;
+        }
+
+        o        = offsetOrigin(s, wi);
+        d        = wi;
+        lastPdf  = pdf;
+        delta    = false;
+        camChain = false;
+        // An opaque surface inside a dielectric (a seabed under the water, a
+        // stone in a glass block) leaves the path inside it: the next leg is
+        // still absorbed, until the path refracts out through the boundary.
+    }
+    return L;
+}
+
+// ── The camera ──────────────────────────────────────────────────────────────
+// The primary ray through a point of the picture (uv, top-left origin), as
+// the frame's camera forms its image. The lens distortion first, as the
+// frame's sensor pass warps it (setLensDistortion, about the output camera's
+// principal point, into the frustum the camera block holds, widened by
+// setLensOverscan); every ray here is traced, so a barrel lens's corners are
+// real whatever the overscan. Then the picture's aspect over the camera's: a
+// picture of another shape keeps the vertical field and widens or narrows the
+// horizontal. Then a thin lens under setDepthOfField: a disc of lensRadius
+// (the camera's focal length over twice setCameraExposure's f-number) focused
+// on the plane at focusDistance, the frame's circle of confusion to within
+// S/(S − f); a pinhole when the radius is 0, and always for a parallel
+// projection. Last, a dome port: a glass hemisphere centred on the lens, as
+// an underwater housing has, refracts nothing on a ray from its centre, so
+// each ray simply starts where it leaves the dome, in whatever medium is
+// there. Half under the water, the lower part of the picture starts in the
+// sea and the upper in the air, split along the line the waves draw across
+// the dome: the over-under picture.
+void ptCameraRay(vec2 uv, inout uint seed, out vec3 ro, out vec3 rd) {
+    const int model = int((pc.flags >> 2) & 3u);
+    if (model != LENS_MODEL_NONE) {
+        const vec2 pd = (uv - pc.lensK.zw) / pc.lensK.xy;
+        const vec2 p  = lensUndistort(model, pc.lensRadial, pc.lensTangential, pd);
+        uv = p * pc.lensK.xy + pc.lensK.zw;
+        if (pc.lensOverscan != 1.0) uv = pc.lensK.zw + (uv - pc.lensK.zw) / pc.lensOverscan;
+    }
+    const vec2 ndc = vec2((uv.x * 2.0 - 1.0) * pc.aspectScale, 1.0 - uv.y * 2.0);
+    ro = camRayOrigin(ndc);
+    rd = camRayDir(ndc);
+    if (cam.camAux.x > 0.5) return;
+    if (pc.lensRadius > 0.0) {
+        const vec4  tVS = cam.projInverse * vec4(ndc, 1.0, 1.0);
+        const vec3  v   = normalize(tVS.xyz / tVS.w);// view space, -z ahead
+        const vec3  pf  = v * (pc.focusDistance / max(-v.z, 1e-6));
+        const float r   = pc.lensRadius * sqrt(rnd(seed));
+        const float phi = TWO_PI * rnd(seed);
+        const vec3  lp  = vec3(r * cos(phi), r * sin(phi), 0.0);
+        ro = (cam.viewInverse * vec4(lp, 1.0)).xyz;
+        rd = normalize((cam.viewInverse * vec4(pf - lp, 0.0)).xyz);
+    }
+    if (pc.domeRadius > 0.0) {
+        // Where the ray leaves the sphere about the lens's centre (a thin
+        // lens's rays start a few millimetres off it).
+        const vec3  oc = ro - cam.viewInverse[3].xyz;
+        const float b  = dot(oc, rd);
+        const float c  = dot(oc, oc) - pc.domeRadius * pc.domeRadius;
+        ro += rd * (-b + sqrt(max(b * b - c, 0.0)));
+    }
+}
+
+void main() {
+    // One band of rows a dispatch: a picture larger than the frame is traced
+    // band by band, each pass over all of them one more set of samples.
+    const uvec2 px = uvec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + (pc.rows & 0xFFFFu));
+    if (px.x >= pc.width || px.y >= pc.height || gl_GlobalInvocationID.y >= (pc.rows >> 16)) return;
+    const uint idx = px.y * pc.width + px.x;
+
+    vec3 sum = vec3(0.0);
+    for (uint s = 0u; s < pc.samples; ++s) {
+        const uint sampleId = pc.sampleIndex + s;
+        uint seed = pcgHash(idx * 7919u ^ pcgHash(sampleId * 104729u + pc.seed * 2654435761u));
+        // Sub-pixel jitter; pixel (0,0) is the top-left, NDC y = +1 the top.
+        const vec2 jit = vec2(rnd(seed), rnd(seed));
+        const vec2 uv  = (vec2(px) + jit) / vec2(float(pc.width), float(pc.height));
+        vec3 ro, rd;
+        ptCameraRay(uv, seed, ro, rd);
+        vec3 Ls = tracePath(ro, rd, seed);
+        if (any(isnan(Ls)) || any(isinf(Ls))) Ls = vec3(0.0);
+        if (pc.fireflyClamp > 0.0) {
+            const float lum = max(max(Ls.r, Ls.g), Ls.b);
+            if (lum > pc.fireflyClamp) Ls *= pc.fireflyClamp / lum;
+        }
+        sum += Ls;
+    }
+
+    const vec4 prev = (pc.flags & 1u) != 0u ? vec4(0.0) : accum[idx];
+    accum[idx] = prev + vec4(sum, float(pc.samples));
+}

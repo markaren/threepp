@@ -56,6 +56,7 @@
 #include <cstring>
 #include <optional>
 #include <stdexcept>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -1125,6 +1126,131 @@ namespace threepp_py {
                               "THREEPP_VULKAN_NO_RT=1 did not turn them off. False: a raster-only frame where "
                               "every ray misses (sky/env-only GI and reflections, no lidar); shadows come from "
                               "shadow maps (shadow_mode).")
+                // ── Path trace of the current view ─────────────────────────
+                .def("path_trace_begin",
+                     [](PyVulkanRenderer& r, uint32_t samples_per_frame, uint32_t max_bounces, float firefly_clamp,
+                        uint32_t width, uint32_t height, float dome_port) {
+                         VulkanRenderer::PathTraceParams p;
+                         p.samplesPerFrame = samples_per_frame;
+                         p.maxBounces      = max_bounces;
+                         p.fireflyClamp    = firefly_clamp;
+                         p.width           = width;
+                         p.height          = height;
+                         p.domePort        = dome_port;
+                         r.native().pathTraceBegin(p);
+                     },
+                     py::arg("samples_per_frame") = 8, py::arg("max_bounces") = 6, py::arg("firefly_clamp") = 0.f,
+                     py::arg("width") = 0, py::arg("height") = 0, py::arg("dome_port") = 0.f,
+                     "Start (or restart) a progressive path trace of the primary view over the scene "
+                     "the frame renders: every frame drawn while the session is active adds "
+                     "samples_per_frame camera paths per pixel (this render() draws flush_frames "
+                     "frames per call, 3 by default), read back with path_trace_read(). "
+                     "width, height: the picture's own extent (0 = the render extent), which may be larger "
+                     "than the window or the screen; a picture of another shape keeps the camera's vertical "
+                     "field. A frame traces a band of rows no larger than the frame, so path_trace_samples "
+                     "counts whole passes and path_trace_progress the rows of the pass in progress too. "
+                     "dome_port: a dome port's radius about the lens (m, 0 = none): every camera ray starts where it "
+                     "leaves the dome, so a camera at the waterline traces the over-under picture. "
+                     "The frame on screen is untouched. Converges over a still scene only (pin the "
+                     "sim time, auto_lod off); stepping the scene between frames averages over what it does "
+                     "(motion blur). Raises RuntimeError without ray_tracing.")
+                .def("path_trace_stop", [](PyVulkanRenderer& r) { r.native().pathTraceStop(); },
+                     "End the session; render() adds no more samples.")
+                .def_property_readonly("path_trace_active",
+                                       [](PyVulkanRenderer& r) { return r.native().pathTraceActive(); })
+                .def_property_readonly("path_trace_samples",
+                                       [](PyVulkanRenderer& r) { return r.native().pathTraceSamples(); },
+                                       "Samples per pixel accumulated over the whole picture so far in the session.")
+                .def_property_readonly("path_trace_progress",
+                                       [](PyVulkanRenderer& r) { return r.native().pathTraceProgress(); },
+                                       "path_trace_samples with the pass in progress counted by its share of the "
+                                       "rows: rises with every frame that traces.")
+                .def("path_trace_read",
+                     [](PyVulkanRenderer& r) {
+                         std::vector<float> rgb;
+                         int w = 0, h = 0;
+                         bool ok = false;
+                         {
+                             py::gil_scoped_release release;
+                             ok = r.native().pathTraceRead(rgb, w, h);
+                         }
+                         if (!ok || w <= 0 || h <= 0)
+                             return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(3)});
+                         py::array_t<float> arr({py::ssize_t(h), py::ssize_t(w), py::ssize_t(3)});
+                         std::memcpy(arr.mutable_data(), rgb.data(), rgb.size() * sizeof(float));
+                         return arr;
+                     },
+                     "The averaged picture so far as (H, W, 3) float32 linear RGB, top row first, at "
+                     "the session's extent; (0, 0, 3) before the first pass. Drains the device.")
+                .def("path_trace_read_rgb",
+                     [](PyVulkanRenderer& r) {
+                         std::vector<unsigned char> rgb;
+                         int w = 0, h = 0;
+                         bool ok = false;
+                         {
+                             py::gil_scoped_release release;
+                             ok = r.native().pathTraceReadRGB(rgb, w, h);
+                         }
+                         if (!ok || w <= 0 || h <= 0)
+                             return py::array_t<uint8_t>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(3)});
+                         py::array_t<uint8_t> arr({py::ssize_t(h), py::ssize_t(w), py::ssize_t(3)});
+                         std::memcpy(arr.mutable_data(), rgb.data(), rgb.size());
+                         return arr;
+                     },
+                     "The averaged picture so far through the renderer's display transform "
+                     "(white balance, the frame's exposure, tone_mapping, sRGB, the colour grade; "
+                     "not the bloom) as (H, W, 3) uint8, top row first, "
+                     "as read_pixels() gives a frame; (0, 0, 3) before the first sample. Drains the device.")
+                .def("path_trace_to_file",
+                     [](PyVulkanRenderer& r, Object3D& scene, Camera& camera, const std::string& path,
+                        uint32_t samples, uint32_t samples_per_frame, uint32_t max_bounces, float firefly_clamp,
+                        uint32_t width, uint32_t height, float dome_port) {
+                         VulkanRenderer::PathTraceParams p;
+                         p.samplesPerFrame = samples_per_frame;
+                         p.maxBounces      = max_bounces;
+                         p.fireflyClamp    = firefly_clamp;
+                         p.width           = width;
+                         p.height          = height;
+                         p.domePort        = dome_port;
+                         py::gil_scoped_release release;
+                         return r.native().pathTraceToFile(scene, camera, std::filesystem::path(path), samples, p);
+                     },
+                     py::arg("scene"), py::arg("camera"), py::arg("path"), py::arg("samples") = 1024,
+                     py::arg("samples_per_frame") = 16, py::arg("max_bounces") = 6, py::arg("firefly_clamp") = 0.f,
+                     py::arg("width") = 0, py::arg("height") = 0, py::arg("dome_port") = 0.f,
+                     "The one-liner: trace `samples` per pixel of the current view and write the picture "
+                     "(.png / .jpg / .bmp by extension) through the renderer's display transform, as "
+                     "save_frame would a frame. False when no frame added samples.")
+                .def("path_trace",
+                     [](PyVulkanRenderer& r, Object3D& scene, Camera& camera, uint32_t samples,
+                        uint32_t samples_per_frame, uint32_t max_bounces, float firefly_clamp,
+                        uint32_t width, uint32_t height, float dome_port) {
+                         VulkanRenderer::PathTraceParams p;
+                         p.samplesPerFrame = samples_per_frame;
+                         p.maxBounces      = max_bounces;
+                         p.fireflyClamp    = firefly_clamp;
+                         p.width           = width;
+                         p.height          = height;
+                         p.domePort        = dome_port;
+                         std::vector<float> rgb;
+                         int w = 0, h = 0;
+                         bool ok = false;
+                         {
+                             py::gil_scoped_release release;
+                             ok = r.native().pathTrace(scene, camera, samples, rgb, w, h, p);
+                         }
+                         if (!ok || w <= 0 || h <= 0)
+                             return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(3)});
+                         py::array_t<float> arr({py::ssize_t(h), py::ssize_t(w), py::ssize_t(3)});
+                         std::memcpy(arr.mutable_data(), rgb.data(), rgb.size() * sizeof(float));
+                         return arr;
+                     },
+                     py::arg("scene"), py::arg("camera"), py::arg("samples") = 1024,
+                     py::arg("samples_per_frame") = 16, py::arg("max_bounces") = 6, py::arg("firefly_clamp") = 0.f,
+                     py::arg("width") = 0, py::arg("height") = 0, py::arg("dome_port") = 0.f,
+                     "Blocking form: begin a session, render() until `samples` per pixel are in, read "
+                     "and stop. Returns (H, W, 3) float32 linear RGB, top row first; (0, 0, 3) when no "
+                     "frame added samples. See path_trace_begin for what the trace models.")
                 // Shadows: 'auto' (ray traced where ray_tracing, else shadow
                 // maps), 'rt', 'sm' (shadow maps), 'off'.
                 .def_property("shadow_mode",

@@ -326,6 +326,9 @@ class Frame:
     pass_timings: list = field(default_factory=list)
     per_frame: list = field(default_factory=list)
     path: Optional[str] = None
+    # ``path_trace`` only: the linear HDR picture (H, W, 3) float32 the uint8 image was
+    # encoded from.
+    hdr: Optional[np.ndarray] = None
 
     @property
     def width(self) -> int:
@@ -404,6 +407,79 @@ def render(scene, camera, *, backend: Union[str, Any] = "vulkan", size: Sequence
     if isinstance(backend, str) and strict_size and frame.size != (int(size[0]), int(size[1])):
         raise RuntimeError(f"capture.render: asked for {tuple(int(x) for x in size)} but the {name} canvas gave "
                            f"{frame.size}; widths below {MIN_SAFE_WIDTH} px are clamped on Windows")
+    if path is not None:
+        frame.save(path)
+    return frame
+
+
+def encode_srgb(hdr, exposure: float = 1.0) -> np.ndarray:
+    """A linear HDR picture (H, W, 3) float as (H, W, 3) uint8: scaled by ``exposure``,
+    clamped to [0, 1] and sRGB-encoded -- the renderer's ``tone_mapping = NONE`` path."""
+    lin = np.clip(np.asarray(hdr, dtype=np.float32) * float(exposure), 0.0, 1.0)
+    srgb = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.power(lin, 1.0 / 2.4) - 0.055)
+    return (srgb * 255.0 + 0.5).astype(np.uint8)
+
+
+def path_trace(scene, camera, *, samples: int = 1024, backend: Union[str, Any] = "vulkan",
+               size: Sequence[int] = (640, 360), samples_per_frame: int = 16, max_bounces: int = 6,
+               firefly_clamp: float = 0.0, path=None, before_frame=None,
+               trace_size: Optional[Sequence[int]] = None, dome_port: float = 0.0) -> Frame:
+    """Path-trace ``scene`` from ``camera`` headless on the Vulkan renderer and return the picture.
+
+    A progressive trace over the scene the frame renders (``VulkanRenderer.path_trace``):
+    ``samples`` camera paths per pixel, ``samples_per_frame`` of them per frame drawn (a
+    Python render() draws ``flush_frames`` frames per call, 3 by default). ``Frame.image`` is
+    the picture through the renderer's own display transform (white balance, the frame's exposure,
+    ``tone_mapping``, the colour grade), as a frame of the window would be without its
+    bloom; ``Frame.hdr`` is the
+    averaged linear (H, W, 3) float32 picture. ``Frame.frames`` is the number of render()
+    calls it took.
+
+    backend: ``"vulkan"`` or a Vulkan renderer you already have. The scene must hold still
+        while it accumulates: pin the sim time and turn auto-LOD off on a renderer you pass in.
+    before_frame: ``before_frame(i)`` is called before frame i, for a scene that must step
+        between frames (then the picture averages over what it did -- motion blur).
+    trace_size: ``(width, height)`` of the picture when it is not the canvas's -- larger than
+        the screen allows a canvas to be, say; another shape keeps the camera's vertical field.
+    dome_port: a dome port's radius about the lens in metres (0 = none): every camera ray starts where it
+        leaves the dome, so a camera at the waterline traces the over-under picture.
+    """
+    renderer = make_renderer(backend, size) if isinstance(backend, str) else backend
+    name = _backend_name(renderer)
+    if name != "vulkan":
+        raise RuntimeError("capture.path_trace needs the Vulkan renderer")
+    if not renderer.ray_tracing:
+        raise RuntimeError("capture.path_trace needs ray tracing (ray query); this device has none")
+    w, h = _size(renderer)
+    if hasattr(camera, "aspect") and w > 0 and h > 0 and abs(float(camera.aspect) - w / h) > 1e-3:
+        camera.aspect = w / h
+        camera.update_projection_matrix()
+    if isinstance(backend, str):
+        renderer.auto_lod = False
+    samples = max(1, int(samples))
+    tw, th = (int(trace_size[0]), int(trace_size[1])) if trace_size is not None else (0, 0)
+    renderer.path_trace_begin(samples_per_frame=max(1, int(samples_per_frame)),
+                              max_bounces=int(max_bounces), firefly_clamp=float(firefly_clamp),
+                              width=tw, height=th, dome_port=float(dome_port))
+    frames = 0
+    try:
+        while renderer.path_trace_samples < samples:
+            before = renderer.path_trace_progress
+            if before_frame is not None:
+                before_frame(frames)
+            renderer.render(scene, camera)
+            frames += 1
+            if renderer.path_trace_progress == before:
+                break
+        hdr = renderer.path_trace_read()
+        img = renderer.path_trace_read_rgb()
+    finally:
+        renderer.path_trace_stop()
+    if hdr.size == 0 or img.size == 0:
+        raise RuntimeError("capture.path_trace: no frame added samples")
+    ft, pt = _timings(renderer)
+    frame = Frame(image=img, backend=name, frames=frames, size=(int(img.shape[1]), int(img.shape[0])),
+                  frame_timings=ft, pass_timings=pt, hdr=hdr)
     if path is not None:
         frame.save(path)
     return frame

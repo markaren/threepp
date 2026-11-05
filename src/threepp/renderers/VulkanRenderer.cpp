@@ -27,6 +27,7 @@
 #include "stb_image_write.h"
 
 #include <cstdio>
+#include <stdexcept>
 
 namespace threepp {
 
@@ -118,6 +119,58 @@ namespace threepp {
                 });
                 probeGI_->declare(g, pass, f);
             }
+        }
+
+        // ── Path trace of the primary view (pathTraceBegin) ─────────────
+        // One dispatch per frame while a session is active, after the TLAS
+        // refit (its rays traverse it) and the probe update, in the primary's
+        // segment only: it reads the primary camera and writes nothing the
+        // frame shows. The accumulator follows the render extent.
+        if (pathTracer_ && pathTracer_->active() && asyncPart && !view().secondary) {
+            pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, frameSerial_);
+            vulkan::PathTracer::FrameInputs pin;
+            pin.sunTanHalfAngle   = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
+            pin.sunExtracted      = envSun_.found;
+            pin.starIntensity     = deferredStarIntensity_;
+            pin.volDensity        = deferredVolDensity_;
+            pin.volAniso          = deferredVolAniso_;
+            // The camera as the frame forms its image: the lens the sensor
+            // pass warps with (buildSensorParams' intrinsics, the output
+            // camera's), and the thin lens of the DoF pass (its focal length
+            // from the output camera's vertical field on its own sensor).
+            const auto& po = prepOut();
+            if (lens_.active()) {
+                pin.lensModel         = static_cast<uint32_t>(lens_.model);
+                pin.lensK[0]          = 0.5f * po.projP0;
+                pin.lensK[1]          = 0.5f * po.projP5;
+                pin.lensK[2]          = 0.5f * (1.f - po.projP8);
+                pin.lensK[3]          = 0.5f * (1.f + po.projP9);
+                pin.lensRadial[0]     = lens_.k1;
+                pin.lensRadial[1]     = lens_.k2;
+                pin.lensRadial[2]     = lens_.k3;
+                pin.lensRadial[3]     = lens_.k4;
+                pin.lensTangential[0] = lens_.p1;
+                pin.lensTangential[1] = lens_.p2;
+                pin.lensOverscan      = effectiveOverscan();
+            }
+            if (dofEnabled_ && !view().orthoFrame_ && std::abs(po.projP5) > 1e-6f) {
+                const float fl = po.filmHeightM * 0.5f * std::abs(po.projP5);
+                const float S  = std::max(focusDistance_, fl * 2.f);
+                // f/(2N), widened by S/(S - f): the frame's circle of
+                // confusion is the thin lens's on a sensor at the image
+                // distance, this one's on the pinhole's at f.
+                pin.lensRadius    = fl / (2.f * std::max(camAperture_, 0.1f)) * S / (S - fl);
+                pin.focusDistance = S;
+            }
+            auto pass = g.addPass("pathTrace", [this, f, pin](VkCommandBuffer c) {
+                auto in               = pin;
+                in.emissiveCount      = emissiveTriCountThisFrame_;
+                in.emissiveTotalPower = emissiveTotalPowerThisFrame_;
+                in.envMipCount        = envImage.mipLevels;
+                in.oceanFineTileSize  = oceanFineTileSize;
+                pathTracer_->recordDispatch(c, f, in);
+            });
+            pathTracer_->declare(g, pass, f);
         }
         // The sample count THIS view's G-buffer was rastered at, not the
         // renderer-wide setting. A secondary view gets no MS framebuffer
@@ -3230,6 +3283,142 @@ namespace threepp {
     bool VulkanRenderer::scanLidarCollect(int handle, std::vector<LidarReturn>& results,
                                           std::vector<LidarReturn>* cleanResults) {
         return core()->scanLidarCollect(handle, results, cleanResults);
+    }
+
+    void VulkanRenderer::pathTraceBegin(const PathTraceParams& params) {
+        auto* pt = core()->pathTracer_.get();
+        if (!pt || !pt->available())
+            throw std::runtime_error("VulkanRenderer::pathTraceBegin: the device has no ray query support");
+        vulkan::PathTracer::Params p;
+        p.samplesPerFrame = params.samplesPerFrame;
+        p.maxBounces      = params.maxBounces;
+        p.fireflyClamp    = params.fireflyClamp;
+        p.width           = params.width;
+        p.height          = params.height;
+        p.domePort        = params.domePort;
+        pt->begin(p);
+    }
+
+    void VulkanRenderer::pathTraceStop() {
+        if (auto* pt = core()->pathTracer_.get()) pt->stop();
+    }
+
+    bool VulkanRenderer::pathTraceActive() const {
+        const auto* pt = core()->pathTracer_.get();
+        return pt && pt->active();
+    }
+
+    uint32_t VulkanRenderer::pathTraceSamples() const {
+        const auto* pt = core()->pathTracer_.get();
+        return pt ? pt->samples() : 0u;
+    }
+
+    double VulkanRenderer::pathTraceProgress() const {
+        const auto* pt = core()->pathTracer_.get();
+        return pt ? pt->progress() : 0.0;
+    }
+
+    bool VulkanRenderer::pathTraceRead(std::vector<float>& rgb, int& w, int& h) {
+        w = h = 0;
+        auto& impl = *core();
+        auto* pt   = impl.pathTracer_.get();
+        if (!pt || !pt->available() || !impl.ctx) return false;
+        // Every dispatch that wrote the accumulator is queued behind frames in
+        // flight; the read copies after all of them.
+        vkDeviceWaitIdle(impl.ctx->device());
+        uint32_t uw = 0, uh = 0;
+        if (!pt->read(rgb, uw, uh)) return false;
+        w = static_cast<int>(uw);
+        h = static_cast<int>(uh);
+        return true;
+    }
+
+    bool VulkanRenderer::pathTraceReadRGB(std::vector<unsigned char>& rgb, int& w, int& h) {
+        w = h = 0;
+        auto& impl = *core();
+        auto* pt   = impl.pathTracer_.get();
+        if (!pt || !pt->available() || !impl.ctx) return false;
+        vkDeviceWaitIdle(impl.ctx->device());
+        // The primary view's white balance and colour grade, as its
+        // PostComposite applies them to a frame.
+        const auto* post = impl.primaryView().post_.get();
+        const vulkan::OverlayGradeGpu grade = post ? impl.gradeOf(*post) : vulkan::OverlayGradeGpu{};
+        // The exposure the frame tone-maps with: auto exposure's while it is
+        // on, the physical camera's (setCameraExposure) while that is, else
+        // toneMappingExposure.
+        uint32_t uw = 0, uh = 0;
+        if (!pt->readRGB(rgb, uw, uh, static_cast<uint32_t>(toneMapping), impl.currentExposure(), grade)) return false;
+        w = static_cast<int>(uw);
+        h = static_cast<int>(uh);
+        return true;
+    }
+
+    namespace {
+        // Trace until `samples` per pixel are in, or until a frame adds none.
+        void pathTraceRun(VulkanRenderer& r, Object3D& scene, Camera& camera, uint32_t samples,
+                          const VulkanRenderer::PathTraceParams& params) {
+            r.pathTraceBegin(params);
+            samples = std::max(1u, samples);
+            while (r.pathTraceSamples() < samples) {
+                const double before = r.pathTraceProgress();
+                r.render(scene, camera);
+                if (r.pathTraceProgress() == before) break;// a debug view, or no ray query
+            }
+        }
+    }// namespace
+
+    void VulkanRenderer::pathTraceBegin() {
+        pathTraceBegin(PathTraceParams{});
+    }
+
+    bool VulkanRenderer::pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
+                                   std::vector<float>& rgb, int& w, int& h) {
+        return pathTrace(scene, camera, samples, rgb, w, h, PathTraceParams{});
+    }
+
+    bool VulkanRenderer::pathTrace(Object3D& scene, Camera& camera, uint32_t samples,
+                                   std::vector<float>& rgb, int& w, int& h,
+                                   const PathTraceParams& params) {
+        pathTraceRun(*this, scene, camera, samples, params);
+        const bool ok = pathTraceRead(rgb, w, h);
+        pathTraceStop();
+        return ok;
+    }
+
+    bool VulkanRenderer::pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
+                                         uint32_t samples) {
+        return pathTraceToFile(scene, camera, file, samples, PathTraceParams{});
+    }
+
+    bool VulkanRenderer::pathTraceToFile(Object3D& scene, Camera& camera, const std::filesystem::path& file,
+                                         uint32_t samples, const PathTraceParams& params) {
+        auto ext = file.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp") {
+            throw std::runtime_error("VulkanRenderer::pathTraceToFile: unsupported format " + ext);
+        }
+        pathTraceRun(*this, scene, camera, samples, params);
+        std::vector<unsigned char> rgb;
+        int w = 0, h = 0;
+        const bool ok = pathTraceReadRGB(rgb, w, h);
+        pathTraceStop();
+        if (!ok) return false;
+        if (file.has_parent_path() && !std::filesystem::exists(file.parent_path())) {
+            std::error_code ec;
+            std::filesystem::create_directories(file.parent_path(), ec);
+        }
+        bool success = false;
+        if (ext == ".png") {
+            success = stbi_write_png(file.string().c_str(), w, h, 3, rgb.data(), w * 3);
+        } else if (ext == ".jpg" || ext == ".jpeg") {
+            success = stbi_write_jpg(file.string().c_str(), w, h, 3, rgb.data(), 100);
+        } else {
+            success = stbi_write_bmp(file.string().c_str(), w, h, 3, rgb.data());
+        }
+        if (!success) {
+            throw std::runtime_error("VulkanRenderer::pathTraceToFile: failed to write " + file.string());
+        }
+        return true;
     }
 
     void VulkanRenderer::setOverlayLayer(int channel) {
