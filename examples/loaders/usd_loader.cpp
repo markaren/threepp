@@ -26,6 +26,9 @@ int main(int argc, char** argv) {
     std::string modelPath;
     std::string shotPath;
     std::string pose;
+    // --camera px,py,pz,tx,ty,tz[,vfov[,near,far]]: place the camera (loaded,
+    // Y-up world units) instead of framing the bounds.
+    std::vector<float> cameraSpec;
     int   shotFrames = 240;
     float shotZoom   = 1.f;// <1 = closer (distance scales with it)
     for (int i = 1; i < argc; ++i) {
@@ -43,6 +46,12 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[i], "--pose") == 0 && i + 1 < argc) {
             pose = argv[++i];
+            continue;
+        }
+        if (std::strcmp(argv[i], "--camera") == 0 && i + 1 < argc) {
+            std::stringstream ss(argv[++i]);
+            std::string value;
+            while (std::getline(ss, value, ',')) cameraSpec.push_back(std::stof(value));
             continue;
         }
         std::filesystem::path arg = argv[i];
@@ -98,11 +107,19 @@ int main(int argc, char** argv) {
         size_t triangles = 0;
         std::unordered_set<Material*> materials;
         int textured = 0, normalMapped = 0;
+        size_t instances = 0;
+        std::unordered_set<BufferGeometry*> geometries;
         result.scene->traverseType<Mesh>([&](Mesh& m) {
             ++meshes;
             auto g = m.geometry();
-            if (g->hasIndex()) triangles += g->getIndex()->count() / 3;
-            else if (auto* pos = g->getAttribute<float>("position")) triangles += pos->count() / 3;
+            geometries.insert(g.get());
+            size_t copies = 1;
+            if (auto* im = dynamic_cast<InstancedMesh*>(&m)) {
+                copies = im->count();
+                instances += copies;
+            }
+            if (g->hasIndex()) triangles += copies * (g->getIndex()->count() / 3);
+            else if (auto* pos = g->getAttribute<float>("position")) triangles += copies * (pos->count() / 3);
             for (auto& mat : m.materials()) {
                 if (!materials.insert(mat.get()).second) continue;
                 if (auto* mm = dynamic_cast<MaterialWithMap*>(mat.get()); mm && mm->map) ++textured;
@@ -113,7 +130,7 @@ int main(int argc, char** argv) {
         bounds.setFromObject(*result.scene);
         Vector3 extent;
         bounds.getSize(extent);
-        std::cout << "Stats: meshes=" << meshes << " triangles=" << triangles
+        std::cout << "Stats: meshes=" << meshes << " instanceDraws=" << instances << " geometries=" << geometries.size() << " triangles=" << triangles
                   << " materials=" << materials.size() << " textured=" << textured
                   << " normalMapped=" << normalMapped
                   << " size=" << extent.x << "x" << extent.y << "x" << extent.z << "\n";
@@ -176,7 +193,20 @@ int main(int argc, char** argv) {
         scene.add(suzanne);
     }
 
-    if (capturing) {
+    if (cameraSpec.size() >= 6) {
+        if (cameraSpec.size() >= 7) camera->fov = cameraSpec[6];
+        if (cameraSpec.size() >= 9) {
+            camera->nearPlane = cameraSpec[7];
+            camera->farPlane = cameraSpec[8];
+        }
+        camera->updateProjectionMatrix();
+        camera->position.set(cameraSpec[0], cameraSpec[1], cameraSpec[2]);
+        const Vector3 target(cameraSpec[3], cameraSpec[4], cameraSpec[5]);
+        camera->lookAt(target);
+        controls.target.copy(target);
+        controls.update();
+        camera->updateMatrixWorld();
+    } else if (capturing) {
         // Frame the scene from its bounds: low oblique view across the model
         // (close enough that glass/reflective details fill the frame).
         Box3 bbox;

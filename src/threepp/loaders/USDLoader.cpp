@@ -14,6 +14,7 @@
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Robot.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -27,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -412,6 +414,89 @@ namespace threepp {
             return out;
         }
 
+        // Identical meshes. A scene that instances one asset through USD's
+        // native instancing or many references (Intel's Jungle Ruins: 195
+        // tree prototypes, 65 copies each of 3 trees) reaches us as one
+        // RenderMesh per copy; their geometry is built once and shared.
+        // Everything buildSubMeshes reads takes part, so equal inputs mean
+        // equal geometry.
+
+        struct ContentHash {
+            uint64_t h = 0x9E3779B97F4A7C15ull;
+
+            void word(uint64_t w) {
+                h ^= w;
+                h *= 0xff51afd7ed558ccdull;
+                h ^= h >> 32;
+            }
+
+            void bytes(const void* data, size_t n) {
+                const auto* c = static_cast<const unsigned char*>(data);
+                size_t i = 0;
+                for (; i + 8 <= n; i += 8) {
+                    uint64_t w;
+                    std::memcpy(&w, c + i, 8);
+                    word(w);
+                }
+                uint64_t tail = 0;
+                std::memcpy(&tail, c + i, n - i);
+                word(tail ^ (uint64_t(n - i) << 56));
+            }
+
+            template<class Chunked>
+            void chunked(const Chunked& a) {
+                word(a.size());
+                for (size_t k = 0; k < a.chunk_count(); ++k) {
+                    if (const size_t n = a.chunk_size(k)) bytes(a.chunk_data(k), n * sizeof(*a.chunk_data(k)));
+                }
+            }
+        };
+
+        // Chunk by chunk; arrays sharing their chunks (LightUSD's
+        // copy-on-write share_from) compare by pointer.
+        template<class Chunked>
+        bool sameChunked(const Chunked& a, const Chunked& b) {
+            if (a.size() != b.size()) return false;
+            for (size_t k = 0; k < a.chunk_count() && k < b.chunk_count(); ++k) {
+                const size_t n = a.chunk_size(k);
+                if (n == 0) break;
+                const auto* pa = a.chunk_data(k);
+                const auto* pb = b.chunk_data(k);
+                if (pa != pb && std::memcmp(pa, pb, n * sizeof(*pa)) != 0) return false;
+            }
+            return true;
+        }
+
+        // `parts`: each triangle's material as an index into the mesh's
+        // materials in first-use order, which is how buildSubMeshes orders
+        // its parts. Copies bound to copies of a material match.
+        uint64_t meshContentHash(const tnext::RenderMesh& rm, const std::vector<int>& parts) {
+            ContentHash c;
+            c.word(rm.is_triangulated);
+            c.chunked(rm.points);
+            c.chunked(rm.triangulated_indices);
+            c.chunked(rm.triangulated_face_vertex_indices);
+            c.word(static_cast<uint64_t>(rm.texcoords_0_interp));
+            c.chunked(rm.texcoords_0);
+            c.word(static_cast<uint64_t>(rm.normals_interp));
+            c.chunked(rm.normals);
+            c.bytes(rm.face_triangle_offsets.data(), rm.face_triangle_offsets.size() * sizeof(uint32_t));
+            c.bytes(parts.data(), parts.size() * sizeof(int));
+            return c.h;
+        }
+
+        bool sameMeshContent(const tnext::RenderMesh& a, const tnext::RenderMesh& b) {
+            return a.is_triangulated == b.is_triangulated &&
+                   a.texcoords_0_interp == b.texcoords_0_interp &&
+                   a.normals_interp == b.normals_interp &&
+                   a.face_triangle_offsets == b.face_triangle_offsets &&
+                   sameChunked(a.points, b.points) &&
+                   sameChunked(a.triangulated_indices, b.triangulated_indices) &&
+                   sameChunked(a.triangulated_face_vertex_indices, b.triangulated_face_vertex_indices) &&
+                   sameChunked(a.texcoords_0, b.texcoords_0) &&
+                   sameChunked(a.normals, b.normals);
+        }
+
     }// namespace
 
     // -----------------------------------------------------------------------
@@ -443,6 +528,12 @@ namespace threepp {
             std::vector<bool> textureDone;
             std::unordered_map<int, std::shared_ptr<Material>> materials;
             std::unordered_map<int, std::vector<SubMesh>> subMeshes;
+            // Content hash -> meshes built under it (see subMeshesFor).
+            struct BuiltMesh {
+                int32_t meshId;
+                std::vector<int> parts;
+            };
+            std::unordered_map<uint64_t, std::vector<BuiltMesh>> meshesByContent;
             std::unordered_map<std::string, std::shared_ptr<Texture>> sampledTextures;
             std::unordered_set<int> prototypeNodes;
             std::unordered_map<std::string, std::shared_ptr<Object3D>> objectByPath;
@@ -659,16 +750,51 @@ namespace threepp {
             return out;
         }
 
+        // A mesh's parts, built once per mesh, and their geometry once per
+        // distinct content: a mesh identical to one already built (same
+        // points, topology, primvars and material layout) takes that mesh's
+        // geometries with its own materials. Skinned meshes are posed per
+        // skeleton and always built.
+        const std::vector<SubMesh>& subMeshesFor(Build& b, int32_t meshId, const tnext::RenderMesh& rm) {
+            if (auto it = b.subMeshes.find(meshId); it != b.subMeshes.end()) return it->second;
+
+            const std::vector<int> triMaterial = triangleMaterials(b, rm);
+            if (rm.skin) return b.subMeshes.emplace(meshId, buildSubMeshes(rm, b.scene, triMaterial)).first->second;
+
+            // The materials in first-use order (buildSubMeshes' part order)
+            // and each triangle's index into them.
+            std::vector<int> materials;
+            std::vector<int> parts(triMaterial.size());
+            std::unordered_map<int, int> partOf;
+            for (size_t t = 0; t < triMaterial.size(); ++t) {
+                auto [it, inserted] = partOf.emplace(triMaterial[t], static_cast<int>(materials.size()));
+                if (inserted) materials.push_back(triMaterial[t]);
+                parts[t] = it->second;
+            }
+
+            auto& built = b.meshesByContent[meshContentHash(rm, parts)];
+            for (const auto& other : built) {
+                const auto* otherMesh = b.scene.get_mesh(other.meshId);
+                if (!otherMesh || other.parts != parts || !sameMeshContent(*otherMesh, rm)) continue;
+                const auto& shared = b.subMeshes.at(other.meshId);
+                std::vector<SubMesh> out;
+                out.reserve(shared.size());
+                for (size_t i = 0; i < shared.size() && i < materials.size(); ++i) {
+                    out.push_back({materials[i], shared[i].geometry});
+                }
+                return b.subMeshes.emplace(meshId, std::move(out)).first->second;
+            }
+            auto& out = b.subMeshes.emplace(meshId, buildSubMeshes(rm, b.scene, triMaterial)).first->second;
+            built.push_back({meshId, std::move(parts)});
+            return out;
+        }
+
         // A mesh prim: one Mesh, or a Group of one Mesh per GeomSubset
         // material.
         std::shared_ptr<Object3D> meshObject(Build& b, int32_t meshId) {
             const auto* rm = b.scene.get_mesh(meshId);
             if (!rm) return nullptr;
-            auto it = b.subMeshes.find(meshId);
-            if (it == b.subMeshes.end()) {
-                it = b.subMeshes.emplace(meshId, buildSubMeshes(*rm, b.scene, triangleMaterials(b, *rm))).first;
-            }
-            const auto& parts = it->second;
+            const auto& parts = subMeshesFor(b, meshId, *rm);
             if (parts.empty()) return nullptr;
 
             auto makeMesh = [&](const SubMesh& part) {
@@ -682,17 +808,36 @@ namespace threepp {
             return group;
         }
 
-        // A PointInstancer prim: its visible instances as meshes placed in
-        // the instancer's space (prototype mesh transform * instance
-        // transform).
+        // A PointInstancer prim: one InstancedMesh per prototype mesh (per
+        // material part of it), its instances placed in the instancer's space
+        // (prototype mesh transform * instance transform). Scattered
+        // vegetation runs to millions of instances; an object per instance
+        // would not fit in memory.
         std::shared_ptr<Object3D> instancerObject(Build& b, int32_t instancerId) {
             auto group = Group::create();
-            for (const auto& draw : b.scene.get_point_instancer_draws(instancerId)) {
-                auto obj = meshObject(b, draw.mesh_id);
-                if (!obj) continue;
-                Matrix4 m = toMatrix4(draw.transform);
-                m.decompose(obj->position, obj->quaternion, obj->scale);
-                group->add(obj);
+            const auto draws = b.scene.get_point_instancer_draws(instancerId);
+            std::vector<int32_t> meshOrder;
+            std::unordered_map<int32_t, std::vector<const tnext::RenderPointInstanceDraw*>> byMesh;
+            for (const auto& draw : draws) {
+                auto& list = byMesh[draw.mesh_id];
+                if (list.empty()) meshOrder.push_back(draw.mesh_id);
+                list.push_back(&draw);
+            }
+            for (int32_t meshId : meshOrder) {
+                const auto* rm = b.scene.get_mesh(meshId);
+                if (!rm) continue;
+                const auto& instances = byMesh[meshId];
+                for (const auto& part : subMeshesFor(b, meshId, *rm)) {
+                    auto mesh = InstancedMesh::create(part.geometry, material(b, part.materialId, *rm), instances.size());
+                    for (size_t i = 0; i < instances.size(); ++i) {
+                        mesh->setMatrixAt(i, toMatrix4(instances[i]->transform));
+                    }
+                    mesh->instanceMatrix()->needsUpdate();
+                    mesh->computeBoundingSphere();
+                    mesh->name = rm->name;
+                    ++b.meshCount;
+                    group->add(mesh);
+                }
             }
             return group;
         }
