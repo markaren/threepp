@@ -12,6 +12,7 @@ the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the
 | `../build_common.py` | what every generator shares: the mesh accumulator and its primitives, the hydrostatic integrator, the Blender export |
 | `../rigs/usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races, her hull's lane and her waves on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
 | `usv_ocean.py` | the demo on `usv_rig.py`: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
+| `usv_radar_sonar.py` | her radar and her forward-looking sonar in Alesund harbour on the real terrain: see [Radar and sonar](#radar-and-sonar) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
 
 ## Build
@@ -69,6 +70,80 @@ Hydrostatics come from the tables; the manoeuvring (resistance with a planing hu
 planing lift that grows with trim and moves aft as the bow rises and toward the low side
 as she rolls, yaw and sway damping, banking) is a lumped sketch tuned so full throttle
 makes the brochure's 24 kn with about 4 deg of running trim.
+
+## Radar and sonar
+
+```
+python usv_radar_sonar.py                           # the loop on autopilot; W/S/A/D take the helm
+python usv_radar_sonar.py --rain --array             # a squall over the basin, a 4 ft open array
+python usv_radar_sonar.py --shot 12 --out rs.png     # headless: the frame, both displays, their labels,
+                                                     # and the ground-truth report (below); it first
+                                                     # lets the terrain stream in round the start (~30 s)
+```
+
+The Mariner runs a loop round the harbour basin south of Alesund town on the 14 m depth
+contour, on the real terrain (`geodata/aalesund`: Kartverket heights, OpenStreetMap buildings,
+quays and moored boats, synthetic bathymetry by distance to shore). She carries two sensors,
+both C++ in the library (`include/threepp/helpers/MarineRadar.hpp`, `ImagingSonar.hpp`), both
+fired through the renderer's ray tracer, and both doing the signal physics rather than drawing
+a depth map:
+
+- **Radar** on her mast (the spec's 20 in radome: 5.2 x 25 deg, 24 rpm; `--array` for a 4 ft
+  open array at 1.8 deg). Every spoke is the radar equation over the rays of its slot: the
+  NRL sea-clutter model (Gregers-Hansen & Mital 2012) at the mean grazing angle, spread over the
+  rendered waves by their tilt; per-material backscatter (Lambert + a Kirchhoff facet glint,
+  corner reflectors as a material); the two-ray propagation factor over the sea, so low targets
+  fade with range; rain volume echoes and attenuation (Marshall-Palmer); the antenna's two-way
+  azimuth pattern with its sidelobes; kTBF noise; gain, sea (STC) and rain (FTC) controls. Its
+  rays go out level whatever she pitches and rolls (the vertical pattern tilts with her), densest
+  just below the horizon, where the sea is, and just above it, where masts and reflectors taller
+  than her antenna stand; surfaces inside the blind zone still hide what lies behind them. The
+  scope is a PPI with afterglow and trails, head up or north up (N).
+- **Forward-looking imaging sonar** on her gondola, the hull's deepest point (an Oculus M750d at
+  750 kHz, tilted 24 deg down). The sonar equation with Francois-Garrison absorption and Mackenzie sound speed;
+  Lambert + facet-glint seabed scattering; coherent beamforming through a tapered 512-beam
+  array, so speckle, sidelobe arcs and curved range lines come out of the physics; the chirp's
+  matched filter; volume reverberation; noise after the array gain; the sea surface as a
+  mirror (image-source multipath, coherent only in calm water). The fold runs on a worker
+  thread. Along the north shore she passes a lost Otter X lying on its side on the seabed,
+  with rocks around it: watch for the echoes and their acoustic shadows.
+
+Every radar range cell and every sonar (beam, bin) carries the stable instance id of what made
+its echo: L colours both displays by it. That is the renderer's ground truth, not a detector.
+
+**Checked against what is known.** `tests/extras/EchoSensors_test.cpp` pins the physics
+without a GPU: the beam patterns' widths and sidelobes, Mackenzie's own check value for the
+sound speed (1550.744 m/s), Francois-Garrison absorption against the independent Ainslie &
+McColm fit, the NRL worked value, two-ray lobing, the surface-multipath ghost, determinism
+across thread counts, and, end to end, the **calibration sphere**: a smooth sphere in front of
+each sensor must return the sonar equation (TS = 20 log10(a / 2)) and the radar equation
+(RCS = pi a^2) through the whole chain of rays, beam pattern, matched filter and noise. Both
+land within half a dB.
+
+**Checked against the scene.** `--shot` also scores the last radar revolution and the last
+ping against truth that never comes from the sensors' rays (`rs_truth.py`): the terrain's
+height field and the poses the demo gave its targets. For the radar: per spoke, the first land
+echo against the first land on the height field along that bearing (allowing for a nearer
+headland smeared in by the beam); every target's strongest echo against its true range and
+bearing. For the sonar: per beam, the seabed's leading edge against where the vertical fan
+first meets the height field; the wreck's and the rocks' strongest echoes against their true
+range and bearing. The numbers go to `_truth.json`, and `_radar_bscan.png` /
+`_sonar_bscan.png` draw the truth over the echoes. The tolerances are the sensors' resolution
+and the targets' size, not tuned to pass. The shot first lets the terrain stream in round the
+start: GeoScene begins with 2 km tiles and refines a level at a time, and on a coarse tile a
+quay wall is a ramp that reaches the sea a few metres out. The radar draws that ramp, as it
+should, and the check against the fine height field then reads it as land over water. The
+survey's buildings, pier decks and moored boats carry their own ids (61000-61002) so the
+report can tell a pier from the shore. A target that is not seen is checked for why: a radar
+target with no line of sight over the height field, or a sonar target outside the vertical
+fan, is reported as not expected. Her antenna is only 1.8 m above the water: inside the
+harbour, quays and piers taller than that hide what lies behind them, and low hulls hide
+behind the waves at range. A real radar on a boat this size does the same.
+
+What is assumed: the scattering strengths are class values, not a calibration of any seabed,
+hull or quay; the radar is flat-earth with no ducting and no target-to-target bounces; the
+sonar's surface-bounce legs assume an unobstructed image path. Nothing here is compared with a
+real recording yet.
 
 ## What is measured and what is assumed
 

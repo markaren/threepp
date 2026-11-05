@@ -9,7 +9,77 @@ import os
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+class AcousticMaterial:
+    """
+    Backscatter per unit area: Lambert mu cos^2 plus a Kirchhoff facet glint.
+    """
+    @staticmethod
+    def concrete() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def fish() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def gravel() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def mud() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def net() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def rock() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def sand() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def sea_surface() -> AcousticMaterial:
+        ...
+    @staticmethod
+    def steel() -> AcousticMaterial:
+        ...
+    @typing.overload
+    def __init__(self) -> None:
+        ...
+    @typing.overload
+    def __init__(self, lambert_db: typing.SupportsFloat | typing.SupportsIndex, reflection_loss_db: typing.SupportsFloat | typing.SupportsIndex = -10.0, rms_slope: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448) -> None:
+        ...
+    def sigma0(self, cos_theta: typing.SupportsFloat | typing.SupportsIndex) -> float:
+        ...
+    @property
+    def lambert_db(self) -> float:
+        ...
+    @lambert_db.setter
+    def lambert_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def reflection_loss_db(self) -> float:
+        ...
+    @reflection_loss_db.setter
+    def reflection_loss_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rms_slope(self) -> float:
+        ...
+    @rms_slope.setter
+    def rms_slope(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class AcousticMaterials:
+    """
+    Acoustic material per stable instance id.
+    """
+    default_material: AcousticMaterial
+    def __init__(self) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def get(self, instance_id: typing.SupportsInt | typing.SupportsIndex) -> AcousticMaterial:
+        ...
+    def set(self, instance_id: typing.SupportsInt | typing.SupportsIndex, material: AcousticMaterial) -> None:
+        ...
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -182,6 +252,51 @@ class AnimationMixer:
         ...
     @time_scale.setter
     def time_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class ArrayTaper:
+    """
+    Aperture taper of a line array: the sidelobe level / beamwidth trade.
+    
+    Members:
+    
+      Uniform
+    
+      Hann
+    
+      Hamming
+    
+      Taylor25
+    """
+    Hamming: typing.ClassVar[ArrayTaper]  # value = <ArrayTaper.Hamming: 2>
+    Hann: typing.ClassVar[ArrayTaper]  # value = <ArrayTaper.Hann: 1>
+    Taylor25: typing.ClassVar[ArrayTaper]  # value = <ArrayTaper.Taylor25: 3>
+    Uniform: typing.ClassVar[ArrayTaper]  # value = <ArrayTaper.Uniform: 0>
+    __members__: typing.ClassVar[dict[str, ArrayTaper]]  # value = {'Uniform': <ArrayTaper.Uniform: 0>, 'Hann': <ArrayTaper.Hann: 1>, 'Hamming': <ArrayTaper.Hamming: 2>, 'Taylor25': <ArrayTaper.Taylor25: 3>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class ArrowHelper(Object3D):
     def __init__(self, dir: Vector3 = ..., origin: Vector3 = ..., length: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: Color = ..., head_length: typing.SupportsFloat | typing.SupportsIndex | None = None, head_width: typing.SupportsFloat | typing.SupportsIndex | None = None) -> None:
@@ -4100,6 +4215,274 @@ class IkTask:
     @property
     def value(self) -> int:
         ...
+class ImagingSonar(Object3D, Sensor):
+    """
+    Forward-looking multibeam imaging sonar on the ray tracer, with the acoustics done properly: the sonar equation (source level, spreading + Francois-Garrison absorption, Lambert + facet-glint backscatter), coherent beamforming through a tapered array (sidelobes, conical beams, speckle), the pulse's matched filter, volume reverberation, noise after the array gain, and sea-surface multipath. A SonarFrame carries the level, the display value and the ground-truth label of every (beam, bin).
+    
+    Forward is local -Z, the array along local X; look_at() aims it. `materials` maps stable instance ids to AcousticMaterial. Pipelined: ping_begin after render(), ping_collect on a later frame. Vulkan only; render() once before the first ping.
+    """
+    def __init__(self, model: ImagingSonarModel = ...) -> None:
+        ...
+    def last_returns(self) -> dict:
+        """
+        Per-ray hits of the last ping (scan_lidar dict layout).
+        """
+    def ping(self, renderer: VulkanRenderer) -> SonarFrame:
+        """
+        One ping from the current pose -> SonarFrame. Blocks on the trace.
+        """
+    def ping_begin(self, renderer: VulkanRenderer) -> bool:
+        ...
+    def ping_collect(self, renderer: VulkanRenderer) -> typing.Any:
+        """
+        The fired ping's SonarFrame, or None when nothing was fired.
+        """
+    def ping_collect_async(self, renderer: VulkanRenderer) -> bool:
+        """
+        Take delivery of the trace and fold it on a worker thread; poll frame_ready, then take_frame().
+        """
+    def ping_ready(self, renderer: VulkanRenderer) -> bool:
+        ...
+    def rebuild(self) -> None:
+        """
+        Re-bake the ray table and beam patterns from model's geometry.
+        """
+    def reset_noise(self) -> None:
+        ...
+    def take_frame(self) -> typing.Any:
+        """
+        The asynchronously folded SonarFrame, or None while it is still folding.
+        """
+    @property
+    def folding(self) -> bool:
+        ...
+    @property
+    def frame_ready(self) -> bool:
+        ...
+    @property
+    def last_origin(self) -> Vector3:
+        ...
+    @property
+    def materials(self) -> AcousticMaterials:
+        """
+        AcousticMaterials; mutate in place.
+        """
+    @materials.setter
+    def materials(self, arg0: AcousticMaterials) -> None:
+        ...
+    @property
+    def model(self) -> ImagingSonarModel:
+        """
+        ImagingSonarModel; mutate in place (geometry: then rebuild()).
+        """
+    @model.setter
+    def model(self, arg0: ImagingSonarModel) -> None:
+        ...
+    @property
+    def params(self) -> LidarParams:
+        """
+        The tracer's LidarParams (set up for the sonar).
+        """
+    @params.setter
+    def params(self, arg0: LidarParams) -> None:
+        ...
+    @property
+    def ping_count(self) -> int:
+        ...
+    @property
+    def ping_pending(self) -> bool:
+        ...
+    @property
+    def ray_count(self) -> int:
+        ...
+    @property
+    def threads(self) -> int:
+        ...
+    @threads.setter
+    def threads(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+class ImagingSonarModel:
+    """
+    A forward-looking multibeam imaging sonar: transducer, fan geometry (baked at rebuild), range, water, noise, surface multipath and display controls.
+    """
+    horizontal_taper: ArrayTaper
+    pulse: PulseKind
+    surface_multipath: bool
+    water: WaterProperties
+    @staticmethod
+    def blueview_m900() -> ImagingSonarModel:
+        """
+        900 kHz: 130 x 20 deg, 768 beams, 1 deg.
+        """
+    @staticmethod
+    def gemini_720is() -> ImagingSonarModel:
+        """
+        720 kHz: 120 x 20 deg, 512 beams, 0.5 deg.
+        """
+    @staticmethod
+    def oculus_m750d() -> ImagingSonarModel:
+        """
+        750 kHz: 130 x 20 deg, 512 beams, 1 deg.
+        """
+    @staticmethod
+    def oculus_m750d_high() -> ImagingSonarModel:
+        """
+        1.2 MHz: 70 x 12 deg, 512 beams, 0.6 deg.
+        """
+    def __init__(self) -> None:
+        ...
+    def beam_bearing_deg(self, beam: typing.SupportsInt | typing.SupportsIndex) -> float:
+        ...
+    @property
+    def azimuth_oversample(self) -> int:
+        ...
+    @azimuth_oversample.setter
+    def azimuth_oversample(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def beams(self) -> int:
+        ...
+    @beams.setter
+    def beams(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bin_width(self) -> float:
+        ...
+    @property
+    def dynamic_range_db(self) -> float:
+        ...
+    @dynamic_range_db.setter
+    def dynamic_range_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def frequency(self) -> float:
+        """
+        Hz
+        """
+    @frequency.setter
+    def frequency(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def gain_db(self) -> float:
+        ...
+    @gain_db.setter
+    def gain_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def horizontal_beamwidth(self) -> float:
+        ...
+    @horizontal_beamwidth.setter
+    def horizontal_beamwidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def horizontal_fov(self) -> float:
+        ...
+    @horizontal_fov.setter
+    def horizontal_fov(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def housing_range(self) -> float:
+        """
+        Where the trace starts (the transducer's face); the blind zone still occludes.
+        """
+    @housing_range.setter
+    def housing_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def incoherent_surface_loss_db(self) -> float:
+        ...
+    @incoherent_surface_loss_db.setter
+    def incoherent_surface_loss_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_range(self) -> float:
+        ...
+    @max_range.setter
+    def max_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_range(self) -> float:
+        ...
+    @min_range.setter
+    def min_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def noise_spectrum_level_db(self) -> float:
+        ...
+    @noise_spectrum_level_db.setter
+    def noise_spectrum_level_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def pattern_span_beamwidths(self) -> float:
+        ...
+    @pattern_span_beamwidths.setter
+    def pattern_span_beamwidths(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def range_bins(self) -> int:
+        ...
+    @range_bins.setter
+    def range_bins(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def range_resolution(self) -> float:
+        ...
+    @range_resolution.setter
+    def range_resolution(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def source_level_db(self) -> float:
+        """
+        dB re 1 uPa at 1 m
+        """
+    @source_level_db.setter
+    def source_level_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def surface_rms_height(self) -> float:
+        ...
+    @surface_rms_height.setter
+    def surface_rms_height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def surface_y(self) -> float:
+        ...
+    @surface_y.setter
+    def surface_y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def tvg_spreading(self) -> float:
+        ...
+    @tvg_spreading.setter
+    def tvg_spreading(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def vertical_beamwidth(self) -> float:
+        ...
+    @vertical_beamwidth.setter
+    def vertical_beamwidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def vertical_samples(self) -> int:
+        ...
+    @vertical_samples.setter
+    def vertical_samples(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def volume_backscatter_db(self) -> float:
+        ...
+    @volume_backscatter_db.setter
+    def volume_backscatter_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wavelength(self) -> float:
+        ...
 class ImguiContext:
     def __init__(self, canvas: Canvas, renderer: typing.Any) -> None:
         """
@@ -5409,6 +5792,274 @@ class Mapping:
         ...
     @property
     def value(self) -> int:
+        ...
+class MarineRadar(Object3D, Sensor):
+    """
+    A rotating marine navigation radar on the ray tracer: the radar equation per ray (NRL sea clutter on the rendered waves, per-material RCS, two-ray multipath over the sea, rain volume echoes and attenuation), coherent range profiles through the pulse's matched filter, the antenna's two-way azimuth pattern across slots, kTBF noise, and the operator's gain / sea / rain controls. `image` holds the last revolution.
+    
+    The node turns about local +Y (clockwise from above), bearing 0 = local -Z (the bow). Drive its sim clock (set_sim_time) and call update(renderer) once per frame after render().
+    """
+    params: LidarParams
+    def __init__(self, model: MarineRadarModel = ...) -> None:
+        ...
+    def rebuild(self) -> None:
+        ...
+    def update(self, renderer: VulkanRenderer) -> int:
+        """
+        Collect, form the swept spokes, fire the next slots. Returns spokes formed.
+        """
+    @property
+    def antenna_bearing_deg(self) -> float:
+        ...
+    @property
+    def heading_deg(self) -> float:
+        ...
+    @property
+    def image(self) -> RadarPolarImage:
+        ...
+    @property
+    def materials(self) -> RadarMaterials:
+        """
+        RadarMaterials; mutate in place.
+        """
+    @materials.setter
+    def materials(self, arg0: RadarMaterials) -> None:
+        ...
+    @property
+    def max_slots_per_batch(self) -> int:
+        ...
+    @max_slots_per_batch.setter
+    def max_slots_per_batch(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def model(self) -> MarineRadarModel:
+        """
+        MarineRadarModel; mutate in place (geometry: then rebuild()).
+        """
+    @model.setter
+    def model(self, arg0: MarineRadarModel) -> None:
+        ...
+    @property
+    def rays_per_slot(self) -> int:
+        ...
+class MarineRadarModel:
+    """
+    A rotating marine radar: transmitter, antenna (geometry baked at rebuild), receiver, the sea and rain it sees, and the operator's controls.
+    """
+    horizontal_taper: ArrayTaper
+    multipath: bool
+    polarization: RadarPolarization
+    @staticmethod
+    def open_array_4ft() -> MarineRadarModel:
+        """
+        4 ft open array, 4 kW: 1.8 x 22 deg.
+        """
+    @staticmethod
+    def open_array_6ft() -> MarineRadarModel:
+        """
+        6 ft open array, 12 kW: 1.2 x 22 deg.
+        """
+    @staticmethod
+    def radome_24in() -> MarineRadarModel:
+        """
+        24 in radome, 4 kW: 3.9 x 25 deg.
+        """
+    def __init__(self) -> None:
+        ...
+    @property
+    def above_horizon_share(self) -> float:
+        """
+        Share of the elevation samples just above the horizon (masts, reflectors).
+        """
+    @above_horizon_share.setter
+    def above_horizon_share(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def antenna_efficiency(self) -> float:
+        ...
+    @antenna_efficiency.setter
+    def antenna_efficiency(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def antenna_gain(self) -> float:
+        ...
+    @property
+    def azimuth_samples(self) -> int:
+        ...
+    @azimuth_samples.setter
+    def azimuth_samples(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def dynamic_range_db(self) -> float:
+        ...
+    @dynamic_range_db.setter
+    def dynamic_range_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def elevation_samples(self) -> int:
+        ...
+    @elevation_samples.setter
+    def elevation_samples(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def frequency(self) -> float:
+        ...
+    @frequency.setter
+    def frequency(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def gain_db(self) -> float:
+        ...
+    @gain_db.setter
+    def gain_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def horizon_share(self) -> float:
+        ...
+    @horizon_share.setter
+    def horizon_share(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def horizontal_beamwidth(self) -> float:
+        ...
+    @horizontal_beamwidth.setter
+    def horizontal_beamwidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def housing_range(self) -> float:
+        """
+        Where the trace starts (the radome); the blind zone still occludes.
+        """
+    @housing_range.setter
+    def housing_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_range(self) -> float:
+        ...
+    @max_range.setter
+    def max_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_range(self) -> float:
+        ...
+    @min_range.setter
+    def min_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def noise_figure_db(self) -> float:
+        ...
+    @noise_figure_db.setter
+    def noise_figure_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def pattern_span_beamwidths(self) -> float:
+        ...
+    @pattern_span_beamwidths.setter
+    def pattern_span_beamwidths(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def peak_power_w(self) -> float:
+        ...
+    @peak_power_w.setter
+    def peak_power_w(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def pulse_length(self) -> float:
+        """
+        s
+        """
+    @pulse_length.setter
+    def pulse_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rain(self) -> list[RainCell]:
+        """
+        List of RainCell (a copy: assign a new list to change it).
+        """
+    @rain.setter
+    def rain(self, arg1: collections.abc.Sequence[RainCell]) -> None:
+        ...
+    @property
+    def rain_clutter(self) -> float:
+        """
+        FTC 0..1
+        """
+    @rain_clutter.setter
+    def rain_clutter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def range_bins(self) -> int:
+        ...
+    @range_bins.setter
+    def range_bins(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def revolution_period(self) -> float:
+        ...
+    @property
+    def rpm(self) -> float:
+        ...
+    @rpm.setter
+    def rpm(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def sea_clutter_db(self) -> float:
+        """
+        STC depth at min range
+        """
+    @sea_clutter_db.setter
+    def sea_clutter_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def sea_level(self) -> float:
+        ...
+    @sea_level.setter
+    def sea_level(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def sea_state(self) -> float:
+        ...
+    @sea_state.setter
+    def sea_state(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def spokes(self) -> int:
+        ...
+    @spokes.setter
+    def spokes(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stc_range(self) -> float:
+        ...
+    @stc_range.setter
+    def stc_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def system_loss_db(self) -> float:
+        ...
+    @system_loss_db.setter
+    def system_loss_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def threshold_db(self) -> float:
+        ...
+    @threshold_db.setter
+    def threshold_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def vertical_beamwidth(self) -> float:
+        ...
+    @vertical_beamwidth.setter
+    def vertical_beamwidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wavelength(self) -> float:
         ...
 class Material:
     alpha_hash: bool
@@ -8671,6 +9322,45 @@ class PositionalAudio(Object3D):
     @property
     def is_playing(self) -> bool:
         ...
+class PulseKind:
+    """
+    Transmitted pulse: CW (triangle range response) or a Hann-weighted chirp.
+    
+    Members:
+    
+      CW
+    
+      Chirp
+    """
+    CW: typing.ClassVar[PulseKind]  # value = <PulseKind.CW: 0>
+    Chirp: typing.ClassVar[PulseKind]  # value = <PulseKind.Chirp: 1>
+    __members__: typing.ClassVar[dict[str, PulseKind]]  # value = {'CW': <PulseKind.CW: 0>, 'Chirp': <PulseKind.Chirp: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
 class Quaternion:
     def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex = 0.0, y: typing.SupportsFloat | typing.SupportsIndex = 0.0, z: typing.SupportsFloat | typing.SupportsIndex = 0.0, w: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -8722,6 +9412,212 @@ class RGBELoader:
         """
         Load a Radiance .hdr equirectangular environment as a float Texture.
         """
+class RadarMaterial:
+    """
+    Radar backscatter per unit area: Lambert + Kirchhoff glint + an isotropic term, or the NRL sea.
+    """
+    sea: bool
+    @staticmethod
+    def concrete() -> RadarMaterial:
+        ...
+    @staticmethod
+    def fibreglass() -> RadarMaterial:
+        ...
+    @staticmethod
+    def metal() -> RadarMaterial:
+        ...
+    @staticmethod
+    def radar_reflector() -> RadarMaterial:
+        ...
+    @staticmethod
+    def rock() -> RadarMaterial:
+        ...
+    @staticmethod
+    def sea_surface() -> RadarMaterial:
+        ...
+    @staticmethod
+    def vegetation() -> RadarMaterial:
+        ...
+    def __init__(self) -> None:
+        ...
+    def sigma0(self, cos_theta: typing.SupportsFloat | typing.SupportsIndex) -> float:
+        ...
+    @property
+    def isotropic_db(self) -> float:
+        ...
+    @isotropic_db.setter
+    def isotropic_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lambert_db(self) -> float:
+        ...
+    @lambert_db.setter
+    def lambert_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def reflection_loss_db(self) -> float:
+        ...
+    @reflection_loss_db.setter
+    def reflection_loss_db(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rms_slope(self) -> float:
+        ...
+    @rms_slope.setter
+    def rms_slope(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class RadarMaterials:
+    """
+    Radar material per stable instance id.
+    """
+    default_material: RadarMaterial
+    def __init__(self) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def get(self, instance_id: typing.SupportsInt | typing.SupportsIndex) -> RadarMaterial:
+        ...
+    def set(self, instance_id: typing.SupportsInt | typing.SupportsIndex, material: RadarMaterial) -> None:
+        ...
+class RadarPolarImage:
+    """
+    The last revolution, spoke by spoke (relative bearing).
+    """
+    @property
+    def bins(self) -> int:
+        ...
+    @property
+    def display(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    @property
+    def label(self) -> numpy.typing.NDArray[numpy.int32]:
+        """
+        (spokes, bins) int32: instance id of the strongest contributor, -1 none, -3 rain.
+        """
+    @property
+    def max_range(self) -> float:
+        ...
+    @property
+    def min_range(self) -> float:
+        ...
+    @property
+    def snr_db(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    @property
+    def spokes(self) -> int:
+        ...
+    @property
+    def time(self) -> numpy.typing.NDArray[numpy.float64]:
+        ...
+    @property
+    def world_bearing_deg(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+class RadarPolarization:
+    """
+    Members:
+    
+      HH
+    
+      VV
+    """
+    HH: typing.ClassVar[RadarPolarization]  # value = <RadarPolarization.HH: 0>
+    VV: typing.ClassVar[RadarPolarization]  # value = <RadarPolarization.VV: 1>
+    __members__: typing.ClassVar[dict[str, RadarPolarization]]  # value = {'HH': <RadarPolarization.HH: 0>, 'VV': <RadarPolarization.VV: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class RadarPpiDisplay:
+    """
+    Draws a RadarPolarImage as a PPI scope (RGBA square, top row first).
+    """
+    style: RadarPpiStyle
+    def __init__(self, size: typing.SupportsInt | typing.SupportsIndex = 512) -> None:
+        ...
+    def draw(self, image: RadarPolarImage, now: typing.SupportsFloat | typing.SupportsIndex, heading_deg: typing.SupportsFloat | typing.SupportsIndex, sweep_deg: typing.SupportsFloat | typing.SupportsIndex, north_up: bool, range_shown: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rgba(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        (size, size, 4) uint8 copy.
+        """
+    def upload(self, texture: Texture) -> None:
+        """
+        Write the scope into a same-sized tp.data_texture (rows flipped) and mark it dirty.
+        """
+    @property
+    def size(self) -> int:
+        ...
+class RadarPpiStyle:
+    show_labels: bool
+    def __init__(self) -> None:
+        ...
+    @property
+    def afterglow_seconds(self) -> float:
+        ...
+    @afterglow_seconds.setter
+    def afterglow_seconds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ring_step(self) -> float:
+        ...
+    @ring_step.setter
+    def ring_step(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def trail_seconds(self) -> float:
+        ...
+    @trail_seconds.setter
+    def trail_seconds(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class RainCell:
+    """
+    A rain shower: Gaussian rain rate across (sigma = radius), sea to top.
+    """
+    centre: Vector3
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex = 300.0, top: typing.SupportsFloat | typing.SupportsIndex = 1500.0, rain_rate: typing.SupportsFloat | typing.SupportsIndex = 8.0) -> None:
+        ...
+    @property
+    def radius(self) -> float:
+        ...
+    @radius.setter
+    def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rain_rate(self) -> float:
+        """
+        mm/h at the centre
+        """
+    @rain_rate.setter
+    def rain_rate(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def top(self) -> float:
+        ...
+    @top.setter
+    def top(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class RangeNoiseModel:
     """
     Range noise for a ranging sensor (LIDAR / depth camera). Per RETURN, not per second: sigma = hypot(stddev, r * stddev_per_metre) metres, plus a fixed `bias`. `seed` makes a scan reproducible — same seed and same beam order gives the same cloud on every run and machine. All-zero = a perfect sensor (clean ranges pass through untouched).
@@ -9545,6 +10441,127 @@ class SogLoader:
         FRAME: the file's own coordinates, untouched. A SOG re-encoded from a COLMAP .ply is +Y DOWN like its .ply, so the caller flips it the same way — cloud.rotation.x = math.pi is what the editor and the gaussian_splats example do.
         """
     def __init__(self) -> None:
+        ...
+class SonarEchoKind:
+    """
+    Members:
+    
+      NoEcho
+    
+      Direct
+    
+      Multipath
+    
+      Volume
+    """
+    Direct: typing.ClassVar[SonarEchoKind]  # value = <SonarEchoKind.Direct: 1>
+    Multipath: typing.ClassVar[SonarEchoKind]  # value = <SonarEchoKind.Multipath: 2>
+    NoEcho: typing.ClassVar[SonarEchoKind]  # value = <SonarEchoKind.NoEcho: 0>
+    Volume: typing.ClassVar[SonarEchoKind]  # value = <SonarEchoKind.Volume: 3>
+    __members__: typing.ClassVar[dict[str, SonarEchoKind]]  # value = {'NoEcho': <SonarEchoKind.NoEcho: 0>, 'Direct': <SonarEchoKind.Direct: 1>, 'Multipath': <SonarEchoKind.Multipath: 2>, 'Volume': <SonarEchoKind.Volume: 3>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class SonarFanDisplay:
+    """
+    Draws a SonarFrame as the operator's fan (RGBA, top row first).
+    """
+    show_labels: bool
+    def __init__(self, width: typing.SupportsInt | typing.SupportsIndex = 640, height: typing.SupportsInt | typing.SupportsIndex = 400) -> None:
+        ...
+    def draw(self, frame: SonarFrame, fov_deg: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rgba(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        (height, width, 4) uint8 copy.
+        """
+    def upload(self, texture: Texture) -> None:
+        """
+        Write the fan into a same-sized tp.data_texture (rows flipped) and mark it dirty.
+        """
+    @property
+    def height(self) -> int:
+        ...
+    @property
+    def ring_step(self) -> float:
+        ...
+    @ring_step.setter
+    def ring_step(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def width(self) -> int:
+        ...
+class SonarFrame:
+    """
+    One ping: echo level, display value and ground-truth label per (beam, bin).
+    """
+    def __init__(self) -> None:
+        ...
+    def range_of_bin(self, bin: typing.SupportsInt | typing.SupportsIndex) -> float:
+        ...
+    @property
+    def beams(self) -> int:
+        ...
+    @property
+    def bearings_deg(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    @property
+    def bins(self) -> int:
+        ...
+    @property
+    def display(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (beams, bins) float32 in [0, 1] after TVG, gain and log compression.
+        """
+    @property
+    def label(self) -> numpy.typing.NDArray[numpy.int32]:
+        """
+        (beams, bins) int32: instance id of the strongest echo, -1 none, -2 volume.
+        """
+    @property
+    def label_kind(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        (beams, bins) uint8 SonarEchoKind of the strongest echo.
+        """
+    @property
+    def level_db(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (beams, bins) float32, dB re 1 uPa.
+        """
+    @property
+    def max_range(self) -> float:
+        ...
+    @property
+    def min_range(self) -> float:
+        ...
+    @property
+    def noise_level_db(self) -> float:
+        ...
+    @property
+    def time(self) -> float:
         ...
 class SonarImage:
     """
@@ -12712,6 +13729,48 @@ class VulkanRenderer:
     @unlit_fog_scatter.setter
     def unlit_fog_scatter(self, arg1: bool) -> None:
         ...
+class WaterProperties:
+    """
+    Iso-velocity water: Mackenzie (1981) sound speed, Francois & Garrison (1982) absorption.
+    """
+    def __init__(self) -> None:
+        ...
+    def absorption_db_per_km(self, frequency_hz: typing.SupportsFloat | typing.SupportsIndex) -> float:
+        ...
+    def sound_speed(self) -> float:
+        """
+        m/s
+        """
+    @property
+    def depth(self) -> float:
+        """
+        m
+        """
+    @depth.setter
+    def depth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ph(self) -> float:
+        ...
+    @ph.setter
+    def ph(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def salinity(self) -> float:
+        """
+        PSU
+        """
+    @salinity.setter
+    def salinity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def temperature(self) -> float:
+        """
+        deg C
+        """
+    @temperature.setter
+    def temperature(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class WrenchSample:
     """
     One six-component wrench reading, in the measured joint's child frame. force is N, torque is N*m.
@@ -12760,6 +13819,10 @@ def data_texture(data: typing.Annotated[numpy.typing.ArrayLike, numpy.uint8], sr
     """
 def deg_to_rad(degrees: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
+def douglas_wave_height(sea_state: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    """
+    Mid-band significant wave height (m) of a Douglas sea state.
+    """
 def egl_available() -> bool:
     """
     True when a display-less hardware GL context can be made here: libEGL loaded and at least one device reported. Use it to choose between EglContext and a Canvas.
@@ -12820,6 +13883,10 @@ def merge_buffer_geometries(geometries: collections.abc.Sequence[BufferGeometry]
     ...
 def merge_vertices(geometry: BufferGeometry, tolerance: typing.SupportsFloat | typing.SupportsIndex = 9.999999747378752e-05) -> BufferGeometry:
     ...
+def nrl_sea_clutter_db(grazing_deg: typing.SupportsFloat | typing.SupportsIndex, frequency_ghz: typing.SupportsFloat | typing.SupportsIndex, sea_state: typing.SupportsFloat | typing.SupportsIndex, polarization: RadarPolarization = RadarPolarization.HH) -> float:
+    """
+    NRL sea clutter reflectivity sigma0 (dB m^2/m^2), Gregers-Hansen & Mital 2012.
+    """
 def rad_to_deg(radians: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
 def rand_float() -> float:

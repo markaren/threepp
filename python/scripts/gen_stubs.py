@@ -88,6 +88,7 @@ ENUM_CLASS_LOCATIONS = [
     f"BarkStyle:{MODULE}",
     f"SplatPoseSet:{MODULE}",
     f"TextBox:{MODULE}",
+    f"RadarPolarization:{MODULE}",
     # TendonCable.__init__ defaults its mode to Mode.TENSION; the enum is nested
     # in the class, so the generator needs told where to find it.
     f"Mode:{MODULE}.TendonCable",
