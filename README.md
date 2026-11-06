@@ -38,8 +38,8 @@ controls, material fixes, the newer post-processing passes).
 **Rendering beyond three.js**
 
 * A deferred Vulkan renderer: raster G-buffer, ray-traced shadows (or cascaded shadow maps), reflections,
-  AO and probe GI, volumetric fog, denoising and TAA, DLSS and FSR 3.1 upscaling, automatic mesh LOD and
-  GPU occlusion culling
+  AO and probe GI, volumetric fog, denoising and TAA, DLSS and FSR 3.1 upscaling, automatic mesh LOD,
+  GPU occlusion culling, and a path tracer that renders the same scene as a reference still
 * `Ocean` (Vulkan): three-cascade FFT water with foam, wind, JONSWAP fetch and an underwater view
 * `ParticleField` (Vulkan): GPU particles for fire, smoke, snow, rain and physics-coupled grains,
   drawn as meshes or billboards, or marched as participating media
@@ -255,7 +255,7 @@ to a rendered image that can be captured headless and judged.
 
 <table>
 <tr>
-<td align="center" colspan="2"><img src="doc/screenshots/trollstigen_show.jpg" width="826" alt="A drone light show writes threepp over the Stigfossen waterfall at Trollstigen"><br><em>Vulkan and Warp: a drone light show writes the name at dusk over Stigfossen, in a digital twin of Trollstigen, Norway; the drones are a <code>ParticleField</code> and the waterfall is GPU parcels (the scene is not in the repository)</em></td>
+<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_volvo_pt.jpg" width="826" alt="A path-traced Volvo S90 on a museum quay in Ålesund"><br><em>Vulkan, path traced: a Volvo S90 on the Sunnmøre Museum's stone apron in the Ålesund waterfront twin, with the museum's red halls, the timber quay and the bridge over the strait under a low sun; the same scene the deferred renderer draws, traced to 2048 samples as a reference still (the scene is not in the repository)</em></td>
 </tr>
 <tr>
 <td align="center" colspan="2"><img src="doc/screenshots/pine_forest.jpg" width="826" alt="A drone flying low through a pine forest"><br><em>Vulkan: a Norwegian pine forest, scanned trees placed by a stand simulation as instanced meshes, grass and heath on the floor, and a drone low over the ground (the scene is not in the repository)</em></td>
