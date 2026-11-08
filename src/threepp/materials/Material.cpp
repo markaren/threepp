@@ -202,8 +202,7 @@ void Material::copyCompatibleFrom(const Material& other) {
                    d->metalnessMap = s->metalnessMap;);
     TPP_COPY_MIXIN(MaterialWithThickness,
                    d->thickness = s->thickness;
-                   d->thicknessMap = s->thicknessMap;
-                   d->thinWalled = s->thinWalled;);
+                   d->thicknessMap = s->thicknessMap;);
     TPP_COPY_MIXIN(MaterialWithClearcoat,
                    d->clearcoat = s->clearcoat;
                    d->clearcoatMap = s->clearcoatMap;

@@ -299,7 +299,7 @@ namespace threepp::vulkan_pt {
         float iridescenceThicknessNm;
         float dispersion;
         float thickness;
-        int32_t thinWalled;
+        int32_t thinWalled;// 1 when thickness is 0 (set on the host, never by the user)
         // Stable per-Material-asset index, deduplicated by Material* pointer
         // when the material table is built (VulkanCoreScene.cpp). Adjacent
         // meshes that share one Material C++ object get the SAME value, so
@@ -421,7 +421,7 @@ struct MaterialDesc {
     float iridescenceThicknessNm;
     float dispersion;
     float thickness;
-    int   thinWalled;
+    int   thinWalled;// 1 when thickness is 0 (set on the host, never by the user)
     uint  materialAssetIdx;
     int   detailTexIndex;// tiled world-anchored detail albedo; -1 = none
     float detailRepeat;  // repeats per world meter (worldPos.xz anchored)

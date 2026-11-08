@@ -1359,9 +1359,7 @@ acrylic.color = 0xffffff
 acrylic.roughness = 0.05
 acrylic.metalness = 0.0
 acrylic.transmission = 0.9
-acrylic.ior = 1.49
-acrylic.thin_walled = True
-acrylic.thickness = 0.004
+acrylic.ior = 1.49                      # no thickness: a thin acrylic wall, seen straight through
 alu = standard_material(0xb9bec4, roughness=0.35, metalness=0.95)
 dark = standard_material(0x15171a, roughness=0.6)
 cable = standard_material(0xf7d51d, roughness=0.6)

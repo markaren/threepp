@@ -197,12 +197,12 @@ void main() {
 
     // ── OCEAN water surface only: analytic deep-water shade (Fresnel reflect ⊕
     // absorption-tinted body + foam), replacing the opaque shade entirely. Gated
-    // on the per-mesh FOAM ATTRIBUTE (foamAddress) — i.e. an actual FFT-displaced
-    // DisplacedMesh — NOT just `thinWalled`. glTF glass is almost always
-    // thin-walled too (no KHR_volume → thinWalled), and routing it here painted
-    // it milky-teal ocean water instead of clear refraction. Thin-walled glass
-    // now falls through to the refractive glass branch below like closed glass.
-    if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
+    // on the per-mesh FOAM ATTRIBUTE (foamAddress), i.e. an actual FFT-displaced
+    // DisplacedMesh, and on nothing in its material: glass is thin-walled too
+    // (glTF glass with no KHR_volume), and routing it here painted it milky-teal
+    // ocean water instead of clear refraction. Glass falls through to the
+    // refractive glass branch below.
+    if (pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
         // Dispatch B skips water's minority-sample refinement (rare at an
         // ocean's silhouette against sky/terrain, and shadeWater's own
         // internal accumulation state is dispatch-A-only) — dispatch A's
@@ -1131,9 +1131,9 @@ void main() {
     // KHR_volume, the common case) — BLENDS a Fresnel reflect+refract glass look
     // over the opaque shade, weighted by `transmission` (matches the path
     // tracer's reflect/refract-vs-opaque split in expectation: transmission=1 →
-    // pure glass; 0.8 → 80% glass + 20% the opaque PBR above). shadeGlass does
-    // the 2-interface refraction either way (a thin shell just has a short
-    // in-glass path → minimal tint → near-clear).
+    // pure glass; 0.8 → 80% glass + 20% the opaque PBR above). shadeGlass
+    // refracts in and out of a volume (thickness > 0) and passes a thin-walled
+    // sheet (thickness 0) straight through.
     // Dispatch B skips the additive/alpha-blend/glass refinement entirely —
     // all three re-trace a full radiance path (traceRadiance/shadeGlass) and
     // the glass branch also owns a reflectImage temporal slot exclusively

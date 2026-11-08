@@ -147,7 +147,6 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     m->thickness = thickness;
     m->thicknessMap = thicknessMap;
-    m->thinWalled = thinWalled;
 
     m->attenuationDistance = attenuationDistance;
     m->attenuationColor.copy(attenuationColor);
@@ -227,11 +226,6 @@ bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue&
     } else if (key == "specularColor") {
 
         specularColor.copy(extractColor(value));
-        return true;
-
-    } else if (key == "thinWalled") {
-
-        thinWalled = std::get<bool>(value);
         return true;
 
     } else if (key == "dispersion") {

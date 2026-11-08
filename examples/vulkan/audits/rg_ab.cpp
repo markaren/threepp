@@ -262,6 +262,7 @@ namespace {
         {
             auto glass = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(Color::white).transmission(1.f).roughness(0.f).metalness(0.f));
             glass->setIor(1.5f);
+            glass->thickness = 1.f;// a solid glass ball: refracted in and out
             mats.push_back(glass);
         }
         mats.push_back(MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(Color(0.65f, 0.05f, 0.05f)).roughness(0.4f).clearcoat(1.f).clearcoatRoughness(0.05f)));
@@ -458,7 +459,6 @@ namespace {
         auto glass = MeshPhysicalMaterial::create(
                 MeshPhysicalMaterial::Params{}.color(Color::white).transmission(1.f).roughness(0.f).metalness(0.f));
         glass->setIor(1.5f);
-        glass->thinWalled = true;
         auto pane = Mesh::create(PlaneGeometry::create(1.6f, 1.1f), glass);
         pane->position.set(0.f, 1.25f, 0.f);
         scene.add(pane);

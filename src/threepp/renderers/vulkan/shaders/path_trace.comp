@@ -30,9 +30,10 @@
 // out once. A transmissive material (transmission > 0) is a dielectric with
 // the material's ior: Fresnel reflect or refract through the GGX microfacet
 // normal, tinted by the albedo, Beer-Lambert attenuation over the inside leg
-// (attenuationColor / attenuationDistance), thin-walled passes straight
-// through. A camera ray that misses (or one it continued through glass)
-// shows the background as the frame draws it (backgroundBlurriness,
+// (attenuationColor / attenuationDistance); a thin-walled surface (thickness
+// 0, MaterialDesc.thinWalled) passes straight through. A camera ray that
+// misses (or one it continued through glass) shows the background as the
+// frame draws it (backgroundBlurriness,
 // backgroundIntensity, backgroundRotation, the procedural star field); any
 // other miss reads the
 // environment, mip 1 when the sun was extracted into a directional light
@@ -1342,8 +1343,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         if (hm.transmission > 0.0 && !wakeLayer && rnd(seed) < hm.transmission) {
             // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
             // is water whatever its material's ior.
-            // The ocean's material is thin-walled for the deferred shade's
-            // thin-shell BSDF; here it is a real interface, entered through
+            // Whatever its material says, here it is a real interface, entered through
             // the wave face's upper side: its geometric normal turned up. Not
             // by the ray's own direction: a ray at a grazing angle just under
             // the surface (a camera at the waterline) meets a steep face from

@@ -967,6 +967,7 @@ water_mat.roughness = 0.04
 water_mat.metalness = 0.0
 if not WATER_OPAQUE:
     water_mat.transmission = 1.0
+    water_mat.thickness = 2.0 * R_WATER     # a volume of water: refracted in and out
 water_mat.ior = 1.333
 water_mat.side = tp.Side.Double
 water_mat.transparent = False

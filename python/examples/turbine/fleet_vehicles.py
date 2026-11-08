@@ -95,9 +95,7 @@ acrylic.color = 0xffffff
 acrylic.roughness = 0.05
 acrylic.metalness = 0.0
 acrylic.transmission = 0.9
-acrylic.ior = 1.49
-acrylic.thin_walled = True
-acrylic.thickness = 0.004
+acrylic.ior = 1.49                      # no thickness: a thin acrylic wall, seen straight through
 
 
 # --------------------------------------------------------------------------- #

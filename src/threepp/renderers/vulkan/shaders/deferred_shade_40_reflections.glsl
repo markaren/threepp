@@ -523,9 +523,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                            (cam.camAux.x > 0.5) ? pix : pix * hitEyeDist, hitDuvA, hitDuvB);
         }
 
-        // A WATER surface met from the air: an ocean instance (foamAddress), the
-        // thin-walled transmissive material Ocean.cpp gives it, the ray against
-        // its normal. The pass-through rule below is glass's, and the ocean
+        // A WATER surface met from the air: an ocean instance (foamAddress) with
+        // the transmissive material Ocean.cpp gives it, the ray against its
+        // normal. The pass-through rule below is glass's, and the ocean
         // material is built like glass (transmission 1, white; its colour is
         // the attenuation), so every traced ray went THROUGH the surface and
         // shaded the seabed: the strait seen through a windscreen was its
@@ -534,7 +534,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // bounce continues below), the rest is the deep body colour. The hit's
         // normal is the mesh's, smooth: no chop in what glass shows. From BELOW
         // the ray keeps passing through, the sky over the column as before.
-        if (geoms[hitId].foamAddress != 0ul && hm.thinWalled != 0 && hm.transmission > 0.0 && dot(d, hitN) < 0.0) {
+        if (geoms[hitId].foamAddress != 0ul && hm.transmission > 0.0 && dot(d, hitN) < 0.0) {
             const vec3  wP    = o + d * tHit;
             const vec3  wV    = -d;
             const float wNdV  = max(dot(hitN, wV), 1e-4);

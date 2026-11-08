@@ -284,18 +284,17 @@ namespace threepp {
 
     struct MaterialWithThickness: virtual Material {
 
+        // The thickness of the volume beneath a transmissive surface, in the
+        // mesh's units: three.js's and glTF's (KHR_materials_volume) meaning.
+        // 0 (the default) = THIN-WALLED: the surface is a sheet with nothing
+        // inside it (a window, a visor, a lens of a pair of glasses), and what
+        // is behind it is seen straight through. > 0 = the surface BOUNDS a
+        // volume (a glass ball, a bottle, a block of ice): light refracts on
+        // the way in and again on the way out. The rasterizer (GL) offsets its
+        // refraction and absorbs over this distance; the ray tracers trace the
+        // mesh itself, so for them only "0 or not" matters.
         float thickness = 0;
         std::shared_ptr<Texture> thicknessMap;
-        // Path-tracer hint: this surface is a thin shell (e.g. a single
-        // FFT-displaced ocean plane, sunglasses lens, leaf), not a closed
-        // volume. Default false → closed-mesh BSDF (front=enter, back=exit,
-        // Beer-Lambert applied at the back-face exit using actual ray length).
-        // True → both faces refract as entries and Beer-Lambert is applied
-        // per-crossing using `thickness` as the in-medium proxy distance.
-        // Closed glass meshes that happen to also be doubleSided should leave
-        // this false; turning it on makes the back-face refraction direction
-        // wrong for them.
-        bool thinWalled = false;
     };
 
     struct MaterialWithClearcoat: virtual Material {

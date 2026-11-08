@@ -27,7 +27,7 @@ layout(set = 0, binding = 1, scalar) readonly buffer MotionMatBuf {
 layout(push_constant) uniform PC {
     mat4 model;
     uint instanceCustomIndex;
-    uint flags;            // bit 0 is_water, bit 1 transmissive, bit 2 thinWalled
+    uint flags;            // DrawInfo.flags: the kInstFlag* bits of vulkan_shared.h
     uint _pad0;
     uint _pad1;
 } pc;

@@ -317,10 +317,12 @@ namespace threepp_py {
                 .def_readwrite("transmission", &MeshPhysicalMaterial::transmission,
                                "0 = opaque, 1 = fully transmissive (water/glass).")
                 .def_readwrite("thickness", &MeshPhysicalMaterial::thickness,
-                               "Thin-shell in-medium proxy distance (m) for Beer-Lambert; also "
-                               "scales the water body veil (attenuation_color^(2*thickness/attenuation_distance)).")
-                .def_readwrite("thin_walled", &MeshPhysicalMaterial::thinWalled,
-                               "Surface is a thin shell (ocean plane, lens), not a closed volume.")
+                               "Thickness of the volume under a transmissive surface (three.js / glTF). "
+                               "0 (default) = thin-walled: a sheet such as a window, seen straight through. "
+                               "> 0 = the mesh bounds a volume (a glass ball, a bottle): refracted in and out; "
+                               "GL offsets and absorbs over this distance, the ray tracers use the mesh. On an "
+                               "Ocean it is the water body's proxy depth (attenuation_color^(2*thickness/"
+                               "attenuation_distance)).")
                 .def_readwrite("attenuation_color", &MeshPhysicalMaterial::attenuationColor,
                                "Beer-Lambert tint per attenuation_distance of travel — the water colour lever.")
                 .def_readwrite("attenuation_distance", &MeshPhysicalMaterial::attenuationDistance,

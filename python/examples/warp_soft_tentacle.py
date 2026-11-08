@@ -828,6 +828,7 @@ for b_ in range(NB):
         tm.roughness = 0.06
         tm.transmission = 1.0
         tm.ior = 1.35
+        tm.thickness = 2.0 * R_BASE  # a solid arm: refracted in and out
         tm.transparent = False
     else:
         g_.set_attribute("color", arm_colours(b_)[faces.reshape(-1)])

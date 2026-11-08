@@ -626,6 +626,7 @@ glass.roughness = 0.02
 glass.metalness = 0.0
 glass.transmission = 1.0
 glass.ior = 1.5
+glass.thickness = THICK          # a thickness: the bowl is a solid of glass, refracted in and out
 bowl = tp.Mesh(bowl_geometry(), glass)
 bowl.cast_shadow = False
 scene.add(bowl)
@@ -660,6 +661,7 @@ for g in range(N_CHUNK):
         mat.emissive_intensity = GLOW
     if TRANSMISSION > 0.0:
         mat.transmission = TRANSMISSION
+        mat.thickness = 0.02           # a gummy is a solid: refracted in and out
     elif TRANSL > 0.0:
         mat.translucency = TRANSL
         mat.translucency_color = tp.Color(*[min(1.0, 0.25 + v) for v in rgb])

@@ -1015,7 +1015,7 @@ namespace threepp {
         // Ocean fine-cascade normal-map source (deferred shade ocean binding).
         // Default 1×1 dummy R32F, replaced with the active DisplacedMesh's
         // cascade-2 height image when one is in the scene. deferred_shade.comp
-        // samples this on `thinWalled` materials at world-space XZ via
+        // samples this on the ocean (transmissive DisplacedMesh) at world-space XZ via
         // finite differences to perturb the macro normal — adds sub-mesh
         // chop detail (FFT cells finer than the 1 m mesh resolves).
         Image2D oceanFineHeightDummy{};
