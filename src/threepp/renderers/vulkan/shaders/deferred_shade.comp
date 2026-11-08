@@ -394,14 +394,31 @@ void main() {
     float probeConf = 0.0;
     vec3  probeE    = vec3(0.0);
     // The probe lookups place their point and pick their visible probes by the
-    // GEOMETRIC normal, from the depth neighbours (probe_common.glsl).
-    const vec3 Ng = probesOn ? depthGeometricNormal(px, msSampleIdx, ndc, id, worldPos, V, N) : N;
-    if (aoOn && probesOn && pc.shadeMode != 1u)
+    // GEOMETRIC normal, from the depth neighbours (probe_common.glsl), and the
+    // GI gather launches its rays off it (gatherEnv): both phases, so with AO on
+    // whether or not there are probes.
+    const vec3 Ng = (probesOn || aoOn) ? depthGeometricNormal(px, msSampleIdx, ndc, id, worldPos, V, N) : N;
+    // FINAL GATHER (probeGrid.probeFlags bit 3, on by default since 2026-11-08;
+    // THREEPP_VK_PROBE_FINAL_GATHER=0 brings the tap back). Without it,
+    // the probe tap below is the visible surface's whole indirect wherever the
+    // probes are confident, so every error of the grid is drawn onto the screen
+    // as it is (gltf-research-scenes bathroom2: a diamond lattice on its walls at
+    // the probe spacing, scallops along its ledges, the base of a teapot blotched
+    // once the cells grew). With the final gather a denoised pixel takes its
+    // indirect from its own GI rays instead, and the probes light only where
+    // those rays land (giRadiance's probeIrradiance at the hit: bounce 2 on), so
+    // what reaches the screen is the grid averaged over a hemisphere of hits.
+    // The cost is the gather Phase A pays without probes (tiers 6/2/1 rays,
+    // checkerboarded); the inline path (glass, blends, denoise off) and
+    // dispatch B keep the tap.
+    const bool probeFinalGather = probesOn && demodIndirect && (probeGrid.probeFlags & 8) != 0;
+    if (aoOn && probesOn && pc.shadeMode != 1u && !probeFinalGather)
         probeE = probeIrradianceConf(worldPos + Ng * SHADOW_EPS, N, Ng, probeConf) * (1.0 / PI);
     // The share of the probe path's fill that its stochastic gather supplies
-    // (see the UNMEASURED SHARE note in Phase B). Flags bit 14
-    // (THREEPP_VK_DIAG_NOGATHER): diagnostic, never gather.
-    const float probeGatherW = flagOn(16384u) ? 0.0 : 1.0 - smoothstep(0.25, 0.5, probeConf);
+    // (see the UNMEASURED SHARE note in Phase B): all of it under the final
+    // gather. Flags bit 14 (THREEPP_VK_DIAG_NOGATHER): diagnostic, never gather.
+    const float probeGatherW = probeFinalGather ? 1.0
+                             : (flagOn(16384u) ? 0.0 : 1.0 - smoothstep(0.25, 0.5, probeConf));
     // Flags bit 15 (THREEPP_VK_PROBE_FAR): 1 beyond the coarsest cascade window,
     // where the probe path's fill is the ray-free sky term instead of the gather.
     const float probeFarW = (flagOn(32768u) && aoOn && probesOn && pc.shadeMode != 1u)
@@ -448,6 +465,11 @@ void main() {
         }
     } else if (aoOn && probesOn) {
         // ── Phase B: probe + bent-normal env diffuse indirect ────────────────
+        // (Under the FINAL GATHER, the default since 2026-11-08, a denoised
+        // pixel skips the tap described here: its gather below is its whole
+        // indirect and the probes reach it through the gather's hits. What
+        // follows is the inline pixels' path, and every pixel's with
+        // THREEPP_VK_PROBE_FINAL_GATHER=0.)
         // The probe field already carries the sky + multi-bounce interior GI
         // (what the stochastic 1-bounce rays approximated); RT AO restores the
         // near-field occlusion the SH-L1 grid can't represent. This REPLACES
@@ -514,7 +536,7 @@ void main() {
                     float openness;
                     gGiMovFrac = 0.0;
                     rayCatSet(kRayCatGi);
-                    fallE = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, true, giSpp,
+                    fallE = gatherEnv(worldPos, N, Ng, px, pc.frame, shadowsOn, true, giSpp,
                                       pm.envMapIntensity, openness);
                     rayCatSet(kRayCatOther);
                     // The moving-hit dwell cut applies to the share the gather supplies.
@@ -533,7 +555,11 @@ void main() {
         } else {
             fillE = sampleEnvDiffuse(bentN) * gtaoMultiBounce(rtSkyVis, albedo);
         }
-        diffInd = mix(fillE, probeT, conf) + (lights.ambient + hemiAmbient(N)) * rtSkyVis;
+        // Under the final gather the gather IS the indirect: its rays see the
+        // near field themselves (no AO factor on it, as in Phase A), and the
+        // probes reached it through its hits.
+        diffInd = (probeFinalGather ? fillE : mix(fillE, probeT, conf))
+                + (lights.ambient + hemiAmbient(N)) * rtSkyVis;
     } else if (aoOn) {
         // ── Phase A: no probe field — keep the stochastic 1-bounce GI gather
         // for the sky/indirect term (nothing else supplies the near-field), but
@@ -543,7 +569,7 @@ void main() {
         rayCatSet(kRayCatGi);
         // Under RR the inline pixels (glass, blends) take the stochastic gather
         // too, one ray, in place of the deterministic 64: RR denoises them.
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect || kRR, giSpp, pm.envMapIntensity, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
+        diffInd = gatherEnv(worldPos, N, Ng, px, pc.frame, shadowsOn, demodIndirect || kRR, giSpp, pm.envMapIntensity, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
         rayCatSet(kRayCatOther);
     } else {
         diffInd = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);

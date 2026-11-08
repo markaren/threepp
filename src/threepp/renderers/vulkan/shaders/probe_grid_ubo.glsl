@@ -31,4 +31,12 @@ layout(set = 0, binding = PROBE_GRID_UBO_BINDING, scalar) uniform ProbeGridUbo {
     vec4  cSpacing[kProbeCascadesMax]; // xyz = probe spacing, w = probeMaxDist (1.5 * |spacing|)
     ivec4 cBase[kProbeCascadesMax];    // xyz = world cell of window coordinate (0,0,0), w = first probe index
     ivec4 cPrevBase[kProbeCascadesMax];// xyz = cBase before this frame's scroll (== cBase when none)
+    float biasScale;     // lookup point's offset off the surface, in cells (0.25 by default)
+    int   probeFlags;    // 1: that offset in the cell size along the normal; 4: probe relocation;
+                         // 8: final gather (deferred_shade: the visible surface's indirect is its own gather);
+                         // 16: the update's history ramp (probe_update: converge in seconds after a clear);
+                         // 32: this frame is in the warm-up after a full clear (blend held at 1/8 or more);
+                         // 64: ...in its first half (1/4 or more)
+    float relocMinFront; // relocation: keep the nearest surface this × min spacing away
+    uint  offsetBase;    // vec4 index of the relocation offsets in the SH store (probeSh[offsetBase + pIdx])
 } probeGrid;

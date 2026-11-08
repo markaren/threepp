@@ -349,6 +349,7 @@ void main() {
             probeShOut[p * 4u + 1u] = vec4(0.0);
             probeShOut[p * 4u + 2u] = vec4(0.0);
             probeShOut[p * 4u + 3u] = vec4(0.0);
+            if ((probeGrid.probeFlags & 4) != 0) probeShOut[probeGrid.offsetBase + p] = vec4(0.0);// back to its grid point
         }
         return;
     }
@@ -363,7 +364,10 @@ void main() {
     const uint  pIdx   = uint(probeGrid.cBase[c].w) + local;
     const ivec3 pcoord = probeWorldCellOfSlot(c, probeSlotCoord(local), probeGrid.cBase[c].xyz)
                        - probeGrid.cBase[c].xyz;// window coordinate
-    const vec3 probePos = probeGrid.cOrigin[c].xyz + vec3(pcoord) * probeGrid.cSpacing[c].xyz;
+    // Relocated probes trace from where they were moved to (the start-of-
+    // dispatch snapshot, like every other read of the store here).
+    const vec3 probeOff = probeOffset(pIdx);
+    const vec3 probePos = probeGrid.cOrigin[c].xyz + vec3(pcoord) * probeGrid.cSpacing[c].xyz + probeOff;
 
     // Fibonacci sphere, Cranley-Patterson-rotated per (probe, update) so
     // successive updates integrate fresh directions (the EMA averages them).
@@ -397,7 +401,31 @@ void main() {
     if (ri == 0u) sHist = probeSh[pIdx * 4u + 1u].a;
     barrier();
 
-    const float alpha = 1.0 / min(sHist + 1.0, 32.0);
+    // HISTORY RAMP (probeGrid.probeFlags bit 4, on by default; THREEPP_VK_PROBE_WARMUP=0
+    // restores the flat cap of 32). The blend used to be the plain average of every
+    // update so far until the 32nd (1/(hist+1)), then 1/32. The light a probe
+    // measures is not stationary while the grid fills: its rays tap the other
+    // probes (the multi-bounce feedback), which start black and reach the bounce
+    // fixed point one sweep at a time, so averaging ALL the updates kept the first
+    // dark ones in for 32 of them, and 1/32 after that met the rest of the climb
+    // slowly. A still white room (gltf-research-scenes kitchen) kept brightening on
+    // screen for ~10 s after it opened, the right wall 119 -> 125. Now the blend
+    // stays at 1/8 from the 8th update to the 16th and tapers to 1/32 by the 64th:
+    // the climb is followed within a couple of seconds, and a converged probe
+    // blends exactly as before (same 1/32, same steady-state noise).
+    // Each update is one damped step of the bounce iteration and closes the share
+    // alpha·(1 − ρ) of what is left to climb; ρ, the bounce gain, is ~0.8 in the
+    // white kitchen. So the WARM-UP after a full clear (ProbeGI's first
+    // kWarmupFrames frames, every probe updating every frame) also holds alpha
+    // up: at 1/4 or more in its first half (probeFlags bit 6), 1/8 in its second
+    // (bit 5). Ramping the update count up that fast alone took alpha down to
+    // 1/16 by the warm-up's end and left a 4 s tail; 1/8 throughout still left a
+    // 1-level climb in the second second. After it, the ramp above takes over at
+    // its converged 1/32, which also averages away the warm-up's extra noise.
+    const float histCap = ((probeGrid.probeFlags & 16) != 0) ? clamp(0.5 * sHist, 8.0, 32.0) : 32.0;
+    const float alphaH  = 1.0 / min(sHist + 1.0, histCap);
+    const float alphaW  = ((probeGrid.probeFlags & 64) != 0) ? 0.25 : (((probeGrid.probeFlags & 32) != 0) ? 0.125 : 0.0);
+    const float alpha   = max(alphaH, alphaW);
 
     // This update's own probe state (see "DDGI-style probe state" below).
     // Every thread needs it: the depth blend is weighted by it too.
@@ -575,4 +603,48 @@ void main() {
     probeShOut[pIdx * 4u + 1u] = vec4(mix(o1.rgb, cx, alphaSh), min(hist + 1.0, 4096.0));
     probeShOut[pIdx * 4u + 2u] = vec4(mix(o2.rgb, cy, alphaSh), mix(semSqOld, semSq, alphaSh));
     probeShOut[pIdx * 4u + 3u] = vec4(mix(o3.rgb, cz, alphaSh), mRun);
+
+    // ── Probe relocation (probeFlags bit 2, THREEPP_VK_PROBE_RELOCATE) ──────
+    // DDGI's answer to probes that sit inside geometry or hug a surface (the
+    // relocation pass of Majercik et al. 2021 / RTXGI), run on this update's own
+    // rays. A probe a few centimetres off a wall measures that wall at grazing
+    // angles across most of its 8×8 depth texels, and the Chebyshev test then
+    // draws its texels onto the wall as scallops (bathroom2's sills and niche
+    // shelves). Each update takes one step:
+    //   inside (over a quarter of the rays end on interior backfaces): through
+    //     the nearest backface, half the clearance beyond it;
+    //   nearer a surface than relocMinFront × min spacing: straight away from
+    //     the nearest hit by the shortfall;
+    //   otherwise back toward the grid point by half the spare clearance.
+    // The offset stays within 0.45 of a cell per axis, so the probe keeps its
+    // cell and the trilinear weights their meaning. A double-sided back is a
+    // legitimate side here as for validity: a surface, not an inside. What the
+    // probe measured from its old spot ages out through the EMA.
+    if ((probeGrid.probeFlags & 4) != 0) {
+        const vec3  spc      = probeGrid.cSpacing[c].xyz;
+        const float minFront = probeGrid.relocMinFront * min(spc.x, min(spc.y, spc.z));
+        float nearBack = 1e30, nearFront = 1e30, nBack = 0.0;
+        int   iBack = -1, iFront = -1;
+        for (uint i = 0u; i < kRays; ++i) {
+            if (sDist[i] >= 1e29) continue;// miss
+            if (sBack[i] > 0.5) {
+                nBack += 1.0;
+                const float d = sDist[i] * 5.0;// probeRayRadiance reports backfaces at 0.2×
+                if (d < nearBack) { nearBack = d; iBack = int(i); }
+            } else if (sDist[i] < nearFront) {
+                nearFront = sDist[i];
+                iFront    = int(i);
+            }
+        }
+        vec3 off = probeOff;
+        if (iBack >= 0 && nBack > 0.25 * float(kRays)) {
+            off += sDir[iBack] * (nearBack + 0.5 * minFront);
+        } else if (iFront >= 0 && nearFront < minFront) {
+            off -= sDir[iFront] * (minFront - nearFront);
+        } else {
+            const float len = length(off);
+            if (len > 1e-6) off -= off * (min(0.5 * (nearFront - minFront), len) / len);
+        }
+        probeShOut[probeGrid.offsetBase + pIdx] = vec4(clamp(off, -0.45 * spc, 0.45 * spc), 0.0);
+    }
 }

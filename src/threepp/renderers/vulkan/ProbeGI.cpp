@@ -28,8 +28,45 @@ namespace threepp::vulkan {
             float   cSpacing[ProbeGI::kCascadesMax][4]; // xyz; w unused
             int32_t cBase[ProbeGI::kCascadesMax][4];    // xyz world cell of (0,0,0); w first probe index
             int32_t cPrevBase[ProbeGI::kCascadesMax][4];// xyz world cell before this frame's scroll
+            float    biasScale;     // lookup offset off the surface, in cells
+            int32_t  probeFlags;    // 1 bias along the normal's cell size, 4 relocation
+            float    relocMinFront; // relocation: nearest surface at least this × min spacing away
+            uint32_t offsetBase;    // vec4 index of the relocation offsets in the SH store
         };
-        static_assert(sizeof(GridUboData) == 48 + 4 * 16 * ProbeGI::kCascadesMax, "ProbeGridUbo layout drift");
+        static_assert(sizeof(GridUboData) == 48 + 4 * 16 * ProbeGI::kCascadesMax + 16, "ProbeGridUbo layout drift");
+
+        // SH store per probe: 4 vec4 of SH-L1 + 1 vec4 relocation offset (the
+        // offsets in a region of their own after all the SH records).
+        constexpr VkDeviceSize kShStride     = 4 * 16;
+        constexpr VkDeviceSize kOffsetStride = 16;
+
+        // Near-cubic probe counts per axis for a scene-fit AABB of extent `ext`:
+        // start every axis at its floor `minDims` and keep adding a probe to the
+        // axis whose cells are longest while the product stays within `budget`.
+        // The floor is what keeps a flat scene's vertical layers: fully cubic,
+        // the teapot on its 160 m floor got 3 layers 2 m apart (the fixed grid
+        // had 16 at 0.39 m) and its base contact went blotchy.
+        void shapedDims(const float ext[3], uint32_t budget, const uint32_t minDims[3], uint32_t out[3]) {
+            float e[3];
+            for (int a = 0; a < 3; ++a) {
+                e[a]   = std::max(ext[a], 1e-3f);
+                out[a] = std::max(minDims[a], 2u);
+            }
+            for (;;) {
+                const uint32_t prod = out[0] * out[1] * out[2];
+                int   best     = -1;
+                float bestCell = 0.f;
+                for (int a = 0; a < 3; ++a) {
+                    const float cell = e[a] / static_cast<float>(out[a]);
+                    if (cell > bestCell && prod / out[a] * (out[a] + 1) <= budget) {
+                        best     = a;
+                        bestCell = cell;
+                    }
+                }
+                if (best < 0) break;
+                ++out[best];
+            }
+        }
 
         float envFloat(const char* name, float dflt) {
             const auto v = env::number(name);
@@ -45,6 +82,12 @@ namespace threepp::vulkan {
         }
         cascadeBase_ = envFloat("THREEPP_VK_PROBE_CASCADE_BASE", kCascadeBaseSpacing);
         sceneFitMax_ = envFloat("THREEPP_VK_PROBE_SCENE_FIT_MAX", kSceneFitMaxSpacing);
+        fitShape_      = envFloat("THREEPP_VK_PROBE_FIT_SHAPE", kFitShapeDefault);
+        biasScale_     = envFloat("THREEPP_VK_PROBE_BIAS", kBiasScaleDefault);
+        biasAxis_      = env::flag("THREEPP_VK_PROBE_BIAS_AXIS");
+        relocMinFront_ = envFloat("THREEPP_VK_PROBE_RELOCATE", 0.f);
+        finalGather_   = env::flag("THREEPP_VK_PROBE_FINAL_GATHER", kFinalGatherDefault);
+        warmup_        = env::flag("THREEPP_VK_PROBE_WARMUP", true);
         for (uint32_t c = 0; c < kCascadesMax; ++c)
             for (int a = 0; a < 3; ++a) cSpacing_[c][a] = 1.f;
         // The stores hold the cascades asked for (cascadeCount_ never exceeds
@@ -73,12 +116,13 @@ namespace threepp::vulkan {
     void ProbeGI::createStores(uint32_t cascades) {
         storeCascades_ = cascades;
         const VkDeviceSize storeProbes = static_cast<VkDeviceSize>(cascades) * kProbeCount;
-        // SH-L1 store: 4 vec4 per probe. TRANSFER_DST for the zero-fill on
+        // SH-L1 store: 4 vec4 per probe, then the relocation offsets (1 vec4
+        // per probe, see the header). TRANSFER_DST for the zero-fill on
         // (re)fit; STORAGE for the update pass + deferred_shade's reads.
         // TRANSFER_SRC: the determinism audit hashes this buffer per frame
         // (debugHashShadeImages' probeSh row) — pure capability bit.
         shBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
-                              storeProbes * 4 * 16,
+                              storeProbes * (kShStride + kOffsetStride),
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -94,7 +138,7 @@ namespace threepp::vulkan {
                                  VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         // Snapshot twins (see the header comment): copy targets, shader reads.
         prevShBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
-                                  storeProbes * 4 * 16,
+                                  storeProbes * (kShStride + kOffsetStride),
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                   VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
@@ -336,7 +380,21 @@ namespace threepp::vulkan {
     }
 
     void ProbeGI::setGridBounds(const float aabbMin[3], const float aabbMax[3]) {
-        const uint32_t dims[3] = {kDimX, kDimY, kDimZ};
+        uint32_t dims[3] = {kDimX, kDimY, kDimZ};
+        if (fitShape_ > 0.f) {
+            // Near-cubic cells within the same probe budget (the stores and the
+            // update cost are unchanged), no axis below 1/fitShape_ of its
+            // fixed-grid count: 1 is the fixed grid, 2 lets an axis give up
+            // half its probes, a large value is fully cubic. Only the scene fit
+            // uses these; the cascades below keep kDim*.
+            float ext[3];
+            for (int a = 0; a < 3; ++a) ext[a] = std::max(aabbMax[a] - aabbMin[a], 0.f);
+            const uint32_t fixed[3] = {kDimX, kDimY, kDimZ};
+            uint32_t       minDims[3];
+            for (int a = 0; a < 3; ++a)
+                minDims[a] = static_cast<uint32_t>(std::ceil(static_cast<float>(fixed[a]) / std::max(fitShape_, 1.f)));
+            shapedDims(ext, kProbeCount, minDims, dims);
+        }
         float newSpacing[3], newOrigin[3];
         for (int a = 0; a < 3; ++a) {
             // Cell-centered probes: spacing = extent/dims, first probe half a
@@ -368,6 +426,10 @@ namespace threepp::vulkan {
             if (layout_ == Layout::Cascades) return;// still too large for a fit; the windows follow the camera
             layout_       = Layout::Cascades;
             cascadeCount_ = std::max(cascadesWanted_, 1u);
+            gridDims_[0]  = kDimX;
+            gridDims_[1]  = kDimY;
+            gridDims_[2]  = kDimZ;
+            probeCount_   = kProbeCount;
             for (uint32_t c = 0; c < cascadeCount_; ++c) {
                 const float sp = cascadeBase_ * std::pow(4.f, static_cast<float>(c));
                 for (int a = 0; a < 3; ++a) cSpacing_[c][a] = sp;
@@ -404,10 +466,12 @@ namespace threepp::vulkan {
             if (keep) return;
         }
         if (log) {
-            std::fprintf(stderr, "[probe] grid %s origin=(%.6f %.6f %.6f) spacing=(%.6f %.6f %.6f)\n",
+            std::fprintf(stderr, "[probe] grid %s origin=(%.6f %.6f %.6f) spacing=(%.6f %.6f %.6f) dims=(%u %u %u)\n",
                          gridFitted_ ? "REFIT" : "fit", newOrigin[0], newOrigin[1], newOrigin[2],
-                         newSpacing[0], newSpacing[1], newSpacing[2]);
+                         newSpacing[0], newSpacing[1], newSpacing[2], dims[0], dims[1], dims[2]);
         }
+        std::memcpy(gridDims_, dims, sizeof(dims));
+        probeCount_ = dims[0] * dims[1] * dims[2];
         std::memcpy(gridSpacing_, newSpacing, sizeof(newSpacing));
         std::memcpy(gridOrigin_,  newOrigin,  sizeof(newOrigin));
         std::memcpy(cSpacing_[0], newSpacing, sizeof(newSpacing));
@@ -456,9 +520,15 @@ namespace threepp::vulkan {
         GridUboData d{};
         std::memcpy(d.origin,  gridOrigin_,  sizeof(gridOrigin_));
         std::memcpy(d.spacing, gridSpacing_, sizeof(gridSpacing_));
-        d.dims[0] = static_cast<int32_t>(kDimX);
-        d.dims[1] = static_cast<int32_t>(kDimY);
-        d.dims[2] = static_cast<int32_t>(kDimZ);
+        d.dims[0] = static_cast<int32_t>(gridDims_[0]);
+        d.dims[1] = static_cast<int32_t>(gridDims_[1]);
+        d.dims[2] = static_cast<int32_t>(gridDims_[2]);
+        d.biasScale     = biasScale_;
+        d.probeFlags    = (biasAxis_ ? 1 : 0) | (relocMinFront_ > 0.f ? 4 : 0) | (finalGather_ ? 8 : 0) |
+                          (warmup_ ? 16 : 0) | (warmupLeft_ > 0 ? 32 : 0) |
+                          (warmupLeft_ > kWarmupFrames / 2 ? 64 : 0);// the warm-up's first half
+        d.relocMinFront = relocMinFront_;
+        d.offsetBase    = static_cast<uint32_t>(storeCascades_ * kProbeCount * 4);
         // Cascades that recentre has not placed yet must not be sampled: the
         // UBO says "disabled" until the first placement (same frame as the
         // first update, so nothing visible changes).
@@ -529,6 +599,7 @@ namespace threepp::vulkan {
             needsClear_    = false;
             scrollPending_ = false;// the full clear supersedes a scroll reset
             fullCopy       = true;
+            if (warmup_) warmupLeft_ = kWarmupFrames;// the fresh grid fills at the boosted rate
         } else if (scrollPending_) {
             // A cascade window moved: reset the slots whose world cell changed
             // (probe_update.comp scroll mode, flags bit 2), before the snapshot
@@ -579,9 +650,9 @@ namespace threepp::vulkan {
             vkCmdPipelineBarrier2(cb, &dep);
 
             // Per cascade, [first, first + n) in that cascade's probe indices,
-            // wrapped at kProbeCount into at most two regions. The window
-            // never wraps as long as kProbesPerFrame divides kProbeCount, but
-            // the cursor arithmetic does not promise that and a silent
+            // wrapped at probeCount_ into at most two regions. The window
+            // never wraps as long as kProbesPerFrame divides the probe count
+            // (always for 32×16×32, not for a shaped scene fit), and a silent
             // half-copy would be a needle-in-a-haystack bug. A full copy is
             // one region over every live cascade.
             uint32_t spans[2 * kCascadesMax][2]{};
@@ -594,7 +665,7 @@ namespace threepp::vulkan {
                 for (uint32_t c = 0; c < cascadeCount_; ++c) {
                     const uint32_t first = lastOffset_;
                     const uint32_t n     = lastCount_;
-                    const uint32_t n0    = std::min(n, kProbeCount - first);
+                    const uint32_t n0    = std::min(n, probeCount_ - first);
                     spans[regionCount][0] = c * kProbeCount + first;
                     spans[regionCount][1] = n0;
                     ++regionCount;
@@ -606,17 +677,22 @@ namespace threepp::vulkan {
                 }
             }
 
-            constexpr VkDeviceSize kShStride    = 4 * 16;
-            const VkDeviceSize     kDepthStride = static_cast<VkDeviceSize>(kDepthTexels) * 4;
+            const VkDeviceSize kDepthStride = static_cast<VkDeviceSize>(kDepthTexels) * 4;
+            // The relocation offsets follow the same windows, in their region
+            // after every SH record of the store.
+            const VkDeviceSize offsetRegion = static_cast<VkDeviceSize>(storeCascades_) * kProbeCount * kShStride;
 
-            VkBufferCopy shCopy[2 * kCascadesMax]{}, depthCopy[2 * kCascadesMax]{};
+            VkBufferCopy shCopy[4 * kCascadesMax]{}, depthCopy[2 * kCascadesMax]{};
             for (uint32_t i = 0; i < regionCount; ++i) {
                 shCopy[i].srcOffset = shCopy[i].dstOffset = spans[i][0] * kShStride;
                 shCopy[i].size                            = spans[i][1] * kShStride;
+                VkBufferCopy& oc = shCopy[regionCount + i];
+                oc.srcOffset = oc.dstOffset = offsetRegion + spans[i][0] * kOffsetStride;
+                oc.size                     = spans[i][1] * kOffsetStride;
                 depthCopy[i].srcOffset = depthCopy[i].dstOffset = spans[i][0] * kDepthStride;
                 depthCopy[i].size                               = spans[i][1] * kDepthStride;
             }
-            vkCmdCopyBuffer(cb, shBuf_.handle, prevShBuf_.handle, regionCount, shCopy);
+            vkCmdCopyBuffer(cb, shBuf_.handle, prevShBuf_.handle, 2 * regionCount, shCopy);
             vkCmdCopyBuffer(cb, depthBuf_.handle, prevDepthBuf_.handle, regionCount, depthCopy);
 
             VkMemoryBarrier2 toCompute{};
@@ -634,7 +710,12 @@ namespace threepp::vulkan {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        const uint32_t count = std::min(kProbesPerFrame, kProbeCount);
+        // Per cascade: the round-robin budget, or during the warm-up after a
+        // full clear kWarmupBoost times it (all 16384 of a window at the default
+        // sizes: every probe updates every frame).
+        const uint32_t budget = warmupLeft_ > 0 ? kProbesPerFrame * kWarmupBoost : kProbesPerFrame;
+        if (warmupLeft_ > 0) --warmupLeft_;
+        const uint32_t count = std::min(budget, probeCount_);
         uint32_t emPowerBits;
         std::memcpy(&emPowerBits, &emissiveTotalPower, sizeof(emPowerBits));
         const uint32_t pc[8] = {probeOffset_, count, updateCounter_,
@@ -651,7 +732,7 @@ namespace threepp::vulkan {
         lastCount_  = count;
         haveWindow_ = true;
 
-        probeOffset_ = (probeOffset_ + count) % kProbeCount;
+        probeOffset_ = (probeOffset_ + count) % probeCount_;
         ++updateCounter_;
     }
 

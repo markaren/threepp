@@ -6,12 +6,46 @@
 // SKY the gather sees -- the rays that miss, and (deterministic path) the
 // near-hit env fill -- and nothing else: a ray that lands on geometry brings
 // back that geometry's own shade, which this surface's IBL knob has no say in.
-vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, float envInt, out float openness) {
+// The hemisphere dither under DLSS Ray Reconstruction. blueNoiseDef slides the
+// 64×64 tile by fixed steps per frame, ivec2(47, 17)·(salt + 1)·frame: the
+// gather's two dimensions repeat every 64 and every 32 frames, and at frame 0
+// mod 64 they read the same texel (u1 == u2 at every pixel: the whole frame
+// samples its hemispheres along one diagonal). So the quality of a frame's GI
+// estimate cycles every 64 frames. SVGF's long accumulation averages that out;
+// RR integrates one ray a pixel a frame and showed it as a PULSE at harmonics of
+// 60/64 Hz on flat, bounce-lit walls (gltf-research-scenes kitchen and lamp,
+// once the final gather put every pixel on the gather: peaks at 2.8, 5.6 and
+// 11.25 Hz, gone with the probe tap or with SVGF). Here every frame and every
+// dimension take their own hashed toroidal offset of the tile, and the second
+// dimension reads it TRANSPOSED: two translations of one tile still lined up on
+// the odd frame (offsets 28,28 apart dipped the whole frame once, frames 506 and
+// 710 of a still kitchen and lamp alike), a tile and its transpose do not. Blue
+// noise in space, no period and no coupling in time.
+float giBlueNoiseRR(uvec2 px, uint frame, uint salt) {
+    const uint  h   = pcgHash(frame * 2654435761u ^ (salt * 0x9E3779B9u + 0x7F4A7C15u));
+    const ivec2 off = ivec2(int(h & 63u), int((h >> 8u) & 63u));
+    const ivec2 q   = ((salt & 1u) != 0u) ? ivec2(px.yx) : ivec2(px);
+    const vec2  uv  = (vec2((q + off) & 63) + 0.5) / 64.0;
+    return texture(blueNoiseTex, uv).r;
+}
+
+// Ng = the GEOMETRIC normal of the surface the rays leave (depth_normal.glsl),
+// facing the viewer. The hemisphere is sampled around the shading normal N, but
+// the rays start off Ng and a direction under Ng's plane is mirrored back above
+// it: N can lean far from the triangle the rays actually leave. Auto-LOD levels
+// keep the full mesh's vertex normals on their coarse triangles, so on a
+// simplified level of a curved, thin shell (bathroom2's tub at its rim) N points
+// a share of the hemisphere straight into the shell, those rays met its own
+// inside and came back unlit, and once the gather lit the visible surface
+// (the probe final gather) that was a black band along the rim. Normal maps and
+// smooth-shaded low-poly meshes lean the same way. Where N and Ng agree the
+// mirror never fires.
+vec3 gatherEnv(vec3 P, vec3 N, vec3 Ng, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, float envInt, out float openness) {
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 T  = normalize(cross(up, N));
     const vec3 B  = cross(N, T);
-    const vec3 orig = P + N * SHADOW_EPS;
+    const vec3 orig = P + Ng * SHADOW_EPS;
     openness = 1.0;
 
     if (stochastic) {
@@ -28,8 +62,11 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         // low-frequency clumps the edge-stopping filter can't separate from signal —
         // the AO "speckle". The offset animates with `frame`, so the temporal
         // accumulator still integrates fresh directions every frame.
-        const vec2 bnOff = vec2(blueNoiseDef(uvec2(px), frame, 0u),
-                                blueNoiseDef(uvec2(px), frame, 1u));
+        // Under RR: the hashed, non-repeating offsets (giBlueNoiseRR above).
+        const vec2 bnOff = kRR ? vec2(giBlueNoiseRR(uvec2(px), frame, 0u),
+                                      giBlueNoiseRR(uvec2(px), frame, 1u))
+                               : vec2(blueNoiseDef(uvec2(px), frame, 0u),
+                                      blueNoiseDef(uvec2(px), frame, 1u));
         vec3  acc   = vec3(0.0);
         float missN = 0.0;
         float movN  = 0.0;// rays whose 1-bounce hit a MOVING mesh (→ gGiMovFrac dwell cut)
@@ -39,7 +76,9 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
             const float r   = sqrt(u1);
             const float phi = TWO_PI * u2;
             const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
-            const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
+            vec3        dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
+            const float dg   = dot(dir, Ng);
+            if (dg < 0.0) dir -= (2.0 * dg) * Ng;// under the traced surface: mirror above it
             bool missed;
             vec3 gi = giRadiance(orig, dir, doShadows, maxLod, seed, missed, envInt);// cheap 1-bounce; cosine pdf cancels
             if (missed) missN += 1.0;
@@ -76,7 +115,9 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         const float phi = float(s) * GA;
         const float r   = sqrt(u1);
         const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
-        const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
+        vec3        dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
+        const float dg   = dot(dir, Ng);
+        if (dg < 0.0) dir -= (2.0 * dg) * Ng;// as above
         rayQueryEXT rq;
         // kRayMaskOpaque: blend decals / glass must not block sky visibility —
         // with 0xFF + force-opaque, a transparent text quad on a hull painted

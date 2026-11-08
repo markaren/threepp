@@ -60,6 +60,18 @@ namespace threepp::vulkan {
         // kProbeCount / kProbesPerFrame = 8 frames. 2048 × 64 = 131 k rays
         // per frame — well inside the ~1 ms probe budget on an RTX 4070.
         static constexpr uint32_t kProbesPerFrame = 2048;
+        // WARM-UP (env THREEPP_VK_PROBE_WARMUP, on by default; =0 restores the
+        // flat budget and the shader's flat history cap): for kWarmupFrames
+        // frames after a full clear (a grid fit, invalidateHistory) every frame
+        // updates kWarmupBoost × kProbesPerFrame probes with their blend held at
+        // 1/4 or more for the first half and 1/8 for the second (probeFlags bits
+        // 6 and 5), so the grid fills and its bounce light
+        // builds up within about a second, not over the ~10 s a still room
+        // visibly kept brightening (probe_update.comp's HISTORY RAMP is the
+        // rest). Costs that many times the probe pass for those frames, which
+        // come right after a load anyway.
+        static constexpr uint32_t kWarmupFrames = 120;
+        static constexpr uint32_t kWarmupBoost  = 8;
         // Camera-centred cascades (layout Cascades): up to kCascadesMax
         // windows of kProbeCount probes each, finest first, back to back in
         // the SH and depth stores. Spacing kCascadeBaseSpacing·4^c, so 1, 4
@@ -81,6 +93,44 @@ namespace threepp::vulkan {
         static constexpr float    kCascadeBaseSpacing  = 1.f;
         static constexpr float    kSceneFitMaxSpacing  = 2.f;
         enum class Layout { SceneFit, Cascades };
+
+        // Wall-artifact levers (2026-11-08, gltf-research-scenes bathroom2: a
+        // diamond lattice on flat walls and scalloped fringes along ledges, all
+        // from the probe field). ON by default: the shaped scene fit (v = 2) and
+        // the final gather; the others are off. Env overrides, read once at
+        // construction:
+        //   THREEPP_VK_PROBE_FIT_SHAPE=v   scene fit with near-cubic cells: the
+        //       kProbeCount budget split by the AABB's proportions instead of a
+        //       fixed 32×16×32, no axis below 1/v of its fixed count. 1 = the
+        //       fixed grid. bathroom2's room + shell got 1.2 × 2.5 × 2.4 m cells
+        //       from the fixed grid, and the probes behind its walls drew their
+        //       lattice on them; shaped it is 20×21×39 at ~1.9 m and the walls
+        //       are clean. Fully cubic (a large v) took the teapot on its 160 m
+        //       floor from 16 vertical layers to 3 and blotched its base; the
+        //       floor of half the fixed count keeps 8 and the base as it was.
+        //   THREEPP_VK_PROBE_BIAS=k        the lookup point's offset off the
+        //       surface, in cells (default 0.25)
+        //   THREEPP_VK_PROBE_BIAS_AXIS=1   measure that offset in the cell size
+        //       ALONG the surface normal, not the smallest spacing (no change on
+        //       cubic cells)
+        //   THREEPP_VK_PROBE_RELOCATE=f    DDGI probe relocation: every update
+        //       moves its probe (within 0.45 of a cell) out of geometry it sits
+        //       inside and to at least f × min spacing from the nearest surface
+        //   THREEPP_VK_PROBE_FINAL_GATHER=0  turns OFF the final gather (on by
+        //       default): the probe field is no longer the visible surface's
+        //       indirect light. Every denoised pixel takes its indirect from its
+        //       own GI rays (the per-pixel gather), and the probes light only
+        //       where those rays land (the bounces after the first), so the
+        //       grid's errors reach the screen averaged over a hemisphere of hits
+        //       instead of drawn onto the wall. No grid shape removes those
+        //       errors; this keeps them off the screen. bathroom2 lost its
+        //       lattice and scallops, in stills and in motion. Cost: the gather
+        //       the no-probe path always paid, on pixels the probes used to fill
+        //       ray-free (RTX 5080, 1280×720, bathroom2: +0.76 ms GPU with DLSS
+        //       Ray Reconstruction, +1.8 ms with the SVGF denoiser).
+        static constexpr float kBiasScaleDefault = 0.25f;
+        static constexpr float kFitShapeDefault  = 2.f;
+        static constexpr bool  kFinalGatherDefault = true;
 
         ProbeGI(VulkanContext& ctx, uint32_t framesInFlight);
         ~ProbeGI();
@@ -172,6 +222,11 @@ namespace threepp::vulkan {
         // (i, j, k) sits at origin + (i, j, k) · spacing).
         [[nodiscard]] const float* gridOrigin() const { return gridOrigin_; }
         [[nodiscard]] const float* gridSpacing() const { return gridSpacing_; }
+        // Probes per axis of the grid gridOrigin/gridSpacing describe: the
+        // fixed 32×16×32, or the shaped scene fit (THREEPP_VK_PROBE_FIT_SHAPE).
+        void gridDims(int out[3]) const {
+            for (int a = 0; a < 3; ++a) out[a] = static_cast<int>(gridDims_[a]);
+        }
 
         // Upload this frame's grid UBO (origin/spacing/dims + the sampling
         // enable). Call every frame BEFORE recording — deferred_shade reads
@@ -203,7 +258,13 @@ namespace threepp::vulkan {
         VulkanContext& ctx_;
         uint32_t       framesInFlight_;
 
-        Buffer                shBuf_{};   // kProbeCount × 4 × vec4 SH-L1 store
+        // kProbeCount × 4 × vec4 SH-L1 store per cascade, then ONE vec4 per
+        // probe slot of the whole store: the probe's relocation offset (xyz,
+        // world units from its grid point; 0 unless relocation is on). The
+        // offsets ride in this buffer, after every SH record, so the readbacks
+        // of the SH region and every existing index stay as they were, and the
+        // update's snapshot copies carry them with no binding of their own.
+        Buffer                shBuf_{};
         Buffer                depthBuf_{};// kProbeCount × kDepthTexels × uint Chebyshev depth
         // Start-of-dispatch snapshots (recordDispatch copies canonical → prev
         // before every update). The update's feedback tap / EMA history reads
@@ -225,6 +286,17 @@ namespace threepp::vulkan {
         float    gridOrigin_[3]  = {0.f, 0.f, 0.f};
         float    gridSpacing_[3] = {1.f, 1.f, 1.f};
         bool     gridFitted_     = false;
+        // Probes per axis and their product for the current layout. Cascades
+        // always use kDim*; the scene fit too unless fitShape_.
+        uint32_t gridDims_[3]    = {kDimX, kDimY, kDimZ};
+        uint32_t probeCount_     = kProbeCount;
+        float    fitShape_       = kFitShapeDefault;// env THREEPP_VK_PROBE_FIT_SHAPE, 1 = fixed grid
+        float    biasScale_      = kBiasScaleDefault;// env THREEPP_VK_PROBE_BIAS
+        bool     biasAxis_       = false;           // env THREEPP_VK_PROBE_BIAS_AXIS
+        float    relocMinFront_  = 0.f;             // env THREEPP_VK_PROBE_RELOCATE, 0 = off
+        bool     finalGather_    = kFinalGatherDefault;// env THREEPP_VK_PROBE_FINAL_GATHER, 0 = the probe tap
+        bool     warmup_         = true;            // env THREEPP_VK_PROBE_WARMUP, 0 = flat budget + history cap
+        uint32_t warmupLeft_     = 0;               // frames of boosted updates left after the last full clear
         // Layout state. cascadeCount_ is 1 for the scene fit, whose window is
         // cascade 0 with base 0. For cascades: per window, the world position
         // of window coordinate (0,0,0), the spacing, the world cell of (0,0,0)

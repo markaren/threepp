@@ -3506,8 +3506,8 @@ namespace threepp {
     bool VulkanRenderer::probeGrid(float origin[3], float spacing[3], int dims[3]) const {
         const auto* probes = core()->probeGI_.get();
         if (!probes || !probes->gridFitted()) return false;
-        const int d[3] = {static_cast<int>(vulkan::ProbeGI::kDimX), static_cast<int>(vulkan::ProbeGI::kDimY),
-                          static_cast<int>(vulkan::ProbeGI::kDimZ)};
+        int d[3];
+        probes->gridDims(d);
         for (int a = 0; a < 3; ++a) {
             origin[a]  = probes->gridOrigin()[a];
             spacing[a] = probes->gridSpacing()[a];

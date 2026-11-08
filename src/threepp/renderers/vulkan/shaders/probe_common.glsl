@@ -80,6 +80,22 @@ uint probeSlotIndex(int c, ivec3 w) {
     return uint(probeGrid.cBase[c].w) + uint(s.x + d.x * (s.y + d.y * s.z));
 }
 
+// Probe relocation (ProbeGI.hpp, THREEPP_VK_PROBE_RELOCATE): where probe pIdx
+// actually sits, relative to its grid point. Zero unless relocation is on.
+vec3 probeOffset(uint pIdx) {
+    return ((probeGrid.probeFlags & 4) != 0) ? probeSh[probeGrid.offsetBase + pIdx].xyz : vec3(0.0);
+}
+
+// How far the lookup point moves off the surface: biasScale (0.25 by default)
+// of the smallest spacing, or with probeFlags bit 0 of the cell's extent along
+// the normal. The two agree on cubic cells; on a 1.2 × 2.5 × 2.4 cell a wall
+// facing z got an eighth of its cell from the smallest spacing and the lookup
+// straddled the probes behind it.
+float probeBiasLength(vec3 sp, vec3 Ng) {
+    const float len = ((probeGrid.probeFlags & 1) != 0) ? length(Ng * sp) : min(sp.x, min(sp.y, sp.z));
+    return probeGrid.biasScale * len;
+}
+
 // ── Probe depth (visibility) — DDGI Chebyshev test (Majercik et al. 2019) ───
 // Each probe carries an 8×8 octahedral map of (mean, mean²) ray-hit distance.
 // At sample time the point-to-probe distance is tested against the moments in
@@ -207,8 +223,7 @@ float probeChebyshev(uint pIdx, vec3 pPos, vec3 Pb, float maxDist) {
 vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, vec3 Ng, out float conf, out float edge) {
     conf = 0.0;
     const vec3  sp    = probeGrid.cSpacing[c].xyz;
-    const float minSp = min(sp.x, min(sp.y, sp.z));
-    const vec3 Pb = P + Ng * (0.25 * minSp);
+    const vec3 Pb = P + Ng * probeBiasLength(sp, Ng);
     vec3 g = (Pb - probeGrid.cOrigin[c].xyz) / sp;
     const vec3 dm1 = vec3(probeGrid.dims) - 1.0;
     const vec3 ein = min(g, dm1 - g);
@@ -226,7 +241,7 @@ vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, vec3 Ng, out float conf, 
         const ivec3 pi   = base + o;// window coordinate
         const vec3  w3   = mix(1.0 - t, t, vec3(o));
         const uint  pIdx = probeSlotIndex(c, probeGrid.cBase[c].xyz + pi);
-        const vec3  pPos = probeGrid.cOrigin[c].xyz + vec3(pi) * sp;
+        const vec3  pPos = probeGrid.cOrigin[c].xyz + vec3(pi) * sp + probeOffset(pIdx);
         vec3 toP = pPos - P;
         const float dLen = length(toP);
         toP = (dLen > 1e-4) ? toP / dLen : Ng;
@@ -319,8 +334,7 @@ float probeBeyondWindows(vec3 P, vec3 N) {
     if (PROBE_GRID_OFF) return 1.0;
     const int   c     = max(probeGrid.cascadeCount, 1) - 1;
     const vec3  sp    = probeGrid.cSpacing[c].xyz;
-    const float minSp = min(sp.x, min(sp.y, sp.z));
-    const vec3  g     = (P + N * (0.25 * minSp) - probeGrid.cOrigin[c].xyz) / sp;
+    const vec3  g     = (P + N * probeBiasLength(sp, N) - probeGrid.cOrigin[c].xyz) / sp;
     const vec3  ein   = min(g, vec3(probeGrid.dims) - 1.0 - g);
     return 1.0 - clamp(min(ein.x, min(ein.y, ein.z)), 0.0, 1.0);
 }
