@@ -182,7 +182,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 32;// 8×u32 (offset, count, frame, flags (bit 0 shadows, bit 1 fast blend), emCount, emPower, envMips, pad)
+        pc.size = 32;// 8×u32 (offset, count, frame, flags (bit 0 shadows, bit 1 fast blend, bit 2 scroll, bit 3 cutout test), emCount, emPower, envMips, pad)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -500,7 +500,8 @@ namespace threepp::vulkan {
 
     void ProbeGI::recordDispatch(VkCommandBuffer cb, uint32_t frame,
                                  uint32_t emissiveCount, float emissiveTotalPower,
-                                 bool shadows, uint32_t envMipCount, bool fastBlend) {
+                                 bool shadows, uint32_t envMipCount, bool fastBlend,
+                                 bool cutoutTest) {
         // A full prev-store refresh is needed whenever the canonical stores
         // could differ from prev OUTSIDE the last dispatch's window: the first
         // dispatch of all (prev is uninitialised), and any frame the clear
@@ -637,7 +638,7 @@ namespace threepp::vulkan {
         uint32_t emPowerBits;
         std::memcpy(&emPowerBits, &emissiveTotalPower, sizeof(emPowerBits));
         const uint32_t pc[8] = {probeOffset_, count, updateCounter_,
-                                (shadows ? 1u : 0u) | (fastBlend ? 2u : 0u),
+                                (shadows ? 1u : 0u) | (fastBlend ? 2u : 0u) | (cutoutTest ? 8u : 0u),
                                 emissiveCount, emPowerBits, envMipCount, 0u};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         // One window of `count` probes per cascade, cascades back to back

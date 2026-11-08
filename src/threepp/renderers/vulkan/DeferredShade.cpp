@@ -1394,6 +1394,7 @@ namespace threepp::vulkan {
                    | (p.unlitScatter ? 268435456u : 0u)// bit 28: unlit surfaces take the in-scatter
                    | (p.fogShadowOpaqueCutouts ? 536870912u : 0u)// bit 29: fog shadow rays take cutouts as opaque
                    | (p.fogHalf ? 1073741824u : 0u)   // bit 30: the sun march came at half res (fogDirPrimary)
+                   | (p.indirectOpaqueCutouts ? 0u : 2147483648u)// bit 31: the GI bounce and the AO rays alpha-test cutouts
                    | (std::min(p.cutoutRayCap, 15u) << 16u)// bits 16-19: cutout ray cap (0 = off)
                    | (std::min(static_cast<uint32_t>(std::max(p.cutoutRayCapFrom, 0.f) / 4.f + 0.5f), 255u)
                       << 20u);                       // bits 20-27: ...from this distance, in 4 m steps
@@ -1517,7 +1518,7 @@ namespace threepp::vulkan {
 
     void DeferredShade::recordRtao(VkCommandBuffer cb, uint32_t frame,
                                    uint32_t width, uint32_t height,
-                                   uint32_t frameCounter) {
+                                   uint32_t frameCounter, bool cutoutTest) {
         // Shared ShadePush block — the RTAO pass consumes the FULL render
         // extent (it derives half res), frame (blue-noise jitter) and reads the
         // G-buffer + TLAS from the shared set. The rest ride as zeros. Same
@@ -1527,6 +1528,7 @@ namespace threepp::vulkan {
         push.width  = width;
         push.height = height;
         push.frame  = frameCounter;
+        push.flags  = cutoutTest ? 2147483648u : 0u;// bit 31: the AO rays alpha-test cutouts (rtao.comp)
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rtaoPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,

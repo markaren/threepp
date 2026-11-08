@@ -302,6 +302,10 @@ namespace threepp::vulkan {
             // ...for shading points at least this far from the eye (flags
             // bits 20-27, in 4 m steps, so 1020 m at most); 0 = everywhere.
             float cutoutRayCapFrom = 0.f;
+            // setIndirectOpaqueCutouts (flags bit 31 SET = the test is on): the
+            // GI bounce and the AO rays alpha-test a cutout card's texels
+            // instead of taking the first card they meet as the hit.
+            bool indirectOpaqueCutouts = true;
             // Float-bits of the pre-exposure baked into every sceneHdr store
             // (physical camera keeps 100k lux in fp16). 0x3F800000 = legacy 1.
             uint32_t preExpBits = 0x3F800000u;
@@ -405,7 +409,7 @@ namespace threepp::vulkan {
         // render extent (the shader derives half res).
         void recordRtao(VkCommandBuffer cb, uint32_t frame,
                         uint32_t width, uint32_t height,
-                        uint32_t frameCounter);
+                        uint32_t frameCounter, bool cutoutTest);
 
         // Particle billboard lighting (particle_light.comp): one thread per
         // live overlay particle evaluates the deferred light field at the

@@ -2972,6 +2972,7 @@ namespace threepp {
         // test against the jet's farthest reach over that box's heights.
         [[nodiscard]] bool downwashReachesBox(const Box3& box) const;
         bool  fogShadowOpaqueCutouts_ = true; // setFogShadowOpaqueCutouts (shade flags bit 29); off = exact
+        bool  indirectOpaqueCutouts_  = true; // setIndirectOpaqueCutouts (shade flags bit 31 clear, probe flags bit 3 clear); off = the GI, probe and AO rays alpha-test cutouts
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 

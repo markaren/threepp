@@ -81,8 +81,7 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         // kRayMaskOpaque: blend decals / glass must not block sky visibility —
         // with 0xFF + force-opaque, a transparent text quad on a hull painted
         // a dark env-occlusion rectangle onto the surface behind it.
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, orig, 1e-3, dir, SKY_DIST);
-        while (rayQueryProceedEXT(rq)) {}
+        traceIndirect(rq, gl_RayFlagsNoneEXT, kRayMaskOpaque, orig, 1e-3, dir, SKY_DIST);
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             acc  += sampleEnvDiffuse(dir) * envInt;
             open += 1.0;

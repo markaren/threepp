@@ -133,6 +133,14 @@
 // One more counter after the categories: the alpha-cutout texture tests the
 // shadow rays' candidate hits paid (shadowOccludes), whatever the ray.
 #define kRayCountAlphaTests 7u
+
+// INDIRECT RAYS AND CUTOUTS: the GI bounce, the probe sweep and the AO rays
+// can alpha-test a pure cutout's texels (VulkanRenderer::setIndirectOpaqueCutouts
+// off; the shade's pc.flags bit 31, probe_update's bit 3). Such a ray passes at
+// most this many transparent texels; the next one is taken as the hit, as a
+// ray that deep in foliage is nearly always blocked further on (the shadow
+// ray's cap reasons the same way).
+#define kIndirectCutoutPassMax 8u
 #define kRayCountSlots      8u
 // The shade's ray-budget features, one bit each of the kRayBudget
 // specialization constant (deferred_shade_00_common.glsl, constant_id 4):

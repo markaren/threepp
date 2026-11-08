@@ -8925,7 +8925,7 @@ class PhysxWorld:
         """
         Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Per-link handles are on the articulation itself: articulation.link('tool_link_name') resolves every URDF link name to its ArticulationLink (for add_force on a tool link, per-link poses...). Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint frames and prismatic limits are built scaled, masses stay as authored, and a prismatic DOF then reads and drives in the SCALED units. `args` are xacro argument overrides, the same name:=value pairs the xacro CLI takes - a parameterised description built without them expands to the FILE's defaults, which for many robots names config paths that do not exist.
         """
-    def load_usd_articulation(self, path: str, fixed_base: bool | None = None, self_collision: bool | None = None, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex | None = None, stiffness: typing.SupportsFloat | typing.SupportsIndex | None = None, damping: typing.SupportsFloat | typing.SupportsIndex | None = None, max_force: typing.SupportsFloat | typing.SupportsIndex | None = None, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], base_rotation: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(4)"] = [0.0, 0.0, 0.0, 1.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, render_visuals: bool = True, drive_limits_are_forces: bool = True) -> tuple[Articulation, list[Mesh], list[str], list[str], Group, list[dict]]:
+    def load_usd_articulation(self, path: str, fixed_base: bool | None = None, self_collision: bool | None = None, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex | None = None, stiffness: typing.SupportsFloat | typing.SupportsIndex | None = None, damping: typing.SupportsFloat | typing.SupportsIndex | None = None, max_force: typing.SupportsFloat | typing.SupportsIndex | None = None, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], base_rotation: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(4)"] = [0.0, 0.0, 0.0, 1.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, render_visuals: bool = True, drive_limits_are_forces: bool = True) -> tuple[Articulation, list[Mesh], list[str], list[str], Group, list]:
         """
         Import a USD robot as a finalized Articulation in the pose the file authors. Returns (articulation, meshes, joint_names, diagnostics, scene, mimics): the meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order, diagnostics says what the file holds that could not be imported, scene holds what is outside the robot's bodies, and mimics lists each PhysxMimicJointAPI coupling built as a dict (joint, reference_joint, link and reference_link as indices into meshes, gearing, offset, natural_frequency, damping_ratio), holding q + gearing * q_ref + offset = 0 in radians and metres. articulation.link(name) takes a body's prim path or leaf name. An argument left None takes the file's value: fixed base from a fixed joint to the world, drive gains and effort limits, solver iterations and self-collision from a 'PhysX' variant, which is selected. stiffness, damping and max_force override every drive, in N·m/rad or N/m (USD authors angular gains per degree). base_rotation is x, y, z, w. Needs a build with THREEPP_WITH_USD (HAS_USD).
         """
@@ -12815,6 +12815,30 @@ class VulkanRenderer:
         """
         The motion vectors of the last rendered frame, as read_motion returns them, without rendering again: (H, W, 2) float32 in pixels.
         """
+    def path_trace(self, scene: Object3D, camera: Camera, samples: typing.SupportsInt | typing.SupportsIndex = 1024, samples_per_frame: typing.SupportsInt | typing.SupportsIndex = 16, max_bounces: typing.SupportsInt | typing.SupportsIndex = 6, firefly_clamp: typing.SupportsFloat | typing.SupportsIndex = 0.0, width: typing.SupportsInt | typing.SupportsIndex = 0, height: typing.SupportsInt | typing.SupportsIndex = 0, dome_port: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Blocking form: begin a session, render() until `samples` per pixel are in, read and stop. Returns (H, W, 3) float32 linear RGB, top row first; (0, 0, 3) when no frame added samples. See path_trace_begin for what the trace models.
+        """
+    def path_trace_begin(self, samples_per_frame: typing.SupportsInt | typing.SupportsIndex = 8, max_bounces: typing.SupportsInt | typing.SupportsIndex = 6, firefly_clamp: typing.SupportsFloat | typing.SupportsIndex = 0.0, width: typing.SupportsInt | typing.SupportsIndex = 0, height: typing.SupportsInt | typing.SupportsIndex = 0, dome_port: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        """
+        Start (or restart) a progressive path trace of the primary view over the scene the frame renders: every frame drawn while the session is active adds samples_per_frame camera paths per pixel (this render() draws flush_frames frames per call, 3 by default), read back with path_trace_read(). width, height: the picture's own extent (0 = the render extent), which may be larger than the window or the screen; a picture of another shape keeps the camera's vertical field. A frame traces a band of rows no larger than the frame, so path_trace_samples counts whole passes and path_trace_progress the rows of the pass in progress too. dome_port: a dome port's radius about the lens (m, 0 = none): every camera ray starts where it leaves the dome, so a camera at the waterline traces the over-under picture. The frame on screen is untouched. Converges over a still scene only (pin the sim time, auto_lod off); stepping the scene between frames averages over what it does (motion blur). Raises RuntimeError without ray_tracing.
+        """
+    def path_trace_read(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        The averaged picture so far as (H, W, 3) float32 linear RGB, top row first, at the session's extent; (0, 0, 3) before the first pass. Drains the device.
+        """
+    def path_trace_read_rgb(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        The averaged picture so far through the renderer's display transform (white balance, the frame's exposure, tone_mapping, sRGB, the colour grade; not the bloom) as (H, W, 3) uint8, top row first, as read_pixels() gives a frame; (0, 0, 3) before the first sample. Drains the device.
+        """
+    def path_trace_stop(self) -> None:
+        """
+        End the session; render() adds no more samples.
+        """
+    def path_trace_to_file(self, scene: Object3D, camera: Camera, path: str, samples: typing.SupportsInt | typing.SupportsIndex = 1024, samples_per_frame: typing.SupportsInt | typing.SupportsIndex = 16, max_bounces: typing.SupportsInt | typing.SupportsIndex = 6, firefly_clamp: typing.SupportsFloat | typing.SupportsIndex = 0.0, width: typing.SupportsInt | typing.SupportsIndex = 0, height: typing.SupportsInt | typing.SupportsIndex = 0, dome_port: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> bool:
+        """
+        The one-liner: trace `samples` per pixel of the current view and write the picture (.png / .jpg / .bmp by extension) through the renderer's display transform, as save_frame would a frame. False when no frame added samples.
+        """
     def probe_grid(self) -> typing.Any:
         """
         The probe-GI grid as a dict: 'origin' (the first probe's world position), 'spacing', 'dims' (x, y, z), and 'sh', float32 (N, 4, 4): per probe the SH-L1 irradiance rows L00, L1x, L1y, L1z (rgb) with validity, update count and two statistics in column 3. Probe (i, j, k) is row i + dims[0]*(j + dims[1]*k), at origin + (i, j, k)*spacing. None before the grid is fitted. Full device sync.
@@ -13414,6 +13438,14 @@ class VulkanRenderer:
         Device memory the renderer holds through its allocator, in bytes: allocated_bytes (every buffer, image and acceleration structure it created) and reserved_bytes (the memory blocks those live in, slack included). Cheap enough to read every frame.
         """
     @property
+    def indirect_opaque_cutouts(self) -> bool:
+        """
+        The indirect rays and alpha-tested cutouts. True (the default): the GI bounce, the probe sweep and the ambient-occlusion rays take the first cutout card they meet as a hit, transparent texel or not, so under a card tree's crown they see a closed roof (no sky, no bounce from the lit leaves above, black occlusion), where the surface shadows, the reflections and the path tracer alpha-test every card. False: those rays pass a card's transparent texels inside their traversal, as the shadow ray does, up to 8 of them, and pay a material read, a UV fetch and a texture sample per texel passed.
+        """
+    @indirect_opaque_cutouts.setter
+    def indirect_opaque_cutouts(self, arg1: bool) -> None:
+        ...
+    @property
     def lens_distortion(self) -> dict:
         """
         Current lens distortion as a dict (see set_lens_distortion).
@@ -13486,6 +13518,19 @@ class VulkanRenderer:
     def pass_timings(self) -> list:
         """
         Per-pass GPU times of the last completed frame: a list of (name, view, gpu_ms) tuples in render-graph execution order, every view included (view 0 is the primary, otherwise the add_view handle). A row spans the pass and the barriers before it; rows meet rather than overlap, so their sum is the render graph's span and gpu_total_ms minus that sum is the work outside the graph (HUD passes, sprites, ImGui, present). The first and last rows, graph.entry and graph.exit, are the graph's boundary barriers. Empty when the device has no timestamps.
+        """
+    @property
+    def path_trace_active(self) -> bool:
+        ...
+    @property
+    def path_trace_progress(self) -> float:
+        """
+        path_trace_samples with the pass in progress counted by its share of the rows: rises with every frame that traces.
+        """
+    @property
+    def path_trace_samples(self) -> int:
+        """
+        Samples per pixel accumulated over the whole picture so far in the session.
         """
     @property
     def physical_camera(self) -> bool:

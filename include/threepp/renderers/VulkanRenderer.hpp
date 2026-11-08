@@ -2070,6 +2070,18 @@ namespace threepp {
         void setFogShadowOpaqueCutouts(bool enabled);
         [[nodiscard]] bool fogShadowOpaqueCutouts() const;
 
+        // The indirect rays and alpha-tested cutouts. ON by default, the GI
+        // bounce, the probe sweep and the ambient-occlusion rays take the first
+        // cutout card they meet as a hit, transparent texel or not: under a card
+        // tree's crown they see a closed roof (no sky, no bounce from the lit
+        // leaves above, black occlusion), where the surface shadows, the
+        // reflections and the path tracer alpha-test every card. Off, those
+        // rays pass a card's transparent texels inside their traversal, as the
+        // shadow ray does, up to kIndirectCutoutPassMax (8) of them, and pay the
+        // material read, UV fetch and texture sample per texel passed.
+        void setIndirectOpaqueCutouts(bool enabled);
+        [[nodiscard]] bool indirectOpaqueCutouts() const;
+
         // Ray-traced env ambient-occlusion / GI. ON by default — soft RT AO/GI
         // (costs occlusion rays; paired with setDenoise, also on by default, to keep
         // the 1-spp gather noise-free). Turn OFF to drop the per-pixel ray cost, or

@@ -2174,6 +2174,16 @@ namespace threepp_py {
                               "unlit pixel gets the fog's extinction and ambient scatter only, so a basic-material "
                               "tree behind sunlit haze reads as a cut-out. True adds the cloud layer, point-light "
                               "glow, spot beams and sun shafts in front of it, as lit surfaces get them.")
+                .def_property("indirect_opaque_cutouts",
+                              [](PyVulkanRenderer& r) { return r.native().indirectOpaqueCutouts(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setIndirectOpaqueCutouts(v); },
+                              "The indirect rays and alpha-tested cutouts. True (the default): the GI bounce, the "
+                              "probe sweep and the ambient-occlusion rays take the first cutout card they meet as a "
+                              "hit, transparent texel or not, so under a card tree's crown they see a closed roof "
+                              "(no sky, no bounce from the lit leaves above, black occlusion), where the surface "
+                              "shadows, the reflections and the path tracer alpha-test every card. False: those rays "
+                              "pass a card's transparent texels inside their traversal, as the shadow ray does, up "
+                              "to 8 of them, and pay a material read, a UV fetch and a texture sample per texel passed.")
                 .def_property("fog_shadow_opaque_cutouts",
                               [](PyVulkanRenderer& r) { return r.native().fogShadowOpaqueCutouts(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setFogShadowOpaqueCutouts(v); },

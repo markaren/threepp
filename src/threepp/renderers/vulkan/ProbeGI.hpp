@@ -185,7 +185,8 @@ namespace threepp::vulkan {
         // this update's probes take the fast blend unconditionally.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t emissiveCount, float emissiveTotalPower,
-                            bool shadows, uint32_t envMipCount, bool fastBlend = false);
+                            bool shadows, uint32_t envMipCount, bool fastBlend = false,
+                            bool cutoutTest = false);
 
         // For DeferredShade's descriptor write (bindings 36/37/54).
         // Render-graph declaration of recordDispatch: its descriptor set as

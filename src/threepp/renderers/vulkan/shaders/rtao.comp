@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_nonuniform_qualifier : require
 #extension GL_GOOGLE_include_directive : enable
 
 // Half-resolution ray-traced ambient occlusion + bent normals for the Vulkan
@@ -23,8 +26,9 @@
 // per-frame DEFORMERS (ifIrradianceReactivity) pin a short cap. Disocclusion
 // (prev-normal / prev-depth mismatch) cold-starts the history.
 //
-// Shares the DeferredShade descriptor set (bindings 0/3/4/5/8/18/19/24/35) +
-// push block; new RTAO bindings at 72/73/75/76 (the shade reads 74 = cur rtao).
+// Shares the DeferredShade descriptor set (bindings 0/3/4/5/8/18/19/24/35, and
+// 9/10/11 for the cutout test) + push block; new RTAO bindings at 72/73/75/76
+// (the shade reads 74 = cur rtao).
 
 #include "vulkan_shared.h"       // kInstFlag* bits
 #include "instance_flags.glsl"   // ifIrradianceReactivity
@@ -49,6 +53,25 @@ layout(set = 0, binding = 72, rgba16f) uniform writeonly image2D rtaoImage;    /
 layout(set = 0, binding = 73) uniform sampler2D rtaoPrevTex;                     // prev-frame rtao (reproject)
 layout(set = 0, binding = 75, rgba16f) uniform writeonly image2D rtaoAuxImage;  // (histLen, E[ao^2], aoNear, skyVis)
 layout(set = 0, binding = 76) uniform sampler2D rtaoAuxPrevTex;                  // prev-frame aux
+
+// The material table, the geometry table and the bindless albedo maps (the
+// shade's bindings 9/10/11), for the cutout test of the rays below
+// (setIndirectOpaqueCutouts off; pc.flags bit 31).
+layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats[]; };
+#include "geometry_fetch.glsl"// GeometryDesc, the vertex/index buffer references, gfetch*
+layout(set = 0, binding = 10, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+layout(set = 0, binding = 11) uniform sampler2D albedoMaps[kMaxMaterialTextures];
+#include "hit_fetch.glsl"// fetchUvAt
+// A candidate that is a pure cutout's transparent texel (the indirect rays'
+// cutout test, deferred_shade_10_lighting_utils' cutoutTexelMiss; the entry's
+// instance colour plays no part in the alpha, so the table record serves).
+bool cutoutTexelMiss(int instIdx, int primId, vec2 bary) {
+    const MaterialDesc m = mats[geoms[instIdx].flags >> kGeomFlagMaterialShift];
+    if (m.alphaCutoff <= 0.0 || m.albedoTexIndex < 0) return false;
+    const vec2 uv = fetchUvAt(instIdx, primId, bary);
+    const int  ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    return textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a < m.alphaCutoff;
+}
 
 layout(push_constant) uniform Pc { ShadePush pc; };
 #include "pane_uv.glsl"// paneHalfToPhys: the history taps under a split-screen pane
@@ -156,10 +179,28 @@ void main() {
         // The nearest occluder is also the physically right one for the
         // falloff. kRayMaskOpaque (0x01) skips blend/transmissive instances so a
         // glass pane / decal doesn't paint an occlusion rectangle behind it.
-        const uint rayFlags = isLong ? (gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT)
-                                     : gl_RayFlagsOpaqueEXT;
-        rayQueryInitializeEXT(rq, topAS, rayFlags, 0x01u, orig, 1e-3, dir, tmax);
-        while (rayQueryProceedEXT(rq)) {}
+        const uint termFlag = isLong ? gl_RayFlagsTerminateOnFirstHitEXT : gl_RayFlagsNoneEXT;
+        if ((pc.flags & 2147483648u) == 0u) {
+            rayQueryInitializeEXT(rq, topAS, termFlag | gl_RayFlagsOpaqueEXT, 0x01u, orig, 1e-3, dir, tmax);
+            while (rayQueryProceedEXT(rq)) {}
+        } else {
+            // Bit 31 (setIndirectOpaqueCutouts off): a pure cutout's transparent
+            // texel is passed inside the traversal (cutoutTexelMiss above), so a
+            // card crown's holes let the sky ray and the open near-field
+            // directions through instead of closing the hemisphere at the first
+            // card. kIndirectCutoutPassMax texels in, the next is the hit.
+            rayQueryInitializeEXT(rq, topAS, termFlag, 0x01u, orig, 1e-3, dir, tmax);
+            uint passed = 0u;
+            while (rayQueryProceedEXT(rq)) {
+                if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
+                if (cutoutTexelMiss(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                    rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, false)) &&
+                    ++passed < kIndirectCutoutPassMax)
+                    continue;
+                rayQueryConfirmIntersectionEXT(rq);
+            }
+        }
         const bool committed =
             rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT;
         const float t = committed ? rayQueryGetIntersectionTEXT(rq, true) : tmax;

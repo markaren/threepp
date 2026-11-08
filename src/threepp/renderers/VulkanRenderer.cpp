@@ -114,7 +114,8 @@ namespace threepp {
                     gpuTimings_->begin(c, TP_ProbeGI, f);
                     probeGI_->recordDispatch(c, f, emissiveTriCountThisFrame_,
                                              emissiveTotalPowerThisFrame_,
-                                             /*shadows=*/true, envImage.mipLevels, fastBlend);
+                                             /*shadows=*/true, envImage.mipLevels, fastBlend,
+                                             /*cutoutTest=*/!indirectOpaqueCutouts_);
                     gpuTimings_->end(c, TP_ProbeGI, f);
                 });
                 probeGI_->declare(g, pass, f);
@@ -283,7 +284,8 @@ namespace threepp {
             auto pass = g.addPass("rtao", [this, f](VkCommandBuffer c) {
                 gpuTimings_->begin(c, TP_Rtao, f);
                 view().deferredShade_->recordRtao(c, f, regionRenderExt_.width, regionRenderExt_.height,
-                                                  sampleIndex);
+                                                  sampleIndex,
+                                                  /*cutoutTest=*/!indirectOpaqueCutouts_);
                 gpuTimings_->end(c, TP_Rtao, f);
             });
             shade.declare(g, pass, Stage::Rtao, f);
@@ -306,6 +308,7 @@ namespace threepp {
         shadeParams.volFog             = deferredVolFog_;
         shadeParams.unlitScatter       = unlitFogScatter_;
         shadeParams.fogShadowOpaqueCutouts = fogShadowOpaqueCutouts_;
+        shadeParams.indirectOpaqueCutouts  = indirectOpaqueCutouts_;
         shadeParams.volDensity         = deferredVolDensity_;
         shadeParams.volAniso           = deferredVolAniso_;
         shadeParams.starIntensity      = deferredStarIntensity_;
@@ -2370,6 +2373,14 @@ namespace threepp {
 
     bool VulkanRenderer::fogShadowOpaqueCutouts() const {
         return pimpl_->fogShadowOpaqueCutouts_;
+    }
+
+    void VulkanRenderer::setIndirectOpaqueCutouts(bool enabled) {
+        pimpl_->indirectOpaqueCutouts_ = enabled;
+    }
+
+    bool VulkanRenderer::indirectOpaqueCutouts() const {
+        return pimpl_->indirectOpaqueCutouts_;
     }
 
     void VulkanRenderer::setDownwash(std::shared_ptr<Downwash> downwash) {

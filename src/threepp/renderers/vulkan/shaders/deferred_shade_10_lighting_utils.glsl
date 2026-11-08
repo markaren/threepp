@@ -602,6 +602,50 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     return shadowOccludes(instIdx, primId, bary, cutoutMiss);
 }
 
+// INDIRECT RAYS AND CUTOUTS (setIndirectOpaqueCutouts; pc.flags bit 31 set =
+// the rays alpha-test). The GI bounce, the AO rays and the probe sweep ran
+// force-opaque, so under a card tree's crown every one of them ended on the
+// first card it met, transparent texel or not: a closed roof over the ground
+// (no sky, no bounce from the lit crown above), the card's texel colour as
+// the bounce, the AO black. The shadow ray, the reflection ray and the path
+// tracer all alpha-test their candidates. With the bit set a candidate that
+// is a pure cutout's transparent texel is passed inside the traversal, the
+// way shadowVis passes it, and the committed hit is the closest surface that
+// is not one. kIndirectCutoutPassMax such texels in, the next is taken as the
+// hit: the ray is buried in foliage. Blend and transmissive instances are
+// still culled by the mask. Default off: the picture as it was.
+bool indirectCutoutTest() { return flagOn(2147483648u); }
+// A candidate that is a pure cutout's transparent texel.
+bool cutoutTexelMiss(int instIdx, int primId, vec2 bary) {
+    const MaterialDesc m = entryMat(instIdx);
+    if (m.alphaCutoff <= 0.0 || m.albedoTexIndex < 0) return false;
+    rayCountSlot(kRayCountAlphaTests);
+    const vec2 uv = fetchUvAt(instIdx, primId, bary);
+    const int  ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    return textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a < m.alphaCutoff;
+}
+// An indirect ray's traversal, to its committed hit: force-opaque as before,
+// or with the cutout test above when the bit is set. extraFlags adds
+// gl_RayFlagsTerminateOnFirstHitEXT for a visibility ray.
+void traceIndirect(rayQueryEXT rq, uint extraFlags, uint mask, vec3 origin, float tMin, vec3 dir, float tMax) {
+    if (!indirectCutoutTest()) {
+        rayQueryInitializeEXT(rq, topAS, extraFlags | gl_RayFlagsOpaqueEXT, mask, origin, tMin, dir, tMax);
+        while (rayQueryProceedEXT(rq)) {}
+        return;
+    }
+    rayQueryInitializeEXT(rq, topAS, extraFlags, mask, origin, tMin, dir, tMax);
+    uint passed = 0u;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
+        if (cutoutTexelMiss(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                            rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                            rayQueryGetIntersectionBarycentricsEXT(rq, false)) &&
+            ++passed < kIndirectCutoutPassMax)
+            continue;
+        rayQueryConfirmIntersectionEXT(rq);
+    }
+}
+
 // Inline hard-shadow test (TerminateOnFirstHit). 1.0 lit / 0.0 occluded.
 // NOT forced-opaque: geometry is non-opaque in the BLAS, so alpha-tested casters
 // (foliage, grids, cutout decals) yield CANDIDATES we alpha-test here — otherwise

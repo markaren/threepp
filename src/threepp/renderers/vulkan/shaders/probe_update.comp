@@ -102,7 +102,8 @@ layout(push_constant) uniform Pc {
     uint  probeOffset;       // round-robin window start (probe index)
     uint  probeCount;        // probes this dispatch (== workgroup count)
     uint  frame;             // update counter — rotates the ray sphere
-    uint  flags;             // bit 0 = shadows, bit 1 = lighting stepped (fast blend), bit 2 = scroll (see main)
+    uint  flags;             // bit 0 = shadows, bit 1 = lighting stepped (fast blend), bit 2 = scroll (see main),
+                             // bit 3 = the rays alpha-test cutouts (setIndirectOpaqueCutouts off)
     uint  emissiveCount;     // # emissive triangles (0 = none)
     float emissiveTotalPower;// power-CDF total (denominator)
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -134,6 +135,16 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
     const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
     return a >= m.alphaCutoff;
+}
+
+// A candidate that is a pure cutout's transparent texel (the indirect rays'
+// cutout test, deferred_shade_10_lighting_utils' cutoutTexelMiss verbatim).
+bool cutoutTexelMiss(int instIdx, int primId, vec2 bary) {
+    const MaterialDesc m = entryMat(instIdx);
+    if (m.alphaCutoff <= 0.0 || m.albedoTexIndex < 0) return false;
+    const vec2 uv = fetchUvAt(instIdx, primId, bary);
+    const int  ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    return textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a < m.alphaCutoff;
 }
 
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
@@ -216,8 +227,27 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
     sealedDark = 0.0;
     hitDist  = 1e30;
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-4, dir, 1e30);
-    while (rayQueryProceedEXT(rq)) {}
+    if ((pc.flags & 8u) == 0u) {
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-4, dir, 1e30);
+        while (rayQueryProceedEXT(rq)) {}
+    } else {
+        // Bit 3 (setIndirectOpaqueCutouts off): a pure cutout's transparent
+        // texel is passed inside the traversal, as shadowVis passes it, so a
+        // probe under a card tree's crown sees the sky through the gaps and the
+        // lit leaves, not a closed roof. kIndirectCutoutPassMax texels in, the
+        // next is the hit (vulkan_shared.h).
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskOpaque, origin, 1e-4, dir, 1e30);
+        uint passed = 0u;
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
+            if (cutoutTexelMiss(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                rayQueryGetIntersectionBarycentricsEXT(rq, false)) &&
+                ++passed < kIndirectCutoutPassMax)
+                continue;
+            rayQueryConfirmIntersectionEXT(rq);
+        }
+    }
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
         // 0.7 of the chain, as envDiffuseLod in deferred_shade_10_lighting_utils: the
         // top mip is the sphere mean, which lit every probe with the same colour

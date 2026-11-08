@@ -835,9 +835,10 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     rayQueryEXT rq;
     // kRayMaskOpaque: the cheap GI bounce passes through blend decals/glass and
     // shades the opaque surface behind them (shading a decal quad as an opaque
-    // dark wall painted indirect darkening onto its receiver).
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-3, dir, 1e30);
-    while (rayQueryProceedEXT(rq)) {}
+    // dark wall painted indirect darkening onto its receiver). A cutout's
+    // transparent texel is passed too when the indirect cutout test is on
+    // (traceIndirect); force-opaque otherwise, as it was.
+    traceIndirect(rq, gl_RayFlagsNoneEXT, kRayMaskOpaque, origin, 1e-3, dir, 1e30);
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
         missed = true;// sky visible along this ray — feeds the openness estimate
         return sampleEnvDiffuse(dir) * envInt;// escaped → sky (the env 1st-bounce term)

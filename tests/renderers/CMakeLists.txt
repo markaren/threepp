@@ -484,6 +484,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanDielectricIor_test COMMAND VulkanDielectricIor_test)
     set_tests_properties(VulkanDielectricIor_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The indirect rays and alpha-tested cutouts (setIndirectOpaqueCutouts): a
+    # half-open checkerboard roof over grey ground under a uniform sky, the
+    # ground under it read with the GI, probe and AO rays taking the cards as
+    # solid (the default) and alpha-testing them.
+    add_executable(VulkanIndirectCutouts_test VulkanIndirectCutouts_test.cpp)
+    target_link_libraries(VulkanIndirectCutouts_test PRIVATE threepp)
+    target_include_directories(VulkanIndirectCutouts_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanIndirectCutouts_test COMMAND VulkanIndirectCutouts_test)
+    set_tests_properties(VulkanIndirectCutouts_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # Camera-model geometry: film gauge / focal length round-trip and the
     # reported cameraIntrinsics() checked against the renderer's own
     # projection. Numeric (not pixel) claims, so unlike the goldens this is
