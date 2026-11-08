@@ -16,7 +16,9 @@ MeshPhysicalMaterial::MeshPhysicalMaterial()
 
     transmission = 0.f;
 
-    thickness = 0.01f;
+    // three.js's default: no volume under the surface, so a transmissive
+    // material is thin-walled (a window) until it is given a thickness.
+    thickness = 0.f;
 
     attenuationDistance = 0.f;
     attenuationColor = Color(1, 1, 1);
