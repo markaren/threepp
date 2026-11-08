@@ -154,4 +154,4 @@
 
     const vec4  nTap   = (msSampleIdx >= 0) ? texelFetch(gbufNormalMS, px, msSampleIdx) : texelFetch(gbufNormalTex, px, 0);
     const vec4  am     = (msSampleIdx >= 0) ? texelFetch(gbufAlbedoMS, px, msSampleIdx) : texelFetch(gbufAlbedoTex, px, 0);
-    const vec3  albedo = am.rgb;
+    vec3        albedo = am.rgb;// not const: a clearcoat dims it (prologue 07)

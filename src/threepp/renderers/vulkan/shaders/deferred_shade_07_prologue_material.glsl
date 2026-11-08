@@ -60,6 +60,26 @@
                                           pm.iridescenceThicknessNm, F0);
         F0 = mix(F0, irid, pm.iridescence);
     }
+    // CLEARCOAT (KHR_materials_clearcoat) on an opaque surface. The opaque shade had
+    // none: a black-metal car paint under a mirror coat rendered as a matte grazing
+    // sheen, bathroom2's glazed basins and lacquered floor as plain matte (the path
+    // tracer and Cycles show the room mirrored in them). ccW = clearcoat × its map
+    // (glTF: R), ccRough = clearcoatRoughness × its map (G), widened by the same
+    // specular AA as the base and floored at 0.03 (the water glint's floor). The
+    // base gets what the coat lets through, ccBase = 1 − ccW·Fc(N·V) (three.js's
+    // (1 − clearcoat·Fcc)): its DIFFUSE through albedo right here, so the direct,
+    // the denoised indirect and RR's diffuse guide all take it; its SPECULAR at
+    // each specular term (evalLight's gCoatBase, the env and the traced lobe).
+    // Glass keeps its own path. ccW == 0 leaves every value bit-for-bit as it was.
+    float ccW = 0.0, ccRough = 0.03, ccBase = 1.0;
+    if (pm.clearcoat > 0.0 && pm.transmission <= 0.0) {
+        ccW = clamp(hitTex(pm.clearcoatTexIndex, pm.uvTransformClearcoat, primUv, vec3(pm.clearcoat)).r, 0.0, 1.0);
+        const float crMat = clamp(hitTex(pm.clearcoatRoughnessTexIndex, pm.uvTransformClearcoatRough, primUv,
+                                         vec3(pm.clearcoatRoughness)).g, 0.03, 1.0);
+        ccRough = min(sqrt(crMat * crMat + specAaKernelSq), 1.0);
+        ccBase  = 1.0 - ccW * (0.04 + 0.96 * pow(1.0 - NdotV, 5.0));
+        albedo *= ccBase;
+    }
     const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
 
     // Demodulated (binding 16, accumulated + denoised) vs INLINE diffuse indirect.

@@ -5947,7 +5947,12 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 }
             }
             if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
-                d.clearcoat = cc->clearcoat;
+                // THREEPP_VK_DIAG_NOCOAT=1: diagnostic only, never a default. Every
+                // material uploads without its coat: the A/B for the opaque shade's
+                // clearcoat lobe in one binary (it also drops the water glint's and
+                // the path tracer's coat).
+                static const bool noCoat = vulkan::env::flag("THREEPP_VK_DIAG_NOCOAT");
+                d.clearcoat = noCoat ? 0.0f : cc->clearcoat;
                 d.clearcoatRoughness = cc->clearcoatRoughness;
             }
             if (auto* att = dynamic_cast<MaterialWithAttenuation*>(mat.get())) {

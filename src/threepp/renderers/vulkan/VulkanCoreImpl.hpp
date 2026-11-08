@@ -1630,12 +1630,20 @@ namespace threepp {
         // Unlit renders no shading at all → 0.
         // Unknown/absent material stays conservative at 0.5. dynamic_cast is
         // fine here: once per geometry lifetime, not per frame.
+        // A clearcoat is the glossier of the two lobes when it is on: bathroom2's
+        // tub is matte ceramic (roughness 1, w = 0) under a 0.03 mirror coat, so it
+        // simplified position-only, its rolled rim became one coarse bevel, and the
+        // bevel's interpolated normals mirrored the wall above in a cream band
+        // along the tub's back wall.
         static float lodNormalWeightFor(const Mesh& mesh) {
             auto mat = mesh.material();
             if (!mat) return 0.5f;
             if (dynamic_cast<MeshBasicMaterial*>(mat.get())) return 0.f;
             if (auto* r = dynamic_cast<MaterialWithRoughness*>(mat.get())) {
-                const float gloss = 1.f - std::clamp(r->roughness, 0.f, 1.f);
+                float rough = r->roughness;
+                if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get()); cc && cc->clearcoat > 0.f)
+                    rough = std::min(rough, cc->clearcoatRoughness);
+                const float gloss = 1.f - std::clamp(rough, 0.f, 1.f);
                 return 0.5f * gloss * gloss;
             }
             return 0.5f;

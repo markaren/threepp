@@ -734,7 +734,19 @@ float primarySunVis(uint i, vec3 P, vec3 N, vec3 orig, vec3 L, bool opaque) {
 
 // distFalloff (point/spot d^decay): gi_bounce.glsl, included by _30.
 
-// Cook-Torrance specular + Lambert diffuse for one analytic light direction L.
+// CLEARCOAT (KHR_materials_clearcoat) of the PRIMARY surface, for evalLight: main()
+// sets these around the primary's direct lighting (analyticDirectSplit and
+// shadeDiffuseDirect) and clears them before any ray hit is shaded, so traced
+// hits keep their old single-lobe shade. gCoatW = clearcoat (factor × map), 0 = no
+// coat; gCoatBase = 1 − clearcoat·Fc(N·V), what reaches the base through the coat
+// (three.js's outgoingLight · (1 − clearcoat·Fcc)): the base DIFFUSE is dimmed
+// through its albedo at the source (prologue 07), the base SPECULAR here.
+float gCoatW     = 0.0;
+float gCoatRough = 0.03;
+float gCoatBase  = 1.0;
+
+// Cook-Torrance specular + Lambert diffuse for one analytic light direction L,
+// plus the primary surface's clearcoat lobe while gCoatW > 0.
 vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
                float roughness, float metalness, float k,
                vec3 sheenColor, float sheenRoughness) {
@@ -758,6 +770,16 @@ vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
         // this view AND this light direction.
         baseShare = sheenBaseShare(sheenColor, max(IBLSheenBRDF(NdotV, sheenRoughness),
                                                    IBLSheenBRDF(NdotL, sheenRoughness)));
+    }
+    if (gCoatW > 0.0) {
+        // The coat: a dielectric GGX lobe (F0 0.04, F90 1) at its own roughness on
+        // the same normal, over a base that gets what the coat lets through.
+        const float kc = (gCoatRough + 1.0) * (gCoatRough + 1.0) / 8.0;
+        const float Fc = 0.04 + 0.96 * pow(1.0 - VdotH, 5.0);
+        const float Dc = distGGX(NdotH, gCoatRough);
+        const float Gc = geomSmithG1(NdotV, kc) * geomSmithG1(NdotL, kc);
+        const float coat = gCoatW * Dc * Gc * Fc / max(4.0 * NdotV * NdotL, 1e-4);
+        return ((diff + spec * gCoatBase) * baseShare + sheen + vec3(coat)) * NdotL;
     }
     return ((diff + spec) * baseShare + sheen) * NdotL;
 }

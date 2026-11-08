@@ -643,6 +643,9 @@ void main() {
     bool  sTopUp    = false;// visEst carries the 16-ray sunShadowVis top-up (cap-1 eligible)
     bool  sMapOnly  = false;// visEst is the shadow maps' exact ratio (kSM, no rays)
     rayCatSet(kRayCatSun);
+    // The coat lobe for THIS surface's direct lights (evalLight), cleared below
+    // before anything is traced: ray hits shade with one lobe, as before.
+    gCoatW = ccW; gCoatRough = ccRough; gCoatBase = ccBase;
     if (shadowChannel) {
         // Cluster slice by view-space -z (matches cluster_build's AABB axis).
         const float clusterDist = max(-(viewH.z / viewH.w), 0.0);
@@ -665,6 +668,7 @@ void main() {
                                   /*addEmissive=*/(!flagOn(8u)),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
                                   /*cheapHit=*/false);// primary: exhaustive lights + full NEE
     gSkipAnalyticDirect = false;// reflection/GI/glass hits below keep inline lights
+    gCoatW = 0.0; gCoatBase = 1.0;// hits below shade without this surface's coat
     rayCatSet(kRayCatOther);
 
     // ── Foliage translucency (MaterialWithTranslucency) — RASTER PRIMARY ONLY ──
@@ -739,7 +743,23 @@ void main() {
     // opaqueRefl keeps the usual rough remainder (1 − reflBlend).
     // Every ray from here to the end: reflections, refraction, their hits.
     rayCatSet(kRayCatRefl);
-    const float envSpecW = opaqueRefl ? (1.0 - reflBlend) : 1.0;
+    // THE TRACED LOBE under a clearcoat. The reflection channel carries ONE lobe
+    // (one ray, one roughness for its denoise), so a coated surface traces the
+    // coat when the coat is at least as glossy as the base and at least half as
+    // reflective (ccW·0.04 vs the base's F0): glazed ceramic, lacquered wood and a
+    // black-metal car paint mirror the room in their coat. The lobe left untraced
+    // takes the prefiltered environment and the emitter NEE in full below. Decided
+    // by material values only, so a surface never splits between the two.
+    const bool  coatTraced   = ccW > 0.0 && opaqueRefl && ccRough <= roughness &&
+                               ccW * 0.04 >= 0.5 * max(F0.r, max(F0.g, F0.b));
+    const float lobeRough    = coatTraced ? ccRough : roughness;
+    const vec3  lobeF0       = coatTraced ? vec3(0.04) : F0;
+    const vec2  lobeAb       = coatTraced ? envBRDFApprox(NdotV, ccRough) : ab;
+    const float lobeBlend    = coatTraced ? 1.0 - smoothstep(0.55, 0.70, ccRough) : reflBlend;
+    const float lobeSpecNEET = coatTraced ? smoothstep(0.10, 0.25, ccRough) : specNEET;
+    const float lobeScale    = coatTraced ? ccW : ccBase;// the coat's weight, or the base under it
+    // The base's env share: its rough remainder, or all of it when the coat took the ray.
+    const float envSpecW = opaqueRefl ? (coatTraced ? 1.0 : 1.0 - reflBlend) : 1.0;
     if (pm.transmission <= 0.0 && envSpecW > 0.0) {
         // SPECULAR OCCLUSION, split by whether RT AO is available.
         //
@@ -808,22 +828,58 @@ void main() {
                         : 1.0;
         // murkAmbient: a submerged rough surface's sky lobe, through the water over it.
         lit += murkAmbient(sampleEnvLod(R, roughness * maxLod), worldPos, R) * envSpecularWeight(F0, ab) * envSpecW * envSpecVis
-             * pm.envMapIntensity * envSpecBaseShare;
+             * pm.envMapIntensity * envSpecBaseShare * ccBase;
+    }
+    if (ccW > 0.0) {
+        // The coat's environment where its lobe is not traced: all of it when the
+        // base took the ray, its rough remainder when the coat did. Occluded like
+        // the base's (Frostbite's specular occlusion at the coat's roughness).
+        const float coatEnvW = coatTraced ? 1.0 - lobeBlend : 1.0;
+        if (coatEnvW > 0.0) {
+            float ccVis = aoOn ? specularOcclusion(NdotV, min(rtAo, rtSkyVis), ccRough) : 1.0;
+            if (matAo < 1.0) ccVis *= specularOcclusion(NdotV, matAo, ccRough);
+            lit += murkAmbient(sampleEnvLod(R, ccRough * maxLod), worldPos, R)
+                 * envSpecularWeight(vec3(0.04), envBRDFApprox(NdotV, ccRough))
+                 * (ccW * coatEnvW * ccVis * pm.envMapIntensity);
+        }
+        // The untraced lobe's emitter highlights, all through the NEE (no ray share).
+        if (pc.emissiveCount > 0u) {
+            uvec2 unusedShare;
+            if (coatTraced && reflBlend > 0.0) {
+                const float kS = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+                lit += (reflBlend * ccBase)
+                     * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn, 0.0, unusedShare);
+            } else if (!coatTraced) {
+                const float cBlend = 1.0 - smoothstep(0.55, 0.70, ccRough);
+                const float kC     = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+                if (cBlend > 0.0)
+                    lit += (cBlend * ccW)
+                         * emissiveSpecNEE(worldPos, N, V, NdotV, vec3(0.04), ccRough, kC, shadowsOn, 0.0, unusedShare);
+            }
+        }
     }
     // emRayShare: the per-light shares the reflection ray below takes over
     // from the NEE, which writes them beside its own estimate.
     uvec2 emRayShare = uvec2(0u);
-    if (opaqueRefl && reflBlend > 0.0 && specNEET > 0.0 && pc.emissiveCount > 0u) {
-        const float kS = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-        lit += (specNEET * reflBlend)
-             * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn,
-                               emSpecRayShareScale(roughness, specAaKernelSq, kReflStochastic, msSampleIdx, px),
-                               emRayShare);
-    }
     vec3 reflOut = vec3(0.0);
     float reflHitT = -1.0;// reflected-content distance (see the trace below)
     float rrHitT   = 0.0;// the same for RR's guide: 0 untraced, kRRMissDist on an escape
     float rrGlassT = 0.0;// RR: the glass share of this pixel (its transmission), 0 off glass
+    {// THE TRACED LOBE (coatTraced above): from here to the reflection's store,
+     // these names are the traced lobe's, and its result is weighted by lobeScale.
+     // Without a coat they are exactly the base's (lobeScale 1).
+    const float roughness = lobeRough;
+    const vec3  F0        = lobeF0;
+    const vec2  ab        = lobeAb;
+    const float reflBlend = lobeBlend;
+    const float specNEET  = lobeSpecNEET;
+    if (opaqueRefl && reflBlend > 0.0 && specNEET > 0.0 && pc.emissiveCount > 0u) {
+        const float kS = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        lit += (specNEET * reflBlend * lobeScale)
+             * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn,
+                               emSpecRayShareScale(roughness, specAaKernelSq, kReflStochastic, msSampleIdx, px),
+                               emRayShare);
+    }
     // CHECKERBOARD reflections (OPPOSITE parity to giSkip → an eligible pixel
     // traces exactly ONE indirect channel per frame): with ≥4 frames of usable
     // history, skip the whole traceRadiance chain and HOLD the accumulation.
@@ -927,6 +983,20 @@ void main() {
         // no amount of denoising should have to absorb. Mirror fallback matches
         // the bounce-continuation guard inside traceRadiance.
         if (dot(Rd, N) <= 0.0) Rd = R;
+        // ...and below the SURFACE itself: the launch takes the depth's geometric
+        // normal, as the GI gather does (gatherEnv). An auto-LOD level keeps LOD0's
+        // vertex normals on its coarser triangles, so N can lean far off the facet
+        // the ray actually leaves: on bathroom2's tub (a glazed coat, roughness
+        // 0.03) the mirror ray, launched off N, dived under the coarse facet into
+        // the tub's own shell and the back wall went black and speckled, with LOD
+        // off clean. The origin steps off along Ng, and a direction under Ng is
+        // laid onto the facet ~3 degrees above it: the nearest direction the facet
+        // lets out (a mirror folded about Ng, as the gather's cosine samples are,
+        // would turn to look the other way).
+        const vec3 NgRefl = (probesOn || aoOn) ? Ng : depthGeometricNormal(px, msSampleIdx, ndc, id, worldPos, V, N);
+        const float rdNg  = dot(Rd, NgRefl);
+        if (rdNg < 0.05) Rd = normalize(Rd - (rdNg - 0.05) * NgRefl);
+        const vec3 reflOrig = worldPos + NgRefl * SHADOW_EPS;
         // A lobe sample that escapes takes the lobe's environment from 8
         // stratified directions, not its own one (envLobeGGX): the reflection
         // filter leaves env misses unblurred, so the single read stayed on
@@ -935,7 +1005,7 @@ void main() {
         // Traced fill for a starved probe neighbourhood at the first hit: full
         // weight up to roughness 0.25, none from 0.35 (gReflStarvedFill).
         gReflStarvedFill = 1.0 - smoothstep(0.25, 0.35, roughness);
-        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
+        vec3 r = traceRadiance(reflOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
                                /*cheapHits=*/true,// reflection channel: blur+temporal absorb
                                /*probeHitFill=*/true,
                                // THE reflection channel: this surface's own
@@ -965,7 +1035,7 @@ void main() {
         // leaves it untouched.
         if (flagOn(4096u)) {
             vec3 svEmis;
-            const float svT = svLeg(shadowOrig, Rd, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
+            const float svT = svLeg(reflOrig, Rd, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
             r    = r * svT + svEmis;
             rEnv = rEnv * svT;
         }
@@ -986,13 +1056,13 @@ void main() {
         // (heteroActive): a scene without height fog is unchanged.
         if (clouds.heteroActive > 0.5 && roughness < kReflStochastic) {
             if (gTraceHitT > 0.0) {
-                const vec3 Ph = shadowOrig + Rd * gTraceHitT;
-                r = applyParticleFog(applyHeteroSurfaceFog(r, vec2(0.0), gTraceHitT, shadowOrig, Ph),
-                                     shadowOrig, Rd, gTraceHitT)
-                  + volumetricDirScatter(shadowOrig, Rd, gTraceHitT, px);
+                const vec3 Ph = reflOrig + Rd * gTraceHitT;
+                r = applyParticleFog(applyHeteroSurfaceFog(r, vec2(0.0), gTraceHitT, reflOrig, Ph),
+                                     reflOrig, Rd, gTraceHitT)
+                  + volumetricDirScatter(reflOrig, Rd, gTraceHitT, px);
             } else {
-                r = applyParticleFog(applySkyFog(r, Rd), shadowOrig, Rd, 2000.0)
-                  + volumetricDirScatter(shadowOrig, Rd, 2000.0, px);
+                r = applyParticleFog(applySkyFog(r, Rd), reflOrig, Rd, 2000.0)
+                  + volumetricDirScatter(reflOrig, Rd, 2000.0, px);
             }
         }
         // Reflected-content distance for the denoiser's gloss-blur footprint:
@@ -1028,7 +1098,7 @@ void main() {
         r += rEnv;
         const float rl = max(max(r.r, r.g), r.b);
         if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
-        reflOut = r * envSpecularWeight(F0, ab) * reflBlend;
+        reflOut = r * envSpecularWeight(F0, ab) * (reflBlend * lobeScale);
     }
     if (pc.shadeMode == 1u) {
         // Dispatch B: fold the reflection term in INLINE (no reflSVGFTemporal —
@@ -1053,6 +1123,7 @@ void main() {
         lit += reflOut;
         imageStore(reflectImage, px, vec4(0.0));
     }
+    }// the traced lobe's names end here
 
     // ── Refractive glass (any transmissive surface that ISN'T the ocean) ──────
     // Ocean water returned far above. Everything else with transmission — closed
@@ -1752,8 +1823,9 @@ void main() {
     // shadeGlass's Fresnel and its frost roughness instead.
     if (kRR) {
         const float opaqueShare = 1.0 - clamp(pm.transmission, 0.0, 1.0);
+        // The specular guide is the TRACED lobe's (the coat's under a traced coat).
         storeRRGuides(px, albedo * (1.0 - metalness) * opaqueShare,
-                      mix(F0 * ab.x + ab.y, gRRSpecF, rrGlassT),
-                      N, rrGlassT > 0.5 ? gRRSpecRough : roughness, rrHitT);
+                      mix((lobeF0 * lobeAb.x + lobeAb.y) * lobeScale, gRRSpecF, rrGlassT),
+                      N, rrGlassT > 0.5 ? gRRSpecRough : lobeRough, rrHitT);
     }
 }
