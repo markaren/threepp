@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/core/AttributeView.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
@@ -575,6 +576,53 @@ TEST_CASE("GLTFLoader creates a SpotLight with nested spot cone angles") {
 
     REQUIRE(point);
     CHECK(point->name == "MyPoint");
+}
+
+TEST_CASE("GLTFLoader aims directional and spot lights down their node's -Z") {
+    // KHR_lights_punctual: the light shines along the node's local -Z. Both nodes are
+    // moved off the origin and turned -90 degrees about X, so -Z points straight down;
+    // a light aimed at the world origin (the default target) would point elsewhere.
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "extensionsUsed":["KHR_lights_punctual"],
+      "extensions":{"KHR_lights_punctual":{"lights":[
+        {"name":"Sun","type":"directional","intensity":3.0},
+        {"name":"Spot","type":"spot","intensity":5.0,"spot":{"outerConeAngle":0.5}}]}},
+      "nodes":[
+        {"name":"sunNode","translation":[3,5,-2],"rotation":[-0.70710678,0,0,0.70710678],
+         "extensions":{"KHR_lights_punctual":{"light":0}}},
+        {"name":"spotNode","translation":[-4,2,6],"rotation":[-0.70710678,0,0,0.70710678],
+         "extensions":{"KHR_lights_punctual":{"light":1}}}],
+      "scenes":[{"nodes":[0,1]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, {}));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    res->scene->updateMatrixWorld(true);
+    DirectionalLight* sun = nullptr;
+    SpotLight* spot = nullptr;
+    res->scene->traverse([&](Object3D& o) {
+        if (auto* d = o.as<DirectionalLight>()) sun = d;
+        else if (auto* s = o.as<SpotLight>()) spot = s;
+    });
+    REQUIRE(sun);
+    REQUIRE(spot);
+
+    const auto aim = [](const Object3D& light, const Object3D& target) {
+        Vector3 from, to;
+        from.setFromMatrixPosition(*light.matrixWorld);
+        to.setFromMatrixPosition(*target.matrixWorld);
+        return (to - from).normalize();
+    };
+    for (const Vector3& d : {aim(*sun, sun->target()), aim(*spot, spot->target())}) {
+        CHECK_THAT(d.x, Catch::Matchers::WithinAbs(0.0, 1e-5));
+        CHECK_THAT(d.y, Catch::Matchers::WithinAbs(-1.0, 1e-5));
+        CHECK_THAT(d.z, Catch::Matchers::WithinAbs(0.0, 1e-5));
+    }
 }
 
 TEST_CASE("GLTFLoader preserves normalized uint8 COLOR_0 as a narrow attribute") {

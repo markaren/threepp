@@ -478,16 +478,36 @@ namespace threepp::gltf {
                 }
                 float range = lightDef.value("range", 0.0f);
 
+                // KHR_lights_punctual: a directional or spot light shines along its
+                // node's local -Z. LightWithTarget aims at its target's world
+                // position, and the default target sits at the world origin, so a
+                // light whose node was not aimed at the origin shone the wrong way
+                // (gltf-research-scenes classroom2: its window sun came almost
+                // straight down, into the ceiling). The target is a child a unit step
+                // down the node's -Z, as three.js's loader does: it follows the node,
+                // and the scene graph owns it, so the pointer setTarget keeps is good
+                // for the light's lifetime.
+                const auto aimDownNodeZ = [&](Light& l, LightWithTarget& lt) {
+                    auto target = Object3D::create();
+                    target->name = "target";
+                    target->position.set(0, 0, -1);
+                    l.add(target);
+                    lt.setTarget(*target);
+                };
                 std::shared_ptr<Light> light;
                 if (ltype == "directional") {
-                    light = DirectionalLight::create(color, intensity);
+                    auto dl = DirectionalLight::create(color, intensity);
+                    aimDownNodeZ(*dl, *dl);
+                    light = dl;
                 } else if (ltype == "spot") {
                     // Cone angles live in the nested "spot" object (KHR_lights_punctual §spot)
                     const json spotDef = lightDef.value("spot", json::object());
                     float innerCone = spotDef.value("innerConeAngle", 0.0f);
                     float outerCone = spotDef.value("outerConeAngle", math::PI / 4.f);
                     float penumbra = (outerCone > 0.f) ? (1.f - innerCone / outerCone) : 0.f;
-                    light = SpotLight::create(color, intensity, range, outerCone, penumbra);
+                    auto sl = SpotLight::create(color, intensity, range, outerCone, penumbra);
+                    aimDownNodeZ(*sl, *sl);
+                    light = sl;
                 } else {
                     // "point" or fallback
                     light = PointLight::create(color, intensity, range);
