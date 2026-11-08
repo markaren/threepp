@@ -364,10 +364,19 @@ def glb_json(path):
 
 
 def environment_maps(glb):
-    """The environment maps the converter recorded in the file's extras (glTF has no
-    environment light). Each: uri relative to the GLB, licence uri, orientation."""
-    pbrt = glb_json(glb).get("extras", {}).get("pbrt", {})
-    return [ls["environment_map"] for ls in pbrt.get("light_sources", []) if "environment_map" in ls]
+    """The environment maps the file records in its extras (glTF has no environment
+    light). Each: uri relative to the GLB, licence uri, and where given intensity_scale
+    and rotation_degrees. The PBRT conversions put them under the top-level
+    extras.pbrt.light_sources; the Blender export (classroom2) under its scene's
+    extras.environment_map, at a strength of 8."""
+    doc = glb_json(glb)
+    pbrt = (doc.get("extras") or {}).get("pbrt", {})
+    envs = [ls["environment_map"] for ls in pbrt.get("light_sources", []) if "environment_map" in ls]
+    for sc in doc.get("scenes", []):
+        env = (sc.get("extras") or {}).get("environment_map")
+        if env and all(e.get("uri") != env.get("uri") for e in envs):
+            envs.append(env)
+    return envs
 
 
 def _node_matrix(node):
@@ -538,6 +547,11 @@ class Viewer:
         if self.model is not None:
             self.scene.remove(self.model)
         self.model = result.scene
+        # threepp's GLTFLoader hides the lights a file brings (the caller opts in).
+        # These scenes' lights are part of them: the extended PBRT conversions'
+        # directional sun, classroom2's window sunlight.
+        self.model.traverse(lambda o: setattr(o, "visible", True)
+                            if type(o).__name__ in ("DirectionalLight", "SpotLight", "PointLight") else None)
         self.scene.add(self.model)
         envs = environment_maps(glb)
         if envs:
@@ -546,9 +560,19 @@ class Viewer:
             env = tp.RGBELoader().load(str((glb.parent / envs[0]["uri"]).resolve()))
             self.scene.environment = env
             self.scene.background = env
+            # The strength the reference render used for its world (classroom2: 8), on
+            # the light and the backdrop alike, as Cycles' world strength is.
+            strength = float(envs[0].get("intensity_scale", 1.0))
+            self.scene.environment_intensity = strength
+            self.scene.background_intensity = strength
+            rx, ry, rz = (math.radians(a) for a in envs[0].get("rotation_degrees", (0.0, 0.0, 0.0)))
+            for rot in (self.scene.environment_rotation, self.scene.background_rotation):
+                rot.set(rx, ry, rz)
         else:
             self.scene.environment = None
             self.scene.background = BACKDROP
+            self.scene.environment_intensity = 1.0
+            self.scene.background_intensity = 1.0
         self.env_name = Path(envs[0]["uri"]).name if envs else None
         box = tp.Box3().set_from_object(self.model)
         c, sz = box.get_center(), box.get_size()
