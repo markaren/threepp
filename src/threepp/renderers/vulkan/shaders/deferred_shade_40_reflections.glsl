@@ -382,6 +382,20 @@ float probeEnvFillVis(vec3 P, vec3 N, float maxLod) {
     return mix(1.0, vis, smoothstep(0.0, 0.1, conf));
 }
 
+// The body colour of a WATER surface a traced ray meets from the air: shadeWater's
+// deepBody in short, the attenuation tint over two crossings of the material's
+// proxy thickness, lit by the sky's luminance and the scene ambient, darker
+// looking down the column (V.y). The same numbers as the primary's, so the strait
+// seen through a windscreen reads as the strait beside the glass.
+vec3 waterHitBody(MaterialDesc wm, vec3 V, float maxLod) {
+    vec3 tint = vec3(1.0);
+    if (wm.attenuationDistance > 0.0)
+        tint = pow(max(wm.attenuationColor, vec3(1e-6)), vec3(2.0 * wm.thickness / wm.attenuationDistance));
+    const float skyLum    = dot(sampleEnvLod(vec3(0.0, 1.0, 0.0), maxLod), vec3(0.2126, 0.7152, 0.0722));
+    const float depthFade = mix(1.0, 0.4, clamp(V.y, 0.0, 1.0));
+    return tint * (skyLum * 0.35 + lights.ambient) * depthFade;
+}
+
 // envInt = the PRIMARY surface's MaterialDesc.envMapIntensity, passed down
 // rather than read off a global so the two nested callers (a glass retrace
 // inside a water shade) can never disagree about whose material is in force.
@@ -507,6 +521,47 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             const float pix = 2.0 * abs(cam.projInverse[1][1]) / float(max(pc.height, 1u));
             hitUvFootprint(hitId, primId, rayQueryGetIntersectionObjectToWorldEXT(rq, true), d,
                            (cam.camAux.x > 0.5) ? pix : pix * hitEyeDist, hitDuvA, hitDuvB);
+        }
+
+        // A WATER surface met from the air: an ocean instance (foamAddress), the
+        // thin-walled transmissive material Ocean.cpp gives it, the ray against
+        // its normal. The pass-through rule below is glass's, and the ocean
+        // material is built like glass (transmission 1, white; its colour is
+        // the attenuation), so every traced ray went THROUGH the surface and
+        // shaded the seabed: the strait seen through a windscreen was its
+        // bottom, and the water mirrored in a facade the same. Shade it as the
+        // primary's shadeWater does in short: the Fresnel share mirrors on (the
+        // bounce continues below), the rest is the deep body colour. The hit's
+        // normal is the mesh's, smooth: no chop in what glass shows. From BELOW
+        // the ray keeps passing through, the sky over the column as before.
+        if (geoms[hitId].foamAddress != 0ul && hm.thinWalled != 0 && hm.transmission > 0.0 && dot(d, hitN) < 0.0) {
+            const vec3  wP    = o + d * tHit;
+            const vec3  wV    = -d;
+            const float wNdV  = max(dot(hitN, wV), 1e-4);
+            const float wIor  = max(hm.ior, 1.0);
+            const float wF0n  = (1.0 - wIor) / (1.0 + wIor);
+            const float wF    = wF0n * wF0n + (1.0 - wF0n * wF0n) * pow(1.0 - wNdV, 5.0);
+            if (gTraceHitT < 0.0) {
+                gTraceHitT     = length(wP - origin);
+                gTraceHitMoved = (geoms[hitId].flags & kGeomFlagMoved) != 0u;
+            }
+            radiance += tput * (1.0 - wF) * waterHitBody(hm, wV, maxLod);
+            vec3 wR = reflect(-wV, hitN);
+            const float wUp = dot(wR, hitN);
+            if (wUp < 0.02) wR = normalize(wR + hitN * (0.02 - wUp));// never below its own plane
+            const float wLod = max(0.12, hm.roughness) * maxLod;// the primary water's env blur floor
+            if (b >= REFL_MAX_BOUNCES - 1 || wF < 0.02) {
+                radiance += tput * wF * sampleEnvLod(wR, wLod) * envInt;
+                break;
+            }
+            ++b;// the water's mirror is a reflective bounce
+            tput      *= wF;
+            d          = wR;
+            o          = wP + hitN * SHADOW_EPS;
+            legOrigin  = o;
+            legEyeDist = hitEyeDist;
+            curMissLod = wLod;
+            continue;
         }
 
         // Cutout (MASK) transparent texel committed: the budget confirmed it
