@@ -18,6 +18,12 @@ if (THREEPP_WITH_USD)
     set(LIGHTUSD_WITH_USDFBX        OFF CACHE BOOL "" FORCE)
     set(LIGHTUSD_WITH_USDVOX        OFF CACHE BOOL "" FORCE)
     set(LIGHTUSD_WITH_USDVOL        OFF CACHE BOOL "" FORCE)
+    # threepp links LightUSD statically (tydra_next -> lightusd_static). The
+    # option defaults to BUILD_SHARED_LIBS, so a shared threepp build also got
+    # an unused lightusd.dll, which on MSVC inherits the top-level
+    # CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS and fails to link (LNK1189, plus rc4
+    # defining the *FromString enum parsers in two sources).
+    set(LIGHTUSD_BUILD_SHARED_LIBS  OFF CACHE BOOL "" FORCE)
     # USDLoader reads through the `next` pipeline (next::pcp composition +
     # tydra::next): the classic flatten path does not compose the layered
     # Isaac Sim / SimReady assets (references of references, sublayer-only
