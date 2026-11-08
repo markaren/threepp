@@ -1164,13 +1164,6 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
     // sky crisp and the sun reads as a real glint. Scene hits stay sharp.
     const float missLod = max(gr, 0.10) * maxLod;
 
-    // Sky visibility at the glass surface, consumed by the SOLID transmit
-    // leg's probeHitFill=false env hit fill (see gEnvFillVis). Without it the
-    // enclosed-interior scene showed a sky-lit world through the glass while
-    // probe GI darkened everything around it. The reflect leg passes
-    // probeHitFill=true and is unaffected; a thin pane's hits are lit where
-    // they are (gThinPaneHits) and do not read it.
-    if (pm.thinWalled == 0) gEnvFillVis = probeEnvFillVis(P, N, maxLod);
 
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {
@@ -1215,13 +1208,13 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             // "washed, detail-destroyed" look over e.g. a watch dial.
             const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
             {
-                gThinPaneHits   = true;// what the pane shows is lit as seen beside it
+                gSeenThroughHits   = true;// what the pane shows is lit as seen beside it
                 gTraceAlongView = true;// ...and by the lamps of its own cluster cell
                 const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false,// transmitted content: the pane's own rule (gThinPaneHits)
+                                                  /*probeHitFill=*/false,// transmitted content: the pane's own rule (gSeenThroughHits)
                                                   /*envInt=*/1.0);// transmitted, not IBL
-                gThinPaneHits   = false;
+                gSeenThroughHits   = false;
                 gTraceAlongView = false;
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
@@ -1260,10 +1253,14 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
                     dOut = (dot(o, o) < 1e-6) ? reflect(dIn, nb)// TIR → internal reflect
                                               : normalize(o);
                 }
+                // Lit where it stands, as behind a thin pane (gSeenThroughHits);
+                // not along the view (the ray is bent), so no cluster-cell lamps.
+                gSeenThroughHits = true;
                 const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false,// content under glass: probes can't resolve the cavity
+                                                  /*probeHitFill=*/false,// transmitted content: lit where it stands
                                                   /*envInt=*/1.0);// transmitted, not IBL
+                gSeenThroughHits = false;
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));

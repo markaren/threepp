@@ -198,16 +198,11 @@ vec3 envLobeGGX(vec3 V, vec3 N, float roughness, float lod, vec2 rot) {
 // false: the stochastic pick showed as per-pixel noise in the glass sphere.
 // probeHitFill: hit diffuse fill source in probe-GI mode. REFLECTION callers
 // pass true — the probe field is the occlusion-correct interior irradiance
-// (the mirror-in-a-corridor fix). TRANSMISSION continuations (thin-shell /
-// refraction / behind-view — content directly under glass) pass false and
-// keep the env fill's SHAPE: a world-scale probe grid cannot resolve a
-// glass-covered cavity (watch dial, goggles, vitrines — probes there sit
-// inside the case). The fill's MAGNITUDE is scaled by gEnvFillVis, the sky
-// visibility measured at the transmitting surface — "seen through clear
-// glass" sees the sky the glass surface sees, which in an enclosed interior
-// is none of it (the raw fill lit everything behind glass sky-bright while
-// probe GI darkened the opaque surround). A THIN pane's straight-through leg
-// is the exception: its hits are lit where they are (gThinPaneHits).
+// (the mirror-in-a-corridor fix). TRANSMISSION continuations pass false.
+// What they see through glass or a blend surface is lit where it stands, by
+// the primary shade's own rule (gSeenThroughHits, which those callers set);
+// the water's floor, the one caller that does not set it, keeps the env
+// fill's shape (the probes measure the air, not the water column).
 // First-bounce hit distance of the last traceRadiance call, for the reflection
 // denoiser's gloss-blur footprint (carried in reflAux .w): -1 = no committed
 // hit (pure env miss — the radiance is ALREADY lobe-filtered via missLod, so
@@ -244,21 +239,18 @@ bool gTraceSkipWater = false;
 bool gTraceDeferMiss = false;
 vec3 gTraceMissTput  = vec3(0.0);
 
-// Sky-visibility scale for the env hit fill on probeHitFill=false traces.
-// Stamped by the transmission callers (shadeGlass, the additive/alpha-blend
-// behind-views) with probeEnvFillVis at the transmitting surface; 1.0 for
-// every other caller (reflection traces read the probe fill and ignore this).
-float gEnvFillVis = 1.0;
-
-// Set by shadeGlass around a THIN-WALLED pane's straight-through leg: what is
-// seen through the pane is lit as the same point seen beside it. The hits of
-// that trace take their diffuse fill by the primary shade's own rule (Phase B
-// in main(): the probes where they measured the point, a traced gather where
-// they did not) in place of the env fill x gEnvFillVis.
+// Set by every caller whose trace looks THROUGH a surface: shadeGlass's
+// legs behind thin and solid glass, the additive and alpha-blend
+// behind-views. What is seen through is lit as the same point seen beside
+// the glass: the hits of that trace take their diffuse fill by the primary
+// shade's own rule (Phase B in main(): the probes where they measured the
+// point, a traced gather where they did not).
 //
-// gEnvFillVis is the sky level AT THE PANE on the viewer's side. That says
-// something about a point behind the pane while the two share a space (a dial
-// under its crystal). A pane between two spaces breaks it, either way:
+// Until 2026-11 only a THIN pane did. Solid glass and the blend views lit
+// what they showed with the env fill scaled by the sky level AT THE GLASS on
+// the viewer's side (gEnvFillVis). That says something about a point behind
+// the glass while the two share a space (a dial under its crystal). Glass
+// between two spaces breaks it, either way:
 //   - Looking OUT of a car (the camera in the cabin, Trollstigen): the probes
 //     at the windscreen read the cabin, the ratio is near zero, and every
 //     hillside in shadow beyond the glass rendered black, beside the same
@@ -268,6 +260,8 @@ float gEnvFillVis = 1.0;
 //     railings' shadows on the road were filled with unoccluded sky.
 //   - A room brighter than its sky clamps the ratio to 1: what stood behind a
 //     pane in it was lit by the sky the room shuts out.
+//   - A dark room seen through a window from the sunny yard came out as
+//     bright as the sky (the glass lab, 2026-11-08).
 // Measured in linear light through a clear pane at Trollstigen, what has no
 // sun on it through the pane over the same pixels seen directly: 0.47 before
 // and 1.01 now by the bridge (the dark case), 1.62 and 1.04 under the trees
@@ -277,8 +271,8 @@ float gEnvFillVis = 1.0;
 // 0.97), 1.26 where the probes do (the direct view takes its near-field AO
 // off the probes; a traced hit has none to take).
 //
-// Solid glass, the blend behind-views and the water's bottom keep the env fill.
-bool gThinPaneHits = false;
+// The water's bottom keeps the env fill (see traceRadiance's header).
+bool gSeenThroughHits = false;
 
 // Set by the callers whose trace runs along this pixel's own view ray (a thin
 // pane's straight-through leg, the additive and alpha-blend behind-views):
@@ -444,7 +438,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 
     int b    = 0;// REFLECTIVE bounces only — incremented at the continuation below
     int step = 0;// every ray segment (bounces + pass-throughs); the loop guard
-    // Hits of this trace that gathered their own fill (gThinPaneHits): what the
+    // Hits of this trace that gathered their own fill (gSeenThroughHits): what the
     // pane shows, and one blend layer in front of it. Layers past that take
     // the probe fill.
     const int kPaneGatherHits = 2;
@@ -673,9 +667,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // Probes off keeps the original approximation.
         const vec3 hitEnvFill = sampleEnvDiffuse(hitN);
         vec3  hitDiffInd = hitEnvFill + lights.ambient + hemiAmbient(hitN);
-        // Scale of the rough hit's split-sum env cap-off further down: on a
-        // transmission retrace, the sky level its diffuse fill was given.
-        float hitEnvVis  = probeHitFill ? 1.0 : gEnvFillVis;
+        // Scale of the rough hit's split-sum env cap-off further down: the sky
+        // level the seen-through rule gives the hit, 1 for every other one.
+        float hitEnvVis  = 1.0;
         if (probesEnabled()) {
             if (probeHitFill) {
                 float probeConf;
@@ -721,8 +715,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                     hitDiffInd = mix(hitDiffInd, gSum * (1.0 / float(kStarvedRays)) + lights.ambient + hemiAmbient(hitN), starvedW);
                 }
                 hitDiffInd = mix(hitDiffInd, probeFill, probeTrust);
-            } else if (gThinPaneHits) {
-                // Seen through a thin pane: lit as seen beside it (gThinPaneHits).
+            } else if (gSeenThroughHits) {
+                // Seen through glass or a blend surface: lit as seen beside it.
                 const vec3 LUMW = vec3(0.2126, 0.7152, 0.0722);
                 float conf;
                 const vec3 probeFill = probeIrradianceConf(hitP + hitN * SHADOW_EPS, hitN, conf) * (1.0 / PI);
@@ -754,12 +748,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                     hitDiffInd = mix(hitDiffInd, probeFill, smoothstep(0.0, 0.25, conf));
                     hitEnvVis  = 1.0;
                 }
-            } else {
-                // Transmission retrace: env-fill shape (probes cannot resolve
-                // the cavity) at the sky level that actually reaches the
-                // transmitting surface. See gEnvFillVis.
-                hitDiffInd *= gEnvFillVis;
             }
+            // else: the water's floor (shadeWater's refracted ray), the env
+            // fill's shape; the probes measure the air, not the column.
         }
         // A hit UNDER the water gets the sky through the column over it. This
         // is the hull seen from the air: shadeWater's refracted ray lands here,
