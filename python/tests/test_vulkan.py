@@ -913,20 +913,29 @@ def test_unknown_aov_raises(vk_renderer):
         vk_renderer.render_aov(scene, cam, "not_an_aov")
 
 
-def test_depth_is_metric(vk_renderer):
-    # A fronto-parallel wall filling the frame: view-space depth equals the
-    # camera distance, so read_depth must return that distance.
+def test_depth_is_metric_and_planar(vk_renderer):
+    # A fronto-parallel wall filling the frame. read_depth is the PLANAR
+    # view-space depth, the distance along the viewing axis: the wall reads the
+    # camera distance at the centre AND in the corners, where the pixel's ray is
+    # 1 / cos(theta) longer. The corners say which of the two it is.
     scene = tp.Scene()
     scene.add(tp.AmbientLight(0xffffff, 1.0))
     scene.add(tp.Mesh(tp.PlaneGeometry(60, 60), tp.MeshStandardMaterial()))
     cam = tp.PerspectiveCamera(50, W / H, 0.1, 100)
     cy, cx = H // 2, W // 2
+    half_h = math.tan(math.radians(25.0))               # the frame's half height at unit depth
+    half_w = half_h * W / H
+    corner_ray = math.sqrt(1.0 + half_w * half_w + half_h * half_h)   # ray length / planar depth at a corner
+    assert corner_ray > 1.1                               # the two readings are apart enough to tell
     for dist in (3.0, 7.0, 15.0):
         cam.position.set(0, 0, dist)
         cam.look_at(0, 0, 0)
         depth = vk_renderer.read_depth(scene, cam)
         assert depth.shape == (H, W) and str(depth.dtype) == "float32"
         assert depth[cy, cx] == pytest.approx(dist, abs=0.05)
+        for py_, px_ in ((2, 2), (2, W - 3), (H - 3, 2), (H - 3, W - 3)):
+            assert depth[py_, px_] == pytest.approx(dist, abs=0.05), (py_, px_)
+            assert depth[py_, px_] < dist * (1.0 + 0.5 * (corner_ray - 1.0))   # not the ray length
 
 
 @pytest.mark.skipif(not tp.HAS_IMGUI, reason="built without imgui")

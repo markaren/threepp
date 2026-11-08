@@ -12855,7 +12855,7 @@ class VulkanRenderer:
         """
     def read_depth(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.float32]:
         """
-        Metric depth as (H, W) float32 — distance from the camera in scene units. Background reads as the camera far plane. Full 32-bit precision (native D32 read; supersedes the old 24-bit-packed path).
+        Depth as (H, W) float32: each pixel's PLANAR view-space depth, its distance along the camera's viewing axis in scene units, as a depth map has it (the convention OpenCV, posed-splat and world-model inputs expect), not the length of the pixel's ray: a wall facing the camera reads one value edge to edge. A point cloud follows from camera_intrinsics: X = (u - cx) * Z / fx, Y = (v - cy) * Z / fy, Z = depth. Background reads as the camera far plane. Full 32-bit precision (native D32 read).
         """
     def read_event_camera_visualisation(self) -> numpy.typing.NDArray[numpy.uint8]:
         """

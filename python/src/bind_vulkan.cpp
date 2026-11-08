@@ -306,9 +306,13 @@ namespace {
         // by the single *_last() fetches and the batched read_aovs_typed —
         // decodes run with the GIL held; only the fetch releases it.
 
-        // Metric depth (H, W) float32 — distance from the camera in scene units.
-        // Background (cleared to the far plane) reads as `far`. Full 32-bit
-        // precision from the D32 depth buffer (the old path quantized to 24 bits).
+        // Depth (H, W) float32: the PLANAR view-space depth of each pixel, its
+        // distance along the camera's viewing axis in scene units (the reverse-Z
+        // NDC value linearised with the camera's near and far), not the length
+        // of the pixel's ray; a fronto-parallel wall reads one value across the
+        // whole frame. Background (cleared to the far plane) reads as `far`.
+        // Full 32-bit precision from the D32 depth buffer (the old path quantized
+        // to 24 bits).
         static py::array_t<float> decode_depth(const std::vector<uint8_t>& raw, int w, int h,
                                                const Camera& camera) {
             if (raw.empty() || w <= 0 || h <= 0) {
@@ -966,9 +970,13 @@ namespace threepp_py {
                 .def("read_albedo", [](PyVulkanRenderer& r, Object3D& s, Camera& c) { return r.render_aov(s, c, "albedo"); },
                      py::arg("scene"), py::arg("camera"))
                 .def("read_depth", &PyVulkanRenderer::read_depth, py::arg("scene"), py::arg("camera"),
-                     "Metric depth as (H, W) float32 — distance from the camera in scene units. "
-                     "Background reads as the camera far plane. Full 32-bit precision "
-                     "(native D32 read; supersedes the old 24-bit-packed path).")
+                     "Depth as (H, W) float32: each pixel's PLANAR view-space depth, its distance "
+                     "along the camera's viewing axis in scene units, as a depth map has it (the "
+                     "convention OpenCV, posed-splat and world-model inputs expect), not the length "
+                     "of the pixel's ray: a wall facing the camera reads one value edge to edge. "
+                     "A point cloud follows from camera_intrinsics: X = (u - cx) * Z / fx, "
+                     "Y = (v - cy) * Z / fy, Z = depth. Background reads as the camera far plane. "
+                     "Full 32-bit precision (native D32 read).")
                 // ── Lossless float / int AOV readback (native G-buffer copy) ──
                 .def("read_instance_ids", &PyVulkanRenderer::read_instance_ids,
                      py::arg("scene"), py::arg("camera"),
