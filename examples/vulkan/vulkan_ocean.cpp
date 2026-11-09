@@ -1374,6 +1374,22 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(camKey);
 
+    // Wave-model switches, one key each, the state printed on every press
+    // (an environment variable that forces a switch wins over the key):
+    //   F5 Choppy Wave Model (Params::cwm)   F6 bound waves (Params::boundWaves)
+    //   F7 breaking crests (Params::breakingCrests)
+    KeyAdapter waveModelKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        auto& p = ocean->params;
+        if (ev.key == Key::F5) p.cwm = !p.cwm;
+        else if (ev.key == Key::F6) p.boundWaves = !p.boundWaves;
+        else if (ev.key == Key::F7) p.breakingCrests = !p.breakingCrests;
+        else return;
+        std::printf("wave model: cwm %s, bound waves %s, breaking crests %s\n",
+                    ocean->cwmOn() ? "on" : "off", ocean->boundWavesOn() ? "on" : "off",
+                    ocean->breakingCrestsOn() ? "on" : "off");
+    });
+    canvas.addKeyListener(waveModelKey);
+
     // ── Sound: engine + ocean/wind ambience ─────────────────────────────────
     // Skipped in --shot capture runs (headless iteration shouldn't bleep).
     OceanSounds sounds;

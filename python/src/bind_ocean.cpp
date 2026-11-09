@@ -119,6 +119,16 @@ namespace threepp_py {
                                "Pierson-Moskowitz-calibrated spectrum (default False, the historical sea): "
                                "significant wave height x1.85 at every wind and fetch, peak wavelength x1.16. "
                                "THREEPP_OCEAN_HS_FIX=1/0 overrides it. Live-tunable.")
+                .def_readwrite("cwm", &DisplacedMesh::Params::cwm,
+                               "Choppy Wave Model (default False): choppiness 1, the first-order Lagrangian "
+                               "surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter. "
+                               "THREEPP_OCEAN_CWM=1/0 overrides it. Live-tunable.")
+                .def_readwrite("bound_waves", &DisplacedMesh::Params::boundWaves,
+                               "Second-order bound harmonics (default False): sharper crests, flatter troughs "
+                               "(Longuet-Higgins 1963, Tayfun 1980). THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.")
+                .def_readwrite("breaking_crests", &DisplacedMesh::Params::breakingCrests,
+                               "Natural foam only where the crest breaks now (default False), from the surface's "
+                               "local steepness; vessel foam unchanged. THREEPP_OCEAN_BREAKING_CRESTS=1/0 overrides it.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")

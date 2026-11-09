@@ -27,6 +27,12 @@
 //   --foam <amount>    whitecap scale, Params::foamAmount (1 for the ocean)
 //   --hs-fix 0|1       Params::hsFix, the Pierson-Moskowitz-calibrated
 //                      spectrum (THREEPP_OCEAN_HS_FIX overrides it)
+//   --cwm 0|1          Params::cwm, the Choppy Wave Model's choppiness 1 with
+//                      its fold limiter (THREEPP_OCEAN_CWM overrides it)
+//   --bound 0|1        Params::boundWaves, second-order bound harmonics
+//                      (THREEPP_OCEAN_BOUND_WAVES overrides it)
+//   --breaking 0|1     Params::breakingCrests, foam only on breaking crests
+//                      (THREEPP_OCEAN_BREAKING_CRESTS overrides it)
 //   --pinned           1/60 s sim-time steps on a pinned renderer clock, so
 //                      captures with the same sea flags show the same waves
 // Validation hooks:
@@ -78,6 +84,7 @@ int main(int argc, char** argv) {
     float fetch = -1.f, chop = -1.f, waveScale = -1.f, tile2 = -1.f, foam = -1.f;
     float theta = -1e9f;
     int hsFix = -1;
+    int cwm = -1, bound = -1, breaking = -1;
     bool pinnedClock = false;
     for (int i = 1; i < argc; ++i) {
         auto num = [&](const char* flag, float& out) {
@@ -88,6 +95,9 @@ int main(int argc, char** argv) {
         if (num("--fetch", fetch) || num("--chop", chop) || num("--wave-scale", waveScale) ||
             num("--tile2", tile2) || num("--theta", theta) || num("--foam", foam)) continue;
         if (std::strcmp(argv[i], "--hs-fix") == 0 && i + 1 < argc) hsFix = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--cwm") == 0 && i + 1 < argc) cwm = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--bound") == 0 && i + 1 < argc) bound = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--breaking") == 0 && i + 1 < argc) breaking = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -192,6 +202,12 @@ int main(int argc, char** argv) {
     auto ocean = Ocean::create(opts);
     if (foam >= 0.f) ocean->params.foamAmount = foam;
     if (hsFix >= 0) ocean->params.hsFix = hsFix != 0;
+    if (cwm >= 0) ocean->params.cwm = cwm != 0;
+    if (bound >= 0) ocean->params.boundWaves = bound != 0;
+    if (breaking >= 0) ocean->params.breakingCrests = breaking != 0;
+    std::printf("wave model: hs-fix %d, cwm %d, bound waves %d, breaking crests %d (with environment overrides)\n",
+                int(ocean->params.hsFix), int(ocean->cwmOn()), int(ocean->boundWavesOn()),
+                int(ocean->breakingCrestsOn()));
     scene.add(ocean);
 
     // Live wind control — setWind() takes effect next frame; the sea morphs
