@@ -233,6 +233,49 @@ TEST_CASE("ImagingSonar: the sea surface puts a ghost at the image path's range"
     CHECK(on.second == static_cast<std::uint8_t>(SonarEchoKind::Multipath));
 }
 
+TEST_CASE("ImagingSonar: a surface just past max range stays in the last bins of its beams") {
+    // The default model with only the range cut to 1 m: the chirp's response
+    // (~0.1 m each side) is far wider than a bin (0.7 mm), so a surface 1.04 m
+    // out, past the window but inside the response, is recentred on its core.
+    ImagingSonarModel model;
+    model.maxRange = 1.f;
+    model.noiseSpectrumLevelDb = -150.f;
+    model.volumeBackscatterDb = -300.f;
+    model.surfaceMultipath = false;
+    const ImagingSonarSynthesizer syn(model);
+    const Vector3 origin(0, 0, 0);
+
+    // Two targets inside the window, one each side, and the wall dead ahead.
+    auto near = targetColumn(syn, origin, -40.f, 2.f, 0.6f, 3);
+    const auto right = targetColumn(syn, origin, 40.f, 2.f, 0.6f, 4);
+    for (std::size_t i = 0; i < near.size(); ++i) {
+        if (right[i].returnNo > 0) near[i] = right[i];
+    }
+    auto withWall = near;
+    const auto wall = targetColumn(syn, origin, 0.f, 2.f, 1.04f, 5);
+    for (std::size_t i = 0; i < wall.size(); ++i) {
+        if (wall[i].returnNo > 0) withWall[i] = wall[i];
+    }
+
+    SonarFrame a, b;
+    syn.synthesize(model, AcousticMaterials{}, near, origin, Matrix3{}, 1, a, 1);
+    syn.synthesize(model, AcousticMaterials{}, withWall, origin, Matrix3{}, 1, b, 1);
+    REQUIRE(a.levelDb.size() == b.levelDb.size());
+    // The wall only adds to the bins its response reaches, the last ~150.
+    const unsigned firstReached = model.rangeBins - 200;
+    unsigned changedEarly = 0, changedLate = 0;
+    for (unsigned beam = 0; beam < b.beams; ++beam) {
+        for (unsigned j = 0; j < b.bins; ++j) {
+            const std::size_t c = b.index(beam, j);
+            REQUIRE(std::isfinite(b.levelDb[c]));
+            if (a.levelDb[c] == b.levelDb[c]) continue;
+            (j < firstReached ? changedEarly : changedLate) += 1;
+        }
+    }
+    CHECK(changedEarly == 0u);
+    CHECK(changedLate > 0u);
+}
+
 namespace {
 
     // One ray of a radar slot aimed at `p` from `origin`, every other ray a miss.
