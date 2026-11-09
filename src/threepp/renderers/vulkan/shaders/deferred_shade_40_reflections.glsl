@@ -418,6 +418,14 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     vec3  tput       = vec3(1.0);
     vec3  o          = origin;
     vec3  d          = dir;
+    // The volume the ray is in: a SOLID transmissive surface (thickness > 0)
+    // it entered through a front face and has not left through a back face.
+    // Every leg run inside it is absorbed, Beer-Lambert over the material's
+    // attenuation, as the path tracer's inside leg. The ray starts in the air:
+    // the callers launch it outside any volume (a solid's own shade starts its
+    // ray past the back face).
+    vec3  insideAtt  = vec3(1.0);// transmittance over insideDist
+    float insideDist = 0.0;      // 0: in the air, or in a volume that absorbs nothing
     // Where the ray last LEFT a surface: the caller's origin, then each
     // reflective bounce. `o` also advances through pass-throughs, so a ray
     // from a submerged plate that threads the water surface on its way out
@@ -492,6 +500,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
         vec3 hitN; vec2 hitUv;
         fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+
+        // The leg to this hit ran inside a volume: absorbed over its length.
+        if (insideDist > 0.0) tput *= pow(insideAtt, vec3(tHit / insideDist));
 
         // Water self-hit pass-through (see gTraceSkipWater). Advance past the
         // crest and keep tracing; the offset scales with the hit distance so a
@@ -649,6 +660,19 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                               * probeEnvFillVis(gP + gN * SHADOW_EPS, gN, maxLod) * envInt;
                 }
                 hitPass  = vec3(1.0 - cov) + cov * t * tint;
+                // A SOLID's surface is a volume's boundary: entered through its
+                // front face, left through its back face (as the path tracer
+                // decides it), so the legs between are absorbed (insideDist).
+                // A liquid in a glass vessel was a hole: the ray that looks
+                // through the vessel crossed the liquid's surfaces with their
+                // tint alone (white), and a teapot full of tea drew empty. A
+                // thin sheet bounds no volume and leaves the medium as it was;
+                // the ocean's body is waterHitBody's.
+                if (!isFlatAlphaBlend(hm.ior) && t > 0.0 && hm.thinWalled == 0 && geoms[hitId].foamAddress == 0ul) {
+                    const bool entering = rayQueryGetIntersectionFrontFaceEXT(rq, true);
+                    insideDist = (entering && hm.attenuationDistance > 0.0) ? hm.attenuationDistance : 0.0;
+                    insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                }
             }
             if (hitAlpha <= 0.01) {// nothing to composite — carry on
                 tput *= hitPass;
