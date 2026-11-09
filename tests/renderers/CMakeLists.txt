@@ -37,6 +37,13 @@ endif ()
 # runtime → exits 42 (CTest "Skipped") where there isn't one. References are
 # GPU-specific, so this is a local pre-push check, not a hard cross-hardware gate.
 if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
+    # The probe GI at four cascades: their per-frame update and scroll reset
+    # dispatches (VulkanProbeCascades_test.cpp has the why). Catch2; without a
+    # ray-tracing device it SKIPs, which only the message tells from a failure.
+    add_test_executable(VulkanProbeCascades_test)
+    set_tests_properties(VulkanProbeCascades_test PROPERTIES
+            SKIP_REGULAR_EXPRESSION "no Vulkan ray tracing device")
+
     add_executable(VulkanGolden_test VulkanGolden_test.cpp)
     target_link_libraries(VulkanGolden_test PRIVATE threepp)
     target_include_directories(VulkanGolden_test PRIVATE

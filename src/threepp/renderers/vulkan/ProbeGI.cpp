@@ -610,7 +610,10 @@ namespace threepp::vulkan {
                                     pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
             const uint32_t spc[8] = {0u, kProbeCount, updateCounter_, 4u, 0u, 0u, 1u, 0u};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(spc), spc);
-            vkCmdDispatch(cb, kProbeCount * cascadeCount_, 1, 1);
+            // (probes, cascades): one row of 16384 per cascade, never the
+            // 65536 in X four back to back would be, past the 65535 a device
+            // has to accept along one dimension (Intel ANV, lavapipe).
+            vkCmdDispatch(cb, kProbeCount, cascadeCount_, 1);
             scrollPending_ = false;
             fullCopy       = true;
             for (uint32_t c = 0; c < cascadeCount_; ++c)
@@ -722,9 +725,11 @@ namespace threepp::vulkan {
                                 (shadows ? 1u : 0u) | (fastBlend ? 2u : 0u) | (cutoutTest ? 8u : 0u),
                                 emissiveCount, emPowerBits, envMipCount, 0u};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
-        // One window of `count` probes per cascade, cascades back to back
-        // (the shader derives the cascade from its workgroup index).
-        vkCmdDispatch(cb, count * cascadeCount_, 1, 1);
+        // One window of `count` probes per cascade, a row per cascade (the
+        // shader takes the cascade from its workgroup's y): the warm-up's
+        // 16384 a window would be 65536 in X at four cascades, past the
+        // 65535 a device has to accept along one dimension.
+        vkCmdDispatch(cb, count, cascadeCount_, 1);
 
         // The window this dispatch is about to write, so the NEXT dispatch's
         // snapshot knows what to restore. Tracked per dispatch, not per frame.
