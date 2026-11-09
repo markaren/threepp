@@ -593,6 +593,14 @@ namespace threepp::vulkan::impl {
         };
         std::array<Cascade, 3> cascades;
         uint32_t cascadeMask = 0;            // bit i set = cascade i enabled
+        // Chop normals (DisplacedMesh::Params::chopNormals): the finest
+        // cascade's slope-moment mip chain, the deferred shade's per-pixel
+        // surface, and the OCEAN_CHOP displace set. Both null until the mesh
+        // first turns the feature on (VulkanRenderer::Impl::syncOceanChop).
+        std::unique_ptr<water::ChopMoments> chopMoments;
+        VkDescriptorSet displaceChopDS = VK_NULL_HANDLE;
+        uint32_t chopFineIdx = 0;            // the finest enabled cascade (feeds chopMoments)
+        bool     chopOn      = false;        // on this frame (resolved by syncOceanChop)
         // Wind + fetch actually baked into the cascades' h0 spectra. When
         // dm.params drifts from these, recordDisplacedDeform rewrites the
         // Phillips params and re-dispatches the (normally one-shot) h0
@@ -607,6 +615,8 @@ namespace threepp::vulkan::impl {
         float boundKm[2]       = {0.f, 0.f};
         bool  boundKmValid     = false;
         bool  crestUvTagged    = false;// breaking crests wrote (eps, -1) into the UV buffer
+        bool  appliedMeasuredSpreading = false;
+        float appliedSwell[4] = {0.f, 0.f, 0.f, 0.f};// height, period, theta, spread
         water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;
         uint32_t vertexCount = 0;

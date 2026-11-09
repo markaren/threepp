@@ -6,6 +6,9 @@
 #extension GL_GOOGLE_include_directive                  : enable
 
 #include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break), sampleBicubicRG
+#ifdef OCEAN_CHOP
+#include "ocean_chop_normal.glsl"// oceanChopSlope: slope of the displaced surface
+#endif
 
 // Writes displaced positions and normals for an FFT-driven ocean surface
 // directly into the BLAS vertex/normal buffers (host-mapped, same memory
@@ -37,6 +40,17 @@ layout(set = 0, binding = 2) uniform sampler2D height1;
 layout(set = 0, binding = 3) uniform sampler2D displace1;
 layout(set = 0, binding = 4) uniform sampler2D height2;
 layout(set = 0, binding = 5) uniform sampler2D displace2;
+#ifdef OCEAN_CHOP
+// Chop normals (this variant is compiled with -DOCEAN_CHOP=1 and bound only
+// while DisplacedMesh::Params::chopNormals is on): the exact derivative fields
+// of cascades 0 and 1, the inverse FFTs of i*k*h (dh/dx, dh/dz) and of the
+// displacement gradient's diagonal (dDx/dx, dDz/dz); the off-diagonal dDx/dz
+// rides in heightN.g. See dynamic_spectrum.comp.
+layout(set = 0, binding = 6) uniform sampler2D slope0;
+layout(set = 0, binding = 7) uniform sampler2D jac0;
+layout(set = 0, binding = 8) uniform sampler2D slope1;
+layout(set = 0, binding = 9) uniform sampler2D jac1;
+#endif
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
@@ -349,6 +363,7 @@ void main() {
     const float wmEpsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
     vec3  wmC = vec3(0.0);
     float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
+    float bGX = 0.0, bGZ = 0.0;// the bound harmonic's own gradient (chop normals)
     float wmLambda = pc.choppiness;
     if (pc.waveModel != 0u) {
         wmC = sampleSmoothRaw(rest.xz).xyz;
@@ -363,6 +378,8 @@ void main() {
         aZZ = (tU.z - tD.z) * iz;// d Dz / dz
         hGX = (tR.y - tL.y) * ix;
         hGZ = (tU.y - tD.y) * iz;
+        bGX = (tR.w - tL.w) * ix;
+        bGZ = (tU.w - tD.w) * iz;
         // Choppy Wave Model (Nouguier, Guerin and Chapron 2009): the
         // first-order Lagrangian surface is x = q + D(q), choppiness 1,
         // limited per vertex so the drawn map never folds.
@@ -547,6 +564,78 @@ void main() {
 
     const vec3 outPos = rest + disp;
 
+    // Breaking crests: the local steepness of the choppiness-1 Lagrangian
+    // map, eps = minus the most compressive eigenvalue of A's symmetric part.
+    // For one wave a cos(k x) at its crest A = -a k, so eps = a k (and
+    // J = 1 - eps): it peaks on the crest and falls down both faces, so the
+    // shade's step on it puts foam on the crest top. Written per vertex at
+    // the vertex's own displaced position (no inversion, no lag) into the UV
+    // channel, tagged -1 in G; faded inside every hull footprint.
+    if ((pc.waveModel & 4u) != 0u) {
+        const float sxz = 0.5 * (aXZ + aZX);
+        const float mid = 0.5 * (aXX + aZZ);
+        const float rad = sqrt(0.25 * (aXX - aZZ) * (aXX - aZZ) + sxz * sxz);
+        const float eps = -(mid - rad);
+        pc.uvOut.v[i] = vec2(eps * hullFadeAll, -1.0);
+    } else if ((pc.waveModel & 8u) != 0u) {
+        // Switched off: an untagged UV (the water material samples none).
+        pc.uvOut.v[i] = vec2(0.0);
+    }
+
+#ifdef OCEAN_CHOP
+    {
+        // Chop normals: the normal of the surface this vertex actually sits
+        // on, from exact derivatives at the REST point (no stencil), the
+        // horizontal chop included: oceanChopSlope (ocean_chop_normal.glsl)
+        // crosses the two tangents of P = rest + (l*Dx, h, l*Dz). The fields
+        // are B-spline filtered like the displacement above, so normal and
+        // geometry describe one surface. Cascades 0+1 as before; cascade 2 is
+        // added per pixel by the deferred shade.
+        vec2  sl  = vec2(0.0);
+        float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+        if ((pc.cascadeMask & 1u) != 0u) {
+            const float invTile = 1.0 / pc.tileSize0;
+            const vec2  uv = rest.xz * invTile;
+            sl += sampleBicubicRG(slope0, uv) * invTile;
+            const vec2 jd = sampleBicubicRG(jac0, uv) * invTile;
+            jxx += jd.x;
+            jzz += jd.y;
+            jxz += sampleBicubicRG(height0, uv).g * invTile;
+        }
+        if ((pc.cascadeMask & 2u) != 0u) {
+            // Rotated sample domain d = R*x: a gradient comes back as
+            // R^T*g (oceanC1World) and the displacement gradient as
+            // R^T * Jd * R.
+            const float invTile = 1.0 / pc.tileSize1;
+            const vec2  uv = oceanC1Domain(rest.xz) * invTile;
+            sl += oceanC1World(sampleBicubicRG(slope1, uv)) * invTile;
+            const vec2  jd = sampleBicubicRG(jac1, uv) * invTile;
+            const float p  = jd.x;
+            const float r  = jd.y;
+            const float q  = sampleBicubicRG(height1, uv).g * invTile;
+            const float c  = kOceanCascade1RotCos;
+            const float sn = kOceanCascade1RotSin;
+            jxx += c * c * p + 2.0 * c * sn * q + sn * sn * r;
+            jzz += sn * sn * p - 2.0 * c * sn * q + c * c * r;
+            jxz += c * sn * (r - p) + (c * c - sn * sn) * q;
+        }
+        // Near a fold the chop correction fades back to the rest slope
+        // (ocean_chop_normal.glsl); a vertex has no roughness to bank the
+        // difference in, the per-pixel moments do. Under the wave-model
+        // switches the choppiness is the drawn one (the CWM limiter's) and
+        // the slope carries the bound harmonic's (stencil, cascades 0+1);
+        // with them off these are pc.choppiness and zero.
+        const vec2 sd = oceanChopSlope(sl * pc.waveScale + vec2(bGX, bGZ),
+                                       jxx * wmLambda, jzz * wmLambda, jxz * wmLambda).xy;
+        const vec3 nc = normalize(vec3(-sd.x, 1.0, -sd.y));
+        pc.posOut.v[i * 3u + 0u]  = outPos.x;
+        pc.posOut.v[i * 3u + 1u]  = outPos.y;
+        pc.posOut.v[i * 3u + 2u]  = outPos.z;
+        pc.normOut.v[i * 3u + 0u] = nc.x;
+        pc.normOut.v[i * 3u + 1u] = nc.y;
+        pc.normOut.v[i * 3u + 2u] = nc.z;
+    }
+#else
     // Finite-difference normal from BICUBIC height taps (cascades 0+1 —
     // see sampleHeightSmooth for why cascade 2 is excluded). eps matches
     // the vertex grid PER AXIS (the old tileSize0/256 ≈ 2× spacing
@@ -578,24 +667,6 @@ void main() {
                            (hD - hU) / (2.0 * epsZ)));
     }
 
-    // Breaking crests: the local steepness of the choppiness-1 Lagrangian
-    // map, eps = minus the most compressive eigenvalue of A's symmetric part.
-    // For one wave a cos(k x) at its crest A = -a k, so eps = a k (and
-    // J = 1 - eps): it peaks on the crest and falls down both faces, so the
-    // shade's step on it puts foam on the crest top. Written per vertex at
-    // the vertex's own displaced position (no inversion, no lag) into the UV
-    // channel, tagged -1 in G; faded inside every hull footprint.
-    if ((pc.waveModel & 4u) != 0u) {
-        const float sxz = 0.5 * (aXZ + aZX);
-        const float mid = 0.5 * (aXX + aZZ);
-        const float rad = sqrt(0.25 * (aXX - aZZ) * (aXX - aZZ) + sxz * sxz);
-        const float eps = -(mid - rad);
-        pc.uvOut.v[i] = vec2(eps * hullFadeAll, -1.0);
-    } else if ((pc.waveModel & 8u) != 0u) {
-        // Switched off: an untagged UV (the water material samples none).
-        pc.uvOut.v[i] = vec2(0.0);
-    }
-
     pc.posOut.v[i * 3u + 0u] = outPos.x;
     pc.posOut.v[i * 3u + 1u] = outPos.y;
     pc.posOut.v[i * 3u + 2u] = outPos.z;
@@ -603,6 +674,7 @@ void main() {
     pc.normOut.v[i * 3u + 0u] = n.x;
     pc.normOut.v[i * 3u + 1u] = n.y;
     pc.normOut.v[i * 3u + 2u] = n.z;
+#endif
 
     // Foam used to be computed per-vertex right here (Jacobian + wake
     // formulas + disturbance splats + persistence decay) and written to a

@@ -80,7 +80,14 @@
 // an emitter keeps only the rest (pmKeep), so no light comes twice. The
 // receiving surfaces may be seen through glass or water themselves (a pool's
 // floor through its wall), which a light tracer's straight connection to the
-// camera could not show.
+// camera could not show. Under an ocean the sun's caustics are photons too
+// (traceSunPhoton): from a disc across the sun about the water the camera
+// sees, they bend through the waves (the wave normal the camera paths take,
+// oceanNormal) onto the seabed, the kelp and what swims there, and the water
+// mirrors them onto hulls and quays above it. Inside that disc a point under
+// the sea takes its sun from them alone; outside it, the murk's flat
+// refraction and crest proxy hold as before. The shafts in the water stay the
+// proxy's.
 //
 // The surface at a hit is the one gbuffer.frag makes of a raster fragment
 // (path_trace_surface.glsl): normal maps, per-vertex colours, the detail
@@ -141,17 +148,17 @@ layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emis
 // a = how many. Row-major, top row first.
 layout(set = 0, binding = 8, scalar) buffer AccumBuf { vec4 accum[]; };
 
-// The photons of the pass (the emitters' caustics): each where it landed, the
-// direction it came from, its power over pgPowerScale and the geometric
-// normal of the surface it landed on, turned to its side. The buffer holds two
-// halves of pgCapacity: as the photons landed, then sorted by grid bucket.
+// The photons of the pass (the caustics): each where it landed, the direction
+// it came from, its power over its kind's scale and the geometric normal of
+// the surface it landed on, turned to its side. The buffer holds two halves of
+// pgCapacity: as the photons landed, then sorted by grid bucket.
 struct Photon {
     vec3 pos;
     uint wi;   // octahedral, snorm 2x16
     uint powRG;// half 2x16
     uint powB; // half, low 16 bits
     uint n;    // octahedral, snorm 2x16
-    uint pad;
+    uint kind; // 0 = an emitter's (pgPowerScale), 1 = the sun's (pgSunScale)
 };
 layout(set = 0, binding = 10, scalar) buffer PhotonBuf { Photon photons[]; };
 layout(set = 0, binding = 11, scalar) buffer PhotonGridBuf {
@@ -161,7 +168,12 @@ layout(set = 0, binding = 11, scalar) buffer PhotonGridBuf {
     uint  pgHashMask;  // buckets - 1 (a power of two)
     float pgRadius;    // the gather radius this pass (m)
     float pgCellInv;   // 1 / the grid's cell, twice the radius
-    float pgPowerScale;// the emitters' total power over the photons traced
+    float pgPowerScale;// the emitters' total power over their photons traced
+    float pgSunScale;  // the sun's: its luminance times the disc's area over its photons (photonSetup)
+    vec4  pgRegion;    // the sun's photons' disc: its centre on the water plane, its radius; w 0 = none
+    float pgShrink;    // this pass's radius shrink (the host's), for the sun's radius
+    uint  pgSunCount;  // the sun's photons traced this pass
+    uint  pgSunLight;  // the directional light they are (the brightest)
     uint  pgPad;
     uint  pgCells[];   // three arrays of the buckets: count, start, end
 };
@@ -209,9 +221,12 @@ layout(push_constant) uniform Pc {
                              // bit 1 = the environment's sun was extracted into a directional light
                              // bits 2-3 = the lens model (LENS_MODEL_*), 0 = none
                              // bit 4 = the extracted sun is the last directional light
-                             // bits 5-6 = the mode: 0 = the camera paths, 1 = trace the
-                             //   photons, 2 = allocate the grid's buckets, 3 = sort into them
-                             // bit 7 = this pass's photons are built: gather them
+                             // bits 5-7 = the mode: 0 = the camera paths, 1 = trace the
+                             //   emitters' photons, 2 = allocate the grid's buckets, 3 = sort
+                             //   into them, 4 = trace the sun's photons, 5 = set the pass up
+                             // bit 8 = this pass's photons are built: gather them
+                             // bit 9 = the pass has the sun's photons through the ocean
+                             // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
     uint  envMipCount;       // PMREM mip levels (>= 1)
@@ -233,6 +248,19 @@ layout(push_constant) uniform Pc {
                              // in the photon modes, how many photons (or buckets)
     float domeRadius;        // a dome port's radius about the lens (m), 0 = none
 } pc;
+
+// PT_PHOTONS: the variant that builds and gathers photons
+// (kPathTracePhotonsCompSpv, the host's for a scene with emitters and glass, or
+// an ocean under a sun). The other holds none of their code: the literal false
+// folds it away in the compiler, so a scene without them traces the very
+// SPIR-V it did before there were photons.
+#if defined(PT_PHOTONS) && PT_PHOTONS
+const bool kPhotons = true;
+#else
+const bool kPhotons = false;
+#endif
+bool photonsOn() { return kPhotons && (pc.flags & 256u) != 0u; }
+bool sunPhotonsOn() { return photonsOn() && (pc.flags & 512u) != 0u && pgRegion.w > 0.0; }
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
 // (the deferred set's binding 13; a dummy and tile size 0 without an ocean).
@@ -488,6 +516,49 @@ float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
     }
     return (rayQueryGetIntersectionTypeEXT(rq, true) ==
             gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
+
+// ── The sun through the ocean (sunPhotonsOn) ────────────────────────────────
+// The sun's photons leave a disc across the sun (pgRegion: its centre on the
+// water plane and its radius) about the water the camera sees, and bend
+// through the waves to the seabed, the kelp and the hulls. A point under the
+// ocean whose sunlight came through that disc takes it from them, gathered;
+// its direct sun (the flat refraction and the crest proxy of the murk) is left
+// out. Anywhere else under the water the old way holds, so no point has both.
+// Where the sun of a point under the water crossed the disc's plane: up the
+// sun refracted at a flat sea to the surface, then toward the sun; inside the
+// disc's inner nine tenths, which the photons cover whole.
+bool inSunDisc(vec3 P) {
+    const vec3 Ls = normalize(lights.dirLights[pgSunLight].direction);
+    vec3 Q = P;
+    if (P.y < pgRegion.y) {
+        vec3 sd = refract(-Ls, vec3(0.0, 1.0, 0.0), kPtMurkEta);
+        if (dot(sd, sd) < 1e-6) return false;
+        sd = normalize(sd);
+        Q = P - sd * ((pgRegion.y - P.y) / max(-sd.y, 0.05));
+    }
+    const vec3  dq = Q - pgRegion.xyz;
+    const vec3  qp = dq - Ls * dot(dq, Ls);
+    const float rc = 0.9 * pgRegion.w;
+    return dot(qp, qp) < rc * rc;
+}
+// Whether the sun reaches P through the ocean's surface: the straight ray
+// toward it meets the water (any ocean candidate; a point a hull shades has no
+// sun either way). Points well above the sea skip the ray.
+bool oceanAbove(vec3 P) {
+    if (P.y > pgRegion.y + 6.0) return false;
+    const vec3 Ls = normalize(lights.dirLights[pgSunLight].direction);
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskOpaque, P + Ls * SHADOW_EPS, 0.0, Ls, 1e4);
+    bool found = false;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)].foamAddress != 0ul) {
+            found = true;
+            rayQueryTerminateEXT(rq);
+        }
+    }
+    return found;
 }
 
 // ── BSDF ────────────────────────────────────────────────────────────────────
@@ -846,7 +917,7 @@ float cloudSunTransmittance(vec3 x, vec3 L) {
 // translucent surface). Up to eight lights are looped; past that one is
 // picked by delivered weight (pickAnalyticLight) and compensated, as
 // giHitDirect does.
-vec3 analyticNee(const Surf s, vec3 V, inout uint seed) {
+vec3 analyticNee(const Surf s, vec3 V, inout uint seed, bool sunByPhotons) {
     vec3 lit = vec3(0.0);
     const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
     if (nLights == 0u) return lit;
@@ -857,6 +928,7 @@ vec3 analyticNee(const Surf s, vec3 V, inout uint seed) {
 
     for (uint i = 0u; i < lights.dirCount; ++i) {
         if (pickOne && i != pick) continue;
+        if (sunByPhotons && i == pgSunLight) continue;// under the ocean in the sun's disc: its photons'
         vec3 L   = sunConeDir(normalize(lights.dirLights[i].direction), seed);
         vec3 col = lights.dirLights[i].color;
         if (murkOn() && s.P.y < fog.waterSurfaceY) {// under the water: refracted, attenuated (murkSunLeg)
@@ -1054,7 +1126,9 @@ vec3 airLampScatter(vec3 o, vec3 d, float tEnd, inout uint seed) {
 // elevation as applyMurk grades it: a column is lit from above) and the sun's
 // single scatter, the sun refracted at a flat surface and attenuated by the
 // water over it (murkSunScatter, with kMurkShaftGain), braided by the frame's
-// crest proxy (murkCaustic). True caustics are not modelled.
+// crest proxy (murkCaustic). The medium's shafts stay that proxy; the sun's
+// true caustics on what lies under the water are its photons'
+// (traceSunPhoton).
 // The murk on one leg: its transmittance (per channel) and what it adds.
 vec3 murkLeg(vec3 o, vec3 d, float tEnd, inout vec3 add, inout uint seed) {
     float t0, t1;
@@ -1309,17 +1383,7 @@ bool dielectricScatter(vec3 V, vec3 N, vec3 Ng, float ior, float eta, bool thin,
 // Cells of twice the gather radius, hashed into pgHashMask + 1 buckets; a
 // bucket's photons sit together in the sorted half of the photon buffer,
 // [start, end). A disc of the radius about a point lies in the 2x2x2 cells
-// nearest it. PT_PHOTONS: the variant that builds and gathers photons
-// (kPathTracePhotonsCompSpv, the host's for a scene with emitters and glass).
-// The other holds none of their code: the literal false folds it away in the
-// compiler, so a scene without them traces the very SPIR-V it did before
-// there were photons.
-#if defined(PT_PHOTONS) && PT_PHOTONS
-const bool kPhotons = true;
-#else
-const bool kPhotons = false;
-#endif
-bool photonsOn() { return kPhotons && (pc.flags & 128u) != 0u; }
+// nearest it.
 ivec3 pgCell(vec3 p) { return ivec3(floor(p * pgCellInv)); }
 uint pgBucket(ivec3 c) { return pcgHash(uint(c.x) + pcgHash(uint(c.y) + pcgHash(uint(c.z)))) & pgHashMask; }
 
@@ -1332,13 +1396,14 @@ vec2 octEncodePt(vec3 v) {
     return v.xy;
 }
 
-// The reflected radiance the pass's photons around s.P make: the density
+// The reflected radiance the pass's photons around s.P make (the sun's only
+// where sunOk: the photons light the point, not the old way): the density
 // estimate sum(f · power) / (π r²) over a disc of pgRadius on the surface,
 // f the photons' share of the BSDF (evalPhotonBsdfCos) over the geometric
 // cosine (Veach's shading-normal correction, capped at 4). A photon on
 // another face (a corner's other wall) or off the disc's plane is not this
 // surface's.
-vec3 gatherPhotons(const Surf s, vec3 V) {
+vec3 gatherPhotons(const Surf s, vec3 V, bool sunOk) {
     const float r   = pgRadius;
     const float r2  = r * r;
     const uint  nb  = pgHashMask + 1u;
@@ -1354,17 +1419,64 @@ vec3 gatherPhotons(const Surf s, vec3 V) {
             const vec3   dp = ph.pos - s.P;
             if (dot(dp, dp) >= r2 || abs(dot(dp, s.Ng)) > 0.25 * r) continue;
             if (pgCell(ph.pos) != c) continue;// a bucket two of the cells share
+            if (ph.kind != 0u && !sunOk) continue;// the sun's, where the old way lights the point
             const vec3 n = gfetchOctDecode(unpackSnorm2x16(ph.n));
             if (abs(dot(n, s.Ng)) < 0.5) continue;
             const vec3  wi = gfetchOctDecode(unpackSnorm2x16(ph.wi));
             const float cg = abs(dot(s.Ng, wi));
             if (cg <= 1e-4) continue;
             const vec3 fc = evalPhotonBsdfCos(s, V, wi);
-            sum += fc * (vec3(unpackHalf2x16(ph.powRG), unpackHalf2x16(ph.powB).x) /
-                         max(cg, 0.25 * abs(dot(s.N, wi))));
+            sum += fc * (vec3(unpackHalf2x16(ph.powRG), unpackHalf2x16(ph.powB).x) *
+                         ((ph.kind != 0u ? pgSunScale : pgPowerScale) / max(cg, 0.25 * abs(dot(s.N, wi)))));
         }
     }
-    return sum * (pgPowerScale / (PI * r2));
+    return sum * (1.0 / (PI * r2));
+}
+
+// The ocean's interface normal at P (an ocean hit's, the camera path's and the
+// sun's photons'): the wave mesh's normal N tilted by the fine cascade's slope,
+// as the deferred shade's prologue tilts it, at full strength (the samples of
+// a pixel integrate the chop the frame has to filter into roughness); and the
+// wake (DisplacedMesh::WakeField) on it, as the deferred shade reads it: the
+// lane a hull leaves calms the chop, turbulent water boils, the hulls' ripples
+// run on it. wk: the wake field there (0 without one), whose foam and aeration
+// the caller weighs. The slope is a central difference over the cascade's
+// texels (it was over a sixteenth of its tile, which smoothed away every
+// ripple shorter than a metre and a half: a mirror for a sea, and no
+// caustics), its heights scaled by the ocean's wave scale as the mesh's are
+// (pc.flags bits 16-31).
+vec3 oceanNormal(int hitId, vec3 P, vec3 N, vec3 V, out vec4 wk) {
+    vec2 g = vec2(0.0);
+    if (pc.oceanFineTileSize > 0.0) {
+        const float invTile = 1.0 / pc.oceanFineTileSize;
+        const float eps     = pc.oceanFineTileSize / float(max(textureSize(oceanFineHeight, 0).x, 32));
+        const float dUV     = eps * invTile;
+        const vec2  uvW     = P.xz * invTile;
+        const float hL = textureLod(oceanFineHeight, uvW + vec2(-dUV, 0.0), 0.0).r * invTile;
+        const float hR = textureLod(oceanFineHeight, uvW + vec2( dUV, 0.0), 0.0).r * invTile;
+        const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -dUV), 0.0).r * invTile;
+        const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  dUV), 0.0).r * invTile;
+        // As the mesh's heights are, scaled by the ocean's wave scale.
+        g = vec2(hR - hL, hU - hD) * (float(pc.flags >> 16) / (256.0 * 2.0 * eps));
+    }
+    wk = vec4(0.0);
+    if (geoms[hitId].foamAddress > 1ul) {
+        const uint64_t wt = geoms[hitId].foamAddress;
+        wk = oceanWakeSample(wt, P.xz, 0.0);
+        g *= 1.0 - 0.9 * clamp(wk.a, 0.0, 1.0);
+        if (wk.b > 2e-3) {
+            const float t   = WakeTable(wt).timeSec;
+            const float amp = min(1.1 * wk.b, 0.24);
+            g += amp * (0.6 * oceanWakeNoised(vec3(P.xz * 3.1, t * 1.7)).yz +
+                        0.4 * oceanWakeNoised(vec3(P.xz * 8.3 + 11.0, t * 2.9)).yz);
+        }
+        g += oceanWakeRipples(wt, P.xz, vec2(0.01, 0.0), vec2(0.0, 0.01)).xy;
+    }
+    const float sgn = N.y >= 0.0 ? 1.0 : -1.0;// tilt in the upward frame, face V after
+    N = sgn * normalize(sgn * N + vec3(-g.x, 0.0, -g.y));
+    const float nv = dot(N, V);
+    if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+    return N;
 }
 
 // ── The camera ray's hit: alpha-cutouts tested, culled sides passed ─────────
@@ -1542,51 +1654,19 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
         }
         // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
-        // is the water's interface: the fine cascade's slope tilts the wave
-        // mesh's normal, as the deferred shade's prologue tilts it, at full
-        // strength (the samples of a pixel integrate the chop the frame has to
-        // filter into roughness).
-        // The wake (DisplacedMesh::WakeField) on it, as the deferred shade
-        // reads it: the lane a hull leaves calms the chop, turbulent water
-        // boils, the hulls' ripples run on it; and where the field holds foam
-        // or aeration the surface is, with the share the deferred shade blends
-        // them in by, a diffuse film or the milky body just under it (an
-        // opaque diffuse layer here, in place of the water's interface).
+        // is the water's interface, its normal tilted by the chop and the wake
+        // (oceanNormal); where the wake holds foam or aeration the surface is,
+        // with the share the deferred shade blends them in by, a diffuse film
+        // or the milky body just under it (an opaque diffuse layer here, in
+        // place of the water's interface).
         const bool isOcean = geoms[hitId].foamAddress != 0ul;
         const bool hasWake = geoms[hitId].foamAddress > 1ul;
         float rough = sf.roughness;
         float metal = sf.metalness;
         bool  wakeLayer = false;
         if (isOcean) {
-            vec2 g = vec2(0.0);
-            if (pc.oceanFineTileSize > 0.0) {
-                const float invTile = 1.0 / pc.oceanFineTileSize;
-                const float eps     = pc.oceanFineTileSize / 32.0;
-                const float dUV     = eps * invTile;
-                const vec2  uvW     = P.xz * invTile;
-                const float hL = textureLod(oceanFineHeight, uvW + vec2(-dUV, 0.0), 0.0).r * invTile;
-                const float hR = textureLod(oceanFineHeight, uvW + vec2( dUV, 0.0), 0.0).r * invTile;
-                const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -dUV), 0.0).r * invTile;
-                const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  dUV), 0.0).r * invTile;
-                g = vec2(hR - hL, hU - hD) / (2.0 * eps);
-            }
-            vec4 wk = vec4(0.0);
-            if (hasWake) {
-                const uint64_t wt = geoms[hitId].foamAddress;
-                wk = oceanWakeSample(wt, P.xz, 0.0);
-                g *= 1.0 - 0.9 * clamp(wk.a, 0.0, 1.0);
-                if (wk.b > 2e-3) {
-                    const float t   = WakeTable(wt).timeSec;
-                    const float amp = min(1.1 * wk.b, 0.24);
-                    g += amp * (0.6 * oceanWakeNoised(vec3(P.xz * 3.1, t * 1.7)).yz +
-                                0.4 * oceanWakeNoised(vec3(P.xz * 8.3 + 11.0, t * 2.9)).yz);
-                }
-                g += oceanWakeRipples(wt, P.xz, vec2(0.01, 0.0), vec2(0.0, 0.01)).xy;
-            }
-            const float sgn = N.y >= 0.0 ? 1.0 : -1.0;// tilt in the upward frame, face V after
-            N = sgn * normalize(sgn * N + vec3(-g.x, 0.0, -g.y));
-            const float nv = dot(N, V);
-            if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+            vec4 wk;
+            N = oceanNormal(hitId, P, N, V, wk);
             if (hasWake && (wk.r > 4e-3 || wk.g > 2e-3)) {
                 const bool  below = dot(V, airUp()) < 0.0;// seen from under the surface
                 const float wA    = WakeTable(geoms[hitId].foamAddress).albedo;
@@ -1713,18 +1793,30 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         }
         surfLobes(s, V);
 
-        L += throughput * analyticNee(s, V, seed);
+        // The photons gather at every diffuse vertex. The sun through the
+        // ocean (sunPhotonsOn): a vertex under it, inside the sun's disc,
+        // takes the sun from them and not from its NEE; under it outside the
+        // disc the NEE's old way holds and the sun's photons are not gathered.
+        const bool pmHere = photonsOn() && !isOcean && photonShare(s);
+        bool sunByPhotons = false;
+        bool sunGather    = true;
+        if (pmHere && sunPhotonsOn()) {
+            const bool disc  = inSunDisc(P);
+            const bool under = oceanAbove(P);
+            sunByPhotons = disc && under;
+            sunGather    = disc || !under;
+        }
+        L += throughput * analyticNee(s, V, seed, sunByPhotons);
         L += throughput * emitterNee(s, V, seed);
-        // The photons: the emitters' light through glass, at every diffuse
-        // vertex. Past the second, a vertex gathers by chance (one in two,
+        // The emitters' light through glass and the sun's through the waves.
+        // Past the second vertex, a vertex gathers by chance (one in two,
         // weighted back), the bounce on keeping out of the photons' share
         // regardless, so deep vertices cost less and add no speckle.
-        const bool pmHere = photonsOn() && !isOcean && photonShare(s);
         if (pmHere) {
             ++pmVertex;
             const float pgP = pmVertex <= 2u ? 1.0 : 0.5;
             if (pgStored > 0u && (pgP >= 1.0 || rnd(seed) < pgP))
-                L += throughput * gatherPhotons(s, V) * (1.0 / pgP);
+                L += throughput * gatherPhotons(s, V, sunGather) * (1.0 / pgP);
         }
 
         if (bounce == pc.maxBounces) break;
@@ -1758,8 +1850,9 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
 }
 
 // ── The photons ─────────────────────────────────────────────────────────────
-// A photon lands: its slot in the first half, its count in its bucket.
-void depositPhoton(vec3 P, vec3 wi, vec3 n, vec3 beta) {
+// A photon lands: its slot in the first half, its count in its bucket. kind:
+// 0 an emitter's, 1 the sun's.
+void depositPhoton(vec3 P, vec3 wi, vec3 n, vec3 beta, uint kind) {
     const uint i = atomicAdd(pgStored, 1u);
     if (i >= pgCapacity) return;
     Photon ph;
@@ -1768,24 +1861,132 @@ void depositPhoton(vec3 P, vec3 wi, vec3 n, vec3 beta) {
     ph.powRG = packHalf2x16(beta.rg);
     ph.powB  = packHalf2x16(vec2(beta.b, 0.0));
     ph.n     = packSnorm2x16(octEncodePt(n));
-    ph.pad   = 0u;
+    ph.kind  = kind;
     photons[i] = ph;
     atomicAdd(pgCells[pgBucket(pgCell(P))], 1u);
 }
 
-// One photon of the pass: an emissive triangle by power (the emitter NEE's
-// table), a point on it, a face (those its material shows) and a direction
-// by the cosine; then the glass and water events a camera path
-// takes (dielectricScatter), until the first surface with an opaque share,
-// where it lands if a glass event came first: a mirror off any glass or a
-// bend through a solid, the light the emitter NEE cannot follow. A straight
-// pass through a thin pane is the NEE's own; an ocean surface ends it (the
-// water's light is the murk's), as does an unlit one. The air and the murk
-// dim its legs (their transmittance; the dust and the clouds are left out),
-// Beer-Lambert its legs inside a medium. Its power is in the camera paths'
-// terms: they carry no n² across an interface, so neither does a photon's
-// density (beta · eta² at each refraction).
+// A photon's way on from where it left its light (o, d; beta: its power over
+// its kind's scale): the glass and water events a camera path takes
+// (dielectricScatter), until the first surface with an opaque share, where it
+// lands if such an event came first: a mirror off any glass or a bend through
+// a solid, the light the emitter NEE cannot follow, and for the sun's photons
+// (sun) the ocean's surface, its normal the camera path's (oceanNormal). An
+// ocean ends an emitter's photon (a lamp's light in the water is the murk's),
+// the wake's foam the sun's. A straight pass through a thin pane is the NEE's
+// own; an unlit surface ends a photon. The air (past the sun's first leg: the
+// sun's colour is its light down here) and the murk dim its legs, the clouds
+// the sun's first leg as they dim its NEE, Beer-Lambert its legs inside a
+// medium; the dust is left out. Its power is in the camera paths' terms: they
+// carry no n² across an interface, so neither does a photon's density
+// (beta · eta² at each refraction).
 const uint kPhotonMaxEvents = 16u;
+void tracePhotonPath(vec3 o, vec3 d, vec3 beta, bool sun, inout uint seed) {
+    const float beta0 = max(max(beta.r, beta.g), beta.b);
+    bool  glass      = false;
+    bool  inside     = false;
+    vec3  insideAtt  = vec3(1.0);
+    float insideDist = 0.0;
+    for (uint ev = 0u; ev < kPhotonMaxEvents; ++ev) {
+        rayQueryEXT rq;
+        const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                    rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, false),
+                                    rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
+                rayQueryConfirmIntersectionEXT(rq);
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return;
+        const float tHit   = rayQueryGetIntersectionTEXT(rq, true);
+        const vec3  P      = o + d * tHit;
+        const bool  sunLeg = sun && ev == 0u;
+        if (!inside && airOn() && !sunLeg) beta *= exp(-airOpticalDepth(o, P));
+        if (sunLeg) beta *= cloudSunTransmittance(P, -d);
+        float t0, t1;
+        if (murkOn() && murkClip(o, d, tHit, t0, t1)) beta *= exp(-fog.murkSigma * (t1 - t0));
+        if (inside && insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater))
+            beta *= pow(insideAtt, vec3(tHit / insideDist));
+
+        const int  hitId   = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const bool isOcean = geoms[hitId].foamAddress != 0ul;
+        if (isOcean && !sun) return;
+        const MaterialDesc hm    = entryMat(hitId);
+        const bool         front = rayQueryGetIntersectionFrontFaceEXT(rq, true);
+        const PtHit hh = ptFetchHit(hitId, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                    rayQueryGetIntersectionObjectToWorldEXT(rq, true),
+                                    rayQueryGetIntersectionWorldToObjectEXT(rq, true));
+        const vec3 V  = -d;
+        const vec3 Ng = dot(hh.Ng, V) >= 0.0 ? hh.Ng : -hh.Ng;
+        const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
+        const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
+        if (sf.roughness < 0.0) return;// unlit
+        SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+
+        if (glass && !isOcean && hm.transmission < 1.0) depositPhoton(P, V, Ng, beta, sun ? 1u : 0u);
+
+        vec3 N = sf.N;
+        {
+            const float nv = dot(N, V);
+            if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+        }
+        if (isOcean) {
+            // The wake's foam and aeration, in the camera path's shares: a
+            // diffuse layer on the water, which a photon does not cross.
+            vec4 wk;
+            N = oceanNormal(hitId, P, N, V, wk);
+            if (geoms[hitId].foamAddress > 1ul && (wk.r > 4e-3 || wk.g > 2e-3)) {
+                const bool  below = dot(V, airUp()) < 0.0;
+                const float cover = smoothstep(0.10, 0.45, wk.r) * (below ? 0.12 : 1.0);
+                const float aer   = (!below && wk.g > 2e-3) ? 1.0 - exp(-1.8 * wk.g) : 0.0;
+                if (rnd(seed) < cover + (1.0 - cover) * aer) return;
+            }
+        }
+        if (!(hm.transmission > 0.0 && rnd(seed) < hm.transmission)) return;
+        // As the camera path's interface: the ocean is water whatever its
+        // material says, entered through its wave face's upper side.
+        const float ior      = isOcean ? 1.333 : max(hm.ior, 1.0001);
+        const bool  thin     = hm.thinWalled != 0 && !isOcean;
+        const vec3  NgUp     = dot(hh.Ng, airUp()) >= 0.0 ? hh.Ng : -hh.Ng;
+        const bool  entering = isOcean ? dot(d, NgUp) < 0.0 : front;
+        const float eta      = thin ? 1.0 : (entering ? 1.0 / ior : ior);
+        vec3 next;
+        bool reflected;
+        const bool goesOn = dielectricScatter(V, N, Ng, ior, eta, thin, sf.roughness, seed, next, reflected);
+        if (reflected) {
+            o = P + Ng * SHADOW_EPS;
+        } else {
+            if (!goesOn) return;
+            beta *= sf.albedo;
+            o = P - Ng * SHADOW_EPS;
+            if (!thin) {
+                // Not at the ocean: the murk's sun, which these photons take
+                // over from, is the light in the water, n² and all.
+                if (!isOcean) beta *= eta * eta;
+                inside = entering;
+                if (inside) {
+                    insideDist = hm.attenuationDistance;
+                    insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                }
+            }
+        }
+        if (reflected || !thin) glass = true;
+        d = next;
+        // Russian roulette once it has lost most of its power.
+        const float bm = max(max(beta.r, beta.g), beta.b);
+        if (bm < 0.05 * beta0) {
+            if (rnd(seed) >= 0.5) return;
+            beta *= 2.0;
+        }
+    }
+}
+
+// One of an emitter's photons: a triangle by power (the emitter NEE's table),
+// a point on it, a face (those its material shows) and a direction by the
+// cosine.
 void tracePhoton(uint pid) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return;
     uint seed = pcgHash(pid * 9781u ^ pcgHash(pc.sampleIndex * 6271u + pc.seed * 2654435761u + 0x2545f491u));
@@ -1816,92 +2017,83 @@ void tracePhoton(uint pid) {
         if (rnd(seed) < 0.5) nL = -nL;
         sidePdf = 0.5;
     }
-    vec3 d = sampleCosine(nL, seed);
+    const vec3 d = sampleCosine(nL, seed);
     // Le cos / (pdfA · pdfω) with pdfA = lum / total and pdfω = sidePdf ·
     // cos / π, the total over the photon count being pgPowerScale.
-    vec3 beta = tri.emission.xyz * (PI / (lum * sidePdf));
-    const float beta0 = max(max(beta.r, beta.g), beta.b);
     SHADOW_EPS = max(1e-3, max(max(abs(p.x), abs(p.y)), abs(p.z)) * 1e-5);
-    vec3  o          = p + nL * SHADOW_EPS;
-    bool  glass      = false;
-    bool  inside     = false;
-    vec3  insideAtt  = vec3(1.0);
-    float insideDist = 0.0;
-    for (uint ev = 0u; ev < kPhotonMaxEvents; ++ev) {
-        rayQueryEXT rq;
-        const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
-        while (rayQueryProceedEXT(rq)) {
-            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
-                cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
-                                    rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
-                                    rayQueryGetIntersectionBarycentricsEXT(rq, false),
-                                    rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
-                rayQueryConfirmIntersectionEXT(rq);
-        }
-        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return;
-        const float tHit = rayQueryGetIntersectionTEXT(rq, true);
-        const vec3  P    = o + d * tHit;
-        if (!inside) {
-            if (airOn()) beta *= exp(-airOpticalDepth(o, P));
-            float t0, t1;
-            if (murkOn() && murkClip(o, d, tHit, t0, t1)) beta *= exp(-fog.murkSigma * (t1 - t0));
-        } else if (insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater)) {
-            beta *= pow(insideAtt, vec3(tHit / insideDist));
-        }
+    tracePhotonPath(p + nL * SHADOW_EPS, d, tri.emission.xyz * (PI / (lum * sidePdf)), false, seed);
+}
 
-        const int hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-        if (geoms[hitId].foamAddress != 0ul) return;// an ocean
-        const MaterialDesc hm    = entryMat(hitId);
-        const bool         front = rayQueryGetIntersectionFrontFaceEXT(rq, true);
-        const PtHit hh = ptFetchHit(hitId, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
-                                    rayQueryGetIntersectionBarycentricsEXT(rq, true),
-                                    rayQueryGetIntersectionObjectToWorldEXT(rq, true),
-                                    rayQueryGetIntersectionWorldToObjectEXT(rq, true));
-        const vec3 V  = -d;
-        const vec3 Ng = dot(hh.Ng, V) >= 0.0 ? hh.Ng : -hh.Ng;
-        const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
-        const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
-        if (sf.roughness < 0.0) return;// unlit
-        SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+// One of the sun's photons (sunPhotonsOn): a point q on the disc pgRegion
+// across the sun light pgSunLight and a direction in its cone
+// (pc.sunTanHalfAngle, as its NEE draws one). It leaves far up that direction
+// from q, so whatever stands toward the sun shades it as the NEE's shadow ray
+// is shaded, and it crosses the disc at q. Its power over pgSunScale is the
+// light's colour over its luminance.
+void traceSunPhoton(uint pid) {
+    if (pgRegion.w <= 0.0) return;
+    uint seed = pcgHash(pid * 7027u ^ pcgHash(pc.sampleIndex * 3343u + pc.seed * 2654435761u + 0x68e31da4u));
+    const vec3  Ls  = normalize(lights.dirLights[pgSunLight].direction);
+    const vec3  col = lights.dirLights[pgSunLight].color;
+    const float lum = dot(col, LUM);
+    if (lum <= 0.0) return;
+    vec3 T, B;
+    tangentFrame(Ls, T, B);
+    const float rr  = pgRegion.w * sqrt(rnd(seed));
+    const float phi = TWO_PI * rnd(seed);
+    const vec3  q   = pgRegion.xyz + T * (rr * cos(phi)) + B * (rr * sin(phi));
+    const vec3  Lc  = sunConeDir(Ls, seed);
+    // Far enough up that the start stands over the land about (600 m above
+    // the disc's centre at the least).
+    const float far = clamp(600.0 / max(Lc.y, 0.05), 1000.0, 12000.0);
+    tracePhotonPath(q + Lc * far, -Lc, col / lum, true, seed);
+}
 
-        if (glass && hm.transmission < 1.0) depositPhoton(P, V, Ng, beta);
-        if (!(hm.transmission > 0.0 && rnd(seed) < hm.transmission)) return;
-
-        vec3 N = sf.N;
-        {
-            const float nv = dot(N, V);
-            if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+// The pass's set-up (one thread, before its photons): the sun's photons' disc
+// and their scale. The disc lies across the brightest directional light, its
+// centre on the water plane (the murk's surface) about the water the camera
+// sees. How far one sees under the water is D, three free paths of the
+// murk's clearest channel (6 to 30 m; 20 m with no murk); an eye near the
+// water has the disc's centre half that ahead and its radius three quarters
+// of it, which holds the reef it looks at and the water nearer the sun its
+// light came down through; from high above, the centre is where the view
+// meets the water. The gather radius grows to hold some four of the sun's
+// photons on average, shrunk as the pass's: a centimetre or two over a 4K
+// still's passes, about the kelp's own shadows.
+void photonSetup() {
+    pgRegion = vec4(0.0);
+    if ((pc.flags & 512u) == 0u || lights.dirCount == 0u || fog.waterSurfaceY >= 1e29) return;
+    uint  best = 0u;
+    float bl   = -1.0;
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const float l = dot(lights.dirLights[i].color, LUM);
+        if (l > bl) {
+            bl   = l;
+            best = i;
         }
-        const float ior  = max(hm.ior, 1.0001);
-        const bool  thin = hm.thinWalled != 0;
-        const float eta  = thin ? 1.0 : (front ? 1.0 / ior : ior);
-        vec3 next;
-        bool reflected;
-        const bool goesOn = dielectricScatter(V, N, Ng, ior, eta, thin, sf.roughness, seed, next, reflected);
-        if (reflected) {
-            o = P + Ng * SHADOW_EPS;
-        } else {
-            if (!goesOn) return;
-            beta *= sf.albedo;
-            o = P - Ng * SHADOW_EPS;
-            if (!thin) {
-                beta *= eta * eta;
-                inside = front;
-                if (inside) {
-                    insideDist = hm.attenuationDistance;
-                    insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
-                }
-            }
-        }
-        if (reflected || !thin) glass = true;
-        d = next;
-        // Russian roulette once it has lost most of its power.
-        const float bm = max(max(beta.r, beta.g), beta.b);
-        if (bm < 0.05 * beta0) {
-            if (rnd(seed) >= 0.5) return;
-            beta *= 2.0;
-        }
+    }
+    if (bl <= 0.0 || normalize(lights.dirLights[best].direction).y <= 0.0) return;// a sun under the horizon
+    pgSunLight = best;
+    const float w  = fog.waterSurfaceY;
+    const vec3  E  = cam.viewInverse[3].xyz;
+    const vec3  F  = normalize(-cam.viewInverse[2].xyz);
+    const float D  = murkOn() ? clamp(3.0 / fog.murkDensity, 6.0, 30.0) : 20.0;
+    const float Rv = 0.75 * D;
+    vec3 C = vec3(E.x, w, E.z);
+    if (E.y - w > D && F.y < -0.02) {
+        const float t = (E.y - w) / -F.y;
+        C = vec3(E.x + F.x * t, w, E.z + F.z * t);
+    } else {
+        const float lh = length(F.xz);
+        if (lh > 1e-3) C.xz += F.xz / lh * (0.5 * D);
+    }
+    const float n = float(max(pgSunCount, 1u));
+    pgRegion   = vec4(C, Rv);
+    pgSunScale = bl * PI * Rv * Rv / n;
+    const float rSun = sqrt(4.0 * Rv * Rv / n) * pgShrink;
+    if (rSun > pgRadius) {
+        pgRadius  = rSun;
+        pgCellInv = 1.0 / (2.0 * rSun);
     }
 }
 
@@ -1924,6 +2116,94 @@ void photonScatter(uint i) {
     photons[pgCapacity + dst] = ph;
 }
 
+// ── The dome port's waterline ───────────────────────────────────────────────
+// Where the sea meets a dome port it climbs the glass: a meniscus, its height
+// over the sea kPtMeniscusRise at the dome and falling off as e^(−u/run) with
+// the distance u out from it (a capillary meniscus at about twice water's own
+// scale, for the film the waves leave on the dome). A ray leaving the dome
+// near the waterline crosses that curved surface: out into the air near its
+// crest, bent hard or mirrored back into the water lower down (Fresnel, and
+// total reflection), and one from just over it may dip in. That is the thick,
+// smeared waterline of an over-under photograph, not a hairline. The sea's
+// level at the dome is the wave mesh's, a short ray down onto it.
+const float kPtMeniscusRise = 0.006;// m
+const float kPtMeniscusRun  = 0.006;// m
+
+float meniscusHeight(float u) { return kPtMeniscusRise * exp(-u / kPtMeniscusRun); }
+
+// The ocean's surface height under (or over) X, false where there is none.
+bool seaLevelAt(vec3 X, out float level) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskOpaque, X + vec3(0.0, 2.0, 0.0), 0.0,
+                          vec3(0.0, -1.0, 0.0), 4.0);
+    float tBest = 1e30;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)].foamAddress != 0ul)
+            tBest = min(tBest, rayQueryGetIntersectionTEXT(rq, false));
+    }
+    level = X.y + 2.0 - tBest;
+    return tBest < 1e29;
+}
+
+// A ray leaving the dome at ro along rd, through the meniscus: on from where it
+// crosses the film's surface, refracted or mirrored; a ray left in the water
+// starts again just under the sea's level, so the trace takes it for one under
+// the surface (as it takes every ray the dome starts under it).
+void domeMeniscus(inout vec3 ro, inout vec3 rd, inout uint seed) {
+    float level;
+    if (!seaLevelAt(ro, level)) return;
+    const float s  = ro.y - level;
+    const float hl = length(rd.xz);
+    if (s < 0.0 || s > 4.0 * kPtMeniscusRise || hl < 1e-3) return;
+    const vec2  hd   = rd.xz / hl;
+    const float f0   = s - meniscusHeight(0.0);// < 0: the ray starts in the film
+    const float tMax = 8.0 * kPtMeniscusRun / hl;
+    float tA = 0.0, fA = f0, tHit = -1.0;
+    for (int i = 1; i <= 24 && tHit < 0.0; ++i) {
+        const float t = tMax * float(i) / 24.0;
+        const float f = ro.y + rd.y * t - level - meniscusHeight(hl * t);
+        if ((f < 0.0) != (fA < 0.0)) {
+            float tB = t;
+            for (int k = 0; k < 14; ++k) {
+                const float tm = 0.5 * (tA + tB);
+                const float fm = ro.y + rd.y * tm - level - meniscusHeight(hl * tm);
+                if ((fm < 0.0) == (fA < 0.0)) tA = tm; else tB = tm;
+            }
+            tHit = 0.5 * (tA + tB);
+        }
+        tA = t;
+        fA = f;
+    }
+    if (tHit < 0.0) {
+        // In the film all the way down: on in the water.
+        if (f0 < 0.0 && rd.y < 0.0) ro += rd * ((s + 1e-3) / -rd.y);
+        return;
+    }
+    // The film's surface there, its normal up out of the water.
+    const float k  = (kPtMeniscusRise / kPtMeniscusRun) * exp(-hl * tHit / kPtMeniscusRun);// −dz/du
+    const vec3  n  = normalize(vec3(k * hd.x, 1.0, k * hd.y));
+    const vec3  P  = ro + rd * tHit;
+    const bool  fromWater = f0 < 0.0;
+    const vec3  Nf   = fromWater ? -n : n;// toward the side the ray comes from
+    const float eta  = fromWater ? 1.333 : 1.0 / 1.333;
+    const float cosi = clamp(dot(-rd, Nf), 0.0, 1.0);
+    float F = 0.02 + 0.98 * pow(1.0 - cosi, 5.0);
+    const vec3 tr = refract(rd, Nf, eta);
+    if (dot(tr, tr) < 1e-6) F = 1.0;
+    bool inWater;
+    if (rnd(seed) < F) {
+        rd = reflect(rd, Nf);
+        ro = P + Nf * 1e-4;
+        inWater = fromWater;
+    } else {
+        rd = normalize(tr);
+        ro = P - Nf * 1e-4;
+        inWater = !fromWater;
+    }
+    if (inWater && rd.y < 0.0) ro += rd * ((ro.y - level + 1e-3) / -rd.y);
+}
+
 // ── The camera ──────────────────────────────────────────────────────────────
 // The primary ray through a point of the picture (uv, top-left origin), as
 // the frame's camera forms its image. The lens distortion first, as the
@@ -1941,7 +2221,8 @@ void photonScatter(uint i) {
 // each ray simply starts where it leaves the dome, in whatever medium is
 // there. Half under the water, the lower part of the picture starts in the
 // sea and the upper in the air, split along the line the waves draw across
-// the dome: the over-under picture.
+// the dome: the over-under picture, its waterline the meniscus the sea makes
+// on the glass (domeMeniscus).
 void ptCameraRay(vec2 uv, inout uint seed, out vec3 ro, out vec3 rd) {
     const int model = int((pc.flags >> 2) & 3u);
     if (model != LENS_MODEL_NONE) {
@@ -1971,23 +2252,29 @@ void ptCameraRay(vec2 uv, inout uint seed, out vec3 ro, out vec3 rd) {
         const float b  = dot(oc, rd);
         const float c  = dot(oc, oc) - pc.domeRadius * pc.domeRadius;
         ro += rd * (-b + sqrt(max(b * b - c, 0.0)));
+        domeMeniscus(ro, rd, seed);
     }
 }
 
 void main() {
     // The photon modes: one thread per photon (trace, sort) or bucket
     // (allocate), the dispatch's threads in rows of its x extent, pc.rows of
-    // them live.
-    const uint mode = (pc.flags >> 5) & 3u;
+    // them live; the set-up one thread.
+    const uint mode = (pc.flags >> 5) & 7u;
     if (mode != 0u) {
         if (!kPhotons) return;
         const uint id = gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+        if (mode == 5u) {
+            if (id == 0u) photonSetup();
+            return;
+        }
         if (mode == 2u) {
             photonAllocate(id, id < pc.rows);
             return;
         }
         if (id >= pc.rows) return;
         if (mode == 1u) tracePhoton(id);
+        else if (mode == 4u) traceSunPhoton(id);
         else photonScatter(id);
         return;
     }

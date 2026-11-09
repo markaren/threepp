@@ -12,12 +12,15 @@
 #include "threepp/renderers/vulkan/shaders/ifft_horizontal.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_vertical.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_permute.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/ocean_chop_moments.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/dynamic_spectrum.comp.chop.spv.h"
 
 #include "threepp/math/Rng.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -403,6 +406,11 @@ namespace threepp::water {
         p.kMax            = settings_.kMax;
         p.fetch           = settings_.fetch;
         p.hsFix           = settings_.hsFix ? 1u : 0u;
+        p.spread          = settings_.spread;
+        p.swellScale      = swellScale(settings_);
+        p.swellPeriod     = settings_.swellPeriod;
+        p.swellTheta      = settings_.swellTheta;
+        p.swellSpread     = swellSpreadClamped(settings_.swellSpread);
         vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(settings_.textureSize);
         vkCmdDispatch(cb, g, g, 1);
@@ -410,18 +418,118 @@ namespace threepp::water {
         cmdShaderRWBarrier(cb, h0_.image);
     }
 
-    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix) {
+    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix,
+                                          uint32_t spread) {
         settings_.windTheta = windTheta;
         settings_.windSpeed = windSpeed;
         settings_.fetch     = fetch;
         settings_.hsFix     = hsFix;
+        settings_.spread    = spread;
+    }
+
+    void PhillipsSpectrum::updateSwell(float height, float period, float theta, float spread) {
+        settings_.swellHeight = height;
+        settings_.swellPeriod = period;
+        settings_.swellTheta  = theta;
+        settings_.swellSpread = spread;
+    }
+
+    namespace {
+        // CPU mirror of swellShape in phillips_spectrum.comp; keep the two
+        // identical (the sources of each factor are cited there).
+        double swellShapeCpu(double kx, double kz, double tp, double theta, double s) {
+            constexpr double g  = 9.81;
+            constexpr double pi = 3.14159265358979323846;
+            const double kl = std::sqrt(kx * kx + kz * kz);
+            const double w  = std::sqrt(g * kl);
+            const double x  = tp * w / (2.0 * pi);
+            const double sg = (x <= 1.0) ? 0.07 : 0.09;
+            const double d  = (x - 1.0) / sg;
+            const double gammaPeak = std::pow(6.0, std::exp(-0.5 * d * d));
+            const double x2 = x * x;
+            const double sf = std::exp(-1.25 / (x2 * x2)) * gammaPeak / (x2 * x2 * x);
+            const double c  = std::clamp(-(kx * std::cos(theta) + kz * std::sin(theta)) / kl, -1.0, 1.0);
+            const double halfCos = std::max(std::sqrt(0.5 * (1.0 + c)), 1e-6);
+            return sf * std::pow(halfCos, 2.0 * s) / (w * kl);
+        }
+
+        // CPU mirror of donelanBannerWeight in phillips_spectrum.comp (float,
+        // as there); the sources are cited there.
+        float donelanBannerWeightCpu(float cosTheta, float wOverWp) {
+            float beta;
+            if (wOverWp < 0.56f) beta = 1.24f;
+            else if (wOverWp < 0.95f) beta = 2.61f * std::pow(wOverWp, 1.3f);
+            else if (wOverWp < 1.6f) beta = 2.28f * std::pow(wOverWp, -1.3f);
+            else beta = std::pow(10.f, -0.4f + 0.8393f * std::exp(-0.567f * std::log(wOverWp * wOverWp)));
+            const float theta = std::acos(std::clamp(cosTheta, -1.f, 1.f));
+            const float ch = std::cosh(beta * theta);
+            return 3.14159265358979f * 0.5f * beta / (ch * ch * std::tanh(beta * 3.14159265358979f));
+        }
+    }// namespace
+
+    float PhillipsSpectrum::swellSpreadClamped(float s) {
+        // s < 1 widens cos^(2s)(theta/2) past anything measured for swell
+        // (Goda 2000 puts it at 10 and up) and s <= 0 makes pow(0, 2s)
+        // undefined; max(1, NaN) is 1 too.
+        return std::max(1.f, s);
+    }
+
+    float PhillipsSpectrum::swellScale(const Settings& s) {
+        if (!(s.swellHeight > 0.f) || !(s.swellPeriod > 0.f) || !(s.tileSize > 0.f)) return 0.f;
+        constexpr double g  = 9.81;
+        constexpr double pi = 3.14159265358979323846;
+        const double dk = 2.0 * pi / s.tileSize;
+        // Peak wavenumber kp = (2 pi / Tp)^2 / g must sit inside the band and
+        // at least two modes out from the origin, or the swell cannot be
+        // drawn on this grid (and normalising its tail up to Hs would be wrong).
+        const double kp = std::pow(2.0 * pi / s.swellPeriod, 2.0) / g;
+        if (kp < 2.0 * dk || kp < s.kMin || (s.kMax > 0.f && kp > s.kMax)) {
+            // Say so, once per period and tile asked for: a swell the user set
+            // that silently draws nothing is worse than a line on stderr.
+            static float warnedPeriod = 0.f, warnedTile = 0.f;
+            if (s.swellPeriod != warnedPeriod || s.tileSize != warnedTile) {
+                warnedPeriod = s.swellPeriod;
+                warnedTile   = s.tileSize;
+                const double kHi = std::min(s.kMax > 0.f ? double(s.kMax) : 1e9, 1e9);
+                const double kLo = std::max(2.0 * dk, double(s.kMin));
+                std::fprintf(stderr,
+                             "[ocean] swell of %.1f s is not drawn: its peak wavelength %.0f m is outside what "
+                             "cascade 0 (tile %.0f m) carries, periods %.1f to %.1f s\n",
+                             double(s.swellPeriod), 2.0 * pi / kp, double(s.tileSize),
+                             2.0 * pi / std::sqrt(g * kHi), 2.0 * pi / std::sqrt(g * kLo));
+            }
+            return 0.f;
+        }
+        const int n = static_cast<int>(s.textureSize);
+        const double l = s.smallWaveCutoff;
+        double sum = 0.0;
+        for (int iz = 0; iz < n; ++iz) {
+            for (int ix = 0; ix < n; ++ix) {
+                const double kx = (ix - 0.5 * n) * dk;
+                const double kz = (iz - 0.5 * n) * dk;
+                const double k2 = kx * kx + kz * kz;
+                const double kl = std::sqrt(k2);
+                // The shader's band mask and its length(k) < 1e-4 guard.
+                if (kl < 1e-4 || kl < s.kMin || (s.kMax > 0.f && kl > s.kMax)) continue;
+                sum += swellShapeCpu(kx, kz, s.swellPeriod, s.swellTheta, swellSpreadClamped(s.swellSpread)) *
+                       std::exp(-k2 * l * l);
+            }
+        }
+        if (!(sum > 0.0)) return 0.f;
+        // The rendered height is the un-normalised IFFT over tileSize, and
+        // h0 = xi sqrt(P / 2) with E|xi|^2 = 2 gives E|h(k, t)|^2 = P(k) + P(-k),
+        // so the height variance is 2 sum P / tile^2. Hs = 4 sqrt(variance).
+        const double variance = (double(s.swellHeight) * s.swellHeight) / 16.0;
+        return static_cast<float>(variance * double(s.tileSize) * s.tileSize / (2.0 * sum));
     }
 
     float PhillipsSpectrum::meanWavenumber() const {
-        // phillips_spectrum.comp's phillips2D, line for line (float, as there).
+        // phillips_spectrum.comp's phillips2D, line for line (float, as there),
+        // its spreading and swell included.
         const Settings& S = settings_;
         const float g = 9.81f;
         const float l = S.smallWaveCutoff;
+        const float swell = swellScale(S);
         auto phillips2D = [&](float kx, float kz) -> float {
             const float k2 = kx * kx + kz * kz;
             if (std::sqrt(k2) < 1e-4f) return 0.f;
@@ -439,7 +547,13 @@ namespace threepp::water {
             const float kL2 = k2 * L * L;
             const float kn = std::sqrt(k2);
             float kw = (kx * std::cos(S.windTheta) + kz * std::sin(S.windTheta)) / kn;
-            kw *= kw;
+            if (S.spread != 0u) {
+                // Measured spreading, from -k as in the shader.
+                const float wp = std::sqrt(g * 0.894f / L);
+                kw = donelanBannerWeightCpu(-kw, std::sqrt(g * kn) / wp);
+            } else {
+                kw *= kw;
+            }
             float p = Aeff * std::exp(-1.f / kL2) * kw * std::exp(-k2 * l * l) / (k2 * k2);
             if (gamma > 1.f) {
                 const float w = std::sqrt(g * kn);
@@ -449,6 +563,10 @@ namespace threepp::water {
                 p *= std::pow(gamma, std::exp(-0.5f * d * d));
             }
             if (S.hsFix) p *= 2.5446900f;
+            if (swell > 0.f)
+                p += float(swell * swellShapeCpu(kx, kz, S.swellPeriod, S.swellTheta,
+                                                 swellSpreadClamped(S.swellSpread))) *
+                     std::exp(-k2 * l * l);
             return p;
         };
         const uint32_t n = S.textureSize;
@@ -583,29 +701,131 @@ namespace threepp::water {
         vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
-    void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds) {
+    void DynamicSpectrum::enableChop(float taperSpacing) {
+        chopTaperSpacing_ = taperSpacing;
+        if (chopPipe_ != VK_NULL_HANDLE) return;
+        slope_   = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.slope");
+        jacDiag_ = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.jacDiag");
+
+        // The OCEAN_CHOP variant's own set: the plain bindings plus Slope (2)
+        // and JacDiag (4). Its own layout, pipeline and pool, so the plain
+        // path above keeps exactly the ones it had.
+        const std::array<VkDescriptorSetLayoutBinding, 5> bindings{
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // H0
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // HT
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Displacement
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Slope
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // JacDiag
+        };
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
+        dlci.pBindings    = bindings.data();
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &chopDsl_),
+              "vkCreateDescriptorSetLayout(dyn chop)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(ChopPushParams);
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &chopDsl_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &chopLayout_),
+              "vkCreatePipelineLayout(dyn chop)");
+
+        VkShaderModule mod = makeShader(ctx_, kDynamicSpectrumChopCompSpv, sizeof(kDynamicSpectrumChopCompSpv));
+        chopPipe_ = makeComputePipeline(ctx_, mod, chopLayout_);
+        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
+        const std::array<VkDescriptorPoolSize, 2> poolSizes{
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          4},
+        };
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = 1;
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        dpci.pPoolSizes    = poolSizes.data();
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &chopPool_),
+              "vkCreateDescriptorPool(dyn chop)");
+
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = chopPool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &chopDsl_;
+        check(vkAllocateDescriptorSets(ctx_.device(), &dai, &chopDs_),
+              "vkAllocateDescriptorSets(dyn chop)");
+
+        VkDescriptorImageInfo h0Info{};
+        h0Info.sampler     = sampler_;
+        h0Info.imageView   = src_.h0View();
+        h0Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        const std::array<VkImageView, 4> storage{ht_.view, displacement_.view, slope_.view, jacDiag_.view};
+        const std::array<uint32_t, 4> storageBinding{1u, 3u, 2u, 4u};
+        std::array<VkDescriptorImageInfo, 4> infos{};
+        std::array<VkWriteDescriptorSet, 5> writes{};
+        for (auto& w : writes) {
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = chopDs_;
+            w.descriptorCount = 1;
+        }
+        writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[0].pImageInfo = &h0Info;
+        for (uint32_t i = 0; i < 4; ++i) {
+            infos[i].imageView           = storage[i];
+            infos[i].imageLayout         = VK_IMAGE_LAYOUT_GENERAL;
+            writes[i + 1].dstBinding     = storageBinding[i];
+            writes[i + 1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i + 1].pImageInfo     = &infos[i];
+        }
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool chop) {
+        chop = chop && chopPipe_ != VK_NULL_HANDLE;
         cmdTransitionToGeneral(cb, ht_);
         cmdTransitionToGeneral(cb, displacement_);
+        if (chop) {
+            cmdTransitionToGeneral(cb, slope_);
+            cmdTransitionToGeneral(cb, jacDiag_);
+        }
 
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
-                                0, 1, &ds_, 0, nullptr);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, chop ? chopPipe_ : pipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, chop ? chopLayout_ : layout_,
+                                0, 1, chop ? &chopDs_ : &ds_, 0, nullptr);
         // The frame time is a PUSH CONSTANT, recorded into this command buffer.
         // It used to be a single host-mapped UBO rewritten here every frame —
         // with two frames in flight, recording frame N+1 overwrote it before
         // frame N's dispatch had necessarily read it, so frame N's cascades
         // could evolve to frame N+1's time (a pacing-dependent skew that
         // showed up as sample_height() mismatches run to run).
-        PushParams p{};
-        p.textureSize    = textureSize_;
-        p.tileSize       = tileSize_;
-        p.elapsedSeconds = elapsedSeconds;
-        vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        if (chop) {
+            ChopPushParams p{};
+            p.textureSize    = textureSize_;
+            p.tileSize       = tileSize_;
+            p.elapsedSeconds = elapsedSeconds;
+            p.taperSpacing   = chopTaperSpacing_;
+            vkCmdPushConstants(cb, chopLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        } else {
+            PushParams p{};
+            p.textureSize    = textureSize_;
+            p.tileSize       = tileSize_;
+            p.elapsedSeconds = elapsedSeconds;
+            vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        }
         const uint32_t g = groupCountFor(textureSize_);
         vkCmdDispatch(cb, g, g, 1);
 
         cmdShaderRWBarrier(cb, ht_.image);
         cmdShaderRWBarrier(cb, displacement_.image);
+        if (chop) {
+            cmdShaderRWBarrier(cb, slope_.image);
+            cmdShaderRWBarrier(cb, jacDiag_.image);
+        }
     }
 
     DynamicSpectrum::~DynamicSpectrum() {
@@ -613,9 +833,15 @@ namespace threepp::water {
         if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layout_, nullptr);
         if (dsl_    != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dsl_, nullptr);
         if (pool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
+        if (chopPipe_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), chopPipe_, nullptr);
+        if (chopLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), chopLayout_, nullptr);
+        if (chopDsl_    != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), chopDsl_, nullptr);
+        if (chopPool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), chopPool_, nullptr);
         if (sampler_!= VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
         destroyImage(ctx_, ht_);
         destroyImage(ctx_, displacement_);
+        destroyImage(ctx_, slope_);// no-ops while the chop variant was never enabled
+        destroyImage(ctx_, jacDiag_);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -944,6 +1170,199 @@ namespace threepp::water {
         if (pool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
         if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
         destroyImage(ctx_, twiddle_);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //   ChopMoments
+    // ─────────────────────────────────────────────────────────────────
+
+    ChopMoments::ChopMoments(vulkan::VulkanContext& ctx, uint32_t textureSize,
+                             VkImageView htView, VkImageView slopeView, VkImageView jacView)
+        : ctx_(ctx), textureSize_(textureSize) {
+        for (uint32_t n = textureSize_; n > 1u; n >>= 1u) ++mipLevels_;
+
+        moments_.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        moments_.width  = textureSize_;
+        moments_.height = textureSize_;
+        VkImageCreateInfo ici{};
+        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = moments_.format;
+        ici.extent        = {textureSize_, textureSize_, 1};
+        ici.mipLevels     = mipLevels_;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &moments_.image, &moments_.alloc, nullptr),
+              "vmaCreateImage(chopMoments)");
+
+        // A storage view names exactly one level; the shade samples them all.
+        VkImageViewCreateInfo vci{};
+        vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image    = moments_.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = moments_.format;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &moments_.view), "vkCreateImageView(chopMoments mip0)");
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &sampledView_), "vkCreateImageView(chopMoments chain)");
+        ctx_.setObjectName(moments_.image, "ocean.chopMoments (RGBA32F + mips)");
+
+        // Repeat (the cascade tiles the world), trilinear, anisotropic: the
+        // footprint of a pixel on water seen low is a long strip along the
+        // line of sight, and an anisotropic fetch averages along it.
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
+        VkSamplerCreateInfo sci{};
+        sci.sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter        = VK_FILTER_LINEAR;
+        sci.minFilter        = VK_FILTER_LINEAR;
+        sci.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeV     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeW     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.anisotropyEnable = VK_TRUE;
+        sci.maxAnisotropy    = std::min(16.0f, props.limits.maxSamplerAnisotropy);
+        sci.minLod           = 0.f;
+        sci.maxLod           = VK_LOD_CLAMP_NONE;
+        check(vkCreateSampler(ctx_.device(), &sci, nullptr, &sampler_), "vkCreateSampler(chopMoments)");
+
+        const std::array<VkDescriptorSetLayoutBinding, 4> bindings{
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// ht (h, dDx/dz)
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// slope
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// jacDiag
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// moments mip 0
+        };
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
+        dlci.pBindings    = bindings.data();
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsl_), "vkCreateDescriptorSetLayout(chopMoments)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.size       = sizeof(PushParams);
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &dsl_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &layout_), "vkCreatePipelineLayout(chopMoments)");
+
+        VkShaderModule mod = makeShader(ctx_, kOceanChopMomentsCompSpv, sizeof(kOceanChopMomentsCompSpv));
+        pipe_ = makeComputePipeline(ctx_, mod, layout_);
+        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
+        const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4};
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = 1;
+        dpci.poolSizeCount = 1;
+        dpci.pPoolSizes    = &poolSize;
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_), "vkCreateDescriptorPool(chopMoments)");
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = pool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &dsl_;
+        check(vkAllocateDescriptorSets(ctx_.device(), &dai, &ds_), "vkAllocateDescriptorSets(chopMoments)");
+
+        const std::array<VkImageView, 4> views{htView, slopeView, jacView, moments_.view};
+        std::array<VkDescriptorImageInfo, 4> infos{};
+        std::array<VkWriteDescriptorSet, 4> w{};
+        for (uint32_t i = 0; i < 4; ++i) {
+            infos[i].imageView   = views[i];
+            infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet          = ds_;
+            w[i].dstBinding      = i;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[i].pImageInfo      = &infos[i];
+        }
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+    }
+
+    void ChopMoments::record(VkCommandBuffer cb, float slopeScale, float chopScale,
+                             VkPipelineStageFlags readerStages) {
+        auto barrier = [&](uint32_t baseMip, uint32_t mipCount, VkImageLayout oldLayout,
+                           VkAccessFlags src, VkAccessFlags dst,
+                           VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
+            VkImageMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout           = oldLayout;
+            b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcAccessMask       = src;
+            b.dstAccessMask       = dst;
+            b.image               = moments_.image;
+            b.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, mipCount, 0, 1};
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
+        };
+        // First use: UNDEFINED -> GENERAL for the whole chain; afterwards a
+        // guard against the previous frame's sampled reads.
+        if (moments_.currentLayout != VK_IMAGE_LAYOUT_GENERAL) {
+            barrier(0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED, 0,
+                    VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+            moments_.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+        } else {
+            barrier(0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT,
+                    VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                    readerStages,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+        }
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &ds_, 0, nullptr);
+        PushParams p{};
+        p.textureSize = textureSize_;
+        p.slopeScale  = slopeScale;
+        p.chopScale   = chopScale;
+        vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        const uint32_t g = groupCountFor(textureSize_);
+        vkCmdDispatch(cb, g, g, 1);
+
+        // The chain by linear blits: level L is the box average of L-1, the
+        // prefilter the shade's footprint fetch assumes. All in GENERAL.
+        barrier(0, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        int32_t w = static_cast<int32_t>(textureSize_);
+        for (uint32_t level = 1; level < mipLevels_; ++level) {
+            const int32_t nw = std::max(w >> 1, 1);
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
+            blit.srcOffsets[1]  = {w, w, 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+            blit.dstOffsets[1]  = {nw, nw, 1};
+            vkCmdBlitImage(cb, moments_.image, VK_IMAGE_LAYOUT_GENERAL,
+                           moments_.image, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
+            barrier(level, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            w = nw;
+        }
+        barrier(0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, readerStages);
+    }
+
+    ChopMoments::~ChopMoments() {
+        if (pipe_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipe_, nullptr);
+        if (layout_  != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layout_, nullptr);
+        if (dsl_     != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dsl_, nullptr);
+        if (pool_    != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
+        if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
+        if (sampledView_ != VK_NULL_HANDLE) vkDestroyImageView(ctx_.device(), sampledView_, nullptr);
+        destroyImage(ctx_, moments_);
     }
 
 }// namespace threepp::water

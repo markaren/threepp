@@ -29,6 +29,16 @@
 
 namespace threepp {
 
+    // Default of DisplacedMesh::Params::measuredSpreading: false unless the
+    // environment sets THREEPP_OCEAN_SPREAD to 1, on or true; 0 is off (read
+    // once per process).
+    bool defaultMeasuredSpreading();
+
+    // Default of DisplacedMesh::Params::chopNormals: false unless the
+    // environment sets THREEPP_OCEAN_CHOP_NORMALS to 1, on or true; 0 is off
+    // (read once per process).
+    bool defaultChopNormals();
+
     class DisplacedMesh : public Mesh {
 
     public:
@@ -39,8 +49,13 @@ namespace threepp {
             float tileSize1 =  0.0f;
             float tileSize2 =  0.0f;
 
-            // Wind direction (radians, 0 = +X) and strength (m/s). Affects
-            // wave anisotropy and overall amplitude via the Phillips spectrum.
+            // Wind direction and strength (m/s). windTheta is the direction
+            // the wind blows TOWARD, in radians in the world XZ plane:
+            // (cos windTheta, sin windTheta), 0 = toward +X, pi/2 = toward +Z.
+            // With measuredSpreading the waves run that way (downwind); with
+            // the symmetric cos^2 only the crest axis follows it, so toward
+            // and from drew the same sea. Speed sets the overall amplitude
+            // via the Phillips spectrum.
             float windTheta = 0.0f;
             float windSpeed = 12.0f;
 
@@ -108,6 +123,40 @@ namespace threepp {
             // foam are unchanged. THREEPP_OCEAN_BREAKING_CRESTS = 1 / 0
             // forces it. Live-tunable.
             bool breakingCrests = false;
+            // Directional spreading of the wave energy. true = the measured
+            // distribution of Donelan, Hamilton & Hui (1985) with Banner's
+            // (1990) short-wave form: near the spectral peak the energy
+            // runs in a narrow fan downwind (long crests travelling with the
+            // wind), the short waves spread wider, and a little energy runs
+            // against the wind. false (the default) = the historical
+            // symmetric cos^2, as much energy upwind as downwind (standing,
+            // short-crested slosh). Both carry the same energy per
+            // wavelength in the continuum; on the cascades' discrete grids
+            // the significant wave height agrees within about 10%, and
+            // depends on the wind angle where the spectral peak sits near a
+            // tile's fundamental, because the narrow lobe then falls on a
+            // handful of modes. Live-tunable like windSpeed: the renderer
+            // regenerates the spectra. THREEPP_OCEAN_SPREAD=1 makes true the
+            // default.
+            bool measuredSpreading = defaultMeasuredSpreading();
+
+            // Optional swell: a second, narrow wave system from a distant
+            // storm, added to the wind sea with its own height, period and
+            // direction (a JONSWAP peak with gamma = 6 and cos^(2s)(theta/2)
+            // spreading; sources in phillips_spectrum.comp). swellHeight is
+            // its significant height in metres; 0 (the default) = no swell.
+            // It lives on cascade 0 only, so its peak wavelength g Tp^2 / 2 pi
+            // must lie between tileSize1 and tileSize0 / 2 (9 to 18 s on the
+            // default 1 km ocean, 9.5 to 17.5 s with a margin); outside that
+            // it is not drawn and the renderer says so once. swellTheta is
+            // the direction it travels toward (radians, as windTheta).
+            // swellSpread is s: ~25 for swell from a nearby storm, ~75 from a
+            // far one (Goda 2000); values below 1 are taken as 1. Live-
+            // tunable: the renderer regenerates the spectra.
+            float swellHeight = 0.0f;
+            float swellPeriod = 12.0f;
+            float swellTheta  = 0.0f;
+            float swellSpread = 50.0f;
 
             // Global Y-displacement multiplier. 1.0 is physical; higher values
             // exaggerate wave height.
@@ -126,6 +175,20 @@ namespace threepp {
             // like a gale — Ocean::create derives ~size/300 (capped at 1) so
             // small water reads calm by default.
             float foamAmount = 1.0f;
+
+            // Chop normals: shade the surface the choppy displacement actually
+            // draws. Exact slope and displacement-gradient fields (more inverse
+            // FFTs of the same spectrum) give the vertex normal as the cross
+            // product of the displaced surface's tangents, and the fine
+            // cascade's per-pixel slope comes from a mip chain of slope moments
+            // (mean tilts the normal, the variance a pixel cannot hold goes to
+            // roughness). Near a fold the chop correction fades back to the
+            // rest slope and its remainder goes to roughness. false = the
+            // height-only finite-difference normals, the renderer's original
+            // path bit for bit: the feature's images, pipelines and shade
+            // branch are built only the first time a mesh turns it on.
+            // Live-tunable. THREEPP_OCEAN_CHOP_NORMALS=1 makes true the default.
+            bool chopNormals = defaultChopNormals();
 
             // FFT texture resolution per cascade (must be power of two).
             // Band-passed cascades need only enough texels to resolve their

@@ -62,7 +62,9 @@ namespace threepp::vulkan {
         constexpr uint32_t kNumBindings = 19;// 0-9, then 67-69, 58, 13, 78, 79, 10 and 11
 
         // The photon grid's header (path_trace.comp's PhotonGridBuf), ahead of
-        // its buckets' count, start and end arrays.
+        // its buckets' count, start and end arrays. The shader's set-up pass
+        // fills the sun's fields (sunScale, region, sunLight) and may widen
+        // the radius.
         struct PhotonGridHeader {
             uint32_t stored;
             uint32_t cursor;
@@ -71,9 +73,14 @@ namespace threepp::vulkan {
             float    radius;
             float    cellInv;
             float    powerScale;
+            float    sunScale;
+            float    region[4];
+            float    shrink;
+            uint32_t sunCount;
+            uint32_t sunLight;
             uint32_t pad;
         };
-        static_assert(sizeof(PhotonGridHeader) == 32);
+        static_assert(sizeof(PhotonGridHeader) == 64);
         constexpr VkDeviceSize kPhotonBytes = 32;// path_trace.comp's Photon
 
         VkPipeline makeComputePipeline(VulkanContext& ctx, const uint32_t* spv, size_t bytes,
@@ -486,7 +493,7 @@ namespace threepp::vulkan {
     }
 
     void PathTracer::prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial,
-                             bool photons) {
+                             bool photons, bool sunPhotons) {
         if (!available() || !active_) return;
         freeRetired(frameSerial, false);
         if (renderWidth == 0 || renderHeight == 0) return;
@@ -513,17 +520,22 @@ namespace threepp::vulkan {
             rowCursor_    = 0;
         }
         bindAccumulator(frame);
-        // The photons: half a photon a pixel each pass (at most a million),
-        // a power of two of buckets at least as many, and the pipeline that
-        // builds and gathers them.
-        if (photons && pipePhotons_ == VK_NULL_HANDLE) {
+        // The photons: each kind half a photon a pixel each pass (the
+        // emitters' at most a million, the sun's three), a power of two of
+        // buckets at least as many as both, and the pipeline that builds and
+        // gathers them.
+        if ((photons || sunPhotons) && pipePhotons_ == VK_NULL_HANDLE) {
             reflPhotons_ = reflectSpirvBindings(kPathTracePhotonsCompSpv);
             pipePhotons_ = makeComputePipeline(ctx_, kPathTracePhotonsCompSpv, sizeof(kPathTracePhotonsCompSpv),
                                                pipeLayout_, "vkCreateComputePipelines(path_trace photons)");
         }
-        photonsWanted_ = photons;
-        if (photons) {
-            const uint32_t cap = std::clamp<uint32_t>(uint32_t((uint64_t(width_) * height_) / 2), 16384u, 1u << 20);
+        photonsWanted_    = photons;
+        sunPhotonsWanted_ = sunPhotons;
+        if (photons || sunPhotons) {
+            const uint32_t half = uint32_t((uint64_t(width_) * height_) / 2);
+            const uint32_t ne   = photons ? std::clamp<uint32_t>(half, 16384u, 1u << 20) : 0u;
+            const uint32_t ns   = sunPhotons ? std::clamp<uint32_t>(half, 65536u, 3u << 20) : 0u;
+            const uint32_t cap  = ne + ns;
             if (cap != photonCap_ || photonBuf_.handle == VK_NULL_HANDLE) {
                 if (photonBuf_.handle != VK_NULL_HANDLE) retired_.emplace_back(photonBuf_, frameSerial);
                 if (photonGrid_.handle != VK_NULL_HANDLE) retired_.emplace_back(photonGrid_, frameSerial);
@@ -538,8 +550,10 @@ namespace threepp::vulkan {
                 photonCap_     = cap;
                 photonBuckets_ = buckets;
                 ++photonSerial_;
-                photonsLive_ = false;// a pass begun on the old ones gathers nothing more
+                photonsLive_ = emitLive_ = sunLive_ = false;// a pass begun on the old ones gathers nothing more
             }
+            photonEmitCount_ = ne;
+            photonSunCount_  = ns;
         }
         bindPhotons(frame);
     }
@@ -548,7 +562,7 @@ namespace threepp::vulkan {
         if (sets_.empty()) return;
         // The photon variant also writes the photons (bindings 10 and 11),
         // which the other leaves out of its code.
-        const bool photons = pipePhotons_ != VK_NULL_HANDLE && (photonsWanted_ || photonsLive_);
+        const bool photons = pipePhotons_ != VK_NULL_HANDLE && (photonsWanted_ || sunPhotonsWanted_ || photonsLive_);
         declareDescriptorSet(graph, pass, sets_[frame], 0, photons ? reflPhotons_ : refl_, rg::kCompute);
     }
 
@@ -563,8 +577,11 @@ namespace threepp::vulkan {
         pc.maxBounces         = params_.maxBounces;
         // The reset holds for every band of the first pass: each overwrites
         // its own rows once.
+        // Bits 16-31: the ocean's wave scale in 256ths, for the fine cascade's
+        // slope (the push block has no room for a float of its own).
+        const uint32_t waveScale = uint32_t(std::clamp(std::lround(double(in.oceanWaveScale) * 256.0), 1L, 65535L));
         pc.flags              = (resetPending_ ? 1u : 0u) | (in.sunExtracted ? 2u : 0u) | ((in.lensModel & 3u) << 2)
-                              | (in.envSunLastDirLight ? 16u : 0u);
+                              | (in.envSunLastDirLight ? 16u : 0u) | (waveScale << 16);
         pc.emissiveCount      = in.emissiveCount;
         pc.emissiveTotalPower = in.emissiveTotalPower;
         pc.envMipCount        = std::max(1u, in.envMipCount);
@@ -594,15 +611,21 @@ namespace threepp::vulkan {
         pc.rows           = rowCursor_ | (rows << 16);
         pc.domeRadius     = params_.domePort;
 
-        // A pass begins with its photons, in a scene with emitters and glass;
-        // its bands gather them, on the pipeline that holds the photon code.
-        if (rowCursor_ == 0)
-            photonsLive_ = photonsWanted_ && pipePhotons_ != VK_NULL_HANDLE && photonBuf_.handle != VK_NULL_HANDLE &&
-                           in.emissiveCount > 0 && in.emissiveTotalPower > 0.f;
+        // A pass begins with its photons: the emitters' in a scene with
+        // emitters and glass, the sun's in one with an ocean and a sun. Its
+        // bands gather them, on the pipeline that holds the photon code.
+        if (rowCursor_ == 0) {
+            const bool ready = pipePhotons_ != VK_NULL_HANDLE && photonBuf_.handle != VK_NULL_HANDLE;
+            emitLive_    = ready && photonsWanted_ && photonEmitCount_ > 0 && in.emissiveCount > 0 &&
+                           in.emissiveTotalPower > 0.f;
+            sunLive_     = ready && sunPhotonsWanted_ && photonSunCount_ > 0;
+            photonsLive_ = emitLive_ || sunLive_;
+        }
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, photonsLive_ ? pipePhotons_ : pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         if (rowCursor_ == 0 && photonsLive_) recordPhotons(cb, in, &pc);
-        if (photonsLive_) pc.flags |= 128u;
+        if (photonsLive_) pc.flags |= 256u;
+        if (sunLive_) pc.flags |= 512u;
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cb, (width_ + 7) / 8, (rows + 7) / 8, 1);
 
@@ -616,23 +639,26 @@ namespace threepp::vulkan {
 
     void PathTracer::recordPhotons(VkCommandBuffer cb, const FrameInputs& in, const void* cameraPush) {
         // The gather radius: two of the picture's pixels at the emitters'
-        // distance in the first pass, shrinking as Knaus and Zwicker's
-        // progressive photon mapping has it, r² by (i + α) / (i + 1) a pass
-        // (α = 2/3): r_i² = r_0² Γ(i + 1 + α) / (Γ(1 + α) Γ(i + 2)).
+        // distance in the first pass (the shader's set-up widens it for the
+        // sun's photons, to hold some four of them), shrinking as Knaus and
+        // Zwicker's progressive photon mapping has it, r² by (i + α) / (i + 1)
+        // a pass (α = 2/3): r_i² = r_0² Γ(i + 1 + α) / (Γ(1 + α) Γ(i + 2)).
         constexpr double kAlpha        = 2.0 / 3.0;
         constexpr double kRadiusPixels = 2.0;
         const double pass    = double(samples_ / std::max(1u, params_.samplesPerFrame));
         const double shrink2 = std::exp(std::lgamma(pass + 1.0 + kAlpha) - std::lgamma(1.0 + kAlpha) -
                                         std::lgamma(pass + 2.0));
         const double pixel   = in.photonViewHeight > 0.f ? double(in.photonViewHeight) / std::max(1u, height_) : 0.01;
-        const float  r       = float(std::max(kRadiusPixels * pixel * std::sqrt(shrink2), 1e-5));
+        const float  r       = emitLive_ ? float(std::max(kRadiusPixels * pixel * std::sqrt(shrink2), 1e-5)) : 1e-4f;
 
         PhotonGridHeader hdr{};
         hdr.capacity   = photonCap_;
         hdr.hashMask   = photonBuckets_ - 1u;
         hdr.radius     = r;
         hdr.cellInv    = 1.f / (2.f * r);
-        hdr.powerScale = in.emissiveTotalPower / float(photonCap_);
+        hdr.powerScale = photonEmitCount_ > 0 ? in.emissiveTotalPower / float(photonEmitCount_) : 0.f;
+        hdr.shrink     = float(std::sqrt(shrink2));
+        hdr.sunCount   = sunLive_ ? photonSunCount_ : 0u;
 
         // The last pass's gathers are done with the grid before it is cleared.
         VkMemoryBarrier mb{};
@@ -648,11 +674,13 @@ namespace threepp::vulkan {
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0, 1, &mb, 0, nullptr, 0, nullptr);
 
-        // Trace (mode 1), allocate the buckets (2), sort (3): each a thread a
-        // photon or bucket, in rows of 1024, each reading what the last wrote.
+        // Set up (mode 5: the sun's disc and scale), trace the emitters' (1)
+        // and the sun's (4), allocate the buckets (2), sort (3): each a thread
+        // a photon or bucket, in rows of 1024, each reading what the last
+        // wrote.
         auto step = [&](uint32_t mode, uint32_t count) {
             PushConstants pc = *static_cast<const PushConstants*>(cameraPush);
-            pc.flags = (pc.flags & ~(3u << 5)) | (mode << 5);
+            pc.flags = (pc.flags & ~(7u << 5)) | (mode << 5) | (sunLive_ ? 512u : 0u);
             pc.rows  = count;
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             const uint32_t threadRows = (count + 1023u) / 1024u;
@@ -664,7 +692,9 @@ namespace threepp::vulkan {
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  0, 1, &b, 0, nullptr, 0, nullptr);
         };
-        step(1u, photonCap_);
+        step(5u, 1u);
+        if (emitLive_) step(1u, photonEmitCount_);
+        if (sunLive_) step(4u, photonSunCount_);
         step(2u, photonBuckets_);
         step(3u, photonCap_);
     }

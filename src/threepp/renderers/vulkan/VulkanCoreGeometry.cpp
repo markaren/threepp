@@ -3390,7 +3390,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
 void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed) {
 
             // (0) Live sea state. The Phillips h0 pass is normally one-shot,
-            // but windSpeed/windTheta/fetch are plain Params fields — when
+            // but windSpeed/windTheta/fetch/measuredSpreading are plain Params fields — when
             // they drift from what the cascades were baked with, rewrite each
             // cascade's spectrum params and drop the phillipsRecorded latch so
             // the loop below re-dispatches h0 this frame. The persistent per-
@@ -3402,7 +3402,12 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             if (dm.params.windSpeed != st.appliedWindSpeed ||
                 dm.params.windTheta != st.appliedWindTheta ||
                 dm.params.fetch     != st.appliedFetch ||
-                hsFix               != st.appliedHsFix) {
+                hsFix               != st.appliedHsFix ||
+                dm.params.measuredSpreading != st.appliedMeasuredSpreading ||
+                dm.params.swellHeight != st.appliedSwell[0] ||
+                dm.params.swellPeriod != st.appliedSwell[1] ||
+                dm.params.swellTheta  != st.appliedSwell[2] ||
+                dm.params.swellSpread != st.appliedSwell[3]) {
                 for (uint32_t i = 0; i < 3; ++i) {
                     if (!(st.cascadeMask & (1u << i))) continue;
                     // Cascade 1's sample domain is rotated; keep its world
@@ -3410,7 +3415,13 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     const float theta = dm.params.windTheta +
                             (i == 1 ? kOceanCascade1RotTheta : 0.f);
                     st.cascades[i].phillips->updateSeaState(theta, dm.params.windSpeed,
-                                                            dm.params.fetch, hsFix);
+                                                            dm.params.fetch, hsFix,
+                                                            dm.params.measuredSpreading ? 1u : 0u);
+                    // The swell lives on cascade 0 only (its finest k sampling).
+                    st.cascades[i].phillips->updateSwell(i == 0 ? dm.params.swellHeight : 0.f,
+                                                         dm.params.swellPeriod,
+                                                         dm.params.swellTheta,
+                                                         dm.params.swellSpread);
                     st.cascades[i].phillipsRecorded = false;
                 }
                 st.appliedWindSpeed = dm.params.windSpeed;
@@ -3418,6 +3429,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 st.appliedFetch     = dm.params.fetch;
                 st.appliedHsFix     = hsFix;
                 st.boundKmValid     = false;
+                st.appliedMeasuredSpreading = dm.params.measuredSpreading;
+                st.appliedSwell[0] = dm.params.swellHeight;
+                st.appliedSwell[1] = dm.params.swellPeriod;
+                st.appliedSwell[2] = dm.params.swellTheta;
+                st.appliedSwell[3] = dm.params.swellSpread;
             }
 
             // The wave-model switches (DisplacedMesh::Params, each forced by
@@ -3466,6 +3482,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                         0, 1, &mb, 0, nullptr, 0, nullptr);
             }
+            // st.chopOn (chop normals this frame) was resolved by
+            // syncOceanChop in the scene build, with the shade's binding.
             for (uint32_t i = 0; i < 3; ++i) {
                 if (!(st.cascadeMask & (1u << i))) continue;
                 auto& c = st.cascades[i];
@@ -3473,7 +3491,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     c.phillips->recordCompute(cb);
                     c.phillipsRecorded = true;
                 }
-                c.dyn->recordCompute(cb, elapsedSeconds);
+                c.dyn->recordCompute(cb, elapsedSeconds, st.chopOn);
                 water::OceanImage ht  = c.dyn->ht();
                 water::OceanImage dsp = c.dyn->displacement();
                 ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;
@@ -3486,6 +3504,13 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 // the first FFT chain).
                 c.ifft->recordApply(cb, ht,  st.scratchA);
                 c.ifft->recordApply(cb, dsp, st.scratchA);
+                if (st.chopOn) {
+                    // The exact derivative fields (dynamic_spectrum.comp):
+                    // slope and the displacement gradient's diagonal; its
+                    // off-diagonal came back with the height, in ht.g.
+                    c.ifft->recordApply(cb, c.dyn->slope(),   st.scratchA);
+                    c.ifft->recordApply(cb, c.dyn->jacDiag(), st.scratchA);
+                }
 
                 // Copy the spatial-domain height image into THIS FRAME's slot
                 // of the host-mapped readback ring for this cascade (slot =
@@ -3576,6 +3601,16 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                             VK_PIPELINE_STAGE_HOST_BIT,
                             0, 0, nullptr, 1, &bmb, 0, nullptr);
                 }
+            }
+            // The fine cascade's per-pixel surface for the deferred shade while
+            // the chop normals are on (the shade's binding 13 points at it
+            // then): the height, unchanged, plus the displaced surface's
+            // slope moments and their mip chain.
+            if (st.chopOn) {
+                const auto& fc = st.cascades[st.chopFineIdx];
+                st.chopMoments->record(cb, dm.params.waveScale / fc.tileSize,
+                                       dm.effectiveChoppiness() / fc.tileSize,
+                                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
             }
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFFT, currentFrame);
 
@@ -3766,6 +3801,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.tileSize1    = dm.params.tileSize1;
             pc.tileSize2    = dm.params.tileSize2;
             pc.waveScale    = dm.params.waveScale;
+            oceanWaveScale  = dm.params.waveScale;
             pc.choppiness   = dm.params.choppiness;
             pc.cascadeMask  = st.cascadeMask;
             pc.warpCenterX    = dm.warp.centerX;
@@ -3789,7 +3825,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
-            waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
+            waterDisplace_->recordDispatch(cb, st.chopOn ? st.displaceChopDS : st.displaceDS, pc, st.chopOn);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
 
             // (4c) World-space foam pass — same inputs as water_displace
@@ -5116,6 +5152,13 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 ps.windSpeed   = dm.params.windSpeed;
                 ps.fetch       = dm.params.fetch;
                 ps.hsFix       = oceanHsFix(dm.params);
+                ps.spread      = dm.params.measuredSpreading ? 1u : 0u;
+                // Swell on cascade 0 only: its 1 km-scale k spacing is the only
+                // one fine enough for a peak this narrow.
+                ps.swellHeight = (i == 0) ? dm.params.swellHeight : 0.f;
+                ps.swellPeriod = dm.params.swellPeriod;
+                ps.swellTheta  = dm.params.swellTheta;
+                ps.swellSpread = dm.params.swellSpread;
                 if (i == 0) {
                     ps.kMin = 0.f;
                     ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound
@@ -5161,6 +5204,11 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->appliedWindTheta = dm.params.windTheta;
             state->appliedFetch     = dm.params.fetch;
             state->appliedHsFix     = oceanHsFix(dm.params);
+            state->appliedMeasuredSpreading = dm.params.measuredSpreading;
+            state->appliedSwell[0] = dm.params.swellHeight;
+            state->appliedSwell[1] = dm.params.swellPeriod;
+            state->appliedSwell[2] = dm.params.swellTheta;
+            state->appliedSwell[3] = dm.params.swellSpread;
 
             // Per-cascade height readback DIMENSIONS. Each cascade can run at
             // a different FFT resolution, so each readback buffer is sized to
@@ -5429,6 +5477,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                         fineTile = state->cascades[i].tileSize;
                     }
                 }
+                state->chopFineIdx = fineIdx;// the cascade a chop-normal moment chain would read
                 if (fineTile > 0.f) {
                     oceanFineHeightView = state->cascades[fineIdx].dyn->ht().view;
                     oceanFineTileSize   = fineTile;
@@ -5456,11 +5505,98 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 oceanWakeView = state->wake->stateView();
                 if (state->wake->rippleView() != VK_NULL_HANDLE) oceanRippleView = state->wake->rippleView();
             }
+            // Chop normals, when the mesh starts with them on: built here so
+            // the priming update below already runs them (the all-slots
+            // rewrite that follows picks up the binding it moves).
+            syncOceanChop(dm, *state);
             rewriteDeferredDescriptors();
 
             auto* raw = state.get();
             displacedStates.emplace(&dm, std::move(state));
             return raw;
+        }
+
+void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& st) {
+            // Chop normals (DisplacedMesh::Params::chopNormals), resolved once
+            // per frame in the scene build, before the frame's fence wait and
+            // before anything is recorded.
+            //
+            // Nothing of the feature exists until the mesh first asks for it:
+            // then every cascade gets its slope and displacement-gradient
+            // images and the OCEAN_CHOP variant of dynamic_spectrum.comp,
+            // water_displace.comp gets its OCEAN_CHOP pipeline and a set for
+            // this mesh, and the fine cascade gets its slope-moment chain
+            // (water::ChopMoments). A scene that never turns it on keeps dev's
+            // images, SPIR-V, layouts and the shade kernel without the
+            // branch. Turned off again, the mesh goes back to all of those;
+            // what was built stays for the next toggle.
+            if (dm.params.chopNormals && !st.chopMoments) {
+                // The vertex normal's derivative fields are tapered to the
+                // vertex grid's Nyquist (dynamic_spectrum.comp): the nominal
+                // spacing, the one the plain path's finite difference uses.
+                // The per-pixel cascade is not tapered, its mip chain filters.
+                const float spacing = std::max(st.planeSizeX / float(st.gridDimX - 1u),
+                                               st.planeSizeZ / float(st.gridDimZ - 1u));
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (!(st.cascadeMask & (1u << i))) continue;
+                    st.cascades[i].dyn->enableChop(i < 2u && i != st.chopFineIdx ? spacing : 0.f);
+                }
+                // The OCEAN_CHOP displace set: the plain six bindings, then
+                // the slope + jacDiag of cascades 0 and 1 (bindings 6-9), a
+                // disabled cascade falling back to cascade 0 as in the plain set.
+                st.displaceChopDS = waterDisplace_->allocateChopDescriptorSet();
+                std::array<VkDescriptorImageInfo, 10> infos{};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    const auto& c = st.cascades[(st.cascadeMask & (1u << i)) ? i : 0u];
+                    infos[i * 2 + 0] = {waterDisplace_->sampler(), c.dyn->ht().view, VK_IMAGE_LAYOUT_GENERAL};
+                    infos[i * 2 + 1] = {waterDisplace_->sampler(), c.dyn->displacement().view, VK_IMAGE_LAYOUT_GENERAL};
+                }
+                for (uint32_t i = 0; i < 2; ++i) {
+                    auto& c = st.cascades[(st.cascadeMask & (1u << i)) ? i : 0u];
+                    infos[6 + i * 2 + 0] = {waterDisplace_->sampler(), c.dyn->slope().view, VK_IMAGE_LAYOUT_GENERAL};
+                    infos[6 + i * 2 + 1] = {waterDisplace_->sampler(), c.dyn->jacDiag().view, VK_IMAGE_LAYOUT_GENERAL};
+                }
+                std::array<VkWriteDescriptorSet, 10> ws{};
+                for (uint32_t i = 0; i < 10; ++i) {
+                    ws[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    ws[i].dstSet          = st.displaceChopDS;
+                    ws[i].dstBinding      = i;
+                    ws[i].descriptorCount = 1;
+                    ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    ws[i].pImageInfo      = &infos[i];
+                }
+                vulkan::updateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+
+                auto& fc = st.cascades[st.chopFineIdx];
+                st.chopMoments = std::make_unique<water::ChopMoments>(
+                        *ctx, fc.dyn->ht().width, fc.dyn->ht().view,
+                        fc.dyn->slope().view, fc.dyn->jacDiag().view);
+            }
+            st.chopOn = st.chopMoments && dm.params.chopNormals;
+            if (!st.chopMoments) return;
+
+            // The shade's fine-height binding (13) is scene-global: it belongs
+            // to this ocean only while it names one of this ocean's two views
+            // (the cascade's height, or the moment chain whose .r is that same
+            // height, so the path tracer and the plain shade read the same
+            // value from either).
+            const VkImageView htView    = st.cascades[st.chopFineIdx].dyn->ht().view;
+            const VkImageView chainView = st.chopMoments->sampledView();
+            if (oceanFineHeightView != htView && oceanFineHeightView != chainView) return;
+            const VkImageView want = st.chopOn ? chainView : htView;
+            if (oceanFineHeightView != want) {
+                oceanFineHeightView    = want;
+                oceanFineHeightSampler = st.chopOn ? st.chopMoments->sampler() : oceanFineHeightDummy.sampler;
+                // Each frame-in-flight slot rewrites its sets at the top of its
+                // own frame, once its fence has signalled, so no recorded or
+                // pending frame sees the switch, and this frame's shade (spec
+                // constant below) and its set agree.
+                deferredDescDirty_.fill(true);
+            }
+            // The shade compiles its chop branch in only for a frame that has
+            // it on (spec constant 6): every other frame and every scene
+            // without an ocean keeps the kernel it had.
+            oceanChopNormals = st.chopOn;
         }
 
 VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(GrassMesh& gm) {

@@ -303,6 +303,11 @@ layout(constant_id = 2) const uint kProbeGi   = 0u;
 // in the no-ray-query variant). Compile-time so a ray-traced frame runs the
 // kernel it always ran.
 layout(constant_id = 3) const uint kShadowMaps = 0u;
+// 1 = an ocean's chop normals are on this frame (DisplacedMesh::Params::
+// chopNormals) and binding 13 holds its slope-moment chain: their per-pixel
+// branch is compiled in. 0, every scene without them, drops it, so that
+// kernel is the one that ran before they existed.
+layout(constant_id = 6) const uint kOceanChop = 0u;
 const bool kSM = kShadowMaps != 0u;
 bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
 // probe_common.glsl's own gate, made the same test here (its default is the UBO).

@@ -1027,6 +1027,8 @@ namespace threepp {
         VkImageView oceanFineHeightView   = VK_NULL_HANDLE;// either dummy or cascade-2 view
         VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
         float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
+        float       oceanWaveScale        = 1.f;          // its params.waveScale (the path tracer's fine slope)
+        bool        oceanChopNormals      = false;        // binding 13 is a ChopMoments chain and it is on this frame
 
         // World-space foam (deferred shade ocean binding). Built by
         // FoamWorldPipeline each frame from a DisplacedMesh's foamImage.
@@ -4353,6 +4355,9 @@ namespace threepp {
         // cascade. Returns nullptr if the geometry is unsupported (must be a
         // square indexed plane with N×N vertices for some power-of-two N).
         DisplacedMeshState* ensureDisplacedState(DisplacedMesh& dm);
+        // Chop normals: builds their resources the first time the mesh asks,
+        // resolves st.chopOn and points binding 13 to match (see the definition).
+        void syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& st);
 
         // Per-frame: run the FFT chain → water_displace → BLAS rebuild for
         // one DisplacedMesh. Mirrors refreshSkinnedBlas's structure.

@@ -1217,18 +1217,20 @@ namespace threepp::vulkan {
 
     // The shade pipeline for this dispatch: the permutation for
     // key = (flags & mask) | probe state << 32 | shadow maps << 40 | the ray
-    // budget features << 41 | Ray Reconstruction << 45, built on first use
+    // budget features << 41 | Ray Reconstruction << 45 | ocean chop normals
+    // on this frame << 46 (spec constant 6, set only then), built on first use
     // (see createPipeline). With no knob set the key is the MSAA code and the
     // shadow mode alone, so an app holds one pipeline per G-buffer sample count
     // and shadow mode its views use, and one more for each set of ray-budget
     // knobs it turns on.
     VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget,
-                                            bool rayRecon) {
+                                            bool rayRecon, bool oceanChop) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
                              (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u) |
-                             (rayRecon ? (1ull << 45u) : 0ull);
+                             (rayRecon ? (1ull << 45u) : 0ull) |
+                             (oceanChop ? (1ull << 46u) : 0ull);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1238,21 +1240,26 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 6> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+        const std::array<uint32_t, 7> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
                                             static_cast<uint32_t>((key >> 40u) & 1u),
                                             static_cast<uint32_t>((key >> 41u) & kRayBudgetAll),
-                                            static_cast<uint32_t>((key >> 45u) & 1u)};
-        std::array<VkSpecializationMapEntry, 6> entries{};
-        for (uint32_t i = 0; i < 6; ++i) {
-            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon
+                                            static_cast<uint32_t>((key >> 45u) & 1u),
+                                            static_cast<uint32_t>((key >> 46u) & 1u)};
+        std::array<VkSpecializationMapEntry, 7> entries{};
+        for (uint32_t i = 0; i < 7; ++i) {
+            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon, kOceanChop
             entries[i].offset     = i * sizeof(uint32_t);
             entries[i].size       = sizeof(uint32_t);
         }
+        // kOceanChop is specialised only for a pipeline that has it on; every
+        // other one passes the six entries it always did (the constant keeps
+        // its default 0).
+        const uint32_t entryCount = ((key >> 46u) & 1u) ? 7u : 6u;
         VkSpecializationInfo si{};
-        si.mapEntryCount = static_cast<uint32_t>(entries.size());
+        si.mapEntryCount = entryCount;
         si.pMapEntries   = entries.data();
-        si.dataSize      = sizeof(values);
+        si.dataSize      = entryCount * sizeof(uint32_t);
         si.pData         = values.data();
 
         VkComputePipelineCreateInfo cpci{};
@@ -1341,7 +1348,7 @@ namespace threepp::vulkan {
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         const ShadePush push = shadePush(p);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget, p.rayRecon));
+                          shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget, p.rayRecon, p.oceanChopNormals));
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
     }

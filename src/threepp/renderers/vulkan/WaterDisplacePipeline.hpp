@@ -104,9 +104,20 @@ namespace threepp::vulkan {
 
         // Per-mesh dispatch — binds pipeline + descriptor set + push
         // constants and dispatches over `pc.vertexCount` in 64-thread groups.
+        // chop: the OCEAN_CHOP variant (chop normals) with a set from
+        // allocateChopDescriptorSet; otherwise the plain pipeline.
         void recordDispatch(VkCommandBuffer cb,
                             VkDescriptorSet ds,
-                            const PushConstants& pc);
+                            const PushConstants& pc,
+                            bool chop = false);
+
+        // Chop normals (DisplacedMesh::Params::chopNormals). The OCEAN_CHOP
+        // variant of water_displace.comp reads four more combined-image-
+        // samplers (bindings 6-9: slope and jacDiag of cascades 0 and 1), so it
+        // has its own set layout, pipeline and pool, all created on the first
+        // call here: a scene that never turns the feature on keeps exactly the
+        // plain pipeline and layout above. Same push block as the plain one.
+        VkDescriptorSet allocateChopDescriptorSet();
 
     private:
         VulkanContext&        ctx_;
@@ -116,7 +127,14 @@ namespace threepp::vulkan {
         VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
         VkSampler             sampler_        = VK_NULL_HANDLE;
 
+        // The OCEAN_CHOP variant (allocateChopDescriptorSet).
+        VkDescriptorSetLayout chopDsLayout_       = VK_NULL_HANDLE;
+        VkPipelineLayout      chopPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline            chopPipeline_       = VK_NULL_HANDLE;
+        VkDescriptorPool      chopDescPool_       = VK_NULL_HANDLE;
+
         void createPipeline();
+        void createChopPipeline();
     };
 
 }// namespace threepp::vulkan
