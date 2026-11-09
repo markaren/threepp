@@ -332,11 +332,17 @@ void BVH::build(const BufferGeometry& geom) {
     if (geom.hasIndex()) {
         const auto index = geom.getIndex();
         const int count = index->count() - index->count() % 3;
+        const auto vertexCount = static_cast<unsigned int>(posAttr->count());
         triangles.reserve(count / 3);
         for (int i = 0; i < count; i += 3) {
             const auto a = index->getX(i);
             const auto b = index->getX(i + 1);
             const auto c = index->getX(i + 2);
+            if (a >= vertexCount || b >= vertexCount || c >= vertexCount) {
+                // As the raw-array build does; the BVH is left empty.
+                triangles.clear();
+                throw std::out_of_range("BVH::build: index out of range for the geometry's positions");
+            }
 
             triangles.emplace_back(
                     Vector3(posAttr->getX(a), posAttr->getY(a), posAttr->getZ(a)),
@@ -376,6 +382,7 @@ void BVH::build(const std::vector<float>& positions, const std::vector<unsigned 
         for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
             const auto a = indices[i], b = indices[i + 1], c = indices[i + 2];
             if (a >= vertexCount || b >= vertexCount || c >= vertexCount) {
+                triangles.clear();// left empty, not holding the triangles read so far
                 throw std::out_of_range("BVH::build: index out of range for the given positions");
             }
             triangles.emplace_back(vertex(a), vertex(b), vertex(c));

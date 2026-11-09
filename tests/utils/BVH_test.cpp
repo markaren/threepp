@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 using namespace threepp;
@@ -808,5 +809,43 @@ TEST_CASE("BVH built from a geometry leaves out a trailing partial triangle", "[
             REQUIRE(hit);
             CHECK(hit->triangleIndex == 0);
         }
+    }
+}
+
+TEST_CASE("BVH build rejects an index past the last vertex and is left empty", "[BVH]") {
+
+    // An intact index over a truncated position attribute: vertex 4 of 4. The
+    // array keeps spare capacity, so a read past its end picks up a stale
+    // fifth vertex instead of crashing.
+    std::vector<float> positions{0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 5, 0, 5};
+    positions.resize(12);
+    const std::vector<unsigned int> index{0, 3, 1, 1, 3, 4};
+    const Ray down({0.25f, 1, 0.25f}, {0, -1, 0});
+
+    // Each build starts from a tree that the failed build must not leave behind.
+    const auto box = BoxGeometry::create(1.f, 1.f, 1.f);
+
+    SECTION("from a geometry") {
+        const auto geometry = BufferGeometry::create();
+        geometry->setAttribute("position", FloatBufferAttribute::create(std::move(positions), 3));
+        geometry->setIndex(index);
+
+        BVH bvh;
+        bvh.build(*box);
+        REQUIRE(bvh.triangleCount() == 12);
+        CHECK_THROWS_AS(bvh.build(*geometry), std::out_of_range);
+        CHECK(bvh.triangleCount() == 0);
+        CHECK(bvh.keptTriangleCount() == 0);
+        CHECK_FALSE(bvh.raycast(down));
+    }
+
+    SECTION("from raw arrays, as before") {
+        BVH bvh;
+        bvh.build(*box);
+        REQUIRE(bvh.triangleCount() == 12);
+        CHECK_THROWS_AS(bvh.build(positions, index), std::out_of_range);
+        CHECK(bvh.triangleCount() == 0);
+        CHECK(bvh.keptTriangleCount() == 0);
+        CHECK_FALSE(bvh.raycast(down));
     }
 }
