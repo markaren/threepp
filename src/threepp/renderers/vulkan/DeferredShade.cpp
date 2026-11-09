@@ -63,7 +63,8 @@ namespace threepp::vulkan {
 
     // The review-fix A/B switches, the shade's kShadeFixes (deferred_shade_00):
     // one bit per fix, set unless its knob is 0, which gives the shade it
-    // replaced. Read once per process.
+    // replaced. Read once per process. Only a value that starts with '0'
+    // turns a fix off (env::flag): "false" or "off" leave it on.
     static uint32_t shadeFixes() {
         static const uint32_t bits = (env::flag("THREEPP_VK_FIX_LAMP_GLASS", true) ? 1u : 0u) |
                                      (env::flag("THREEPP_VK_FIX_WATER_BOUNCE_EM", true) ? 2u : 0u) |
