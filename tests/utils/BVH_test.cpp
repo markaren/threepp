@@ -567,7 +567,10 @@ TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
 
                     BVH bvh(leafSize);
                     bvh.build(mesh.positions, mesh.indices);
-                    CHECK(bvh.triangleCount() == mesh.triangleCount() - 1);
+                    // triangleCount() is the source's count, so it bounds every
+                    // triangleIndex a query hands back.
+                    CHECK(bvh.triangleCount() == mesh.triangleCount());
+                    CHECK(bvh.keptTriangleCount() == mesh.triangleCount() - 1);
 
                     // Straight down onto the inside of each floor triangle: the
                     // hit is that triangle, numbered as in the source.
@@ -580,7 +583,7 @@ TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
                                 REQUIRE(hit);
                                 CHECK(hit->distance == 1.f);
                                 REQUIRE(hit->triangleIndex >= 0);
-                                REQUIRE(hit->triangleIndex < static_cast<int>(mesh.triangleCount()));
+                                REQUIRE(hit->triangleIndex < static_cast<int>(bvh.triangleCount()));
                                 CHECK(hit->triangleIndex != static_cast<int>(badTriangle));
                                 CHECK(onTriangle(mesh.triangle(hit->triangleIndex), hit->point));
                                 CHECK(bvh.raycastAny(ray, 2.f));
@@ -608,7 +611,8 @@ TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
             mesh.indices = {0, 3, 1, 1, 3, 2, 1, 2, 4};
             BVH bvh;
             bvh.build(mesh.positions, mesh.indices);
-            CHECK(bvh.triangleCount() == 2);
+            CHECK(bvh.triangleCount() == 3);
+            CHECK(bvh.keptTriangleCount() == 2);
 
             const Ray miss({2.5f, 1, 2.5f}, {0, -1, 0});
             CHECK_FALSE(bvh.raycast(miss));
@@ -623,7 +627,8 @@ TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
         const float nan = std::numeric_limits<float>::quiet_NaN();
         BVH bvh;
         bvh.build({0, 0, 0, 1, 0, 0, nan, 0, 1});
-        CHECK(bvh.triangleCount() == 0);
+        CHECK(bvh.triangleCount() == 1);
+        CHECK(bvh.keptTriangleCount() == 0);
         CHECK_FALSE(bvh.raycast(down));
         CHECK(bvh.intersect(Box3({-10, -10, -10}, {10, 10, 10})).empty());
     }
@@ -646,6 +651,7 @@ TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
         BVH bvh(1);
         bvh.build(positions);
         CHECK(bvh.triangleCount() == 16);
+        CHECK(bvh.keptTriangleCount() == 16);
 
         const auto hit = bvh.raycast(down);
         if (hit) {

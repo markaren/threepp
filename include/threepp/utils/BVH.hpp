@@ -106,8 +106,14 @@ namespace threepp {
 
         [[nodiscard]] const BufferGeometry* getGeometry() const;
 
-        // The triangles in the tree: the source's, less any with a non-finite vertex.
+        // The triangles in the source geometry, kept or not: every triangleIndex
+        // a query hands back is below it, so it can size a per-triangle array.
         [[nodiscard]] std::size_t triangleCount() const {
+            return sourceTriangles;
+        }
+
+        // The triangles in the tree: the source's, less any with a non-finite vertex.
+        [[nodiscard]] std::size_t keptTriangleCount() const {
             return triangles.size();
         }
 
@@ -147,6 +153,7 @@ namespace threepp {
         std::vector<Triangle> triangles;       // leaf order
         std::vector<RayTriangle> rayTriangles; // leaf order
         std::vector<int> sourceIndex;          // leaf order -> index in the source geometry
+        std::size_t sourceTriangles = 0;       // the source's triangle count, kept or not
         const BufferGeometry* geometry = nullptr;
 
         void buildTree();

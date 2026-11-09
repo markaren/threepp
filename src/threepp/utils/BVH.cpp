@@ -157,6 +157,7 @@ void BVH::buildTree() {
     nodes.clear();
     rayTriangles.clear();
     sourceIndex.clear();
+    sourceTriangles = triangles.size();
 
     const auto n = static_cast<int>(triangles.size());
     if (n == 0) return;
