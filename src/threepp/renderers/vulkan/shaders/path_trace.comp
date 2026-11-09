@@ -1367,7 +1367,8 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             // next-event estimation, since a delta light is never found by the
             // mirror ray the interface samples. The sun's glint is the
             // background's disc on that mirror ray, so it is left out here.
-            if (!thin) L += throughput * dielectricGlints(P, N, Ng, V, ior, max(rough, 0.03));
+            // A thin-walled pane glints like any other glass (it was skipped).
+            L += throughput * dielectricGlints(P, N, Ng, V, ior, max(rough, 0.03));
             const float VdotH = clamp(dot(V, H), 0.0, 1.0);
             const float F0    = (ior - 1.0) / (ior + 1.0);
             float F = F0 * F0 + (1.0 - F0 * F0) * pow(1.0 - VdotH, 5.0);

@@ -1260,7 +1260,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
 
     // Direct-light glint. The recombine scales the opaque base by
     // (1 − transmission), which erases its analytic specular entirely for
-    // transmission=1 glass — so glass under a sun/dir light had NO surface
+    // transmission=1 glass — so glass under a sun or a lamp had NO surface
     // glint at all, a big part of the "dull" look. Spec-only Cook-Torrance at
     // the glass lobe + Fresnel from the ior (no diffuse — the transmit path
     // carries that energy). Deterministic, so it's added sharp on top of the
@@ -1283,6 +1283,58 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             const vec3  F = glassFresnel(r0, max(dot(V, H), 0.0), pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
             // spec·NdotL = D·G·F / (4·NdotV·NdotL) · NdotL
             glint += lights.dirLights[i].color * (D * G * F / max(4.0 * NdotV, 1e-4)) * vis;
+        }
+        // The point and spot lamps' glints, the same lobe. Glass had the sun's
+        // alone: a street lamp or a car's head lamps in a shop window or a
+        // windscreen at night left no highlight at all, where the path tracer
+        // (dielectricGlints) and a photo show a bright one. The lamps are this
+        // pixel's cluster cell's (its own depth, as the water's glints read
+        // them); a parallel projection has no cells along a ray and goes
+        // without. A lamp's shadow ray is cast only for a glint worth one.
+        if (pc.clusterLightCount > 0u && cam.camAux.x < 0.5) {
+            const uint cellBase = clusterCellBase(ivec2(gl_GlobalInvocationID.xy),
+                                                  max(dot(P - gPrimaryOrigin, cam.camAux.yzw), 0.0));
+            const uint cCnt     = min(clusterGrid[cellBase], kClusterMaxPerCell);
+            for (uint ci = 0u; ci < cCnt; ++ci) {
+                const uint li = min(clusterGrid[cellBase + 1u + ci], pc.clusterLightCount - 1u);
+                vec3 toL = clusterLights[li].position - P;
+                const float dist = length(toL);
+                if (dist < 1e-4) continue;
+                toL /= dist;
+                const float NdotL = dot(N, toL);
+                if (NdotL <= 0.0) continue;
+                float atten;
+                if (clusterLights[li].type > 0.5) {
+                    const float spotAtten = smoothstep(clusterLights[li].cosAngleOuter, clusterLights[li].cosAngleInner,
+                                                       dot(-toL, clusterLights[li].direction));
+                    if (spotAtten <= 0.0) continue;
+                    atten = spotAtten / max(pow(dist, clusterLights[li].decay), 0.01);
+                } else {
+                    atten = 1.0 / max(distFalloff(dist, clusterLights[li].decay), 0.01);
+                }
+                const float range = clusterLights[li].range;
+                if (range > 0.0) {
+                    const float tt  = dist / range;
+                    const float wnd = max(1.0 - tt * tt * tt * tt, 0.0);
+                    atten *= wnd * wnd;
+                }
+                const vec3  H = normalize(V + toL);
+                const float D = distGGX(max(dot(N, H), 0.0), gr);
+                const float G = geomSmithG1(NdotV, kG) * geomSmithG1(NdotL, kG);
+                const vec3  F = glassFresnel(r0, max(dot(V, H), 0.0), pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
+                vec3 c = clusterLights[li].color * (atten * D * G / max(4.0 * NdotV, 1e-4)) * F;
+                if (max(max(c.r, c.g), c.b) < 1e-4) continue;
+                if (doShadows) {
+                    const float smV = kSM ? smLampVis(clusterLights[li].shadowSlot, clusterLights[li].type > 0.5, P, N,
+                                                      clusterLights[li].position, vec2(gl_GlobalInvocationID.xy))
+                                          : -1.0;
+                    c *= smV >= 0.0 ? smV : shadowVis(P + N * SHADOW_EPS, toL, dist - 1e-2);
+                }
+                const float cl   = max(max(c.r, c.g), c.b);
+                const float gMax = pc.fireflyClamp * 4.0;
+                if (gMax > 0.0 && cl > gMax) c *= gMax / cl;
+                glint += c;
+            }
         }
     }
     return sum / float(kGlassSamples) + glint;
