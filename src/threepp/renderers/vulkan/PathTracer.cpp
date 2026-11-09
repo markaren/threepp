@@ -577,8 +577,11 @@ namespace threepp::vulkan {
         pc.maxBounces         = params_.maxBounces;
         // The reset holds for every band of the first pass: each overwrites
         // its own rows once.
+        // Bits 16-31: the ocean's wave scale in 256ths, for the fine cascade's
+        // slope (the push block has no room for a float of its own).
+        const uint32_t waveScale = uint32_t(std::clamp(std::lround(double(in.oceanWaveScale) * 256.0), 1L, 65535L));
         pc.flags              = (resetPending_ ? 1u : 0u) | (in.sunExtracted ? 2u : 0u) | ((in.lensModel & 3u) << 2)
-                              | (in.envSunLastDirLight ? 16u : 0u);
+                              | (in.envSunLastDirLight ? 16u : 0u) | (waveScale << 16);
         pc.emissiveCount      = in.emissiveCount;
         pc.emissiveTotalPower = in.emissiveTotalPower;
         pc.envMipCount        = std::max(1u, in.envMipCount);

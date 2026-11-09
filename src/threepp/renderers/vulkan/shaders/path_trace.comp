@@ -82,9 +82,8 @@
 // floor through its wall), which a light tracer's straight connection to the
 // camera could not show. Under an ocean the sun's caustics are photons too
 // (traceSunPhoton): from a disc across the sun about the water the camera
-// sees, they bend through the waves (the camera paths' wave normal with the
-// fine cascade's slope taken over its texels, oceanNormal) onto the seabed,
-// the kelp and what swims there, and the water
+// sees, they bend through the waves (the wave normal the camera paths take,
+// oceanNormal) onto the seabed, the kelp and what swims there, and the water
 // mirrors them onto hulls and quays above it. Inside that disc a point under
 // the sea takes its sun from them alone; outside it, the murk's flat
 // refraction and crest proxy hold as before. The shafts in the water stay the
@@ -227,6 +226,7 @@ layout(push_constant) uniform Pc {
                              //   into them, 4 = trace the sun's photons, 5 = set the pass up
                              // bit 8 = this pass's photons are built: gather them
                              // bit 9 = the pass has the sun's photons through the ocean
+                             // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
     uint  envMipCount;       // PMREM mip levels (>= 1)
@@ -1440,22 +1440,24 @@ vec3 gatherPhotons(const Surf s, vec3 V, bool sunOk) {
 // wake (DisplacedMesh::WakeField) on it, as the deferred shade reads it: the
 // lane a hull leaves calms the chop, turbulent water boils, the hulls' ripples
 // run on it. wk: the wake field there (0 without one), whose foam and aeration
-// the caller weighs. The slope is a central difference over a sixteenth of the
-// cascade's tile for the camera path, the frame's own; over its texels for a
-// sun's photon (fine), which the ripples that focus sunlight a metre or two
-// down live at.
-vec3 oceanNormal(int hitId, vec3 P, vec3 N, vec3 V, bool fine, out vec4 wk) {
+// the caller weighs. The slope is a central difference over the cascade's
+// texels (it was over a sixteenth of its tile, which smoothed away every
+// ripple shorter than a metre and a half: a mirror for a sea, and no
+// caustics), its heights scaled by the ocean's wave scale as the mesh's are
+// (pc.flags bits 16-31).
+vec3 oceanNormal(int hitId, vec3 P, vec3 N, vec3 V, out vec4 wk) {
     vec2 g = vec2(0.0);
     if (pc.oceanFineTileSize > 0.0) {
         const float invTile = 1.0 / pc.oceanFineTileSize;
-        const float eps     = pc.oceanFineTileSize / (fine ? float(max(textureSize(oceanFineHeight, 0).x, 32)) : 32.0);
+        const float eps     = pc.oceanFineTileSize / float(max(textureSize(oceanFineHeight, 0).x, 32));
         const float dUV     = eps * invTile;
         const vec2  uvW     = P.xz * invTile;
         const float hL = textureLod(oceanFineHeight, uvW + vec2(-dUV, 0.0), 0.0).r * invTile;
         const float hR = textureLod(oceanFineHeight, uvW + vec2( dUV, 0.0), 0.0).r * invTile;
         const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -dUV), 0.0).r * invTile;
         const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  dUV), 0.0).r * invTile;
-        g = vec2(hR - hL, hU - hD) / (2.0 * eps);
+        // As the mesh's heights are, scaled by the ocean's wave scale.
+        g = vec2(hR - hL, hU - hD) * (float(pc.flags >> 16) / (256.0 * 2.0 * eps));
     }
     wk = vec4(0.0);
     if (geoms[hitId].foamAddress > 1ul) {
@@ -1664,7 +1666,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         bool  wakeLayer = false;
         if (isOcean) {
             vec4 wk;
-            N = oceanNormal(hitId, P, N, V, false, wk);
+            N = oceanNormal(hitId, P, N, V, wk);
             if (hasWake && (wk.r > 4e-3 || wk.g > 2e-3)) {
                 const bool  below = dot(V, airUp()) < 0.0;// seen from under the surface
                 const float wA    = WakeTable(geoms[hitId].foamAddress).albedo;
@@ -1935,7 +1937,7 @@ void tracePhotonPath(vec3 o, vec3 d, vec3 beta, bool sun, inout uint seed) {
             // The wake's foam and aeration, in the camera path's shares: a
             // diffuse layer on the water, which a photon does not cross.
             vec4 wk;
-            N = oceanNormal(hitId, P, N, V, true, wk);
+            N = oceanNormal(hitId, P, N, V, wk);
             if (geoms[hitId].foamAddress > 1ul && (wk.r > 4e-3 || wk.g > 2e-3)) {
                 const bool  below = dot(V, airUp()) < 0.0;
                 const float cover = smoothstep(0.10, 0.45, wk.r) * (below ? 0.12 : 1.0);

@@ -203,6 +203,7 @@ namespace threepp {
                 in.emissiveTotalPower = emissiveTotalPowerThisFrame_;
                 in.envMipCount        = envImage.mipLevels;
                 in.oceanFineTileSize  = oceanFineTileSize;
+                in.oceanWaveScale     = oceanWaveScale;
                 pathTracer_->recordDispatch(c, f, in);
             });
             pathTracer_->declare(g, pass, f);

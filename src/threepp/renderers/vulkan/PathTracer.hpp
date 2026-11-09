@@ -68,6 +68,7 @@ namespace threepp::vulkan {
             // mip 0 is what a ray through glass finds (sun caustics).
             bool     envSunLastDirLight = false;
             float    oceanFineTileSize  = 0.f;// the fine cascade's tile (m), 0 = no ocean
+            float    oceanWaveScale     = 1.f;// the ocean's wave height multiplier (DisplacedMesh::Params::waveScale)
             float    starIntensity      = 0.f;// the procedural star field, 0 = none
             // setDeferredVolumetrics: the lamps' beam medium in clear air and its g.
             float    volDensity         = 0.f;
