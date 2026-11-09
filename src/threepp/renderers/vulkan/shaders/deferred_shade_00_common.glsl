@@ -91,8 +91,11 @@ const bool kRR = kRayRecon != 0u;
 // replaced. The default, every bit, is what fog_march.comp compiles.
 //   bit 0  THREEPP_VK_FIX_LAMP_GLASS: the inline lamp loops dim a lamp by
 //          the glass it shines through (lampShadowVis).
+//   bit 1  THREEPP_VK_FIX_WATER_BOUNCE_EM: the water's mirror bounce resets
+//          bounceEmScale (traceRadiance).
 layout(constant_id = 6) const uint kShadeFixes = 0xFFFFFFFFu;
 const bool kFixLampGlass = (kShadeFixes & 1u) != 0u;
+const bool kFixWaterBounceEm = (kShadeFixes & 2u) != 0u;
 
 // Ray-query counters (VulkanRenderer::setCountRays, frame_timings rays_*):
 // lights.rayCountAddr names this frame's kRayCountSlots uints (0 = off). Every

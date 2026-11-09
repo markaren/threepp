@@ -65,7 +65,8 @@ namespace threepp::vulkan {
     // one bit per fix, set unless its knob is 0, which gives the shade it
     // replaced. Read once per process.
     static uint32_t shadeFixes() {
-        static const uint32_t bits = env::flag("THREEPP_VK_FIX_LAMP_GLASS", true) ? 1u : 0u;
+        static const uint32_t bits = (env::flag("THREEPP_VK_FIX_LAMP_GLASS", true) ? 1u : 0u) |
+                                     (env::flag("THREEPP_VK_FIX_WATER_BOUNCE_EM", true) ? 2u : 0u);
         return bits;
     }
 
