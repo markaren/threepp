@@ -1652,17 +1652,16 @@ namespace threepp {
         const auto& w = *it->second->wake;
         if (w.slopeImage == VK_NULL_HANDLE || w.rippleRes == 0 || patch >= w.layers) return false;
 
-        // rgba16f: slope x, slope z, the sum of their squares (alpha unused).
+        // rgba16f: slope x, slope z, the sum of their squares, and alpha
+        // (unused on this branch; a ripple height when one is written there).
         const uint32_t n = w.rippleRes;
         const auto bytes = copyGeneralImageToHost(*ctx, w.slopeImage, n, n, patch, 8u, "readWakeRipples");
         const size_t texels = static_cast<size_t>(n) * n;
-        out.resize(texels * 3u);
-        for (size_t i = 0; i < texels; ++i) {
-            for (size_t c = 0; c < 3; ++c) {
-                uint16_t h;
-                std::memcpy(&h, bytes.data() + i * 8u + c * 2u, sizeof(h));
-                out[i * 3u + c] = halfBitsToFloat(h);
-            }
+        out.resize(texels * 4u);
+        for (size_t i = 0; i < texels * 4u; ++i) {
+            uint16_t h;
+            std::memcpy(&h, bytes.data() + i * 2u, sizeof(h));
+            out[i] = halfBitsToFloat(h);
         }
         resolution = n;
         period     = w.rippleSize[patch];

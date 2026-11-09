@@ -204,8 +204,9 @@ namespace threepp {
 
         // ── Wake ripple readback (TEST / AUDIT) ──────────────────────────
         // Copy one wake patch's ripple slopes (wake_ripple.comp, mip 0) to
-        // the host: `out` holds resolution^2 texels of 3 floats (slope x,
-        // slope z, the sum of their squares), row-major, texel (ix, iz) at world
+        // the host: `out` holds resolution^2 texels of 4 floats (slope x,
+        // slope z, the sum of their squares, and the image's alpha, 0 unless
+        // the ripples write their height there), row-major, texel (ix, iz) at world
         // (ix, iz) * period / resolution modulo `period`: the patch's small
         // sea is periodic and world-anchored, and is shown only through its
         // ripples' window (DisplacedMesh::WakePatch). Exists so the Kelvin
