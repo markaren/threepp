@@ -10,9 +10,12 @@
 //
 //   ocean_metrics                         the sweep: U10 = 7, 10, 15 m/s at
 //                                         fetch 0 (fully developed) and 20 km,
-//                                         each case in its own child process
+//                                         then two wakes (30 m at 10 kn, 4 m
+//                                         at 15 kn), each in its own process
 //   ocean_metrics --wind 10 --fetch 0     one case
 //   ocean_metrics --json metrics.jsonl    also append JSON lines to this file
+//   ocean_metrics --wake 5.14 --hull 30   one wake case: a hull of 30 m at
+//                                         5.14 m/s on a calm sea
 //
 // Flags
 //   --wind U      wind speed at 10 m (m/s)                 default 10
@@ -23,6 +26,12 @@
 //   --hz f        sample rate of the pinned clock           default 10
 //   --gauges n    n x n virtual wave gauges over the tile   default 16
 //   --json path   append one JSON object per metric
+//   --wake U      the wake case at hull speed U (m/s); with --hull L (30),
+//                 --beam B (8), --window S (256, the ripples' period) and
+//                 --wake-seconds (60)
+//   --dump prefix for a look: a sea case writes the gauge PSD to
+//                 <prefix>_psd.txt; a wake case writes the slope image and
+//                 the ridge maxima to <prefix>.f32 and <prefix>.txt
 //   --strict      exit 1 when any graded metric FAILs
 // Exit codes: 0 ran, 1 a FAIL under --strict, 2 bad arguments, 42 no Vulkan
 // device (the ctest skip code of the other Vulkan tests).
@@ -43,7 +52,12 @@
 // Not measured here: the shade's sub-grid roughness (base roughness plus the
 // view-dependent LEAN banking in deferred_shade_06_prologue_surface.glsl), the
 // B-spline reconstruction of cascades 0 and 1 in water_displace.comp (spectra
-// below are of the raw cascade fields), and the vessel wakes.
+// below are of the raw cascade fields), and the analytic wake (bow bump and
+// V-wedge in water_displace.comp); the wake case measures the ripples of the
+// wake field (wake_ripple.comp), read back with VulkanRenderer::
+// readWakeRipples. They carry slopes only today, so the wake metrics are
+// taken from the slope image; kelvinMetrics takes any scalar, so height can
+// replace slope when the ripples carry it.
 
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -160,7 +174,63 @@ namespace {
         int gauges = 16;
         std::string json;
         bool strict = false;
+        // --wake: one pressure source (a hull) at speed U on a calm sea.
+        float wakeSpeed = 0.f;     // m/s; > 0 selects the wake case
+        float hullLength = 30.f;   // m
+        float hullBeam = 8.f;      // m
+        float wakeWindow = 256.f;  // m, the ripples' period and window
+        double wakeSeconds = 60.0;
+        std::string dump;          // --dump prefix: the wake image and ridge, for a look
     };
+
+    // ── Shared: a hidden-window renderer and the table ───────────────────────
+    constexpr int kW = 320, kH = 180;
+    struct Gpu {
+        std::unique_ptr<Canvas> canvas;
+        std::unique_ptr<VulkanRenderer> renderer;
+    };
+
+    bool makeGpu(Gpu& g) {
+        std::unordered_map<std::string, Canvas::ParameterValue> canvasParams{
+                {"vsync", false}, {"size", WindowSize{kW, kH}}, {"headless", true}};
+        try {
+            g.canvas = std::make_unique<Canvas>("ocean_metrics", canvasParams);
+            g.renderer = std::make_unique<VulkanRenderer>(*g.canvas);
+        } catch (const std::exception& e) {
+            std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
+            return false;
+        }
+        return true;
+    }
+
+    // Prints the table and appends one JSON object per metric; `tag` names
+    // the case in the JSON.
+    int report(const std::vector<Metric>& out, const Config& cfg, const std::string& tag) {
+        std::printf("\n%-42s %12s  %-14s %-16s %-6s %s\n", "metric", "measured", "target", "tolerance", "", "source");
+        bool anyFail = false;
+        for (const auto& m: out) {
+            const char* v = m.graded() ? (m.pass() ? "PASS" : "FAIL") : "INFO";
+            if (m.graded() && !m.pass()) anyFail = true;
+            std::printf("%-42s %12.5g  %-14s %-16s %-6s %s\n", m.name.c_str(), m.measured, m.target.c_str(),
+                        m.tolerance.c_str(), v, m.source.c_str());
+        }
+        std::fflush(stdout);
+        if (!cfg.json.empty()) {
+            std::ofstream js(cfg.json, std::ios::app);
+            for (const auto& m: out) {
+                std::string name = m.name;
+                name.erase(0, name.find_first_not_of(' '));
+                char b[1024];
+                std::snprintf(b, sizeof(b),
+                              "{\"case\":\"%s\",\"metric\":\"%s\",\"measured\":%.6g,\"lo\":%.6g,\"hi\":%.6g,"
+                              "\"target\":\"%s\",\"tolerance\":\"%s\",\"verdict\":\"%s\",\"source\":\"%s\"}",
+                              tag.c_str(), name.c_str(), m.measured, m.lo, m.hi, m.target.c_str(), m.tolerance.c_str(),
+                              m.graded() ? (m.pass() ? "PASS" : "FAIL") : "INFO", m.source.c_str());
+                js << b << "\n";
+            }
+        }
+        return (cfg.strict && anyFail) ? 1 : 0;
+    }
 
     // Per-cascade spectral state kept across frames.
     struct Cascade {
@@ -227,23 +297,13 @@ namespace {
     }
 
     int runCase(const Config& cfg) {
-        constexpr int W = 320, H = 180;
-        std::unordered_map<std::string, Canvas::ParameterValue> canvasParams{
-                {"vsync", false}, {"size", WindowSize{W, H}}, {"headless", true}};
-        std::unique_ptr<Canvas> canvasPtr;
-        std::unique_ptr<VulkanRenderer> rendererPtr;
-        try {
-            canvasPtr = std::make_unique<Canvas>("ocean_metrics", canvasParams);
-            rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-        } catch (const std::exception& e) {
-            std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-            return kSkipCode;
-        }
-        Canvas& canvas = *canvasPtr;
-        VulkanRenderer& renderer = *rendererPtr;
+        Gpu gpu;
+        if (!makeGpu(gpu)) return kSkipCode;
+        Canvas& canvas = *gpu.canvas;
+        VulkanRenderer& renderer = *gpu.renderer;
 
         Scene scene;
-        PerspectiveCamera camera(55.f, float(W) / H, 0.5f, 4000.f);
+        PerspectiveCamera camera(55.f, float(kW) / kH, 0.5f, 4000.f);
         camera.position.set(0.f, 40.f, 120.f);
         camera.lookAt(Vector3{0.f, 0.f, 0.f});
         auto sun = DirectionalLight::create(Color::white, 2.f);
@@ -645,6 +705,11 @@ namespace {
         out.push_back({"Tp (gauge PSD peak, 0.01 Hz bands)", tp, 0.9 * tpT, 1.1 * tpT, fmt("%.2f s", tpT), "+-10%",
                        tpSrc});
         out.push_back({"  Tp of the strongest single line", 1.0 / peakOf(psd), 1, 0, "", "", "the tile's discrete modes"});
+        if (!cfg.dump.empty()) {
+            // For a look: frequency (Hz), PSD (m^2/Hz), PSD in 0.01 Hz bands.
+            std::ofstream txt(cfg.dump + "_psd.txt");
+            for (int j = 1; j <= L / 2; ++j) txt << j * df << " " << psd[j] << " " << psdBand[j] << "\n";
+        }
         // Tail slope of the frequency spectrum: least squares of log S on
         // log f over quarter-octave band means in [1.5 fp, min(4 fp, 0.4 fs)]
         // (band means, so the comb of lines does not set the slope):
@@ -827,33 +892,223 @@ namespace {
 
         out.push_back({"stale readback frames", double(staleFrames), 0, 0, "0", "", "harness self-check"});
 
-        // ── Print ────────────────────────────────────────────────────────────
-        std::printf("\n%-42s %12s  %-14s %-16s %-6s %s\n", "metric", "measured", "target", "tolerance", "", "source");
-        bool anyFail = false;
-        for (const auto& m: out) {
-            const char* v = m.graded() ? (m.pass() ? "PASS" : "FAIL") : "INFO";
-            if (m.graded() && !m.pass()) anyFail = true;
-            std::printf("%-42s %12.5g  %-14s %-16s %-6s %s\n", m.name.c_str(), m.measured, m.target.c_str(),
-                        m.tolerance.c_str(), v, m.source.c_str());
+        char tag[96];
+        std::snprintf(tag, sizeof(tag), "U10=%.1f fetch=%.0f chop=%.2f", U, double(cfg.fetch), chop);
+        return report(out, cfg, tag);
+    }
+
+    // ── 6. Kelvin wake ───────────────────────────────────────────────────────
+    // A periodic, world-anchored image of one scalar of the wake: `along`
+    // oscillates with the waves along the track and `energy` is its local
+    // power. Today the ripples carry slopes only, so `along` is the slope
+    // along the track and `energy` the squared slope magnitude; once they
+    // carry height, pass h and h^2 and nothing below changes.
+    struct WakeImage {
+        int n = 0;
+        double period = 0;
+        std::vector<float> along, energy;
+    };
+
+    inline int wrapIndex(long long i, int n) {
+        i %= n;
+        return int(i < 0 ? i + n : i);
+    }
+
+    // Texel ix lies at world ix * period / n, modulo period.
+    inline size_t texelOf(const WakeImage& w, double x, double z) {
+        const double t = w.period / w.n;
+        return size_t(wrapIndex(std::llround(z / t), w.n)) * w.n + size_t(wrapIndex(std::llround(x / t), w.n));
+    }
+
+    // The source has moved along +x and now sits at (xs, zs). Transverse
+    // wavelength: 2 pi U^2 / g (+-5 %). Angle of the maximum-amplitude
+    // ridge: 19.47 deg up to a hull Froude number of about 0.5, then
+    // 1 / (2 sqrt(2 pi) Fr) rad (Rabaud and Moisy 2013), +-2 deg.
+    // `ridge`, when given, receives the (distance behind, signed lateral
+    // offset) of every maximum the angle fit used.
+    std::vector<Metric> kelvinMetrics(const WakeImage& w, double U, double L, double xs, double zs,
+                                      double behindMax, std::vector<std::pair<double, double>>* ridge = nullptr) {
+        std::vector<Metric> out;
+        const double texel = w.period / w.n;
+        const double lamT = 2.0 * kPi * U * U / kG;
+        const double fr = U / std::sqrt(kG * L);
+
+        // Transverse waves on the centreline, from one hull length behind
+        // the centre to behindMax: the strongest wavenumber of a Hann-windowed,
+        // zero-padded FFT, refined by a parabola through its neighbours.
+        double lamMeas = 0;
+        {
+            std::vector<double> sline;
+            for (double d = L; d <= behindMax; d += texel) sline.push_back(w.along[texelOf(w, xs - d, zs)]);
+            const int m = int(sline.size());
+            int nfft = 1;
+            while (nfft < 16 * m) nfft <<= 1;
+            Fft f(nfft);
+            std::vector<cfloat> b(nfft, cfloat(0.f, 0.f));
+            double mean = 0;
+            for (double v: sline) mean += v;
+            mean /= std::max(1, m);
+            for (int i = 0; i < m; ++i)
+                b[i] = cfloat(float((sline[i] - mean) * (0.5 - 0.5 * std::cos(2.0 * kPi * i / std::max(1, m - 1)))), 0.f);
+            f.run(b.data(), false);
+            // Skip wavelengths longer than half the record.
+            const int jMin = std::max(2, int(2.0 * nfft / std::max(1, m)));
+            int jp = jMin;
+            for (int j = jMin; j < nfft / 2; ++j)
+                if (std::norm(b[j]) > std::norm(b[jp])) jp = j;
+            double delta = 0;
+            if (jp > jMin) {
+                const double a = std::norm(b[jp - 1]), c0 = std::norm(b[jp]), c = std::norm(b[jp + 1]);
+                const double den = a - 2 * c0 + c;
+                if (den < 0) delta = 0.5 * (a - c) / den;
+            }
+            const double cyclesPerMetre = (jp + delta) / (nfft * texel);
+            lamMeas = cyclesPerMetre > 0 ? 1.0 / cyclesPerMetre : 0.0;
         }
-        std::fflush(stdout);
-        if (!cfg.json.empty()) {
-            std::ofstream js(cfg.json, std::ios::app);
-            for (const auto& m: out) {
-                std::string name = m.name;
-                name.erase(0, name.find_first_not_of(' '));
-                char b[1024];
-                std::snprintf(b, sizeof(b),
-                              "{\"wind\":%.2f,\"fetch\":%.0f,\"choppiness\":%.3f,\"metric\":\"%s\",\"measured\":%.6g,"
-                              "\"lo\":%.6g,\"hi\":%.6g,\"target\":\"%s\",\"tolerance\":\"%s\",\"verdict\":\"%s\","
-                              "\"source\":\"%s\"}",
-                              U, double(cfg.fetch), chop, name.c_str(), m.measured, m.lo, m.hi, m.target.c_str(),
-                              m.tolerance.c_str(), m.graded() ? (m.pass() ? "PASS" : "FAIL") : "INFO",
-                              m.source.c_str());
-                js << b << "\n";
+        out.push_back({"wake transverse wavelength (m)", lamMeas, 0.95 * lamT, 1.05 * lamT, fmt("%.2f m", lamT), "+-5%",
+                       "2 pi U^2 / g, Kelvin"});
+
+        // Ridge: average the power along the track over one transverse
+        // wavelength (it oscillates with the crests), then for each distance
+        // behind the source take the lateral offset of the maximum on each
+        // side and fit a line. No averaging across the track: a box as wide
+        // as a wavelength there merges the two ridges of a narrow wake into
+        // one on the centreline.
+        const int hw = std::max(1, int(std::lround(0.5 * (lamMeas > 0 ? lamMeas : lamT) / texel)));
+        std::vector<double> sm(w.energy.size());
+        for (int r = 0; r < w.n; ++r) {
+            for (int c = 0; c < w.n; ++c) {
+                double acc = 0;
+                for (int k = -hw; k <= hw; ++k) acc += w.energy[size_t(r) * w.n + wrapIndex(c + k, w.n)];
+                sm[size_t(r) * w.n + c] = acc;
             }
         }
-        return (cfg.strict && anyFail) ? 1 : 0;
+        const double tanMax = std::tan(35.0 * kPi / 180.0);
+        double angles[2] = {0, 0};
+        int fitted = 0;
+        for (int side = 0; side < 2; ++side) {
+            const double sgn = side == 0 ? 1.0 : -1.0;
+            double sx = 0, sy = 0, sxx = 0, sxy = 0;
+            int nn = 0;
+            for (double d = std::max(2.0 * L, 2.0 * lamT); d <= behindMax; d += texel) {
+                double best = -1, bestZ = 0;
+                const double zHi = std::min(0.4 * w.period, d * tanMax);
+                for (double z = std::max(texel, 0.02 * d); z <= zHi; z += texel) {
+                    const double v = sm[texelOf(w, xs - d, zs + sgn * z)];
+                    if (v > best) best = v, bestZ = z;
+                }
+                if (best <= 0) continue;
+                if (ridge) ridge->emplace_back(d, sgn * bestZ);
+                sx += d, sy += bestZ, sxx += d * d, sxy += d * bestZ;
+                ++nn;
+            }
+            if (nn > 2) {
+                const double slope = (nn * sxy - sx * sy) / (nn * sxx - sx * sx);
+                angles[side] = std::atan(slope) * 180.0 / kPi;
+                ++fitted;
+            }
+        }
+        const double alphaT = std::min(19.47, 180.0 / kPi / (2.0 * std::sqrt(2.0 * kPi) * fr));
+        const double alpha = fitted ? 0.5 * (angles[0] + angles[1]) : 0.0;
+        out.push_back({"wake max-amplitude ridge angle (deg)", alpha, alphaT - 2.0, alphaT + 2.0,
+                       fmt("%.2f deg", alphaT), "+-2 deg", fmt("Rabaud-Moisy 2013, Fr_L = %.2f", fr)});
+        out.push_back({"  ridge angle, +z side", angles[0], 1, 0, "", "", ""});
+        out.push_back({"  ridge angle, -z side", angles[1], 1, 0, "", "", ""});
+        return out;
+    }
+
+    // A calm sea (waveScale 0, choppiness 0) and one pressure source, a hull
+    // of `hullLength` x `hullBeam` bearing down with its weight, moving along
+    // +x at `wakeSpeed`, inside one wake patch whose ripples' window trails
+    // it (the source at 80 % of the window, as VesselWash places it).
+    int runWake(const Config& cfg) {
+        Gpu gpu;
+        if (!makeGpu(gpu)) return kSkipCode;
+        Canvas& canvas = *gpu.canvas;
+        VulkanRenderer& renderer = *gpu.renderer;
+
+        Scene scene;
+        PerspectiveCamera camera(55.f, float(kW) / kH, 0.5f, 4000.f);
+        camera.position.set(0.f, 120.f, 60.f);
+        camera.lookAt(Vector3{0.f, 0.f, 0.f});
+
+        Ocean::Options opt;
+        opt.waveScale = 0.f;
+        opt.choppiness = 0.f;
+        auto ocean = Ocean::create(opt);
+        ocean->wakeField.resolution = 256;
+        ocean->wakeField.rippleResolution = 512;
+        scene.add(ocean);
+
+        const double U = cfg.wakeSpeed, L = cfg.hullLength, B = cfg.hullBeam, S = cfg.wakeWindow;
+        // Weight of a box hull of draft 0.4 B and block coefficient 0.5 in
+        // sea water. The metrics are geometric, so only its sign matters.
+        const double weight = 1025.0 * kG * L * B * 0.4 * B * 0.5;
+        const double hz = 20.0, dt = 1.0 / hz, t0 = 1.0;
+        const int frames = std::max(2, int(std::lround(cfg.wakeSeconds * hz)));
+        std::printf("wake U=%.2f m/s hull %.1f x %.1f m Fr_L=%.2f window %.0f m, %d frames at %.0f Hz\n", U, L, B,
+                    U / std::sqrt(kG * L), S, frames, hz);
+        std::fflush(stdout);
+
+        double x = 0, xPrev = 0;
+        for (int f = 0; f < frames; ++f) {
+            xPrev = x;
+            x = U * f * dt;
+            ocean->clearWakeSources();
+            DisplacedMesh::WakeSource src;
+            src.x0 = float(xPrev), src.z0 = 0.f;
+            src.x1 = float(x), src.z1 = 0.f;
+            src.radius = float(0.5 * B);
+            src.push = float(weight);
+            src.ax = float(0.5 * L), src.az = 0.f;
+            src.patch = 0;
+            ocean->addWakeSource(src);
+            auto& p = ocean->wakePatches[0];
+            p.centerX = float(x - 0.3 * S);
+            p.centerZ = 0.f;
+            p.size = float(S);
+            renderer.setSimTime(t0 + f * dt);
+            canvas.animateOnce([&] { renderer.render(scene, camera); });
+        }
+
+        std::vector<float> rip;
+        uint32_t n = 0;
+        float period = 0.f;
+        std::vector<Metric> out;
+        if (!renderer.readWakeRipples(*ocean, 0, rip, n, period) || n == 0) {
+            out.push_back({"wake ripples read back", 0, 1, 1, "1", "", "readWakeRipples"});
+        } else {
+            WakeImage w;
+            w.n = int(n);
+            w.period = period;
+            w.along.resize(size_t(n) * n);
+            w.energy.resize(size_t(n) * n);
+            double peak = 0;
+            for (size_t i = 0; i < w.along.size(); ++i) {
+                w.along[i] = rip[3 * i];// slope along +x, the track
+                w.energy[i] = rip[3 * i] * rip[3 * i] + rip[3 * i + 1] * rip[3 * i + 1];
+                peak = std::max(peak, double(w.energy[i]));
+            }
+            // Stay inside the window (0.8 S behind the source) and off its
+            // faded outer tenth.
+            std::vector<std::pair<double, double>> ridge;
+            out = kelvinMetrics(w, U, L, x, 0.0, 0.7 * period, &ridge);
+            if (!cfg.dump.empty()) {
+                // For a look: <dump>.f32 holds n*n floats of `along` then n*n
+                // of `energy`; <dump>.txt holds n, period, the source x and z,
+                // then one ridge maximum per line.
+                std::ofstream raw(cfg.dump + ".f32", std::ios::binary);
+                raw.write(reinterpret_cast<const char*>(w.along.data()), std::streamsize(w.along.size() * 4));
+                raw.write(reinterpret_cast<const char*>(w.energy.data()), std::streamsize(w.energy.size() * 4));
+                std::ofstream txt(cfg.dump + ".txt");
+                txt << n << " " << period << " " << x << " 0\n";
+                for (const auto& [d, z]: ridge) txt << d << " " << z << "\n";
+            }
+            out.push_back({"  max slope in the window", std::sqrt(peak), 1, 0, "", "", "ripples are slope only"});
+        }
+        char tag[96];
+        std::snprintf(tag, sizeof(tag), "wake U=%.2f L=%.1f B=%.1f", U, L, B);
+        return report(out, cfg, tag);
     }
 
 }// namespace
@@ -873,6 +1128,12 @@ int main(int argc, char** argv) {
         else if (const char* s = val("--hz")) cfg.hz = std::atof(s);
         else if (const char* s = val("--gauges")) cfg.gauges = std::atoi(s);
         else if (const char* s = val("--json")) cfg.json = s;
+        else if (const char* s = val("--wake")) cfg.wakeSpeed = float(std::atof(s)), single = true;
+        else if (const char* s = val("--hull")) cfg.hullLength = float(std::atof(s));
+        else if (const char* s = val("--beam")) cfg.hullBeam = float(std::atof(s));
+        else if (const char* s = val("--window")) cfg.wakeWindow = float(std::atof(s));
+        else if (const char* s = val("--wake-seconds")) cfg.wakeSeconds = std::atof(s);
+        else if (const char* s = val("--dump")) cfg.dump = s;
         else if (std::strcmp(argv[i], "--strict") == 0) cfg.strict = true;
         else {
             std::printf("unknown argument %s (see the usage block in ocean_metrics.cpp)\n", argv[i]);
@@ -880,28 +1141,35 @@ int main(int argc, char** argv) {
         }
     }
     if (cfg.hz <= 0 || cfg.seconds <= 0 || cfg.wind <= 0) return 2;
-    if (single) return runCase(cfg);
+    if (single) return cfg.wakeSpeed > 0.f ? runWake(cfg) : runCase(cfg);
 
     // The sweep: each case in its own process, so no renderer state carries
     // from one ocean to the next. Every other flag is passed through.
     std::string pass;
     for (int i = 1; i < argc; ++i) pass += std::string(" \"") + argv[i] + "\"";
-    int worst = 0;
-    for (float fetch: {0.f, 20000.f}) {
+    std::vector<std::string> cases;
+    for (float fetch: {0.f, 20000.f})
         for (float u: {7.f, 10.f, 15.f}) {
             char b[128];
             std::snprintf(b, sizeof(b), " --wind %.1f --fetch %.0f", u, fetch);
-#ifdef _WIN32
-            // cmd.exe strips the outer quotes of a /c line that starts with one.
-            const std::string cmd = std::string("\"\"") + argv[0] + "\"" + b + pass + "\"";
-#else
-            const std::string cmd = std::string("\"") + argv[0] + "\"" + b + pass;
-#endif
-            std::fflush(stdout);
-            const int rc = std::system(cmd.c_str());
-            if (rc == kSkipCode) return kSkipCode;
-            worst = std::max(worst, rc);
+            cases.emplace_back(b);
         }
+    // Wakes: a 30 m research vessel at 10 kn (Fr_L 0.30, the Kelvin regime)
+    // and a 4 m USV at 15 kn (Fr_L 1.23, a narrowed wake).
+    cases.emplace_back(" --wake 5.14 --hull 30 --beam 8");
+    cases.emplace_back(" --wake 7.72 --hull 4 --beam 1.6");
+    int worst = 0;
+    for (const auto& c: cases) {
+#ifdef _WIN32
+        // cmd.exe strips the outer quotes of a /c line that starts with one.
+        const std::string cmd = std::string("\"\"") + argv[0] + "\"" + c + pass + "\"";
+#else
+        const std::string cmd = std::string("\"") + argv[0] + "\"" + c + pass;
+#endif
+        std::fflush(stdout);
+        const int rc = std::system(cmd.c_str());
+        if (rc == kSkipCode) return kSkipCode;
+        worst = std::max(worst, rc);
     }
     return worst;
 }
