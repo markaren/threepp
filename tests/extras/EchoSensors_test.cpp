@@ -372,6 +372,52 @@ TEST_CASE("MarineRadar: a fold writes no further than the rows it is given") {
     }
 }
 
+TEST_CASE("MarineRadar: rain is attenuated by the showers nearer than it, whatever their order in the list") {
+    MarineRadarModel m;
+    m.multipath = false;
+    m.minRange = 20.f;
+    m.maxRange = 6020.f;
+    m.rangeBins = 1000;// 6 m bins
+    MarineRadarSynthesizer syn(m);
+    RadarMaterials mats;
+    const Vector3 origin(0, 5, 0);
+    const auto o = oneRayAt(syn, origin, Vector3(0, 5, -5900.f));
+
+    // Two heavy showers on the ray's bearing, 1.5 and 4 km out, apart.
+    RainCell nearCell, farCell, none;
+    nearCell.centre = Vector3(0, 0, -1500.f);
+    farCell.centre = Vector3(0, 0, -4000.f);
+    nearCell.radius = farCell.radius = 300.f;
+    nearCell.rainRate = farCell.rainRate = 100.f;
+    none.rainRate = 0.f;// skipped: keeps the near shower second in both lists
+
+    auto fold = [&](const std::vector<RainCell>& rain) {
+        auto mm = m;
+        mm.rain = rain;
+        std::vector<std::complex<float>> col(mm.rangeBins);
+        std::vector<std::int32_t> lab(mm.rangeBins);
+        std::vector<float> amp(mm.rangeBins);
+        syn.foldSlot(mm, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{}, 1,
+                     col.data(), lab.data(), amp.data(), mm.rangeBins);
+        return col;
+    };
+    const auto alone = fold({none, nearCell});
+    const auto farFirst = fold({farCell, nearCell});
+
+    // The near shower's own echo (0.6 to 2.4 km) is the same with the far one
+    // listed first: nothing lies between it and the antenna.
+    double pAlone = 0.0, pFarFirst = 0.0;
+    for (unsigned j = 0; j < m.rangeBins; ++j) {
+        const double R = m.minRange + (j + 0.5) * m.binWidth();
+        if (R < 700.0 || R > 2300.0) continue;
+        pAlone += std::norm(std::complex<double>(alone[j]));
+        pFarFirst += std::norm(std::complex<double>(farFirst[j]));
+    }
+    REQUIRE(pAlone > 0.0);
+    INFO("near shower's echo: " << 10.0 * std::log10(pFarFirst / pAlone) << " dB with the far one listed first");
+    CHECK_THAT(10.0 * std::log10(pFarFirst / pAlone), WithinAbs(0.0, 0.01));
+}
+
 TEST_CASE("MarineRadar: two-ray lobing over a glassy sea") {
     MarineRadarModel m;
     m.seaState = 0.f;// no roughness: the full Fresnel reflection

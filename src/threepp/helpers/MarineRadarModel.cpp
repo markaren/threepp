@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::echo;
@@ -293,6 +294,16 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
     };
     std::array<double, kTiltBands> tiltW{}, tiltSum{};
 
+    // One ray's rain, every shower's steps together, walked in range order:
+    // an echo is dimmed by the rain nearer than it, whichever shower that
+    // rain belongs to and wherever that shower sits in the list (showers
+    // overlap, so sorting the showers would not do).
+    struct RainStep {
+        double t, dt, rate;
+        std::uint32_t cell, step;
+    };
+    std::vector<RainStep> rainSteps;
+
     const unsigned n = raysPerSlot();
     for (unsigned i = 0; i < n; ++i) {
         const double dOmega = solidAngle[i];
@@ -317,6 +328,7 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
         // ── Rain on the way: volume echoes, and the attenuation they cost ──
         double rainAttDb = 0.0;// one-way, accumulated to the hit
         const double tEnd = hit ? std::min(R, r1) : r1;
+        rainSteps.clear();
         for (std::size_t c = 0; c < model.rain.size(); ++c) {
             const RainCell& cell = model.rain[c];
             if (cell.rainRate <= 0.f || cell.radius <= 0.f) continue;
@@ -355,17 +367,24 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
                 const double px = ox + t * dx, pz = oz + t * dz;
                 const double rate = cell.rainRate * std::exp(-(px * px + pz * pz) / (2.0 * cell.radius * cell.radius));
                 if (rate < 0.05) continue;
-                // Marshall-Palmer reflectivity, |K|^2 = 0.93 for water.
-                const double Z = 200.0 * std::pow(rate, 1.6) * 1e-18;// m^6/m^3
-                const double eta = std::pow(kPi, 5.0) * 0.93 * Z / std::pow(lambda, 4.0);
-                const double dV = t * t * dOmega * dt;
-                const double p = C * eta * dV / std::pow(t, 4.0) * std::pow(10.0, -0.2 * rainAttDb);
-                const std::uint64_t key = combineKeys(combineKeys(combineKeys(revolutionKey, sIdx), i),
-                                                      static_cast<std::uint64_t>(st) * 31 + c);
-                deposit(t, std::sqrt(p) * gv2 * complexGaussian(key), -3);
-                // Specific attenuation near 9.4 GHz (ITU-R P.838 class values).
-                rainAttDb += 0.0101 * std::pow(rate, 1.276) * dt * 1e-3;
+                rainSteps.push_back({t, dt, rate, static_cast<std::uint32_t>(c), static_cast<std::uint32_t>(st)});
             }
+        }
+        std::sort(rainSteps.begin(), rainSteps.end(), [](const RainStep& a, const RainStep& b) {
+            if (a.t != b.t) return a.t < b.t;
+            return a.cell != b.cell ? a.cell < b.cell : a.step < b.step;
+        });
+        for (const RainStep& rs : rainSteps) {
+            // Marshall-Palmer reflectivity, |K|^2 = 0.93 for water.
+            const double Z = 200.0 * std::pow(rs.rate, 1.6) * 1e-18;// m^6/m^3
+            const double eta = std::pow(kPi, 5.0) * 0.93 * Z / std::pow(lambda, 4.0);
+            const double dV = rs.t * rs.t * dOmega * rs.dt;
+            const double p = C * eta * dV / std::pow(rs.t, 4.0) * std::pow(10.0, -0.2 * rainAttDb);
+            const std::uint64_t key = combineKeys(combineKeys(combineKeys(revolutionKey, sIdx), i),
+                                                  static_cast<std::uint64_t>(rs.step) * 31 + rs.cell);
+            deposit(rs.t, std::sqrt(p) * gv2 * complexGaussian(key), -3);
+            // Specific attenuation near 9.4 GHz (ITU-R P.838 class values).
+            rainAttDb += 0.0101 * std::pow(rs.rate, 1.276) * rs.dt * 1e-3;
         }
 
         if (!hit || R < r0 || R > r1 + hs || R < 1e-3) continue;
