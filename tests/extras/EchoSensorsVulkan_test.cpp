@@ -220,6 +220,61 @@ TEST_CASE("MarineRadar: a clock set back drops the trace in flight instead of wa
 
 namespace {
 
+    // Spokes of the picture that hold a formed spoke, and the latest one's time.
+    unsigned filledSpokes(const RadarPolarImage& img) {
+        return static_cast<unsigned>(std::count_if(img.time.begin(), img.time.end(), [](double t) { return t >= 0.0; }));
+    }
+    double latestSpoke(const RadarPolarImage& img) {
+        double latest = -1.0;
+        for (const double t : img.time) latest = std::max(latest, t);
+        return latest;
+    }
+
+}// namespace
+
+TEST_CASE("MarineRadar: a lower rpm mid-run keeps the picture and the sweep") {
+    REQUIRE_RT_GPU(r);
+    Scene scene;
+    auto target = box(20.f, 20.f, 20.f);
+    target->position.set(0, 10, -150);
+    scene.add(target);
+    build(*r, scene);
+
+    MarineRadar radar(smallRadar());// 60 rpm
+    radar.position.set(0, 10, 0);
+    radar.updateMatrixWorld();
+    radar.setSimTime(0.0);
+    radar.update(*r);
+    runAt(radar, *r, 0.8);
+    const unsigned filled = filledSpokes(radar.image());
+    REQUIRE(filled > 0u);
+
+    // Half speed from here: the antenna slows, the clock still runs forward.
+    radar.model.rpm = 30.f;
+    radar.setSimTime(0.85);
+    radar.update(*r);
+    CHECK(filledSpokes(radar.image()) >= filled);
+
+    // It sweeps on at the new rate: fresh spokes, none later than the clock.
+    CHECK(runAt(radar, *r, 1.25) > 0u);
+    CHECK(latestSpoke(radar.image()) > 0.85);
+    CHECK(latestSpoke(radar.image()) <= 1.25);
+
+    // A spin-down: a lower rpm on every frame. The picture stays.
+    double t = 1.25;
+    for (int i = 0; i < 10; ++i) {
+        t += 0.05;
+        radar.model.rpm *= 0.85f;
+        radar.setSimTime(t);
+        radar.update(*r);
+        INFO("frame " << i << " at " << radar.model.rpm << " rpm");
+        CHECK(filledSpokes(radar.image()) >= filled);
+    }
+    CHECK(latestSpoke(radar.image()) <= t);
+}
+
+namespace {
+
     // The strongest echo's bearing (deg) in a frame.
     float peakBearing(const SonarFrame& f) {
         const auto peak = static_cast<std::size_t>(std::max_element(f.levelDb.begin(), f.levelDb.end()) -

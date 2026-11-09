@@ -26,6 +26,9 @@ namespace threepp {
      * physics), stores them in image(), and fires the slots the antenna will
      * sweep next. A spoke therefore shows the world where it was when the
      * beam passed: a moving target leaves a fresh echo each revolution.
+     * A new model.rpm turns the antenna on at that rate from where it is (a
+     * spin-down sweeps on, slower); a clock set back restarts the sweep and
+     * clears the picture.
      *
      * Radar materials are keyed on stable instance ids (the ocean gets
      * RadarMaterial::Sea()). The renderer's visual fog is kept out of the
@@ -81,7 +84,12 @@ namespace threepp {
 
         bool started_ = false;
         std::int64_t nextFire_ = 0, nextSpoke_ = 0, tracedUpTo_ = 0;
-        std::int64_t lastNow_ = 0;// the antenna's slot at the last update()
+        // The antenna's angle, integrated: turns = t * rpm / 60 + turnOffset_,
+        // re-anchored at each update() so an rpm change turns it on from where
+        // it is. lastTime_ is the sim time of the last update().
+        double lastTime_ = 0.0;
+        double turnOffset_ = 0.0;
+        float anchorRpm_ = 0.f;// the rpm turnOffset_ was anchored for
         // The range scale the ring and the picture were laid out for.
         unsigned builtRangeBins_ = 0;
         float builtMinRange_ = 0.f, builtMaxRange_ = 0.f;
@@ -101,6 +109,8 @@ namespace threepp {
         std::vector<LidarReturn> returns_;
         float heading_ = 0.f;
 
+        [[nodiscard]] double turnOffsetAt(double t) const;
+        [[nodiscard]] double turnsNow() const;
         [[nodiscard]] std::int64_t slotNow() const;
         void collect(VulkanRenderer& renderer);
         void fire(VulkanRenderer& renderer, std::int64_t upTo);

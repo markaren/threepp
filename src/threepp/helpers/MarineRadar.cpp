@@ -4,7 +4,6 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include <cmath>
-#include <limits>
 
 using namespace threepp;
 
@@ -31,6 +30,7 @@ MarineRadar::MarineRadar(const MarineRadarModel& m)
     params.mediumExtinction = 1e-5f;
     params.mediumSurfaceY = -1e20f;
     params.mediumAlbedo = 0.f;
+    anchorRpm_ = model.rpm;
     rebuild();
 }
 
@@ -51,19 +51,31 @@ void MarineRadar::rebuild() {
     // folded into the new ring (the renderer reclaims its scan slot).
     handle_ = -1;
     lastSpokes_.clear();
-    lastNow_ = std::numeric_limits<std::int64_t>::min();
     builtRangeBins_ = model.rangeBins;
     builtMinRange_ = model.minRange;
     builtMaxRange_ = model.maxRange;
 }
 
+double MarineRadar::turnOffsetAt(double t) const {
+    // The clock set back is a new timeline: the angle is t * rpm / 60 again,
+    // as a fresh radar's. Otherwise a new rpm takes over at the last update,
+    // from the angle the antenna had then, instead of moving it to where it
+    // would be had it always turned at that rate (back, for a lower one).
+    if (t < lastTime_) return 0.0;
+    return turnOffset_ + lastTime_ * (static_cast<double>(anchorRpm_) - static_cast<double>(model.rpm)) / 60.0;
+}
+
+double MarineRadar::turnsNow() const {
+    const double t = simTime();
+    return t * model.rpm / 60.0 + turnOffsetAt(t);
+}
+
 std::int64_t MarineRadar::slotNow() const {
-    const double turns = simTime() * model.rpm / 60.0;
-    return static_cast<std::int64_t>(std::floor(turns * static_cast<double>(image_.spokes)));
+    return static_cast<std::int64_t>(std::floor(turnsNow() * static_cast<double>(image_.spokes)));
 }
 
 float MarineRadar::antennaBearingDeg() const {
-    const double turns = simTime() * model.rpm / 60.0;
+    const double turns = turnsNow();
     return static_cast<float>(360.0 * (turns - std::floor(turns)));
 }
 
@@ -79,9 +91,16 @@ unsigned MarineRadar::update(VulkanRenderer& renderer) {
     lastSpokes_.clear();
     const unsigned spokes = image_.spokes;
     const std::int64_t K = synth_->kernelHalfSlots();
+    const double t = simTime();
+    // The raw clock, not the antenna's slot: a lower rpm also moves the slot
+    // t * rpm back, which is a slower antenna, not an earlier time.
+    const bool rewound = t < lastTime_;
     const std::int64_t now = slotNow();
+    turnOffset_ = turnOffsetAt(t);
+    anchorRpm_ = model.rpm;
+    lastTime_ = t;
 
-    if (!started_ || now < lastNow_) {
+    if (!started_ || rewound) {
         // First call, or the clock went back (by any amount: an episode
         // reset): start the sweep here. The picture is of a time that has
         // not happened yet, so it goes too. A trace in flight is of the old
@@ -94,7 +113,6 @@ unsigned MarineRadar::update(VulkanRenderer& renderer) {
         nextFire_ = now - K;
         tracedUpTo_ = nextFire_;
     }
-    lastNow_ = now;
 
     if (handle_ >= 0 && (renderer.scanLidarReady(handle_) || ++framesWaiting_ > 3)) collect(renderer);
 
@@ -123,7 +141,11 @@ unsigned MarineRadar::update(VulkanRenderer& renderer) {
                 [&](std::int64_t s) { return &ringLabel_[ringIndex(s, spokes) * bins]; },
                 [&](std::int64_t s) { return &ringAmp_[ringIndex(s, spokes) * bins]; },
                 [&](std::int64_t s) { return ringExtent_[ringIndex(s, spokes)]; }, revKey, sp);
-        sp.time = slotsPerSecond > 0.0 ? static_cast<double>(nextSpoke_) / slotsPerSecond : 0.0;
+        // When the antenna passed the slot, at the rate it turns at now; a
+        // stopped one gives the clock (it passed them before).
+        sp.time = slotsPerSecond > 0.0
+                          ? (static_cast<double>(nextSpoke_) - turnOffset_ * spokes) / slotsPerSecond
+                          : t;
         sp.bearingDeg = static_cast<float>(360.0 * static_cast<double>(ringIndex(nextSpoke_, spokes)) / spokes);
         float wb = ringHeading_[ringIndex(nextSpoke_, spokes)] + sp.bearingDeg;
         wb = std::fmod(wb, 360.f);
