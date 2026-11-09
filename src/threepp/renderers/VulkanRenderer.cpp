@@ -333,6 +333,7 @@ namespace threepp {
         shadeParams.emissiveTotalPower = emissiveTotalPowerThisFrame_;
         shadeParams.fireflyClamp       = fireflyClamp_;
         shadeParams.oceanFineTileSize  = oceanFineTileSize;
+        shadeParams.oceanChopNormals   = oceanChopNormals;
         shadeParams.oceanFoamTileSize  = oceanFoamTileSize;
         shadeParams.denoise            = denoiseEnabled_;
         shadeParams.restirDI           = restirDIEnabled_;

@@ -12,6 +12,7 @@
 #include "threepp/renderers/vulkan/shaders/ifft_horizontal.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_vertical.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_permute.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/ocean_chop_moments.comp.spv.h"
 
 #include "threepp/math/Rng.hpp"
 
@@ -441,6 +442,8 @@ namespace threepp::water {
     void DynamicSpectrum::createImages() {
         ht_           = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.ht");
         displacement_ = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.displacement");
+        slope_        = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.slope");
+        jacDiag_      = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.jacDiag");
     }
 
     void DynamicSpectrum::createPipeline() {
@@ -450,10 +453,12 @@ namespace threepp::water {
         // layout qualifiers stay put.
         // (Binding 4, the params UBO, is gone too: the per-frame time rides in
         // push constants — see recordCompute.)
-        const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
+        const std::array<VkDescriptorSetLayoutBinding, 5> bindings{
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // H0
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // HT
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Displacement
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Slope (chop normals)
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // JacDiag (chop normals)
         };
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -481,7 +486,7 @@ namespace threepp::water {
 
         const std::array<VkDescriptorPoolSize, 2> poolSizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          2},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          4},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -515,7 +520,14 @@ namespace threepp::water {
         dispInfo.imageView   = displacement_.view;
         dispInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        std::array<VkWriteDescriptorSet, 3> writes{};
+        VkDescriptorImageInfo slopeInfo{};
+        slopeInfo.imageView   = slope_.view;
+        slopeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorImageInfo jacInfo{};
+        jacInfo.imageView   = jacDiag_.view;
+        jacInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        std::array<VkWriteDescriptorSet, 5> writes{};
         for (auto& w : writes) {
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w.dstSet = ds_;
@@ -524,12 +536,18 @@ namespace threepp::water {
         writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[0].pImageInfo = &h0Info;
         writes[1].dstBinding = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[1].pImageInfo = &htInfo;
         writes[2].dstBinding = 3; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[2].pImageInfo = &dispInfo;
+        writes[3].dstBinding = 2; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[3].pImageInfo = &slopeInfo;
+        writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[4].pImageInfo = &jacInfo;
         vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
-    void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds) {
+    void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool writeChop) {
         cmdTransitionToGeneral(cb, ht_);
         cmdTransitionToGeneral(cb, displacement_);
+        // Statically used bindings of this set: in a declared layout every
+        // frame whether or not this one stores to them.
+        cmdTransitionToGeneral(cb, slope_);
+        cmdTransitionToGeneral(cb, jacDiag_);
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
@@ -544,12 +562,17 @@ namespace threepp::water {
         p.textureSize    = textureSize_;
         p.tileSize       = tileSize_;
         p.elapsedSeconds = elapsedSeconds;
+        p.writeChop      = writeChop ? 1u : 0u;
         vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(textureSize_);
         vkCmdDispatch(cb, g, g, 1);
 
         cmdShaderRWBarrier(cb, ht_.image);
         cmdShaderRWBarrier(cb, displacement_.image);
+        if (writeChop) {
+            cmdShaderRWBarrier(cb, slope_.image);
+            cmdShaderRWBarrier(cb, jacDiag_.image);
+        }
     }
 
     DynamicSpectrum::~DynamicSpectrum() {
@@ -560,6 +583,8 @@ namespace threepp::water {
         if (sampler_!= VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
         destroyImage(ctx_, ht_);
         destroyImage(ctx_, displacement_);
+        destroyImage(ctx_, slope_);
+        destroyImage(ctx_, jacDiag_);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -888,6 +913,199 @@ namespace threepp::water {
         if (pool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
         if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
         destroyImage(ctx_, twiddle_);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //   ChopMoments
+    // ─────────────────────────────────────────────────────────────────
+
+    ChopMoments::ChopMoments(vulkan::VulkanContext& ctx, uint32_t textureSize,
+                             VkImageView htView, VkImageView slopeView, VkImageView jacView)
+        : ctx_(ctx), textureSize_(textureSize) {
+        for (uint32_t n = textureSize_; n > 1u; n >>= 1u) ++mipLevels_;
+
+        moments_.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        moments_.width  = textureSize_;
+        moments_.height = textureSize_;
+        VkImageCreateInfo ici{};
+        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = moments_.format;
+        ici.extent        = {textureSize_, textureSize_, 1};
+        ici.mipLevels     = mipLevels_;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &moments_.image, &moments_.alloc, nullptr),
+              "vmaCreateImage(chopMoments)");
+
+        // A storage view names exactly one level; the shade samples them all.
+        VkImageViewCreateInfo vci{};
+        vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image    = moments_.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = moments_.format;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &moments_.view), "vkCreateImageView(chopMoments mip0)");
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &sampledView_), "vkCreateImageView(chopMoments chain)");
+        ctx_.setObjectName(moments_.image, "ocean.chopMoments (RGBA32F + mips)");
+
+        // Repeat (the cascade tiles the world), trilinear, anisotropic: the
+        // footprint of a pixel on water seen low is a long strip along the
+        // line of sight, and an anisotropic fetch averages along it.
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
+        VkSamplerCreateInfo sci{};
+        sci.sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter        = VK_FILTER_LINEAR;
+        sci.minFilter        = VK_FILTER_LINEAR;
+        sci.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeV     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeW     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.anisotropyEnable = VK_TRUE;
+        sci.maxAnisotropy    = std::min(16.0f, props.limits.maxSamplerAnisotropy);
+        sci.minLod           = 0.f;
+        sci.maxLod           = VK_LOD_CLAMP_NONE;
+        check(vkCreateSampler(ctx_.device(), &sci, nullptr, &sampler_), "vkCreateSampler(chopMoments)");
+
+        const std::array<VkDescriptorSetLayoutBinding, 4> bindings{
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// ht (h, dDx/dz)
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// slope
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// jacDiag
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// moments mip 0
+        };
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
+        dlci.pBindings    = bindings.data();
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsl_), "vkCreateDescriptorSetLayout(chopMoments)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.size       = sizeof(PushParams);
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &dsl_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &layout_), "vkCreatePipelineLayout(chopMoments)");
+
+        VkShaderModule mod = makeShader(ctx_, kOceanChopMomentsCompSpv, sizeof(kOceanChopMomentsCompSpv));
+        pipe_ = makeComputePipeline(ctx_, mod, layout_);
+        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
+        const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4};
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = 1;
+        dpci.poolSizeCount = 1;
+        dpci.pPoolSizes    = &poolSize;
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_), "vkCreateDescriptorPool(chopMoments)");
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = pool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &dsl_;
+        check(vkAllocateDescriptorSets(ctx_.device(), &dai, &ds_), "vkAllocateDescriptorSets(chopMoments)");
+
+        const std::array<VkImageView, 4> views{htView, slopeView, jacView, moments_.view};
+        std::array<VkDescriptorImageInfo, 4> infos{};
+        std::array<VkWriteDescriptorSet, 4> w{};
+        for (uint32_t i = 0; i < 4; ++i) {
+            infos[i].imageView   = views[i];
+            infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet          = ds_;
+            w[i].dstBinding      = i;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[i].pImageInfo      = &infos[i];
+        }
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+    }
+
+    void ChopMoments::record(VkCommandBuffer cb, float slopeScale, float chopScale,
+                             VkPipelineStageFlags readerStages) {
+        auto barrier = [&](uint32_t baseMip, uint32_t mipCount, VkImageLayout oldLayout,
+                           VkAccessFlags src, VkAccessFlags dst,
+                           VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
+            VkImageMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout           = oldLayout;
+            b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcAccessMask       = src;
+            b.dstAccessMask       = dst;
+            b.image               = moments_.image;
+            b.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, mipCount, 0, 1};
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
+        };
+        // First use: UNDEFINED -> GENERAL for the whole chain; afterwards a
+        // guard against the previous frame's sampled reads.
+        if (moments_.currentLayout != VK_IMAGE_LAYOUT_GENERAL) {
+            barrier(0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED, 0,
+                    VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+            moments_.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+        } else {
+            barrier(0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT,
+                    VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                    readerStages,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+        }
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &ds_, 0, nullptr);
+        PushParams p{};
+        p.textureSize = textureSize_;
+        p.slopeScale  = slopeScale;
+        p.chopScale   = chopScale;
+        vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        const uint32_t g = groupCountFor(textureSize_);
+        vkCmdDispatch(cb, g, g, 1);
+
+        // The chain by linear blits: level L is the box average of L-1, the
+        // prefilter the shade's footprint fetch assumes. All in GENERAL.
+        barrier(0, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        int32_t w = static_cast<int32_t>(textureSize_);
+        for (uint32_t level = 1; level < mipLevels_; ++level) {
+            const int32_t nw = std::max(w >> 1, 1);
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
+            blit.srcOffsets[1]  = {w, w, 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+            blit.dstOffsets[1]  = {nw, nw, 1};
+            vkCmdBlitImage(cb, moments_.image, VK_IMAGE_LAYOUT_GENERAL,
+                           moments_.image, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
+            barrier(level, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            w = nw;
+        }
+        barrier(0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, readerStages);
+    }
+
+    ChopMoments::~ChopMoments() {
+        if (pipe_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipe_, nullptr);
+        if (layout_  != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layout_, nullptr);
+        if (dsl_     != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dsl_, nullptr);
+        if (pool_    != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
+        if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
+        if (sampledView_ != VK_NULL_HANDLE) vkDestroyImageView(ctx_.device(), sampledView_, nullptr);
+        destroyImage(ctx_, moments_);
     }
 
 }// namespace threepp::water

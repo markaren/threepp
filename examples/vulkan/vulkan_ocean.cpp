@@ -670,6 +670,7 @@ namespace {
 int main(int argc, char** argv) {
 
     // --shot <name.png> [--frames N] [--pinned] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
+    // [--chop <lambda>] [--chop-normals 0|1]
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -679,6 +680,8 @@ int main(int argc, char** argv) {
     bool shotBow    = false;// ahead of the boat looking back at the stem (bow foam)
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     bool pinnedClock = false;// --pinned: fixed 1/60 s steps on a pinned renderer clock (replayable captures)
+    float chopOverride = -1.f;// --chop <lambda>: the ocean's choppiness for this run (look A/Bs)
+    int   chopNormalsArg = -1;// --chop-normals 0|1: Params::chopNormals for this run
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -689,6 +692,8 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--bow") == 0) shotBow = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
+        else if (std::strcmp(argv[i], "--chop") == 0 && i + 1 < argc) chopOverride = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--chop-normals") == 0 && i + 1 < argc) chopNormalsArg = std::atoi(argv[++i]);
     }
     const bool capturing = !shotPath.empty();
     // Shared capture machinery (capture_util.hpp): --cam/--look override the
@@ -758,6 +763,8 @@ int main(int argc, char** argv) {
     // calm glassy sea — the surface-artifact-hunting state.
     oceanOpts.windSpeed  = shotClose ? 3.5f : 10.0f;
     auto ocean = Ocean::create(oceanOpts);
+    if (chopOverride >= 0.f) ocean->params.choppiness = chopOverride;
+    if (chopNormalsArg >= 0) ocean->params.chopNormals = chopNormalsArg != 0;
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
@@ -1362,6 +1369,24 @@ int main(int argc, char** argv) {
         }
     });
     canvas.addKeyListener(camKey);
+
+    // N flips the chop normals (DisplacedMesh::Params::chopNormals) for a live
+    // A/B. THREEPP_OCEAN_CHOP_NORMALS=0 at startup removes them altogether.
+    {
+        const char* chopEnv = std::getenv("THREEPP_OCEAN_CHOP_NORMALS");
+        if (chopEnv && std::atoi(chopEnv) == 0)
+            std::cout << "[vulkan_ocean] chop normals REMOVED (THREEPP_OCEAN_CHOP_NORMALS=0)" << std::endl;
+        else
+            std::cout << "[vulkan_ocean] chop normals " << (ocean->params.chopNormals ? "ON" : "OFF")
+                      << " (N toggles)" << std::endl;
+    }
+    KeyAdapter chopKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        if (ev.key == Key::N) {
+            ocean->params.chopNormals = !ocean->params.chopNormals;
+            std::cout << "[vulkan_ocean] chop normals " << (ocean->params.chopNormals ? "ON" : "OFF") << std::endl;
+        }
+    });
+    canvas.addKeyListener(chopKey);
 
     // ── Sound: engine + ocean/wind ambience ─────────────────────────────────
     // Skipped in --shot capture runs (headless iteration shouldn't bleep).
@@ -2495,6 +2520,8 @@ int main(int argc, char** argv) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             renderer.writeFramebuffer(path);// creates parent dirs; throws on failure
             std::printf("wrote %s\n", path.string().c_str());
+            std::printf("boat at %.2f %.2f, heading (%.3f, %.3f)\n",
+                        bs.position.x, bs.position.z, std::sin(bs.yaw), std::cos(bs.yaw));
             std::exit(0);
         }
 

@@ -1550,6 +1550,10 @@ if (THREEPP_WITH_VULKAN)
         kDynamicSpectrumCompSpv
         _dynamic_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ocean_chop_moments.comp"
+        kOceanChopMomentsCompSpv
+        _ocean_chop_moments_spv_h)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_twiddle.comp"
         kIfftTwiddleCompSpv
         _ifft_twiddle_spv_h)

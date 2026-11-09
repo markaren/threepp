@@ -329,7 +329,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 80;// 20×u32 (…, clusterLightCount, shadeMode, preExpBits)
+        pc.size = sizeof(ShadePush);// 21×u32 (…, clusterLightCount, shadeMode, preExpBits, oceanFlags)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -425,6 +425,9 @@ namespace threepp::vulkan {
         //   THREEPP_VK_SHADE_SPEC_PROBE=1: the probe GI gate made compile-time.
         specMask_  = kShadeSpecMsaa | static_cast<uint32_t>(env::integer("THREEPP_VK_SHADE_SPEC_MASK", 0).value_or(0));
         specProbe_ = env::flag("THREEPP_VK_SHADE_SPEC_PROBE");
+        // The ocean chop normals' per-pixel branch, compiled in unless
+        // THREEPP_OCEAN_CHOP_NORMALS=0 removed the feature at startup.
+        oceanChopSpec_ = env::integer("THREEPP_OCEAN_CHOP_NORMALS").value_or(1) != 0;
         shadeMod_ = mod;
 
         // Filter + composite pipelines — GI SVGF and reflection gloss
@@ -512,7 +515,7 @@ namespace threepp::vulkan {
               "vkCreateComputePipelines(cloud_shadow)");
 
         // Half-res ray-traced AO + bent normals (rtao.comp) — same shared set 0
-        // and 80-byte ShadePush range as the shade itself.
+        // and ShadePush range as the shade itself.
         // Not without ray query: rtaoPipe_ stays null and the stage is never
         // recorded (the shade's AO term is then 1).
         VkShaderModule modAo = VK_NULL_HANDLE;
@@ -1228,7 +1231,8 @@ namespace threepp::vulkan {
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
                              (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u) |
-                             (rayRecon ? (1ull << 45u) : 0ull);
+                             (rayRecon ? (1ull << 45u) : 0ull) |
+                             (oceanChopSpec_ ? (1ull << 46u) : 0ull);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1238,14 +1242,15 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 6> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+        const std::array<uint32_t, 7> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
                                             static_cast<uint32_t>((key >> 40u) & 1u),
                                             static_cast<uint32_t>((key >> 41u) & kRayBudgetAll),
-                                            static_cast<uint32_t>((key >> 45u) & 1u)};
-        std::array<VkSpecializationMapEntry, 6> entries{};
-        for (uint32_t i = 0; i < 6; ++i) {
-            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon
+                                            static_cast<uint32_t>((key >> 45u) & 1u),
+                                            static_cast<uint32_t>((key >> 46u) & 1u)};
+        std::array<VkSpecializationMapEntry, 7> entries{};
+        for (uint32_t i = 0; i < 7; ++i) {
+            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon, kOceanChop
             entries[i].offset     = i * sizeof(uint32_t);
             entries[i].size       = sizeof(uint32_t);
         }
@@ -1403,6 +1408,7 @@ namespace threepp::vulkan {
         push.emissiveTotalPower = p.emissiveTotalPower;
         push.fireflyClamp       = p.fireflyClamp;
         push.oceanFineTileSize  = p.oceanFineTileSize;
+        push.oceanFlags         = p.oceanChopNormals ? 1u : 0u;
         push.oceanFoamTileSize  = p.oceanFoamTileSize;
         push.volDensity         = p.volDensity;
         push.volAniso           = p.volAniso;

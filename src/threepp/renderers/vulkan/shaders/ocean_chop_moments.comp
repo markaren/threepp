@@ -1,0 +1,55 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+
+// Chop normals, the fine cascade's per-pixel surface (water::ChopMoments).
+//
+// Reads the cascade's spatial fields after their inverse FFTs:
+//   ht.r    height h                 ht.g    dDx/dz = dDz/dx
+//   slope   (dh/dx, dh/dz)           jac     (dDx/dx, dDz/dz)
+// (raw IFFT units, see dynamic_spectrum.comp) and writes mip 0 of
+//   .r = h, untouched, so the old fine-height readers see the same value
+//   .g, .b = slope of the DISPLACED surface, world units
+//   .a = its squared length
+// The host box-filters the mip chain over it, so a footprint fetch returns
+// the mean slope and the mean squared slope (LEAN mapping, Olano and Baker
+// 2010, "LEAN Mapping", I3D).
+//
+// The displaced (choppy) surface is P(x, z) = (x + l*Dx, h, z + l*Dz)
+// (Tessendorf 2001, "Simulating Ocean Water", eq. 44). Its tangents are
+//   Tx = dP/dx = (1 + l*dDx/dx, dh/dx, l*dDz/dx)
+//   Tz = dP/dz = (l*dDx/dz, dh/dz, 1 + l*dDz/dz)
+// and the normal Tz x Tx = (c*sz - b*sx, a*b - c*c, c*sx - a*sz) with
+// a = 1 + l*dDx/dx, b = 1 + l*dDz/dz, c = l*dDx/dz. Its y component is the
+// Jacobian determinant J of the horizontal map, so the slope of the surface
+// the geometry actually draws is (b*sx - c*sz, a*sz - c*sx) / J: steeper by
+// about 1/J at a crest the chop pinches, gentler in the troughs it spreads.
+// Where J <= 0 the Lagrangian surface has folded over (Nouguier, Guerin and
+// Chapron 2009, "Choppy wave model for nonlinear gravity waves", JGR 114):
+// real water breaks there. The normal is held at the fold's steepest
+// representable tilt instead of flipping under the surface.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rg32f)   uniform readonly  image2D Ht;
+layout(set = 0, binding = 1, rg32f)   uniform readonly  image2D Slope;
+layout(set = 0, binding = 2, rg32f)   uniform readonly  image2D Jac;
+layout(set = 0, binding = 3, rgba32f) uniform writeonly image2D Moments;
+
+layout(push_constant) uniform Params {
+    uint  textureSize;
+    float slopeScale;// waveScale / tile: raw IFFT slope -> world slope
+    float chopScale; // choppiness / tile: raw dD/dx -> world, times lambda
+} P;
+
+#include "ocean_chop_normal.glsl"
+
+void main() {
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (id.x >= int(P.textureSize) || id.y >= int(P.textureSize)) return;
+
+    const vec2 hj = imageLoad(Ht, id).rg;
+    const vec2 s  = imageLoad(Slope, id).rg * P.slopeScale;
+    const vec2 jd = imageLoad(Jac, id).rg * P.chopScale;
+    const vec2 sd = oceanChopSlope(s, jd.x, jd.y, hj.y * P.chopScale);
+    imageStore(Moments, id, vec4(hj.x, sd, dot(sd, sd)));
+}
