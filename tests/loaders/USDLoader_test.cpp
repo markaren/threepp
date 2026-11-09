@@ -211,3 +211,64 @@ TEST_CASE("a material whose .mdl file is not beside the asset is left as the pri
     CHECK_FALSE(mat->map);
     CHECK_FALSE(mat->alphaMap);
 }
+
+TEST_CASE("OmniPBR flags authored on the shader prim as bool or int are read", "[usd]") {
+    // A library OmniPBR (no .mdl beside the asset to fall back on) whose decal flags the
+    // prim authors itself, as Isaac Sim writes them: bool for the opacity flags, int for
+    // the emission flag. Read as floats they failed, and the decal drew as an opaque quad.
+    const std::string flagged = R"(#usda 1.0
+(
+    defaultPrim = "decal"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "decal" {
+    def Mesh "mesh" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </decal/Looks/Decal>
+    }
+
+    def Scope "Looks" {
+        def Material "Decal" {
+            token outputs:mdl:surface.connect = </decal/Looks/Decal/Shader.outputs:out>
+
+            def Shader "Shader" {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                bool inputs:enable_opacity = 1
+                bool inputs:enable_opacity_texture = true
+                asset inputs:opacity_texture = @./textures/Decal_Opacity.png@
+                float inputs:opacity_threshold = 0.2
+                int inputs:enable_emission = 1
+                color3f inputs:emissive_color = (1, 0.5, 0)
+                float inputs:emissive_intensity = 2000
+                token outputs:out
+            }
+        }
+    }
+}
+)";
+    const auto dir = std::filesystem::temp_directory_path() / "usd_mdl_prim_flags";
+    std::filesystem::remove_all(dir);
+    write(dir / "decal.usda", flagged);
+    writePng(dir / "textures" / "Decal_Opacity.png");
+
+    USDLoader loader;
+    const auto scene = loader.load(dir / "decal.usda");
+    REQUIRE(scene);
+    const auto mat = materialOf(*scene);
+    REQUIRE(mat);
+    CHECK(mat->alphaMap);
+    CHECK_THAT(mat->alphaTest, WithinAbs(0.2f, 1e-6f));
+    CHECK(mat->emissive == Color(1, 0.5f, 0));
+    CHECK_THAT(mat->emissiveIntensity, WithinAbs(2.f, 1e-6f));
+}

@@ -1400,11 +1400,16 @@ namespace threepp {
                 }
                 return std::nullopt;
             };
+            // A flag (enable_opacity, enable_emission, ...) authored on the prim is a bool or an
+            // int, which to_float does not read: it reads as 1 or 0.
             auto tryFloat = [&](std::initializer_list<const char*> names) -> std::optional<float> {
                 for (const char* name : names) {
                     float f;
                     const auto* value = shader.GetPropertyValue(name);
-                    if (value && value->to_float(&f)) return f;
+                    if (!value) continue;
+                    if (value->to_float(&f)) return f;
+                    if (const bool* flag = value->as_bool()) return *flag ? 1.f : 0.f;
+                    if (const int32_t* i = value->as_int()) return static_cast<float>(*i);
                 }
                 for (const char* name : names) {
                     if (const auto it = defaults.numbers.find(mdlName(name)); it != defaults.numbers.end()) return it->second;
