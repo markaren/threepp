@@ -642,3 +642,44 @@ TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
         CHECK(small->triangleIndex == 12);
     }
 }
+
+TEST_CASE("BVH axis-aligned rays hit with the origin on a node face", "[BVH]") {
+
+    // Straight down onto a 4 x 4 floor from every half-unit grid point, the
+    // edges included. The origins lie on the faces of the root box and of
+    // inner nodes, in the axes where the direction is zero; which face the old
+    // slab test dropped depended on the sign of that zero.
+    const auto mesh = floorGrid(4);
+    for (const int leafSize : {1, 8}) {
+        BVH bvh(leafSize);
+        bvh.build(mesh.positions, mesh.indices);
+
+        int hits = 0;
+        for (const float zero : {0.f, -0.f}) {
+            for (int z = 0; z <= 8; ++z) {
+                for (int x = 0; x <= 8; ++x) {
+                    CAPTURE(leafSize, zero, x, z);
+                    const Ray ray({0.5f * static_cast<float>(x), 1, 0.5f * static_cast<float>(z)}, {zero, -1, zero});
+                    const auto hit = bvh.raycast(ray);
+                    CHECK(hit);
+                    if (hit) {
+                        CHECK(hit->distance == 1.f);
+                        CHECK(onTriangle(mesh.triangle(hit->triangleIndex), hit->point));
+                        ++hits;
+                    }
+                    CHECK(bvh.raycastAny(ray, 2.f));
+                }
+            }
+        }
+        CHECK(hits == 2 * 81);
+
+        // Just past the max-x and max-z edges a parallel ray misses.
+        const float past = std::nextafter(4.f, 5.f);
+        for (const float zero : {0.f, -0.f}) {
+            CAPTURE(leafSize, zero);
+            CHECK_FALSE(bvh.raycast(Ray({past, 1, 2}, {zero, -1, zero})));
+            CHECK_FALSE(bvh.raycast(Ray({2, 1, past}, {zero, -1, zero})));
+            CHECK_FALSE(bvh.raycastAny(Ray({past, 1, past}, {zero, -1, zero}), 2.f));
+        }
+    }
+}

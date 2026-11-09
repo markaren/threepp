@@ -110,30 +110,41 @@ namespace {
     };
 
     // The ray as the traversal reads it: origin, direction and a finite inverse
-    // direction (a zero component becomes +-1e30, so an origin lying on a slab
-    // plane gives 0 * 1e30 = 0 rather than 0 * inf = NaN).
+    // direction (a tiny component's inverse is clamped to +-1e30, so an origin
+    // lying on a slab plane gives 0 * 1e30 = 0 rather than 0 * inf = NaN).
     struct RayData {
         float o[3];
         float d[3];
         float inv[3];
+        bool still[3];// no motion along this axis
 
         explicit RayData(const Ray& ray) {
             for (int k = 0; k < 3; ++k) {
                 o[k] = ray.origin[k];
                 d[k] = ray.direction[k];
+                still[k] = d[k] == 0.f;
                 const float i = 1.f / d[k];
                 inv[k] = std::abs(i) > 1e30f ? std::copysign(1e30f, d[k]) : i;
             }
         }
 
         // Entry distance (in units of t) into the box, when the ray meets it within [0, tLimit].
+        // An axis the ray does not move along has no slab interval: the box is
+        // met only if the origin lies within it on that axis, faces included.
+        // (A 1e30 inverse there gave an origin on a face the interval [-big, 0]
+        // on one face or the other, depending on the sign of the zero.)
         [[nodiscard]] bool slab(const float* mn, const float* mx, float tLimit, float& tEntry) const {
-            float t0 = (mn[0] - o[0]) * inv[0], t1 = (mx[0] - o[0]) * inv[0];
-            float tNear = std::min(t0, t1), tFar = std::max(t0, t1);
-            t0 = (mn[1] - o[1]) * inv[1], t1 = (mx[1] - o[1]) * inv[1];
-            tNear = std::max(tNear, std::min(t0, t1)), tFar = std::min(tFar, std::max(t0, t1));
-            t0 = (mn[2] - o[2]) * inv[2], t1 = (mx[2] - o[2]) * inv[2];
-            tNear = std::max(tNear, std::min(t0, t1)), tFar = std::min(tFar, std::max(t0, t1));
+            float tNear = -std::numeric_limits<float>::infinity();
+            float tFar = std::numeric_limits<float>::infinity();
+            for (int k = 0; k < 3; ++k) {
+                if (still[k]) {
+                    if (!(o[k] >= mn[k] && o[k] <= mx[k])) return false;
+                    continue;
+                }
+                const float t0 = (mn[k] - o[k]) * inv[k], t1 = (mx[k] - o[k]) * inv[k];
+                tNear = std::max(tNear, std::min(t0, t1));
+                tFar = std::min(tFar, std::max(t0, t1));
+            }
             tEntry = tNear;
             return tNear <= tFar && tFar >= 0.f && tNear <= tLimit;
         }
