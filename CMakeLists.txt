@@ -216,10 +216,7 @@ if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
 endif ()
 if (THREEPP_WITH_USD)
-    install(TARGETS tydra_next lightusd_static lightusd_next EXPORT threepp-targets)
-    if (TARGET lightusd_textools)
-        install(TARGETS lightusd_textools EXPORT threepp-targets)
-    endif ()
+    install(TARGETS ${THREEPP_LIGHTUSD_TARGETS} EXPORT threepp-targets)
     install(DIRECTORY "${lightusd_SOURCE_DIR}/src/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/lightusd"
             FILES_MATCHING PATTERN "*.hh" PATTERN "*.h" PATTERN "*.inc")
