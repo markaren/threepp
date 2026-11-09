@@ -17,6 +17,9 @@
 //       card adds its glow; the old way drew unlit ones as opaque cards;
 //   [5] a mirrored single-sided emitter's photons leave its front (no switch):
 //       a glass ball's caustic is the same under the panel and its mirror;
+//   [6] a sprite card's shadow follows its texels' alpha: the sun through an
+//       alpha-masked card at opacity 0.5 is halved under its covered half and
+//       whole under its clear half;
 //
 // THREEPP_TEST_IMAGES=<dir>: the traces are also written there as PNGs.
 // Exit 42 (SKIP) without a Vulkan device with ray query.
@@ -98,6 +101,22 @@ namespace {
                 ++n;
             }
         return n ? s / n : 0.0;
+    }
+
+    // A 4x4 RGBA8 map, white, its left half (u < 0.5) opaque and its right
+    // half clear, unfiltered.
+    std::shared_ptr<Texture> halfMaskMap() {
+        std::vector<unsigned char> data(4 * 4 * 4, 255);
+        for (int y = 0; y < 4; ++y)
+            for (int x = 2; x < 4; ++x) data[(y * 4 + x) * 4 + 3] = 0;
+        Image img{ImageData(std::move(data)), 4u, 4u};
+        auto  tex       = Texture::create(img);
+        tex->format     = Format::RGBA;
+        tex->magFilter  = Filter::Nearest;
+        tex->minFilter  = Filter::Nearest;
+        tex->generateMipmaps = false;
+        tex->needsUpdate();
+        return tex;
     }
 
     double lum(const std::vector<float>& px, int x0, int x1, int y0, int y1) {
@@ -449,6 +468,50 @@ int main() {
         std::printf("  floor under the ball: panel %.4f, mirrored panel %.4f\n", plain, mirrored);
         check(plain > 0.02, "the ball focuses the panel's light on the floor");
         check(std::abs(mirrored / plain - 1.0) < 0.15, "and as much of the mirrored panel's");
+    }
+
+    // ── 6. A sprite card's shadow follows its texels' alpha ────────────────
+    // A sun straight down on a white floor through a 2 m card 1 m up, black
+    // and unlit at opacity 0.5, its map's left half opaque and right half
+    // clear: the floor under the left half gets half the sun, under the right
+    // half all of it. A shadow of the card's opacity alone halved both.
+    std::printf("\n[6] a sprite card's shadow follows its texels' alpha\n");
+    {
+        Scene scene;
+        scene.environment = black;
+        scene.background  = black;
+        scene.add(floorPlane(0.8f, 1.f));
+        auto sun = DirectionalLight::create(Color(1.f, 1.f, 1.f), 3.f);
+        sun->position.set(0, 5, 0);
+        scene.add(sun);
+        auto camera = PerspectiveCamera::create(40, float(kW) / float(kH), 0.1f, 100.f);
+        camera->position.set(0, 0.6f, 3.5f);
+        camera->lookAt(0, 0, 0);
+        camera->updateMatrixWorld();
+        // The floor at x = -0.5 and x = +0.5 (about 29 px either side).
+        const auto sides = [&](const std::string& name) {
+            const auto img = tr.trace(scene, *camera, 64, 2, name);
+            return std::pair{lum(img, kW / 2 - 37, kW / 2 - 21, kH / 2 - 6, kH / 2 + 6),
+                             lum(img, kW / 2 + 21, kW / 2 + 37, kH / 2 - 6, kH / 2 + 6)};
+        };
+        const auto [openL, openR] = sides("6_open");
+
+        auto mat         = MeshBasicMaterial::create();
+        mat->color       = Color(0.f, 0.f, 0.f);
+        mat->map         = halfMaskMap();
+        mat->transparent = true;
+        mat->opacity     = 0.5f;
+        mat->side        = Side::Double;
+        auto card        = Mesh::create(PlaneGeometry::create(2.f, 2.f), mat);
+        card->rotation.x = -math::PI / 2;
+        card->position.y = 1.f;
+        scene.add(card);
+        const auto [cardL, cardR] = sides("6_sprite");
+        std::printf("  floor over the open floor: under the covered half %.3f, under the clear half %.3f\n",
+                    cardL / openL, cardR / openR);
+        check(openL > 0.05, "the sun lights the open floor");
+        check(std::abs(cardL / openL - 0.5) < 0.05, "the card's covered half lets half the sun through");
+        check(std::abs(cardR / openR - 1.0) < 0.05, "and its clear half all of it");
     }
 
     // ── Validation ─────────────────────────────────────────────────────────
