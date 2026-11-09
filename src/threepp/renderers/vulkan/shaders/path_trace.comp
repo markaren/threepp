@@ -36,7 +36,8 @@
 // frame draws it (backgroundBlurriness,
 // backgroundIntensity, backgroundRotation, the procedural star field); any
 // other miss reads the
-// environment, mip 1 when the sun was extracted into a directional light
+// environment and the ambient and hemisphere lights (ambientRadiance),
+// the environment's mip 1 when the sun was extracted into a directional light
 // (flags bit 1), so the disc is not counted twice. Unlit materials
 // (roughness < 0) return their albedo.
 //
@@ -228,6 +229,7 @@ layout(push_constant) uniform Pc {
                              // bit 9 = the pass has the sun's photons through the ocean
                              // bit 10 = thinGlassNeeOwns (THREEPP_PT_THIN_GLASS_NEE)
                              // bit 11 = lastBounceMis (THREEPP_PT_LAST_BOUNCE_MIS)
+                             // bit 12 = ambientLights (THREEPP_PT_AMBIENT_LIGHTS)
                              // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
@@ -270,6 +272,10 @@ bool thinGlassNeeOwns() { return (pc.flags & 1024u) != 0u; }
 // Bit 11 (THREEPP_PT_LAST_BOUNCE_MIS): the last vertex traces the bounce its
 // emitter NEE is weighted against, for the emission alone (lastBounceEmission).
 bool lastBounceMis() { return (pc.flags & 2048u) != 0u; }
+// Bit 12 (THREEPP_PT_AMBIENT_LIGHTS): AmbientLight and HemisphereLight as the
+// radiance a lighting ray that escapes meets (ambientRadiance). Off: neither
+// lights a surface.
+bool ambientLights() { return (pc.flags & 4096u) != 0u; }
 bool sunPhotonsOn() { return photonsOn() && (pc.flags & 512u) != 0u && pgRegion.w > 0.0; }
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
@@ -1014,6 +1020,22 @@ vec3 analyticNee(const Surf s, vec3 V, inout uint seed, bool sunByPhotons) {
     return lit;
 }
 
+// AmbientLight and HemisphereLight as radiance from every direction a
+// lighting ray escapes in (ambientLights), as the deferred shade adds
+// them to the environment's diffuse light: lights.ambient (every ambient
+// light, and each hemisphere light's mean), and the hemisphere's sky or
+// ground half by the side of its axis the ray leaves on. The rows hold
+// 0.5·(sky − ground) along the axis per channel; a step there lights a
+// Lambertian surface with exactly the mix(ground, sky, 0.5·N·up + 0.5) the
+// frame uses (the cosine-weighted share of the sky half is linear in N·up).
+// Several hemisphere lights with different axes fold into one step per channel.
+vec3 ambientRadiance(vec3 d) {
+    if (!ambientLights()) return vec3(0.0);
+    return lights.ambient + vec3(sign(dot(lights.hemiDeltaR, d)) * length(lights.hemiDeltaR),
+                                 sign(dot(lights.hemiDeltaG, d)) * length(lights.hemiDeltaG),
+                                 sign(dot(lights.hemiDeltaB, d)) * length(lights.hemiDeltaB));
+}
+
 // The sun's single scatter in the air along [o, o + d·tEnd] (odEnd its
 // optical depth): ∫ σ_s(t) T(t) Σ sun · phase · visibility dt, estimated
 // with one distance drawn in proportion to σ(t) T(t), so the estimate is
@@ -1699,7 +1721,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 const bool  sunExtracted = (pc.flags & 2u) != 0u;
                 const bool  sunDisc      = causticPath && envSunLight();
                 const float lod = (!sunExtracted || pc.envMipCount < 2u || sunDisc) ? 0.0 : 1.0;
-                L += throughput * sampleEnvLod(d, lod);
+                L += throughput * (sampleEnvLod(d, lod) + ambientRadiance(d));
             }
             break;
         }

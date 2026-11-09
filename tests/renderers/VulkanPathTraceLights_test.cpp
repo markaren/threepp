@@ -9,6 +9,9 @@
 //   [2] the last vertex's emitter NEE has its bounce (THREEPP_PT_LAST_BOUNCE_MIS):
 //       a glossy floor's reflection of a panel at max_bounces 0 is the one
 //       max_bounces 1 draws; the old way lost all but the NEE's MIS share;
+//   [3] a RectAreaLight lights a floor once (through its emissive quad), and
+//       AmbientLight and HemisphereLight light a sphere as the frame does
+//       (THREEPP_PT_AMBIENT_LIGHTS); the old way left both out;
 //
 // THREEPP_TEST_IMAGES=<dir>: the traces are also written there as PNGs.
 // Exit 42 (SKIP) without a Vulkan device with ray query.
@@ -236,6 +239,81 @@ int main() {
         std::printf("  reflection: max_bounces 1 %.4f | max_bounces 0 %.4f (old %.4f)\n", full, last, old);
         check(full > 0.1, "the floor mirrors the panel");
         check(std::abs(last / full - 1.0) < 0.1, "max_bounces 0 keeps the whole reflection");
+    }
+
+    // ── 3. Rect, ambient and hemisphere lights ──────────────────────────────
+    std::printf("\n[3] RectAreaLight, AmbientLight and HemisphereLight light surfaces\n");
+    {
+        // A 1 m RectAreaLight of 1 nit, 1 m over a white floor, facing it:
+        // under its centre the floor is albedo x the rectangle's form factor.
+        Scene scene;
+        scene.environment = black;
+        scene.background  = black;
+        scene.add(floorPlane(0.8f, 1.f));
+        auto rect        = RectAreaLight::create(Color(1.f, 1.f, 1.f), 1.f, 1.f, 1.f);
+        rect->rotation.x = -math::PI / 2;// its emitting -z turned down
+        rect->position.y = 1.f;
+        scene.add(rect);
+        auto camera = PerspectiveCamera::create(40, float(kW) / float(kH), 0.1f, 100.f);
+        camera->position.set(0, 0.5f, 3.f);
+        camera->lookAt(0, 0, 0);
+        camera->updateMatrixWorld();
+        // Four corner rectangles of 0.5 x 0.5 m at 1 m (the parallel-rectangle
+        // form factor from a corner).
+        const double A = 0.5, B = 0.5, sa = std::sqrt(1 + A * A), sb = std::sqrt(1 + B * B);
+        const double ff = 4.0 * (A / sa * std::atan(B / sa) + B / sb * std::atan(A / sb)) / (2.0 * math::PI);
+        const auto floorLum = [&](const std::string& name) {
+            const auto img = tr.trace(scene, *camera, 256, 2, name);
+            return lum(img, kW / 2 - 6, kW / 2 + 6, kH / 2 - 4, kH / 2 + 4);
+        };
+        // It lights the trace through its emissive quad (RectAreaLight's
+        // child mesh), an emitter like any other: once.
+        const double on = floorLum("3_rect");
+        std::printf("  floor under the rect: %.4f, albedo x form factor %.4f\n", on, 0.8 * ff);
+        check(std::abs(on / (0.8 * ff) - 1.0) < 0.1, "a RectAreaLight lights the floor once, through its quad");
+    }
+    {
+        // A grey sphere under a white AmbientLight, then under a hemisphere
+        // light of white sky and black ground, nothing else: the centre
+        // faces sideways (half the sky), the top up.
+        Scene scene;
+        scene.environment = black;
+        scene.background  = black;
+        auto mat       = MeshStandardMaterial::create();
+        mat->color     = Color(0.5f, 0.5f, 0.5f);
+        mat->roughness = 1.f;
+        scene.add(Mesh::create(SphereGeometry::create(1.f, 48, 32), mat));
+        auto camera = PerspectiveCamera::create(40, float(kW) / float(kH), 0.1f, 100.f);
+        camera->position.set(0, 0, 4.f);
+        camera->lookAt(0, 0, 0);
+        camera->updateMatrixWorld();
+        const auto centre = [&](const std::vector<float>& img) { return lum(img, kW / 2 - 6, kW / 2 + 6, kH / 2 - 6, kH / 2 + 6); };
+        const auto top    = [&](const std::vector<float>& img) { return lum(img, kW / 2 - 6, kW / 2 + 6, kH / 2 - 44, kH / 2 - 36); };
+        const auto bottom = [&](const std::vector<float>& img) { return lum(img, kW / 2 - 6, kW / 2 + 6, kH / 2 + 36, kH / 2 + 44); };
+
+        auto ambient = AmbientLight::create(Color(1.f, 1.f, 1.f), 1.f);
+        scene.add(ambient);
+        const auto amb = tr.trace(scene, *camera, 128, 2, "3_ambient_on");
+        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "0");
+        const auto ambOld = tr.trace(scene, *camera, 128, 2, "3_ambient_off");
+        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "1");
+        scene.remove(*ambient);
+        std::printf("  ambient: sphere centre %.4f (old %.4f)\n", centre(amb), centre(ambOld));
+        check(centre(amb) > 0.46 && centre(amb) < 0.60, "an ambient light of 1 lights the sphere at its albedo (0.5)");
+
+        auto hemi = HemisphereLight::create(Color(1.f, 1.f, 1.f), Color(0.f, 0.f, 0.f), 1.f);
+        scene.add(hemi);
+        const auto hem = tr.trace(scene, *camera, 128, 2, "3_hemi_on");
+        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "0");
+        const auto hemOld = tr.trace(scene, *camera, 128, 2, "3_hemi_off");
+        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "1");
+        scene.remove(*hemi);
+        std::printf("  hemisphere: sphere top %.4f centre %.4f bottom %.4f (old %.4f %.4f %.4f)\n", top(hem), centre(hem),
+                    bottom(hem), top(hemOld), centre(hemOld), bottom(hemOld));
+        // Lambert under the sky half: albedo x (0.5 N.up + 0.5); the top band
+        // is at N.up ~ 0.78 (0.45), the centre at 0 (0.25), the bottom ~ -0.78.
+        check(std::abs(centre(hem) - 0.25) < 0.04, "the hemisphere lights the sphere's side by half its sky");
+        check(top(hem) > 0.38 && bottom(hem) < 0.10, "and its top by the sky, its bottom by the black ground");
     }
 
     // ── Validation ─────────────────────────────────────────────────────────
