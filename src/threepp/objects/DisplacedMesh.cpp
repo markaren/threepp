@@ -37,6 +37,11 @@ namespace threepp {
         return env < 0 ? params.cwm : env == 1;
     }
 
+    bool DisplacedMesh::boundWavesOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_BOUND_WAVES");
+        return env < 0 ? params.boundWaves : env == 1;
+    }
+
     float DisplacedMesh::effectiveChoppiness() const {
         return cwmOn() ? 1.f : params.choppiness;
     }
@@ -313,16 +318,28 @@ namespace threepp {
         }
 
         float total = 0.f;
+        float bound = 0.f;// second-order harmonic, already in world metres
         for (uint32_t i = 0; i < 3; ++i) {
             if ((cascadeMask & (1u << i)) == 0u) continue;
             const CascadeField& cf = heightFields[i];
             if (!hasField(cf, cf.data)) continue;
             const float invTile = 1.f / cf.tileSize;
             const Vec2f p = cascadeDomain(i, bestX, bestZ);
-            total += sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
-                                 cascadeBicubic(i)).x * invTile;
+            const Vec2f h = sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
+                                        cascadeBicubic(i));
+            total += h.x * invTile;
+            if (cf.boundKm > 0.f && hasField(cf, cf.disp)) {
+                // eta2 = (k_m / 2)(eta^2 - |R[eta]|^2) of the drawn
+                // (waveScale'd) first-order field, R[eta] = -D at choppiness
+                // 1: water_displace.comp's boundHeight().
+                const Vec2f d = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile,
+                                            cascadeBicubic(i));
+                const float s = invTile * params.waveScale;
+                const float e = h.x * s, rx = d.x * s, rz = d.y * s;
+                bound += 0.5f * cf.boundKm * (e * e - rx * rx - rz * rz);
+            }
         }
-        return total * params.waveScale;
+        return total * params.waveScale + bound;
     }
 
     float DisplacedMesh::sampleWakeHeight(float worldX, float worldZ) const {

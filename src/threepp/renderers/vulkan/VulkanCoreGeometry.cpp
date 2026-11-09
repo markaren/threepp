@@ -3417,12 +3417,22 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 st.appliedWindTheta = dm.params.windTheta;
                 st.appliedFetch     = dm.params.fetch;
                 st.appliedHsFix     = hsFix;
+                st.boundKmValid     = false;
             }
 
             // The wave-model switches (DisplacedMesh::Params, each forced by
             // its environment variable). All off is the historical path,
             // untouched.
             const bool cwmOn      = dm.cwmOn();
+            const bool boundOn    = dm.boundWavesOn();
+            // Bound waves: each band's mean wavenumber (Tayfun 1980's k_m from
+            // the band's mean frequency), recomputed on the CPU from the
+            // cascade's own spectrum whenever the sea state changes.
+            if (boundOn && !st.boundKmValid) {
+                for (uint32_t i = 0; i < 2; ++i)
+                    st.boundKm[i] = (st.cascadeMask & (1u << i)) ? st.cascades[i].phillips->meanWavenumber() : 0.f;
+                st.boundKmValid = true;
+            }
 
             // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
             // is one-shot per cascade. DynamicSpectrum re-runs each frame.
@@ -3762,7 +3772,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.wakeTrailAddr  = wakeTrailAddr;
             pc.hullAddr       = hullAddr;
             pc.hullCount      = hullCount;
-            pc.waveModel      = cwmOn ? 1u : 0u;
+            pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u);
+            pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
+            pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
@@ -3973,6 +3985,7 @@ void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, Displa
                     vmaUnmapMemory(ctx->allocator(), buf.alloc);
                     cf.dim      = dim;
                     cf.tileSize = tileSizes[ci];
+                    cf.boundKm  = (ci < 2 && dm.boundWavesOn() && st.boundKmValid) ? st.boundKm[ci] : 0.f;
                 }
             }
         }

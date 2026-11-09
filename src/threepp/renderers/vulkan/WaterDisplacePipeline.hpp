@@ -77,8 +77,10 @@ namespace threepp::vulkan {
             // The wave-model switches (DisplacedMesh::Params). With
             // waveModel 0 the shader runs the historical path and touches
             // nothing below.
-            uint32_t        waveModel;    // bit 0 cwm
-            uint32_t        _pad0[3];
+            uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves
+            float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
+            float           boundKm1;     // 0 = none on that cascade
+            uint32_t        _pad0;
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

@@ -83,10 +83,10 @@ layout(push_constant, scalar) uniform Pc {
     uint    hullCount;      // active vessels; 0 = no hull exclusion, no wake
     // The wave-model switches (DisplacedMesh::Params). waveModel 0 runs the
     // historical path below and reads nothing past here.
-    uint    waveModel;      // bit 0 cwm
+    uint    waveModel;      // bit 0 cwm, bit 1 boundWaves
+    float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
+    float   boundKm1;
     uint    _pad0;
-    uint    _pad1;
-    uint    _pad2;
 } pc;
 
 // A rest point in vessel `hu`'s frame, and how far outside its footprint it
@@ -224,17 +224,35 @@ vec3 sampleDisplacement(vec2 worldXZ) {
 // -- Wave-model switches ---------------------------------------------------
 // Cascades 0 and 1 at rest point p, B-spline filtered as in
 // sampleDisplacement, in world metres: .x / .z the horizontal displacement at
-// choppiness 1 and .y the height with waveScale. The normal stencil and
-// the CWM limiter difference this.
+// choppiness 1, .y the height with waveScale and, under boundWaves, the
+// second-order bound harmonic, which .w also holds on its own. The normal
+// stencil and the CWM limiter difference this.
+//
+// Bound harmonic (boundWaves): the narrow-band second-order surface of
+// Longuet-Higgins (1963) and Tayfun (1980),
+//   eta2 = (k_m / 2)(eta^2 - |R[eta]|^2),
+// eta the band's first-order height, k_m its mean wavenumber
+// (PhillipsSpectrum::meanWavenumber) and R the Riesz transform, multiplier
+// -i k/|k|, the Hilbert transform's 2D form (Felsberg and Sommer 2001, "The
+// monogenic signal"). The displacement image holds i k/|k| h, so R[eta] is
+// minus the unit-choppiness displacement already sampled here and costs
+// nothing. For one wave a cos(t), from any direction, |R[eta]| = a |sin(t)|
+// and eta2 = (k a^2 / 2) cos(2t): the Stokes crest a + k a^2 / 2 and trough
+// -a + k a^2 / 2; its mean is 0. Each cascade carries its own; the
+// cross-band terms are left out (the narrow-band form has none).
+float boundHeight(float h, vec2 r, float km) {
+    return 0.5 * km * (h * h - dot(r, r));
+}
 
-vec3 sampleSmoothRaw(vec2 worldXZ) {
-    vec3 d = vec3(0.0);
+vec4 sampleSmoothRaw(vec2 worldXZ) {
+    vec4 d = vec4(0.0);
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
         const vec2 uv = worldXZ * invTile;
         const vec2 dxz = sampleBicubicRG(displace0, uv) * invTile;
         const float h  = sampleBicubicR(height0, uv) * invTile * pc.waveScale;
         d.y += h;
+        if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm0);
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -244,9 +262,11 @@ vec3 sampleSmoothRaw(vec2 worldXZ) {
         const vec2 dxz = oceanC1World(sampleBicubicRG(displace1, uv)) * invTile;
         const float h  = sampleBicubicR(height1, uv) * invTile * pc.waveScale;
         d.y += h;
+        if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm1);
         d.x += dxz.x;
         d.z += dxz.y;
     }
+    d.y += d.w;
     return d;
 }
 
@@ -329,11 +349,11 @@ void main() {
     float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
     float wmLambda = pc.choppiness;
     if (pc.waveModel != 0u) {
-        wmC = sampleSmoothRaw(rest.xz);
-        const vec3 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
-        const vec3 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));
-        const vec3 tD = sampleSmoothRaw(rest.xz + vec2(0.0, -wmEpsZ));
-        const vec3 tU = sampleSmoothRaw(rest.xz + vec2(0.0,  wmEpsZ));
+        wmC = sampleSmoothRaw(rest.xz).xyz;
+        const vec4 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
+        const vec4 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));
+        const vec4 tD = sampleSmoothRaw(rest.xz + vec2(0.0, -wmEpsZ));
+        const vec4 tU = sampleSmoothRaw(rest.xz + vec2(0.0,  wmEpsZ));
         const float ix = 0.5 / wmEpsX, iz = 0.5 / wmEpsZ;
         aXX = (tR.x - tL.x) * ix;// d Dx / dx
         aXZ = (tU.x - tD.x) * iz;// d Dx / dz
@@ -349,7 +369,7 @@ void main() {
     }
 
     vec3 disp;
-    if ((pc.waveModel & 1u) != 0u) {
+    if ((pc.waveModel & 3u) != 0u) {
         const vec3 f = sampleFineRaw(rest.xz);
         disp = vec3(wmLambda * (wmC.x + f.x), wmC.y + f.y, wmLambda * (wmC.z + f.z));
     } else {
@@ -538,6 +558,10 @@ void main() {
         const vec3 tx = vec3(1.0 + wmLambda * aXX, hGX, wmLambda * aZX);
         const vec3 tz = vec3(wmLambda * aXZ, hGZ, 1.0 + wmLambda * aZZ);
         n = normalize(cross(tz, tx));
+    } else if ((pc.waveModel & 2u) != 0u) {
+        // Bound waves alone: the historical rest-space height gradient, the
+        // bound harmonic included.
+        n = normalize(vec3(-hGX, 1.0, -hGZ));
     } else {
         const float epsX = pc.planeSizeX / float(pc.gridDimX - 1u);
         const float epsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);

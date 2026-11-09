@@ -417,6 +417,60 @@ namespace threepp::water {
         settings_.hsFix     = hsFix;
     }
 
+    float PhillipsSpectrum::meanWavenumber() const {
+        // phillips_spectrum.comp's phillips2D, line for line (float, as there).
+        const Settings& S = settings_;
+        const float g = 9.81f;
+        const float l = S.smallWaveCutoff;
+        auto phillips2D = [&](float kx, float kz) -> float {
+            const float k2 = kx * kx + kz * kz;
+            if (std::sqrt(k2) < 1e-4f) return 0.f;
+            float L = S.windSpeed * S.windSpeed / g;
+            if (S.hsFix) L *= 1.1624764f;
+            float Aeff = 0.01f;
+            float gamma = 1.f;
+            if (S.fetch > 0.f) {
+                const float Ffd = 1609.f * S.windSpeed * S.windSpeed;
+                const float r = std::clamp(S.fetch / Ffd, 0.005f, 1.f);
+                L *= std::pow(r, 2.f / 3.f);
+                Aeff *= std::pow(r, -0.22f);
+                gamma = 1.f + 2.3f * std::sqrt(1.f - r);
+            }
+            const float kL2 = k2 * L * L;
+            const float kn = std::sqrt(k2);
+            float kw = (kx * std::cos(S.windTheta) + kz * std::sin(S.windTheta)) / kn;
+            kw *= kw;
+            float p = Aeff * std::exp(-1.f / kL2) * kw * std::exp(-k2 * l * l) / (k2 * k2);
+            if (gamma > 1.f) {
+                const float w = std::sqrt(g * kn);
+                const float wp = std::sqrt(g * 0.894f / L);
+                const float sg = (w <= wp) ? 0.07f : 0.09f;
+                const float d = (w - wp) / (sg * wp);
+                p *= std::pow(gamma, std::exp(-0.5f * d * d));
+            }
+            if (S.hsFix) p *= 2.5446900f;
+            return p;
+        };
+        const uint32_t n = S.textureSize;
+        const double dk = 2.0 * 3.14159265358979 / double(S.tileSize);
+        double sumP = 0.0, sumWP = 0.0;
+        for (uint32_t iz = 0; iz < n; ++iz) {
+            for (uint32_t ix = 0; ix < n; ++ix) {
+                const float kx = float((double(ix) - double(n) * 0.5) * dk);
+                const float kz = float((double(iz) - double(n) * 0.5) * dk);
+                const float kl = std::sqrt(kx * kx + kz * kz);
+                if (kl < S.kMin || (S.kMax > 0.f && kl > S.kMax)) continue;
+                // Mode k carries P(k) and P(-k) (h0(k) + conj h0(-k)).
+                const double p = double(phillips2D(kx, kz)) + double(phillips2D(-kx, -kz));
+                sumP += p;
+                sumWP += std::sqrt(double(g) * kl) * p;
+            }
+        }
+        if (!(sumP > 0.0)) return 0.f;
+        const double wm = sumWP / sumP;
+        return float(wm * wm / g);
+    }
+
     PhillipsSpectrum::~PhillipsSpectrum() {
         if (pipe_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipe_, nullptr);
         if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layout_, nullptr);

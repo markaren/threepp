@@ -85,6 +85,17 @@ namespace threepp {
             // 1 / 0 forces it on / off for every ocean. Live-tunable.
             bool cwm = false;
 
+            // Second-order bound waves (default OFF). ON adds the narrow-band
+            // second-order harmonic of Longuet-Higgins (1963) and Tayfun
+            // (1980), eta2 = (k_m / 2)(eta^2 - |R[eta]|^2), to cascades 0 and
+            // 1, k_m the band's mean wavenumber and R the Riesz transform,
+            // the Hilbert transform's 2D form (Felsberg and Sommer 2001),
+            // which is minus the unit-choppiness horizontal displacement the
+            // cascade already carries: crests higher and sharper, troughs
+            // flatter, height skewness 3 sigma k_m, for waves from any
+            // direction. Normals follow. THREEPP_OCEAN_BOUND_WAVES = 1 / 0
+            // forces it. Live-tunable.
+            bool boundWaves = false;
 
 
             // Global Y-displacement multiplier. 1.0 is physical; higher values
@@ -124,6 +135,7 @@ namespace threepp {
         // field, unless its environment variable (THREEPP_OCEAN_<SWITCH> =
         // 1 / 0, read once, named with the field) forces it for every ocean.
         [[nodiscard]] bool cwmOn() const;
+        [[nodiscard]] bool boundWavesOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under
         // the Choppy Wave Model, else params.choppiness.
         [[nodiscard]] float effectiveChoppiness() const;
@@ -467,6 +479,9 @@ namespace threepp {
             std::vector<float> disp;
             uint32_t dim      = 0;
             float    tileSize = 0.f;
+            // The band's mean wavenumber (rad/m) the bound harmonic uses;
+            // 0 = no bound harmonic on this cascade.
+            float    boundKm  = 0.f;
         };
         mutable CascadeField heightFields[3];
 

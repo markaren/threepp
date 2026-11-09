@@ -602,6 +602,10 @@ namespace threepp::vulkan::impl {
         float appliedWindTheta = 0.f;
         float appliedFetch     = 0.f;
         bool  appliedHsFix     = false;// the Hs calibration (Params::hsFix / THREEPP_OCEAN_HS_FIX)
+        // Bound waves: cascades 0 and 1's mean wavenumbers (rad/m) for the
+        // second-order harmonic, valid until the sea state changes.
+        float boundKm[2]       = {0.f, 0.f};
+        bool  boundKmValid     = false;
         water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;
         uint32_t vertexCount = 0;

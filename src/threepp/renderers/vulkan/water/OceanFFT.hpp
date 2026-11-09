@@ -94,6 +94,13 @@ namespace threepp::water {
         // change meant for the next one.
         void updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix);
 
+        // The band's mean wavenumber in Tayfun's (1980) sense, k_m = w_m^2 / g
+        // with w_m = sum(w P) / sum(P) over this cascade's own k grid and band
+        // (kMin, kMax, the small-wave taper): the k of the bound-wave harmonic
+        // (DisplacedMesh::Params::boundWaves). A CPU copy of the shader's
+        // phillips2D, evaluated for the current settings. 0 for an empty band.
+        float meanWavenumber() const;
+
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }
         const OceanImage& h0() const { return h0_; }
