@@ -347,3 +347,166 @@ def Xform "crate" {
     }
     CHECK(textures == std::set<std::string>{"Crate_Albedo.1001", "Crate_Albedo.1002"});
 }
+
+TEST_CASE("OmniPBR's texture_scale, translate and rotate place its maps, which repeat", "[usd]") {
+    // OmniPBR samples every map with wrap_repeat at uv' = S * R * uv + T, where
+    // rotation_translation_scale in OmniPBR.mdl builds R from texture_rotate in degrees.
+    // A plain UsdPreviewSurface material on the same image shows the loader cloned the
+    // shared, cached texture before placing it.
+    const auto stage = [](const std::string& shaderInputs) {
+        return R"(#usda 1.0
+(
+    defaultPrim = "box"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "box" {
+    def Mesh "mesh" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </box/Looks/Floor>
+    }
+
+    def Mesh "plain" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(2, 0, 0), (3, 0, 0), (2, 1, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </box/Looks/Plain>
+    }
+
+    def Scope "Looks" {
+        def Material "Floor" {
+            token outputs:mdl:surface.connect = </box/Looks/Floor/Shader.outputs:out>
+
+            def Shader "Shader" {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @./materials/Floor.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "Floor"
+)" + shaderInputs + R"(
+                token outputs:out
+            }
+        }
+
+        def Material "Plain" {
+            token outputs:surface.connect = </box/Looks/Plain/Surface.outputs:surface>
+
+            def Shader "Surface" {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor.connect = </box/Looks/Plain/Albedo.outputs:rgb>
+                token outputs:surface
+            }
+
+            def Shader "Albedo" {
+                uniform token info:id = "UsdUVTexture"
+                asset inputs:file = @./materials/textures/Floor_Albedo.png@
+                float2 inputs:st.connect = </box/Looks/Plain/Reader.outputs:result>
+                float3 outputs:rgb
+            }
+
+            def Shader "Reader" {
+                uniform token info:id = "UsdPrimvarReader_float2"
+                string inputs:varname = "st"
+                float2 outputs:result
+            }
+        }
+    }
+}
+)";
+    };
+    const std::string floorMdl = R"(mdl 1.4;
+
+using ::OmniPBR import OmniPBR;
+import ::tex::gamma_mode;
+
+export material Floor(*)
+ = OmniPBR(
+	diffuse_texture: texture_2d("./textures/Floor_Albedo.png", ::tex::gamma_srgb),
+	normalmap_texture: texture_2d("./textures/Floor_Normal.png", ::tex::gamma_linear),
+	project_uvw: false,
+	texture_translate: float2(0.25, 0.5),
+	texture_rotate: 90.f,
+	texture_scale: float2(3, 2));
+)";
+
+    const auto load = [&](const std::string& name, const std::string& shaderInputs) {
+        const auto dir = std::filesystem::temp_directory_path() / name;
+        std::filesystem::remove_all(dir);
+        write(dir / "box.usda", stage(shaderInputs));
+        write(dir / "materials" / "Floor.mdl", floorMdl);
+        writePng(dir / "materials" / "textures" / "Floor_Albedo.png");
+        writePng(dir / "materials" / "textures" / "Floor_Normal.png");
+        USDLoader loader;
+        auto scene = loader.load(dir / "box.usda");
+        REQUIRE(scene);
+        std::shared_ptr<MeshStandardMaterial> floor, plain;
+        scene->traverse([&](Object3D& o) {
+            if (auto* mesh = o.as<Mesh>()) {
+                auto mat = std::dynamic_pointer_cast<MeshStandardMaterial>(mesh->material());
+                (mesh->name == "plain" || (mat && mat->name == "Plain") ? plain : floor) = mat;
+            }
+        });
+        REQUIRE(floor);
+        REQUIRE(plain);
+        REQUIRE(floor->map);
+        REQUIRE(floor->normalMap);
+        REQUIRE(plain->map);
+        return std::make_pair(floor, plain);
+    };
+    // Where a texture samples a mesh's uv, by the matrix a renderer would use.
+    const auto uvOf = [](const Texture& tex, float u, float v) {
+        Matrix3 m = tex.matrix;
+        if (tex.matrixAutoUpdate) {
+            m.setUvTransform(tex.offset.x, tex.offset.y, tex.repeat.x, tex.repeat.y, tex.rotation, tex.center.x, tex.center.y);
+        }
+        Vector2 uv(u, v);
+        uv.applyMatrix3(m);
+        return uv;
+    };
+    const auto checkUv = [](const Vector2& uv, float u, float v) {
+        CHECK_THAT(uv.x, WithinAbs(u, 1e-5f));
+        CHECK_THAT(uv.y, WithinAbs(v, 1e-5f));
+    };
+
+    SECTION("from the material's .mdl file") {
+        const auto [floor, plain] = load("usd_mdl_transform", "");
+        for (const auto& map : {floor->map, floor->normalMap}) {
+            CHECK(map->wrapS == TextureWrapping::Repeat);
+            CHECK(map->wrapT == TextureWrapping::Repeat);
+            // S = (3, 2), R = 90 degrees, T = (0.25, 0.5)
+            checkUv(uvOf(*map, 0, 0), 0.25f, 0.5f);
+            checkUv(uvOf(*map, 1, 0), 0.25f, -1.5f);
+            checkUv(uvOf(*map, 0, 1), 3.25f, 0.5f);
+        }
+        CHECK(plain->map != floor->map);
+        CHECK(plain->map->wrapS == TextureWrapping::ClampToEdge);
+        checkUv(uvOf(*plain->map, 1, 0), 1, 0);
+    }
+
+    SECTION("authored on the prim, over the file's") {
+        const auto [floor, plain] = load("usd_mdl_transform_prim", R"(
+                float2 inputs:texture_scale = (4, 4)
+                float2 inputs:texture_translate = (0, 0)
+                float inputs:texture_rotate = 0)");
+        checkUv(uvOf(*floor->map, 1, 1), 4, 4);
+        CHECK(floor->map->wrapS == TextureWrapping::Repeat);
+    }
+
+    SECTION("not with project_uvw, which projects the maps from 3D instead") {
+        const auto [floor, plain] = load("usd_mdl_transform_projected", R"(
+                bool inputs:project_uvw = 1)");
+        checkUv(uvOf(*floor->map, 1, 0), 1, 0);
+        CHECK(floor->map->wrapS == TextureWrapping::Repeat);
+    }
+}

@@ -28,6 +28,7 @@
 #include "tydra/next/scene-access.hh"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -537,6 +538,11 @@ namespace threepp {
 
     struct USDLoader::Impl {
         TextureLoader texLoader;
+        // An MDL material's maps, each a clone of the texture loader's shared
+        // texture, set to repeat and placed by its material's UV transform (see
+        // applyMdlInputs), by file and transform. Held as weakly as the texture
+        // loader's own cache, so loads of the same asset share them.
+        std::unordered_map<std::string, std::weak_ptr<Texture>> mdlTextures;
         bool ignoreUpDirection = false;
         // The latest load's DomeLight environment texture (if any) — exposed
         // to the caller via USDResult so they can assign it to scene.environment
@@ -1312,6 +1318,7 @@ namespace threepp {
             std::unordered_map<std::string, std::filesystem::path> textures;
             std::unordered_map<std::string, Color> colors;
             std::unordered_map<std::string, float> numbers;
+            std::unordered_map<std::string, std::array<float, 2>> float2s;
         };
 
         static std::string mdlName(const char* input) {
@@ -1344,7 +1351,10 @@ namespace threepp {
             static const std::regex texture(R"re((\w+)\s*:\s*texture_2d\(\s*"([^"]+)")re");
             static const std::regex color(R"re((\w+)\s*:\s*color\(\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\))re");
             static const std::regex flag(R"re((\w+)\s*:\s*(true|false)\b)re");
-            static const std::regex number(R"re((\w+)\s*:\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*[,)])re");
+            // MDL writes a float as 0.5, 1., .5 or 90.f
+            static const std::string real = R"re(([-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)[fF]?)re";
+            static const std::regex number(R"re((\w+)\s*:\s*)re" + real + R"re(\s*[,)])re");
+            static const std::regex float2(R"re((\w+)\s*:\s*float2\(\s*)re" + real + R"re(\s*(?:,\s*)re" + real + R"re(\s*)?\))re");
             const std::sregex_iterator end;
             for (std::sregex_iterator it(s.begin(), s.end(), texture); it != end; ++it) {
                 out.textures[(*it)[1].str()] = (file.parent_path() / (*it)[2].str()).lexically_normal();
@@ -1357,6 +1367,10 @@ namespace threepp {
             }
             for (std::sregex_iterator it(s.begin(), s.end(), number); it != end; ++it) {
                 out.numbers[(*it)[1].str()] = std::stof((*it)[2].str());
+            }
+            for (std::sregex_iterator it(s.begin(), s.end(), float2); it != end; ++it) {
+                const float x = std::stof((*it)[2].str());
+                out.float2s[(*it)[1].str()] = {x, (*it)[3].matched ? std::stof((*it)[3].str()) : x};// float2(1.0) is (1, 1)
             }
             return out;
         }
@@ -1382,30 +1396,6 @@ namespace threepp {
             // prim does not author is looked up there by the same name.
             const MdlDefaults defaults = mdlDefaults(shader, anchor, b.baseDir);
 
-            auto tryTexture = [&](std::initializer_list<const char*> names) -> std::shared_ptr<Texture> {
-                for (const char* name : names) {
-                    const auto* value = shader.GetPropertyValue(name);
-                    const auto raw = value ? value->as_asset_path() : lnext::StringView();
-                    if (!raw || raw->empty()) continue;
-                    if (hasUDIM(*raw)) b.sawUDIM = true;
-                    std::string rel = resolveUDIM(*raw, b.udimTile);
-                    std::replace(rel.begin(), rel.end(), '\\', '/');
-                    for (const auto& base : {anchor, b.baseDir}) {
-                        const auto candidate = (base / rel).lexically_normal();
-                        if (isFile(candidate)) return texLoader.load(candidate, true);
-                    }
-                    if (isFile(rel)) return texLoader.load(rel, true);
-                }
-                for (const char* name : names) {
-                    const auto it = defaults.textures.find(mdlName(name));
-                    if (it == defaults.textures.end()) continue;
-                    const std::string file = it->second.string();
-                    if (hasUDIM(file)) b.sawUDIM = true;
-                    const std::filesystem::path tilePath = resolveUDIM(file, b.udimTile);
-                    if (isFile(tilePath)) return texLoader.load(tilePath, true);
-                }
-                return nullptr;
-            };
             auto tryColor = [&](std::initializer_list<const char*> names) -> std::optional<Color> {
                 for (const char* name : names) {
                     float c[3];
@@ -1432,6 +1422,72 @@ namespace threepp {
                     if (const auto it = defaults.numbers.find(mdlName(name)); it != defaults.numbers.end()) return it->second;
                 }
                 return std::nullopt;
+            };
+            auto tryFloat2 = [&](const char* name) -> std::optional<std::array<float, 2>> {
+                float f[2];
+                if (const auto* value = shader.GetPropertyValue(name); value && value->to_float2(f)) return std::array<float, 2>{f[0], f[1]};
+                if (const auto it = defaults.float2s.find(mdlName(name)); it != defaults.float2s.end()) return it->second;
+                return std::nullopt;
+            };
+
+            // OmniPBR samples its maps with wrap_repeat at uv' = S * R * uv + T: its
+            // rotation_translation_scale, with texture_rotate in degrees. About the origin that
+            // is the matrix three.js's setUvTransform builds from offset, repeat and rotation.
+            // project_uvw projects the maps from 3D, which no transform of the UVs gives, so it
+            // keeps them as they are. The texture loader shares a texture by path, so each map
+            // is a clone, shared by the materials that place it the same way.
+            const auto scale = tryFloat2("inputs:texture_scale").value_or(std::array<float, 2>{1.f, 1.f});
+            const auto translate = tryFloat2("inputs:texture_translate").value_or(std::array<float, 2>{0.f, 0.f});
+            const float rotate = tryFloat({"inputs:texture_rotate"}).value_or(0.f);
+            const bool placed = tryFloat({"inputs:project_uvw"}).value_or(0.f) <= 0.f;
+            auto place = [&](const std::filesystem::path& path) -> std::shared_ptr<Texture> {
+                std::ostringstream key;
+                key << path.string() << '|';
+                if (placed) key << scale[0] << ',' << scale[1] << ',' << translate[0] << ',' << translate[1] << ',' << rotate;
+                if (auto cached = mdlTextures[key.str()].lock()) return cached;
+                auto source = texLoader.load(path, true);
+                if (!source) return nullptr;
+                auto tex = source->clone();
+                // Texture::copy leaves these out
+                tex->name = source->name;
+                tex->sourceFile = source->sourceFile;
+                tex->encodedSource = source->encodedSource;
+                tex->wrapS = TextureWrapping::Repeat;
+                tex->wrapT = TextureWrapping::Repeat;
+                if (placed) {
+                    tex->offset.set(translate[0], translate[1]);
+                    tex->repeat.set(scale[0], scale[1]);
+                    tex->rotation = math::degToRad(rotate);
+                    tex->center.set(0, 0);
+                    tex->matrixAutoUpdate = true;
+                    tex->updateMatrix();
+                }
+                mdlTextures[key.str()] = tex;
+                return tex;
+            };
+            auto tryTexture = [&](std::initializer_list<const char*> names) -> std::shared_ptr<Texture> {
+                for (const char* name : names) {
+                    const auto* value = shader.GetPropertyValue(name);
+                    const auto raw = value ? value->as_asset_path() : lnext::StringView();
+                    if (!raw || raw->empty()) continue;
+                    if (hasUDIM(*raw)) b.sawUDIM = true;
+                    std::string rel = resolveUDIM(*raw, b.udimTile);
+                    std::replace(rel.begin(), rel.end(), '\\', '/');
+                    for (const auto& base : {anchor, b.baseDir}) {
+                        const auto candidate = (base / rel).lexically_normal();
+                        if (isFile(candidate)) return place(candidate);
+                    }
+                    if (isFile(rel)) return place(rel);
+                }
+                for (const char* name : names) {
+                    const auto it = defaults.textures.find(mdlName(name));
+                    if (it == defaults.textures.end()) continue;
+                    const std::string file = it->second.string();
+                    if (hasUDIM(file)) b.sawUDIM = true;
+                    const std::filesystem::path tilePath = resolveUDIM(file, b.udimTile);
+                    if (isFile(tilePath)) return place(tilePath);
+                }
+                return nullptr;
             };
 
             if (auto t = tryTexture({"inputs:diffuse_texture", "inputs:albedo_texture",
