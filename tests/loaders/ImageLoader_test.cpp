@@ -156,6 +156,58 @@ namespace {
             140, 130, 81, 192, 48, 88, 1, 0, 32, 209, 5, 251
     };
 
+    // A little-endian, uncompressed, tiled RGBA TIFF of one tile, written field by field
+    // so a test can set any tile size. Every IFD value is a single SHORT or LONG and sits
+    // inline in its entry; the tile's bytes follow the IFD. ~200 bytes plus the tile.
+    std::vector<unsigned char> tiledRgbaTiff(uint32_t width, uint32_t height,
+                                             uint32_t tileWidth, uint32_t tileLength,
+                                             const std::vector<unsigned char>& tile,
+                                             uint16_t predictor = 1) {
+        struct Field {
+            uint16_t tag, type;
+            uint32_t value;
+        };
+        constexpr uint16_t kShort = 3, kLong = 4;
+        const std::vector<Field> fields{
+                {256, kLong, width},
+                {257, kLong, height},
+                {258, kShort, 8},     // BitsPerSample
+                {259, kShort, 1},     // Compression: none
+                {262, kShort, 2},     // Photometric: RGB
+                {277, kShort, 4},     // SamplesPerPixel
+                {284, kShort, 1},     // PlanarConfiguration: chunky
+                {317, kShort, predictor},
+                {322, kLong, tileWidth},
+                {323, kLong, tileLength},
+                {324, kLong, 0},// TileOffsets, set below
+                {325, kLong, static_cast<uint32_t>(tile.size())},
+                {338, kShort, 2},// ExtraSamples: unassociated alpha
+        };
+        const auto tileOffset = static_cast<uint32_t>(8 + 2 + fields.size() * 12 + 4);
+
+        std::vector<unsigned char> out;
+        auto u16 = [&](uint16_t v) { out.insert(out.end(), {uint8_t(v), uint8_t(v >> 8)}); };
+        auto u32 = [&](uint32_t v) { out.insert(out.end(), {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)}); };
+        out.insert(out.end(), {'I', 'I', 42, 0});
+        u32(8);
+        u16(static_cast<uint16_t>(fields.size()));
+        for (const auto& f : fields) {
+            u16(f.tag);
+            u16(f.type);
+            u32(1);
+            const uint32_t value = f.tag == 324 ? tileOffset : f.value;
+            if (f.type == kShort) {
+                u16(static_cast<uint16_t>(value));
+                u16(0);
+            } else {
+                u32(value);
+            }
+        }
+        u32(0);// no next IFD
+        out.insert(out.end(), tile.begin(), tile.end());
+        return out;
+    }
+
     template<size_t N>
     std::vector<unsigned char> bytesOf(const std::array<unsigned char, N>& a) {
         return {a.begin(), a.end()};
@@ -430,6 +482,49 @@ TEST_CASE("ImageLoader decodes TIFF") {
             std::vector<unsigned char> truncated(kTiffBigEndianPlanar16.begin(), kTiffBigEndianPlanar16.begin() + keep);
             CHECK_FALSE(loader.load(truncated, 4, false).has_value());
         }
+    }
+
+    SECTION("a 256x256 tile over a 4x4 image, as GDAL writes small images, still loads") {
+        // The tile holds 256x256 pixels; only its top-left 4x4 is the image. Each pixel
+        // carries its own (x, y) so a wrong row stride shows.
+        std::vector<unsigned char> tile(size_t(256) * 256 * 4, 7);
+        for (unsigned y = 0; y < 4; ++y) {
+            for (unsigned x = 0; x < 4; ++x) {
+                unsigned char* p = tile.data() + (size_t(y) * 256 + x) * 4;
+                p[0] = static_cast<unsigned char>(10 * x);
+                p[1] = static_cast<unsigned char>(10 * y);
+                p[2] = 200;
+                p[3] = 255;
+            }
+        }
+        auto img = loader.load(tiledRgbaTiff(4, 4, 256, 256, tile), 4, false);
+        REQUIRE(img.has_value());
+        CHECK(img->width() == 4);
+        CHECK(img->height() == 4);
+        for (unsigned y = 0; y < 4; ++y) {
+            for (unsigned x = 0; x < 4; ++x) {
+                CHECK(rgbAt(*img, x, y, 4) == std::array<unsigned char, 3>{
+                                                      static_cast<unsigned char>(10 * x),
+                                                      static_cast<unsigned char>(10 * y), 200});
+                CHECK(alphaAt(*img, x, y) == 255);
+            }
+        }
+    }
+
+    // A tile size is an unbounded 32-bit number. A tiny file must not make the decoder
+    // wrap its tile buffer size, allocate gigabytes, or read and write past the buffer.
+    const std::vector<unsigned char> smallTile(4 * 4 * 4, 128);
+
+    SECTION("a 2^31 x 2^31 tile on a 4x4 image is rejected") {
+        const auto file = tiledRgbaTiff(4, 4, 0x80000000u, 0x80000000u, smallTile);
+        CHECK(file.size() < 256);
+        CHECK_FALSE(loader.load(file, 4, false).has_value());
+    }
+
+    SECTION("a tile whose byte size wraps to 64 bytes is rejected, with the predictor on") {
+        // 4 bytes * 1717882064 * 2684518405 = 2^64 + 64.
+        const auto file = tiledRgbaTiff(4, 4, 1717882064u, 2684518405u, smallTile, 2);
+        CHECK_FALSE(loader.load(file, 4, false).has_value());
     }
 }
 

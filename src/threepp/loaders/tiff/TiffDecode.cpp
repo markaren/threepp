@@ -104,7 +104,7 @@ namespace {
     std::optional<std::vector<uint32_t>> values(const Reader& r, const Entry& e) {
         if (e.type != 1 && e.type != 3 && e.type != 4) return std::nullopt;
         const size_t ts = typeSize(e.type);
-        if (!r.has(e.valueOffset, ts * size_t(e.count))) return std::nullopt;
+        if (uint64_t(ts) * e.count > r.size || !r.has(e.valueOffset, ts * size_t(e.count))) return std::nullopt;
         std::vector<uint32_t> out(e.count);
         for (size_t i = 0; i < out.size(); ++i) {
             const size_t at = e.valueOffset + i * ts;
@@ -249,7 +249,7 @@ namespace threepp::detail {
         for (size_t k = 0; k < entryCount; ++k) {
             const size_t at = ifd + 2 + k * 12;
             Entry e{r.u16(at + 2), r.u32(at + 4), 0};
-            const size_t bytes = typeSize(e.type) * size_t(e.count);
+            const uint64_t bytes = uint64_t(typeSize(e.type)) * e.count;
             e.valueOffset = bytes <= 4 ? at + 8 : r.u32(at + 8);
             tags[r.u16(at)] = e;
         }
@@ -332,25 +332,43 @@ namespace threepp::detail {
             counts = list(kTagStripByteCounts);
         }
         if (segWidth == 0 || segHeight == 0) return fail("zero tile or strip size");
-        const size_t across = (size_t(width) + segWidth - 1) / segWidth;
-        const size_t down = (size_t(height) + segHeight - 1) / segHeight;
-        const size_t segmentsPerPlane = across * down;
-        if (!offsets || !counts || offsets->size() < segmentsPerPlane * planes || counts->size() < segmentsPerPlane * planes) {
+        // Sizes are worked out in 64 bits: a tile side is any 32-bit number, which
+        // wraps a 32-bit size_t and, multiplied out, a 64-bit one too.
+        const uint64_t across = (uint64_t(width) + segWidth - 1) / segWidth;
+        const uint64_t down = (uint64_t(height) + segHeight - 1) / segHeight;
+        const uint64_t segmentCount = across * down * planes;// <= 2^30 * 16
+        if (!offsets || !counts || offsets->size() < segmentCount || counts->size() < segmentCount) {
             return fail("missing or short strip/tile offsets");
         }
+        const auto segmentsPerPlane = static_cast<size_t>(across * down);
+
+        const size_t pixelBytes = spp * bytesPerSample;
+        const uint64_t rawBytes = uint64_t(width) * height * pixelBytes;// <= 2^30 * 32
+        const uint64_t pixelsBytes = uint64_t(width) * height * channels;
+        if (rawBytes > SIZE_MAX || pixelsBytes > SIZE_MAX) return fail("image too large for this platform");
+
+        // A tile may be wider or taller than the image (GDAL writes 256x256 tiles even
+        // for a 4x4 image), so its size is not rejected. Only the rows inside the image
+        // are decoded, though, and a buffer for them past the image's own size plus
+        // 1 GiB is a hostile tile width, not a picture.
+        constexpr uint64_t kSegmentSlack = uint64_t(1) << 30;
+        const uint64_t segRowBytes64 = uint64_t(segWidth) * samplesPerSegment * bytesPerSample;// <= 2^37
+        const uint64_t segRowsMax = std::min<uint64_t>(segHeight, height);
+        const uint64_t segLimit = std::max(rawBytes, kSegmentSlack);
+        if (segRowBytes64 > segLimit || segRowsMax > segLimit / segRowBytes64) return fail("tile or strip too large");
+        const auto segRowBytes = static_cast<size_t>(segRowBytes64);
 
         // --- Decode every segment into one chunky buffer of raw samples ---
-        const size_t pixelBytes = spp * bytesPerSample;
-        std::vector<unsigned char> raw(size_t(width) * height * pixelBytes);
-        const size_t segRowBytes = size_t(segWidth) * samplesPerSegment * bytesPerSample;
+        std::vector<unsigned char> raw(static_cast<size_t>(rawBytes));
         std::vector<unsigned char> seg;
 
         for (size_t plane = 0; plane < planes; ++plane) {
             for (size_t s = 0; s < segmentsPerPlane; ++s) {
                 const size_t index = plane * segmentsPerPlane + s;
-                const size_t x0 = (s % across) * segWidth;
-                const size_t y0 = (s / across) * segHeight;
-                const size_t rows = tiled ? segHeight : std::min<size_t>(segHeight, height - y0);
+                const auto x0 = static_cast<size_t>((s % across) * segWidth);// < width
+                const auto y0 = static_cast<size_t>((s / across) * segHeight);// < height
+                // A tile's rows past the image's last row are never decoded.
+                const size_t rows = std::min<size_t>(segHeight, height - y0);
 
                 const size_t offset = (*offsets)[index];
                 if (offset >= size) return fail("strip/tile offset out of range");
@@ -423,7 +441,7 @@ namespace threepp::detail {
             return rr.u16(0);
         };
 
-        std::vector<unsigned char> pixels(size_t(width) * height * channels);
+        std::vector<unsigned char> pixels(static_cast<size_t>(pixelsBytes));
         for (size_t y = 0; y < height; ++y) {
             const size_t outRow = flipY ? height - 1 - y : y;
             const unsigned char* src = raw.data() + y * width * pixelBytes;
