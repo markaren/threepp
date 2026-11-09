@@ -782,6 +782,21 @@ float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
     return T;
 }
 
+// A lamp's shadow ray in the inline loops (shadeDiffuseDirect's point, spot
+// and cell lamps): shadowVis, times what the glass on the way lets through.
+// Those loops shade the primary with the denoiser off, dispatch B,
+// transmissive pixels and sharp traced hits; the denoised primary gets the
+// same product from shadowRayVisTo. They took the opaque test alone, so a
+// seat behind a smoked pane took about a tenth of the lamp with the denoiser
+// on and all of it with the denoiser off. Still undimmed by glass: the
+// reflection channel's hits (cheapHit, as in sunShadowVis), a lamp or the sun
+// answered by a shadow map (kSM), the rect lights' soft shadows and the
+// emitter NEE.
+float lampShadowVis(vec3 origin, vec3 dir, float tMax, bool cheapHit) {
+    const float v = shadowVis(origin, dir, tMax);
+    return (kFixLampGlass && v > 0.0 && !cheapHit) ? v * glassTransmittance(origin, dir, tMax) : v;
+}
+
 // FOG-ONLY shadow ray (setFogShadowOpaqueCutouts, pc.flags bit 29): the same
 // ray with every candidate taken as a blocker, so an alpha-tested crown is an
 // opaque blob to the volumetric march. The march is low-frequency and

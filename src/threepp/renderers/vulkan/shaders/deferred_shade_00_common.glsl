@@ -86,6 +86,13 @@ layout(constant_id = 4) const uint kRayBudget = kRayBudgetAll;
 // twice. 0, the default, is the kernel without any of it.
 layout(constant_id = 5) const uint kRayRecon = 0u;
 const bool kRR = kRayRecon != 0u;
+// Review-fix A/B switches (DeferredShade::shadePipeline): one bit per fix,
+// each set unless its THREEPP_VK_FIX_* knob is 0, which gives the shade it
+// replaced. The default, every bit, is what fog_march.comp compiles.
+//   bit 0  THREEPP_VK_FIX_LAMP_GLASS: the inline lamp loops dim a lamp by
+//          the glass it shines through (lampShadowVis).
+layout(constant_id = 6) const uint kShadeFixes = 0xFFFFFFFFu;
+const bool kFixLampGlass = (kShadeFixes & 1u) != 0u;
 
 // Ray-query counters (VulkanRenderer::setCountRays, frame_timings rays_*):
 // lights.rayCountAddr names this frame's kRayCountSlots uints (0 = off). Every
