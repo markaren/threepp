@@ -3684,6 +3684,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 g.trailFirst   = hullCount * DisplacedMeshState::kMaxWakeSamples;
                 g.trailCount   = static_cast<uint32_t>(std::min<size_t>(
                         wk.trail.size(), DisplacedMeshState::kMaxWakeSamples));
+                g.analyticWaves = wk.analyticWaves ? 1u : 0u;
                 hullWakes[hullCount] = &wk;
                 ++hullCount;
             }
@@ -3742,6 +3743,20 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.wakeTrailAddr  = wakeTrailAddr;
             pc.hullAddr       = hullAddr;
             pc.hullCount      = hullCount;
+            // The wake field's ripple heights (WakeField::rippleHeights): its
+            // step goes first, so the geometry has this frame's waves, as the
+            // shade's slopes do.
+            const bool rippleHeights = st.wake && st.wake->rippleRes > 0u && dm.wakeField.rippleHeights;
+            if (rippleHeights) {
+                wakeField_->record(cb, *st.wake, dm, frameNowSec());
+                VkMemoryBarrier mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+                pc.wakeTableAddr = st.wake->tableAddress();
+            }
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
@@ -3797,8 +3812,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 // declares the image).
             }
 
-            // (4d) The wake field: carry, settle and feed every patch that is on.
-            if (st.wake) wakeField_->record(cb, *st.wake, dm, frameNowSec());
+            // (4d) The wake field: carry, settle and feed every patch that is on
+            // (already done above when the geometry takes its ripples' height).
+            if (st.wake && !rippleHeights) wakeField_->record(cb, *st.wake, dm, frameNowSec());
         }
 
 void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed) {
@@ -5401,6 +5417,24 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 state->blas->oceanWakeTable = state->wake->tableAddress();
                 oceanWakeView = state->wake->stateView();
                 if (state->wake->rippleView() != VK_NULL_HANDLE) oceanRippleView = state->wake->rippleView();
+            }
+            // Binding 6 of the displace set: the ripples whose height the
+            // geometry takes, or the 1x1 stand-in (never read then).
+            {
+                VkDescriptorImageInfo ri{};
+                ri.sampler     = wakeField_->rippleSampler();
+                ri.imageView   = state->wake && state->wake->rippleView() != VK_NULL_HANDLE
+                                         ? state->wake->rippleView()
+                                         : wakeField_->dummyView();
+                ri.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkWriteDescriptorSet rw{};
+                rw.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                rw.dstSet          = state->displaceDS;
+                rw.dstBinding      = 6;
+                rw.descriptorCount = 1;
+                rw.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                rw.pImageInfo      = &ri;
+                vulkan::updateDescriptorSets(ctx->device(), 1, &rw, 0, nullptr);
             }
             rewriteDeferredDescriptors();
 

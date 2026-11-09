@@ -673,7 +673,7 @@ namespace threepp::vulkan::impl {
         // reallocated; null handles until then.
         static constexpr uint32_t kMaxVessels     = 8;// = DisplacedMesh::kMaxVessels (asserted at the upload)
         static constexpr uint32_t kMaxWakeSamples = 64;// per vessel
-        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 48u;// vulkan::OceanHullGpu
+        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 56u;// vulkan::OceanHullGpu
         static constexpr VkDeviceSize kVesselTrailBytes = kMaxVessels * kMaxWakeSamples * 32u;
         Buffer    vesselBuffer[kFramesInFlight] = {};
 

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace threepp {
@@ -127,7 +128,7 @@ namespace threepp {
             // bow at ~20° half-angle. The V-wedge is taken as MAX over the
             // historical trail samples — same combiner as the shader, so
             // 60 samples don't stack into fountain-shaped pillars.
-            if (!wake.enabled || hullExclusion.halfLength <= 0.f) return 0.f;
+            if (!wake.enabled || !wake.analyticWaves || hullExclusion.halfLength <= 0.f) return 0.f;
 
             auto smoothstepF = [](float a, float b, float x) {
                 const float t = std::clamp((x - a) / (b - a), 0.f, 1.f);
@@ -298,6 +299,14 @@ namespace threepp {
                                  cascadeBicubic(i)).x * invTile;
         }
         return total * params.waveScale;
+    }
+
+    bool DisplacedMesh::defaultRippleHeights() {
+        static const bool on = [] {
+            const char* v = std::getenv("THREEPP_WAKE_HEIGHTS");
+            return !(v && v[0] == '0' && v[1] == '\0');
+        }();
+        return on;
     }
 
     float DisplacedMesh::sampleWakeHeight(float worldX, float worldZ) const {

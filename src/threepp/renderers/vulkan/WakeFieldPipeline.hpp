@@ -49,7 +49,7 @@ namespace threepp::vulkan {
         float rippleOriginX;
         float rippleOriginZ;
         float rippleSize;
-        float _pad;
+        float rippleHeight;// 1 = the ripple image's alpha holds the waves' height (water_displace adds it)
     };
     static_assert(sizeof(WakePatchGpu) == 56, "WakePatchGpu must match ocean_wake.glsl's WakePatch");
 
@@ -178,7 +178,7 @@ namespace threepp::vulkan {
         VkImageView           dummyView_      = VK_NULL_HANDLE;
 
         void createPipeline();
-        void recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, PushConstants pc);
+        void recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, uint32_t heightMask, PushConstants pc);
     };
 
 }// namespace threepp::vulkan

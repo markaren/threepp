@@ -287,7 +287,8 @@ void main() {
                 // hullFade so foam doesn't appear under the boat's
                 // historical hull footprint.
                 const float sDistAft = hu.halfLength - sLZ;
-                if (sDistAft > 0.0 && sDistAft < hu.halfLength * 5.0) {
+                // (none where the wake field makes her waves: VesselWake::analyticWaves)
+                if (hu.analyticWaves != 0u && sDistAft > 0.0 && sDistAft < hu.halfLength * 5.0) {
                     const float uHull = clamp(-sLZ / hu.halfLength, -1.0, 1.0);
                     float sHalfBeamAtLZ;
                     if (uHull <= 0.0) {
@@ -329,7 +330,7 @@ void main() {
                     vesselFoam = max(vesselFoam, wakeGate * kTrailPeak * along * lateral);
                 }
                 const float distAft = hu.halfLength - lZ;
-                if (distAft > 0.0 && distAft < hu.halfLength * 5.0) {
+                if (hu.analyticWaves != 0u && distAft > 0.0 && distAft < hu.halfLength * 5.0) {
                     const float uHull = clamp(-lZ / hu.halfLength, -1.0, 1.0);
                     float halfBeamAtLZ;
                     if (uHull <= 0.0) {

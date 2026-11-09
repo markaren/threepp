@@ -25,7 +25,7 @@ namespace threepp::vulkan {
     // One vessel as water_displace.comp and foam_world.comp read it: the
     // DisplacedMesh::HullExclusion pose, the wake's forward speed and the
     // vessel's slice of the wake-trail buffer. Mirrors `OceanHull` in
-    // ocean_cascade.glsl field for field (scalar layout, 48 bytes).
+    // ocean_cascade.glsl field for field (scalar layout, 56 bytes).
     struct OceanHullGpu {
         float    centerX;
         float    centerZ;
@@ -39,18 +39,22 @@ namespace threepp::vulkan {
         float    roll;
         uint32_t trailFirst;  // first WakeSample of this vessel in the trail buffer
         uint32_t trailCount;
+        uint32_t analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam (VesselWake::analyticWaves)
+        uint32_t _pad;
     };
-    static_assert(sizeof(OceanHullGpu) == 48, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
+    static_assert(sizeof(OceanHullGpu) == 56, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
 
     class WaterDisplacePipeline {
 
     public:
-        // Max simultaneous DisplacedMesh instances. Each set holds 6
-        // combined-image-samplers (3 cascades × 2 images).
+        // Max simultaneous DisplacedMesh instances. Each set holds 7
+        // combined-image-samplers (3 cascades × 2 images, and binding 6: the
+        // wake field's ripples, or its 1x1 stand-in).
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match water_displace.comp's `Pc` struct (96 bytes):
-        // 4 × VkDeviceAddress (32) + 16 × u32/float (64). The vessels live in
+        // Must match water_displace.comp's `Pc` struct (104 bytes):
+        // 4 × VkDeviceAddress (32) + 16 × u32/float (64) + the wake table's
+        // address (8). The vessels live in
         // a per-frame buffer (hullAddr → OceanHullGpu[hullCount]); one hull
         // alone used to fill this block to the 128-byte maximum.
         struct PushConstants {
@@ -74,6 +78,10 @@ namespace threepp::vulkan {
             float           warpHalfRange; // gates the whole feature on
             float           warpCoefA;     // warpHalfRange > 0.
             uint32_t        hullCount;     // active vessels (0 = none)
+            // The ocean's wake-field table (WakeFieldPipeline::State::tableAddress),
+            // whose patches with rippleHeight on add their waves' height
+            // from binding 6; 0 = none (the geometry is exactly the old one).
+            VkDeviceAddress wakeTableAddr;
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

@@ -29,7 +29,7 @@ struct WakePatch {
     float rippleOriginX;// the window its ripples are shown through (world min corner)
     float rippleOriginZ;
     float rippleSize;   // that window's side, and the period of its small sea (m)
-    float _pad;
+    float rippleHeight; // 1 = the ripples' fourth channel holds their height (m), which the geometry takes
 };
 
 // What makes a mark. 64 bytes (= DisplacedMesh::WakeSource).
