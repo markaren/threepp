@@ -1028,6 +1028,7 @@ namespace threepp {
         VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
         float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
         float       oceanWaveScale        = 1.f;          // its params.waveScale (the path tracer's fine slope)
+        bool        oceanChopNormals      = false;        // binding 13 is a ChopMoments chain and it is on this frame
 
         // World-space foam (deferred shade ocean binding). Built by
         // FoamWorldPipeline each frame from a DisplacedMesh's foamImage.

@@ -135,17 +135,25 @@ namespace threepp::water {
         DynamicSpectrum(const DynamicSpectrum&) = delete;
         DynamicSpectrum& operator=(const DynamicSpectrum&) = delete;
 
-        // Push-constant block of dynamic_spectrum.comp (std430, 12 bytes).
+        // Push-constant block of dynamic_spectrum.comp (std430, 16 bytes).
         struct PushParams {
             uint32_t textureSize;
             float    tileSize;
             float    elapsedSeconds;
+            uint32_t writeChop;// 0 = height + displacement only (the plain path)
         };
 
-        void recordCompute(VkCommandBuffer cb, float elapsedSeconds);
+        // writeChop: also store the slope spectrum i*k*h, the displacement
+        // gradient's diagonal, and pack its off-diagonal into ht's imaginary
+        // part (see dynamic_spectrum.comp). The slope and jacDiag images are
+        // allocated for every cascade either way, so the bindings stay valid
+        // and the switch can flip at runtime.
+        void recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool writeChop = false);
 
         const OceanImage& ht()           const { return ht_; }
         const OceanImage& displacement() const { return displacement_; }
+        OceanImage&       slope()              { return slope_; }
+        OceanImage&       jacDiag()            { return jacDiag_; }
 
     private:
         vulkan::VulkanContext& ctx_;
@@ -153,7 +161,7 @@ namespace threepp::water {
         uint32_t textureSize_;
         float    tileSize_;
 
-        OceanImage  ht_, displacement_;
+        OceanImage  ht_, displacement_, slope_, jacDiag_;
         VkSampler   sampler_ = VK_NULL_HANDLE;
 
         VkDescriptorPool      pool_   = VK_NULL_HANDLE;
@@ -245,6 +253,57 @@ namespace threepp::water {
         void createPipelines();
         void recordTwiddleOnce(VkCommandBuffer cb);
         DescGroup& groupFor(const OceanImage& input, const OceanImage& scratch);
+    };
+
+    // ─── ChopMoments ───────────────────────────────────────────────────
+    // The fine cascade's per-pixel surface for the deferred shade when the
+    // chop normals are on (THREEPP_OCEAN_CHOP_NORMALS). One RGBA32F image
+    // with a full mip chain:
+    //   .r = the height exactly as the IFFT left it (so every reader of the
+    //        old fine-height binding, the path tracer included, sees the
+    //        same value at LOD 0)
+    //   .g, .b = the slope of the DISPLACED (choppy) surface, world units
+    //   .a = its squared length
+    // Level L is the box average of 2^L x 2^L texels (linear blits), so one
+    // filtered fetch over a pixel's footprint gives the mean slope (tilts N)
+    // and E[s^2] - |E[s]|^2, the slope variance the pixel cannot hold (goes
+    // to roughness): LEAN mapping, Olano and Baker 2010, "LEAN Mapping".
+    class ChopMoments {
+    public:
+        ChopMoments(vulkan::VulkanContext& ctx, uint32_t textureSize,
+                    VkImageView htView, VkImageView slopeView, VkImageView jacView);
+        ~ChopMoments();
+
+        ChopMoments(const ChopMoments&) = delete;
+        ChopMoments& operator=(const ChopMoments&) = delete;
+
+        struct PushParams {
+            uint32_t textureSize;
+            float    slopeScale;// raw IFFT slope -> world slope (waveScale / tile)
+            float    chopScale; // raw IFFT dD/dx -> world, times lambda (choppiness / tile)
+        };
+
+        // After the cascade's IFFTs, same command buffer. Leaves every level
+        // in GENERAL, visible to compute and ray-tracing sampled reads.
+        void record(VkCommandBuffer cb, float slopeScale, float chopScale, VkPipelineStageFlags readerStages);
+
+        VkImageView sampledView() const { return sampledView_; }
+        VkSampler   sampler()     const { return sampler_; }
+
+    private:
+        vulkan::VulkanContext& ctx_;
+        uint32_t textureSize_;
+        uint32_t mipLevels_ = 1;
+
+        OceanImage  moments_;                      // .view = mip 0 storage view
+        VkImageView sampledView_ = VK_NULL_HANDLE; // all levels
+        VkSampler   sampler_     = VK_NULL_HANDLE; // linear, trilinear, repeat, anisotropic
+
+        VkDescriptorPool      pool_   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout dsl_    = VK_NULL_HANDLE;
+        VkDescriptorSet       ds_     = VK_NULL_HANDLE;
+        VkPipelineLayout      layout_ = VK_NULL_HANDLE;
+        VkPipeline            pipe_   = VK_NULL_HANDLE;
     };
 
     // ─── OceanCascade ──────────────────────────────────────────────────

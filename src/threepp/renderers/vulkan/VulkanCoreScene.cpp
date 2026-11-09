@@ -4329,6 +4329,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 oceanFineTileSize   = 0.0f;
                             }
                         }
+                        // The chop normals' moment chain stood in for the
+                        // height view, with its own sampler.
+                        if (st->chopMoments && st->chopMoments->sampledView() == oceanFineHeightView) {
+                            oceanFineHeightView    = oceanFineHeightDummy.view;
+                            oceanFineHeightSampler = oceanFineHeightDummy.sampler;
+                            oceanFineTileSize      = 0.0f;
+                            oceanChopNormals       = false;
+                        }
                         if (st->foamImage.view == oceanFoamView) {
                             oceanFoamView     = oceanFoamDummy.view;
                             oceanFoamTileSize = 0.0f;

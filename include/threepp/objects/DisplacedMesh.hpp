@@ -77,6 +77,17 @@ namespace threepp {
             // small water reads calm by default.
             float foamAmount = 1.0f;
 
+            // Chop normals: shade the surface the choppy displacement actually
+            // draws. Exact slope and displacement-gradient fields (more inverse
+            // FFTs of the same spectrum) give the vertex normal as the cross
+            // product of the displaced surface's tangents, and the fine
+            // cascade's per-pixel slope comes from a mip chain of slope moments
+            // (mean tilts the normal, the variance a pixel cannot hold goes to
+            // roughness). false = the height-only finite-difference normals.
+            // Live-tunable. The env var THREEPP_OCEAN_CHOP_NORMALS=0, read at
+            // startup, removes the feature entirely (the old path, bit for bit).
+            bool chopNormals = true;
+
             // FFT texture resolution per cascade (must be power of two).
             // Band-passed cascades need only enough texels to resolve their
             // own wavelength band (~10 samples per shortest wavelength) — the

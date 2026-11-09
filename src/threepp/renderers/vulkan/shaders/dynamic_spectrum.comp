@@ -13,6 +13,23 @@
 // from finite differences of the SPATIAL fields — so they were retired. The
 // remaining bindings keep their historical numbers.)
 //
+// Chop normals (writeChop != 0, THREEPP_OCEAN_CHOP_NORMALS): the exact
+// derivatives the displaced-surface normal needs, as more inverse FFTs of the
+// same h(k,t), so no finite-difference stencil is needed anywhere:
+//   slope (binding 2)  i*k*h, packed like the displacement:
+//                      IFFT -> .r = dh/dx, .g = dh/dz
+//   jac   (binding 4)  -(kx^2 + i*kz^2)/|k| * h, the diagonal of the
+//                      displacement's own gradient: IFFT -> .r = dDx/dx,
+//                      .g = dDz/dz
+//   ht    (binding 1)  h + i*(-kx*kz/|k| * h): the height keeps .r and the
+//                      off-diagonal dDx/dz = dDz/dx rides in the otherwise
+//                      zero imaginary part (.g), which costs no extra IFFT.
+// Derivative of a Fourier mode e^{i k.x} is i k times it (Tessendorf 2001,
+// "Simulating Ocean Water", eq. 37 for the slope, eq. 44-45 for the
+// displacement whose x-derivatives give the Jacobian terms).
+// Two real Hermitian spectra A and B can share one complex IFFT as A + i*B:
+// the real part returns IFFT(A) and the imaginary part IFFT(B).
+//
 // Dispatched once per frame per cascade. The params ride in PUSH CONSTANTS,
 // recorded into the frame's command buffer: with two frames in flight a
 // host-mapped UBO rewritten at record time handed frame N the time of frame
@@ -25,10 +42,13 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0)            uniform sampler2D H0;
 layout(set = 0, binding = 1, rg32f)     uniform writeonly image2D HT;
 layout(set = 0, binding = 3, rg32f)     uniform writeonly image2D Displacement;
+layout(set = 0, binding = 2, rg32f)     uniform writeonly image2D Slope;
+layout(set = 0, binding = 4, rg32f)     uniform writeonly image2D JacDiag;
 layout(push_constant) uniform Params {
     uint  textureSize;
     float tileSize;
     float elapsedSeconds;
+    uint  writeChop;// 0 = the plain height + displacement (no extra stores)
 } P;
 
 const float PI = 3.14159265358979;
@@ -61,6 +81,14 @@ void main() {
     const float kLen = length(k) + 1e-3;
     const vec2  displacement = ikh / kLen;
 
-    imageStore(HT,           id, vec4(h,            0.0, 0.0));
+    if (P.writeChop != 0u) {
+        // Displacement D = i k/|k| h, so dD/dx = i kx D = -kx k/|k| h.
+        const vec2 jxz = (-k.x * k.y / kLen) * h;
+        imageStore(HT,      id, vec4(h + vec2(-jxz.y, jxz.x), 0.0, 0.0));// h + i*jxz
+        imageStore(Slope,   id, vec4(ikh, 0.0, 0.0));
+        imageStore(JacDiag, id, vec4(-(k.x * k.x * h + k.y * k.y * ih) / kLen, 0.0, 0.0));
+    } else {
+        imageStore(HT,      id, vec4(h,            0.0, 0.0));
+    }
     imageStore(Displacement, id, vec4(displacement, 0.0, 0.0));
 }

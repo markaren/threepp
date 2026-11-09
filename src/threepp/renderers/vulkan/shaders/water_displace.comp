@@ -6,6 +6,7 @@
 #extension GL_GOOGLE_include_directive                  : enable
 
 #include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break), sampleBicubicRG
+#include "ocean_chop_normal.glsl"// oceanChopSlope: slope of the displaced surface
 
 // Writes displaced positions and normals for an FFT-driven ocean surface
 // directly into the BLAS vertex/normal buffers (host-mapped, same memory
@@ -37,6 +38,14 @@ layout(set = 0, binding = 2) uniform sampler2D height1;
 layout(set = 0, binding = 3) uniform sampler2D displace1;
 layout(set = 0, binding = 4) uniform sampler2D height2;
 layout(set = 0, binding = 5) uniform sampler2D displace2;
+// Chop normals (cascadeMask bit 31): the exact derivative fields of cascades
+// 0 and 1, the inverse FFTs of i*k*h (dh/dx, dh/dz) and of the displacement
+// gradient's diagonal (dDx/dx, dDz/dz); the off-diagonal dDx/dz rides in
+// heightN.g. See dynamic_spectrum.comp.
+layout(set = 0, binding = 6) uniform sampler2D slope0;
+layout(set = 0, binding = 7) uniform sampler2D jac0;
+layout(set = 0, binding = 8) uniform sampler2D slope1;
+layout(set = 0, binding = 9) uniform sampler2D jac1;
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
@@ -75,7 +84,7 @@ layout(push_constant, scalar) uniform Pc {
     float   tileSize2;
     float   waveScale;
     float   choppiness;
-    uint    cascadeMask;
+    uint    cascadeMask;    // bits 0-2: cascades; bit 31: chop normals
     float   warpCenterX;
     float   warpCenterZ;
     float   warpHalfRange;
@@ -419,6 +428,54 @@ void main() {
     }
 
     const vec3 outPos = rest + disp;
+
+    if ((pc.cascadeMask & 0x80000000u) != 0u) {
+        // Chop normals: the normal of the surface this vertex actually sits
+        // on, from exact derivatives at the REST point (no stencil), the
+        // horizontal chop included: oceanChopSlope (ocean_chop_normal.glsl)
+        // crosses the two tangents of P = rest + (l*Dx, h, l*Dz). The fields
+        // are B-spline filtered like the displacement above, so normal and
+        // geometry describe one surface. Cascades 0+1 as before; cascade 2 is
+        // added per pixel by the deferred shade.
+        vec2  sl  = vec2(0.0);
+        float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+        if ((pc.cascadeMask & 1u) != 0u) {
+            const float invTile = 1.0 / pc.tileSize0;
+            const vec2  uv = rest.xz * invTile;
+            sl += sampleBicubicRG(slope0, uv) * invTile;
+            const vec2 jd = sampleBicubicRG(jac0, uv) * invTile;
+            jxx += jd.x;
+            jzz += jd.y;
+            jxz += sampleBicubicRG(height0, uv).g * invTile;
+        }
+        if ((pc.cascadeMask & 2u) != 0u) {
+            // Rotated sample domain d = R*x: a gradient comes back as
+            // R^T*g (oceanC1World) and the displacement gradient as
+            // R^T * Jd * R.
+            const float invTile = 1.0 / pc.tileSize1;
+            const vec2  uv = oceanC1Domain(rest.xz) * invTile;
+            sl += oceanC1World(sampleBicubicRG(slope1, uv)) * invTile;
+            const vec2  jd = sampleBicubicRG(jac1, uv) * invTile;
+            const float p  = jd.x;
+            const float r  = jd.y;
+            const float q  = sampleBicubicRG(height1, uv).g * invTile;
+            const float c  = kOceanCascade1RotCos;
+            const float sn = kOceanCascade1RotSin;
+            jxx += c * c * p + 2.0 * c * sn * q + sn * sn * r;
+            jzz += sn * sn * p - 2.0 * c * sn * q + c * c * r;
+            jxz += c * sn * (r - p) + (c * c - sn * sn) * q;
+        }
+        const vec2 sd = oceanChopSlope(sl * pc.waveScale,
+                                       jxx * pc.choppiness, jzz * pc.choppiness, jxz * pc.choppiness);
+        const vec3 nc = normalize(vec3(-sd.x, 1.0, -sd.y));
+        pc.posOut.v[i * 3u + 0u]  = outPos.x;
+        pc.posOut.v[i * 3u + 1u]  = outPos.y;
+        pc.posOut.v[i * 3u + 2u]  = outPos.z;
+        pc.normOut.v[i * 3u + 0u] = nc.x;
+        pc.normOut.v[i * 3u + 1u] = nc.y;
+        pc.normOut.v[i * 3u + 2u] = nc.z;
+        return;
+    }
 
     // Finite-difference normal from BICUBIC height taps (cascades 0+1 —
     // see sampleHeightSmooth for why cascade 2 is excluded). eps matches

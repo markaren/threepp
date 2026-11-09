@@ -27,9 +27,10 @@ namespace threepp::vulkan {
     }
 
     void WaterDisplacePipeline::createPipeline() {
-        // 6 combined-image-sampler bindings — three (height, displacement)
-        // cascade pairs.
-        std::array<VkDescriptorSetLayoutBinding, 6> bb{};
+        // 10 combined-image-sampler bindings: three (height, displacement)
+        // cascade pairs, then the chop normals' (slope, jacDiag) pairs of
+        // cascades 0 and 1 (water_displace.comp bindings 6-9).
+        std::array<VkDescriptorSetLayoutBinding, 10> bb{};
         for (uint32_t i = 0; i < bb.size(); ++i) {
             bb[i].binding         = i;
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -85,7 +86,7 @@ namespace threepp::vulkan {
         // destroyed; bump kMaxOceans if scenes ever exceed it.
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps.descriptorCount = 6 * kMaxOceans;
+        ps.descriptorCount = 10 * kMaxOceans;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = kMaxOceans;
