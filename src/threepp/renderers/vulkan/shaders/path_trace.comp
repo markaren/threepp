@@ -227,6 +227,7 @@ layout(push_constant) uniform Pc {
                              // bit 8 = this pass's photons are built: gather them
                              // bit 9 = the pass has the sun's photons through the ocean
                              // bit 10 = thinGlassNeeOwns (THREEPP_PT_THIN_GLASS_NEE)
+                             // bit 11 = lastBounceMis (THREEPP_PT_LAST_BOUNCE_MIS)
                              // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
@@ -266,6 +267,9 @@ bool photonsOn() { return kPhotons && (pc.flags & 256u) != 0u; }
 // glass lets through; the bounce ray that finds it through them adds nothing.
 // Off: the old way, where both counted it (about twice the light).
 bool thinGlassNeeOwns() { return (pc.flags & 1024u) != 0u; }
+// Bit 11 (THREEPP_PT_LAST_BOUNCE_MIS): the last vertex traces the bounce its
+// emitter NEE is weighted against, for the emission alone (lastBounceEmission).
+bool lastBounceMis() { return (pc.flags & 2048u) != 0u; }
 bool sunPhotonsOn() { return photonsOn() && (pc.flags & 512u) != 0u && pgRegion.w > 0.0; }
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
@@ -1533,6 +1537,50 @@ bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front, uint ra
     return float(h) * (1.0 / 4294967296.0) < a;
 }
 
+// ── The last vertex's bounce (lastBounceMis) ────────────────────────────────
+// The emitter NEE at a path's last vertex is weighted against a bounce ray
+// that the path no longer traces, so its weights summed to the NEE's share
+// alone: a glossy floor under a large panel, its reflection nearly black at
+// max_bounces 0. This traces that ray (o, d, its BSDF pdf) and returns the
+// emission it hits under the bounce's MIS weight, dimmed by the air, the murk
+// and the medium it travels in; nothing else (no environment, no unlit or
+// glow-only surface, nothing past glass): the light the NEE's weight left out.
+vec3 lastBounceEmission(vec3 o, vec3 d, float pdf, bool inside, vec3 insideAtt, float insideDist, inout uint seed) {
+    rayQueryEXT rq;
+    const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                rayQueryGetIntersectionBarycentricsEXT(rq, false),
+                                rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
+            rayQueryConfirmIntersectionEXT(rq);
+    }
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return vec3(0.0);
+    const int hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+    if ((geoms[hitId].flags & kGeomFlagGlowOnly) != 0u) return vec3(0.0);
+    const MaterialDesc hm = entryMat(hitId);
+    if (hm.roughness < 0.0 || max(max(hm.emissive.r, hm.emissive.g), hm.emissive.b) * hm.emissiveIntensity <= 0.0)
+        return vec3(0.0);
+    const float tHit = rayQueryGetIntersectionTEXT(rq, true);
+    const PtHit hh   = ptFetchHit(hitId, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
+                                  rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                  rayQueryGetIntersectionObjectToWorldEXT(rq, true),
+                                  rayQueryGetIntersectionWorldToObjectEXT(rq, true));
+    const vec3 Le = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hh.uv, hm.emissive * hm.emissiveIntensity);
+    if (max(max(Le.r, Le.g), Le.b) <= 0.0) return vec3(0.0);
+    const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, abs(dot(hh.Ng, d)));
+    const float w    = pdf * pdf / max(pdf * pdf + pdfL * pdfL, 1e-20);
+    vec3 T = vec3(1.0);
+    if (!inside && airOn()) T *= exp(-airOpticalDepth(o, o + d * tHit));
+    float t0, t1;
+    if (murkOn() && murkClip(o, d, tHit, t0, t1)) T *= exp(-fog.murkSigma * (t1 - t0));
+    if (inside && insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater))
+        T *= pow(insideAtt, vec3(tHit / insideDist));
+    return Le * T * w;
+}
+
 // ── One path ────────────────────────────────────────────────────────────────
 vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     vec3  L          = vec3(0.0);
@@ -1856,7 +1904,13 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 L += throughput * gatherPhotons(s, V, sunGather) * (1.0 / pgP);
         }
 
-        if (bounce == pc.maxBounces) break;
+        if (bounce == pc.maxBounces) {
+            // The bounce the last vertex's emitter NEE is weighted against.
+            vec3 wi; float pdf; vec3 wgt;
+            if (lastBounceMis() && pc.emissiveCount > 0u && sampleBsdf(s, V, seed, wi, pdf, wgt))
+                L += throughput * wgt * lastBounceEmission(offsetOrigin(s, wi), wi, pdf, inside, insideAtt, insideDist, seed);
+            break;
+        }
 
         vec3 wi; float pdf; vec3 wgt;
         if (!sampleBsdf(s, V, seed, wi, pdf, wgt)) break;

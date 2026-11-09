@@ -6,6 +6,9 @@
 //       pane (THREEPP_PT_THIN_GLASS_NEE): a clear pane takes about 8 % off,
 //       a smoked one (albedo 0.2) leaves about a fifth; the old way counted
 //       the light about twice;
+//   [2] the last vertex's emitter NEE has its bounce (THREEPP_PT_LAST_BOUNCE_MIS):
+//       a glossy floor's reflection of a panel at max_bounces 0 is the one
+//       max_bounces 1 draws; the old way lost all but the NEE's MIS share;
 //
 // THREEPP_TEST_IMAGES=<dir>: the traces are also written there as PNGs.
 // Exit 42 (SKIP) without a Vulkan device with ray query.
@@ -99,11 +102,11 @@ namespace {
         }
     };
 
-    std::shared_ptr<Mesh> floorPlane(float albedo, float roughness) {
+    std::shared_ptr<Mesh> floorPlane(float albedo, float roughness, float metalness = 0.f) {
         auto mat       = MeshStandardMaterial::create();
         mat->color     = Color(albedo, albedo, albedo);
         mat->roughness = roughness;
-        mat->metalness = 0.f;
+        mat->metalness = metalness;
         auto floor        = Mesh::create(PlaneGeometry::create(8.f, 8.f), mat);
         floor->rotation.x = -math::PI / 2;
         return floor;
@@ -202,6 +205,37 @@ int main() {
         check(open > 0.05, "the panel lights the open floor");
         check(std::abs(clearOn / open - 0.92) < 0.06, "a clear pane lets 0.92 through, once");
         check(std::abs(smokedOn / open - 0.184) < 0.03, "a smoked pane (0.2) lets 0.18 through");
+    }
+
+    // ── 2. The last vertex's bounce ────────────────────────────────────────
+    // A polished metal floor (roughness 0.1) under a large panel, the camera
+    // on the panel's reflection. With no bounce after the floor (max_bounces
+    // 0) the reflection is the floor's direct light, all of it: what one more
+    // bounce sees of the panel (max_bounces 1, the panel black).
+    std::printf("\n[2] the last vertex's emitter NEE has its bounce\n");
+    {
+        Scene scene;
+        scene.environment = black;
+        scene.background  = black;
+        auto floor = floorPlane(0.9f, 0.1f, 1.f);
+        scene.add(floor);
+        scene.add(panel(2.f, 1.5f, 0.8f, Side::Double));
+        auto camera = PerspectiveCamera::create(40, float(kW) / float(kH), 0.1f, 100.f);
+        camera->position.set(0, 0.8f, 3.f);
+        camera->lookAt(0, 0, 1.9f);
+        camera->updateMatrixWorld();
+        const auto refl = [&](uint32_t bounces, const std::string& name) {
+            const auto img = tr.trace(scene, *camera, 256, bounces, name);
+            return lum(img, kW / 2 - 15, kW / 2 + 15, kH / 2 - 8, kH / 2 + 8);
+        };
+        const double full = refl(1, "2_bounces1");
+        const double last = refl(0, "2_bounces0_on");
+        setEnv("THREEPP_PT_LAST_BOUNCE_MIS", "0");
+        const double old = refl(0, "2_bounces0_off");
+        setEnv("THREEPP_PT_LAST_BOUNCE_MIS", "1");
+        std::printf("  reflection: max_bounces 1 %.4f | max_bounces 0 %.4f (old %.4f)\n", full, last, old);
+        check(full > 0.1, "the floor mirrors the panel");
+        check(std::abs(last / full - 1.0) < 0.1, "max_bounces 0 keeps the whole reflection");
     }
 
     // ── Validation ─────────────────────────────────────────────────────────

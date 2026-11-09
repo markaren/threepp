@@ -591,7 +591,8 @@ namespace threepp::vulkan {
         const uint32_t waveScale = uint32_t(std::clamp(std::lround(double(in.oceanWaveScale) * 256.0), 1L, 65535L));
         pc.flags              = (resetPending_ ? 1u : 0u) | (in.sunExtracted ? 2u : 0u) | ((in.lensModel & 3u) << 2)
                               | (in.envSunLastDirLight ? 16u : 0u) | (waveScale << 16)
-                              | (ptSwitch("THREEPP_PT_THIN_GLASS_NEE") ? 1024u : 0u);
+                              | (ptSwitch("THREEPP_PT_THIN_GLASS_NEE") ? 1024u : 0u)
+                              | (ptSwitch("THREEPP_PT_LAST_BOUNCE_MIS") ? 2048u : 0u);
         pc.emissiveCount      = in.emissiveCount;
         pc.emissiveTotalPower = in.emissiveTotalPower;
         pc.envMipCount        = std::max(1u, in.envMipCount);
