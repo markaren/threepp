@@ -233,6 +233,49 @@ TEST_CASE("ImagingSonar: the sea surface puts a ghost at the image path's range"
     CHECK(on.second == static_cast<std::uint8_t>(SonarEchoKind::Multipath));
 }
 
+TEST_CASE("ImagingSonar: a surface just past max range stays in the last bins of its beams") {
+    // The default model with only the range cut to 1 m: the chirp's response
+    // (~0.1 m each side) is far wider than a bin (0.7 mm), so a surface 1.04 m
+    // out, past the window but inside the response, is recentred on its core.
+    ImagingSonarModel model;
+    model.maxRange = 1.f;
+    model.noiseSpectrumLevelDb = -150.f;
+    model.volumeBackscatterDb = -300.f;
+    model.surfaceMultipath = false;
+    const ImagingSonarSynthesizer syn(model);
+    const Vector3 origin(0, 0, 0);
+
+    // Two targets inside the window, one each side, and the wall dead ahead.
+    auto sides = targetColumn(syn, origin, -40.f, 2.f, 0.6f, 3);
+    const auto right = targetColumn(syn, origin, 40.f, 2.f, 0.6f, 4);
+    for (std::size_t i = 0; i < sides.size(); ++i) {
+        if (right[i].returnNo > 0) sides[i] = right[i];
+    }
+    auto withWall = sides;
+    const auto wall = targetColumn(syn, origin, 0.f, 2.f, 1.04f, 5);
+    for (std::size_t i = 0; i < wall.size(); ++i) {
+        if (wall[i].returnNo > 0) withWall[i] = wall[i];
+    }
+
+    SonarFrame a, b;
+    syn.synthesize(model, AcousticMaterials{}, sides, origin, Matrix3{}, 1, a, 1);
+    syn.synthesize(model, AcousticMaterials{}, withWall, origin, Matrix3{}, 1, b, 1);
+    REQUIRE(a.levelDb.size() == b.levelDb.size());
+    // The wall only adds to the bins its response reaches, the last ~150.
+    const unsigned firstReached = model.rangeBins - 200;
+    unsigned changedEarly = 0, changedLate = 0;
+    for (unsigned beam = 0; beam < b.beams; ++beam) {
+        for (unsigned j = 0; j < b.bins; ++j) {
+            const std::size_t c = b.index(beam, j);
+            REQUIRE(std::isfinite(b.levelDb[c]));
+            if (a.levelDb[c] == b.levelDb[c]) continue;
+            (j < firstReached ? changedEarly : changedLate) += 1;
+        }
+    }
+    CHECK(changedEarly == 0u);
+    CHECK(changedLate > 0u);
+}
+
 namespace {
 
     // One ray of a radar slot aimed at `p` from `origin`, every other ray a miss.
@@ -265,7 +308,7 @@ namespace {
         std::vector<std::int32_t> lab(m.rangeBins);
         std::vector<float> amp(m.rangeBins);
         syn.foldSlot(m, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{}, 1, col.data(),
-                     lab.data(), amp.data());
+                     lab.data(), amp.data(), m.rangeBins);
         double s = 0.0;
         for (const auto& c : col) s += std::norm(std::complex<double>(c));
         if (labelOut) *labelOut = lab[static_cast<std::size_t>(std::max_element(amp.begin(), amp.end()) - amp.begin())];
@@ -302,6 +345,77 @@ TEST_CASE("MarineRadar: one ray of a wall follows R^-2, its label rides along") 
     // A ray stands for a fixed solid angle: its patch grows as R^2, so the
     // return falls as R^-2 (a wall), not R^-4 (a point).
     CHECK_THAT(10.0 * std::log10(p1 / p2), WithinAbs(20.0 * std::log10(600.5 / 300.5), 0.05));
+}
+
+TEST_CASE("MarineRadar: a fold writes no further than the rows it is given") {
+    MarineRadarModel m;
+    m.multipath = false;
+    m.rangeBins = 2048;// the model asks for more bins than the rows hold
+    m.minRange = 20.f;
+    m.maxRange = 1020.f;
+    MarineRadarSynthesizer syn(m);
+    RadarMaterials mats;
+    const Vector3 origin(0, 5, 0);
+    // A wall at the far end of the range, where bins past 1024 would be written.
+    const auto o = oneRayAt(syn, origin, Vector3(0, 5, -1000.f));
+    constexpr unsigned rows = 1024, guard = 1024;
+    std::vector<std::complex<float>> col(rows + guard, {7.f, 7.f});
+    std::vector<std::int32_t> lab(rows + guard, 77);
+    std::vector<float> amp(rows + guard, 7.f);
+    const unsigned extent = syn.foldSlot(m, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin,
+                                         Matrix3{}, 1, col.data(), lab.data(), amp.data(), rows);
+    CHECK(extent <= rows);
+    for (unsigned j = rows; j < rows + guard; ++j) {
+        REQUIRE(col[j] == std::complex<float>(7.f, 7.f));
+        REQUIRE(lab[j] == 77);
+        REQUIRE(amp[j] == 7.f);
+    }
+}
+
+TEST_CASE("MarineRadar: rain is attenuated by the showers nearer than it, whatever their order in the list") {
+    MarineRadarModel m;
+    m.multipath = false;
+    m.minRange = 20.f;
+    m.maxRange = 6020.f;
+    m.rangeBins = 1000;// 6 m bins
+    MarineRadarSynthesizer syn(m);
+    RadarMaterials mats;
+    const Vector3 origin(0, 5, 0);
+    const auto o = oneRayAt(syn, origin, Vector3(0, 5, -5900.f));
+
+    // Two heavy showers on the ray's bearing, 1.5 and 4 km out, apart.
+    RainCell nearCell, farCell, none;
+    nearCell.centre = Vector3(0, 0, -1500.f);
+    farCell.centre = Vector3(0, 0, -4000.f);
+    nearCell.radius = farCell.radius = 300.f;
+    nearCell.rainRate = farCell.rainRate = 100.f;
+    none.rainRate = 0.f;// skipped: keeps the near shower second in both lists
+
+    auto fold = [&](const std::vector<RainCell>& rain) {
+        auto mm = m;
+        mm.rain = rain;
+        std::vector<std::complex<float>> col(mm.rangeBins);
+        std::vector<std::int32_t> lab(mm.rangeBins);
+        std::vector<float> amp(mm.rangeBins);
+        syn.foldSlot(mm, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{}, 1,
+                     col.data(), lab.data(), amp.data(), mm.rangeBins);
+        return col;
+    };
+    const auto alone = fold({none, nearCell});
+    const auto farFirst = fold({farCell, nearCell});
+
+    // The near shower's own echo (0.6 to 2.4 km) is the same with the far one
+    // listed first: nothing lies between it and the antenna.
+    double pAlone = 0.0, pFarFirst = 0.0;
+    for (unsigned j = 0; j < m.rangeBins; ++j) {
+        const double R = m.minRange + (j + 0.5) * m.binWidth();
+        if (R < 700.0 || R > 2300.0) continue;
+        pAlone += std::norm(std::complex<double>(alone[j]));
+        pFarFirst += std::norm(std::complex<double>(farFirst[j]));
+    }
+    REQUIRE(pAlone > 0.0);
+    INFO("near shower's echo: " << 10.0 * std::log10(pFarFirst / pAlone) << " dB with the far one listed first");
+    CHECK_THAT(10.0 * std::log10(pFarFirst / pAlone), WithinAbs(0.0, 0.01));
 }
 
 TEST_CASE("MarineRadar: two-ray lobing over a glassy sea") {
@@ -559,7 +673,7 @@ TEST_CASE("MarineRadar: a calibration sphere returns the radar equation's SNR") 
             lab[c].resize(m.rangeBins);
             amp[c].resize(m.rangeBins);
             syn.foldSlot(m, mats, sl, ret.data(), dirs.data(), solid.data(), origin, Matrix3{}, 1, col[c].data(),
-                         lab[c].data(), amp[c].data());
+                         lab[c].data(), amp[c].data(), m.rangeBins);
         }
         auto at = [](std::int64_t sl) { return static_cast<std::size_t>(sl + 1); };
         auto inRing = [](std::int64_t sl) { return sl >= -1 && sl <= 1; };

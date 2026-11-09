@@ -47,7 +47,8 @@ namespace threepp {
 
     public:
         // Physics and display, read every ping. Geometry fields (swath,
-        // beams, beamwidths, taper, sampling, seed) take effect on rebuild().
+        // beams, beamwidths, taper, sampling, seed) are baked by rebuild(),
+        // which the next pingBegin() calls by itself when they have changed.
         ImagingSonarModel model;
         AcousticMaterials materials;
         LidarParams params;
@@ -59,7 +60,8 @@ namespace threepp {
 
         [[nodiscard]] bool usesCameraLookAtConvention() const override { return true; }
 
-        // Rebuild the ray table and beam patterns from `model`'s geometry.
+        // Rebuild the ray table and beam patterns from `model`'s geometry
+        // (pingBegin() does this when the geometry has changed).
         void rebuild();
 
         [[nodiscard]] unsigned rayCount() const;
@@ -96,10 +98,11 @@ namespace threepp {
 
     private:
         std::unique_ptr<ImagingSonarSynthesizer> synth_;
+        ImagingSonarModel built_;// the model the synthesizer was baked from
         std::vector<LidarBeam> beams_;
         std::vector<LidarReturn> returns_;
         Vector3 origin_;
-        Matrix3 rotation_;
+        Matrix3 rotation_;// world from the sensor, rotation only
         std::uint64_t pingKey_ = 0;
         std::uint64_t pings_ = 0;
         int handle_ = -1;

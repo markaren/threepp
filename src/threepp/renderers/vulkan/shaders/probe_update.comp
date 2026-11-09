@@ -329,16 +329,16 @@ void main() {
     const uint nCasc = uint(max(probeGrid.cascadeCount, 1));
 
     // ── Scroll (flags bit 2): a cascade window moved. One workgroup per probe
-    // of EVERY cascade; a slot whose world cell is not the one it held before
-    // the move is reset to the fresh-grid state (SH 0, validity 0, history 0,
-    // depth sentinel 0u), so its next update bootstraps with α = 1 instead of
-    // blending into light measured kilometres away. The slots the window kept
-    // are untouched: same world cell, same history. No probe rays.
+    // of EVERY cascade (x the slot, y the cascade); a slot whose world cell is
+    // not the one it held before the move is reset to the fresh-grid state
+    // (SH 0, validity 0, history 0, depth sentinel 0u), so its next update
+    // bootstraps with α = 1 instead of blending into light measured
+    // kilometres away. The slots the window kept are untouched: same world
+    // cell, same history. No probe rays.
     if ((pc.flags & 4u) != 0u) {
-        const uint wg = gl_WorkGroupID.x;
-        if (wg >= total * nCasc) return;
-        const int   sc   = int(wg / total);
-        const uint  slot = wg % total;
+        const uint  slot = gl_WorkGroupID.x;
+        if (slot >= total || gl_WorkGroupID.y >= nCasc) return;
+        const int   sc   = int(gl_WorkGroupID.y);
         const ivec3 s    = probeSlotCoord(slot);
         if (all(equal(probeWorldCellOfSlot(sc, s, probeGrid.cBase[sc].xyz),
                       probeWorldCellOfSlot(sc, s, probeGrid.cPrevBase[sc].xyz)))) return;
@@ -354,13 +354,14 @@ void main() {
         return;
     }
 
-    // One window of pc.probeCount probes per cascade, cascades back to back.
-    // The index is ABSOLUTE (cascade range + slot); the probe's position comes
-    // from the world cell its slot holds. With one scene-fit grid (cBase 0)
-    // this is the plain index and position it always was.
-    if (gl_WorkGroupID.x >= pc.probeCount * nCasc) return;
-    const int   c      = int(gl_WorkGroupID.x / pc.probeCount);
-    const uint  local  = (pc.probeOffset + gl_WorkGroupID.x % pc.probeCount) % max(total, 1u);
+    // One window of pc.probeCount probes per cascade: x the probe of the
+    // window, y the cascade (a 2D dispatch keeps x under the 65535 workgroups
+    // every device accepts). The index is ABSOLUTE (cascade range + slot); the
+    // probe's position comes from the world cell its slot holds. With one
+    // scene-fit grid (cBase 0) this is the plain index and position it always was.
+    if (gl_WorkGroupID.x >= pc.probeCount || gl_WorkGroupID.y >= nCasc) return;
+    const int   c      = int(gl_WorkGroupID.y);
+    const uint  local  = (pc.probeOffset + gl_WorkGroupID.x) % max(total, 1u);
     const uint  pIdx   = uint(probeGrid.cBase[c].w) + local;
     const ivec3 pcoord = probeWorldCellOfSlot(c, probeSlotCoord(local), probeGrid.cBase[c].xyz)
                        - probeGrid.cBase[c].xyz;// window coordinate

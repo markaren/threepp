@@ -216,9 +216,11 @@ void ImagingSonarSynthesizer::synthesize(const ImagingSonarModel& model, const A
         jhi = std::min(jhi, static_cast<int>(bins) - 1);
         if (jhi < jlo) return;
         if (jhi - jlo > 63) {// a response far wider than a bin: keep its core
-            const int jc = static_cast<int>(std::floor(x));
-            jlo = std::max(jc - 31, 0);
-            jhi = std::min(jc + 32, static_cast<int>(bins) - 1);
+            // The core of a range just outside the window is the window's
+            // edge: clamped into [jlo, jhi], the core never leaves it.
+            const int jc = std::clamp(static_cast<int>(std::floor(x)), jlo, jhi);
+            jlo = std::max(jc - 31, jlo);
+            jhi = std::min(jc + 32, jhi);
         }
         Contribution ct{};
         ct.u = u;

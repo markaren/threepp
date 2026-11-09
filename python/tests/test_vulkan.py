@@ -995,6 +995,25 @@ def test_depth_occlusion(vk_renderer):
     assert depth[5, 5] == pytest.approx(8.0, abs=0.1)             # wall behind
 
 
+def test_depth_orthographic_is_planar_too(vk_renderer):
+    # An orthographic camera's reverse-Z depth is LINEAR in the distance, not
+    # hyperbolic as a perspective camera's: decoded with the perspective
+    # formula a wall 100 m away read 0.111 m. The wall fills the frame, so the
+    # corners read the same distance as the centre.
+    scene = tp.Scene()
+    scene.add(tp.AmbientLight(0xffffff, 1.0))
+    scene.add(tp.Mesh(tp.PlaneGeometry(60, 60), tp.MeshStandardMaterial()))
+    half = 5.0
+    cam = tp.OrthographicCamera(-half, half, half * H / W, -half * H / W, 0.1, 1000)
+    cy, cx = H // 2, W // 2
+    for dist in (3.0, 50.0, 100.0):
+        cam.position.set(0, 0, dist)
+        cam.look_at(0, 0, 0)
+        depth = vk_renderer.read_depth(scene, cam)
+        assert depth[cy, cx] == pytest.approx(dist, rel=1e-3)
+        assert depth[2, 2] == pytest.approx(dist, rel=1e-3)
+
+
 def test_orthographic_scene_rendering_defaults_on(vk_renderer):
     assert vk_renderer.orthographic_scene_rendering is True
     try:

@@ -33,6 +33,16 @@ add_test_executable(Sensor_test)
 add_test_executable(VisionSensor_test)
 add_test_executable(SonarModel_test)
 add_test_executable(EchoSensors_test)
+
+# The same sensors' frame loop on the ray tracer. It needs a Vulkan device with
+# ray tracing at run time; without one every case SKIPs, and Catch2's exit code
+# alone cannot say so (see PbdParticles_test below), hence the message.
+if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
+    add_test_executable(EchoSensorsVulkan_test)
+    target_include_directories(EchoSensorsVulkan_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/renderers")
+    set_tests_properties(EchoSensorsVulkan_test PROPERTIES
+            SKIP_REGULAR_EXPRESSION "no Vulkan ray tracing device")
+endif ()
 add_test_executable(TerrainTilesShutdown_test)
 
 # extras/uav: SITL wire codec, loopback socket path, and the NED<->threepp

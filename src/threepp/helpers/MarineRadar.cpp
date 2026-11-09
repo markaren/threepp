@@ -30,6 +30,7 @@ MarineRadar::MarineRadar(const MarineRadarModel& m)
     params.mediumExtinction = 1e-5f;
     params.mediumSurfaceY = -1e20f;
     params.mediumAlbedo = 0.f;
+    anchorRpm_ = model.rpm;
     rebuild();
 }
 
@@ -46,29 +47,67 @@ void MarineRadar::rebuild() {
     ringHeading_.assign(spokes, 0.f);
     ringExtent_.assign(spokes, 0u);
     started_ = false;
+    // A slot in flight was traced for the old geometry: it is dropped, never
+    // folded into the new ring (the renderer reclaims its scan slot).
     handle_ = -1;
     lastSpokes_.clear();
+    builtRangeBins_ = model.rangeBins;
+    builtMinRange_ = model.minRange;
+    builtMaxRange_ = model.maxRange;
+}
+
+double MarineRadar::turnOffsetAt(double t) const {
+    // The clock set back is a new timeline: the angle is t * rpm / 60 again,
+    // as a fresh radar's. Otherwise a new rpm takes over at the last update,
+    // from the angle the antenna had then, instead of moving it to where it
+    // would be had it always turned at that rate (back, for a lower one).
+    if (t < lastTime_) return 0.0;
+    return turnOffset_ + lastTime_ * (static_cast<double>(anchorRpm_) - static_cast<double>(model.rpm)) / 60.0;
+}
+
+double MarineRadar::turnsNow() const {
+    const double t = simTime();
+    return t * model.rpm / 60.0 + turnOffsetAt(t);
 }
 
 std::int64_t MarineRadar::slotNow() const {
-    const double turns = simTime() * model.rpm / 60.0;
-    return static_cast<std::int64_t>(std::floor(turns * static_cast<double>(image_.spokes)));
+    return static_cast<std::int64_t>(std::floor(turnsNow() * static_cast<double>(image_.spokes)));
 }
 
 float MarineRadar::antennaBearingDeg() const {
-    const double turns = simTime() * model.rpm / 60.0;
+    const double turns = turnsNow();
     return static_cast<float>(360.0 * (turns - std::floor(turns)));
 }
 
 unsigned MarineRadar::update(VulkanRenderer& renderer) {
+    // The ring and the picture are laid out by the range scale: a new one
+    // (an operator's range switch) rebuilds them before anything is folded.
+    // The raw fields are compared, not the image's clamped ones, which a
+    // minRange under 1 m would never match.
+    if (model.rangeBins != builtRangeBins_ || model.minRange != builtMinRange_ ||
+        model.maxRange != builtMaxRange_) {
+        rebuild();
+    }
     lastSpokes_.clear();
     const unsigned spokes = image_.spokes;
     const std::int64_t K = synth_->kernelHalfSlots();
+    const double t = simTime();
+    // The raw clock, not the antenna's slot: a lower rpm also moves the slot
+    // t * rpm back, which is a slower antenna, not an earlier time.
+    const bool rewound = t < lastTime_;
     const std::int64_t now = slotNow();
+    turnOffset_ = turnOffsetAt(t);
+    anchorRpm_ = model.rpm;
+    lastTime_ = t;
 
-    if (!started_ || now < nextSpoke_ - static_cast<std::int64_t>(spokes)) {
-        // First call, or the clock went back: start the sweep here.
-        if (handle_ >= 0) collect(renderer);
+    if (!started_ || rewound) {
+        // First call, or the clock went back (by any amount: an episode
+        // reset): start the sweep here. The picture is of a time that has
+        // not happened yet, so it goes too. A trace in flight is of the old
+        // timeline: it is dropped as rebuild() drops one, not read back,
+        // which would wait on its fence for rows that are traced again.
+        handle_ = -1;
+        if (started_) image_.reset(image_.spokes, image_.bins, image_.minRange, image_.maxRange);
         started_ = true;
         nextSpoke_ = now;
         nextFire_ = now - K;
@@ -102,7 +141,11 @@ unsigned MarineRadar::update(VulkanRenderer& renderer) {
                 [&](std::int64_t s) { return &ringLabel_[ringIndex(s, spokes) * bins]; },
                 [&](std::int64_t s) { return &ringAmp_[ringIndex(s, spokes) * bins]; },
                 [&](std::int64_t s) { return ringExtent_[ringIndex(s, spokes)]; }, revKey, sp);
-        sp.time = slotsPerSecond > 0.0 ? static_cast<double>(nextSpoke_) / slotsPerSecond : 0.0;
+        // When the antenna passed the slot, at the rate it turns at now; a
+        // stopped one gives the clock (it passed them before).
+        sp.time = slotsPerSecond > 0.0
+                          ? (static_cast<double>(nextSpoke_) - turnOffset_ * spokes) / slotsPerSecond
+                          : t;
         sp.bearingDeg = static_cast<float>(360.0 * static_cast<double>(ringIndex(nextSpoke_, spokes)) / spokes);
         float wb = ringHeading_[ringIndex(nextSpoke_, spokes)] + sp.bearingDeg;
         wb = std::fmod(wb, 360.f);
@@ -123,7 +166,9 @@ void MarineRadar::fire(VulkanRenderer& renderer, std::int64_t upTo) {
     beginScan();
     if (!parent) updateMatrixWorld();
     getWorldPosition(pendingOrigin_);
-    pendingRotation_.setFromMatrix4(*matrixWorld);
+    // The rotation alone: it is inverted by transposing below, which a scaled
+    // parent would turn into a scale of the vertical pattern's argument.
+    pendingRotation_.setFromMatrix4(Matrix4().extractRotation(*matrixWorld));
     Vector3 fwd(0.f, 0.f, -1.f);
     fwd.applyMatrix3(pendingRotation_);
     heading_ = static_cast<float>(std::atan2(static_cast<double>(fwd.x), -static_cast<double>(fwd.z)) * 180.0 /
@@ -166,6 +211,7 @@ void MarineRadar::fire(VulkanRenderer& renderer, std::int64_t upTo) {
 void MarineRadar::collect(VulkanRenderer& renderer) {
     const int h = handle_;
     handle_ = -1;
+    ++scansCollected_;
     returns_.clear();
     if (!renderer.scanLidarCollect(h, returns_)) return;
     const unsigned per = synth_->raysPerSlot();
@@ -179,7 +225,7 @@ void MarineRadar::collect(VulkanRenderer& renderer) {
         ringExtent_[ri] = synth_->foldSlot(model, materials, s, &returns_[static_cast<std::size_t>(i) * per],
                          &pendingDirs_[static_cast<std::size_t>(i) * per], &pendingSolid_[static_cast<std::size_t>(i) * per],
                          pendingOrigin_, pendingLevel_, revKey, &ring_[ri * bins], &ringLabel_[ri * bins],
-                         &ringAmp_[ri * bins], &pendingTilt_);
+                         &ringAmp_[ri * bins], image_.bins, &pendingTilt_);
     }
     tracedUpTo_ = pendingFirst_ + pendingCount_;
 }
