@@ -32,7 +32,6 @@ if (THREEPP_WITH_USD)
         GIT_REPOSITORY https://github.com/lighttransport/LightUSD.git
         GIT_TAG        v1.0.0
         GIT_SHALLOW    TRUE
-        UPDATE_DISCONNECTED TRUE
     )
     FetchContent_MakeAvailable(lightusd)
 
