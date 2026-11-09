@@ -5225,9 +5225,11 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 ici.arrayLayers   = 1;
                 ici.samples       = VK_SAMPLE_COUNT_1_BIT;
                 ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                // TRANSFER_SRC is for VulkanRenderer::readOceanFoam (audits).
                 ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
                                     VK_IMAGE_USAGE_SAMPLED_BIT |
-                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
                 ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
                 ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
                 VmaAllocationCreateInfo aci{};
