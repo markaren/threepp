@@ -430,6 +430,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // escape is no longer along the caller's lobe, so the caller cannot shade
     // it (gTraceDeferMiss); it is shaded here.
     bool  bent       = false;
+    // The share of an emitter's glow a bounce ray keeps when it meets the
+    // emitter: what the surface it bounced off did not already draw through its
+    // emitter-specular NEE (see the hit's glossy NEE below).
+    float bounceEmScale = 1.0;
     // Where the ray last LEFT a surface: the caller's origin, then each
     // reflective bounce. `o` also advances through pass-throughs, so a ray
     // from a submerged plate that threads the water surface on its way out
@@ -868,7 +872,17 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // a glow-only emissive (kGeomFlagGlowOnly) is in no emitter list, so it
         // keeps all of it here. A light the strata are too sparse for keeps its
         // share (gReflEmitterRayShare), read for the light this instance is.
-        float hEmScale = gReflEmitterScale;
+        //
+        // Only the caller's own lobe, though: before the trace's first
+        // reflective bounce (b == 0). An emitter met after a bounce is what the
+        // surface the ray bounced off mirrors, and no NEE drew it: the hit
+        // shade's emitter NEE is diffuse-only (emissiveNEE), so a rough METAL
+        // there gets its whole highlight from this ray. Scaled out at every
+        // depth, it went nowhere: gltf-research-scenes' glass-of-water lights a
+        // metal floor and a metal backdrop with one emissive panel behind the
+        // camera, and the floor, a blurred mirror of the backdrop's highlight in
+        // the path tracer, drew black.
+        float hEmScale = (b == 0) ? gReflEmitterScale : bounceEmScale;
         if ((geoms[hitId].flags & kGeomFlagGlowOnly) != 0u) {
             hEmScale = 1.0;
         } else if (any(notEqual(gReflEmitterRayShare, uvec2(0u))) && any(greaterThan(hEmissive, vec3(0.0)))) {
@@ -917,6 +931,27 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
         const vec3  specW = envSpecularWeight(hitF0, hitAB);// specular throughput for the next bounce
         const vec3  hitR  = reflect(-hitV, hitN);
+        // The emitters a GLOSSY hit mirrors, sampled over its lobe as the
+        // primary samples them (emissiveSpecNEE, the same specNEET ramp). The
+        // hit's own emitter NEE is diffuse-only (emissiveNEE), and the bounce
+        // below goes along the exact mirror direction, so a rough metal lit by
+        // an area light showed its highlight only where the mirror ray landed
+        // on the light: gltf-research-scenes' glass-of-water, whose backdrop is
+        // a rough metal mirroring one emissive panel behind the camera, drew
+        // that backdrop black wherever its glass and water were in front of
+        // it. Sharp traces only (glass and refraction, cheapHits false): the
+        // blurred reflection channel keeps its cheaper bounce. The bounce's
+        // emitter hit keeps what this NEE did not draw (bounceEmScale).
+        float hSpecNEET = 0.0;
+        if (!cheapHits && pc.emissiveCount > 0u && max(max(specW.r, specW.g), specW.b) >= 0.02) {
+            hSpecNEET = smoothstep(0.10, 0.25, hRough);
+            if (hSpecNEET > 0.0) {
+                const float kS = (hRough + 1.0) * (hRough + 1.0) / 8.0;
+                uvec2 unusedShare;
+                radiance += tput * hSpecNEET
+                          * emissiveSpecNEE(hitP, hitN, hitV, hitNdotV, hitF0, hRough, kS, doShadows, 0.0, unusedShare);
+            }
+        }
         // Stop bouncing on rough surfaces, the last bounce, or when the specular
         // throughput is negligible — cap off with prefiltered-env specular.
         if (b >= REFL_MAX_BOUNCES - 1 || hRough > 0.35 ||
@@ -928,7 +963,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                       * hitEnvVis;
             break;
         }
-        // Continue the reflection one bounce deeper (GGX-jittered when glossy).
+        // Continue the reflection one bounce deeper, along the mirror direction
+        // (one Fibonacci sample is the mirror: ggxHalfVectorFib).
+        bounceEmScale = 1.0 - hSpecNEET;
         ++b;// the ONLY place a reflective bounce is counted
         tput      *= specW;
         d          = (hRough < 0.08) ? hitR : sampleGGXReflectionFib(hitV, hitN, hRough, 0, 1);
