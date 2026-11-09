@@ -17,6 +17,18 @@
 // Headless capture: vulkan_ocean_minimal --shot <name.png> [--frames N] [--pt]
 //   (plus --cam x,y,z / --look x,y,z to reframe with no rebuild, and
 //   --wind <m/s> to capture a specific sea state).
+// Sea state (each maps onto one Ocean::Options / DisplacedMesh::Params field,
+// so a look can be tried without a rebuild):
+//   --fetch <m>        open water upwind; 0 = fully developed (Options::fetch)
+//   --chop <lambda>    horizontal displacement, Options::choppiness (0.55)
+//   --wave-scale <s>   height multiplier, Options::waveScale (1)
+//   --tile2 <m>        finest cascade's tile, Options::tileSize2 (auto 9.3)
+//   --theta <rad>      wind direction, 0 = +X, Options::windTheta (0.6)
+//   --foam <amount>    whitecap scale, Params::foamAmount (1 for the ocean)
+//   --hs-fix 0|1       Params::hsFix, the Pierson-Moskowitz-calibrated
+//                      spectrum (THREEPP_OCEAN_HS_FIX overrides it)
+//   --pinned           1/60 s sim-time steps on a pinned renderer clock, so
+//                      captures with the same sea flags show the same waves
 // Validation hooks:
 //   --pond        — 16 m garden-pond preset: shallow sandy bottom + rocks,
 //                   calm wind. Exercises the scale-aware Ocean defaults and
@@ -62,8 +74,22 @@ int main(int argc, char** argv) {
     bool probes = false;      // sampleHeight parity probes (debug)
     bool pond = false;        // 16 m pond preset: shallow bright bottom, calm wind
     int benchFrames = 0;      // >0 = --bench: collect N per-pass GPU timing samples, print, exit
+    // Sea-state overrides; a negative value keeps the Ocean default.
+    float fetch = -1.f, chop = -1.f, waveScale = -1.f, tile2 = -1.f, foam = -1.f;
+    float theta = -1e9f;
+    int hsFix = -1;
+    bool pinnedClock = false;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
+        auto num = [&](const char* flag, float& out) {
+            if (std::strcmp(argv[i], flag) != 0 || i + 1 >= argc) return false;
+            out = float(std::atof(argv[++i]));
+            return true;
+        };
+        if (num("--fetch", fetch) || num("--chop", chop) || num("--wave-scale", waveScale) ||
+            num("--tile2", tile2) || num("--theta", theta) || num("--foam", foam)) continue;
+        if (std::strcmp(argv[i], "--hs-fix") == 0 && i + 1 < argc) hsFix = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
+        else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--wind") == 0 && i + 1 < argc) windOverride = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--wind2") == 0 && i + 1 < argc) wind2 = float(std::atof(argv[++i]));
@@ -156,7 +182,14 @@ int main(int argc, char** argv) {
     opts.size = kSize;
     if (pond) opts.windSpeed = 3.0f;
     if (windOverride >= 0.f) opts.windSpeed = windOverride;
+    if (fetch >= 0.f) opts.fetch = fetch;
+    if (chop >= 0.f) opts.choppiness = chop;
+    if (waveScale >= 0.f) opts.waveScale = waveScale;
+    if (tile2 >= 0.f) opts.tileSize2 = tile2;
+    if (theta > -1e8f) opts.windTheta = theta;
     auto ocean = Ocean::create(opts);
+    if (foam >= 0.f) ocean->params.foamAmount = foam;
+    if (hsFix >= 0) ocean->params.hsFix = hsFix != 0;
     scene.add(ocean);
 
     // Live wind control — setWind() takes effect next frame; the sea morphs
@@ -208,7 +241,12 @@ int main(int argc, char** argv) {
         }
     }
 
+    double pinnedTime = 0.0;
     canvas.animate([&] {
+        if (pinnedClock) {
+            pinnedTime += 1.0 / 60.0;
+            renderer.setSimTime(pinnedTime);
+        }
         controls.update();
 
         // Pack vertex density toward where the camera is looking. The focus is
