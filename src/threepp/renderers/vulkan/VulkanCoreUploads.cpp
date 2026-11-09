@@ -458,8 +458,20 @@ namespace threepp {
             // The faces a camera ray finds it from (path_trace.comp's
             // cameraCandidateHits: a transmissive surface from both).
             float emSides = em->side == Side::Front ? 1.f : em->side == Side::Back ? 2.f : 0.f;
-            if (const auto* tr = dynamic_cast<const MaterialWithTransmission*>(em); tr && tr->transmission > 0.f)
+            const auto* emTr = dynamic_cast<const MaterialWithTransmission*>(em);
+            if (emTr && emTr->transmission > 0.f)
                 emSides = 0.f;
+            // A flat alpha blend or an additive card (the material desc's
+            // ior-0 surfaces: not transmissive, Blending::Additive or
+            // transparent below opacity 1) shows its emission on its opaque
+            // share alone, its opacity, where path_trace.comp's camera path
+            // does not pass it (blendPass): the emitter NEE and photons take
+            // it from emission.w, packed over the sides as 65535ths of
+            // 1 - opacity (0, and w the sides alone, for every other emitter).
+            float emDim = 0.f;
+            if (!(emTr && emTr->transmission > 0.f) &&
+                (em->blending == Blending::Additive || (em->transparent && em->opacity < 1.f)))
+                emDim = std::round((1.f - std::clamp(em->opacity, 0.f, 1.f)) * 65535.f);
             // emissiveMap modulates per-texel; we don't sample textures here,
             // so use the constant tint for power. Slightly under-samples
             // bright textured emissives but keeps the build lightweight.
@@ -554,7 +566,7 @@ namespace threepp {
                 data.push_back(w2x); data.push_back(w2y); data.push_back(w2z);
                 data.push_back(power);
                 data.push_back(emR); data.push_back(emG); data.push_back(emB);
-                data.push_back(sides);
+                data.push_back(sides + 4.f * emDim);
             }
             const uint32_t triCnt = static_cast<uint32_t>(data.size() / 16) - triBegin;
             if (triCnt > 0) {

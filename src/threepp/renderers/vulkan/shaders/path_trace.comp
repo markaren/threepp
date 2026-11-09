@@ -141,7 +141,7 @@ struct EmTri {
     vec4 v0;       // xyz = pos, w = area
     vec4 v1;       // xyz = pos, w = cumPower (inclusive running power CDF)
     vec4 v2;       // xyz = pos, w = power (lum × area)
-    vec4 emission; // xyz = emissive × intensity
+    vec4 emission; // xyz = emissive × intensity, w = sides + 4 · (65535ths of 1 - opaque share)
 };
 layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
 
@@ -861,6 +861,16 @@ float emitterHitPdf(vec3 Le, float dist2, float cosL) {
     return lum / pc.emissiveTotalPower * dist2 / cosL;
 }
 
+// The share of an emitter triangle's emission a camera path adds: under
+// blendPass, a flat blend's or an additive card's opacity (it adds the
+// emission where it does not pass the card), packed in emission.w above the
+// sides; else all of it. The table's power stays the full emission, so the
+// NEE's pdf and the bounce's MIS pdf (emitterHitPdf) agree.
+float emitterShare(const EmTri tri) {
+    if (!blendPass()) return 1.0;
+    return 1.0 - float(uint(tri.emission.w + 0.5) >> 2u) * (1.0 / 65535.0);
+}
+
 vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     const float xi = rnd(seed) * pc.emissiveTotalPower;
@@ -896,12 +906,13 @@ vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
     if (max(max(gv.r, gv.g), gv.b) <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
     const float pdfB = pdfBsdf(s, V, toL);
     float       w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
-    if (!thinGlassNeeOwns()) return fc * (w / pdfSolid) * tri.emission.xyz;
+    const vec3 Le = tri.emission.xyz * emitterShare(tri);
+    if (!thinGlassNeeOwns()) return fc * (w / pdfSolid) * Le;
     // Through a thin pane or a flat blend the light is this NEE's alone (the
     // bounce ray that finds it there adds nothing), dimmed and tinted by what
     // they let through.
     if (crossed) w = 1.0;
-    return fc * gv * (w / pdfSolid) * tri.emission.xyz;
+    return fc * gv * (w / pdfSolid) * Le;
 }
 
 // gi_bounce.glsl asks the includer for these. emissiveIrradiance is the
@@ -1631,8 +1642,12 @@ vec3 lastBounceEmission(vec3 o, vec3 d, float pdf, bool inside, vec3 insideAtt, 
                                   rayQueryGetIntersectionBarycentricsEXT(rq, true),
                                   rayQueryGetIntersectionObjectToWorldEXT(rq, true),
                                   rayQueryGetIntersectionWorldToObjectEXT(rq, true));
-    const vec3 Le = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hh.uv, hm.emissive * hm.emissiveIntensity);
+    vec3 Le = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hh.uv, hm.emissive * hm.emissiveIntensity);
     if (max(max(Le.r, Le.g), Le.b) <= 0.0) return vec3(0.0);
+    // A flat blend or an additive card (blendPass): its emission on its
+    // opaque share, as the main walk adds it and the NEE (emitterShare) counts it.
+    if (blendPass() && hm.transmission > 0.0 && hm.ior < 0.5 && geoms[hitId].foamAddress == 0ul)
+        Le *= hm.transmission > 1.0 ? clamp(hm.transmission - 1.0, 0.0, 1.0) : 1.0 - hm.transmission;
     const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, abs(dot(hh.Ng, d)));
     const float w    = pdf * pdf / max(pdf * pdf + pdfL * pdfL, 1e-20);
     vec3 T = vec3(1.0);
@@ -2215,7 +2230,7 @@ void tracePhoton(uint pid) {
     // 2 the back, as its material's side): a single-sided emitter's light
     // leaves its front alone. What its back sent would pass out through the
     // far wall of a closed emitter, whose back faces no ray meets.
-    const uint sides   = uint(tri.emission.w + 0.5);
+    const uint sides   = uint(tri.emission.w + 0.5) & 3u;
     float      sidePdf = 1.0;
     if (sides == 2u) nL = -nL;
     else if (sides == 0u) {
@@ -2226,7 +2241,7 @@ void tracePhoton(uint pid) {
     // Le cos / (pdfA · pdfω) with pdfA = lum / total and pdfω = sidePdf ·
     // cos / π, the total over the photon count being pgPowerScale.
     SHADOW_EPS = max(1e-3, max(max(abs(p.x), abs(p.y)), abs(p.z)) * 1e-5);
-    tracePhotonPath(p + nL * SHADOW_EPS, d, tri.emission.xyz * (PI / (lum * sidePdf)), false, seed);
+    tracePhotonPath(p + nL * SHADOW_EPS, d, tri.emission.xyz * (emitterShare(tri) * PI / (lum * sidePdf)), false, seed);
 }
 
 // One of the sun's photons (sunPhotonsOn): a point q on the disc pgRegion

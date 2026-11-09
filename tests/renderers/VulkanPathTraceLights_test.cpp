@@ -20,6 +20,8 @@
 //   [6] a sprite card's shadow follows its texels' alpha: the sun through an
 //       alpha-masked card at opacity 0.5 is halved under its covered half and
 //       whole under its clear half;
+//   [7] an emissive blended card lights the floor by its opaque share: at
+//       opacity 0.5, as an opaque panel of half its emission does;
 //
 // THREEPP_TEST_IMAGES=<dir>: the traces are also written there as PNGs.
 // Exit 42 (SKIP) without a Vulkan device with ray query.
@@ -512,6 +514,39 @@ int main() {
         check(openL > 0.05, "the sun lights the open floor");
         check(std::abs(cardL / openL - 0.5) < 0.05, "the card's covered half lets half the sun through");
         check(std::abs(cardR / openR - 1.0) < 0.05, "and its clear half all of it");
+    }
+
+    // ── 7. An emissive blended card lights by its opaque share ─────────────
+    // A camera path adds a flat blend's emission where it does not pass the
+    // card (its opacity), so the floor under an emissive card at opacity 0.5
+    // is what an opaque panel of half its emission gives it.
+    std::printf("\n[7] an emissive blended card lights by its opaque share\n");
+    {
+        const auto floorUnder = [&](float intensity, bool blended, const std::string& name) {
+            Scene scene;
+            scene.environment = black;
+            scene.background  = black;
+            scene.add(floorPlane(0.8f, 1.f));
+            auto p = panel(0.4f, 2.f, intensity, Side::Double);
+            if (blended) {
+                const auto mat   = p->material();
+                mat->transparent = true;
+                mat->opacity     = 0.5f;
+            }
+            scene.add(p);
+            auto camera = PerspectiveCamera::create(40, float(kW) / float(kH), 0.1f, 100.f);
+            camera->position.set(0, 0.6f, 3.5f);
+            camera->lookAt(0, 0, 0);
+            camera->updateMatrixWorld();
+            const auto img = tr.trace(scene, *camera, 128, 2, name);
+            return lum(img, kW / 2 - 12, kW / 2 + 12, kH / 2 - 6, kH / 2 + 6);
+        };
+        const double opaqueHalf = floorUnder(15.f, false, "7_opaque_half");
+        const double card       = floorUnder(30.f, true, "7_blended_card");
+        std::printf("  floor: opaque panel of 15 %.4f | card of 30 at opacity 0.5 %.4f (ratio %.3f)\n",
+                    opaqueHalf, card, card / opaqueHalf);
+        check(opaqueHalf > 0.05, "the panel lights the floor");
+        check(std::abs(card / opaqueHalf - 1.0) < 0.1, "a card at opacity 0.5 lights it as half its emission");
     }
 
     // ── Validation ─────────────────────────────────────────────────────────
