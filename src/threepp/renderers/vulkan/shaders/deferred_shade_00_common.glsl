@@ -93,9 +93,12 @@ const bool kRR = kRayRecon != 0u;
 //          the glass it shines through (lampShadowVis).
 //   bit 1  THREEPP_VK_FIX_WATER_BOUNCE_EM: the water's mirror bounce resets
 //          bounceEmScale (traceRadiance).
+//   bit 2  THREEPP_VK_FIX_TIR_TINT: a total internal reflection inside a
+//          solid does not take the glass tint again (traceRadiance).
 layout(constant_id = 6) const uint kShadeFixes = 0xFFFFFFFFu;
 const bool kFixLampGlass = (kShadeFixes & 1u) != 0u;
 const bool kFixWaterBounceEm = (kShadeFixes & 2u) != 0u;
+const bool kFixTirTint = (kShadeFixes & 4u) != 0u;
 
 // Ray-query counters (VulkanRenderer::setCountRays, frame_timings rays_*):
 // lights.rayCountAddr names this frame's kRayCountSlots uints (0 = off). Every

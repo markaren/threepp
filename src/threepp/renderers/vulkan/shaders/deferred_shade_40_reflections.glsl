@@ -709,6 +709,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                         if (dot(rd, rd) < 1e-6) {
                             passDir  = reflect(d, nOut);
                             passFrom = sP + nOut * SHADOW_EPS;
+                            // Turned back inside, the ray never crossed the
+                            // surface: the tint is the crossing's (the path
+                            // tracer's is the refraction's), and the volume's
+                            // own colour is insideAtt's. The (1 - t) share
+                            // stays the covered part's.
+                            if (kFixTirTint) hitPass = vec3(1.0 - cov) + cov * t;
                         } else {
                             passDir  = normalize(rd);
                             passFrom = sP - nOut * SHADOW_EPS;

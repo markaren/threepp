@@ -66,7 +66,8 @@ namespace threepp::vulkan {
     // replaced. Read once per process.
     static uint32_t shadeFixes() {
         static const uint32_t bits = (env::flag("THREEPP_VK_FIX_LAMP_GLASS", true) ? 1u : 0u) |
-                                     (env::flag("THREEPP_VK_FIX_WATER_BOUNCE_EM", true) ? 2u : 0u);
+                                     (env::flag("THREEPP_VK_FIX_WATER_BOUNCE_EM", true) ? 2u : 0u) |
+                                     (env::flag("THREEPP_VK_FIX_TIR_TINT", true) ? 4u : 0u);
         return bits;
     }
 
