@@ -1379,6 +1379,21 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(spreadKey);
 
+    // K: adds or removes a swell under the wind sea: 1 m significant height,
+    // 12 s period (225 m crests), running 45 degrees off the wind, s = 50.
+    KeyAdapter swellKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        if (ev.key == Key::K) {
+            auto& p = ocean->params;
+            p.swellHeight = p.swellHeight > 0.f ? 0.f : 1.0f;
+            p.swellPeriod = 12.f;
+            p.swellTheta  = p.windTheta - 0.785f;
+            p.swellSpread = 50.f;
+            std::printf("[ocean] swell: %s\n", p.swellHeight > 0.f ? "1 m, 12 s, 45 deg off the wind" : "off");
+            std::fflush(stdout);
+        }
+    });
+    canvas.addKeyListener(swellKey);
+
     // ── Sound: engine + ocean/wind ambience ─────────────────────────────────
     // Skipped in --shot capture runs (headless iteration shouldn't bleep).
     OceanSounds sounds;
@@ -1577,6 +1592,8 @@ int main(int argc, char** argv) {
             ocean->params.choppiness = choppiness;
         }
         ImGui::Checkbox("Measured spreading (L)", &ocean->params.measuredSpreading);
+        ImGui::SliderFloat("Swell Hs (K)", &ocean->params.swellHeight, 0.f, 3.f, "%.2f m");
+        ImGui::SliderFloat("Swell period", &ocean->params.swellPeriod, 9.f, 18.f, "%.1f s");
 
         ImGui::TextDisabled("Wind changes apply on scene reload.");
         if (ImGui::Checkbox("Clouds", &cloudsOn)) applyClouds();

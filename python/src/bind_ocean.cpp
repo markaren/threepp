@@ -119,6 +119,15 @@ namespace threepp_py {
                                "True (default) = Donelan-Hamilton-Hui / Banner directional spreading: waves run "
                                "downwind with long crests at the peak. False = the old symmetric cos^2 (as much "
                                "energy upwind as downwind). Same Hs either way. Live-tunable.")
+                .def_readwrite("swell_height", &DisplacedMesh::Params::swellHeight,
+                               "Significant height (m) of an optional swell added to the wind sea; 0 = none. "
+                               "Drawn on cascade 0 only: its peak wavelength must lie between tile_size_1 and "
+                               "tile_size_0 / 2 (9-18 s on a 1 km ocean). Live-tunable.")
+                .def_readwrite("swell_period", &DisplacedMesh::Params::swellPeriod, "Swell peak period Tp (s).")
+                .def_readwrite("swell_theta", &DisplacedMesh::Params::swellTheta,
+                               "Direction the swell travels toward (radians, 0 = +X).")
+                .def_readwrite("swell_spread", &DisplacedMesh::Params::swellSpread,
+                               "Swell spreading s of cos^(2s)(theta/2): ~25 nearby storm, ~75 far away.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
