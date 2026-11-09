@@ -999,6 +999,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
 // "exit" became the candle or the far wall and Beer-Lambert ran over the whole
 // interior. glTF GlassHurricaneCandleHolder (1.2 mm walls, attenuationDistance
 // 1 mm) went deep blue above the bulge, near-black under the rim.
+// gGlassExitHeadOn: the exit interface found was met on its FRONT face, so it is
+// not this glass's way out but the surface of something nested inside it (a
+// liquid in a vessel); the caller hands the ray on before it.
+bool gGlassExitHeadOn = false;
 void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, inout uint seed,
                         out vec3 hitP, out vec3 hitN, out float dist, out bool miss, out bool blocked,
                         inout vec3 over, inout float overT) {
@@ -1039,6 +1043,7 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
                 travelled += tHit;
                 continue;
             }
+            gGlassExitHeadOn = rayQueryGetIntersectionFrontFaceEXT(rq, true);
             return;// exit interface (glass back face / nested glass)
         }
 
@@ -1213,17 +1218,26 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
                 vec3 exitP, exitN; float inDist; bool exitMiss, blockedInside;
                 vec3  overC = vec3(0.0);
                 float overT = 1.0;
+                gGlassExitHeadOn = false;
                 traceGlassInterior(P, dIn, maxLod, doShadows, seed,
                                    exitP, exitN, inDist, exitMiss, blockedInside, overC, overT);
                 vec3 dOut;
                 if (exitMiss) {
                     dOut = dIn; inDist = 0.0;// open/odd geometry — straight through
-                } else if (blockedInside) {
+                } else if (blockedInside || gGlassExitHeadOn) {
                     // Opaque content inside the volume: stop the refraction at
                     // it. Back the origin off so the behind-ray re-hits the
                     // blocker and traceRadiance shades it (with its own
                     // cutout/blend handling) — no exit bend through a surface
                     // the ray never actually leaves.
+                    //
+                    // The same for a surface met HEAD-ON inside the glass: it
+                    // is not this glass's way out but the surface of something
+                    // inside it, a liquid in a vessel. It was bent as glass to
+                    // air with this glass's ior, where the ray crosses into the
+                    // liquid: at a slant that is a total internal reflection,
+                    // and a glass teapot's tea showed the reflected glass instead
+                    // of the tea. traceRadiance crosses it by its own rules.
                     dOut  = dIn;
                     exitP = exitP - dIn * (4.0 * SHADOW_EPS);
                 } else {

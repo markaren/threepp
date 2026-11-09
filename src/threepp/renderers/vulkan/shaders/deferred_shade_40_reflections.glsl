@@ -426,6 +426,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // ray past the back face).
     vec3  insideAtt  = vec3(1.0);// transmittance over insideDist
     float insideDist = 0.0;      // 0: in the air, or in a volume that absorbs nothing
+    // A solid bent the ray (refraction, or a total internal reflection): its
+    // escape is no longer along the caller's lobe, so the caller cannot shade
+    // it (gTraceDeferMiss); it is shaded here.
+    bool  bent       = false;
     // Where the ray last LEFT a surface: the caller's origin, then each
     // reflective bounce. `o` also advances through pass-throughs, so a ray
     // from a submerged plate that threads the water surface on its way out
@@ -484,7 +488,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             rayQueryConfirmIntersectionEXT(rq);
         }
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-            if (b == 0 && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
+            if (b == 0 && !bent && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
             // A bounce off a SUBMERGED surface that escapes sees the sky through
             // the column over it (murkAmbient; b == 0 is the caller's own leg and
             // the caller's business — the water's reflection starts in a trough).
@@ -613,6 +617,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const bool passThrough = (hm.alphaCutoff < 0.0 || hm.transmission > 0.0);
         float hitAlpha = 1.0;      // weight of this hit's own shade
         vec3  hitPass  = vec3(0.0);// throughput carried on past it
+        bool  passBent = false;    // a solid bent the ray: it goes on along passDir from passFrom
+        vec3  passDir  = d;
+        vec3  passFrom = vec3(0.0);
         if (passThrough) {
             const float cov = (hm.alphaCutoff < 0.0) ? hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv) : 1.0;
             if (hm.transmission > 1.0) {
@@ -623,7 +630,14 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 const vec3  tint = isFlatAlphaBlend(hm.ior) ? vec3(1.0)
                                                             : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo, hitDuvA, hitDuvB);
                 hitAlpha = cov * (1.0 - t);
-                if (!isFlatAlphaBlend(hm.ior) && t > 0.0) {
+                // A SOLID's surface (thickness > 0) bounds a volume: entered
+                // through its front face, left through its back face, as the
+                // path tracer decides it. Met from inside, its mirror shows the
+                // solid's own inside, not the sky: no sky is added there.
+                const bool solidHit  = !isFlatAlphaBlend(hm.ior) && t > 0.0 && hm.thinWalled == 0 &&
+                                       geoms[hitId].foamAddress == 0ul;
+                const bool solidFrom = solidHit && rayQueryGetIntersectionFrontFaceEXT(rq, true);
+                if (!isFlatAlphaBlend(hm.ior) && t > 0.0 && !(solidHit && !solidFrom)) {
                     // GLASS met by a traced ray reflects too. It used to pass
                     // straight on with its tint alone, so glass seen in a
                     // mirror, in the sea, in paint, or behind other glass was a
@@ -660,24 +674,55 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                               * probeEnvFillVis(gP + gN * SHADOW_EPS, gN, maxLod) * envInt;
                 }
                 hitPass  = vec3(1.0 - cov) + cov * t * tint;
-                // A SOLID's surface is a volume's boundary: entered through its
-                // front face, left through its back face (as the path tracer
-                // decides it), so the legs between are absorbed (insideDist).
-                // A liquid in a glass vessel was a hole: the ray that looks
-                // through the vessel crossed the liquid's surfaces with their
-                // tint alone (white), and a teapot full of tea drew empty. A
-                // thin sheet bounds no volume and leaves the medium as it was;
-                // the ocean's body is waterHitBody's.
-                if (!isFlatAlphaBlend(hm.ior) && t > 0.0 && hm.thinWalled == 0 && geoms[hitId].foamAddress == 0ul) {
-                    const bool entering = rayQueryGetIntersectionFrontFaceEXT(rq, true);
-                    insideDist = (entering && hm.attenuationDistance > 0.0) ? hm.attenuationDistance : 0.0;
-                    insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                // The ray crosses a solid's surface the way the primary's
+                // solid-glass shade crosses the first one: bent by Snell's law
+                // at the surface's own normal, or turned back inside where the
+                // angle allows no way out (total internal reflection, the dark
+                // rim of a glass's edge). It went straight through, as through
+                // a thin sheet, so what a solid was seen through or in a mirror
+                // never bent: a teapot's tea behind its glass drew as a soft,
+                // unbent body where the path tracer shows it magnified, crisp
+                // and rimmed. A thin sheet still passes straight (its two
+                // faces cancel). Where the vertex normal disagrees with the
+                // face the ray met (a shading normal past the silhouette), the
+                // ray goes straight on rather than bend through the wrong side.
+                //
+                // Crossing it enters or leaves the volume, so the legs inside
+                // are absorbed (insideDist): a liquid in a glass vessel was a
+                // hole, its surfaces crossed with their tint alone (white), and
+                // a teapot full of tea drew empty. Turned back inside, the ray
+                // stays in the volume. The ocean's body is waterHitBody's.
+                if (solidHit) {
+                    const vec3 nOut = solidFrom ? hitN : -hitN;// the normal on the side the ray came from
+                    if (dot(nOut, d) < 0.0) {
+                        const float sIor = max(hm.ior, 1.0);
+                        const vec3  rd   = refract(d, nOut, solidFrom ? 1.0 / sIor : sIor);
+                        const vec3  sP   = o + d * tHit;
+                        passBent = true;
+                        if (dot(rd, rd) < 1e-6) {
+                            passDir  = reflect(d, nOut);
+                            passFrom = sP + nOut * SHADOW_EPS;
+                        } else {
+                            passDir  = normalize(rd);
+                            passFrom = sP - nOut * SHADOW_EPS;
+                            insideDist = (solidFrom && hm.attenuationDistance > 0.0) ? hm.attenuationDistance : 0.0;
+                            insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                        }
+                    } else {
+                        insideDist = (solidFrom && hm.attenuationDistance > 0.0) ? hm.attenuationDistance : 0.0;
+                        insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                    }
                 }
             }
             if (hitAlpha <= 0.01) {// nothing to composite — carry on
                 tput *= hitPass;
                 if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
-                o = o + d * (tHit + 1e-3);
+                if (passBent) {
+                    legEyeDist = hitEyeDist;
+                    d = passDir; o = passFrom; legOrigin = o; bent = true;
+                } else {
+                    o = o + d * (tHit + 1e-3);
+                }
                 continue;
             }
         }
@@ -852,12 +897,18 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         gSunFixedPattern = false;
 
         // Pass-through hit composited — carry the remainder on along the same
-        // ray. No specular continuation for the layer itself (its weighted
-        // diffuse is the visually dominant term).
+        // ray (or, through a solid, the bent one). No specular continuation
+        // for the layer itself (its weighted diffuse is the visually dominant
+        // term).
         if (passThrough) {
             tput *= hitPass;
             if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
-            o = o + d * (tHit + 1e-3);
+            if (passBent) {
+                legEyeDist = hitEyeDist;
+                d = passDir; o = passFrom; legOrigin = o; bent = true;
+            } else {
+                o = o + d * (tHit + 1e-3);
+            }
             continue;
         }
 
@@ -909,7 +960,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             const vec3 nFace = -d;
             const vec3 fill = sampleEnvDiffuse(nFace) + lights.ambient + hemiAmbient(nFace);
             radiance += tput * lastCutout * fill * (1.0 / PI) * envInt;
-        } else if (b == 0 && gTraceDeferMiss) {
+        } else if (b == 0 && !bent && gTraceDeferMiss) {
             gTraceMissTput = tput;// the caller shades it, as in the miss branch
         } else {
             radiance += tput * sampleEnvLod(d, curMissLod) * envInt;
