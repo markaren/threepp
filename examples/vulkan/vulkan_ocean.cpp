@@ -1363,6 +1363,22 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(camKey);
 
+    // L: directional spreading A/B. Measured Donelan-Banner spreading (waves
+    // run downwind, long crests) against the historical symmetric cos^2. The
+    // renderer regenerates the spectra on the change; THREEPP_OCEAN_SPREAD=0
+    // starts in the cos^2 state.
+    std::printf("[ocean] spreading: %s (L toggles)\n",
+                ocean->params.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2");
+    KeyAdapter spreadKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        if (ev.key == Key::L) {
+            ocean->params.measuredSpreading = !ocean->params.measuredSpreading;
+            std::printf("[ocean] spreading: %s\n",
+                        ocean->params.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2");
+            std::fflush(stdout);
+        }
+    });
+    canvas.addKeyListener(spreadKey);
+
     // ── Sound: engine + ocean/wind ambience ─────────────────────────────────
     // Skipped in --shot capture runs (headless iteration shouldn't bleep).
     OceanSounds sounds;
@@ -1560,6 +1576,7 @@ int main(int argc, char** argv) {
         if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f")) {
             ocean->params.choppiness = choppiness;
         }
+        ImGui::Checkbox("Measured spreading (L)", &ocean->params.measuredSpreading);
 
         ImGui::TextDisabled("Wind changes apply on scene reload.");
         if (ImGui::Checkbox("Clouds", &cloudsOn)) applyClouds();

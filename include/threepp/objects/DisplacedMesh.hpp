@@ -29,6 +29,10 @@
 
 namespace threepp {
 
+    // Default of DisplacedMesh::Params::measuredSpreading: true unless the
+    // environment sets THREEPP_OCEAN_SPREAD=0 (read once per process).
+    bool defaultMeasuredSpreading();
+
     class DisplacedMesh : public Mesh {
 
     public:
@@ -58,6 +62,19 @@ namespace threepp {
             // developed fetch (~1600 V² m, i.e. 145 km at 9.5 m/s). Live-
             // tunable like windSpeed: the renderer regenerates the spectra.
             float fetch = 0.0f;
+
+            // Directional spreading of the wave energy. true = the measured
+            // distribution of Donelan, Hamilton & Hui (1985) with Banner's
+            // (1990) short-wave form: near the spectral peak the energy
+            // runs in a narrow fan downwind (long crests travelling with the
+            // wind), the short waves spread wider, and a little energy runs
+            // against the wind. false = the historical symmetric cos^2, as
+            // much energy upwind as downwind (standing, short-crested
+            // slosh). Both carry the same energy per wavelength, so the
+            // significant wave height is the same. Live-tunable like
+            // windSpeed: the renderer regenerates the spectra.
+            // THREEPP_OCEAN_SPREAD=0 makes false the default.
+            bool measuredSpreading = defaultMeasuredSpreading();
 
             // Global Y-displacement multiplier. 1.0 is physical; higher values
             // exaggerate wave height.

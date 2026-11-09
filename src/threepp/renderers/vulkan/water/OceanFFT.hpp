@@ -59,9 +59,10 @@ namespace threepp::water {
             float    kMin = 0.0f;
             float    kMax = 0.0f;     // 0 = no upper bound
             float    fetch = 0.0f;    // m of upwind open water; 0 = fully developed (plain Phillips)
+            uint32_t spread = 0;      // 0 = symmetric cos^2, 1 = Donelan-Banner sech^2 (see the shader)
         };
 
-        // Push-constant block of phillips_spectrum.comp (std430, 32 bytes).
+        // Push-constant block of phillips_spectrum.comp (std430, 36 bytes).
         struct PushParams {
             uint32_t textureSize;
             float    tileSize;
@@ -71,6 +72,7 @@ namespace threepp::water {
             float    kMin;
             float    kMax;
             float    fetch;
+            uint32_t spread;
         };
 
         PhillipsSpectrum(vulkan::VulkanContext& ctx, const Settings& s);
@@ -90,7 +92,7 @@ namespace threepp::water {
         // sea state morphs smoothly. The params are push constants recorded
         // into the command buffer, so a frame in flight never sees the
         // change meant for the next one.
-        void updateSeaState(float windTheta, float windSpeed, float fetch);
+        void updateSeaState(float windTheta, float windSpeed, float fetch, uint32_t spread);
 
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }

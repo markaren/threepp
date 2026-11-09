@@ -115,6 +115,10 @@ namespace threepp_py {
                                "peak ~8 V^2/g). Finite = JONSWAP young sea: shorter, steeper waves with more "
                                "energy at the 10-40 m scale and less swell; 20e3-40e3 reads as a coastal sea. "
                                "Live-tunable; saturates at ~1600 V^2.")
+                .def_readwrite("measured_spreading", &DisplacedMesh::Params::measuredSpreading,
+                               "True (default) = Donelan-Hamilton-Hui / Banner directional spreading: waves run "
+                               "downwind with long crests at the peak. False = the old symmetric cos^2 (as much "
+                               "energy upwind as downwind). Same Hs either way. Live-tunable.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")

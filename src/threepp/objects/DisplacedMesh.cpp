@@ -8,9 +8,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace threepp {
+
+    bool defaultMeasuredSpreading() {
+        static const bool value = [] {
+            const char* v = std::getenv("THREEPP_OCEAN_SPREAD");
+            return !(v && *v && std::atoi(v) == 0);
+        }();
+        return value;
+    }
 
     DisplacedMesh::DisplacedMesh(const std::shared_ptr<BufferGeometry>& geometry,
                                  const std::shared_ptr<Material>& material)
