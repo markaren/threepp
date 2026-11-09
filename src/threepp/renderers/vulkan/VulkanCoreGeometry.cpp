@@ -3419,6 +3419,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 st.appliedHsFix     = hsFix;
             }
 
+            // The wave-model switches (DisplacedMesh::Params, each forced by
+            // its environment variable). All off is the historical path,
+            // untouched.
+            const bool cwmOn      = dm.cwmOn();
+
             // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
             // is one-shot per cascade. DynamicSpectrum re-runs each frame.
             // IFFT calls are sequential on the same queue so they can share
@@ -3757,6 +3762,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.wakeTrailAddr  = wakeTrailAddr;
             pc.hullAddr       = hullAddr;
             pc.hullCount      = hullCount;
+            pc.waveModel      = cwmOn ? 1u : 0u;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);

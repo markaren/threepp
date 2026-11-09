@@ -72,6 +72,21 @@ namespace threepp {
             // ocean. Live-tunable like windSpeed.
             bool hsFix = false;
 
+            // Choppy Wave Model switch (default OFF, the historical chop).
+            // ON draws the surface as the first-order Lagrangian sea of
+            // Nouguier, Guerin and Chapron (2009), x = q + D(q) with the full
+            // horizontal displacement D, i.e. choppiness 1 whatever the field
+            // below says, so crests are as peaked and troughs as broad as
+            // linear Lagrangian theory makes them. A per-vertex limiter keeps
+            // the Jacobian of the drawn map at or above kCwmMinJacobian by
+            // taking the largest choppiness <= 1 that satisfies it there, so
+            // the mesh never loops; vertex normals are the displaced
+            // surface's own. The environment variable THREEPP_OCEAN_CWM =
+            // 1 / 0 forces it on / off for every ocean. Live-tunable.
+            bool cwm = false;
+
+
+
             // Global Y-displacement multiplier. 1.0 is physical; higher values
             // exaggerate wave height.
             float waveScale = 1.0f;
@@ -104,6 +119,17 @@ namespace threepp {
         };
 
         Params params;
+
+        // The wave-model switches as the renderer applies them: the Params
+        // field, unless its environment variable (THREEPP_OCEAN_<SWITCH> =
+        // 1 / 0, read once, named with the field) forces it for every ocean.
+        [[nodiscard]] bool cwmOn() const;
+        // The horizontal-displacement scale the surface is drawn with: 1 under
+        // the Choppy Wave Model, else params.choppiness.
+        [[nodiscard]] float effectiveChoppiness() const;
+
+        // The CWM limiter's floor on the Jacobian of the drawn map.
+        static constexpr float kCwmMinJacobian = 0.1f;
 
         // Hull exclusion zone: suppresses wave displacement inside a
         // world-space oriented rectangle so the ocean doesn't clip through

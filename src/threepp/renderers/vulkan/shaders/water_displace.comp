@@ -81,6 +81,12 @@ layout(push_constant, scalar) uniform Pc {
     float   warpHalfRange;
     float   warpCoefA;
     uint    hullCount;      // active vessels; 0 = no hull exclusion, no wake
+    // The wave-model switches (DisplacedMesh::Params). waveModel 0 runs the
+    // historical path below and reads nothing past here.
+    uint    waveModel;      // bit 0 cwm
+    uint    _pad0;
+    uint    _pad1;
+    uint    _pad2;
 } pc;
 
 // A rest point in vessel `hu`'s frame, and how far outside its footprint it
@@ -215,6 +221,68 @@ vec3 sampleDisplacement(vec2 worldXZ) {
                 d.z * pc.choppiness);
 }
 
+// -- Wave-model switches ---------------------------------------------------
+// Cascades 0 and 1 at rest point p, B-spline filtered as in
+// sampleDisplacement, in world metres: .x / .z the horizontal displacement at
+// choppiness 1 and .y the height with waveScale. The normal stencil and
+// the CWM limiter difference this.
+
+vec3 sampleSmoothRaw(vec2 worldXZ) {
+    vec3 d = vec3(0.0);
+    if ((pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        const vec2 uv = worldXZ * invTile;
+        const vec2 dxz = sampleBicubicRG(displace0, uv) * invTile;
+        const float h  = sampleBicubicR(height0, uv) * invTile * pc.waveScale;
+        d.y += h;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    if ((pc.cascadeMask & 2u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize1;
+        const vec2 uv = oceanC1Domain(worldXZ) * invTile;
+        const vec2 dxz = oceanC1World(sampleBicubicRG(displace1, uv)) * invTile;
+        const float h  = sampleBicubicR(height1, uv) * invTile * pc.waveScale;
+        d.y += h;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    return d;
+}
+
+// Cascade 2, bilinear as in sampleDisplacement: (dx, height * waveScale, dz),
+// horizontal at choppiness 1.
+vec3 sampleFineRaw(vec2 worldXZ) {
+    if ((pc.cascadeMask & 4u) == 0u) return vec3(0.0);
+    const float invTile = 1.0 / pc.tileSize2;
+    const vec2 uv = worldXZ * invTile;
+    const vec2 dxz = texture(displace2, uv).rg * invTile;
+    return vec3(dxz.x, texture(height2, uv).r * invTile * pc.waveScale, dxz.y);
+}
+
+// The Choppy Wave Model's limiter. The drawn map x = q + l D(q) has Jacobian
+// J(l) = det(I + l A) = 1 + l tr A + l^2 det A, A = grad D. Returns the
+// largest l' <= lMax with J >= kCwmMinJacobian on all of [0, l']: lMax when
+// J never reaches the floor there, else the smallest positive root of
+// J(l) = Jmin (closed form, the numerically stable quadratic).
+float cwmLimit(float trA, float detA, float lMax) {
+    const float c = 1.0 - 0.1;// 1 - DisplacedMesh::kCwmMinJacobian
+    float r = 1e30;
+    if (abs(detA) < 1e-8) {
+        if (trA < 0.0) r = -c / trA;
+    } else {
+        const float disc = trA * trA - 4.0 * detA * c;
+        if (disc >= 0.0) {
+            const float q  = -0.5 * (trA + (trA >= 0.0 ? 1.0 : -1.0) * sqrt(disc));
+            const float r1 = q / detA;
+            const float r2 = (q != 0.0) ? c / q : 1e30;
+            if (r1 > 0.0) r = min(r, r1);
+            if (r2 > 0.0) r = min(r, r2);
+        }
+    }
+    return min(lMax, r);
+}
+
 void main() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= pc.vertexCount) return;
@@ -251,7 +319,42 @@ void main() {
                     -(v - 0.5) * pc.planeSizeZ);
     }
 
-    vec3 disp = sampleDisplacement(rest.xz);
+    // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the
+    // vertex grid's spacing (the historical normal stencil) gives the
+    // displacement gradient A (choppiness 1), the height gradient and the
+    // CWM limiter.
+    const float wmEpsX = pc.planeSizeX / float(pc.gridDimX - 1u);
+    const float wmEpsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+    vec3  wmC = vec3(0.0);
+    float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
+    float wmLambda = pc.choppiness;
+    if (pc.waveModel != 0u) {
+        wmC = sampleSmoothRaw(rest.xz);
+        const vec3 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
+        const vec3 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));
+        const vec3 tD = sampleSmoothRaw(rest.xz + vec2(0.0, -wmEpsZ));
+        const vec3 tU = sampleSmoothRaw(rest.xz + vec2(0.0,  wmEpsZ));
+        const float ix = 0.5 / wmEpsX, iz = 0.5 / wmEpsZ;
+        aXX = (tR.x - tL.x) * ix;// d Dx / dx
+        aXZ = (tU.x - tD.x) * iz;// d Dx / dz
+        aZX = (tR.z - tL.z) * ix;// d Dz / dx
+        aZZ = (tU.z - tD.z) * iz;// d Dz / dz
+        hGX = (tR.y - tL.y) * ix;
+        hGZ = (tU.y - tD.y) * iz;
+        // Choppy Wave Model (Nouguier, Guerin and Chapron 2009): the
+        // first-order Lagrangian surface is x = q + D(q), choppiness 1,
+        // limited per vertex so the drawn map never folds.
+        if ((pc.waveModel & 1u) != 0u)
+            wmLambda = cwmLimit(aXX + aZZ, aXX * aZZ - aXZ * aZX, 1.0);
+    }
+
+    vec3 disp;
+    if ((pc.waveModel & 1u) != 0u) {
+        const vec3 f = sampleFineRaw(rest.xz);
+        disp = vec3(wmLambda * (wmC.x + f.x), wmC.y + f.y, wmLambda * (wmC.z + f.z));
+    } else {
+        disp = sampleDisplacement(rest.xz);
+    }
 
     OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
 
@@ -426,15 +529,26 @@ void main() {
     // oversmoothed the resolvable band on top of the bilinear-derivative
     // kinks; rectangular grids have anisotropic spacing, so each axis's
     // slope is measured at its own stencil width).
-    const float epsX = pc.planeSizeX / float(pc.gridDimX - 1u);
-    const float epsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
-    const float hL = sampleHeightSmooth(rest.xz + vec2(-epsX, 0.0));
-    const float hR = sampleHeightSmooth(rest.xz + vec2( epsX, 0.0));
-    const float hD = sampleHeightSmooth(rest.xz + vec2(0.0, -epsZ));
-    const float hU = sampleHeightSmooth(rest.xz + vec2(0.0,  epsZ));
-    const vec3 n = normalize(vec3((hL - hR) / (2.0 * epsX),
-                                  1.0,
-                                  (hD - hU) / (2.0 * epsZ)));
+    vec3 n;
+    if ((pc.waveModel & 1u) != 0u) {
+        // CWM: the displaced surface's own normal, from the tangents of the
+        // limited map, dX/dq_x = (1 + l Dxx, h_x, l Dzx) and
+        // dX/dq_z = (l Dxz, h_z, 1 + l Dzz). (The historical normal is the
+        // rest-space height gradient, the un-chopped slope.)
+        const vec3 tx = vec3(1.0 + wmLambda * aXX, hGX, wmLambda * aZX);
+        const vec3 tz = vec3(wmLambda * aXZ, hGZ, 1.0 + wmLambda * aZZ);
+        n = normalize(cross(tz, tx));
+    } else {
+        const float epsX = pc.planeSizeX / float(pc.gridDimX - 1u);
+        const float epsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+        const float hL = sampleHeightSmooth(rest.xz + vec2(-epsX, 0.0));
+        const float hR = sampleHeightSmooth(rest.xz + vec2( epsX, 0.0));
+        const float hD = sampleHeightSmooth(rest.xz + vec2(0.0, -epsZ));
+        const float hU = sampleHeightSmooth(rest.xz + vec2(0.0,  epsZ));
+        n = normalize(vec3((hL - hR) / (2.0 * epsX),
+                           1.0,
+                           (hD - hU) / (2.0 * epsZ)));
+    }
 
     pc.posOut.v[i * 3u + 0u] = outPos.x;
     pc.posOut.v[i * 3u + 1u] = outPos.y;

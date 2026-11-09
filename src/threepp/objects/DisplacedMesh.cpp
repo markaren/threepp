@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace threepp {
@@ -19,6 +20,25 @@ namespace threepp {
     const std::string& DisplacedMesh::type() const {
         static const std::string typeName = "DisplacedMesh";
         return typeName;
+    }
+
+    namespace {
+        // A wave-model switch's environment override: 1 / 0 forces it on /
+        // off, unset or empty leaves the mesh's own field in charge (-1).
+        int envSwitch(const char* name) {
+            const char* e = std::getenv(name);
+            if (!e || !*e) return -1;
+            return e[0] == '0' ? 0 : 1;
+        }
+    }// namespace
+
+    bool DisplacedMesh::cwmOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_CWM");
+        return env < 0 ? params.cwm : env == 1;
+    }
+
+    float DisplacedMesh::effectiveChoppiness() const {
+        return cwmOn() ? 1.f : params.choppiness;
     }
 
     namespace {
@@ -232,7 +252,12 @@ namespace threepp {
         wantsHeightReadback = true;
 
         // World-space horizontal displacement D(q) of the selected cascades at
-        // rest position q, choppiness applied.
+        // rest position q, choppiness applied. Under the Choppy Wave Model it
+        // is the full displacement (choppiness 1); the shader's per-vertex
+        // limiter, which lowers it where the Jacobian would fall under
+        // kCwmMinJacobian, is not mirrored here (the audit reports where it
+        // binds).
+        const float chop = effectiveChoppiness();
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
             for (uint32_t i = 0; i < 3; ++i) {
@@ -251,8 +276,8 @@ namespace threepp {
                 d.x += v.x * invTile;
                 d.y += v.y * invTile;
             }
-            d.x *= params.choppiness;
-            d.y *= params.choppiness;
+            d.x *= chop;
+            d.y *= chop;
             return d;
         };
 
@@ -265,7 +290,7 @@ namespace threepp {
         // default choppiness, 14 at choppiness 1 on a steep (ak = 0.59) wave.
         float bestX = worldX;
         float bestZ = worldZ;
-        if (params.choppiness != 0.f) {
+        if (chop != 0.f) {
             constexpr int kMaxIterations = 16;
             constexpr float kTolerance = 1e-3f;// metres
             float qx = worldX;
