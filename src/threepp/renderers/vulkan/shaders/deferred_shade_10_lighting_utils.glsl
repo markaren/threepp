@@ -752,6 +752,36 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
         gShadowMovingOccluder = true;
     return 0.0;
 }
+// What the GLASS on a shadow ray lets through, as one number: per glass surface
+// crossed, the luminance of its tint and its faces' Fresnel loss at normal
+// incidence ((1 - F0) a face; a thin-walled sheet is two faces, a solid's
+// surface one, its tint taken once, where the ray enters). Glass used to let
+// the light through whole and white: a smoked window lit the seat behind it
+// like no glass at all. Not the colour (the shadow channel is a scalar), not
+// the absorption over a solid's depth, not a caustic. Its own traversal of the
+// glass and blend instances only (kRayMaskAlpha; flat blends and additive
+// cards pass), every candidate visited (NoOpaque), none committed. The ocean
+// is in the opaque mask and stays out.
+float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
+    float T = 1.0;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
+        const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
+        if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
+        const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
+        const float face = 1.0 - f0n * f0n;
+        const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
+        const float tintL = clamp(dot(m.albedo, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+        // The opaque share of a partly transmissive surface blocks.
+        const float t = clamp(m.transmission, 0.0, 1.0);
+        T *= t * (m.thinWalled != 0 ? tintL * face * face : (entry ? tintL : 1.0) * face);
+        if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
+    }
+    return T;
+}
+
 // FOG-ONLY shadow ray (setFogShadowOpaqueCutouts, pc.flags bit 29): the same
 // ray with every candidate taken as a blocker, so an alpha-tested crown is an
 // opaque blob to the volumetric march. The march is low-frequency and

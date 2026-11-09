@@ -411,7 +411,14 @@ float blueNoiseDef(uvec2 px, uint frame, uint salt) {
 // windscreen on 27 % of the frame +0.7 ms on open road and +1.8 ms under
 // birches, over 78 % of it +2.9 ms in both places.
 bool gSunFixedPattern = false;
+float sunShadowVisOpaque(vec3 orig, vec3 L, float tanR, bool cheapHit);
+// The soft sun's visibility, times what the glass on the way lets through
+// (one glass ray along the centre; a cheap hit goes without).
 float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
+    const float v = sunShadowVisOpaque(orig, L, tanR, cheapHit);
+    return (v > 0.0 && !cheapHit) ? v * glassTransmittance(orig, L, 1e30) : v;
+}
+float sunShadowVisOpaque(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
     // Under DLSS Ray Reconstruction (kRR) every caller's sun is the cheapHit
     // one: a single jittered ray, animated with the frame, at every pixel.
@@ -514,12 +521,15 @@ float shadowRayVisTo(vec3 orig, vec3 P, uint gi, vec2 xi, uint cellBase) {
         vec3        L    = normalize(lights.dirLights[gi].direction);
         murkSunLeg(P, L);// submerged: the occluder test follows the refracted leg
         const float tanR = pc.sunTanHalfAngle;
-        if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
-        const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-        const vec3 t  = normalize(cross(up, L));
-        const vec3 b  = cross(L, t);
-        const float a = TWO_PI * xi.x;
-        return shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * (sqrt(xi.y) * tanR)), 1e30);
+        if (tanR > 0.0) {
+            const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+            const vec3 t  = normalize(cross(up, L));
+            const vec3 b  = cross(L, t);
+            const float a = TWO_PI * xi.x;
+            L = normalize(L + (t * cos(a) + b * sin(a)) * (sqrt(xi.y) * tanR));
+        }
+        const float v = shadowVis(orig, L, 1e30);
+        return v > 0.0 ? v * glassTransmittance(orig, L, 1e30) : 0.0;// the glass the sun comes through
     }
     const uint li = min(clusterGrid[cellBase + 1u + (gi - lights.dirCount)],
                         pc.clusterLightCount - 1u);
@@ -540,7 +550,8 @@ float shadowRayVisTo(vec3 orig, vec3 P, uint gi, vec2 xi, uint cellBase) {
         if (dist < 1e-4) return 1.0;
         toL /= dist;
     }
-    return shadowVis(orig, toL, dist - 1e-2);
+    const float v = shadowVis(orig, toL, dist - 1e-2);
+    return v > 0.0 ? v * glassTransmittance(orig, toL, dist - 1e-2) : 0.0;// the glass the lamp shines through
 }
 
 // Analytic/stochastic direct-light split (Heitz et al. 2018 ratio estimator).
