@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace threepp::vulkan {
@@ -82,6 +83,14 @@ namespace threepp::vulkan {
         };
         static_assert(sizeof(PhotonGridHeader) == 64);
         constexpr VkDeviceSize kPhotonBytes = 32;// path_trace.comp's Photon
+
+        // A switch of the trace's own (pc.flags bits 10 and up): on unless the
+        // environment variable is "0", read at every dispatch, so an A/B is
+        // one variable.
+        bool ptSwitch(const char* name) {
+            const char* v = std::getenv(name);
+            return !(v && v[0] == '0' && v[1] == '\0');
+        }
 
         VkPipeline makeComputePipeline(VulkanContext& ctx, const uint32_t* spv, size_t bytes,
                                        VkPipelineLayout layout, const char* what) {
@@ -581,7 +590,11 @@ namespace threepp::vulkan {
         // slope (the push block has no room for a float of its own).
         const uint32_t waveScale = uint32_t(std::clamp(std::lround(double(in.oceanWaveScale) * 256.0), 1L, 65535L));
         pc.flags              = (resetPending_ ? 1u : 0u) | (in.sunExtracted ? 2u : 0u) | ((in.lensModel & 3u) << 2)
-                              | (in.envSunLastDirLight ? 16u : 0u) | (waveScale << 16);
+                              | (in.envSunLastDirLight ? 16u : 0u) | (waveScale << 16)
+                              | (ptSwitch("THREEPP_PT_THIN_GLASS_NEE") ? 1024u : 0u)
+                              | (ptSwitch("THREEPP_PT_LAST_BOUNCE_MIS") ? 2048u : 0u)
+                              | (ptSwitch("THREEPP_PT_AMBIENT_LIGHTS") ? 4096u : 0u)
+                              | (ptSwitch("THREEPP_PT_BLEND_PASS") ? 8192u : 0u);
         pc.emissiveCount      = in.emissiveCount;
         pc.emissiveTotalPower = in.emissiveTotalPower;
         pc.envMipCount        = std::max(1u, in.envMipCount);

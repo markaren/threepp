@@ -36,7 +36,8 @@
 // frame draws it (backgroundBlurriness,
 // backgroundIntensity, backgroundRotation, the procedural star field); any
 // other miss reads the
-// environment, mip 1 when the sun was extracted into a directional light
+// environment and the ambient and hemisphere lights (ambientRadiance),
+// the environment's mip 1 when the sun was extracted into a directional light
 // (flags bit 1), so the disc is not counted twice. Unlit materials
 // (roughness < 0) return their albedo.
 //
@@ -140,7 +141,7 @@ struct EmTri {
     vec4 v0;       // xyz = pos, w = area
     vec4 v1;       // xyz = pos, w = cumPower (inclusive running power CDF)
     vec4 v2;       // xyz = pos, w = power (lum × area)
-    vec4 emission; // xyz = emissive × intensity
+    vec4 emission; // xyz = emissive × intensity, w = sides + 4 · (65535ths of 1 - opaque share)
 };
 layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
 
@@ -226,6 +227,10 @@ layout(push_constant) uniform Pc {
                              //   into them, 4 = trace the sun's photons, 5 = set the pass up
                              // bit 8 = this pass's photons are built: gather them
                              // bit 9 = the pass has the sun's photons through the ocean
+                             // bit 10 = thinGlassNeeOwns (THREEPP_PT_THIN_GLASS_NEE)
+                             // bit 11 = lastBounceMis (THREEPP_PT_LAST_BOUNCE_MIS)
+                             // bit 12 = ambientLights (THREEPP_PT_AMBIENT_LIGHTS)
+                             // bit 13 = blendPass (THREEPP_PT_BLEND_PASS)
                              // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
@@ -260,6 +265,26 @@ const bool kPhotons = true;
 const bool kPhotons = false;
 #endif
 bool photonsOn() { return kPhotons && (pc.flags & 256u) != 0u; }
+// Bit 10 (THREEPP_PT_THIN_GLASS_NEE, on unless "0"): an emitter seen through a
+// thin pane or a flat blend is the emitter NEE's alone, dimmed by what the
+// glass lets through; the bounce ray that finds it through them adds nothing.
+// Off: the old way, where both counted it (about twice the light).
+bool thinGlassNeeOwns() { return (pc.flags & 1024u) != 0u; }
+// Bit 11 (THREEPP_PT_LAST_BOUNCE_MIS): the last vertex traces the bounce its
+// emitter NEE is weighted against, for the emission alone (lastBounceEmission).
+bool lastBounceMis() { return (pc.flags & 2048u) != 0u; }
+// Bit 12 (THREEPP_PT_AMBIENT_LIGHTS): AmbientLight and HemisphereLight as the
+// radiance a lighting ray that escapes meets (ambientRadiance). Off: neither
+// lights a surface.
+bool ambientLights() { return (pc.flags & 4096u) != 0u; }
+// Bit 13 (THREEPP_PT_BLEND_PASS): a flat alpha blend (transmission 1 - opacity,
+// ior 0) or an additive surface (transmission 1 + strength), lit or unlit, is
+// a null event the ray passes (blendPass): a flat blend straight through,
+// untinted, with the chance of its transmission; an additive one always, its
+// glow added. The path keeps delta, lastPdf and its photon flags. Off: unlit
+// ones were opaque cards, lit ones tinted what lay behind and did not glow.
+bool blendPass() { return (pc.flags & 8192u) != 0u; }
+const uint kPtMaxBlendPasses = 8u;// per path, past which a pass costs a bounce
 bool sunPhotonsOn() { return photonsOn() && (pc.flags & 512u) != 0u && pgRegion.w > 0.0; }
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
@@ -447,13 +472,14 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     return a >= m.alphaCutoff;
 }
 
-// What the GLASS on a shadow ray lets through, as one number: per glass surface
-// crossed, the luminance of its tint and its faces' Fresnel loss at normal
-// incidence ((1 - F0) a face; a thin-walled sheet is two faces, a solid's
-// surface one, its tint taken once, where the ray enters). Glass used to let
-// the light through whole and white: a smoked window lit the seat behind it
-// like no glass at all. Not the colour (the shadow channel is a scalar), not
-// the absorption over a solid's depth, not a caustic. Its own traversal of the
+// What the GLASS on a shadow ray lets through, per channel: per glass surface
+// crossed, its tint and its faces' Fresnel loss at normal incidence ((1 - F0)
+// a face; a thin-walled sheet is two faces, a solid's surface one, its tint
+// taken once, where the ray enters). Glass used to let the light through whole
+// and white: a smoked window lit the seat behind it like no glass at all. The
+// emitter NEE keeps the colour (a red pane lights the floor red); the scalar
+// shadow channel takes its luminance (kGlassLum). Not the absorption over a
+// solid's depth, not a caustic. Its own traversal of the
 // glass and blend instances only (kRayMaskAlpha; flat blends and additive
 // cards pass), every candidate visited (NoOpaque), none committed. The ocean
 // is in the opaque mask and stays out.
@@ -462,27 +488,72 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 // the environment's sun (envSunLight) the light a solid bends is found by the
 // path itself, refracted through it to the sun's disc (the miss branch), so a
 // straight shadow ray through the solid would count it a second time.
-float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock) {
+// crossed: set when the ray passed a surface the camera path takes as a thin
+// pass (a thin pane, or a flat blend), which the emitter NEE then owns
+// (thinGlassNeeOwns). A flat blend lets its transmission through, untinted,
+// as the camera path passes it. A textured surface's texel covers as much as
+// the camera ray finds of it (cameraCandidateHits): a cutout's face is there
+// where its alpha reaches the cutoff, a blend's with the chance of its alpha,
+// so a sprite card's clear texels cast no shadow and its covered ones what
+// the card lets through (1 - a·(1 - t)).
+const vec3 kGlassLum = vec3(0.2126, 0.7152, 0.0722);
+vec3 glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock, inout bool crossed) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
-    float T = 1.0;
+    vec3 T = vec3(1.0);
+    // The faces counted so far, (instance, geometry, primitive): no BLAS sets
+    // NO_DUPLICATE_ANY_HIT, so a driver may hand the same triangle over twice,
+    // and the product would take its face in twice. Past eight, unchecked.
+    uvec3 seen[8];
+    uint  nSeen = 0u;
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
         const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
-        if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
-        if (solidsBlock && m.thinWalled == 0) { T = 0.0; rayQueryTerminateEXT(rq); break; }
-        const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
-        const float face = 1.0 - f0n * f0n;
-        const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
-        const float tintL = clamp(dot(m.albedo, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
-        // The opaque share of a partly transmissive surface blocks.
-        const float t = clamp(m.transmission, 0.0, 1.0);
-        T *= t * (m.thinWalled != 0 ? tintL * face * face : (entry ? tintL : 1.0) * face);
-        if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
+        if (m.transmission <= 0.0 || m.transmission > 1.0) continue;// not glass: additive
+        const uvec3 key = uvec3(uint(rayQueryGetIntersectionInstanceIdEXT(rq, false)),
+                                uint(rayQueryGetIntersectionGeometryIndexEXT(rq, false)),
+                                uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
+        bool dup = false;
+        for (uint k = 0u; k < nSeen; ++k) dup = dup || seen[k] == key;
+        if (dup) continue;
+        if (nSeen < 8u) seen[nSeen++] = key;
+        float a = 1.0;// the texel's coverage
+        if (m.albedoTexIndex >= 0 && m.alphaCutoff != 0.0) {
+            const int  ii = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+            const vec2 uv = fetchUvAt(ii, rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                      rayQueryGetIntersectionBarycentricsEXT(rq, false));
+            const int  ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            a = clamp(textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a, 0.0, 1.0);
+            if (m.alphaCutoff > 0.0) a = a >= m.alphaCutoff ? 1.0 : 0.0;
+            if (a <= 0.0) continue;
+        }
+        if (m.ior < 0.5) {// a flat blend (ior 0)
+            if (!thinGlassNeeOwns()) continue;
+            T *= 1.0 - a * (1.0 - clamp(m.transmission, 0.0, 1.0));
+            if (!blendPass()) crossed = true;// with blendPass the bounce ray passes it as a null event: MIS holds
+            if (dot(T, kGlassLum) < 0.01) { T = vec3(0.0); rayQueryTerminateEXT(rq); }
+            continue;
+        }
+        vec3 faceT = vec3(0.0);// what the face lets through where it covers
+        if (!(solidsBlock && m.thinWalled == 0)) {
+            if (m.thinWalled != 0) crossed = true;
+            const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
+            const float face = 1.0 - f0n * f0n;
+            const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
+            const vec3  tint  = clamp(m.albedo, 0.0, 1.0);
+            // The opaque share of a partly transmissive surface blocks.
+            const float t = clamp(m.transmission, 0.0, 1.0);
+            faceT = t * (m.thinWalled != 0 ? tint * (face * face) : (entry ? tint : vec3(1.0)) * face);
+        }
+        T *= mix(vec3(1.0), faceT, a);
+        if (dot(T, kGlassLum) < 0.01) { T = vec3(0.0); rayQueryTerminateEXT(rq); }
     }
     return T;
 }
-float glassTransmittance(vec3 origin, vec3 dir, float tMax) { return glassTransmittanceImpl(origin, dir, tMax, false); }
+float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
+    bool crossed = false;
+    return dot(glassTransmittanceImpl(origin, dir, tMax, false, crossed), kGlassLum);
+}
 
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax);
 // The occlusion test times what the glass on the way lets through.
@@ -499,9 +570,13 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
 // Point and spot lamps, and a scene's own sun, are found by no ray: their
 // light keeps passing glass along the shadow ray, dimmed (shadowVis).
 bool envSunLight() { return (pc.flags & 16u) != 0u && lights.dirCount > 0u; }
-float shadowVisFindable(vec3 origin, vec3 dir, float tMax) {
+vec3 shadowVisFindableRgb(vec3 origin, vec3 dir, float tMax, inout bool crossed) {
     const float v = shadowVisOpaque(origin, dir, tMax);
-    return v > 0.0 ? v * glassTransmittanceImpl(origin, dir, tMax, true) : 0.0;
+    return v > 0.0 ? v * glassTransmittanceImpl(origin, dir, tMax, true, crossed) : vec3(0.0);
+}
+float shadowVisFindable(vec3 origin, vec3 dir, float tMax) {
+    bool crossed = false;
+    return dot(shadowVisFindableRgb(origin, dir, tMax, crossed), kGlassLum);
 }
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
@@ -786,6 +861,16 @@ float emitterHitPdf(vec3 Le, float dist2, float cosL) {
     return lum / pc.emissiveTotalPower * dist2 / cosL;
 }
 
+// The share of an emitter triangle's emission a camera path adds: under
+// blendPass, a flat blend's or an additive card's opacity (it adds the
+// emission where it does not pass the card), packed in emission.w above the
+// sides; else all of it. The table's power stays the full emission, so the
+// NEE's pdf and the bounce's MIS pdf (emitterHitPdf) agree.
+float emitterShare(const EmTri tri) {
+    if (!blendPass()) return 1.0;
+    return 1.0 - float(uint(tri.emission.w + 0.5) >> 2u) * (1.0 / 65535.0);
+}
+
 vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     const float xi = rnd(seed) * pc.emissiveTotalPower;
@@ -816,10 +901,18 @@ vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
     if (max(max(fc.r, fc.g), fc.b) <= 0.0) return vec3(0.0);
     const float tMax = dist - SHADOW_EPS - dist * 1e-3;
     if (tMax <= 1e-4) return vec3(0.0);
-    if (shadowVisFindable(offsetOrigin(s, toL), toL, tMax) <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
+    bool       crossed = false;
+    const vec3 gv      = shadowVisFindableRgb(offsetOrigin(s, toL), toL, tMax, crossed);
+    if (max(max(gv.r, gv.g), gv.b) <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
     const float pdfB = pdfBsdf(s, V, toL);
-    const float w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
-    return fc * (w / pdfSolid) * tri.emission.xyz;
+    float       w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
+    const vec3 Le = tri.emission.xyz * emitterShare(tri);
+    if (!thinGlassNeeOwns()) return fc * (w / pdfSolid) * Le;
+    // Through a thin pane or a flat blend the light is this NEE's alone (the
+    // bounce ray that finds it there adds nothing), dimmed and tinted by what
+    // they let through.
+    if (crossed) w = 1.0;
+    return fc * gv * (w / pdfSolid) * Le;
 }
 
 // gi_bounce.glsl asks the includer for these. emissiveIrradiance is the
@@ -977,6 +1070,22 @@ vec3 analyticNee(const Surf s, vec3 V, inout uint seed, bool sunByPhotons) {
         lit += fc * lights.spotLights[i].color * (atten * vis * wL);
     }
     return lit;
+}
+
+// AmbientLight and HemisphereLight as radiance from every direction a
+// lighting ray escapes in (ambientLights), as the deferred shade adds
+// them to the environment's diffuse light: lights.ambient (every ambient
+// light, and each hemisphere light's mean), and the hemisphere's sky or
+// ground half by the side of its axis the ray leaves on. The rows hold
+// 0.5·(sky − ground) along the axis per channel; a step there lights a
+// Lambertian surface with exactly the mix(ground, sky, 0.5·N·up + 0.5) the
+// frame uses (the cosine-weighted share of the sky half is linear in N·up).
+// Several hemisphere lights with different axes fold into one step per channel.
+vec3 ambientRadiance(vec3 d) {
+    if (!ambientLights()) return vec3(0.0);
+    return lights.ambient + vec3(sign(dot(lights.hemiDeltaR, d)) * length(lights.hemiDeltaR),
+                                 sign(dot(lights.hemiDeltaG, d)) * length(lights.hemiDeltaG),
+                                 sign(dot(lights.hemiDeltaB, d)) * length(lights.hemiDeltaB));
 }
 
 // The sun's single scatter in the air along [o, o + d·tEnd] (odEnd its
@@ -1502,6 +1611,71 @@ bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front, uint ra
     return float(h) * (1.0 / 4294967296.0) < a;
 }
 
+// ── The last vertex's bounce (lastBounceMis) ────────────────────────────────
+// The emitter NEE at a path's last vertex is weighted against a bounce ray
+// that the path no longer traces, so its weights summed to the NEE's share
+// alone: a glossy floor under a large panel, its reflection nearly black at
+// max_bounces 0. This traces that ray (o, d, its BSDF pdf) and returns the
+// emission it hits under the bounce's MIS weight, dimmed by the air, the murk
+// and the medium it travels in; nothing else (no environment, no unlit or
+// glow-only surface, nothing past glass, only past the blended and additive
+// cards the main walk passes): the light the NEE's weight left out.
+vec3 lastBounceEmission(vec3 o, vec3 d, float pdf, bool inside, vec3 insideAtt, float insideDist, inout uint seed) {
+    const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
+    // blendPass: a flat blend or an additive card on the way is passed as the
+    // main walk passes it (up to kPtMaxBlendPasses), in expectation: its
+    // emission on its opaque share, what lies behind by its pass weight
+    // (a flat blend's transmission, an additive card's 1), so the NEE's MIS
+    // weight through a card has its bounce share too.
+    vec3  sum   = vec3(0.0);
+    float carry = 1.0;
+    float tMin  = 0.0;
+    for (uint pass = 0u; pass <= kPtMaxBlendPasses; ++pass) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, tMin, d, 1e30);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                    rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, false),
+                                    rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
+                rayQueryConfirmIntersectionEXT(rq);
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) break;
+        const int          hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const MaterialDesc hm    = entryMat(hitId);
+        const float        tHit  = rayQueryGetIntersectionTEXT(rq, true);
+        const bool flatOrAdd = blendPass() && hm.transmission > 0.0 && hm.ior < 0.5 && geoms[hitId].foamAddress == 0ul;
+        // A flat blend or an additive card (blendPass): its emission on its
+        // opaque share, as the main walk adds it and the NEE (emitterShare) counts it.
+        const float share = !flatOrAdd ? 1.0 : hm.transmission > 1.0 ? clamp(hm.transmission - 1.0, 0.0, 1.0) : 1.0 - hm.transmission;
+        if ((geoms[hitId].flags & kGeomFlagGlowOnly) == 0u && hm.roughness >= 0.0 &&
+            max(max(hm.emissive.r, hm.emissive.g), hm.emissive.b) * hm.emissiveIntensity > 0.0) {
+            const PtHit hh = ptFetchHit(hitId, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
+                                        rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                        rayQueryGetIntersectionObjectToWorldEXT(rq, true),
+                                        rayQueryGetIntersectionWorldToObjectEXT(rq, true));
+            const vec3 Le = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hh.uv, hm.emissive * hm.emissiveIntensity) * share;
+            if (max(max(Le.r, Le.g), Le.b) > 0.0) {
+                const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, abs(dot(hh.Ng, d)));
+                const float w    = pdf * pdf / max(pdf * pdf + pdfL * pdfL, 1e-20);
+                vec3 T = vec3(1.0);
+                if (!inside && airOn()) T *= exp(-airOpticalDepth(o, o + d * tHit));
+                float t0, t1;
+                if (murkOn() && murkClip(o, d, tHit, t0, t1)) T *= exp(-fog.murkSigma * (t1 - t0));
+                if (inside && insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater))
+                    T *= pow(insideAtt, vec3(tHit / insideDist));
+                sum += Le * T * (w * carry);
+            }
+        }
+        if (!flatOrAdd) break;
+        carry *= hm.transmission > 1.0 ? 1.0 : hm.transmission;
+        if (carry <= 0.0) break;
+        tMin = tHit + max(1e-4, tHit * 1e-5);
+    }
+    return sum;
+}
+
 // ── One path ────────────────────────────────────────────────────────────────
 vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     vec3  L          = vec3(0.0);
@@ -1516,6 +1690,14 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     // pane is what the shadow ray already dims, and the water's own light is
     // the murk's (murkCaustic), so neither sets it.
     bool  causticPath = false;
+    // Since the path's last NEE vertex, only thin passes (thinGlassNeeOwns): an
+    // emitter the ray then hits is the emitter NEE's, which crossed the same
+    // panes dimmed by them, so the hit adds nothing.
+    bool  neeChain    = false;
+    // blendPass: the distance since the last vertex the null events cover
+    // (the emitter's MIS pdf is over the whole leg), and how many passed.
+    float legDist     = 0.0;
+    uint  blendPasses = 0u;
     // The photon-mapped caustics (photonsOn): a diffuse vertex gathers the
     // emitters' light that came through glass from the photons, so the
     // bounce on from it through glass to an emitter keeps only the share of
@@ -1616,7 +1798,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 const bool  sunExtracted = (pc.flags & 2u) != 0u;
                 const bool  sunDisc      = causticPath && envSunLight();
                 const float lod = (!sunExtracted || pc.envMipCount < 2u || sunDisc) ? 0.0 : 1.0;
-                L += throughput * sampleEnvLod(d, lod);
+                L += throughput * (sampleEnvLod(d, lod) + ambientRadiance(d));
             }
             break;
         }
@@ -1643,6 +1825,40 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
         const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
         vec3 albedo = sf.albedo;
+        // A flat blend or an additive surface (blendPass), before the unlit
+        // test: the ray passes on with the chance of its transmission (an
+        // additive one: always, its glow added), a null event. What stays is
+        // the surface's opaque share, shaded below; an additive lit one is
+        // shaded by chance, both ways weighted by 1 + strength.
+        const bool flatOrAdd = blendPass() && hm.transmission > 0.0 && hm.ior < 0.5 &&
+                               geoms[hitId].foamAddress == 0ul;
+        if (flatOrAdd) {
+            bool passes;
+            if (hm.transmission > 1.0) {
+                const float st = clamp(hm.transmission - 1.0, 0.0, 1.0);
+                if (sf.roughness < 0.0) {
+                    L += throughput * albedo * st;
+                    passes = true;
+                } else {
+                    passes = rnd(seed) * (1.0 + st) < 1.0;
+                    throughput *= 1.0 + st;
+                }
+            } else {
+                passes = rnd(seed) < hm.transmission;
+            }
+            if (passes) {
+                SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+                o = P - Ng * SHADOW_EPS;
+                legDist += tHit;
+                // A pass is not a bounce (up to kPtMaxBlendPasses): the loop's
+                // ++ undoes this (unsigned, wraps at 0).
+                if (blendPasses < kPtMaxBlendPasses) {
+                    ++blendPasses;
+                    bounce -= 1u;
+                }
+                continue;
+            }
+        }
         if (sf.roughness < 0.0) {// unlit
             L += throughput * albedo;
             break;
@@ -1696,9 +1912,11 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             if (max(max(Le.r, Le.g), Le.b) > 0.0) {
                 float w = 1.0;
                 if (!delta && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u) {
-                    const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, max(dot(Ng, V), 0.0));
+                    const float leg  = legDist + tHit;
+                    const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, leg * leg, max(dot(Ng, V), 0.0));
                     w = lastPdf * lastPdf / max(lastPdf * lastPdf + pdfL * pdfL, 1e-20);
                 }
+                if (delta && neeChain && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u) w = 0.0;// see neeChain
                 // Through glass from a diffuse vertex: the photons' share is theirs.
                 if (pmChain && pmGlass && !pmOcean && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u)
                     L += throughput * Le * w * pmKeep;
@@ -1710,7 +1928,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
 
         // ── Transmission: a dielectric slab or shell ────────────────────────
-        if (hm.transmission > 0.0 && !wakeLayer && rnd(seed) < hm.transmission) {
+        if (hm.transmission > 0.0 && !wakeLayer && !flatOrAdd && rnd(seed) < hm.transmission) {
             // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
             // is water whatever its material's ior.
             // Whatever its material says, here it is a real interface, entered through
@@ -1751,6 +1969,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             delta   = true;
             lastPdf = 0.0;
             if (!isOcean && (reflected || !thin)) causticPath = true;// see causticPath
+            if (isOcean || reflected || !thin) neeChain = false;
             if (isOcean) pmOcean = true;
             else if (reflected || !thin) pmGlass = true;
             continue;
@@ -1819,7 +2038,13 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 L += throughput * gatherPhotons(s, V, sunGather) * (1.0 / pgP);
         }
 
-        if (bounce == pc.maxBounces) break;
+        if (bounce == pc.maxBounces) {
+            // The bounce the last vertex's emitter NEE is weighted against.
+            vec3 wi; float pdf; vec3 wgt;
+            if (lastBounceMis() && pc.emissiveCount > 0u && sampleBsdf(s, V, seed, wi, pdf, wgt))
+                L += throughput * wgt * lastBounceEmission(offsetOrigin(s, wi), wi, pdf, inside, insideAtt, insideDist, seed);
+            break;
+        }
 
         vec3 wi; float pdf; vec3 wgt;
         if (!sampleBsdf(s, V, seed, wi, pdf, wgt)) break;
@@ -1839,9 +2064,11 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         o        = offsetOrigin(s, wi);
         d        = wi;
         lastPdf  = pdf;
+        legDist  = 0.0;
         delta    = false;
         camChain = false;
         causticPath = false;// a new NEE vertex: the next glass event starts over
+        neeChain    = thinGlassNeeOwns();
         // An opaque surface inside a dielectric (a seabed under the water, a
         // stone in a glass block) leaves the path inside it: the next leg is
         // still absorbed, until the path refracts out through the boundary.
@@ -1923,10 +2150,20 @@ void tracePhotonPath(vec3 o, vec3 d, vec3 beta, bool sun, inout uint seed) {
         const vec3 Ng = dot(hh.Ng, V) >= 0.0 ? hh.Ng : -hh.Ng;
         const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
         const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
+        // A flat blend or an additive surface (blendPass) passes the photon
+        // as it passes a camera path (an additive one always, its glow no
+        // light here); what stays meets the surface's opaque share.
+        if (blendPass() && !isOcean && hm.transmission > 0.0 && hm.ior < 0.5 &&
+            (hm.transmission > 1.0 || rnd(seed) < hm.transmission)) {
+            SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+            o = P - Ng * SHADOW_EPS;
+            continue;
+        }
         if (sf.roughness < 0.0) return;// unlit
         SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
 
         if (glass && !isOcean && hm.transmission < 1.0) depositPhoton(P, V, Ng, beta, sun ? 1u : 0u);
+        if (blendPass() && !isOcean && hm.transmission > 0.0 && hm.ior < 0.5) return;// its opaque share
 
         vec3 N = sf.N;
         {
@@ -2010,7 +2247,7 @@ void tracePhoton(uint pid) {
     // 2 the back, as its material's side): a single-sided emitter's light
     // leaves its front alone. What its back sent would pass out through the
     // far wall of a closed emitter, whose back faces no ray meets.
-    const uint sides   = uint(tri.emission.w + 0.5);
+    const uint sides   = uint(tri.emission.w + 0.5) & 3u;
     float      sidePdf = 1.0;
     if (sides == 2u) nL = -nL;
     else if (sides == 0u) {
@@ -2021,7 +2258,7 @@ void tracePhoton(uint pid) {
     // Le cos / (pdfA · pdfω) with pdfA = lum / total and pdfω = sidePdf ·
     // cos / π, the total over the photon count being pgPowerScale.
     SHADOW_EPS = max(1e-3, max(max(abs(p.x), abs(p.y)), abs(p.z)) * 1e-5);
-    tracePhotonPath(p + nL * SHADOW_EPS, d, tri.emission.xyz * (PI / (lum * sidePdf)), false, seed);
+    tracePhotonPath(p + nL * SHADOW_EPS, d, tri.emission.xyz * (emitterShare(tri) * PI / (lum * sidePdf)), false, seed);
 }
 
 // One of the sun's photons (sunPhotonsOn): a point q on the disc pgRegion

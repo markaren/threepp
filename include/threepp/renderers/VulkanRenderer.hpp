@@ -1875,7 +1875,10 @@ namespace threepp {
         // Lambert + GGX, with sheen, clearcoat and foliage translucency as a
         // transmission lobe; dielectric transmission with ior, thin-walled
         // and Beer-Lambert attenuation; the analytic lights (the sun as a
-        // cone of setSunAngularRadius) and emissive meshes as area lights;
+        // cone of setSunAngularRadius) and emissive meshes as area lights (a
+        // RectAreaLight is one, through its emissive quad); AmbientLight and
+        // HemisphereLight as light from every direction a bounce escapes in
+        // (the hemisphere's sky above its axis, its ground below);
         // the camera's lens as the frame forms its image (setLensDistortion
         // traced through, so a barrel lens's corners are real without
         // overscan; setDepthOfField as a thin lens of setCameraExposure's
@@ -1898,8 +1901,7 @@ namespace threepp {
         // exposure (auto exposure's or the physical camera's when on), white
         // balance and colour grade, not its bloom, sensor noise or motion
         // blur. Not modelled:
-        // iridescence, the ocean's whitecap foam, caustics, billboard
-        // particles (rain).
+        // iridescence, the ocean's whitecap foam, billboard particles (rain).
         struct PathTraceParams {
             uint32_t samplesPerFrame = 8;  // camera paths per pixel per render()
             uint32_t maxBounces      = 6;  // scattering events after the primary hit (<= 64)
