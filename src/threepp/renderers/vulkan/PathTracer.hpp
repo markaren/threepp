@@ -68,6 +68,7 @@ namespace threepp::vulkan {
             // mip 0 is what a ray through glass finds (sun caustics).
             bool     envSunLastDirLight = false;
             float    oceanFineTileSize  = 0.f;// the fine cascade's tile (m), 0 = no ocean
+            float    oceanWaveScale     = 1.f;// the ocean's wave height multiplier (DisplacedMesh::Params::waveScale)
             float    starIntensity      = 0.f;// the procedural star field, 0 = none
             // setDeferredVolumetrics: the lamps' beam medium in clear air and its g.
             float    volDensity         = 0.f;
@@ -162,12 +163,13 @@ namespace threepp::vulkan {
         // ── Frame graph ─────────────────────────────────────────────────────
         // Size the accumulator for the picture (params' extent, or this
         // frame's render extent; a change restarts the session) and bind it
-        // in frame `frame`'s set. `photons`: the scene has emitters and glass,
-        // so the passes build photons for the emitters' caustics
-        // (path_trace.comp): their buffers and pipeline are made and bound.
+        // in frame `frame`'s set. Photons (path_trace.comp), their buffers and
+        // pipeline made and bound when wanted: `photons` for the emitters'
+        // caustics (a scene with emitters and glass), `sunPhotons` for the
+        // sun's through the ocean (a scene with an ocean and a sun).
         // Call at graph build, before declare().
         void prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial,
-                     bool photons);
+                     bool photons, bool sunPhotons);
         void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
         // Trace the next band of rows.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const FrameInputs& in);
@@ -247,8 +249,17 @@ namespace threepp::vulkan {
         uint32_t              photonBuckets_ = 0;
         uint64_t              photonSerial_  = 1;
         std::vector<uint64_t> boundPhotons_;
-        bool                  photonsWanted_ = false;// this frame's prepare(): emitters and glass
-        bool                  photonsLive_   = false;
+        // Of photonCap_, how many the emitters' and the sun's a pass traces.
+        uint32_t              photonEmitCount_ = 0;
+        uint32_t              photonSunCount_  = 0;
+        // This frame's prepare(): emitters and glass; an ocean and a sun.
+        bool                  photonsWanted_    = false;
+        bool                  sunPhotonsWanted_ = false;
+        // This pass's: its photons are built (either kind), the emitters',
+        // the sun's.
+        bool                  photonsLive_ = false;
+        bool                  emitLive_    = false;
+        bool                  sunLive_     = false;
 
         void createPipeline();
         void createResolvePipeline();
