@@ -1129,6 +1129,22 @@ namespace threepp {
 
     }// namespace
 
+    void VulkanRenderer::decodeDepthAOV(const float* depth, std::size_t count, const Camera& camera, float* out) {
+        const float n = camera.nearPlane, f = camera.farPlane;
+        // An orthographic projection is affine (no w from z): reverseZVk makes
+        // its depth linear, z = (f - d) / (f - n). A perspective one is
+        // hyperbolic, z = n (f - d) / (d (f - n)). The background (z = 0) is f
+        // under both.
+        if (camera.projectionMatrix.elements[11] == 0.f) {
+            for (std::size_t i = 0; i < count; ++i) out[i] = f - depth[i] * (f - n);
+            return;
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const float z = depth[i];// reverse-Z NDC depth [0,1] (1=near, 0=far)
+            out[i] = (z <= 0.f) ? f : (n * f) / (n + z * (f - n));
+        }
+    }
+
     bool VulkanRenderer::readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                         int& width, int& height, int& bytesPerPixel) {
         // Handle 0 is the primary — the whole body below is view-agnostic

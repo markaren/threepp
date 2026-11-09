@@ -146,6 +146,14 @@ namespace threepp {
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
 
+        // The Depth AOV as PLANAR view-space depth: each pixel's distance along
+        // `camera`'s viewing axis in scene units (not the length of its ray),
+        // the cleared background as the far plane. `camera` is the one the
+        // frame was rendered with: reverse-Z depth is hyperbolic in that
+        // distance under a perspective projection and linear under an
+        // orthographic one. `count` floats; `out` may be `depth`.
+        static void decodeDepthAOV(const float* depth, std::size_t count, const Camera& camera, float* out);
+
         // Batched form: read SEVERAL attachments of the same frame with ONE
         // device wait, one command buffer (N copy regions) and one staging
         // allocation, instead of paying the full drain per AOV — the multi-AOV

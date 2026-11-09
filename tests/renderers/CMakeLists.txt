@@ -44,6 +44,11 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(VulkanProbeCascades_test PROPERTIES
             SKIP_REGULAR_EXPRESSION "no Vulkan ray tracing device")
 
+    # The Depth AOV decoded to planar depth under perspective and orthographic
+    # cameras (what Python's read_depth returns). Catch2; the end-to-end case
+    # SKIPs without a ray-tracing device.
+    add_test_executable(VulkanDepthAov_test)
+
     add_executable(VulkanGolden_test VulkanGolden_test.cpp)
     target_link_libraries(VulkanGolden_test PRIVATE threepp)
     target_include_directories(VulkanGolden_test PRIVATE

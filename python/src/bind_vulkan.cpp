@@ -308,11 +308,12 @@ namespace {
 
         // Depth (H, W) float32: the PLANAR view-space depth of each pixel, its
         // distance along the camera's viewing axis in scene units (the reverse-Z
-        // NDC value linearised with the camera's near and far), not the length
-        // of the pixel's ray; a fronto-parallel wall reads one value across the
-        // whole frame. Background (cleared to the far plane) reads as `far`.
-        // Full 32-bit precision from the D32 depth buffer (the old path quantized
-        // to 24 bits).
+        // NDC value linearised with the camera's near and far: hyperbolic under
+        // a perspective projection, linear under an orthographic one; see
+        // VulkanRenderer::decodeDepthAOV), not the length of the pixel's ray; a
+        // fronto-parallel wall reads one value across the whole frame.
+        // Background (cleared to the far plane) reads as `far`. Full 32-bit
+        // precision from the D32 depth buffer (the old path quantized to 24 bits).
         static py::array_t<float> decode_depth(const std::vector<uint8_t>& raw, int w, int h,
                                                const Camera& camera) {
             if (raw.empty() || w <= 0 || h <= 0) {
@@ -322,14 +323,8 @@ namespace {
                 return py::array_t<float>(py::array::ShapeContainer{0, 0});
             }
             py::array_t<float> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
-            auto* dst        = arr.mutable_data();
-            const auto* d    = reinterpret_cast<const float*>(raw.data());// D32_SFLOAT
-            const float nearP = camera.nearPlane, farP = camera.farPlane;
-            const size_t px   = static_cast<size_t>(w) * h;
-            for (size_t i = 0; i < px; ++i) {
-                const float z = d[i];// reverse-Z NDC depth [0,1] (1=near, 0=far)
-                dst[i] = (z <= 0.f) ? farP : (nearP * farP) / (nearP + z * (farP - nearP));
-            }
+            VulkanRenderer::decodeDepthAOV(reinterpret_cast<const float*>(raw.data()),// D32_SFLOAT
+                                           static_cast<size_t>(w) * h, camera, arr.mutable_data());
             return arr;
         }
 
@@ -974,9 +969,11 @@ namespace threepp_py {
                      "along the camera's viewing axis in scene units, as a depth map has it (the "
                      "convention OpenCV, posed-splat and world-model inputs expect), not the length "
                      "of the pixel's ray: a wall facing the camera reads one value edge to edge. "
-                     "A point cloud follows from camera_intrinsics: X = (u - cx) * Z / fx, "
-                     "Y = (v - cy) * Z / fy, Z = depth. Background reads as the camera far plane. "
-                     "Full 32-bit precision (native D32 read).")
+                     "An orthographic camera's depth is decoded as such (linear in the depth "
+                     "buffer). For a perspective camera a point cloud follows from "
+                     "camera_intrinsics: X = (u - cx) * Z / fx, Y = (v - cy) * Z / fy, Z = depth; "
+                     "that pinhole recipe does not apply to an orthographic camera. Background "
+                     "reads as the camera far plane. Full 32-bit precision (native D32 read).")
                 // ── Lossless float / int AOV readback (native G-buffer copy) ──
                 .def("read_instance_ids", &PyVulkanRenderer::read_instance_ids,
                      py::arg("scene"), py::arg("camera"),
