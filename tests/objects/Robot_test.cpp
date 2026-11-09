@@ -455,3 +455,64 @@ TEST_CASE("Revolute joints already agreed, and still do") {
         REQUIRE_THAT(fromGraph.z, WithinAbs(fromCompute.z, 1e-5));
     }
 }
+
+TEST_CASE("Scene-graph and analytic FK agree when static nodes sit between the joints") {
+
+    // The shape a USD import builds: the stage's up-axis conversion as a rotated
+    // group above the base, and each joint frame under its parent body's prim,
+    // which itself sits off-centre and turned under the joint before it. None of
+    // those nodes are joints, and the analytic chain used to skip them.
+    auto robot = Robot::create();
+
+    auto stage = Object3D::create();
+    stage->rotation.x = -math::PI / 2;// Z-up to Y-up
+    stage->position.set(0.2f, 0.f, -0.1f);
+    robot->add(stage);
+
+    auto base = Object3D::create();
+    base->name = "base";
+    base->position.set(0.f, 0.f, 0.05f);
+    stage->add(base);
+
+    auto joint1 = Object3D::create();
+    joint1->position.set(0.f, 0.f, 0.3f);
+    base->add(joint1);
+
+    auto body1 = Object3D::create();
+    body1->name = "body1";
+    body1->position.set(0.1f, 0.f, 0.f);
+    body1->rotation.y = 0.5f;
+    joint1->add(body1);
+
+    auto joint2 = Object3D::create();
+    joint2->position.set(0.f, 0.f, 0.5f);
+    joint2->rotation.z = 0.3f;
+    body1->add(joint2);
+
+    auto tip = Object3D::create();
+    tip->name = "tip";
+    joint2->add(tip);
+
+    for (const auto& link : {base, body1, tip}) robot->addLink(link);
+    robot->addJoint(joint1, {Vector3(0, 0, 1), Robot::JointType::Revolute, "j1", std::nullopt, "base", "body1"});
+    robot->addJoint(joint2, {Vector3(1, 0, 0), Robot::JointType::Revolute, "j2", std::nullopt, "body1", "tip"});
+    robot->finalizeInPlace();
+    robot->position.set(1.f, 0.5f, 0.f);
+    robot->rotation.y = 0.4f;
+    robot->updateMatrix();
+
+    for (const auto& q : std::vector<std::vector<float>>{{0.f, 0.f}, {0.7f, -0.4f}, {-1.2f, 1.1f}}) {
+        robot->setJointValues(q);
+        robot->updateMatrixWorld(true);
+
+        const Vector3 fromGraph = positionOf(robot->getEndEffectorTransform());
+        const Vector3 fromCompute = positionOf(robot->computeEndEffectorTransform(q));
+
+        INFO("q (" << q[0] << ", " << q[1] << "): graph (" << fromGraph.x << ", " << fromGraph.y << ", "
+                   << fromGraph.z << ") vs computed (" << fromCompute.x << ", " << fromCompute.y << ", "
+                   << fromCompute.z << ")");
+        REQUIRE_THAT(fromGraph.x, WithinAbs(fromCompute.x, 1e-5));
+        REQUIRE_THAT(fromGraph.y, WithinAbs(fromCompute.y, 1e-5));
+        REQUIRE_THAT(fromGraph.z, WithinAbs(fromCompute.z, 1e-5));
+    }
+}

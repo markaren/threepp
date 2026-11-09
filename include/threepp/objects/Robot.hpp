@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -151,6 +152,9 @@ namespace threepp {
 
                 const auto& joint = joints_.at(i);
                 const auto& info = jointInfos_.at(i);
+
+                // The static nodes between the previous joint and this one (see chainLinks_).
+                if (!walkAll) result.multiply(chainLinks_.at(k));
 
                 auto jointTransform = Matrix4()
                                               .makeRotationFromQuaternion(origPose_.at(joint.get()).second)
@@ -478,6 +482,42 @@ namespace threepp {
                 const int dof = jointDof_.at(i);
                 if (dof >= 0) chainDofs_.push_back(static_cast<size_t>(dof));
             }
+
+            // The static transform from each chain joint's predecessor (the previous chain
+            // joint, or the robot itself for the first) down to the joint node's parent.
+            //
+            // A URDF robot hangs each joint directly off a link that sits at identity under
+            // the previous joint, so this is the identity throughout and the chain is just
+            // the product of joint origins. A robot built from USD is not: the composed
+            // stage puts the up-axis conversion and the asset's own Xforms above the first
+            // joint, and each joint frame sits under its parent body's prim, wherever that
+            // body sits under the joint before it. Leaving those out made
+            // computeEndEffectorTransform() disagree with the scene graph by metres (and
+            // the IK built on it reach for the wrong point). The nodes on these paths are
+            // not joints, so their local transforms never change and are read once here.
+            chainLinks_.clear();
+            const Object3D* previous = this;
+            for (const size_t i : chain_) {
+                const Object3D* joint = joints_.at(i).get();
+                chainLinks_.push_back(staticPath(previous, joint->parent).value_or(Matrix4()));
+                previous = joint;
+            }
+        }
+
+        // The product of the local transforms on the way down from `ancestor` (exclusive) to
+        // `node` (inclusive); identity when they are the same node, nullopt when `ancestor`
+        // is not above `node` (a robot whose hierarchy is not assembled yet).
+        static std::optional<Matrix4> staticPath(const Object3D* ancestor, const Object3D* node) {
+            std::vector<const Object3D*> path;
+            for (const Object3D* n = node; n != ancestor; n = n->parent) {
+                if (!n) return std::nullopt;
+                path.push_back(n);
+            }
+            Matrix4 m;
+            for (auto it = path.rbegin(); it != path.rend(); ++it) {
+                m.multiply(Matrix4().compose((*it)->position, (*it)->quaternion, (*it)->scale));
+            }
+            return m;
         }
 
         std::vector<float> jointValues_;
@@ -491,8 +531,9 @@ namespace threepp {
         std::unordered_map<Object3D* , std::pair<Vector3, Quaternion>> origPose_;
 
         std::string eeLink_;
-        std::vector<size_t> chain_;    // joint indices, root -> tip
-        std::vector<size_t> chainDofs_;// dof indices along that path
+        std::vector<size_t> chain_;      // joint indices, root -> tip
+        std::vector<size_t> chainDofs_;  // dof indices along that path
+        std::vector<Matrix4> chainLinks_;// parallel to chain_: static transform into each joint's parent
     };
 
 }// namespace threepp
