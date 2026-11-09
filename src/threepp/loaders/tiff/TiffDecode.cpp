@@ -345,17 +345,26 @@ namespace threepp::detail {
         const size_t pixelBytes = spp * bytesPerSample;
         const uint64_t rawBytes = uint64_t(width) * height * pixelBytes;// <= 2^30 * 32
         const uint64_t pixelsBytes = uint64_t(width) * height * channels;
-        if (rawBytes > SIZE_MAX || pixelsBytes > SIZE_MAX) return fail("image too large for this platform");
 
         // A tile may be wider or taller than the image (GDAL writes 256x256 tiles even
         // for a 4x4 image), so its size is not rejected. Only the rows inside the image
         // are decoded, though, and a buffer for them past the image's own size plus
-        // 1 GiB is a hostile tile width, not a picture.
-        constexpr uint64_t kSegmentSlack = uint64_t(1) << 30;
+        // 64 MiB is a hostile tile width, not a picture.
+        constexpr uint64_t kSegmentSlack = uint64_t(1) << 26;
         const uint64_t segRowBytes64 = uint64_t(segWidth) * samplesPerSegment * bytesPerSample;// <= 2^37
         const uint64_t segRowsMax = std::min<uint64_t>(segHeight, height);
         const uint64_t segLimit = std::max(rawBytes, kSegmentSlack);
         if (segRowBytes64 > segLimit || segRowsMax > segLimit / segRowBytes64) return fail("tile or strip too large");
+
+        // The raw samples, the tile buffer and the output are alive at once, and a
+        // header costs a few bytes to write, so their sum is capped: at 16 GiB, which
+        // fits every image of up to 2^30 pixels and four 8-bit samples, and at half the
+        // address space on a 32-bit build (a wasm build aborts on a failed allocation).
+        constexpr uint64_t kDecodeBudget = std::min<uint64_t>(uint64_t(1) << 34, SIZE_MAX / 2);
+        const uint64_t decodeBytes = rawBytes + pixelsBytes + segRowBytes64 * segRowsMax;// < 2^37
+        if (decodeBytes > kDecodeBudget) {
+            return fail("image needs " + std::to_string(decodeBytes >> 20) + " MiB to decode");
+        }
         const auto segRowBytes = static_cast<size_t>(segRowBytes64);
 
         // --- Decode every segment into one chunky buffer of raw samples ---
@@ -393,10 +402,14 @@ namespace threepp::detail {
                 }
                 if (!ok) return fail("corrupt compressed data");
 
+                // A tile's columns past the image's right edge are dropped.
+                const size_t columns = std::min<size_t>(segWidth, width - x0);
+
                 if (predictor == 2) {
                     // Horizontal differencing: each sample is stored as its
-                    // difference from the same sample one pixel to the left.
-                    const size_t rowSamples = size_t(segWidth) * samplesPerSegment;
+                    // difference from the same sample one pixel to the left. It
+                    // only reads to the left, so the dropped columns are skipped.
+                    const size_t rowSamples = columns * samplesPerSegment;
                     for (size_t row = 0; row < rows; ++row) {
                         unsigned char* p = seg.data() + row * segRowBytes;
                         if (bytesPerSample == 1) {
@@ -414,7 +427,6 @@ namespace threepp::detail {
                     }
                 }
 
-                const size_t columns = std::min<size_t>(segWidth, width - x0);
                 for (size_t row = 0; row < rows && y0 + row < height; ++row) {
                     const unsigned char* src = seg.data() + row * segRowBytes;
                     unsigned char* dst = raw.data() + ((y0 + row) * width + x0) * pixelBytes;

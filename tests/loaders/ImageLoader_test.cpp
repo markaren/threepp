@@ -164,7 +164,7 @@ namespace {
     std::vector<unsigned char> tiledRgbaTiff(uint32_t width, uint32_t height,
                                              uint32_t tileWidth, uint32_t tileLength,
                                              const std::vector<unsigned char>& tile,
-                                             uint16_t predictor = 1) {
+                                             uint16_t predictor = 1, uint16_t bitsPerSample = 8) {
         struct Field {
             uint16_t tag, type;
             uint32_t value;
@@ -173,7 +173,7 @@ namespace {
         const std::vector<Field> fields{
                 {256, kLong, width},
                 {257, kLong, height},
-                {258, kShort, 8},     // BitsPerSample
+                {258, kShort, bitsPerSample},
                 {259, kShort, 1},     // Compression: none
                 {262, kShort, 2},     // Photometric: RGB
                 {277, kShort, 4},     // SamplesPerPixel
@@ -593,6 +593,49 @@ TEST_CASE("ImageLoader decodes TIFF") {
         AllocationCap cap(size_t(1) << 20);
         CHECK_FALSE(loader.load(file, 4, false).has_value());
         CHECK_FALSE(cap.tripped());
+    }
+
+    SECTION("a 2^23 x 2^31 tile on a 4x4 image, four 32 MiB rows kept, is rejected before its buffer is allocated") {
+        // 128 MiB for a 64-byte image: more than the image plus 64 MiB of slack.
+        const auto file = tiledRgbaTiff(4, 4, 1u << 23, 0x80000000u, smallTile);
+        AllocationCap cap(size_t(1) << 20);
+        CHECK_FALSE(loader.load(file, 4, false).has_value());
+        CHECK_FALSE(cap.tripped());
+    }
+
+    SECTION("a 32768 x 32768 16-bit RGBA image in one tile, 20 GiB to decode, is rejected before anything is allocated") {
+        // 8 GiB of raw samples, 8 GiB of tile buffer and 4 GiB of output, from ~200 bytes.
+        const auto file = tiledRgbaTiff(32768, 32768, 32768, 32768, smallTile, 1, 16);
+        CHECK(file.size() < 256);
+        AllocationCap cap(size_t(1) << 20);
+        CHECK_FALSE(loader.load(file, 4, false).has_value());
+        CHECK_FALSE(cap.tripped());
+    }
+
+    SECTION("the predictor over a 256x256 tile on a 4x4 image decodes the image's columns") {
+        // Each kept pixel is stored as its difference from the one to its left; the
+        // dropped columns hold noise, which must not reach the image.
+        std::vector<unsigned char> tile(size_t(256) * 256 * 4);
+        for (size_t i = 0; i < tile.size(); ++i) tile[i] = static_cast<unsigned char>(i * 37 + 11);
+        for (unsigned y = 0; y < 4; ++y) {
+            for (unsigned x = 0; x < 4; ++x) {
+                unsigned char* p = tile.data() + (size_t(y) * 256 + x) * 4;
+                p[0] = static_cast<unsigned char>(x == 0 ? 0 : 10);
+                p[1] = static_cast<unsigned char>(x == 0 ? 10 * y : 0);
+                p[2] = static_cast<unsigned char>(x == 0 ? 200 : 0);
+                p[3] = static_cast<unsigned char>(x == 0 ? 255 : 0);
+            }
+        }
+        auto img = loader.load(tiledRgbaTiff(4, 4, 256, 256, tile, 2), 4, false);
+        REQUIRE(img.has_value());
+        for (unsigned y = 0; y < 4; ++y) {
+            for (unsigned x = 0; x < 4; ++x) {
+                CHECK(rgbAt(*img, x, y, 4) == std::array<unsigned char, 3>{
+                                                      static_cast<unsigned char>(10 * x),
+                                                      static_cast<unsigned char>(10 * y), 200});
+                CHECK(alphaAt(*img, x, y) == 255);
+            }
+        }
     }
 }
 
