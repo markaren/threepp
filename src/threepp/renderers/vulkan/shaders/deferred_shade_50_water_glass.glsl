@@ -1138,10 +1138,14 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
         // seed moves with the frame there): RR integrates the frosted lobe. Else
         // the one deterministic sample and the reflection filter's blur.
         // The facet is drawn at the material's own roughness (the ior ramp, no
-        // kGlassFrost floor: that floor is for the filter and the glass marker,
-        // and as a lobe it would soften smooth glass a little).
-        vec3 Ns = kRR ? ggxHalfVector(N, matRough * clamp(ior * 2.0 - 2.0, 0.0, 1.0), seed)
-                      : ggxHalfVectorFib(N, gr, s, kGlassSamples);
+        // kGlassFrost floor: that floor is for the filter and the glass marker),
+        // and only for glass rougher than 0.05, the path tracer's threshold for a
+        // thin sheet's scatter. Below it the mirror normal, as without RR: the
+        // twin's Volvo windows (0.03) went soft at a distance and smeared under
+        // RR, which reprojects what the glass shows as a reflection would be.
+        const float lobeRough = matRough * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
+        vec3 Ns = (kRR && lobeRough > 0.05) ? ggxHalfVector(N, lobeRough, seed)
+                                            : ggxHalfVectorFib(N, gr, s, kGlassSamples);
         if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
         const float NdotV = max(dot(Ns, V), 1e-4);
         const vec3  F     = glassFresnel(r0, NdotV, pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
