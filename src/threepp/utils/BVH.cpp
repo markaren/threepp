@@ -136,6 +136,9 @@ namespace {
         [[nodiscard]] bool slab(const float* mn, const float* mx, float tLimit, float& tEntry) const {
             float tNear = -std::numeric_limits<float>::infinity();
             float tFar = std::numeric_limits<float>::infinity();
+            // Written on every path, so no caller ever reads it uninitialised
+            // (GCC's -Wmaybe-uninitialized cannot see that callers check the result).
+            tEntry = tNear;
             for (int k = 0; k < 3; ++k) {
                 if (still[k]) {
                     if (!(o[k] >= mn[k] && o[k] <= mx[k])) return false;
@@ -613,7 +616,7 @@ namespace {
         Entry stack[stackSize];
         int sp = 0;
 
-        float tEntry;
+        float tEntry = 0.f;
         if (!ray.slab(nodes[0].min, nodes[0].max, tLimit, tEntry)) return;
         int current = 0;
 
@@ -624,7 +627,7 @@ namespace {
                 if (tLimit < 0.f) return;
             } else {
                 const int left = node.first;
-                float tLeft, tRight;
+                float tLeft = 0.f, tRight = 0.f;
                 const bool hitLeft = ray.slab(nodes[left].min, nodes[left].max, tLimit, tLeft);
                 const bool hitRight = ray.slab(nodes[left + 1].min, nodes[left + 1].max, tLimit, tRight);
                 if (hitLeft && hitRight) {
