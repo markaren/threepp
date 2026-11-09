@@ -404,6 +404,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanPathTrace_test COMMAND VulkanPathTrace_test)
     set_tests_properties(VulkanPathTrace_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The path tracer's light counted once and in full: an emitter through a
+    # thin pane, each fix against its switch's old way.
+    add_executable(VulkanPathTraceLights_test VulkanPathTraceLights_test.cpp)
+    target_link_libraries(VulkanPathTraceLights_test PRIVATE threepp)
+    add_test(NAME VulkanPathTraceLights_test COMMAND VulkanPathTraceLights_test)
+    set_tests_properties(VulkanPathTraceLights_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A material's aoMap (glTF occlusionTexture) darkens its indirect light,
     # never a light's: a split map under a uniform environment and under a
     # sun, the glTF strength, a map of 1, an unlit surface. Twice: ray traced

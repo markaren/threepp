@@ -226,6 +226,7 @@ layout(push_constant) uniform Pc {
                              //   into them, 4 = trace the sun's photons, 5 = set the pass up
                              // bit 8 = this pass's photons are built: gather them
                              // bit 9 = the pass has the sun's photons through the ocean
+                             // bit 10 = thinGlassNeeOwns (THREEPP_PT_THIN_GLASS_NEE)
                              // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
@@ -260,6 +261,11 @@ const bool kPhotons = true;
 const bool kPhotons = false;
 #endif
 bool photonsOn() { return kPhotons && (pc.flags & 256u) != 0u; }
+// Bit 10 (THREEPP_PT_THIN_GLASS_NEE, on unless "0"): an emitter seen through a
+// thin pane or a flat blend is the emitter NEE's alone, dimmed by what the
+// glass lets through; the bounce ray that finds it through them adds nothing.
+// Off: the old way, where both counted it (about twice the light).
+bool thinGlassNeeOwns() { return (pc.flags & 1024u) != 0u; }
 bool sunPhotonsOn() { return photonsOn() && (pc.flags & 512u) != 0u && pgRegion.w > 0.0; }
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
@@ -462,15 +468,27 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 // the environment's sun (envSunLight) the light a solid bends is found by the
 // path itself, refracted through it to the sun's disc (the miss branch), so a
 // straight shadow ray through the solid would count it a second time.
-float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock) {
+// crossed: set when the ray passed a surface the camera path takes as a thin
+// pass (a thin pane, or a flat blend), which the emitter NEE then owns
+// (thinGlassNeeOwns). A flat blend lets its transmission through, untinted,
+// as the camera path passes it.
+float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock, inout bool crossed) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
     float T = 1.0;
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
         const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
-        if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
+        if (m.transmission <= 0.0 || m.transmission > 1.0) continue;// not glass: additive
+        if (m.ior < 0.5) {// a flat blend (ior 0)
+            if (!thinGlassNeeOwns()) continue;
+            T *= clamp(m.transmission, 0.0, 1.0);
+            crossed = true;
+            if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
+            continue;
+        }
         if (solidsBlock && m.thinWalled == 0) { T = 0.0; rayQueryTerminateEXT(rq); break; }
+        if (m.thinWalled != 0) crossed = true;
         const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
         const float face = 1.0 - f0n * f0n;
         const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
@@ -482,7 +500,10 @@ float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock
     }
     return T;
 }
-float glassTransmittance(vec3 origin, vec3 dir, float tMax) { return glassTransmittanceImpl(origin, dir, tMax, false); }
+float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
+    bool crossed = false;
+    return glassTransmittanceImpl(origin, dir, tMax, false, crossed);
+}
 
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax);
 // The occlusion test times what the glass on the way lets through.
@@ -499,9 +520,13 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
 // Point and spot lamps, and a scene's own sun, are found by no ray: their
 // light keeps passing glass along the shadow ray, dimmed (shadowVis).
 bool envSunLight() { return (pc.flags & 16u) != 0u && lights.dirCount > 0u; }
-float shadowVisFindable(vec3 origin, vec3 dir, float tMax) {
+float shadowVisFindable(vec3 origin, vec3 dir, float tMax, inout bool crossed) {
     const float v = shadowVisOpaque(origin, dir, tMax);
-    return v > 0.0 ? v * glassTransmittanceImpl(origin, dir, tMax, true) : 0.0;
+    return v > 0.0 ? v * glassTransmittanceImpl(origin, dir, tMax, true, crossed) : 0.0;
+}
+float shadowVisFindable(vec3 origin, vec3 dir, float tMax) {
+    bool crossed = false;
+    return shadowVisFindable(origin, dir, tMax, crossed);
 }
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
@@ -816,10 +841,16 @@ vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
     if (max(max(fc.r, fc.g), fc.b) <= 0.0) return vec3(0.0);
     const float tMax = dist - SHADOW_EPS - dist * 1e-3;
     if (tMax <= 1e-4) return vec3(0.0);
-    if (shadowVisFindable(offsetOrigin(s, toL), toL, tMax) <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
+    bool        crossed = false;
+    const float gv      = shadowVisFindable(offsetOrigin(s, toL), toL, tMax, crossed);
+    if (gv <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
     const float pdfB = pdfBsdf(s, V, toL);
-    const float w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
-    return fc * (w / pdfSolid) * tri.emission.xyz;
+    float       w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
+    if (!thinGlassNeeOwns()) return fc * (w / pdfSolid) * tri.emission.xyz;
+    // Through a thin pane or a flat blend the light is this NEE's alone (the
+    // bounce ray that finds it there adds nothing), dimmed by what they let through.
+    if (crossed) w = 1.0;
+    return fc * (w * gv / pdfSolid) * tri.emission.xyz;
 }
 
 // gi_bounce.glsl asks the includer for these. emissiveIrradiance is the
@@ -1516,6 +1547,10 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     // pane is what the shadow ray already dims, and the water's own light is
     // the murk's (murkCaustic), so neither sets it.
     bool  causticPath = false;
+    // Since the path's last NEE vertex, only thin passes (thinGlassNeeOwns): an
+    // emitter the ray then hits is the emitter NEE's, which crossed the same
+    // panes dimmed by them, so the hit adds nothing.
+    bool  neeChain    = false;
     // The photon-mapped caustics (photonsOn): a diffuse vertex gathers the
     // emitters' light that came through glass from the photons, so the
     // bounce on from it through glass to an emitter keeps only the share of
@@ -1699,6 +1734,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                     const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, max(dot(Ng, V), 0.0));
                     w = lastPdf * lastPdf / max(lastPdf * lastPdf + pdfL * pdfL, 1e-20);
                 }
+                if (delta && neeChain && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u) w = 0.0;// see neeChain
                 // Through glass from a diffuse vertex: the photons' share is theirs.
                 if (pmChain && pmGlass && !pmOcean && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u)
                     L += throughput * Le * w * pmKeep;
@@ -1751,6 +1787,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             delta   = true;
             lastPdf = 0.0;
             if (!isOcean && (reflected || !thin)) causticPath = true;// see causticPath
+            if (isOcean || reflected || !thin) neeChain = false;
             if (isOcean) pmOcean = true;
             else if (reflected || !thin) pmGlass = true;
             continue;
@@ -1842,6 +1879,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         delta    = false;
         camChain = false;
         causticPath = false;// a new NEE vertex: the next glass event starts over
+        neeChain    = thinGlassNeeOwns();
         // An opaque surface inside a dielectric (a seabed under the water, a
         // stone in a glass block) leaves the path inside it: the next leg is
         // still absorbed, until the path refracts out through the boundary.
