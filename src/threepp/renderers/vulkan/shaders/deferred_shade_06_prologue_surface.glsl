@@ -45,13 +45,13 @@
     // against this plane; see the self-hit note there. Orientation-agnostic,
     // so a rotated (Z-up) ocean works without a world-up assumption.
     vec3 Nmacro = N;
-    // foamAddress gate — same ocean marker the water branch below uses, for the
-    // same reason its comment gives: glTF transmission glass is almost always
-    // thin-walled too (no KHR_volume → thinWalled), and oceanFineTileSize is
-    // scene-GLOBAL, so without it every thin-walled glass surface in an ocean
-    // scene had its normal flipped and tilted by wave slope sampled at its own
-    // worldPos.xz (the lantern glazing wobbled at ocean-wave frequency).
-    if (pm.thinWalled != 0 && pc.oceanFineTileSize > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
+    // foamAddress gate: the same ocean marker the water branch in main() uses.
+    // oceanFineTileSize is scene-GLOBAL, so without it every glass surface in an
+    // ocean scene had its normal flipped and tilted by wave slope sampled at its
+    // own worldPos.xz (the lantern glazing wobbled at ocean-wave frequency). A
+    // DisplacedMesh that is not water (an opaque displaced surface) has no
+    // transmission and keeps its own normal.
+    if (pm.transmission > 0.0 && pc.oceanFineTileSize > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
         // The FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
         // into the water) → NdotV≈0 → Fresnel pinned at ~1 → the ocean read as a
         // flat, dull sky reflection with NO depth gradient. Water is

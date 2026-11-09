@@ -198,16 +198,11 @@ vec3 envLobeGGX(vec3 V, vec3 N, float roughness, float lod, vec2 rot) {
 // false: the stochastic pick showed as per-pixel noise in the glass sphere.
 // probeHitFill: hit diffuse fill source in probe-GI mode. REFLECTION callers
 // pass true — the probe field is the occlusion-correct interior irradiance
-// (the mirror-in-a-corridor fix). TRANSMISSION continuations (thin-shell /
-// refraction / behind-view — content directly under glass) pass false and
-// keep the env fill's SHAPE: a world-scale probe grid cannot resolve a
-// glass-covered cavity (watch dial, goggles, vitrines — probes there sit
-// inside the case). The fill's MAGNITUDE is scaled by gEnvFillVis, the sky
-// visibility measured at the transmitting surface — "seen through clear
-// glass" sees the sky the glass surface sees, which in an enclosed interior
-// is none of it (the raw fill lit everything behind glass sky-bright while
-// probe GI darkened the opaque surround). A THIN pane's straight-through leg
-// is the exception: its hits are lit where they are (gThinPaneHits).
+// (the mirror-in-a-corridor fix). TRANSMISSION continuations pass false.
+// What they see through glass or a blend surface is lit where it stands, by
+// the primary shade's own rule (gSeenThroughHits, which those callers set);
+// the water's floor, the one caller that does not set it, keeps the env
+// fill's shape (the probes measure the air, not the water column).
 // First-bounce hit distance of the last traceRadiance call, for the reflection
 // denoiser's gloss-blur footprint (carried in reflAux .w): -1 = no committed
 // hit (pure env miss — the radiance is ALREADY lobe-filtered via missLod, so
@@ -244,21 +239,18 @@ bool gTraceSkipWater = false;
 bool gTraceDeferMiss = false;
 vec3 gTraceMissTput  = vec3(0.0);
 
-// Sky-visibility scale for the env hit fill on probeHitFill=false traces.
-// Stamped by the transmission callers (shadeGlass, the additive/alpha-blend
-// behind-views) with probeEnvFillVis at the transmitting surface; 1.0 for
-// every other caller (reflection traces read the probe fill and ignore this).
-float gEnvFillVis = 1.0;
-
-// Set by shadeGlass around a THIN-WALLED pane's straight-through leg: what is
-// seen through the pane is lit as the same point seen beside it. The hits of
-// that trace take their diffuse fill by the primary shade's own rule (Phase B
-// in main(): the probes where they measured the point, a traced gather where
-// they did not) in place of the env fill x gEnvFillVis.
+// Set by every caller whose trace looks THROUGH a surface: shadeGlass's
+// legs behind thin and solid glass, the additive and alpha-blend
+// behind-views. What is seen through is lit as the same point seen beside
+// the glass: the hits of that trace take their diffuse fill by the primary
+// shade's own rule (Phase B in main(): the probes where they measured the
+// point, a traced gather where they did not).
 //
-// gEnvFillVis is the sky level AT THE PANE on the viewer's side. That says
-// something about a point behind the pane while the two share a space (a dial
-// under its crystal). A pane between two spaces breaks it, either way:
+// Until 2026-11 only a THIN pane did. Solid glass and the blend views lit
+// what they showed with the env fill scaled by the sky level AT THE GLASS on
+// the viewer's side (gEnvFillVis). That says something about a point behind
+// the glass while the two share a space (a dial under its crystal). Glass
+// between two spaces breaks it, either way:
 //   - Looking OUT of a car (the camera in the cabin, Trollstigen): the probes
 //     at the windscreen read the cabin, the ratio is near zero, and every
 //     hillside in shadow beyond the glass rendered black, beside the same
@@ -268,6 +260,8 @@ float gEnvFillVis = 1.0;
 //     railings' shadows on the road were filled with unoccluded sky.
 //   - A room brighter than its sky clamps the ratio to 1: what stood behind a
 //     pane in it was lit by the sky the room shuts out.
+//   - A dark room seen through a window from the sunny yard came out as
+//     bright as the sky (the glass lab, 2026-11-08).
 // Measured in linear light through a clear pane at Trollstigen, what has no
 // sun on it through the pane over the same pixels seen directly: 0.47 before
 // and 1.01 now by the bridge (the dark case), 1.62 and 1.04 under the trees
@@ -277,8 +271,8 @@ float gEnvFillVis = 1.0;
 // 0.97), 1.26 where the probes do (the direct view takes its near-field AO
 // off the probes; a traced hit has none to take).
 //
-// Solid glass, the blend behind-views and the water's bottom keep the env fill.
-bool gThinPaneHits = false;
+// The water's bottom keeps the env fill (see traceRadiance's header).
+bool gSeenThroughHits = false;
 
 // Set by the callers whose trace runs along this pixel's own view ray (a thin
 // pane's straight-through leg, the additive and alpha-blend behind-views):
@@ -424,6 +418,18 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     vec3  tput       = vec3(1.0);
     vec3  o          = origin;
     vec3  d          = dir;
+    // The volume the ray is in: a SOLID transmissive surface (thickness > 0)
+    // it entered through a front face and has not left through a back face.
+    // Every leg run inside it is absorbed, Beer-Lambert over the material's
+    // attenuation, as the path tracer's inside leg. The ray starts in the air:
+    // the callers launch it outside any volume (a solid's own shade starts its
+    // ray past the back face).
+    vec3  insideAtt  = vec3(1.0);// transmittance over insideDist
+    float insideDist = 0.0;      // 0: in the air, or in a volume that absorbs nothing
+    // A solid bent the ray (refraction, or a total internal reflection): its
+    // escape is no longer along the caller's lobe, so the caller cannot shade
+    // it (gTraceDeferMiss); it is shaded here.
+    bool  bent       = false;
     // Where the ray last LEFT a surface: the caller's origin, then each
     // reflective bounce. `o` also advances through pass-throughs, so a ray
     // from a submerged plate that threads the water surface on its way out
@@ -444,7 +450,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 
     int b    = 0;// REFLECTIVE bounces only — incremented at the continuation below
     int step = 0;// every ray segment (bounces + pass-throughs); the loop guard
-    // Hits of this trace that gathered their own fill (gThinPaneHits): what the
+    // Hits of this trace that gathered their own fill (gSeenThroughHits): what the
     // pane shows, and one blend layer in front of it. Layers past that take
     // the probe fill.
     const int kPaneGatherHits = 2;
@@ -482,7 +488,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             rayQueryConfirmIntersectionEXT(rq);
         }
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-            if (b == 0 && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
+            if (b == 0 && !bent && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
             // A bounce off a SUBMERGED surface that escapes sees the sky through
             // the column over it (murkAmbient; b == 0 is the caller's own leg and
             // the caller's business — the water's reflection starts in a trough).
@@ -498,6 +504,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
         vec3 hitN; vec2 hitUv;
         fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+
+        // The leg to this hit ran inside a volume: absorbed over its length.
+        if (insideDist > 0.0) tput *= pow(insideAtt, vec3(tHit / insideDist));
 
         // Water self-hit pass-through (see gTraceSkipWater). Advance past the
         // crest and keep tracing; the offset scales with the hit distance so a
@@ -523,9 +532,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                            (cam.camAux.x > 0.5) ? pix : pix * hitEyeDist, hitDuvA, hitDuvB);
         }
 
-        // A WATER surface met from the air: an ocean instance (foamAddress), the
-        // thin-walled transmissive material Ocean.cpp gives it, the ray against
-        // its normal. The pass-through rule below is glass's, and the ocean
+        // A WATER surface met from the air: an ocean instance (foamAddress) with
+        // the transmissive material Ocean.cpp gives it, the ray against its
+        // normal. The pass-through rule below is glass's, and the ocean
         // material is built like glass (transmission 1, white; its colour is
         // the attenuation), so every traced ray went THROUGH the surface and
         // shaded the seabed: the strait seen through a windscreen was its
@@ -534,7 +543,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // bounce continues below), the rest is the deep body colour. The hit's
         // normal is the mesh's, smooth: no chop in what glass shows. From BELOW
         // the ray keeps passing through, the sky over the column as before.
-        if (geoms[hitId].foamAddress != 0ul && hm.thinWalled != 0 && hm.transmission > 0.0 && dot(d, hitN) < 0.0) {
+        if (geoms[hitId].foamAddress != 0ul && hm.transmission > 0.0 && dot(d, hitN) < 0.0) {
             const vec3  wP    = o + d * tHit;
             const vec3  wV    = -d;
             const float wNdV  = max(dot(hitN, wV), 1e-4);
@@ -594,8 +603,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         //   • flat alpha blend (host: transmission = 1−opacity, ior = 0):
         //     α = opacity · texel alpha (the texel only when alphaCutoff < 0),
         //   • glass (transmission t, a real ior): the covered part shades opaque
-        //     by (1−t) and transmits t·tint STRAIGHT through — a secondary ray
-        //     gets no Fresnel split or refraction (thin-shell approximation),
+        //     by (1−t); of the rest, the Fresnel share F of the environment in
+        //     the mirror direction is added and t·tint goes STRAIGHT through (no
+        //     refraction for a secondary ray: the thin-shell approximation),
         //   • additive (transmission > 1): glows by its strength, passes fully.
         // Skipping blend hits made every blend surface invisible through
         // glass/reflections (the TransmissionOrderTest "missing alpha blend"
@@ -607,6 +617,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const bool passThrough = (hm.alphaCutoff < 0.0 || hm.transmission > 0.0);
         float hitAlpha = 1.0;      // weight of this hit's own shade
         vec3  hitPass  = vec3(0.0);// throughput carried on past it
+        bool  passBent = false;    // a solid bent the ray: it goes on along passDir from passFrom
+        vec3  passDir  = d;
+        vec3  passFrom = vec3(0.0);
         if (passThrough) {
             const float cov = (hm.alphaCutoff < 0.0) ? hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv) : 1.0;
             if (hm.transmission > 1.0) {
@@ -617,12 +630,99 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 const vec3  tint = isFlatAlphaBlend(hm.ior) ? vec3(1.0)
                                                             : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo, hitDuvA, hitDuvB);
                 hitAlpha = cov * (1.0 - t);
+                // A SOLID's surface (thickness > 0) bounds a volume: entered
+                // through its front face, left through its back face, as the
+                // path tracer decides it. Met from inside, its mirror shows the
+                // solid's own inside, not the sky: no sky is added there.
+                const bool solidHit  = !isFlatAlphaBlend(hm.ior) && t > 0.0 && hm.thinWalled == 0 &&
+                                       geoms[hitId].foamAddress == 0ul;
+                const bool solidFrom = solidHit && rayQueryGetIntersectionFrontFaceEXT(rq, true);
+                if (!isFlatAlphaBlend(hm.ior) && t > 0.0 && !(solidHit && !solidFrom)) {
+                    // GLASS met by a traced ray reflects too. It used to pass
+                    // straight on with its tint alone, so glass seen in a
+                    // mirror, in the sea, in paint, or behind other glass was a
+                    // tinted hole: a facade's windows mirrored in the strait
+                    // showed the rooms behind them, where the path tracer (and
+                    // a photo) shows the sky in them, more so the more grazing
+                    // the view. The Fresnel share of the environment in the
+                    // mirror direction is added here, at the facing side's
+                    // sky visibility (the probes; 1 without them). The mirror
+                    // is the environment only, not a second trace: one probe
+                    // read and one env sample per glass hit, no ray.
+                    //
+                    // The share is ADDED, not taken out of what the glass lets
+                    // through. Taking F out (t·(1−F)·tint) is right only where
+                    // the environment is the whole mirror image; the room the
+                    // glass would mirror is not traced, so where no sky reaches
+                    // that share was simply lost, and at a slant F goes to 1: a
+                    // wavy glass sheet in a closed box with no environment
+                    // (gltf-research-scenes' cornell-caustic), seen through
+                    // itself, turned into black creases where the path tracer
+                    // shows it faint and clear. Added, a slanted pane in front
+                    // of something bright under a bright sky can come out
+                    // brighter than the path tracer, by F times what lies
+                    // behind it; it is never darker than before.
+                    const vec3  gN   = dot(hitN, d) < 0.0 ? hitN : -hitN;
+                    const float gIor = max(hm.ior, 1.0);
+                    const float gF0n = (gIor - 1.0) / (gIor + 1.0);
+                    const vec3  gF   = glassFresnel(gF0n * gF0n, clamp(-dot(gN, d), 0.0, 1.0),
+                                                    hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm);
+                    const vec3  gR   = reflect(d, gN);
+                    const vec3  gP   = o + d * tHit;
+                    const float gLod = max(glassRough(hm.roughness, gIor), 0.10) * maxLod;
+                    radiance += tput * (cov * t) * gF * murkAmbient(sampleEnvLod(gR, gLod), gP, gR)
+                              * probeEnvFillVis(gP + gN * SHADOW_EPS, gN, maxLod) * envInt;
+                }
                 hitPass  = vec3(1.0 - cov) + cov * t * tint;
+                // The ray crosses a solid's surface the way the primary's
+                // solid-glass shade crosses the first one: bent by Snell's law
+                // at the surface's own normal, or turned back inside where the
+                // angle allows no way out (total internal reflection, the dark
+                // rim of a glass's edge). It went straight through, as through
+                // a thin sheet, so what a solid was seen through or in a mirror
+                // never bent: a teapot's tea behind its glass drew as a soft,
+                // unbent body where the path tracer shows it magnified, crisp
+                // and rimmed. A thin sheet still passes straight (its two
+                // faces cancel). Where the vertex normal disagrees with the
+                // face the ray met (a shading normal past the silhouette), the
+                // ray goes straight on rather than bend through the wrong side.
+                //
+                // Crossing it enters or leaves the volume, so the legs inside
+                // are absorbed (insideDist): a liquid in a glass vessel was a
+                // hole, its surfaces crossed with their tint alone (white), and
+                // a teapot full of tea drew empty. Turned back inside, the ray
+                // stays in the volume. The ocean's body is waterHitBody's.
+                if (solidHit) {
+                    const vec3 nOut = solidFrom ? hitN : -hitN;// the normal on the side the ray came from
+                    if (dot(nOut, d) < 0.0) {
+                        const float sIor = max(hm.ior, 1.0);
+                        const vec3  rd   = refract(d, nOut, solidFrom ? 1.0 / sIor : sIor);
+                        const vec3  sP   = o + d * tHit;
+                        passBent = true;
+                        if (dot(rd, rd) < 1e-6) {
+                            passDir  = reflect(d, nOut);
+                            passFrom = sP + nOut * SHADOW_EPS;
+                        } else {
+                            passDir  = normalize(rd);
+                            passFrom = sP - nOut * SHADOW_EPS;
+                            insideDist = (solidFrom && hm.attenuationDistance > 0.0) ? hm.attenuationDistance : 0.0;
+                            insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                        }
+                    } else {
+                        insideDist = (solidFrom && hm.attenuationDistance > 0.0) ? hm.attenuationDistance : 0.0;
+                        insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                    }
+                }
             }
             if (hitAlpha <= 0.01) {// nothing to composite — carry on
                 tput *= hitPass;
                 if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
-                o = o + d * (tHit + 1e-3);
+                if (passBent) {
+                    legEyeDist = hitEyeDist;
+                    d = passDir; o = passFrom; legOrigin = o; bent = true;
+                } else {
+                    o = o + d * (tHit + 1e-3);
+                }
                 continue;
             }
         }
@@ -673,9 +773,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // Probes off keeps the original approximation.
         const vec3 hitEnvFill = sampleEnvDiffuse(hitN);
         vec3  hitDiffInd = hitEnvFill + lights.ambient + hemiAmbient(hitN);
-        // Scale of the rough hit's split-sum env cap-off further down: on a
-        // transmission retrace, the sky level its diffuse fill was given.
-        float hitEnvVis  = probeHitFill ? 1.0 : gEnvFillVis;
+        // Scale of the rough hit's split-sum env cap-off further down: the sky
+        // level the seen-through rule gives the hit, 1 for every other one.
+        float hitEnvVis  = 1.0;
         if (probesEnabled()) {
             if (probeHitFill) {
                 float probeConf;
@@ -721,8 +821,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                     hitDiffInd = mix(hitDiffInd, gSum * (1.0 / float(kStarvedRays)) + lights.ambient + hemiAmbient(hitN), starvedW);
                 }
                 hitDiffInd = mix(hitDiffInd, probeFill, probeTrust);
-            } else if (gThinPaneHits) {
-                // Seen through a thin pane: lit as seen beside it (gThinPaneHits).
+            } else if (gSeenThroughHits) {
+                // Seen through glass or a blend surface: lit as seen beside it.
                 const vec3 LUMW = vec3(0.2126, 0.7152, 0.0722);
                 float conf;
                 const vec3 probeFill = probeIrradianceConf(hitP + hitN * SHADOW_EPS, hitN, conf) * (1.0 / PI);
@@ -754,12 +854,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                     hitDiffInd = mix(hitDiffInd, probeFill, smoothstep(0.0, 0.25, conf));
                     hitEnvVis  = 1.0;
                 }
-            } else {
-                // Transmission retrace: env-fill shape (probes cannot resolve
-                // the cavity) at the sky level that actually reaches the
-                // transmitting surface. See gEnvFillVis.
-                hitDiffInd *= gEnvFillVis;
             }
+            // else: the water's floor (shadeWater's refracted ray), the env
+            // fill's shape; the probes measure the air, not the column.
         }
         // A hit UNDER the water gets the sky through the column over it. This
         // is the hull seen from the air: shadeWater's refracted ray lands here,
@@ -800,12 +897,18 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         gSunFixedPattern = false;
 
         // Pass-through hit composited — carry the remainder on along the same
-        // ray. No specular continuation for the layer itself (its weighted
-        // diffuse is the visually dominant term).
+        // ray (or, through a solid, the bent one). No specular continuation
+        // for the layer itself (its weighted diffuse is the visually dominant
+        // term).
         if (passThrough) {
             tput *= hitPass;
             if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
-            o = o + d * (tHit + 1e-3);
+            if (passBent) {
+                legEyeDist = hitEyeDist;
+                d = passDir; o = passFrom; legOrigin = o; bent = true;
+            } else {
+                o = o + d * (tHit + 1e-3);
+            }
             continue;
         }
 
@@ -857,7 +960,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             const vec3 nFace = -d;
             const vec3 fill = sampleEnvDiffuse(nFace) + lights.ambient + hemiAmbient(nFace);
             radiance += tput * lastCutout * fill * (1.0 / PI) * envInt;
-        } else if (b == 0 && gTraceDeferMiss) {
+        } else if (b == 0 && !bent && gTraceDeferMiss) {
             gTraceMissTput = tput;// the caller shades it, as in the miss branch
         } else {
             radiance += tput * sampleEnvLod(d, curMissLod) * envInt;

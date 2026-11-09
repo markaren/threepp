@@ -703,6 +703,7 @@ def jelly_material(ccol):
         mat.metalness = 0.0
         mat.transmission = cli_arg("--transmission", 1.0, float)
         mat.ior = 1.35
+        mat.thickness = BLOCK          # a block of jelly: refracted in and out
         mat.transparent = False
     return mat
 

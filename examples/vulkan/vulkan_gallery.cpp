@@ -32,8 +32,10 @@ namespace {
         return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.72f, 0.45f, 0.20f)).roughness(0.15f).metalness(1.0f));
     }
 
+    // The glass balls' material: solid balls of radius 0.6, so their diameter as thickness
+    // (no thickness = a thin sheet, a bubble).
     auto matGlass(Color tint = Color::white) {
-        return MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(tint).transmission(0.95f).ior(1.5f).roughness(0.0f).metalness(0.0f).attenuationDistance(2.0f));
+        return MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(tint).transmission(0.95f).thickness(1.2f).ior(1.5f).roughness(0.0f).metalness(0.0f).attenuationDistance(2.0f));
     }
 
     auto matRoughDiffuse(Color c, float roughness = 0.9f, Side side = Side::Front) {

@@ -379,6 +379,108 @@ def environment_maps(glb):
     return envs
 
 
+def pbrt_glass(glb):
+    """The glass of a PBRT conversion as pbrt has it, by material name: (eta, whether the
+    file puts the surface's medium in front of its normals). Empty for a file that is not a
+    PBRT conversion (classroom2)."""
+    out = {}
+    for m in glb_json(glb).get("materials", []):
+        p = (m.get("extras") or {}).get("pbrt") or {}
+        if p.get("type") != "dielectric" or "KHR_materials_transmission" not in (m.get("extensions") or {}):
+            continue
+        mi = p.get("medium_interface") or {}
+        out[m.get("name", "")] = (float(p.get("eta", 1.5)), bool(mi.get("outside")) and not mi.get("inside"))
+    return out
+
+
+def _faces_inward(geometry):
+    """Whether a mesh's faces point INTO it: its triangles' winding normals, weighted by
+    area, against the way out from its centre. Works for an open bowl as for a closed
+    solid (a bowl's inside is its concave side)."""
+    import numpy as np
+    p = np.asarray(geometry.get_attribute("position"), dtype=np.float64)
+    idx = geometry.get_index()
+    tri = (np.asarray(idx, dtype=np.int64) if idx is not None else np.arange(len(p))).reshape(-1, 3)
+    a, b, c = p[tri[:, 0]], p[tri[:, 1]], p[tri[:, 2]]
+    return float((np.cross(b - a, c - a) * ((a + b + c) / 3.0 - p.mean(axis=0))).sum()) < 0.0
+
+
+def _turn(geometry):
+    """Turns a mesh inside out: winding and normals (and a tangent's handedness)."""
+    import numpy as np
+    idx = geometry.get_index()
+    tri = (np.asarray(idx, dtype=np.uint32) if idx is not None
+           else np.arange(len(geometry.get_attribute("position")), dtype=np.uint32)).reshape(-1, 3)
+    geometry.set_index(tri[:, [0, 2, 1]].copy())
+    n = geometry.get_attribute("normal")
+    if n is not None:
+        geometry.update_attribute("normal", -n)
+    t = geometry.get_attribute("tangent")
+    if t is not None and t.shape[1] == 4:
+        t[:, 3] *= -1.0
+        geometry.update_attribute("tangent", t)
+
+
+def read_glass_as_pbrt(model, glb):
+    """A PBRT conversion's glass, read as pbrt reads it. glTF reads the same file otherwise
+    in two places:
+
+    * A pbrt dielectric is an interface that refracts. glTF calls a transmissive material
+      without KHR_materials_volume thin-walled, and the converter writes that extension
+      only where a medium absorbs, so every scene's glass drew as thin sheets: teapot-full's
+      glass teapot a soap bubble, where pbrt and Cycles (the release's reference) refract at
+      each surface. Glass pbrt calls a dielectric gets a thickness (its mesh's diagonal, as
+      the converter gives the volumes it writes), and so refracts in and out.
+    * pbrt says on which side of each surface its medium lies and gives eta as the index
+      behind the normal over the one in front; glTF puts a volume behind the normals and
+      gives an ior over the air in front. A surface pbrt has the other way round is turned
+      and given 1/eta: one whose medium lies in front of normals that point into its own
+      mesh (teapot-full's tea where it meets the glass: without the turn its absorption
+      lay on the glass side and the tea showed only through its top), and one whose eta is
+      below 1, the thinner side behind (glass-of-water's air bubbles in the ice). An ior
+      holds no less than 1, so the tea's glass-to-tea 1.13 passes unbent, the nearest it
+      can come. crown's ruby and sapphire carry the same medium label on normals that
+      point OUT of the gem (pbrt refracts them as gems and puts their medium round them):
+      they stay as they are, a gem with its colour inside.
+
+    Returns one line per change, for the log."""
+    glass = pbrt_glass(glb)
+    if not glass:
+        return []
+    meshes = []
+    model.traverse(lambda o: meshes.append(o) if type(o).__name__ == "Mesh" else None)
+    by_mat = {}
+    for o in meshes:
+        mat = o.material
+        if getattr(mat, "name", None) in glass and getattr(mat, "transmission", 0.0) > 0.0:
+            by_mat.setdefault(mat.name, (mat, []))[1].append(o)
+    lines = []
+    for name, (mat, objs) in by_mat.items():
+        eta, medium_in_front = glass[name]
+        if mat.thickness <= 0.0:
+            import numpy as np
+            diag = 0.0
+            for o in objs:
+                p = np.asarray(o.geometry.get_attribute("position"))
+                diag = max(diag, float(np.linalg.norm(p.max(axis=0) - p.min(axis=0))))
+            mat.thickness = diag
+            lines.append(f"{name}: solid (thickness {diag:.3g})")
+        turn = eta < 1.0 or (medium_in_front and all(_faces_inward(o.geometry) for o in objs))
+        if turn:
+            turned = []   # a geometry two meshes share is turned once (the wrappers stay alive, so `is` holds)
+            for o in objs:
+                g = o.geometry
+                if not any(g is t for t in turned):
+                    _turn(g)
+                    turned.append(g)
+            mat.ior = 1.0 / eta
+            lines.append(f"{name}: turned, ior {mat.ior:.3g} (pbrt eta {eta:g}"
+                         f"{', medium in front' if medium_in_front else ''})")
+        elif medium_in_front:
+            lines.append(f"{name}: medium labelled in front of normals that point out, left as it is")
+    return lines
+
+
 def _node_matrix(node):
     if "matrix" in node:
         return [node["matrix"][c * 4 + r] for r in range(4) for c in range(4)]   # column-major -> rows
@@ -547,6 +649,8 @@ class Viewer:
         if self.model is not None:
             self.scene.remove(self.model)
         self.model = result.scene
+        for line in read_glass_as_pbrt(self.model, glb):
+            print(f"[research-scenes] {scene_id}: {line}")
         # threepp's GLTFLoader hides the lights a file brings (the caller opts in).
         # These scenes' lights are part of them: the extended PBRT conversions'
         # directional sun, classroom2's window sunlight.

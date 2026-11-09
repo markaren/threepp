@@ -537,6 +537,9 @@ namespace threepp {
             std::unordered_map<std::string, std::shared_ptr<Texture>> sampledTextures;
             std::unordered_set<int> prototypeNodes;
             std::unordered_map<std::string, std::shared_ptr<Object3D>> objectByPath;
+            // Transmissive materials that bound a volume (thinWalledShader):
+            // the first mesh that wears one gives it its thickness.
+            std::unordered_set<const Material*> volumeMaterials;
             int meshCount = 0;
         };
 
@@ -799,6 +802,7 @@ namespace threepp {
 
             auto makeMesh = [&](const SubMesh& part) {
                 auto mesh = Mesh::create(part.geometry, material(b, part.materialId, *rm));
+                sizeVolume(b, mesh->material(), *part.geometry);
                 ++b.meshCount;
                 return mesh;
             };
@@ -829,6 +833,7 @@ namespace threepp {
                 const auto& instances = byMesh[meshId];
                 for (const auto& part : subMeshesFor(b, meshId, *rm)) {
                     auto mesh = InstancedMesh::create(part.geometry, material(b, part.materialId, *rm), instances.size());
+                    sizeVolume(b, mesh->material(), *part.geometry);
                     for (size_t i = 0; i < instances.size(); ++i) {
                         mesh->setMatrixAt(i, toMatrix4(instances[i]->transform));
                     }
@@ -1003,6 +1008,10 @@ namespace threepp {
             // No convertible surface shader (NVIDIA MDL: OmniPBR, OmniSurface,
             // OmniUe4Base): read the MDL inputs off the shader prim.
             if (rmat->default_fallback) applyMdlInputs(b, *rmat, *mat);
+            if (auto* phys = dynamic_cast<MeshPhysicalMaterial*>(mat.get());
+                phys && phys->transmission > 0.f && !thinWalledShader(b, *rmat)) {
+                b.volumeMaterials.insert(phys);
+            }
 
             mat->name = rmat->name;
             switch (rmat->alpha_mode) {
@@ -1126,6 +1135,35 @@ namespace threepp {
                 mat->transparent = true;
             }
             return mat;
+        }
+
+        // OpenPBR (geometry_thin_walled) and Autodesk Standard Surface
+        // (thin_walled) both default to a VOLUME: a transmissive surface bounds
+        // something refracted in and out. lightusd's render data does not carry
+        // the flag, so it is read off the shader prim.
+        static bool thinWalledShader(Build& b, const tnext::RenderMaterial& rmat) {
+            const auto matPrim = b.stage.GetPrimAtPath(rmat.prim_path);
+            if (!matPrim.IsValid()) return false;
+            const auto shader = surfaceShader(b.stage, matPrim);
+            if (!shader.IsValid()) return false;
+            for (const char* name : {"inputs:geometry_thin_walled", "inputs:thin_walled"}) {
+                const auto* value = shader.GetPropertyValue(name);
+                const bool* thin = value ? value->as_bool() : nullptr;
+                if (thin) return *thin;
+            }
+            return false;
+        }
+
+        // threepp says "volume" with a thickness (three.js / glTF: 0 = thin-
+        // walled). A volume material takes the smallest side of the first
+        // mesh that wears it: GL offsets and absorbs over that distance, the
+        // ray tracers trace the mesh and only need it above zero.
+        static void sizeVolume(Build& b, const std::shared_ptr<Material>& m, BufferGeometry& g) {
+            auto* phys = dynamic_cast<MeshPhysicalMaterial*>(m.get());
+            if (!phys || phys->thickness > 0.f || !b.volumeMaterials.count(phys)) return;
+            if (!g.boundingBox) g.computeBoundingBox();
+            const Vector3 size = g.boundingBox->getSize();
+            phys->thickness = std::max(std::min({size.x, size.y, size.z}), 1e-3f);
         }
 
         // The Material's surface shader: the target of its MDL (or universal)

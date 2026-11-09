@@ -714,7 +714,6 @@ namespace {
         }
         if (auto* m = dynamic_cast<MaterialWithThickness*>(&material)) {
             data["thickness"] = m->thickness;
-            data["thinWalled"] = m->thinWalled;
             writeTextureSlot(data, "thicknessMap", m->thicknessMap, meta);
         }
         if (auto* m = dynamic_cast<MaterialWithAttenuation*>(&material)) {

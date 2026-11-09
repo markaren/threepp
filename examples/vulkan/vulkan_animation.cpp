@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
             MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
                                           .color(Color::pink)
                                           .transmission(0.8f)
+                                          .thickness(0.9f)// a solid ball: its diameter (no thickness = a thin bubble)
                                           .ior(1.5f)
                                           .roughness(0.1f)
                                           .metalness(0.f)));

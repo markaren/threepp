@@ -407,13 +407,10 @@ namespace threepp::gltf {
                     int ti = tr["transmissionTexture"]["index"].get<int>();
                     physMat->transmissionMap = loadTexture(ti, ColorSpace::Linear);
                 }
-                // glTF: transmission WITHOUT KHR_materials_volume = a THIN-WALLED
-                // surface (infinitely thin, e.g. a watch crystal / car window).
-                // The volume block below resets this to false when volume is
-                // present (a closed solid). Without this the renderer treated
-                // every transmissive surface as solid → 2-interface refraction
-                // that warps/destroys whatever is just behind a thin pane.
-                physMat->thinWalled = true;
+                // glTF: transmission WITHOUT KHR_materials_volume is a THIN-WALLED
+                // surface (a watch crystal, a car window). thickness stays 0, which
+                // is what thin-walled means to the renderers; the volume block
+                // below gives a closed solid its thicknessFactor.
             }
 
             // KHR_materials_ior
@@ -456,10 +453,9 @@ namespace threepp::gltf {
                     auto c = vol["attenuationColor"];
                     physMat->attenuationColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
                 }
+                // > 0: the mesh bounds a volume (refracted in and out); 0 keeps it
+                // thin-walled, as the extension defines.
                 physMat->thickness = vol.value("thicknessFactor", 0.0f);
-                // A volume = a closed solid → 2-interface (closed-mesh) refraction,
-                // not the thin-shell path the transmission block assumed above.
-                physMat->thinWalled = (physMat->thickness <= 0.0f);
             }
 
             // KHR_materials_clearcoat

@@ -836,8 +836,8 @@ int main(int argc, char** argv) {
         watchRoom->position.set(0.f, 19.18f, 0.f);
         scene.add(watchRoom);
 
-        // Lantern glazing: an open thin-walled transmission cylinder — the
-        // lamp shines through real glass. Radius stays inside the 1.7 m
+        // Lantern glazing: an open transmission cylinder with no thickness, so
+        // thin-walled glass the lamp shines through. Radius stays inside the 1.7 m
         // offset the render loop pushes the SpotLight origin out to, so the
         // spot never starts inside the pane.
         auto glassMat = MeshPhysicalMaterial::create();
@@ -846,8 +846,6 @@ int main(int argc, char** argv) {
         glassMat->metalness = 0.f;
         glassMat->transmission = 1.f;
         glassMat->setIor(1.52f);
-        glassMat->thickness = 0.02f;
-        glassMat->thinWalled = true;
         glassMat->side = Side::Double;
         auto glazing = Mesh::create(
                 CylinderGeometry::create(1.45f, 1.45f, 1.4f, 24, 1, true), glassMat);

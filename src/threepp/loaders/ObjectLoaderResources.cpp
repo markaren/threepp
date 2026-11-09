@@ -288,7 +288,6 @@ namespace {
         }
         if (dynamic_cast<MaterialWithThickness*>(&material)) {
             setFloat("thickness");
-            setBool("thinWalled");
             setTexture("thicknessMap");
         }
         if (dynamic_cast<MaterialWithAttenuation*>(&material)) {

@@ -999,6 +999,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
 // "exit" became the candle or the far wall and Beer-Lambert ran over the whole
 // interior. glTF GlassHurricaneCandleHolder (1.2 mm walls, attenuationDistance
 // 1 mm) went deep blue above the bulge, near-black under the rim.
+// gGlassExitHeadOn: the exit interface found was met on its FRONT face, so it is
+// not this glass's way out but the surface of something nested inside it (a
+// liquid in a vessel); the caller hands the ray on before it.
+bool gGlassExitHeadOn = false;
 void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, inout uint seed,
                         out vec3 hitP, out vec3 hitN, out float dist, out bool miss, out bool blocked,
                         inout vec3 over, inout float overT) {
@@ -1039,6 +1043,7 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
                 travelled += tHit;
                 continue;
             }
+            gGlassExitHeadOn = rayQueryGetIntersectionFrontFaceEXT(rq, true);
             return;// exit interface (glass back face / nested glass)
         }
 
@@ -1098,45 +1103,10 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
 // it's a clean soft — not the milky 1-sample grain. Raise kGlassFrost for
 // softer/dreamier glass, drop to 0 for a perfect lens; raise GSAMP if the soft
 // shows residual grain on moving glass (costs proportionally).
-const float kGlassFrost = 0.04;// near-sharp glass: a wide frost lobe scatters the HDR sun into static speckle
-const float kGlassMaxRough = 0.14;// Clamps the primary refraction lobe to
-                              // alpha 0.02 (≈ roughness 0.14) because a wide refraction lobe is
-                              // per-pixel variance no denoiser can fix. Deferred used the raw material
-                              // roughness here, so asset glass with a mid-grey roughness map (e.g. the
-                              // OpenChessSet pawn domes) blurred into a milky ball — structureless,
-                              // duller than intended. The trade: frosted glass
-                              // renders polished at primary, but it stays GLASS.
 const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO discrete-microfacet ghost
                               // copies. The frost (roughness blur) is applied afterwards by the reflection
                               // filter (deferred_refl_filter.comp), exactly like opaque reflections.
 
-// Effective glass shading/blur roughness — used by shadeGlass AND the demod
-// recombine below; both must agree or the denoise blur mismatches the lobe.
-// Roughness frosts what comes THROUGH by scattering it at the interface, and an
-// interface with no index contrast cannot scatter: at ior 1 every microfacet
-// refracts straight on. three.js's applyIorToRoughness, same ramp (full by ior
-// 1.5). glTF sample TransmissionRoughnessTest's "1.0 - Air" row is sharp from its
-// smooth end to its rough one for this reason. The floor stays: the lobe maths and
-// the filter's negative-alpha glass marker both need a roughness above zero.
-float glassRough(float matRoughness, float ior) {
-    return clamp(matRoughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0), kGlassFrost, kGlassMaxRough);
-}
-
-// Reflectance of the glass surface at cosine c: Schlick from the ior, and under a
-// thin film (KHR_materials_iridescence) the film's interference reflectance in
-// its place, by the iridescence factor. The opaque shade has applied the film to
-// its F0 all along; glass weights the opaque shade by (1 − transmission) and takes
-// its whole reflection from here, where the Fresnel was a scalar from the ior
-// alone — so a film on glass did nothing. It matters most where it is the ONLY
-// reflector: SunglassesKhronos coats an ior 1.0 lens (r0 = 0, no reflection of its
-// own) with an ior 2 film, and that film is the entire mirror finish.
-// evalIridescence returns the reflectance AT the angle, so it is used as is.
-vec3 glassFresnel(float r0, float c, float iridescence, float iridescenceIOR, float iridescenceThicknessNm) {
-    vec3 F = vec3(r0 + (1.0 - r0) * pow(1.0 - c, 5.0));
-    if (iridescence > 0.0)
-        F = mix(F, min(evalIridescence(1.0, iridescenceIOR, c, iridescenceThicknessNm, vec3(r0)), vec3(1.0)), iridescence);
-    return F;
-}
 
 // matRough is the pixel's G-buffer roughness (factor x roughness map), not
 // pm.roughness: glTF leaves roughnessFactor at 1 when a map carries it, and the
@@ -1162,19 +1132,25 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
     // not a smooth PMREM). The old 0.30 floor smeared the whole sky into the
     // glass — with the lobe now capped near-mirror, a gentle floor keeps the
     // sky crisp and the sun reads as a real glint. Scene hits stay sharp.
-    const float missLod = max(gr, 0.10) * maxLod;
+    // Under RR the microfacet below is drawn per pixel and per frame, so the
+    // blur is in the directions and the miss reads the floor's mip.
+    const float missLod = max(kRR ? 0.0 : gr, 0.10) * maxLod;
 
-    // Sky visibility at the glass surface, consumed by the SOLID transmit
-    // leg's probeHitFill=false env hit fill (see gEnvFillVis). Without it the
-    // enclosed-interior scene showed a sky-lit world through the glass while
-    // probe GI darkened everything around it. The reflect leg passes
-    // probeHitFill=true and is unaffected; a thin pane's hits are lit where
-    // they are (gThinPaneHits) and do not read it.
-    if (pm.thinWalled == 0) gEnvFillVis = probeEnvFillVis(P, N, maxLod);
 
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {
-        vec3 Ns = ggxHalfVectorFib(N, gr, s, kGlassSamples);// distinct per-iteration Fibonacci sample
+        // Under DLSS Ray Reconstruction one random facet per pixel and frame (the
+        // seed moves with the frame there): RR integrates the frosted lobe. Else
+        // the one deterministic sample and the reflection filter's blur.
+        // The facet is drawn at the material's own roughness (the ior ramp, no
+        // kGlassFrost floor: that floor is for the filter and the glass marker),
+        // and only for glass rougher than 0.05, the path tracer's threshold for a
+        // thin sheet's scatter. Below it the mirror normal, as without RR: the
+        // twin's Volvo windows (0.03) went soft at a distance and smeared under
+        // RR, which reprojects what the glass shows as a reflection would be.
+        const float lobeRough = matRough * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
+        vec3 Ns = (kRR && lobeRough > 0.05) ? ggxHalfVector(N, lobeRough, seed)
+                                            : ggxHalfVectorFib(N, gr, s, kGlassSamples);
         if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
         const float NdotV = max(dot(Ns, V), 1e-4);
         const vec3  F     = glassFresnel(r0, NdotV, pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
@@ -1213,15 +1189,17 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             // (the old code) bends by the full first-interface angle → it shifts/
             // warps the face beneath and lets rays escape to the sky = a blue
             // "washed, detail-destroyed" look over e.g. a watch dial.
-            const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
+            // A ROUGH sheet scatters what it lets through (thinSheetTransmit): with
+            // the facet sampled under RR the view through frosted glass is frosted.
+            const vec3 dT = thinSheetTransmit(V, N, Ns);// straight through when smooth
             {
-                gThinPaneHits   = true;// what the pane shows is lit as seen beside it
+                gSeenThroughHits   = true;// what the pane shows is lit as seen beside it
                 gTraceAlongView = true;// ...and by the lamps of its own cluster cell
                 const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false,// transmitted content: the pane's own rule (gThinPaneHits)
+                                                  /*probeHitFill=*/false,// transmitted content: the pane's own rule (gSeenThroughHits)
                                                   /*envInt=*/1.0);// transmitted, not IBL
-                gThinPaneHits   = false;
+                gSeenThroughHits   = false;
                 gTraceAlongView = false;
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
@@ -1240,17 +1218,26 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
                 vec3 exitP, exitN; float inDist; bool exitMiss, blockedInside;
                 vec3  overC = vec3(0.0);
                 float overT = 1.0;
+                gGlassExitHeadOn = false;
                 traceGlassInterior(P, dIn, maxLod, doShadows, seed,
                                    exitP, exitN, inDist, exitMiss, blockedInside, overC, overT);
                 vec3 dOut;
                 if (exitMiss) {
                     dOut = dIn; inDist = 0.0;// open/odd geometry — straight through
-                } else if (blockedInside) {
+                } else if (blockedInside || gGlassExitHeadOn) {
                     // Opaque content inside the volume: stop the refraction at
                     // it. Back the origin off so the behind-ray re-hits the
                     // blocker and traceRadiance shades it (with its own
                     // cutout/blend handling) — no exit bend through a surface
                     // the ray never actually leaves.
+                    //
+                    // The same for a surface met HEAD-ON inside the glass: it
+                    // is not this glass's way out but the surface of something
+                    // inside it, a liquid in a vessel. It was bent as glass to
+                    // air with this glass's ior, where the ray crosses into the
+                    // liquid: at a slant that is a total internal reflection,
+                    // and a glass teapot's tea showed the reflected glass instead
+                    // of the tea. traceRadiance crosses it by its own rules.
                     dOut  = dIn;
                     exitP = exitP - dIn * (4.0 * SHADOW_EPS);
                 } else {
@@ -1260,10 +1247,14 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
                     dOut = (dot(o, o) < 1e-6) ? reflect(dIn, nb)// TIR → internal reflect
                                               : normalize(o);
                 }
+                // Lit where it stands, as behind a thin pane (gSeenThroughHits);
+                // not along the view (the ray is bent), so no cluster-cell lamps.
+                gSeenThroughHits = true;
                 const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false,// content under glass: probes can't resolve the cavity
+                                                  /*probeHitFill=*/false,// transmitted content: lit where it stands
                                                   /*envInt=*/1.0);// transmitted, not IBL
+                gSeenThroughHits = false;
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
@@ -1287,7 +1278,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
 
     // Direct-light glint. The recombine scales the opaque base by
     // (1 − transmission), which erases its analytic specular entirely for
-    // transmission=1 glass — so glass under a sun/dir light had NO surface
+    // transmission=1 glass — so glass under a sun or a lamp had NO surface
     // glint at all, a big part of the "dull" look. Spec-only Cook-Torrance at
     // the glass lobe + Fresnel from the ior (no diffuse — the transmit path
     // carries that energy). Deterministic, so it's added sharp on top of the
@@ -1310,6 +1301,58 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             const vec3  F = glassFresnel(r0, max(dot(V, H), 0.0), pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
             // spec·NdotL = D·G·F / (4·NdotV·NdotL) · NdotL
             glint += lights.dirLights[i].color * (D * G * F / max(4.0 * NdotV, 1e-4)) * vis;
+        }
+        // The point and spot lamps' glints, the same lobe. Glass had the sun's
+        // alone: a street lamp or a car's head lamps in a shop window or a
+        // windscreen at night left no highlight at all, where the path tracer
+        // (dielectricGlints) and a photo show a bright one. The lamps are this
+        // pixel's cluster cell's (its own depth, as the water's glints read
+        // them); a parallel projection has no cells along a ray and goes
+        // without. A lamp's shadow ray is cast only for a glint worth one.
+        if (pc.clusterLightCount > 0u && cam.camAux.x < 0.5) {
+            const uint cellBase = clusterCellBase(ivec2(gl_GlobalInvocationID.xy),
+                                                  max(dot(P - gPrimaryOrigin, cam.camAux.yzw), 0.0));
+            const uint cCnt     = min(clusterGrid[cellBase], kClusterMaxPerCell);
+            for (uint ci = 0u; ci < cCnt; ++ci) {
+                const uint li = min(clusterGrid[cellBase + 1u + ci], pc.clusterLightCount - 1u);
+                vec3 toL = clusterLights[li].position - P;
+                const float dist = length(toL);
+                if (dist < 1e-4) continue;
+                toL /= dist;
+                const float NdotL = dot(N, toL);
+                if (NdotL <= 0.0) continue;
+                float atten;
+                if (clusterLights[li].type > 0.5) {
+                    const float spotAtten = smoothstep(clusterLights[li].cosAngleOuter, clusterLights[li].cosAngleInner,
+                                                       dot(-toL, clusterLights[li].direction));
+                    if (spotAtten <= 0.0) continue;
+                    atten = spotAtten / max(pow(dist, clusterLights[li].decay), 0.01);
+                } else {
+                    atten = 1.0 / max(distFalloff(dist, clusterLights[li].decay), 0.01);
+                }
+                const float range = clusterLights[li].range;
+                if (range > 0.0) {
+                    const float tt  = dist / range;
+                    const float wnd = max(1.0 - tt * tt * tt * tt, 0.0);
+                    atten *= wnd * wnd;
+                }
+                const vec3  H = normalize(V + toL);
+                const float D = distGGX(max(dot(N, H), 0.0), gr);
+                const float G = geomSmithG1(NdotV, kG) * geomSmithG1(NdotL, kG);
+                const vec3  F = glassFresnel(r0, max(dot(V, H), 0.0), pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
+                vec3 c = clusterLights[li].color * (atten * D * G / max(4.0 * NdotV, 1e-4)) * F;
+                if (max(max(c.r, c.g), c.b) < 1e-4) continue;
+                if (doShadows) {
+                    const float smV = kSM ? smLampVis(clusterLights[li].shadowSlot, clusterLights[li].type > 0.5, P, N,
+                                                      clusterLights[li].position, vec2(gl_GlobalInvocationID.xy))
+                                          : -1.0;
+                    c *= smV >= 0.0 ? smV : shadowVis(P + N * SHADOW_EPS, toL, dist - 1e-2);
+                }
+                const float cl   = max(max(c.r, c.g), c.b);
+                const float gMax = pc.fireflyClamp * 4.0;
+                if (gMax > 0.0 && cl > gMax) c *= gMax / cl;
+                glint += c;
+            }
         }
     }
     return sum / float(kGlassSamples) + glint;

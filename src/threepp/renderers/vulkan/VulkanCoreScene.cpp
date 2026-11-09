@@ -5800,8 +5800,8 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             d.iridescenceIOR = 1.3f;
             d.iridescenceThicknessNm = 400.0f;
             d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
-            d.thickness = 0.0f;               // 0 = use back-face actual distance for Beer-Lambert (closed-mesh path)
-            d.thinWalled = 0;                 // 0 = closed-mesh BSDF; 1 = thin-shell BSDF (set explicitly via MaterialWithThickness::thinWalled)
+            d.thickness = 0.0f;               // the volume under a transmissive surface (MaterialWithThickness)
+            d.thinWalled = 1;                 // derived from thickness below: 1 = a sheet seen straight through
             d.occlusionTexIndex = -1;
             d.detailTexIndex = -1;
             d.detailRepeat = 0.f;
@@ -5985,7 +5985,11 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             }
             if (auto* th = dynamic_cast<MaterialWithThickness*>(mat.get())) {
                 d.thickness  = std::max(0.0f, th->thickness);
-                d.thinWalled = th->thinWalled ? 1 : 0;
+                // three.js and glTF (KHR_materials_volume): no thickness = thin-
+                // walled, a window or a lens seen straight through; a thickness =
+                // the mesh bounds a volume that refracts in and out. The shaders
+                // trace the mesh for the volume's depth, so they only need which.
+                d.thinWalled = d.thickness > 0.0f ? 0 : 1;
             }
             if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
                 // texIndex stays -1 here; the texture-index fill sites bind it

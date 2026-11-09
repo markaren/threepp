@@ -468,6 +468,17 @@ float sheenBaseShare(vec3 sheenColor, float sheenAlbedo) {
 // blend at opacity 0 — not there at all, black only from behind.
 bool isFlatAlphaBlend(float ior) { return ior < 0.5; }
 
+// ── Glass helpers: shadeGlass (the primary) and traceRadiance (a glass hit) ──
+// The frost floor and cap of the primary glass lobe.
+const float kGlassFrost = 0.04;// near-sharp glass: a wide frost lobe scatters the HDR sun into static speckle
+const float kGlassMaxRough = 0.14;// Clamps the primary refraction lobe to
+                              // alpha 0.02 (≈ roughness 0.14) because a wide refraction lobe is
+                              // per-pixel variance no denoiser can fix. Deferred used the raw material
+                              // roughness here, so asset glass with a mid-grey roughness map (e.g. the
+                              // OpenChessSet pawn domes) blurred into a milky ball — structureless,
+                              // duller than intended. The trade: frosted glass
+                              // renders polished at primary, but it stays GLASS.
+
 // Normal-incidence reflectance of a DIELECTRIC, from its index of refraction:
 // ((n-1)/(n+1))^2, times KHR_materials_specular. three.js r185's
 //   min( pow2( ( ior - 1 ) / ( ior + 1 ) ) * specularColor, 1 ) * specularIntensity.
@@ -557,6 +568,46 @@ vec3 evalIridescence(float outsideIOR, float eta2, float cosTheta1,
         I      += Cm * Sm;
     }
     return max(I, vec3(0.0));
+}
+
+// Effective glass shading/blur roughness — used by shadeGlass AND the demod
+// recombine below; both must agree or the denoise blur mismatches the lobe.
+// Roughness frosts what comes THROUGH by scattering it at the interface, and an
+// interface with no index contrast cannot scatter: at ior 1 every microfacet
+// refracts straight on. three.js's applyIorToRoughness, same ramp (full by ior
+// 1.5). glTF sample TransmissionRoughnessTest's "1.0 - Air" row is sharp from its
+// smooth end to its rough one for this reason. The floor stays: the lobe maths and
+// the filter's negative-alpha glass marker both need a roughness above zero.
+float glassRough(float matRoughness, float ior) {
+    // Under DLSS Ray Reconstruction the lobe is sampled per pixel and per frame
+    // (shadeGlass) and RR integrates it, which is what the cap stood in for:
+    // frosted glass frosts at the roughness it was given.
+    return clamp(matRoughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0), kGlassFrost, kRR ? 1.0 : kGlassMaxRough);
+}
+
+// What a THIN rough sheet lets through: its reflection lobe about the facet
+// normal Ns, mirrored through the sheet (Burley 2015's thin-surface
+// transmission). A smooth sheet (Ns = N) passes the view ray straight on.
+vec3 thinSheetTransmit(vec3 V, vec3 N, vec3 Ns) {
+    const vec3 R = reflect(-V, Ns);
+    const vec3 T = R - 2.0 * dot(R, N) * N;
+    return dot(T, N) < 0.0 ? normalize(T) : -V;
+}
+
+// Reflectance of the glass surface at cosine c: Schlick from the ior, and under a
+// thin film (KHR_materials_iridescence) the film's interference reflectance in
+// its place, by the iridescence factor. The opaque shade has applied the film to
+// its F0 all along; glass weights the opaque shade by (1 − transmission) and takes
+// its whole reflection from here, where the Fresnel was a scalar from the ior
+// alone — so a film on glass did nothing. It matters most where it is the ONLY
+// reflector: SunglassesKhronos coats an ior 1.0 lens (r0 = 0, no reflection of its
+// own) with an ior 2 film, and that film is the entire mirror finish.
+// evalIridescence returns the reflectance AT the angle, so it is used as is.
+vec3 glassFresnel(float r0, float c, float iridescence, float iridescenceIOR, float iridescenceThicknessNm) {
+    vec3 F = vec3(r0 + (1.0 - r0) * pow(1.0 - c, 5.0));
+    if (iridescence > 0.0)
+        F = mix(F, min(evalIridescence(1.0, iridescenceIOR, c, iridescenceThicknessNm, vec3(r0)), vec3(1.0)), iridescence);
+    return F;
 }
 
 // Does a shadow-ray candidate hit actually OCCLUDE? Policy mirrors the RT
@@ -701,6 +752,36 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
         gShadowMovingOccluder = true;
     return 0.0;
 }
+// What the GLASS on a shadow ray lets through, as one number: per glass surface
+// crossed, the luminance of its tint and its faces' Fresnel loss at normal
+// incidence ((1 - F0) a face; a thin-walled sheet is two faces, a solid's
+// surface one, its tint taken once, where the ray enters). Glass used to let
+// the light through whole and white: a smoked window lit the seat behind it
+// like no glass at all. Not the colour (the shadow channel is a scalar), not
+// the absorption over a solid's depth, not a caustic. Its own traversal of the
+// glass and blend instances only (kRayMaskAlpha; flat blends and additive
+// cards pass), every candidate visited (NoOpaque), none committed. The ocean
+// is in the opaque mask and stays out.
+float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
+    float T = 1.0;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
+        const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
+        if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
+        const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
+        const float face = 1.0 - f0n * f0n;
+        const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
+        const float tintL = clamp(dot(m.albedo, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+        // The opaque share of a partly transmissive surface blocks.
+        const float t = clamp(m.transmission, 0.0, 1.0);
+        T *= t * (m.thinWalled != 0 ? tintL * face * face : (entry ? tintL : 1.0) * face);
+        if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
+    }
+    return T;
+}
+
 // FOG-ONLY shadow ray (setFogShadowOpaqueCutouts, pc.flags bit 29): the same
 // ray with every candidate taken as a blocker, so an alpha-tested crown is an
 // opaque blob to the volumetric march. The march is low-frequency and

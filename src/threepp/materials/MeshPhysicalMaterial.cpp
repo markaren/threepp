@@ -16,7 +16,9 @@ MeshPhysicalMaterial::MeshPhysicalMaterial()
 
     transmission = 0.f;
 
-    thickness = 0.01f;
+    // three.js's default: no volume under the surface, so a transmissive
+    // material is thin-walled (a window) until it is given a thickness.
+    thickness = 0.f;
 
     attenuationDistance = 0.f;
     attenuationColor = Color(1, 1, 1);
@@ -147,7 +149,6 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     m->thickness = thickness;
     m->thicknessMap = thicknessMap;
-    m->thinWalled = thinWalled;
 
     m->attenuationDistance = attenuationDistance;
     m->attenuationColor.copy(attenuationColor);
@@ -227,11 +228,6 @@ bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue&
     } else if (key == "specularColor") {
 
         specularColor.copy(extractColor(value));
-        return true;
-
-    } else if (key == "thinWalled") {
-
-        thinWalled = std::get<bool>(value);
         return true;
 
     } else if (key == "dispersion") {

@@ -23,6 +23,22 @@
 using namespace threepp;
 using Catch::Matchers::WithinAbs;
 
+// thickness is what says thin-walled (0) or a volume (> 0), as in three.js and
+// glTF, and the renderers read nothing else: a fresh material, glass made with
+// the builder and a copy must all start thin-walled. The default was once
+// 0.01, which made every glass a volume the moment the flag that used to say
+// it was derived from thickness.
+TEST_CASE("A transmissive MeshPhysicalMaterial is thin-walled until given a thickness") {
+    auto fresh = MeshPhysicalMaterial::create();
+    CHECK(fresh->thickness == 0.f);
+    fresh->transmission = 1.f;
+    CHECK(fresh->clone<MeshPhysicalMaterial>()->thickness == 0.f);
+    auto built = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.transmission(1.f));
+    CHECK(built->thickness == 0.f);
+    auto solid = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.transmission(1.f).thickness(0.5f));
+    CHECK(solid->thickness == 0.5f);
+}
+
 TEST_CASE("MeshPhysicalMaterial::Params carries the specular and iridescence fields") {
 
     auto m = MeshPhysicalMaterial::create(

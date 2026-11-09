@@ -146,7 +146,7 @@ namespace {
     TPP_MIXIN(MaterialWithMatCap, matcap)
     TPP_MIXIN(MaterialWithRoughness, roughness, roughnessMap)
     TPP_MIXIN(MaterialWithMetalness, metalness, metalnessMap)
-    TPP_MIXIN(MaterialWithThickness, thickness, thicknessMap, thinWalled)
+    TPP_MIXIN(MaterialWithThickness, thickness, thicknessMap)
     TPP_MIXIN(MaterialWithClearcoat, clearcoat, clearcoatMap, clearcoatRoughness, clearcoatRoughnessMap, clearcoatNormalScale, clearcoatNormalMap)
     TPP_MIXIN(MaterialWithTransmission, transmission, ior, dispersion, transmissionMap)
     TPP_MIXIN(MaterialWithAttenuation, attenuationDistance, attenuationColor, scatterDistance, scatterColor)

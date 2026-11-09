@@ -28,14 +28,14 @@ namespace threepp {
             mat->metalness = 0.0f;
             mat->setIor(1.33f);
             mat->transmission = 1.0f;
-            // doubleSided + thinWalled opt this single FFT-displaced plane into
-            // the renderer's thin-shell transmission BSDF: every crossing applies
-            // Beer-Lambert for `thickness` metres of in-medium depth, instead of
-            // using the (much longer) actual ray distance through the water column
-            // which would saturate to near-black.
+            // The renderers know the ocean by its mesh (the DisplacedMesh and its
+            // foam attribute), not by this material: the Vulkan shade's water
+            // branch and the path tracer's water interface both key on that.
+            // `thickness` is the water body's proxy depth: a crossing absorbs over
+            // `thickness` metres of water, not over the (much longer) ray distance
+            // through the column, which would saturate to near-black.
             mat->side = Side::Double;
             mat->thickness = 2.0f;
-            mat->thinWalled = true;
             mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
             mat->attenuationDistance = 3.0f;
             mat->clearcoat = 0.1f;

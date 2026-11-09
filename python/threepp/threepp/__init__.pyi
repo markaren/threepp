@@ -6910,18 +6910,10 @@ class MeshPhysicalMaterial(MeshStandardMaterial):
     @property
     def thickness(self) -> float:
         """
-        Thin-shell in-medium proxy distance (m) for Beer-Lambert; also scales the water body veil (attenuation_color^(2*thickness/attenuation_distance)).
+        Thickness of the volume under a transmissive surface (three.js / glTF). 0 (default) = thin-walled: a sheet such as a window, seen straight through. > 0 = the mesh bounds a volume (a glass ball, a bottle): refracted in and out; GL offsets and absorbs over this distance, the ray tracers use the mesh. On an Ocean it is the water body's proxy depth (attenuation_color^(2*thickness/attenuation_distance)).
         """
     @thickness.setter
     def thickness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
-    @property
-    def thin_walled(self) -> bool:
-        """
-        Surface is a thin shell (ocean plane, lens), not a closed volume.
-        """
-    @thin_walled.setter
-    def thin_walled(self, arg0: bool) -> None:
         ...
     @property
     def transmission(self) -> float:

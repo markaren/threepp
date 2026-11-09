@@ -30,9 +30,10 @@
 // out once. A transmissive material (transmission > 0) is a dielectric with
 // the material's ior: Fresnel reflect or refract through the GGX microfacet
 // normal, tinted by the albedo, Beer-Lambert attenuation over the inside leg
-// (attenuationColor / attenuationDistance), thin-walled passes straight
-// through. A camera ray that misses (or one it continued through glass)
-// shows the background as the frame draws it (backgroundBlurriness,
+// (attenuationColor / attenuationDistance); a thin-walled surface (thickness
+// 0, MaterialDesc.thinWalled) passes straight through. A camera ray that
+// misses (or one it continued through glass) shows the background as the
+// frame draws it (backgroundBlurriness,
 // backgroundIntensity, backgroundRotation, the procedural star field); any
 // other miss reads the
 // environment, mip 1 when the sun was extracted into a directional light
@@ -366,7 +367,43 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     return a >= m.alphaCutoff;
 }
 
+// What the GLASS on a shadow ray lets through, as one number: per glass surface
+// crossed, the luminance of its tint and its faces' Fresnel loss at normal
+// incidence ((1 - F0) a face; a thin-walled sheet is two faces, a solid's
+// surface one, its tint taken once, where the ray enters). Glass used to let
+// the light through whole and white: a smoked window lit the seat behind it
+// like no glass at all. Not the colour (the shadow channel is a scalar), not
+// the absorption over a solid's depth, not a caustic. Its own traversal of the
+// glass and blend instances only (kRayMaskAlpha; flat blends and additive
+// cards pass), every candidate visited (NoOpaque), none committed. The ocean
+// is in the opaque mask and stays out.
+float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
+    float T = 1.0;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
+        const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
+        if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
+        const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
+        const float face = 1.0 - f0n * f0n;
+        const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
+        const float tintL = clamp(dot(m.albedo, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+        // The opaque share of a partly transmissive surface blocks.
+        const float t = clamp(m.transmission, 0.0, 1.0);
+        T *= t * (m.thinWalled != 0 ? tintL * face * face : (entry ? tintL : 1.0) * face);
+        if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
+    }
+    return T;
+}
+
+float shadowVisOpaque(vec3 origin, vec3 dir, float tMax);
+// The occlusion test times what the glass on the way lets through.
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
+    const float v = shadowVisOpaque(origin, dir, tMax);
+    return v > 0.0 ? v * glassTransmittance(origin, dir, tMax) : 0.0;
+}
+float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
                           kRayMaskOpaque, origin, 0.0, dir, tMax);
@@ -1342,8 +1379,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         if (hm.transmission > 0.0 && !wakeLayer && rnd(seed) < hm.transmission) {
             // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
             // is water whatever its material's ior.
-            // The ocean's material is thin-walled for the deferred shade's
-            // thin-shell BSDF; here it is a real interface, entered through
+            // Whatever its material says, here it is a real interface, entered through
             // the wave face's upper side: its geometric normal turned up. Not
             // by the ray's own direction: a ray at a grazing angle just under
             // the surface (a camera at the waterline) meets a steep face from
@@ -1367,7 +1403,8 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             // next-event estimation, since a delta light is never found by the
             // mirror ray the interface samples. The sun's glint is the
             // background's disc on that mirror ray, so it is left out here.
-            if (!thin) L += throughput * dielectricGlints(P, N, Ng, V, ior, max(rough, 0.03));
+            // A thin-walled pane glints like any other glass (it was skipped).
+            L += throughput * dielectricGlints(P, N, Ng, V, ior, max(rough, 0.03));
             const float VdotH = clamp(dot(V, H), 0.0, 1.0);
             const float F0    = (ior - 1.0) / (ior + 1.0);
             float F = F0 * F0 + (1.0 - F0 * F0) * pow(1.0 - VdotH, 5.0);
@@ -1394,7 +1431,24 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 if (dot(next, Ng) <= 0.0) next = reflect(-V, Ng);
                 o = P + Ng * SHADOW_EPS;
             } else {
-                if (thin) next = d;
+                if (thin) {
+                    // A rough thin sheet scatters what it lets through: its
+                    // reflection lobe about a facet drawn at the roughness the
+                    // deferred glass uses (three.js's ior ramp), mirrored
+                    // through the sheet (Burley 2015). Smooth: straight on.
+                    next = d;
+                    const float tr = rough * clamp(2.0 * ior - 2.0, 0.0, 1.0);
+                    if (tr > 0.05) {
+                        vec3 T, B;
+                        tangentFrame(N, T, B);
+                        const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
+                        const vec3 Ht = sampleGgxVndf(Vt, tr * tr, vec2(rnd(seed), rnd(seed)));
+                        const vec3 H2 = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+                        const vec3 R2 = reflect(-V, H2);
+                        const vec3 T2 = R2 - 2.0 * dot(R2, N) * N;
+                        if (dot(T2, Ng) < 0.0) next = normalize(T2);
+                    }
+                }
                 next = normalize(next);
                 if (dot(next, Ng) >= 0.0) break;
                 throughput *= albedo;
