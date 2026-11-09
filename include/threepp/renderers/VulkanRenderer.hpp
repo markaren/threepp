@@ -36,6 +36,7 @@
 
 namespace threepp {
 
+    class DisplacedMesh;
     class Downwash;
     class Mesh;
     class ParticleField;
@@ -190,6 +191,41 @@ namespace threepp {
         [[nodiscard]] bool readParticleDensityVolume(const ParticleField& field,
                                                      std::vector<uint32_t>& out,
                                                      uint32_t& resolution);
+
+        // ── Ocean whitecap foam readback (TEST / AUDIT) ──────────────────
+        // Copy a DisplacedMesh's world-space foam accumulator (foam_world.comp)
+        // to the host: `out` is resolution^2 floats, row-major, texel (ix, iz)
+        // at index iz * resolution + ix, centred on world
+        // ((ix + 0.5), (iz + 0.5)) * tileSize / resolution. It covers one
+        // cascade-0 tile of `tileSize` metres; the sea repeats it. Each texel
+        // is the decayed foam value the water shade reads (it multiplies it by
+        // 1.3 and clamps to 0..1 as coverage). Exists so whitecap coverage can
+        // be checked against field measurements without thresholding a
+        // rendered image (examples/vulkan/audits/ocean_metrics.cpp).
+        //
+        // DRAINS THE DEVICE (vkDeviceWaitIdle) and allocates a staging buffer
+        // of resolution^2 * 4 bytes. Not a per-frame call. Returns false when
+        // the mesh has no foam image (not an ocean, or never rendered).
+        [[nodiscard]] bool readOceanFoam(const DisplacedMesh& mesh,
+                                         std::vector<float>& out,
+                                         uint32_t& resolution, float& tileSize);
+
+        // ── Wake ripple readback (TEST / AUDIT) ──────────────────────────
+        // Copy one wake patch's ripple slopes (wake_ripple.comp, mip 0) to
+        // the host: `out` holds resolution^2 texels of 4 floats (slope x,
+        // slope z, the sum of their squares, and the image's alpha, 0 unless
+        // the ripples write their height there), row-major, texel (ix, iz) at world
+        // (ix, iz) * period / resolution modulo `period`: the patch's small
+        // sea is periodic and world-anchored, and is shown only through its
+        // ripples' window (DisplacedMesh::WakePatch). Exists so the Kelvin
+        // wake's angle and transverse wavelength can be measured headless
+        // (examples/vulkan/audits/ocean_metrics.cpp --wake).
+        //
+        // DRAINS THE DEVICE. Not a per-frame call. Returns false when the
+        // mesh has no ripples or `patch` is out of range.
+        [[nodiscard]] bool readWakeRipples(const DisplacedMesh& mesh, uint32_t patch,
+                                           std::vector<float>& out,
+                                           uint32_t& resolution, float& period);
 
         // ── Gaussian-splat depth AOV ─────────────────────────────────────
         // A splat cloud is composited by a compute tile rasterizer and is in no

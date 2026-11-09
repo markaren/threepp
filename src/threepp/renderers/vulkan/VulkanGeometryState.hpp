@@ -601,6 +601,7 @@ namespace threepp::vulkan::impl {
         float appliedWindSpeed = 0.f;
         float appliedWindTheta = 0.f;
         float appliedFetch     = 0.f;
+        bool  appliedHsFix     = false;// the Hs calibration (Params::hsFix / THREEPP_OCEAN_HS_FIX)
         water::OceanImage scratchA;          // RG32F IFFT scratch, shared across cascades (sequential dispatch); null when every cascade's IFFT is on the shared path
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;
         uint32_t vertexCount = 0;

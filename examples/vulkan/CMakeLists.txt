@@ -28,6 +28,9 @@ add_example(NAME "vulkan_lidar_audit" SOURCES "audits/vulkan_lidar_audit.cpp")
 # plans/render-graph.md, "Verification method"). Also registered as the
 # per-scene ctests rg_ab_<scene> in tests/renderers.
 add_example(NAME "rg_ab" SOURCES "audits/rg_ab.cpp")
+# Ocean sea-state audit: Hs, Tp, dispersion, slopes and crests of the FFT
+# ocean against published measurements (see the file comment).
+add_example(NAME "ocean_metrics" SOURCES "audits/ocean_metrics.cpp")
 
 # Local scratch harnesses (capture / repro / profiling tools) are not tracked —
 # see scratch/README.md and .gitignore. Auto-register every scratch/*.cpp as its

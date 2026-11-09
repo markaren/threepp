@@ -406,6 +406,7 @@ namespace threepp::water {
         p.kMin            = settings_.kMin;
         p.kMax            = settings_.kMax;
         p.fetch           = settings_.fetch;
+        p.hsFix           = settings_.hsFix ? 1u : 0u;
         vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(settings_.textureSize);
         vkCmdDispatch(cb, g, g, 1);
@@ -413,10 +414,11 @@ namespace threepp::water {
         cmdShaderRWBarrier(cb, h0_.image);
     }
 
-    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch) {
+    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix) {
         settings_.windTheta = windTheta;
         settings_.windSpeed = windSpeed;
         settings_.fetch     = fetch;
+        settings_.hsFix     = hsFix;
     }
 
     PhillipsSpectrum::~PhillipsSpectrum() {

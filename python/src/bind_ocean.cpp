@@ -115,6 +115,10 @@ namespace threepp_py {
                                "peak ~8 V^2/g). Finite = JONSWAP young sea: shorter, steeper waves with more "
                                "energy at the 10-40 m scale and less swell; 20e3-40e3 reads as a coastal sea. "
                                "Live-tunable; saturates at ~1600 V^2.")
+                .def_readwrite("hs_fix", &DisplacedMesh::Params::hsFix,
+                               "Pierson-Moskowitz-calibrated spectrum (default False, the historical sea): "
+                               "significant wave height x1.85 at every wind and fetch, peak wavelength x1.16. "
+                               "THREEPP_OCEAN_HS_FIX=1/0 overrides it. Live-tunable.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
