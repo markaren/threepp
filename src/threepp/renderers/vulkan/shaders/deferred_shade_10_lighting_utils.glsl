@@ -579,7 +579,19 @@ vec3 evalIridescence(float outsideIOR, float eta2, float cosTheta1,
 // smooth end to its rough one for this reason. The floor stays: the lobe maths and
 // the filter's negative-alpha glass marker both need a roughness above zero.
 float glassRough(float matRoughness, float ior) {
-    return clamp(matRoughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0), kGlassFrost, kGlassMaxRough);
+    // Under DLSS Ray Reconstruction the lobe is sampled per pixel and per frame
+    // (shadeGlass) and RR integrates it, which is what the cap stood in for:
+    // frosted glass frosts at the roughness it was given.
+    return clamp(matRoughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0), kGlassFrost, kRR ? 1.0 : kGlassMaxRough);
+}
+
+// What a THIN rough sheet lets through: its reflection lobe about the facet
+// normal Ns, mirrored through the sheet (Burley 2015's thin-surface
+// transmission). A smooth sheet (Ns = N) passes the view ray straight on.
+vec3 thinSheetTransmit(vec3 V, vec3 N, vec3 Ns) {
+    const vec3 R = reflect(-V, Ns);
+    const vec3 T = R - 2.0 * dot(R, N) * N;
+    return dot(T, N) < 0.0 ? normalize(T) : -V;
 }
 
 // Reflectance of the glass surface at cosine c: Schlick from the ior, and under a

@@ -1394,7 +1394,24 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 if (dot(next, Ng) <= 0.0) next = reflect(-V, Ng);
                 o = P + Ng * SHADOW_EPS;
             } else {
-                if (thin) next = d;
+                if (thin) {
+                    // A rough thin sheet scatters what it lets through: its
+                    // reflection lobe about a facet drawn at the roughness the
+                    // deferred glass uses (three.js's ior ramp), mirrored
+                    // through the sheet (Burley 2015). Smooth: straight on.
+                    next = d;
+                    const float tr = rough * clamp(2.0 * ior - 2.0, 0.0, 1.0);
+                    if (tr > 0.05) {
+                        vec3 T, B;
+                        tangentFrame(N, T, B);
+                        const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
+                        const vec3 Ht = sampleGgxVndf(Vt, tr * tr, vec2(rnd(seed), rnd(seed)));
+                        const vec3 H2 = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+                        const vec3 R2 = reflect(-V, H2);
+                        const vec3 T2 = R2 - 2.0 * dot(R2, N) * N;
+                        if (dot(T2, Ng) < 0.0) next = normalize(T2);
+                    }
+                }
                 next = normalize(next);
                 if (dot(next, Ng) >= 0.0) break;
                 throughput *= albedo;

@@ -1127,12 +1127,21 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
     // not a smooth PMREM). The old 0.30 floor smeared the whole sky into the
     // glass — with the lobe now capped near-mirror, a gentle floor keeps the
     // sky crisp and the sun reads as a real glint. Scene hits stay sharp.
-    const float missLod = max(gr, 0.10) * maxLod;
+    // Under RR the microfacet below is drawn per pixel and per frame, so the
+    // blur is in the directions and the miss reads the floor's mip.
+    const float missLod = max(kRR ? 0.0 : gr, 0.10) * maxLod;
 
 
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {
-        vec3 Ns = ggxHalfVectorFib(N, gr, s, kGlassSamples);// distinct per-iteration Fibonacci sample
+        // Under DLSS Ray Reconstruction one random facet per pixel and frame (the
+        // seed moves with the frame there): RR integrates the frosted lobe. Else
+        // the one deterministic sample and the reflection filter's blur.
+        // The facet is drawn at the material's own roughness (the ior ramp, no
+        // kGlassFrost floor: that floor is for the filter and the glass marker,
+        // and as a lobe it would soften smooth glass a little).
+        vec3 Ns = kRR ? ggxHalfVector(N, matRough * clamp(ior * 2.0 - 2.0, 0.0, 1.0), seed)
+                      : ggxHalfVectorFib(N, gr, s, kGlassSamples);
         if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
         const float NdotV = max(dot(Ns, V), 1e-4);
         const vec3  F     = glassFresnel(r0, NdotV, pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
@@ -1171,7 +1180,9 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             // (the old code) bends by the full first-interface angle → it shifts/
             // warps the face beneath and lets rays escape to the sky = a blue
             // "washed, detail-destroyed" look over e.g. a watch dial.
-            const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
+            // A ROUGH sheet scatters what it lets through (thinSheetTransmit): with
+            // the facet sampled under RR the view through frosted glass is frosted.
+            const vec3 dT = thinSheetTransmit(V, N, Ns);// straight through when smooth
             {
                 gSeenThroughHits   = true;// what the pane shows is lit as seen beside it
                 gTraceAlongView = true;// ...and by the lamps of its own cluster cell
