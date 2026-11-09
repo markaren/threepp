@@ -79,6 +79,7 @@ namespace {
         auto mat = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
                 .color(Color::steelblue)
                 .transmission(0.95f)
+                .thickness(3.f)// a solid ball: its diameter (no thickness = a thin bubble)
                 .ior(1.5f)
                 .roughness(0.0f)
                 .metalness(0.0f));

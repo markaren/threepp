@@ -100,6 +100,7 @@ namespace {
         {
             auto mat = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(Color::white).transmission(1.0f).roughness(0.0f).metalness(0.0f));
             mat->setIor(1.5f);
+            mat->thickness = 1.1f;// a solid ball: its diameter (no thickness = a thin bubble)
             auto m = Mesh::create(sphereGeom, mat);
             m->position.set(x0 + 3 * dx, y, 2.5f);
             out.push_back(m);

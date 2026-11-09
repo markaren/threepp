@@ -155,6 +155,7 @@ namespace {
         auto mat = MeshPhysicalMaterial::create(
                 MeshPhysicalMaterial::Params{}.color(Color::white).transmission(1.f).roughness(0.f).metalness(0.f));
         mat->setIor(1.65f);
+        mat->thickness = 2.5f;// a solid ball: its diameter (no thickness = a thin bubble)
         mat->attenuationColor = Color(0.08f, 0.20f, 1.f);
         mat->attenuationDistance = 2.5f;
         auto sphere = Mesh::create(SphereGeometry::create(1.25f, 64, 64), mat);
@@ -202,6 +203,7 @@ namespace {
                                                                   .roughness(0.f)
                                                                   .metalness(0.f));
                     m->setIor(1.75f);
+                    m->thickness = 1.1f;// a solid ball: its diameter (no thickness = a thin bubble)
                     m->dispersion = 0.45f;
                     obj = Mesh::create(SphereGeometry::create(0.55f, 64, 64), m);
                     break;
@@ -214,6 +216,7 @@ namespace {
                                                                   .roughness(0.f)
                                                                   .metalness(0.f));
                     m->setIor(1.50f);
+                    m->thickness = 1.1f;// a solid ball: its diameter (no thickness = a thin bubble)
                     m->attenuationColor = Color(1.f, 0.55f, 0.08f);
                     m->attenuationDistance = 0.9f;
                     obj = Mesh::create(SphereGeometry::create(0.55f, 64, 64), m);
@@ -238,6 +241,7 @@ namespace {
                                                                   .roughness(0.f)
                                                                   .metalness(0.f));
                     m->setIor(1.58f);
+                    m->thickness = 1.1f;// a solid ball: its diameter (no thickness = a thin bubble)
                     m->attenuationColor = Color(0.08f, 1.f, 0.28f);
                     m->attenuationDistance = 0.8f;
                     obj = Mesh::create(SphereGeometry::create(0.55f, 64, 64), m);
