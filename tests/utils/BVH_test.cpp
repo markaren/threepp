@@ -12,6 +12,7 @@
 #include "threepp/utils/TriangleIntersect.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -705,6 +706,63 @@ TEST_CASE("BVH axis-aligned rays hit with the origin on a node face", "[BVH]") {
             CHECK_FALSE(bvh.raycast(Ray({2, 1, past}, {zero, -1, zero})));
             CHECK_FALSE(bvh.raycastAny(Ray({past, 1, past}, {zero, -1, zero}), 2.f));
         }
+    }
+}
+
+TEST_CASE("BVH rays from a non-finite origin stop at the root", "[BVH]") {
+
+    // A sensor pose that went NaN after a physics blow-up. A NaN origin on an
+    // axis the ray moves along used to drop out of the slab test's min/max, so
+    // every node passed and every triangle was tested before the NaN hit
+    // distances were thrown away.
+    const auto mesh = deformedSphere(100, 100, {0, 0, 0}, 1.f, 11);
+    BVH bvh;
+    bvh.build(mesh.positions, mesh.indices);
+
+    constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    const Vector3 slanted = Vector3(1, 0.3f, -0.2f).normalize();
+
+    SECTION("no hit") {
+        for (const auto& origin : {Vector3(nan, nan, nan), Vector3(nan, 0, 0), Vector3(0, nan, 0),
+                                   Vector3(0, 0, nan), Vector3(inf, 0, 0), Vector3(0, -inf, 0)}) {
+            for (const auto& direction : {slanted, Vector3(0, 0, 1)}) {
+                CAPTURE(origin, direction);
+                const Ray ray(origin, direction);
+                CHECK_FALSE(bvh.raycast(ray));
+                CHECK_FALSE(bvh.raycastAny(ray, 10.f));
+            }
+        }
+    }
+
+    SECTION("and no more work than a ray that hits") {
+        // From inside the sphere every ray hits after a short walk; from a NaN
+        // origin the walk used to cover the whole tree, about 20 000 triangles.
+        Rng rng{3};
+        std::vector<Vector3> directions(64);
+        for (auto& d : directions) d = rng.unitVector();
+
+        int sink = 0;
+        const auto fastest = [&](const Vector3& origin) {
+            double best = std::numeric_limits<double>::infinity();
+            for (int trial = 0; trial < 5; ++trial) {
+                const auto start = std::chrono::steady_clock::now();
+                for (const auto& d : directions) {
+                    const Ray ray(origin, d);
+                    sink += bvh.raycast(ray).has_value();
+                    sink += bvh.raycastAny(ray, inf);
+                }
+                best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+            }
+            return best;
+        };
+
+        const double hitting = fastest({0.05f, -0.1f, 0.02f});
+        CHECK(sink == 2 * 5 * static_cast<int>(directions.size()));
+        const double fromNaN = fastest({nan, nan, nan});
+        CHECK(sink == 2 * 5 * static_cast<int>(directions.size()));
+        CAPTURE(hitting, fromNaN);
+        CHECK(fromNaN < hitting);
     }
 }
 

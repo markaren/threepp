@@ -96,6 +96,7 @@ namespace threepp {
                                             float maxDistance = std::numeric_limits<float>::infinity());
 
         // Closest hit within maxDistance, or nullopt. The ray is in the BVH's local space.
+        // A ray from a NaN or infinite origin hits nothing, here and in raycastAny.
         // Safe to call from several threads at once.
         [[nodiscard]] std::optional<RayHit> raycast(const Ray& ray, float maxDistance = std::numeric_limits<float>::infinity()) const;
 

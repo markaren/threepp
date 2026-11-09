@@ -645,6 +645,13 @@ namespace {
         }
     }
 
+    // A NaN origin on an axis the ray moves along drops out of the slab test's
+    // min/max, so every node would pass and every triangle be tested for no
+    // hit; an infinite one never meets a box. Either way there is no hit.
+    bool finiteOrigin(const Ray& ray) {
+        return std::isfinite(ray.origin.x) && std::isfinite(ray.origin.y) && std::isfinite(ray.origin.z);
+    }
+
     // Moller-Trumbore, both faces; the t along the (unnormalized) direction, or
     // a negative value on a miss.
     template<class RayTriangle>
@@ -668,7 +675,7 @@ namespace {
 }// namespace
 
 std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const {
-    if (nodes.empty()) return std::nullopt;
+    if (nodes.empty() || !finiteOrigin(ray)) return std::nullopt;
 
     const float length = ray.direction.length();
     if (!(length > 0.f)) return std::nullopt;
@@ -706,7 +713,7 @@ std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const
 }
 
 bool BVH::raycastAny(const Ray& ray, float maxDistance) const {
-    if (nodes.empty()) return false;
+    if (nodes.empty() || !finiteOrigin(ray)) return false;
 
     const float length = ray.direction.length();
     if (!(length > 0.f)) return false;
