@@ -30,8 +30,11 @@
 // Donelan, Hamilton & Hui (1985) with Banner's (1990) high-frequency form:
 // narrow and downwind at the spectral peak, broader for the short waves,
 // with a little counter-wind energy there. Both integrate to the same value
-// over the circle, so the omnidirectional spectrum and the significant wave
-// height do not change; only where the energy points does.
+// over the circle, so in the continuum the omnidirectional spectrum and the
+// significant wave height do not change, only where the energy points. On
+// the discrete grids Hs agrees within about 10%, angle-dependent where the
+// peak sits near a tile's fundamental (the narrow lobe lands on few modes).
+// windTheta is the direction the wind blows toward.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -58,7 +61,7 @@ layout(push_constant) uniform Params {
     float swellScale;
     float swellPeriod; // Tp, s
     float swellTheta;  // direction the swell runs toward, rad, sample domain
-    float swellSpread; // s of cos^(2s)(theta/2)
+    float swellSpread; // s of cos^(2s)(theta/2), >= 1 (the host clamps it)
 } P;
 
 const float PI = 3.14159265358979;
@@ -120,7 +123,10 @@ float swellShape(vec2 k) {
     // Runs toward -k, as the wind sea (see phillips2D).
     const vec2  dir = vec2(cos(P.swellTheta), sin(P.swellTheta));
     const float c   = clamp(-dot(k, dir) / kl, -1.0, 1.0);
-    const float halfCos = sqrt(0.5 * (1.0 + c));// cos(theta / 2)
+    // cos(theta / 2), kept off 0: straight against the swell it is exactly 0
+    // on axis-aligned headings, and pow(0, y) is undefined in GLSL (one NaN
+    // texel would spread through the IFFT over the whole cascade).
+    const float halfCos = max(sqrt(0.5 * (1.0 + c)), 1e-6);
     return sf * pow(halfCos, 2.0 * P.swellSpread) / (w * kl);
 }
 

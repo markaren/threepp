@@ -64,7 +64,7 @@ namespace threepp::water {
             float    swellHeight = 0.0f;  // significant height, m
             float    swellPeriod = 12.0f; // peak period Tp, s
             float    swellTheta  = 0.0f;  // direction of travel, rad (sample domain)
-            float    swellSpread = 50.0f; // s of cos^(2s)(theta/2)
+            float    swellSpread = 50.0f; // s of cos^(2s)(theta/2); below 1 is taken as 1
         };
 
         // Push-constant block of phillips_spectrum.comp (std430, 52 bytes).
@@ -114,6 +114,9 @@ namespace threepp::water {
         // depending on where the lattice falls. 0 when there is no swell or
         // its peak is not inside the band with at least two modes below it.
         static float swellScale(const Settings& s);
+
+        // swellSpread as the shader gets it: at least 1.
+        static float swellSpreadClamped(float s);
 
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }

@@ -36,10 +36,7 @@ namespace threepp {
     }
 
     bool defaultMeasuredSpreading() {
-        static const bool value = [] {
-            const char* v = std::getenv("THREEPP_OCEAN_SPREAD");
-            return !(v && *v && std::atoi(v) == 0);
-        }();
+        static const bool value = envSwitch("THREEPP_OCEAN_SPREAD", false);
         return value;
     }
 

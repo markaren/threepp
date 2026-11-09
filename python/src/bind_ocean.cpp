@@ -107,7 +107,9 @@ namespace threepp_py {
                                "Cascade-0 world tile (m); the largest swell wavelength. Must be > 0.")
                 .def_readwrite("tile_size_1", &DisplacedMesh::Params::tileSize1, "Cascade-1 tile (m); 0 disables.")
                 .def_readwrite("tile_size_2", &DisplacedMesh::Params::tileSize2, "Cascade-2 tile (m); 0 disables.")
-                .def_readwrite("wind_theta", &DisplacedMesh::Params::windTheta, "Wind direction (radians, 0 = +X).")
+                .def_readwrite("wind_theta", &DisplacedMesh::Params::windTheta,
+                               "Direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X); "
+                               "with measured_spreading the waves run that way.")
                 .def_readwrite("wind_speed", &DisplacedMesh::Params::windSpeed,
                                "Wind speed (m/s); the dominant wave-height lever (Phillips amplitude ~ V^4).")
                 .def_readwrite("fetch", &DisplacedMesh::Params::fetch,
@@ -116,18 +118,20 @@ namespace threepp_py {
                                "energy at the 10-40 m scale and less swell; 20e3-40e3 reads as a coastal sea. "
                                "Live-tunable; saturates at ~1600 V^2.")
                 .def_readwrite("measured_spreading", &DisplacedMesh::Params::measuredSpreading,
-                               "True (default) = Donelan-Hamilton-Hui / Banner directional spreading: waves run "
-                               "downwind with long crests at the peak. False = the old symmetric cos^2 (as much "
-                               "energy upwind as downwind). Same Hs either way. Live-tunable.")
+                               "True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with "
+                               "long crests at the peak. False (default) = the old symmetric cos^2 (as much energy "
+                               "upwind as downwind). Hs agrees within about 10% on the cascade grids. Live-tunable; "
+                               "THREEPP_OCEAN_SPREAD=1 makes True the default.")
                 .def_readwrite("swell_height", &DisplacedMesh::Params::swellHeight,
                                "Significant height (m) of an optional swell added to the wind sea; 0 = none. "
                                "Drawn on cascade 0 only: its peak wavelength must lie between tile_size_1 and "
-                               "tile_size_0 / 2 (9-18 s on a 1 km ocean). Live-tunable.")
+                               "tile_size_0 / 2 (9.5-17.5 s on a 1 km ocean); outside that it is not drawn and the "
+                               "renderer warns once. Live-tunable.")
                 .def_readwrite("swell_period", &DisplacedMesh::Params::swellPeriod, "Swell peak period Tp (s).")
                 .def_readwrite("swell_theta", &DisplacedMesh::Params::swellTheta,
                                "Direction the swell travels toward (radians, 0 = +X).")
                 .def_readwrite("swell_spread", &DisplacedMesh::Params::swellSpread,
-                               "Swell spreading s of cos^(2s)(theta/2): ~25 nearby storm, ~75 far away.")
+                               "Swell spreading s of cos^(2s)(theta/2): ~25 nearby storm, ~75 far away; below 1 is taken as 1.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
@@ -516,7 +520,8 @@ namespace threepp_py {
                      "'ocean'/'pond' pin it regardless of scale; 'fjord' is the glacial recipe whose turquoise "
                      "comes from volume SCATTERING (Vulkan deferred only). fetch (m) = 0 is a fully developed sea "
                      "(long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea "
-                     "(see Params.fetch).")
+                     "(see Params.fetch). wind_theta is the direction the wind blows TOWARD (radians, "
+                     "(cos, sin) in world XZ, 0 = toward +X).")
                 .def("warp_toward", &Ocean::warpToward,
                      py::arg("world_x"), py::arg("world_z"), py::arg("coef_a") = 0.1f,
                      "Pack vertex density toward a world-space focus point (e.g. the camera). "

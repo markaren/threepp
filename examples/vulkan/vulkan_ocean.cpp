@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -670,7 +671,7 @@ namespace {
 int main(int argc, char** argv) {
 
     // --shot <name.png> [--frames N] [--pinned] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
-    // [--chop <lambda>] [--chop-normals 0|1]
+    // [--chop <lambda>] [--chop-normals 0|1] [--spread 0|1] [--swell <Hs m>,<Tp s>]
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -682,6 +683,8 @@ int main(int argc, char** argv) {
     bool pinnedClock = false;// --pinned: fixed 1/60 s steps on a pinned renderer clock (replayable captures)
     float chopOverride = -1.f;// --chop <lambda>: the ocean's choppiness for this run (look A/Bs)
     int   chopNormalsArg = -1;// --chop-normals 0|1: Params::chopNormals for this run
+    int   spreadArg = -1;     // --spread 0|1: Params::measuredSpreading for this run
+    float swellHs = 0.f, swellTp = 12.f;// --swell Hs,Tp: a swell 45 deg off the wind, as K adds
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -694,6 +697,8 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--chop") == 0 && i + 1 < argc) chopOverride = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--chop-normals") == 0 && i + 1 < argc) chopNormalsArg = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--spread") == 0 && i + 1 < argc) spreadArg = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--swell") == 0 && i + 1 < argc) std::sscanf(argv[++i], "%f,%f", &swellHs, &swellTp);
     }
     const bool capturing = !shotPath.empty();
     // Shared capture machinery (capture_util.hpp): --cam/--look override the
@@ -765,6 +770,13 @@ int main(int argc, char** argv) {
     auto ocean = Ocean::create(oceanOpts);
     if (chopOverride >= 0.f) ocean->params.choppiness = chopOverride;
     if (chopNormalsArg >= 0) ocean->params.chopNormals = chopNormalsArg != 0;
+    if (spreadArg >= 0) ocean->params.measuredSpreading = spreadArg != 0;
+    if (swellHs > 0.f) {
+        ocean->params.swellHeight = swellHs;
+        ocean->params.swellPeriod = swellTp;
+        ocean->params.swellTheta  = ocean->params.windTheta - 0.785f;
+        ocean->params.swellSpread = 50.f;
+    }
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
@@ -1384,8 +1396,8 @@ int main(int argc, char** argv) {
 
     // L: directional spreading A/B. Measured Donelan-Banner spreading (waves
     // run downwind, long crests) against the historical symmetric cos^2. The
-    // renderer regenerates the spectra on the change; THREEPP_OCEAN_SPREAD=0
-    // starts in the cos^2 state.
+    // renderer regenerates the spectra on the change; THREEPP_OCEAN_SPREAD=1
+    // starts in the measured state.
     std::printf("[ocean] spreading: %s (L toggles)\n",
                 ocean->params.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2");
     KeyAdapter spreadKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
@@ -1612,7 +1624,9 @@ int main(int argc, char** argv) {
         }
         ImGui::Checkbox("Measured spreading (L)", &ocean->params.measuredSpreading);
         ImGui::SliderFloat("Swell Hs (K)", &ocean->params.swellHeight, 0.f, 3.f, "%.2f m");
-        ImGui::SliderFloat("Swell period", &ocean->params.swellPeriod, 9.f, 18.f, "%.1f s");
+        // 9.5-17.5 s: the band cascade 0 carries on this 1 km ocean (its
+        // peak must sit between the 127 m tile and two modes of the 1 km one).
+        ImGui::SliderFloat("Swell period", &ocean->params.swellPeriod, 9.5f, 17.5f, "%.1f s");
 
         ImGui::TextDisabled("Wind changes apply on scene reload.");
         if (ImGui::Checkbox("Clouds", &cloudsOn)) applyClouds();

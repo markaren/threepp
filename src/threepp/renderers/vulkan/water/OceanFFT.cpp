@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -408,7 +409,7 @@ namespace threepp::water {
         p.swellScale      = swellScale(settings_);
         p.swellPeriod     = settings_.swellPeriod;
         p.swellTheta      = settings_.swellTheta;
-        p.swellSpread     = settings_.swellSpread;
+        p.swellSpread     = swellSpreadClamped(settings_.swellSpread);
         vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(settings_.textureSize);
         vkCmdDispatch(cb, g, g, 1);
@@ -445,10 +446,17 @@ namespace threepp::water {
             const double x2 = x * x;
             const double sf = std::exp(-1.25 / (x2 * x2)) * gammaPeak / (x2 * x2 * x);
             const double c  = std::clamp(-(kx * std::cos(theta) + kz * std::sin(theta)) / kl, -1.0, 1.0);
-            const double halfCos = std::sqrt(0.5 * (1.0 + c));
+            const double halfCos = std::max(std::sqrt(0.5 * (1.0 + c)), 1e-6);
             return sf * std::pow(halfCos, 2.0 * s) / (w * kl);
         }
     }// namespace
+
+    float PhillipsSpectrum::swellSpreadClamped(float s) {
+        // s < 1 widens cos^(2s)(theta/2) past anything measured for swell
+        // (Goda 2000 puts it at 10 and up) and s <= 0 makes pow(0, 2s)
+        // undefined; max(1, NaN) is 1 too.
+        return std::max(1.f, s);
+    }
 
     float PhillipsSpectrum::swellScale(const Settings& s) {
         if (!(s.swellHeight > 0.f) || !(s.swellPeriod > 0.f) || !(s.tileSize > 0.f)) return 0.f;
@@ -459,7 +467,23 @@ namespace threepp::water {
         // at least two modes out from the origin, or the swell cannot be
         // drawn on this grid (and normalising its tail up to Hs would be wrong).
         const double kp = std::pow(2.0 * pi / s.swellPeriod, 2.0) / g;
-        if (kp < 2.0 * dk || kp < s.kMin || (s.kMax > 0.f && kp > s.kMax)) return 0.f;
+        if (kp < 2.0 * dk || kp < s.kMin || (s.kMax > 0.f && kp > s.kMax)) {
+            // Say so, once per period and tile asked for: a swell the user set
+            // that silently draws nothing is worse than a line on stderr.
+            static float warnedPeriod = 0.f, warnedTile = 0.f;
+            if (s.swellPeriod != warnedPeriod || s.tileSize != warnedTile) {
+                warnedPeriod = s.swellPeriod;
+                warnedTile   = s.tileSize;
+                const double kHi = std::min(s.kMax > 0.f ? double(s.kMax) : 1e9, 1e9);
+                const double kLo = std::max(2.0 * dk, double(s.kMin));
+                std::fprintf(stderr,
+                             "[ocean] swell of %.1f s is not drawn: its peak wavelength %.0f m is outside what "
+                             "cascade 0 (tile %.0f m) carries, periods %.1f to %.1f s\n",
+                             double(s.swellPeriod), 2.0 * pi / kp, double(s.tileSize),
+                             2.0 * pi / std::sqrt(g * kHi), 2.0 * pi / std::sqrt(g * kLo));
+            }
+            return 0.f;
+        }
         const int n = static_cast<int>(s.textureSize);
         const double l = s.smallWaveCutoff;
         double sum = 0.0;
@@ -471,7 +495,7 @@ namespace threepp::water {
                 const double kl = std::sqrt(k2);
                 // The shader's band mask and its length(k) < 1e-4 guard.
                 if (kl < 1e-4 || kl < s.kMin || (s.kMax > 0.f && kl > s.kMax)) continue;
-                sum += swellShapeCpu(kx, kz, s.swellPeriod, s.swellTheta, s.swellSpread) *
+                sum += swellShapeCpu(kx, kz, s.swellPeriod, s.swellTheta, swellSpreadClamped(s.swellSpread)) *
                        std::exp(-k2 * l * l);
             }
         }
