@@ -109,6 +109,13 @@ namespace threepp {
         // concern rather than a solver one, but it is cheap here and every
         // real-time caller wants it, so it is offered rather than imposed.
         float maxJointSpeed = 0.f;
+
+        // Chain DOFs (global indices) the solver must leave where they are.
+        // A robot whose two arms share a torso needs this: solving one arm
+        // through the waist moves the other arm's hand, so a bimanual caller
+        // locks the shared joints and solves each arm over its own. Read at
+        // construction, like the chain itself.
+        std::vector<size_t> lockedDofs;
     };
 
     struct IkResult {
@@ -180,6 +187,10 @@ namespace threepp {
         explicit IkSolver(const Robot& robot, IkOptions options = {})
             : robot_(&robot), options_(std::move(options)),
               dofs_(robot.chainDofs()), ranges_(robot.getJointRanges(false)) {
+
+            std::erase_if(dofs_, [this](size_t d) {
+                return std::ranges::find(options_.lockedDofs, d) != options_.lockedDofs.end();
+            });
 
             const auto infos = robot.getArticulatedJointInfo();
             types_.reserve(dofs_.size());

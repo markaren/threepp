@@ -342,3 +342,29 @@ TEST_CASE("The rest-posture pull does not cost reach") {
     INFO("total joint difference " << moved);
     CHECK(moved > 1e-3f);
 }
+
+TEST_CASE("A locked DOF stays where it is while the others reach") {
+
+    // The planar arm is redundant for a position task, so with its base joint
+    // locked the two remaining joints can still strike a pose the arm reached
+    // with the base held at the same angle.
+    auto robot = planarArm();
+    REQUIRE(robot);
+
+    IkOptions opts;
+    opts.task = IkTask::Position;
+    opts.maxIterations = 200;
+    opts.lockedDofs = {0};
+    const IkSolver solver(*robot, opts);
+    REQUIRE(solver.solvedDofs().size() == 2);
+
+    const float base = 0.25f;
+    const Vector3 target = positionOf(solver.toolTransform({base, -0.5f, 0.4f}));
+
+    std::vector<float> q{base, 0.1f, 0.1f};
+    const IkResult r = solver.solve(q, target);
+
+    CHECK(r.converged);
+    CHECK(q[0] == base);
+    CHECK_THAT(r.positionError, WithinAbs(0.f, 1e-4));
+}
