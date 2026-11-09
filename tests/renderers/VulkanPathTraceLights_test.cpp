@@ -4,8 +4,8 @@
 //
 //   [1] an emitter through a thin pane lights the floor once, dimmed by the
 //       pane (THREEPP_PT_THIN_GLASS_NEE): a clear pane takes about 8 % off,
-//       a smoked one (albedo 0.2) leaves about a fifth; the old way counted
-//       the light about twice;
+//       a smoked one (albedo 0.2) leaves about a fifth, a red one (1, 0, 0)
+//       lights it red; the old way counted the light about twice;
 //   [2] the last vertex's emitter NEE has its bounce (THREEPP_PT_LAST_BOUNCE_MIS):
 //       a glossy floor's reflection of a panel at max_bounces 0 is the one
 //       max_bounces 1 draws; the old way lost all but the NEE's MIS share;
@@ -86,6 +86,18 @@ namespace {
         tex->format = Format::RGBA;
         tex->needsUpdate();
         return tex;
+    }
+
+    // The mean of channel c (0 red, 1 green, 2 blue) over the window.
+    double chan(const std::vector<float>& px, int c, int x0, int x1, int y0, int y1) {
+        double s = 0;
+        int    n = 0;
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x) {
+                s += px[(std::size_t(y) * kW + x) * 3 + c];
+                ++n;
+            }
+        return n ? s / n : 0.0;
     }
 
     double lum(const std::vector<float>& px, int x0, int x1, int y0, int y1) {
@@ -224,6 +236,19 @@ int main() {
         check(open > 0.05, "the panel lights the open floor");
         check(std::abs(clearOn / open - 0.92) < 0.06, "a clear pane lets 0.92 through, once");
         check(std::abs(smokedOn / open - 0.184) < 0.03, "a smoked pane (0.2) lets 0.18 through");
+
+        // A red pane: the open floor is lit white (its channels equal), the
+        // floor under the pane is 0.92 of it in red and none in green; a
+        // grey shadow channel lit it with the pane's luminance (0.21 x 0.92)
+        // in every channel.
+        glass->color = Color(1.f, 0.f, 0.f);
+        glass->needsUpdate();
+        const auto   red  = tr.trace(scene, *camera, 256, 2, "1_red_on");
+        const double redR = chan(red, 0, kW / 2 - 12, kW / 2 + 12, kH / 2 - 6, kH / 2 + 6);
+        const double redG = chan(red, 1, kW / 2 - 12, kW / 2 + 12, kH / 2 - 6, kH / 2 + 6);
+        std::printf("  red pane over the open floor: red %.3f, green %.3f\n", redR / open, redG / open);
+        check(std::abs(redR / open - 0.92) < 0.06, "a red pane lets 0.92 of the red through");
+        check(redG / open < 0.05, "and none of the green");
     }
 
     // ── 2. The last vertex's bounce ────────────────────────────────────────

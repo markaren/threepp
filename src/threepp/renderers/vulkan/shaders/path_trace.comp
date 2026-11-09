@@ -472,13 +472,14 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     return a >= m.alphaCutoff;
 }
 
-// What the GLASS on a shadow ray lets through, as one number: per glass surface
-// crossed, the luminance of its tint and its faces' Fresnel loss at normal
-// incidence ((1 - F0) a face; a thin-walled sheet is two faces, a solid's
-// surface one, its tint taken once, where the ray enters). Glass used to let
-// the light through whole and white: a smoked window lit the seat behind it
-// like no glass at all. Not the colour (the shadow channel is a scalar), not
-// the absorption over a solid's depth, not a caustic. Its own traversal of the
+// What the GLASS on a shadow ray lets through, per channel: per glass surface
+// crossed, its tint and its faces' Fresnel loss at normal incidence ((1 - F0)
+// a face; a thin-walled sheet is two faces, a solid's surface one, its tint
+// taken once, where the ray enters). Glass used to let the light through whole
+// and white: a smoked window lit the seat behind it like no glass at all. The
+// emitter NEE keeps the colour (a red pane lights the floor red); the scalar
+// shadow channel takes its luminance (kGlassLum). Not the absorption over a
+// solid's depth, not a caustic. Its own traversal of the
 // glass and blend instances only (kRayMaskAlpha; flat blends and additive
 // cards pass), every candidate visited (NoOpaque), none committed. The ocean
 // is in the opaque mask and stays out.
@@ -491,10 +492,11 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 // pass (a thin pane, or a flat blend), which the emitter NEE then owns
 // (thinGlassNeeOwns). A flat blend lets its transmission through, untinted,
 // as the camera path passes it.
-float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock, inout bool crossed) {
+const vec3 kGlassLum = vec3(0.2126, 0.7152, 0.0722);
+vec3 glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock, inout bool crossed) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
-    float T = 1.0;
+    vec3 T = vec3(1.0);
     // The faces counted so far, (instance, geometry, primitive): no BLAS sets
     // NO_DUPLICATE_ANY_HIT, so a driver may hand the same triangle over twice,
     // and the product would take its face in twice. Past eight, unchecked.
@@ -515,25 +517,25 @@ float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock
             if (!thinGlassNeeOwns()) continue;
             T *= clamp(m.transmission, 0.0, 1.0);
             if (!blendPass()) crossed = true;// with blendPass the bounce ray passes it as a null event: MIS holds
-            if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
+            if (dot(T, kGlassLum) < 0.01) { T = vec3(0.0); rayQueryTerminateEXT(rq); }
             continue;
         }
-        if (solidsBlock && m.thinWalled == 0) { T = 0.0; rayQueryTerminateEXT(rq); break; }
+        if (solidsBlock && m.thinWalled == 0) { T = vec3(0.0); rayQueryTerminateEXT(rq); break; }
         if (m.thinWalled != 0) crossed = true;
         const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
         const float face = 1.0 - f0n * f0n;
         const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
-        const float tintL = clamp(dot(m.albedo, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+        const vec3  tint  = clamp(m.albedo, 0.0, 1.0);
         // The opaque share of a partly transmissive surface blocks.
         const float t = clamp(m.transmission, 0.0, 1.0);
-        T *= t * (m.thinWalled != 0 ? tintL * face * face : (entry ? tintL : 1.0) * face);
-        if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
+        T *= t * (m.thinWalled != 0 ? tint * (face * face) : (entry ? tint : vec3(1.0)) * face);
+        if (dot(T, kGlassLum) < 0.01) { T = vec3(0.0); rayQueryTerminateEXT(rq); }
     }
     return T;
 }
 float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
     bool crossed = false;
-    return glassTransmittanceImpl(origin, dir, tMax, false, crossed);
+    return dot(glassTransmittanceImpl(origin, dir, tMax, false, crossed), kGlassLum);
 }
 
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax);
@@ -551,13 +553,13 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
 // Point and spot lamps, and a scene's own sun, are found by no ray: their
 // light keeps passing glass along the shadow ray, dimmed (shadowVis).
 bool envSunLight() { return (pc.flags & 16u) != 0u && lights.dirCount > 0u; }
-float shadowVisFindable(vec3 origin, vec3 dir, float tMax, inout bool crossed) {
+vec3 shadowVisFindableRgb(vec3 origin, vec3 dir, float tMax, inout bool crossed) {
     const float v = shadowVisOpaque(origin, dir, tMax);
-    return v > 0.0 ? v * glassTransmittanceImpl(origin, dir, tMax, true, crossed) : 0.0;
+    return v > 0.0 ? v * glassTransmittanceImpl(origin, dir, tMax, true, crossed) : vec3(0.0);
 }
 float shadowVisFindable(vec3 origin, vec3 dir, float tMax) {
     bool crossed = false;
-    return shadowVisFindable(origin, dir, tMax, crossed);
+    return dot(shadowVisFindableRgb(origin, dir, tMax, crossed), kGlassLum);
 }
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
@@ -872,16 +874,17 @@ vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
     if (max(max(fc.r, fc.g), fc.b) <= 0.0) return vec3(0.0);
     const float tMax = dist - SHADOW_EPS - dist * 1e-3;
     if (tMax <= 1e-4) return vec3(0.0);
-    bool        crossed = false;
-    const float gv      = shadowVisFindable(offsetOrigin(s, toL), toL, tMax, crossed);
-    if (gv <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
+    bool       crossed = false;
+    const vec3 gv      = shadowVisFindableRgb(offsetOrigin(s, toL), toL, tMax, crossed);
+    if (max(max(gv.r, gv.g), gv.b) <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
     const float pdfB = pdfBsdf(s, V, toL);
     float       w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
     if (!thinGlassNeeOwns()) return fc * (w / pdfSolid) * tri.emission.xyz;
     // Through a thin pane or a flat blend the light is this NEE's alone (the
-    // bounce ray that finds it there adds nothing), dimmed by what they let through.
+    // bounce ray that finds it there adds nothing), dimmed and tinted by what
+    // they let through.
     if (crossed) w = 1.0;
-    return fc * (w * gv / pdfSolid) * tri.emission.xyz;
+    return fc * gv * (w / pdfSolid) * tri.emission.xyz;
 }
 
 // gi_bounce.glsl asks the includer for these. emissiveIrradiance is the
