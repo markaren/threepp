@@ -20,6 +20,9 @@ add_test_executable(URDFLoader_test)
 add_test_executable(Xacro_test)
 add_test_executable(XacroUr_test)
 add_test_executable(XacroFranka_test)
+if (THREEPP_WITH_USD)
+    add_test_executable(USDLoader_test)
+endif ()
 # Every case needs a description clone to expand — a Universal_Robots_ROS2_Description for
 # the one (THREEPP_UR_DESCRIPTION), a franka_description for the other
 # (THREEPP_FRANKA_DESCRIPTION). Without one Catch2 skips them all and exits 4, which is a

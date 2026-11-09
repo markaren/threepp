@@ -33,11 +33,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -178,12 +180,18 @@ namespace threepp {
             return e;
         }
 
-        // Replace <UDIM> token with the first tile index so we get a usable path.
-        std::string resolveUDIM(const std::string& s) {
+        // A UDIM texture set names its tiles 1001, 1002, ... (1001 + the u tile + 10 * the v
+        // tile) in place of a <UDIM> token.
+        bool hasUDIM(const std::string& s) {
+            return s.find("<UDIM>") != std::string::npos;
+        }
+
+        // The path of one tile of a UDIM texture set (any other path as it is).
+        std::string resolveUDIM(const std::string& s, int tile) {
             std::string out = s;
             const std::string tok = "<UDIM>";
             auto pos = out.find(tok);
-            if (pos != std::string::npos) out.replace(pos, tok.size(), "1001");
+            if (pos != std::string::npos) out.replace(pos, tok.size(), std::to_string(tile));
             return out;
         }
 
@@ -287,13 +295,53 @@ namespace threepp {
         // per-material triangle ranges, and a threepp mesh draws one material.
         struct SubMesh {
             int materialId = -1;
+            int tile = 0;// the UDIM tile its UVs were moved from (0: none, see buildSubMeshes)
             std::shared_ptr<BufferGeometry> geometry;
         };
 
-        // `triMaterial` holds the material of every triangle.
+        // The element of a primvar that corner k of a triangulated mesh reads,
+        // whatever the primvar's interpolation (-1: none). Uniform primvars
+        // need the authored face of each triangle.
+        long long primvarElement(const tnext::RenderMesh& rm, tnext::Interpolation interp, size_t k) {
+            switch (interp) {
+                case tnext::Interpolation::Constant:
+                    return 0;
+                case tnext::Interpolation::Vertex:
+                case tnext::Interpolation::Varying:
+                    return rm.triangulated_indices[k];
+                case tnext::Interpolation::FaceVarying:
+                    return k < rm.triangulated_face_vertex_indices.size()
+                                   ? static_cast<long long>(rm.triangulated_face_vertex_indices[k])
+                                   : -1;
+                case tnext::Interpolation::Uniform: {
+                    const auto& faceOffsets = rm.face_triangle_offsets;
+                    if (faceOffsets.empty()) return -1;
+                    const auto t = static_cast<uint32_t>(k / 3);
+                    auto it = std::upper_bound(faceOffsets.begin(), faceOffsets.end(), t);
+                    return static_cast<long long>(it - faceOffsets.begin()) - 1;
+                }
+            }
+            return -1;
+        }
+
+        // Whether a primvar of `count` elements has an element for every corner.
+        bool coversCorners(const tnext::RenderMesh& rm, tnext::Interpolation interp, size_t count) {
+            if (count == 0) return false;
+            for (size_t k = 0; k < rm.triangulated_indices.size(); ++k) {
+                const long long i = primvarElement(rm, interp, k);
+                if (i < 0 || static_cast<size_t>(i) >= count) return false;
+            }
+            return true;
+        }
+
+        // `triMaterial` holds the material of every triangle, `triTile` (empty
+        // for none) the UDIM tile the UVs of a triangle lie in when its
+        // material is a UDIM texture set: a part per material and tile, the
+        // tile's UVs moved into the 0..1 square its own textures cover.
         std::vector<SubMesh> buildSubMeshes(const tnext::RenderMesh& rm,
                                             const tnext::RenderScene& scene,
-                                            const std::vector<int>& triMaterial) {
+                                            const std::vector<int>& triMaterial,
+                                            const std::vector<int>& triTile = {}) {
             std::vector<SubMesh> out;
             if (!rm.is_triangulated || rm.points.empty()) return out;
 
@@ -301,45 +349,14 @@ namespace threepp {
             const size_t numCorners = rm.triangulated_indices.size();
             const size_t numTris = numCorners / 3;
             if (numTris == 0 || triMaterial.size() != numTris) return out;
+            if (!triTile.empty() && triTile.size() != numTris) return out;
 
             const std::vector<float> positions = restPosePositions(rm, scene);
 
-            // The element of a primvar that corner k reads, whatever the
-            // primvar's interpolation. Uniform primvars need the authored
-            // face of each triangle.
-            const auto& faceOffsets = rm.face_triangle_offsets;
-            auto elementIndex = [&](tnext::Interpolation interp, size_t k) -> long long {
-                switch (interp) {
-                    case tnext::Interpolation::Constant:
-                        return 0;
-                    case tnext::Interpolation::Vertex:
-                    case tnext::Interpolation::Varying:
-                        return rm.triangulated_indices[k];
-                    case tnext::Interpolation::FaceVarying:
-                        return k < rm.triangulated_face_vertex_indices.size()
-                                       ? static_cast<long long>(rm.triangulated_face_vertex_indices[k])
-                                       : -1;
-                    case tnext::Interpolation::Uniform: {
-                        if (faceOffsets.empty()) return -1;
-                        const auto t = static_cast<uint32_t>(k / 3);
-                        auto it = std::upper_bound(faceOffsets.begin(), faceOffsets.end(), t);
-                        return static_cast<long long>(it - faceOffsets.begin()) - 1;
-                    }
-                }
-                return -1;
-            };
-            auto covers = [&](tnext::Interpolation interp, size_t count) {
-                if (count == 0) return false;
-                for (size_t k = 0; k < numCorners; ++k) {
-                    const long long i = elementIndex(interp, k);
-                    if (i < 0 || static_cast<size_t>(i) >= count) return false;
-                }
-                return true;
-            };
             const auto& uv = rm.texcoords_0;
-            const bool haveUV = covers(rm.texcoords_0_interp, uv.size() / 2);
+            const bool haveUV = coversCorners(rm, rm.texcoords_0_interp, uv.size() / 2);
             const auto& normals = rm.normals;
-            const bool haveNormals = covers(rm.normals_interp, normals.size() / 3);
+            const bool haveNormals = coversCorners(rm, rm.normals_interp, normals.size() / 3);
 
             // Corners share a vertex when they share a point, a UV and an
             // authored normal: the recomputed normals then stay smooth across
@@ -360,9 +377,11 @@ namespace threepp {
                 }
             };
 
-            std::unordered_map<int, size_t> partOf;
+            std::map<std::pair<int, int>, size_t> partOf;
             struct Part {
                 int materialId;
+                int tile;
+                float du, dv;// the tile's corner in UV space
                 std::unordered_map<Key, unsigned int, KeyHash> vertexOf;
                 std::vector<float> pos, uvs;
                 std::vector<unsigned int> index;
@@ -370,8 +389,12 @@ namespace threepp {
             std::vector<Part> parts;
 
             for (size_t t = 0; t < numTris; ++t) {
-                auto [it, inserted] = partOf.emplace(triMaterial[t], parts.size());
-                if (inserted) parts.push_back({triMaterial[t], {}, {}, {}, {}});
+                const int tile = triTile.empty() ? 0 : triTile[t];
+                auto [it, inserted] = partOf.emplace(std::make_pair(triMaterial[t], tile), parts.size());
+                if (inserted) {
+                    const int n = tile > 0 ? tile - 1001 : 0;
+                    parts.push_back({triMaterial[t], tile, static_cast<float>(n % 10), static_cast<float>(n / 10), {}, {}, {}, {}});
+                }
                 Part& g = parts[it->second];
                 for (size_t c = 0; c < 3; ++c) {
                     const size_t k = t * 3 + c;
@@ -380,14 +403,14 @@ namespace threepp {
                     Key key{p, {}};
                     float s = 0, tt = 0;
                     if (haveUV) {
-                        const auto i = static_cast<size_t>(elementIndex(rm.texcoords_0_interp, k));
+                        const auto i = static_cast<size_t>(primvarElement(rm, rm.texcoords_0_interp, k));
                         s = uv[i * 2];
                         tt = uv[i * 2 + 1];
                         std::memcpy(&key.attr[0], &s, 4);
                         std::memcpy(&key.attr[1], &tt, 4);
                     }
                     if (haveNormals) {
-                        const auto i = static_cast<size_t>(elementIndex(rm.normals_interp, k));
+                        const auto i = static_cast<size_t>(primvarElement(rm, rm.normals_interp, k));
                         for (int a = 0; a < 3; ++a) {
                             const float n = normals[i * 3 + a];
                             std::memcpy(&key.attr[2 + a], &n, 4);
@@ -396,7 +419,7 @@ namespace threepp {
                     auto [vit, fresh] = g.vertexOf.emplace(key, static_cast<unsigned int>(g.pos.size() / 3));
                     if (fresh) {
                         g.pos.insert(g.pos.end(), {positions[p * 3], positions[p * 3 + 1], positions[p * 3 + 2]});
-                        if (haveUV) g.uvs.insert(g.uvs.end(), {s, tt});
+                        if (haveUV) g.uvs.insert(g.uvs.end(), {s - g.du, tt - g.dv});
                     }
                     g.index.push_back(vit->second);
                 }
@@ -417,7 +440,7 @@ namespace threepp {
                 // another). Recompute from the winding: guaranteed outward,
                 // costs only smoothing-group fidelity.
                 geometry->computeVertexNormals();
-                out.push_back({g.materialId, std::move(geometry)});
+                out.push_back({g.materialId, g.tile, std::move(geometry)});
             }
             return out;
         }
@@ -475,9 +498,10 @@ namespace threepp {
             return true;
         }
 
-        // `parts`: each triangle's material as an index into the mesh's
-        // materials in first-use order, which is how buildSubMeshes orders
-        // its parts. Copies bound to copies of a material match.
+        // `parts`: each triangle's part (its material, and the UDIM tile of
+        // it) as an index into the mesh's parts in first-use order, which is
+        // how buildSubMeshes orders them. Copies bound to copies of a
+        // material match.
         uint64_t meshContentHash(const tnext::RenderMesh& rm, const std::vector<int>& parts) {
             ContentHash c;
             c.word(rm.is_triangulated);
@@ -535,13 +559,21 @@ namespace threepp {
 
             std::vector<std::shared_ptr<Texture>> textures;
             std::vector<bool> textureDone;
-            std::unordered_map<int, std::shared_ptr<Material>> materials;
+            // by material id and UDIM tile (see material)
+            std::unordered_map<uint64_t, std::shared_ptr<Material>> materials;
             std::unordered_map<int, std::vector<SubMesh>> subMeshes;
             // Content hash -> meshes built under it (see subMeshesFor).
             struct BuiltMesh {
                 int32_t meshId;
                 std::vector<int> parts;
+                std::vector<int> tiles;// each part's UDIM tile
             };
+            // UDIM texture sets: the tile the material being converted takes
+            // its textures from, whether its conversion met a texture set, and
+            // which materials have one.
+            int udimTile = 1001;
+            bool sawUDIM = false;
+            std::unordered_map<int, bool> udimMaterials;
             std::unordered_map<uint64_t, std::vector<BuiltMesh>> meshesByContent;
             std::unordered_map<std::string, std::shared_ptr<Texture>> sampledTextures;
             std::unordered_set<int> prototypeNodes;
@@ -759,6 +791,49 @@ namespace threepp {
             return out;
         }
 
+        // Whether a material's textures are UDIM texture sets (converting it,
+        // once, finds out).
+        bool usesUDIM(Build& b, int materialId, const tnext::RenderMesh& rm) {
+            if (!b.scene.get_material(materialId)) return false;
+            material(b, materialId, rm);
+            const auto it = b.udimMaterials.find(materialId);
+            return it != b.udimMaterials.end() && it->second;
+        }
+
+        // The UDIM tile (1001 + the u tile + 10 * the v tile) the UVs of each
+        // triangle lie in, for the triangles whose material is a UDIM texture
+        // set; 0 for the rest, and empty when none is. A UDIM asset keeps
+        // every face inside one tile, so its UV centroid tells which.
+        std::vector<int> triangleTiles(Build& b, const tnext::RenderMesh& rm, const std::vector<int>& triMaterial) {
+            std::unordered_map<int, bool> udim;
+            bool any = false;
+            for (int id : triMaterial) {
+                if (udim.contains(id)) continue;
+                const bool u = usesUDIM(b, id, rm);
+                udim[id] = u;
+                any = any || u;
+            }
+            if (!any) return {};
+            const auto& uv = rm.texcoords_0;
+            const bool haveUV = coversCorners(rm, rm.texcoords_0_interp, uv.size() / 2);
+            std::vector<int> out(triMaterial.size(), 0);
+            for (size_t t = 0; t < triMaterial.size(); ++t) {
+                if (!udim[triMaterial[t]]) continue;
+                float u = 0, v = 0;
+                if (haveUV) {
+                    for (size_t c = 0; c < 3; ++c) {
+                        const auto i = static_cast<size_t>(primvarElement(rm, rm.texcoords_0_interp, t * 3 + c));
+                        u += uv[i * 2] / 3.f;
+                        v += uv[i * 2 + 1] / 3.f;
+                    }
+                }
+                const int column = std::clamp(static_cast<int>(std::floor(u)), 0, 9);
+                const int row = std::max(0, static_cast<int>(std::floor(v)));
+                out[t] = 1001 + column + 10 * row;
+            }
+            return out;
+        }
+
         // A mesh's parts, built once per mesh, and their geometry once per
         // distinct content: a mesh identical to one already built (same
         // points, topology, primvars and material layout) takes that mesh's
@@ -768,38 +843,43 @@ namespace threepp {
             if (auto it = b.subMeshes.find(meshId); it != b.subMeshes.end()) return it->second;
 
             const std::vector<int> triMaterial = triangleMaterials(b, rm);
-            if (rm.skin) return b.subMeshes.emplace(meshId, buildSubMeshes(rm, b.scene, triMaterial)).first->second;
+            const std::vector<int> triTile = triangleTiles(b, rm, triMaterial);
+            if (rm.skin) return b.subMeshes.emplace(meshId, buildSubMeshes(rm, b.scene, triMaterial, triTile)).first->second;
 
-            // The materials in first-use order (buildSubMeshes' part order)
-            // and each triangle's index into them.
-            std::vector<int> materials;
+            // The parts (a material, and a UDIM tile of it) in first-use
+            // order (buildSubMeshes' part order) and each triangle's index
+            // into them.
+            std::vector<std::pair<int, int>> keys;
             std::vector<int> parts(triMaterial.size());
-            std::unordered_map<int, int> partOf;
+            std::map<std::pair<int, int>, int> partOf;
             for (size_t t = 0; t < triMaterial.size(); ++t) {
-                auto [it, inserted] = partOf.emplace(triMaterial[t], static_cast<int>(materials.size()));
-                if (inserted) materials.push_back(triMaterial[t]);
+                const std::pair<int, int> key{triMaterial[t], triTile.empty() ? 0 : triTile[t]};
+                auto [it, inserted] = partOf.emplace(key, static_cast<int>(keys.size()));
+                if (inserted) keys.push_back(key);
                 parts[t] = it->second;
             }
+            std::vector<int> tiles(keys.size());
+            for (size_t i = 0; i < keys.size(); ++i) tiles[i] = keys[i].second;
 
             auto& built = b.meshesByContent[meshContentHash(rm, parts)];
             for (const auto& other : built) {
                 const auto* otherMesh = b.scene.get_mesh(other.meshId);
-                if (!otherMesh || other.parts != parts || !sameMeshContent(*otherMesh, rm)) continue;
+                if (!otherMesh || other.parts != parts || other.tiles != tiles || !sameMeshContent(*otherMesh, rm)) continue;
                 const auto& shared = b.subMeshes.at(other.meshId);
                 std::vector<SubMesh> out;
                 out.reserve(shared.size());
-                for (size_t i = 0; i < shared.size() && i < materials.size(); ++i) {
-                    out.push_back({materials[i], shared[i].geometry});
+                for (size_t i = 0; i < shared.size() && i < keys.size(); ++i) {
+                    out.push_back({keys[i].first, keys[i].second, shared[i].geometry});
                 }
                 return b.subMeshes.emplace(meshId, std::move(out)).first->second;
             }
-            auto& out = b.subMeshes.emplace(meshId, buildSubMeshes(rm, b.scene, triMaterial)).first->second;
-            built.push_back({meshId, std::move(parts)});
+            auto& out = b.subMeshes.emplace(meshId, buildSubMeshes(rm, b.scene, triMaterial, triTile)).first->second;
+            built.push_back({meshId, std::move(parts), std::move(tiles)});
             return out;
         }
 
         // A mesh prim: one Mesh, or a Group of one Mesh per GeomSubset
-        // material.
+        // material (and UDIM tile).
         std::shared_ptr<Object3D> meshObject(Build& b, int32_t meshId) {
             const auto* rm = b.scene.get_mesh(meshId);
             if (!rm) return nullptr;
@@ -807,7 +887,7 @@ namespace threepp {
             if (parts.empty()) return nullptr;
 
             auto makeMesh = [&](const SubMesh& part) {
-                auto mesh = Mesh::create(part.geometry, material(b, part.materialId, *rm));
+                auto mesh = Mesh::create(part.geometry, material(b, part.materialId, *rm, part.tile));
                 sizeVolume(b, mesh->material(), *part.geometry);
                 ++b.meshCount;
                 return mesh;
@@ -838,7 +918,7 @@ namespace threepp {
                 if (!rm) continue;
                 const auto& instances = byMesh[meshId];
                 for (const auto& part : subMeshesFor(b, meshId, *rm)) {
-                    auto mesh = InstancedMesh::create(part.geometry, material(b, part.materialId, *rm), instances.size());
+                    auto mesh = InstancedMesh::create(part.geometry, material(b, part.materialId, *rm, part.tile), instances.size());
                     sizeVolume(b, mesh->material(), *part.geometry);
                     for (size_t i = 0; i < instances.size(); ++i) {
                         mesh->setMatrixAt(i, toMatrix4(instances[i]->transform));
@@ -899,9 +979,9 @@ namespace threepp {
         }
 
         std::shared_ptr<Texture> loadImage(Build& b, const std::string& resolved, const std::string& authored) {
-            const std::string path = resolveUDIM(resolved.empty() ? authored : resolved);
+            const std::string path = resolveUDIM(resolved.empty() ? authored : resolved, b.udimTile);
             if (isFile(path)) return texLoader.load(path, true);
-            const std::string rel = resolveUDIM(authored);
+            const std::string rel = resolveUDIM(authored, b.udimTile);
             if (isFile(b.baseDir / rel)) return texLoader.load(b.baseDir / rel, true);
             // Package entries (.usdz) and anything else only LightUSD can read.
             tnext::TextureImage img;
@@ -916,22 +996,30 @@ namespace threepp {
                 b.textures.resize(b.scene.textures.size());
                 b.textureDone.resize(b.scene.textures.size(), false);
             }
-            if (b.textureDone[texId]) return b.textures[texId];
-            b.textureDone[texId] = true;
-
             const auto& rt = b.scene.textures[texId];
             std::string resolved;
             if (rt.image_id >= 0 && static_cast<size_t>(rt.image_id) < b.scene.images.size()) {
                 resolved = b.scene.images[rt.image_id].resolved_path;
             }
+            // A UDIM texture set is one texture per tile: the one the material
+            // being converted is for (see material), never remembered by id.
+            const bool udim = hasUDIM(resolved) || hasUDIM(rt.asset_path);
+            if (udim) {
+                b.sawUDIM = true;
+            } else {
+                if (b.textureDone[texId]) return b.textures[texId];
+                b.textureDone[texId] = true;
+            }
+
             // Every material instance carries its own RenderTexture records;
             // uses that sample one image the same way share one texture
             // (a clone copies the image).
             std::ostringstream key;
-            key << resolved << '|' << rt.asset_path << '|' << int(rt.wrap_s) << int(rt.wrap_t) << '|'
+            key << resolved << '|' << rt.asset_path << '|' << (udim ? b.udimTile : 0) << '|' << int(rt.wrap_s) << int(rt.wrap_t) << '|'
                 << rt.offset.x << ',' << rt.offset.y << ',' << rt.scale.x << ',' << rt.scale.y << ',' << rt.rotation;
             if (auto it = b.sampledTextures.find(key.str()); it != b.sampledTextures.end()) {
-                return b.textures[texId] = it->second;
+                if (!udim) b.textures[texId] = it->second;
+                return it->second;
             }
             auto tex = loadImage(b, resolved, rt.asset_path);
             b.sampledTextures[key.str()] = tex;// also remembers failures
@@ -969,7 +1057,7 @@ namespace threepp {
                 }
             }
             b.sampledTextures[key.str()] = tex;
-            b.textures[texId] = tex;
+            if (!udim) b.textures[texId] = tex;
             return tex;
         }
 
@@ -989,7 +1077,9 @@ namespace threepp {
         // Materials
         // -------------------------------------------------------------------
 
-        std::shared_ptr<Material> material(Build& b, int materialId, const tnext::RenderMesh& rm) {
+        // A material; for the part of a mesh in UDIM `tile` (0: none), with
+        // that tile's textures.
+        std::shared_ptr<Material> material(Build& b, int materialId, const tnext::RenderMesh& rm, int tile = 0) {
             const auto* rmat = b.scene.get_material(materialId);
             if (!rmat) {
                 // Unbound geometry shows its displayColor.
@@ -1000,9 +1090,12 @@ namespace threepp {
                 if (rm.double_sided) mat->side = Side::Double;
                 return mat;
             }
-            auto it = b.materials.find(materialId);
+            const uint64_t key = static_cast<uint64_t>(static_cast<uint32_t>(materialId)) << 32 | static_cast<uint32_t>(tile);
+            auto it = b.materials.find(key);
             if (it != b.materials.end()) return it->second;
 
+            b.udimTile = tile > 0 ? tile : 1001;
+            b.sawUDIM = false;
             std::shared_ptr<MeshStandardMaterial> mat;
             if (rmat->shader_type == tnext::RenderMaterial::ShaderType::OpenPBR && rmat->openpbr) {
                 mat = openPBRMaterial(b, *rmat->openpbr);
@@ -1019,7 +1112,7 @@ namespace threepp {
                 b.volumeMaterials.insert(phys);
             }
 
-            mat->name = rmat->name;
+            mat->name = tile > 0 ? rmat->name + "." + std::to_string(tile) : rmat->name;
             switch (rmat->alpha_mode) {
                 case tnext::RenderMaterial::AlphaMode::Mask:
                     mat->alphaTest = rmat->alpha_cutoff;
@@ -1032,7 +1125,8 @@ namespace threepp {
             }
             if (rmat->double_sided || rm.double_sided) mat->side = Side::Double;
 
-            b.materials.emplace(materialId, mat);
+            if (tile == 0) b.udimMaterials[materialId] = b.sawUDIM;
+            b.materials.emplace(key, mat);
             return mat;
         }
 
@@ -1193,6 +1287,63 @@ namespace threepp {
             return {};
         }
 
+        // The values a material's own .mdl file gives its parameters, by name: textures as file
+        // paths, colours, and numbers (a flag is 1 or 0). SimReady assets ship materials of their
+        // own as thin OmniPBR wrappers (`export material M(*) = OmniPBR(diffuse_texture:
+        // texture_2d("./textures/..."), ...)`) and author none of it on the shader prim.
+        struct MdlDefaults {
+            std::unordered_map<std::string, std::filesystem::path> textures;
+            std::unordered_map<std::string, Color> colors;
+            std::unordered_map<std::string, float> numbers;
+        };
+
+        static std::string mdlName(const char* input) {
+            const std::string s(input);
+            return s.rfind("inputs:", 0) == 0 ? s.substr(7) : s;
+        }
+
+        static MdlDefaults mdlDefaults(const lnext::UsdPrim& shader, const std::filesystem::path& anchor, const std::filesystem::path& baseDir) {
+            MdlDefaults out;
+            const auto* value = shader.GetPropertyValue("info:mdl:sourceAsset");
+            const auto raw = value ? value->as_asset_path() : lnext::StringView();
+            if (!raw || raw->empty()) return out;
+            std::string rel(raw.data(), raw.size());
+            std::replace(rel.begin(), rel.end(), '\\', '/');
+            std::filesystem::path file;
+            for (const auto& base : {anchor, baseDir}) {
+                const auto candidate = (base / rel).lexically_normal();
+                if (isFile(candidate)) {
+                    file = candidate;
+                    break;
+                }
+            }
+            // a library material (OmniPBR.mdl itself) is not beside the asset: nothing to read
+            if (file.empty()) return out;
+            std::ifstream in(file);
+            std::stringstream text;
+            text << in.rdbuf();
+            const std::string s = text.str();
+
+            static const std::regex texture(R"re((\w+)\s*:\s*texture_2d\(\s*"([^"]+)")re");
+            static const std::regex color(R"re((\w+)\s*:\s*color\(\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\))re");
+            static const std::regex flag(R"re((\w+)\s*:\s*(true|false)\b)re");
+            static const std::regex number(R"re((\w+)\s*:\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*[,)])re");
+            const std::sregex_iterator end;
+            for (std::sregex_iterator it(s.begin(), s.end(), texture); it != end; ++it) {
+                out.textures[(*it)[1].str()] = (file.parent_path() / (*it)[2].str()).lexically_normal();
+            }
+            for (std::sregex_iterator it(s.begin(), s.end(), color); it != end; ++it) {
+                out.colors[(*it)[1].str()] = Color(std::stof((*it)[2].str()), std::stof((*it)[3].str()), std::stof((*it)[4].str()));
+            }
+            for (std::sregex_iterator it(s.begin(), s.end(), flag); it != end; ++it) {
+                out.numbers[(*it)[1].str()] = (*it)[2].str() == "true" ? 1.f : 0.f;
+            }
+            for (std::sregex_iterator it(s.begin(), s.end(), number); it != end; ++it) {
+                out.numbers[(*it)[1].str()] = std::stof((*it)[2].str());
+            }
+            return out;
+        }
+
         // NVIDIA MDL materials. The input names cover OmniPBR (snake_case),
         // OmniUe4Base / the Omniverse Unreal bridge (PascalCase, Lightwheel
         // exports) and OmniSurface (*_image, Omniverse Automotive Showcase).
@@ -1209,18 +1360,32 @@ namespace threepp {
                 if (!dir.empty()) anchor = dir;
             }
 
+            // A material of its own (a .mdl file next to the asset, wrapping OmniPBR) carries its
+            // parameters' values as the defaults in that file, not on the shader prim: what the
+            // prim does not author is looked up there by the same name.
+            const MdlDefaults defaults = mdlDefaults(shader, anchor, b.baseDir);
+
             auto tryTexture = [&](std::initializer_list<const char*> names) -> std::shared_ptr<Texture> {
                 for (const char* name : names) {
                     const auto* value = shader.GetPropertyValue(name);
                     const auto raw = value ? value->as_asset_path() : lnext::StringView();
                     if (!raw || raw->empty()) continue;
-                    std::string rel = resolveUDIM(*raw);
+                    if (hasUDIM(*raw)) b.sawUDIM = true;
+                    std::string rel = resolveUDIM(*raw, b.udimTile);
                     std::replace(rel.begin(), rel.end(), '\\', '/');
                     for (const auto& base : {anchor, b.baseDir}) {
                         const auto candidate = (base / rel).lexically_normal();
                         if (isFile(candidate)) return texLoader.load(candidate, true);
                     }
                     if (isFile(rel)) return texLoader.load(rel, true);
+                }
+                for (const char* name : names) {
+                    const auto it = defaults.textures.find(mdlName(name));
+                    if (it == defaults.textures.end()) continue;
+                    const std::string file = it->second.string();
+                    if (hasUDIM(file)) b.sawUDIM = true;
+                    const std::filesystem::path tilePath = resolveUDIM(file, b.udimTile);
+                    if (isFile(tilePath)) return texLoader.load(tilePath, true);
                 }
                 return nullptr;
             };
@@ -1230,6 +1395,9 @@ namespace threepp {
                     const auto* value = shader.GetPropertyValue(name);
                     if (value && value->to_float3(c)) return Color(c[0], c[1], c[2]);
                 }
+                for (const char* name : names) {
+                    if (const auto it = defaults.colors.find(mdlName(name)); it != defaults.colors.end()) return it->second;
+                }
                 return std::nullopt;
             };
             auto tryFloat = [&](std::initializer_list<const char*> names) -> std::optional<float> {
@@ -1237,6 +1405,9 @@ namespace threepp {
                     float f;
                     const auto* value = shader.GetPropertyValue(name);
                     if (value && value->to_float(&f)) return f;
+                }
+                for (const char* name : names) {
+                    if (const auto it = defaults.numbers.find(mdlName(name)); it != defaults.numbers.end()) return it->second;
                 }
                 return std::nullopt;
             };
@@ -1301,8 +1472,17 @@ namespace threepp {
                 if (auto c = tryColor({"inputs:emissive_color"})) mat.emissive = *c;
                 mat.emissiveIntensity = tryFloat({"inputs:emissive_intensity"}).value_or(1.f) / 1000.f;
             }
-            if (auto v = tryFloat({"inputs:opacity_constant"}); v && *v < 1.f &&
-                                                                 tryFloat({"inputs:enable_opacity"}).value_or(0.f) > 0.f) {
+            // OmniPBR's opacity: a mask (cut out below its threshold, as a decal's edges are), or
+            // one value
+            const bool opacity = tryFloat({"inputs:enable_opacity"}).value_or(0.f) > 0.f;
+            if (opacity && tryFloat({"inputs:enable_opacity_texture"}).value_or(0.f) > 0.f) {
+                if (auto t = tryTexture({"inputs:opacity_texture"})) {
+                    t->colorSpace = ColorSpace::Linear;
+                    mat.alphaMap = t;
+                    mat.alphaTest = std::max(0.01f, tryFloat({"inputs:opacity_threshold"}).value_or(0.5f));
+                }
+            }
+            if (auto v = tryFloat({"inputs:opacity_constant"}); v && *v < 1.f && opacity) {
                 mat.opacity = *v;
                 mat.transparent = true;
             }
