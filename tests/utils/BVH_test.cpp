@@ -807,7 +807,10 @@ TEST_CASE("BVH rays from a non-finite origin stop at the root", "[BVH]") {
         const double fromNaN = fastest({nan, nan, nan});
         CHECK(sink == 2 * 5 * static_cast<int>(directions.size()));
         CAPTURE(hitting, fromNaN);
-        CHECK(fromNaN < hitting);
+        // The NaN rays return before the root's slab test, so they take a tiny
+        // fraction of the hitting rays' time; a factor of 4 keeps a scheduler
+        // hiccup on a loaded CI runner from flipping the check.
+        CHECK(fromNaN < hitting / 4);
     }
 }
 
