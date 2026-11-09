@@ -242,15 +242,18 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
                                       const float* solidAngle, const Vector3& origin,
                                       const Matrix3& worldFromLevel, std::uint64_t revolutionKey,
                                       std::complex<float>* column, std::int32_t* label, float* labelAmp,
-                                      const Matrix3* antennaFromLevel) {
-    const unsigned bins = std::max(1u, model.rangeBins);
+                                      unsigned columnBins, const Matrix3* antennaFromLevel) {
+    // The bins are laid out by the model; only those the rows hold are written.
+    const unsigned modelBins = std::max(1u, model.rangeBins);
+    const unsigned bins = std::min(modelBins, columnBins);
+    if (bins == 0) return 0;
     std::fill(column, column + bins, std::complex<float>(0.f, 0.f));
     std::fill(label, label + bins, -1);
     std::fill(labelAmp, labelAmp + bins, 0.f);
 
     const double r0 = std::max(1.f, model.minRange);
     const double r1 = std::max(model.maxRange, model.minRange + 1.f);
-    const double binW = (r1 - r0) / bins;
+    const double binW = (r1 - r0) / modelBins;
     const double lambda = model.wavelength();
     const double k = 2.0 * kPi / lambda;
     const double G = model.antennaGain();

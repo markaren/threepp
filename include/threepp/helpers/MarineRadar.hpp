@@ -50,6 +50,8 @@ namespace threepp {
         void rebuild();
 
         // Once per frame, after render(). Returns the number of spokes formed.
+        // A new range scale (model.rangeBins, minRange or maxRange) rebuilds
+        // first, by itself; the other geometry fields wait for rebuild().
         unsigned update(VulkanRenderer& renderer);
 
         [[nodiscard]] const RadarPolarImage& image() const { return image_; }
@@ -76,6 +78,9 @@ namespace threepp {
 
         bool started_ = false;
         std::int64_t nextFire_ = 0, nextSpoke_ = 0, tracedUpTo_ = 0;
+        // The range scale the ring and the picture were laid out for.
+        unsigned builtRangeBins_ = 0;
+        float builtMinRange_ = 0.f, builtMaxRange_ = 0.f;
 
         int handle_ = -1;
         int framesWaiting_ = 0;

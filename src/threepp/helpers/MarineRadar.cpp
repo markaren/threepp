@@ -46,8 +46,13 @@ void MarineRadar::rebuild() {
     ringHeading_.assign(spokes, 0.f);
     ringExtent_.assign(spokes, 0u);
     started_ = false;
+    // A slot in flight was traced for the old geometry: it is dropped, never
+    // folded into the new ring (the renderer reclaims its scan slot).
     handle_ = -1;
     lastSpokes_.clear();
+    builtRangeBins_ = model.rangeBins;
+    builtMinRange_ = model.minRange;
+    builtMaxRange_ = model.maxRange;
 }
 
 std::int64_t MarineRadar::slotNow() const {
@@ -61,6 +66,14 @@ float MarineRadar::antennaBearingDeg() const {
 }
 
 unsigned MarineRadar::update(VulkanRenderer& renderer) {
+    // The ring and the picture are laid out by the range scale: a new one
+    // (an operator's range switch) rebuilds them before anything is folded.
+    // The raw fields are compared, not the image's clamped ones, which a
+    // minRange under 1 m would never match.
+    if (model.rangeBins != builtRangeBins_ || model.minRange != builtMinRange_ ||
+        model.maxRange != builtMaxRange_) {
+        rebuild();
+    }
     lastSpokes_.clear();
     const unsigned spokes = image_.spokes;
     const std::int64_t K = synth_->kernelHalfSlots();
@@ -179,7 +192,7 @@ void MarineRadar::collect(VulkanRenderer& renderer) {
         ringExtent_[ri] = synth_->foldSlot(model, materials, s, &returns_[static_cast<std::size_t>(i) * per],
                          &pendingDirs_[static_cast<std::size_t>(i) * per], &pendingSolid_[static_cast<std::size_t>(i) * per],
                          pendingOrigin_, pendingLevel_, revKey, &ring_[ri * bins], &ringLabel_[ri * bins],
-                         &ringAmp_[ri * bins], &pendingTilt_);
+                         &ringAmp_[ri * bins], image_.bins, &pendingTilt_);
     }
     tracedUpTo_ = pendingFirst_ + pendingCount_;
 }

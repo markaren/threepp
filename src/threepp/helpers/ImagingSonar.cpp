@@ -27,9 +27,23 @@ void ImagingSonar::waitFold() {
     if (fold_.valid()) fold_.wait();
 }
 
+namespace {
+
+    // The fields ImagingSonarSynthesizer bakes into its ray table and patterns.
+    bool sameGeometry(const ImagingSonarModel& a, const ImagingSonarModel& b) {
+        return a.horizontalFov == b.horizontalFov && a.beams == b.beams &&
+               a.horizontalBeamwidth == b.horizontalBeamwidth && a.horizontalTaper == b.horizontalTaper &&
+               a.verticalBeamwidth == b.verticalBeamwidth && a.azimuthOversample == b.azimuthOversample &&
+               a.verticalSamples == b.verticalSamples && a.patternSpanBeamwidths == b.patternSpanBeamwidths &&
+               a.seed == b.seed;
+    }
+
+}// namespace
+
 void ImagingSonar::rebuild() {
     waitFold();// a running fold reads the synthesizer
     synth_ = std::make_unique<ImagingSonarSynthesizer>(model);
+    built_ = model;
     syncParams();
 }
 
@@ -52,6 +66,8 @@ void ImagingSonar::ping(VulkanRenderer& renderer, SonarFrame& out) {
 }
 
 void ImagingSonar::pingBegin(VulkanRenderer& renderer) {
+    // New fan geometry re-bakes the ray table before it is fired.
+    if (!sameGeometry(model, built_)) rebuild();
     beginScan();
     syncParams();
     handle_ = VulkanRenderer::kNoLidarScan;

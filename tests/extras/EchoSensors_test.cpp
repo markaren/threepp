@@ -265,7 +265,7 @@ namespace {
         std::vector<std::int32_t> lab(m.rangeBins);
         std::vector<float> amp(m.rangeBins);
         syn.foldSlot(m, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{}, 1, col.data(),
-                     lab.data(), amp.data());
+                     lab.data(), amp.data(), m.rangeBins);
         double s = 0.0;
         for (const auto& c : col) s += std::norm(std::complex<double>(c));
         if (labelOut) *labelOut = lab[static_cast<std::size_t>(std::max_element(amp.begin(), amp.end()) - amp.begin())];
@@ -302,6 +302,31 @@ TEST_CASE("MarineRadar: one ray of a wall follows R^-2, its label rides along") 
     // A ray stands for a fixed solid angle: its patch grows as R^2, so the
     // return falls as R^-2 (a wall), not R^-4 (a point).
     CHECK_THAT(10.0 * std::log10(p1 / p2), WithinAbs(20.0 * std::log10(600.5 / 300.5), 0.05));
+}
+
+TEST_CASE("MarineRadar: a fold writes no further than the rows it is given") {
+    MarineRadarModel m;
+    m.multipath = false;
+    m.rangeBins = 2048;// the model asks for more bins than the rows hold
+    m.minRange = 20.f;
+    m.maxRange = 1020.f;
+    MarineRadarSynthesizer syn(m);
+    RadarMaterials mats;
+    const Vector3 origin(0, 5, 0);
+    // A wall at the far end of the range, where bins past 1024 would be written.
+    const auto o = oneRayAt(syn, origin, Vector3(0, 5, -1000.f));
+    constexpr unsigned rows = 1024, guard = 1024;
+    std::vector<std::complex<float>> col(rows + guard, {7.f, 7.f});
+    std::vector<std::int32_t> lab(rows + guard, 77);
+    std::vector<float> amp(rows + guard, 7.f);
+    const unsigned extent = syn.foldSlot(m, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin,
+                                         Matrix3{}, 1, col.data(), lab.data(), amp.data(), rows);
+    CHECK(extent <= rows);
+    for (unsigned j = rows; j < rows + guard; ++j) {
+        REQUIRE(col[j] == std::complex<float>(7.f, 7.f));
+        REQUIRE(lab[j] == 77);
+        REQUIRE(amp[j] == 7.f);
+    }
 }
 
 TEST_CASE("MarineRadar: two-ray lobing over a glassy sea") {
@@ -559,7 +584,7 @@ TEST_CASE("MarineRadar: a calibration sphere returns the radar equation's SNR") 
             lab[c].resize(m.rangeBins);
             amp[c].resize(m.rangeBins);
             syn.foldSlot(m, mats, sl, ret.data(), dirs.data(), solid.data(), origin, Matrix3{}, 1, col[c].data(),
-                         lab[c].data(), amp[c].data());
+                         lab[c].data(), amp[c].data(), m.rangeBins);
         }
         auto at = [](std::int64_t sl) { return static_cast<std::size_t>(sl + 1); };
         auto inRing = [](std::int64_t sl) { return sl >= -1 && sl <= 1; };

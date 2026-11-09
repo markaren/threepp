@@ -119,8 +119,9 @@ namespace threepp {
      * Everything that defines one marine radar. Frame: the antenna turns about
      * the node's local +Y, clockwise seen from above; relative bearing 0 is
      * local -Z (mount it so that is the bow). GEOMETRY fields (beams, spokes,
-     * the sampling) are baked when a synthesizer is built; the rest is read
-     * per slot.
+     * the sampling, the range scale) are baked when a synthesizer is built;
+     * the rest is read per slot. MarineRadar::update() rebuilds by itself when
+     * the range scale (minRange, maxRange, rangeBins) changes.
      */
     struct MarineRadarModel {
         // ── Transmitter / antenna ────────────────────────────────────────
@@ -135,14 +136,14 @@ namespace threepp {
         unsigned spokes = 2048;// per revolution (geometry)
 
         // ── Range and receiver ───────────────────────────────────────────
-        float minRange = 20.f;   // the main bang / blind zone, m
+        float minRange = 20.f;   // the main bang / blind zone, m (geometry)
         // Where the trace starts, m: the antenna's own radome. Nothing nearer is
         // seen and everything past it occludes, the blind zone included: echoes
         // inside minRange are dropped, not looked through, so a sea surface
         // inside the main bang still hides the seabed under it.
         float housingRange = 1.f;
-        float maxRange = 1852.f; // 1 nmi
-        unsigned rangeBins = 1024;
+        float maxRange = 1852.f; // 1 nmi (geometry)
+        unsigned rangeBins = 1024;// (geometry)
         float pulseLength = 80e-9f;// s
         float noiseFigureDb = 5.f;
         float systemLossDb = 6.f;
@@ -251,16 +252,18 @@ namespace threepp {
         /**
          * Fold one traced slot into its complex range profile (`column`,
          * rangeBins long, overwritten) and its per-bin strongest-contributor
-         * label / amplitude. `returns`, `dirs` (the level frame of slotRays,
-         * which `worldFromLevel` turns into the world) and `solidAngle` are
-         * the slot's raysPerSlot() rays. `antennaFromLevel` is the antenna's
+         * label / amplitude. `columnBins` is how long the three rows really
+         * are: nothing is written past it, whatever model.rangeBins says.
+         * `returns`, `dirs` (the level frame of slotRays, which
+         * `worldFromLevel` turns into the world) and `solidAngle` are the
+         * slot's raysPerSlot() rays. `antennaFromLevel` is the antenna's
          * pitch and roll, where its vertical pattern is read; nullptr = level.
          * Returns the profile's extent: one past its last non-zero bin.
          */
         unsigned foldSlot(const MarineRadarModel& model, const RadarMaterials& materials, std::int64_t slot,
                       const LidarReturn* returns, const Vector3* dirs, const float* solidAngle,
                       const Vector3& origin, const Matrix3& worldFromLevel, std::uint64_t revolutionKey,
-                      std::complex<float>* column, std::int32_t* label, float* labelAmp,
+                      std::complex<float>* column, std::int32_t* label, float* labelAmp, unsigned columnBins,
                       const Matrix3* antennaFromLevel = nullptr);
 
         /**

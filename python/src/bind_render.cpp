@@ -471,11 +471,14 @@ namespace threepp_py {
                 .def_readwrite("antenna_efficiency", &MarineRadarModel::antennaEfficiency)
                 .def_readwrite("rpm", &MarineRadarModel::rpm)
                 .def_readwrite("spokes", &MarineRadarModel::spokes)
-                .def_readwrite("min_range", &MarineRadarModel::minRange)
+                .def_readwrite("min_range", &MarineRadarModel::minRange,
+                               "(geometry) The blind zone, m; a new value rebuilds at the next update().")
                 .def_readwrite("housing_range", &MarineRadarModel::housingRange,
                                "Where the trace starts (the radome); the blind zone still occludes.")
-                .def_readwrite("max_range", &MarineRadarModel::maxRange)
-                .def_readwrite("range_bins", &MarineRadarModel::rangeBins)
+                .def_readwrite("max_range", &MarineRadarModel::maxRange,
+                               "(geometry) m; a new value rebuilds at the next update().")
+                .def_readwrite("range_bins", &MarineRadarModel::rangeBins,
+                               "(geometry) A new value rebuilds at the next update().")
                 .def_readwrite("pulse_length", &MarineRadarModel::pulseLength, "s")
                 .def_readwrite("noise_figure_db", &MarineRadarModel::noiseFigureDb)
                 .def_readwrite("system_loss_db", &MarineRadarModel::systemLossDb)

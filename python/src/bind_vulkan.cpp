@@ -2882,7 +2882,9 @@ namespace threepp_py {
                 "later frame. Vulkan only; render() once before the first ping.")
                 .def(py::init([](const ImagingSonarModel& model) { return std::make_shared<ImagingSonar>(model); }),
                      py::arg("model") = ImagingSonarModel::OculusM750d())
-                .def_readwrite("model", &ImagingSonar::model, "ImagingSonarModel; mutate in place (geometry: then rebuild()).")
+                .def_readwrite("model", &ImagingSonar::model,
+                               "ImagingSonarModel; mutate in place. New fan geometry (fov, beams, beamwidths, taper, "
+                               "sampling, seed) is re-baked at the next ping.")
                 .def_readwrite("materials", &ImagingSonar::materials, "AcousticMaterials; mutate in place.")
                 .def_readwrite("params", &ImagingSonar::params, "The tracer's LidarParams (set up for the sonar).")
                 .def_readwrite("threads", &ImagingSonar::threads)
@@ -2945,7 +2947,9 @@ namespace threepp_py {
                 "its sim clock (set_sim_time) and call update(renderer) once per frame after render().")
                 .def(py::init([](const MarineRadarModel& model) { return std::make_shared<MarineRadar>(model); }),
                      py::arg("model") = MarineRadarModel::OpenArray4ft())
-                .def_readwrite("model", &MarineRadar::model, "MarineRadarModel; mutate in place (geometry: then rebuild()).")
+                .def_readwrite("model", &MarineRadar::model,
+                               "MarineRadarModel; mutate in place. Geometry: a new range scale (range_bins, "
+                               "min_range, max_range) rebuilds at the next update(); the rest takes rebuild().")
                 .def_readwrite("materials", &MarineRadar::materials, "RadarMaterials; mutate in place.")
                 .def_readwrite("params", &MarineRadar::params)
                 .def_readwrite("max_slots_per_batch", &MarineRadar::maxSlotsPerBatch)
