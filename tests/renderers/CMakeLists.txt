@@ -381,6 +381,19 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGrassMotion_test COMMAND VulkanGrassMotion_test)
     set_tests_properties(VulkanGrassMotion_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The shared-memory ocean IFFT equals the butterfly path it replaces (to
+    # 1e-5 relative RMS) and the transform both have always computed, at every
+    # ocean and ripple resolution. Drives water::IFFT directly on its own
+    # context, so it sees the library's private include paths (VMA, the
+    # compiled shader headers, GLFW). Same plain exit-code + skip-42 shape.
+    add_executable(OceanFftShared_test OceanFftShared_test.cpp)
+    target_link_libraries(OceanFftShared_test PRIVATE threepp)
+    target_include_directories(OceanFftShared_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+            $<TARGET_PROPERTY:threepp,INCLUDE_DIRECTORIES>)
+    add_test(NAME OceanFftShared_test COMMAND OceanFftShared_test)
+    set_tests_properties(OceanFftShared_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # The rotor downwash (VulkanRenderer::setDownwash): rings on a rippled
     # water's G-buffer normal along the radius, a rougher struck disc, grass
     # leaning out though its distance gate froze it, no motion while still,

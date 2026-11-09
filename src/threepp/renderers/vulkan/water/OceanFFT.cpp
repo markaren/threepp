@@ -12,12 +12,16 @@
 #include "threepp/renderers/vulkan/shaders/ifft_horizontal.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_vertical.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_permute.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/ifft_shared.comp.spv.h"
 
 #include "threepp/math/Rng.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -573,6 +577,23 @@ namespace threepp::water {
         sampler_ = makeNearestSampler(ctx_);
         createTwiddleImage();
         createPipelines();
+        checkSharedLimits();
+        setPath(defaultPath());
+    }
+
+    void IFFT::setPath(Path p) {
+        path_ = (p == Path::Shared && sharedSupported_ && ensureSharedPipelines()) ? Path::Shared : Path::Butterfly;
+    }
+
+    IFFT::Path IFFT::defaultPath() {
+        static const Path path = [] {
+            const char* e = std::getenv("THREEPP_OCEAN_FFT");
+            if (!e || !*e || std::strcmp(e, "shared") == 0) return Path::Shared;
+            if (std::strcmp(e, "butterfly") == 0) return Path::Butterfly;
+            std::fprintf(stderr, "[IFFT] THREEPP_OCEAN_FFT=%s is neither butterfly nor shared; using shared\n", e);
+            return Path::Shared;
+        }();
+        return path;
     }
 
     void IFFT::createTwiddleImage() {
@@ -671,13 +692,15 @@ namespace threepp::water {
         // 4 butterfly (2 horizontal + 2 vertical) + 2 permute sets. A butterfly
         // set is 2 sampled + 1 storage; an in-place permute set is 1 storage
         // and samples nothing.
+        // The shared path's sets come from the same pool: up to maxGroups_ of
+        // them, each the twiddle table + kMaxBatch storage images.
         const std::array<VkDescriptorPoolSize, 2> poolSizes{
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxGroups_ * (4 * 2)},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1 + maxGroups_ * (4 * 1 + 2 * 1)},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxGroups_ * (4 * 2) + maxGroups_},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1 + maxGroups_ * (4 * 1 + 2 * 1) + maxGroups_ * kMaxBatch},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = 1 + maxGroups_ * 6;
+        dpci.maxSets       = 1 + maxGroups_ * 6 + maxGroups_;
         dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         dpci.pPoolSizes    = poolSizes.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_),
@@ -799,7 +822,303 @@ namespace threepp::water {
         return groups_.back();
     }
 
+    void IFFT::checkSharedLimits() {
+        // 256 threads (ifft_shared.comp's fixed size), ROWS lines a
+        // workgroup so that every thread has a butterfly up to N = 512, and in
+        // shared memory each line's ping-pong pair plus one twiddle column:
+        // (ROWS*2*N + N/2) complex fp32.
+        constexpr uint32_t kThreads = 256;
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
+        const uint32_t half = std::max(textureSize_ / 2u, 1u);
+        sharedRows_ = std::clamp(kThreads / half, 1u, std::max(textureSize_, 1u));
+        const uint32_t sharedBytes = (sharedRows_ * 2u * textureSize_ + textureSize_ / 2u) * 8u;
+        sharedSupported_ = textureSize_ >= 2u && std::has_single_bit(textureSize_) &&
+                           (1u << logSize_) == textureSize_ &&
+                           kThreads <= props.limits.maxComputeWorkGroupInvocations &&
+                           kThreads <= props.limits.maxComputeWorkGroupSize[0] &&
+                           sharedBytes <= props.limits.maxComputeSharedMemorySize &&
+                           textureSize_ / sharedRows_ <= props.limits.maxComputeWorkGroupCount[1];
+    }
+
+    void IFFT::destroySharedPipelines() {
+        VkDevice d = ctx_.device();
+        if (pipeSharedRows_ != VK_NULL_HANDLE) vkDestroyPipeline(d, pipeSharedRows_, nullptr);
+        if (pipeSharedCols_ != VK_NULL_HANDLE) vkDestroyPipeline(d, pipeSharedCols_, nullptr);
+        if (layoutShared_   != VK_NULL_HANDLE) vkDestroyPipelineLayout(d, layoutShared_, nullptr);
+        if (dslShared_      != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(d, dslShared_, nullptr);
+        pipeSharedRows_ = pipeSharedCols_ = VK_NULL_HANDLE;
+        layoutShared_ = VK_NULL_HANDLE;
+        dslShared_ = VK_NULL_HANDLE;
+    }
+
+    bool IFFT::ensureSharedPipelines() {
+        if (pipeSharedRows_ != VK_NULL_HANDLE && pipeSharedCols_ != VK_NULL_HANDLE) return true;
+        if (!sharedSupported_) return false;
+        try {
+            buildSharedPipelines();
+            return true;
+        } catch (const std::exception& e) {
+            // A driver that will not build the shared kernel (its shared array
+            // is sized by specialization constants) must not take the
+            // butterfly path down with it: this IFFT stays on that path.
+            destroySharedPipelines();
+            sharedSupported_ = false;
+            std::fprintf(stderr, "[IFFT] N=%u: the shared-memory FFT did not build (%s); the butterfly path runs\n",
+                         textureSize_, e.what());
+            return false;
+        }
+    }
+
+    void IFFT::buildSharedPipelines() {
+        const std::array<VkDescriptorSetLayoutBinding, 2> bindings{
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          kMaxBatch, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        };
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
+        dlci.pBindings    = bindings.data();
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dslShared_),
+              "vkCreateDescriptorSetLayout(ifft shared)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(uint32_t);
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &dslShared_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &layoutShared_),
+              "vkCreatePipelineLayout(ifft shared)");
+
+        VkShaderModule mod = makeShader(ctx_, kIfftSharedCompSpv, sizeof(kIfftSharedCompSpv));
+        for (uint32_t vertical = 0; vertical < 2; ++vertical) {
+            // constant_id 0: N, 1: log2 N, 2: lines a workgroup, 3: rows (0) or columns (1).
+            const std::array<int32_t, 4> values{
+                static_cast<int32_t>(textureSize_), static_cast<int32_t>(logSize_),
+                static_cast<int32_t>(sharedRows_), static_cast<int32_t>(vertical)};
+            std::array<VkSpecializationMapEntry, 4> entries{};
+            for (uint32_t k = 0; k < 4; ++k) entries[k] = VkSpecializationMapEntry{k, k * 4u, 4u};
+            VkSpecializationInfo si{};
+            si.mapEntryCount = static_cast<uint32_t>(entries.size());
+            si.pMapEntries   = entries.data();
+            si.dataSize      = sizeof(values);
+            si.pData         = values.data();
+
+            VkComputePipelineCreateInfo cpci{};
+            cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            cpci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            cpci.stage.module = mod;
+            cpci.stage.pName  = "main";
+            cpci.stage.pSpecializationInfo = &si;
+            cpci.layout       = layoutShared_;
+            VkPipeline& p = vertical ? pipeSharedCols_ : pipeSharedRows_;
+            const VkResult r = vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &cpci, nullptr, &p);
+            if (r != VK_SUCCESS) {
+                p = VK_NULL_HANDLE;
+                vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+                check(r, "vkCreateComputePipelines(ifft shared)");
+            }
+        }
+        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+    }
+
+    VkDescriptorSet IFFT::sharedSetFor(OceanImage* const* images, uint32_t count) {
+        SharedSet key{};
+        key.count = count;
+        for (uint32_t i = 0; i < count; ++i) key.views[i] = images[i]->view;
+        for (const auto& s : sharedSets_) {
+            if (s.count == key.count && s.views == key.views) return s.ds;
+        }
+        if (sharedSets_.size() >= maxGroups_) {
+            // Same contract as groupFor: a set is written once and only bound
+            // afterwards, so a new list of views past the cap means images
+            // were recreated without recreating the IFFT.
+            throw std::runtime_error("[IFFT] shared descriptor-set cache exhausted: image churn without IFFT recreation");
+        }
+
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = pool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &dslShared_;
+        check(vkAllocateDescriptorSets(ctx_.device(), &dai, &key.ds),
+              "vkAllocateDescriptorSets(ifft shared)");
+
+        const VkDescriptorImageInfo twInfo{sampler_, twiddle_.view, VK_IMAGE_LAYOUT_GENERAL};
+        // Every slot must name a valid image: the shader's switch reaches
+        // each array element statically. Unused slots repeat the first image
+        // (the layer slots never select them).
+        std::array<VkDescriptorImageInfo, kMaxBatch> io{};
+        for (uint32_t i = 0; i < kMaxBatch; ++i) {
+            io[i].imageView   = key.views[i < count ? i : 0u];
+            io[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        std::array<VkWriteDescriptorSet, 2> w{};
+        for (auto& e : w) { e.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; e.dstSet = key.ds; }
+        w[0].dstBinding = 0; w[0].descriptorCount = 1;         w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &twInfo;
+        w[1].dstBinding = 1; w[1].descriptorCount = kMaxBatch; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[1].pImageInfo = io.data();
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+
+        sharedSets_.push_back(key);
+        return key.ds;
+    }
+
+    uint32_t IFFT::prepareShared(VkCommandBuffer cb, OceanImage* const* images, uint32_t count, uint32_t mask,
+                                 VkDescriptorSet& ds, uint32_t& slots) {
+        if (count > kMaxBatch) {
+            throw std::runtime_error("[IFFT] recordApplyBatch: more images than kMaxBatch");
+        }
+        if (!twiddleComputed_) recordTwiddleOnce(cb);
+        ds = sharedSetFor(images, count);
+
+        // The z slots: the k-th live image is transformed by z = k.
+        uint32_t layers = 0;
+        slots = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (images[i]->width != textureSize_ || images[i]->height != textureSize_) {
+                throw std::runtime_error("[IFFT] recordApplyBatch: image size differs from the IFFT's");
+            }
+            // All of them, live or not: every slot is bound, so every image
+            // must be in the layout its descriptor names.
+            cmdTransitionToGeneral(cb, *images[i]);
+            if (mask & (1u << i)) slots |= i << (4u * layers++);
+        }
+        return layers;
+    }
+
+    void IFFT::dispatchShared(VkCommandBuffer cb, VkDescriptorSet ds, uint32_t slots, uint32_t layers,
+                              bool columns) const {
+        // Workgroup (0, y, z) owns lines [y*ROWS, (y+1)*ROWS) of image slot z:
+        // rows on the first pass, columns (and the permute's sign) on the second.
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, columns ? pipeSharedCols_ : pipeSharedRows_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutShared_, 0, 1, &ds, 0, nullptr);
+        vkCmdPushConstants(cb, layoutShared_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(slots), &slots);
+        vkCmdDispatch(cb, 1, textureSize_ / sharedRows_, layers);
+    }
+
+    namespace {
+        // The live bits of a batch of `count` images.
+        uint32_t liveMask(uint32_t count, uint32_t mask) {
+            return count >= 32u ? mask : mask & ((1u << count) - 1u);
+        }
+    }// namespace
+
+    uint32_t IFFT::newGroupsFor(OceanImage* const* images, uint32_t count, const OceanImage& scratch,
+                                uint32_t mask) const {
+        uint32_t fresh = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!(mask & (1u << i))) continue;
+            bool known = false;
+            for (const auto& g : groups_) known = known || (g.input == images[i]->view && g.scratch == scratch.view);
+            // A repeat of an image earlier in this batch is one group, not two.
+            for (uint32_t k = 0; k < i && !known; ++k) {
+                known = (mask & (1u << k)) && images[k]->view == images[i]->view;
+            }
+            if (!known) ++fresh;
+        }
+        return fresh;
+    }
+
+    void IFFT::checkButterflyGroups(OceanImage* const* images, uint32_t count, const OceanImage& scratch,
+                                    uint32_t mask) const {
+        const uint32_t fresh = newGroupsFor(images, count, scratch, mask);
+        if (groups_.size() + fresh > maxGroups_) {
+            throw std::runtime_error(
+                    "[IFFT] butterfly path: this batch needs " + std::to_string(groups_.size() + fresh) +
+                    " (image, scratch) descriptor groups but the IFFT was built with maxGroups " +
+                    std::to_string(maxGroups_) +
+                    "; every image a batch hands it, other IFFTs' included, takes one, so build it with "
+                    "maxGroups at least the number of distinct images it will transform");
+        }
+    }
+
+    void IFFT::recordApplyJobs(VkCommandBuffer cb, const Job* jobs, uint32_t jobCount) {
+        if (jobCount > 8u) throw std::runtime_error("[IFFT] recordApplyJobs: more than 8 jobs");
+        bool allShared = true;
+        for (uint32_t j = 0; j < jobCount; ++j) allShared = allShared && jobs[j].fft->path_ == Path::Shared;
+        if (!allShared) {
+            // Checked for every job before any is recorded, so a batch the
+            // butterfly caches cannot take throws without leaving half a
+            // transform in the command buffer. (A job on the Shared path
+            // goes through its own recordApplyBatch below unchanged.)
+            for (uint32_t j = 0; j < jobCount; ++j) {
+                if (jobs[j].fft->path_ != Path::Shared) {
+                    jobs[j].fft->checkButterflyGroups(jobs[j].images, jobs[j].count, *jobs[j].scratch,
+                                                      liveMask(jobs[j].count, jobs[j].mask));
+                }
+            }
+            for (uint32_t j = 0; j < jobCount; ++j) {
+                jobs[j].fft->recordApplyBatch(cb, jobs[j].images, jobs[j].count, *jobs[j].scratch, jobs[j].mask);
+            }
+            return;
+        }
+
+        struct Prepared {
+            VkDescriptorSet ds = VK_NULL_HANDLE;
+            uint32_t slots = 0, layers = 0;
+        };
+        std::array<Prepared, 8> prep{};
+        uint32_t live = 0;
+        for (uint32_t j = 0; j < jobCount; ++j) {
+            if (jobs[j].count > kMaxBatch) {
+                throw std::runtime_error("[IFFT] recordApplyBatch: more than kMaxBatch images");
+            }
+            // An empty job binds nothing: its descriptor set would name no image.
+            if (liveMask(jobs[j].count, jobs[j].mask) == 0u) continue;
+            prep[j].layers = jobs[j].fft->prepareShared(cb, jobs[j].images, jobs[j].count, jobs[j].mask,
+                                                        prep[j].ds, prep[j].slots);
+            live += prep[j].layers;
+        }
+        if (live == 0) return;
+
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        // Every job's rows, one barrier, every job's columns, one barrier: the
+        // jobs touch disjoint images, so their dispatches overlap freely.
+        for (const bool columns : {false, true}) {
+            for (uint32_t j = 0; j < jobCount; ++j) {
+                if (prep[j].layers) jobs[j].fft->dispatchShared(cb, prep[j].ds, prep[j].slots, prep[j].layers, columns);
+            }
+            // After the columns, as recordApply's final barrier: every
+            // downstream reader of the images (water_displace, the height
+            // readback, the ripple slopes) reads what the columns pass wrote.
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 1, &mb, 0, nullptr, 0, nullptr);
+        }
+    }
+
+    void IFFT::recordApplyBatch(VkCommandBuffer cb, OceanImage* const* images, uint32_t count,
+                                OceanImage& scratch, uint32_t mask) {
+        if (count > kMaxBatch) {
+            throw std::runtime_error("[IFFT] recordApplyBatch: more images than kMaxBatch");
+        }
+        mask = liveMask(count, mask);
+        if (mask == 0u) return;// no image, or none live: nothing to record
+        if (path_ == Path::Shared) {
+            const Job job{this, images, count, &scratch, mask};
+            recordApplyJobs(cb, &job, 1u);
+            return;
+        }
+        checkButterflyGroups(images, count, scratch, mask);
+        for (uint32_t i = 0; i < count; ++i) {
+            if (mask & (1u << i)) recordApply(cb, *images[i], scratch);
+        }
+    }
+
     void IFFT::recordApply(VkCommandBuffer cb, OceanImage& input, OceanImage& scratch) {
+        if (path_ == Path::Shared) {
+            OceanImage* one = &input;
+            recordApplyBatch(cb, &one, 1u, scratch, 1u);
+            return;
+        }
         if (!twiddleComputed_) recordTwiddleOnce(cb);
 
         // Write-once group for this image pair — record-time only BINDS, so
@@ -875,7 +1194,8 @@ namespace threepp::water {
     }
 
     IFFT::~IFFT() {
-        if (pipeTwiddle_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeTwiddle_, nullptr);
+        destroySharedPipelines();
+        if (pipeTwiddle_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeTwiddle_, nullptr);
         if (pipeHorizontal_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeHorizontal_, nullptr);
         if (pipeVertical_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeVertical_, nullptr);
         if (pipePermute_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipePermute_, nullptr);

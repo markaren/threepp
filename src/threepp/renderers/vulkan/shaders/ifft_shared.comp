@@ -1,0 +1,153 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+
+// The ocean's 2D inverse FFT in two dispatches instead of 2*log2(N)+1: a
+// workgroup holds whole rows (or columns) of N complex texels in shared memory
+// and runs every radix-2 stage there, with a workgroup barrier between stages
+// instead of a pipeline barrier and a full image round trip. The rows dispatch
+// runs first; the columns dispatch then folds in the (-1)^(x+y) sign that
+// ifft_permute.comp applies on the butterfly path.
+//
+// The stages are the self-sorting (Stockham) radix-2 formulation the butterfly
+// path already uses (ifft_twiddle.comp builds its table; ifft_horizontal.comp
+// and ifft_vertical.comp run one stage per dispatch), so the two paths do the
+// same arithmetic in the same order and agree to float rounding:
+//   T. G. Stockham, "High-speed convolution and correlation", AFIPS Spring
+//   Joint Computer Conference, 1966; the GPU form follows Govindaraju et al.,
+//   "High performance discrete Fourier transforms on graphics processors",
+//   SC 2008 (one transform per workgroup in shared memory).
+// The transform is the unnormalised inverse: out(x,y) = (-1)^(x+y) *
+// sum over (k,l) of in(k,l) * exp(+2*pi*i*(k*x + l*y)/N), no 1/N.
+//
+// Stage s (b = N >> (s+1)), output index t < N/2 and its mirror t + N/2:
+//   i   = 2*b*(t/b) + t%b,   the pair is (i, i+b)
+//   w   = table twiddle exp(-2*pi*i*k/N) with k = (t/b)*b
+//   out[t]       = in[i] + conj(w) * in[i+b]
+//   out[t + N/2] = in[i] + conj(-w) * in[i+b]
+// Every stage's twiddle is the last stage's at k, so one column of the table
+// (N/2 entries) goes into shared memory once.
+//
+// Shape: 256 threads, ROWS lines a workgroup (ROWS = 256 / (N/2), at least 1),
+// so a workgroup always has 256 butterflies a stage up to N = 512, and two a
+// thread at N = 1024. The size is fixed rather than a specialization constant
+// because LocalSizeId needs maintenance4, which the device does not enable.
+// Loads and stores walk the lines' texels in memory order (adjacent threads,
+// adjacent texels; for columns, adjacent columns of one row), apart from the
+// butterflies' own indexing.
+//
+// Layers: gl_WorkGroupID.z picks which of the bound images to transform
+// through the 4-bit slots of the push constant, so one dispatch covers a
+// cascade's height and displacement, or every live wake patch. The slot is a
+// switch over constant indices: indexing the image array by a variable would
+// need shaderStorageImageArrayDynamicIndexing, which the device does not
+// enable. The index is uniform across the workgroup, so the branch is too.
+
+layout(local_size_x = 256) in;
+
+layout(constant_id = 0) const int N = 512;
+layout(constant_id = 1) const int LOG_N = 9;
+layout(constant_id = 2) const int ROWS = 1;    // lines a workgroup
+layout(constant_id = 3) const int VERTICAL = 0;// 0: rows, 1: columns (+ the sign)
+
+const int kThreads = 256;
+const int kMaxLayers = 8;
+
+layout(set = 0, binding = 0)        uniform sampler2D Twiddle;// ifft_twiddle.comp's table
+layout(set = 0, binding = 1, rg32f) uniform image2D Io[kMaxLayers];
+
+layout(push_constant) uniform Pc {
+    uint layerSlots;// 4 bits per gl_WorkGroupID.z: the Io index it transforms
+} pc;
+
+#include "complex_math.glsl"// complexMul
+
+// Line r's ping-pong halves: [r*2N, r*2N + N) and [r*2N + N, r*2N + 2N).
+shared vec2 lineBuf[ROWS * 2 * N];
+shared vec2 twid[N / 2];
+
+vec2 ioLoad(uint slot, ivec2 p) {
+    switch (slot) {
+        case 0u: return imageLoad(Io[0], p).xy;
+        case 1u: return imageLoad(Io[1], p).xy;
+        case 2u: return imageLoad(Io[2], p).xy;
+        case 3u: return imageLoad(Io[3], p).xy;
+        case 4u: return imageLoad(Io[4], p).xy;
+        case 5u: return imageLoad(Io[5], p).xy;
+        case 6u: return imageLoad(Io[6], p).xy;
+        default: return imageLoad(Io[7], p).xy;
+    }
+}
+
+void ioStore(uint slot, ivec2 p, vec2 v) {
+    const vec4 o = vec4(v, 0.0, 0.0);
+    switch (slot) {
+        case 0u: imageStore(Io[0], p, o); break;
+        case 1u: imageStore(Io[1], p, o); break;
+        case 2u: imageStore(Io[2], p, o); break;
+        case 3u: imageStore(Io[3], p, o); break;
+        case 4u: imageStore(Io[4], p, o); break;
+        case 5u: imageStore(Io[5], p, o); break;
+        case 6u: imageStore(Io[6], p, o); break;
+        default: imageStore(Io[7], p, o); break;
+    }
+}
+
+// Texel e of this workgroup's lines (e < ROWS*N), in memory order: its line r
+// and its index j along the line, and where it sits in the image.
+void texelOf(int e, out int r, out int j, out ivec2 p) {
+    const int line0 = int(gl_WorkGroupID.y) * ROWS;
+    if (VERTICAL != 0) {
+        r = e % ROWS;// adjacent threads: adjacent columns of one row
+        j = e / ROWS;
+        p = ivec2(line0 + r, j);
+    } else {
+        r = e / N;// adjacent threads: adjacent texels of one row
+        j = e % N;
+        p = ivec2(j, line0 + r);
+    }
+}
+
+void main() {
+    const int H = N / 2;
+    const int t = int(gl_LocalInvocationID.x);
+    const uint slot = (pc.layerSlots >> (4u * gl_WorkGroupID.z)) & 0xFu;
+
+    for (int e = t; e < ROWS * N; e += kThreads) {
+        int r, j;
+        ivec2 p;
+        texelOf(e, r, j, p);
+        lineBuf[r * 2 * N + j] = ioLoad(slot, p);
+    }
+    for (int k = t; k < H; k += kThreads) {
+        twid[k] = texelFetch(Twiddle, ivec2(LOG_N - 1, k), 0).rg;
+    }
+    barrier();
+
+    int src = 0;
+    for (int s = 0; s < LOG_N; ++s) {
+        const int b = N >> (s + 1);
+        for (int u = t; u < ROWS * H; u += kThreads) {
+            const int base = (u / H) * 2 * N;
+            const int o = u % H;
+            const int q = o / b;
+            const int i = 2 * b * q + (o - q * b);
+            const vec2 w = twid[q * b];
+            const vec2 a = lineBuf[base + src + i];
+            const vec2 c = lineBuf[base + src + i + b];
+            const int dst = base + N - src;
+            lineBuf[dst + o]     = a + complexMul(vec2(w.x, -w.y), c);
+            lineBuf[dst + o + H] = a + complexMul(vec2(-w.x, w.y), c);
+        }
+        src = N - src;
+        barrier();
+    }
+
+    for (int e = t; e < ROWS * N; e += kThreads) {
+        int r, j;
+        ivec2 p;
+        texelOf(e, r, j, p);
+        vec2 v = lineBuf[r * 2 * N + src + j];
+        if (VERTICAL != 0) v *= 1.0 - 2.0 * float((p.x + p.y) & 1);
+        ioStore(slot, p, v);
+    }
+}

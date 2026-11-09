@@ -3433,26 +3433,72 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                         0, 1, &mb, 0, nullptr, 0, nullptr);
             }
-            for (uint32_t i = 0; i < 3; ++i) {
-                if (!(st.cascadeMask & (1u << i))) continue;
+            auto evolveCascade = [&](uint32_t i) {
                 auto& c = st.cascades[i];
                 if (!c.phillipsRecorded) {
                     c.phillips->recordCompute(cb);
                     c.phillipsRecorded = true;
                 }
                 c.dyn->recordCompute(cb, elapsedSeconds);
-                water::OceanImage ht  = c.dyn->ht();
-                water::OceanImage dsp = c.dyn->displacement();
-                ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;
-                dsp.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
-                // scratchA.currentLayout is deliberately NOT forced: it is
-                // created UNDEFINED and recordApply's cmdTransitionToGeneral
-                // relies on the tracked value to record the one first-use
-                // UNDEFINED→GENERAL barrier (pre-setting GENERAL here skipped
-                // that barrier and tripped submit-time layout validation on
-                // the first FFT chain).
-                c.ifft->recordApply(cb, ht,  st.scratchA);
-                c.ifft->recordApply(cb, dsp, st.scratchA);
+            };
+            // The shared-memory IFFT (water::IFFT::Path::Shared) transforms
+            // every image of one size in the same two dispatches. On that
+            // path every cascade's spectrum is evolved first, then the
+            // transforms go out grouped by resolution: a cascade's height and
+            // displacement, together with those of any cascade of the same
+            // size. The butterfly path keeps the cascade-at-a-time order.
+            bool batchFft = true;
+            for (uint32_t i = 0; i < 3; ++i) {
+                if ((st.cascadeMask & (1u << i)) &&
+                    st.cascades[i].ifft->path() != water::IFFT::Path::Shared) batchFft = false;
+            }
+            if (batchFft) {
+                std::array<water::OceanImage, 6> spectra{};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (!(st.cascadeMask & (1u << i))) continue;
+                    evolveCascade(i);
+                    spectra[2 * i]     = st.cascades[i].dyn->ht();
+                    spectra[2 * i + 1] = st.cascades[i].dyn->displacement();
+                    spectra[2 * i].currentLayout     = VK_IMAGE_LAYOUT_GENERAL;
+                    spectra[2 * i + 1].currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+                }
+                // One job a resolution, all jobs' rows then all their columns.
+                std::array<std::array<water::OceanImage*, 6>, 3> lists{};
+                std::array<water::IFFT::Job, 3> jobs{};
+                uint32_t jobCount = 0, done = 0;
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (!(st.cascadeMask & (1u << i)) || (done & (1u << i))) continue;
+                    const uint32_t n = st.cascades[i].ifft->textureSize();
+                    auto& list = lists[jobCount];
+                    uint32_t count = 0;
+                    for (uint32_t j = i; j < 3; ++j) {
+                        if (!(st.cascadeMask & (1u << j)) || st.cascades[j].ifft->textureSize() != n) continue;
+                        list[count++] = &spectra[2 * j];
+                        list[count++] = &spectra[2 * j + 1];
+                        done |= 1u << j;
+                    }
+                    jobs[jobCount++] = {st.cascades[i].ifft.get(), list.data(), count, &st.scratchA};
+                }
+                water::IFFT::recordApplyJobs(cb, jobs.data(), jobCount);
+            }
+            for (uint32_t i = 0; i < 3; ++i) {
+                if (!(st.cascadeMask & (1u << i))) continue;
+                auto& c = st.cascades[i];
+                if (!batchFft) {
+                    evolveCascade(i);
+                    water::OceanImage ht  = c.dyn->ht();
+                    water::OceanImage dsp = c.dyn->displacement();
+                    ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;
+                    dsp.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    // scratchA.currentLayout is deliberately NOT forced: it is
+                    // created UNDEFINED and recordApply's cmdTransitionToGeneral
+                    // relies on the tracked value to record the one first-use
+                    // UNDEFINED→GENERAL barrier (pre-setting GENERAL here skipped
+                    // that barrier and tripped submit-time layout validation on
+                    // the first FFT chain).
+                    c.ifft->recordApply(cb, ht,  st.scratchA);
+                    c.ifft->recordApply(cb, dsp, st.scratchA);
+                }
 
                 // Copy the spatial-domain height image into THIS FRAME's slot
                 // of the host-mapped readback ring for this cascade (slot =
@@ -5128,11 +5174,16 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // it to the largest enabled cascade. Smaller cascades' IFFT runs
             // only touch their own extent within the scratch — the unused
             // tail is harmless.
+            // The shared-memory IFFT works in place and never touches it, so
+            // it is made only when some cascade runs the butterfly path.
             uint32_t scratchDim = 0;
+            bool needScratch = false;
             for (uint32_t i = 0; i < 3; ++i) {
                 if (tileSizes[i] > 0.f) scratchDim = std::max(scratchDim, textureSizes[i]);
+                if ((state->cascadeMask & (1u << i)) &&
+                    state->cascades[i].ifft->path() != water::IFFT::Path::Shared) needScratch = true;
             }
-            {
+            if (needScratch) {
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
                 ici.imageType     = VK_IMAGE_TYPE_2D;
