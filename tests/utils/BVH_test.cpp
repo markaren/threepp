@@ -5,16 +5,21 @@
 #include "threepp/extras/curves/LineCurve.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/TubeGeometry.hpp"
+#include "threepp/math/Euler.hpp"
+#include "threepp/math/Sphere.hpp"
 #include "threepp/utils/BVH.hpp"
 #include "threepp/utils/TriangleIntersect.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <vector>
 
 using namespace threepp;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 
 namespace {
 
@@ -242,4 +247,246 @@ TEST_CASE("BVH built from raw arrays", "[BVH]") {
         CHECK(soup.triangleCount() == a.triangleCount());
         CHECK(BVH::intersects(soup, overlapping));
     }
+}
+
+namespace {
+
+    // Deterministic across compilers: std::*_distribution is implementation-defined.
+    struct Rng {
+        std::uint64_t state;
+
+        float next() {
+            state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+            return static_cast<float>(state >> 40) / static_cast<float>(1u << 24);
+        }
+
+        float range(float lo, float hi) {
+            return lo + (hi - lo) * next();
+        }
+
+        Vector3 unitVector() {
+            while (true) {
+                Vector3 v(range(-1, 1), range(-1, 1), range(-1, 1));
+                const float len = v.length();
+                if (len > 1e-3f && len <= 1.f) return v.divideScalar(len);
+            }
+        }
+    };
+
+    struct Mesh {
+        std::vector<float> positions;
+        std::vector<unsigned int> indices;
+
+        [[nodiscard]] std::size_t triangleCount() const {
+            return indices.size() / 3;
+        }
+
+        [[nodiscard]] Triangle triangle(std::size_t i) const {
+            const auto v = [this](unsigned int k) {
+                return Vector3(positions[k * 3], positions[k * 3 + 1], positions[k * 3 + 2]);
+            };
+            return {v(indices[i * 3]), v(indices[i * 3 + 1]), v(indices[i * 3 + 2])};
+        }
+    };
+
+    // A lumpy sphere: about 2 * rings * segments triangles, the radius wobbled
+    // by a few lobes and a little per-vertex noise.
+    Mesh deformedSphere(int segments, int rings, const Vector3& center, float radius, std::uint64_t seed) {
+        Mesh mesh;
+        Rng rng{seed};
+        constexpr float pi = 3.14159265358979f;
+        for (int r = 0; r <= rings; ++r) {
+            const float theta = pi * static_cast<float>(r) / static_cast<float>(rings);
+            for (int s = 0; s <= segments; ++s) {
+                const float phi = 2.f * pi * static_cast<float>(s % segments) / static_cast<float>(segments);
+                const float wobble = 1.f + 0.15f * std::sin(5.f * theta) * std::cos(3.f * phi) + rng.range(-0.01f, 0.01f);
+                const float rr = radius * wobble;
+                mesh.positions.push_back(center.x + rr * std::sin(theta) * std::cos(phi));
+                mesh.positions.push_back(center.y + rr * std::cos(theta));
+                mesh.positions.push_back(center.z + rr * std::sin(theta) * std::sin(phi));
+            }
+        }
+        const auto vertex = [segments](int r, int s) {
+            return static_cast<unsigned int>(r * (segments + 1) + s);
+        };
+        for (int r = 0; r < rings; ++r) {
+            for (int s = 0; s < segments; ++s) {
+                const auto a = vertex(r, s), b = vertex(r + 1, s), c = vertex(r + 1, s + 1), d = vertex(r, s + 1);
+                if (r != 0) mesh.indices.insert(mesh.indices.end(), {a, b, d});
+                if (r != rings - 1) mesh.indices.insert(mesh.indices.end(), {b, c, d});
+            }
+        }
+        return mesh;
+    }
+
+    constexpr float rayEps = 1e-4f;// the segment-endpoint epsilon in BVH.cpp
+
+    bool sameDistance(float a, float b) {
+        return std::abs(a - b) <= std::max(1e-6f, 1e-5f * std::max(std::abs(a), std::abs(b)));
+    }
+
+}// namespace
+
+TEST_CASE("BVH raycast matches a brute-force loop", "[BVH]") {
+
+    const auto mesh = deformedSphere(160, 157, {0.1f, -0.2f, 0.05f}, 1.f, 1234);
+    REQUIRE(mesh.triangleCount() > 49000);
+
+    BVH bvh;
+    bvh.build(mesh.positions, mesh.indices);
+    REQUIRE(bvh.triangleCount() == mesh.triangleCount());
+
+    std::vector<Triangle> tris;
+    tris.reserve(mesh.triangleCount());
+    for (std::size_t i = 0; i < mesh.triangleCount(); ++i) tris.push_back(mesh.triangle(i));
+
+    const float maxDistances[] = {std::numeric_limits<float>::infinity(), 3.f, 1.2f, 0.4f};
+
+    Rng rng{42};
+    int hits = 0, mismatches = 0, anyMismatches = 0;
+    constexpr int rayCount = 10000;
+    std::vector<float> triDistance(tris.size());
+    for (int r = 0; r < rayCount; ++r) {
+        const Vector3 origin(rng.range(-2.f, 2.f), rng.range(-2.f, 2.f), rng.range(-2.f, 2.f));
+        Vector3 direction = rng.unitVector();
+        // Every 16th ray runs along an axis, so the slab test sees zero direction components.
+        if (r % 16 == 0) {
+            const int axis = r / 16 % 3;
+            direction.set(0, 0, 0);
+            direction[axis] = (r / 48) % 2 ? 1.f : -1.f;
+        }
+        const Ray ray(origin, direction);
+
+        // Nearest hit at or beyond rayEps; a shorter limit keeps it or finds nothing.
+        float bruteDistance = std::numeric_limits<float>::infinity();
+        Vector3 point;
+        std::ranges::fill(triDistance, std::numeric_limits<float>::infinity());
+        for (std::size_t i = 0; i < tris.size(); ++i) {
+            if (!ray.intersectTriangle(tris[i].a(), tris[i].b(), tris[i].c(), false, point)) continue;
+            const float d = point.distanceTo(origin);
+            if (d < rayEps) continue;
+            triDistance[i] = d;
+            bruteDistance = std::min(bruteDistance, d);
+        }
+
+        for (const float maxDistance : maxDistances) {
+            const bool expectHit = std::isfinite(bruteDistance) && bruteDistance <= maxDistance - rayEps;
+            const auto hit = bvh.raycast(ray, maxDistance);
+            if (bvh.raycastAny(ray, maxDistance) != expectHit) ++anyMismatches;
+            if (hit.has_value() != expectHit) {
+                ++mismatches;
+                continue;
+            }
+            if (!hit) continue;
+            ++hits;
+            // A tie on a shared edge may pick either triangle: both must be hit at that distance.
+            Vector3 along;
+            const bool ok = hit->triangleIndex >= 0 && hit->triangleIndex < static_cast<int>(tris.size()) &&
+                            sameDistance(hit->distance, bruteDistance) &&
+                            sameDistance(triDistance[hit->triangleIndex], bruteDistance) &&
+                            hit->normal.dot(direction) <= 0.f &&
+                            std::abs(hit->normal.length() - 1.f) < 1e-4f &&
+                            hit->point.distanceTo(ray.at(hit->distance, along)) < 1e-4f;
+            if (!ok) ++mismatches;
+        }
+    }
+
+    CHECK(hits > rayCount / 3);// a fair share of the rays hit
+    CHECK(mismatches == 0);
+    CHECK(anyMismatches == 0);
+}
+
+TEST_CASE("BVH box and sphere queries match a brute-force loop", "[BVH]") {
+
+    const auto mesh = deformedSphere(120, 100, {0, 0, 0}, 1.f, 99);
+    BVH bvh;
+    bvh.build(mesh.positions, mesh.indices);
+
+    Matrix4 rotated;
+    rotated.makeRotationFromEuler(Euler(0.3f, -0.7f, 0.2f)).setPosition(0.4f, -0.1f, 0.25f);
+    Matrix4 scaled;
+    scaled.makeScale(1.5f, 0.75f, 1.f).premultiply(rotated);
+    const Matrix4 matrices[] = {Matrix4(), rotated, scaled};
+
+    Rng rng{7};
+    int boxHits = 0, sphereHits = 0;
+    for (const auto& m : matrices) {
+        for (int q = 0; q < 200; ++q) {
+            const Vector3 c(rng.range(-1.5f, 1.5f), rng.range(-1.5f, 1.5f), rng.range(-1.5f, 1.5f));
+            const Vector3 half(rng.range(0.01f, 0.4f), rng.range(0.01f, 0.4f), rng.range(0.01f, 0.4f));
+            const Box3 box(Vector3(c).sub(half), Vector3(c).add(half));
+            const Sphere sphere(c, rng.range(0.01f, 0.5f));
+
+            std::vector<int> expectBox, expectSphere;
+            Box3 triBox;
+            Vector3 a, b, cc, closest;
+            for (std::size_t i = 0; i < mesh.triangleCount(); ++i) {
+                const auto tri = mesh.triangle(i);
+                triBox.makeEmpty();
+                triBox.expandByPoint(tri.a());
+                triBox.expandByPoint(tri.b());
+                triBox.expandByPoint(tri.c());
+                triBox.applyMatrix4(m);
+                if (box.intersectsBox(triBox)) expectBox.push_back(static_cast<int>(i));
+
+                const Triangle world(a.copy(tri.a()).applyMatrix4(m), b.copy(tri.b()).applyMatrix4(m), cc.copy(tri.c()).applyMatrix4(m));
+                world.closestPointToPoint(sphere.center, closest);
+                if (closest.distanceToSquared(sphere.center) <= sphere.radius * sphere.radius) {
+                    expectSphere.push_back(static_cast<int>(i));
+                }
+            }
+
+            auto gotBox = bvh.intersect(box, m);
+            auto gotSphere = bvh.intersect(sphere, m);
+            std::ranges::sort(gotBox);
+            std::ranges::sort(gotSphere);
+            CHECK(gotBox == expectBox);
+            CHECK(gotSphere == expectSphere);
+            boxHits += !expectBox.empty();
+            sphereHits += !expectSphere.empty();
+        }
+    }
+    // The random shapes both touch and miss the mesh.
+    CHECK(boxHits > 50);
+    CHECK(boxHits < 550);
+    CHECK(sphereHits > 50);
+    CHECK(sphereHits < 550);
+}
+
+TEST_CASE("BVH mesh-mesh queries on a procedural pair", "[BVH]") {
+
+    const auto meshA = deformedSphere(64, 48, {0, 0, 0}, 1.f, 5);
+    const auto meshB = deformedSphere(48, 40, {1.4f, 0.3f, -0.2f}, 0.8f, 6);
+    BVH a, b;
+    a.build(meshA.positions, meshA.indices);
+    b.build(meshB.positions, meshB.indices);
+
+    Matrix4 apart;
+    apart.makeRotationFromEuler(Euler(0.5f, 0.1f, -0.4f)).setPosition(1.6f, 0.4f, 0.f);
+
+    CHECK(BVH::intersects(a, b));
+    CHECK_FALSE(BVH::intersects(a, b, Matrix4(), apart));
+
+    const auto pairs = BVH::intersect(a, Matrix4(), b, Matrix4(), true);
+    const auto coarse = BVH::intersect(a, Matrix4(), b, Matrix4(), false);
+    const float gap = BVH::distance(a, b, Matrix4(), apart);
+
+    // Expected values from the recursive median-split BVH this one replaced.
+    CHECK(pairs.size() == 216u);
+    std::int64_t pairSum = 0;// order-free fingerprint of which original triangle pairs were reported
+    for (const auto& p : pairs) pairSum += static_cast<std::int64_t>(p.idxA) * 100003 + p.idxB;
+    CHECK(pairSum == 56253238848);
+    for (const auto& p : pairs) {
+        REQUIRE(p.idxA >= 0);
+        REQUIRE(p.idxB >= 0);
+        REQUIRE(p.idxA < static_cast<int>(meshA.triangleCount()));
+        REQUIRE(p.idxB < static_cast<int>(meshB.triangleCount()));
+        // The reported indices are the original triangles, and they do cross.
+        CHECK(detail::triTriOverlap(meshA.triangle(p.idxA), meshB.triangle(p.idxB)));
+    }
+    // One entry per overlapping leaf pair: the count follows the tree's shape.
+    CHECK_FALSE(coarse.empty());
+
+    CHECK_THAT(BVH::distance(a, b), WithinAbs(0.f, 1e-6f));
+    CHECK_THAT(gap, WithinRel(0.987624466f, 1e-5f));
 }

@@ -1,4 +1,8 @@
-// Simple BVH implementation for threepp Geometries
+// Bounding volume hierarchy over the triangles of a threepp geometry.
+//
+// Built with a binned surface-area heuristic and stored as a flat node array,
+// so ray queries walk it iteratively, near child first. Triangle indices handed
+// back by any query are the triangle's position in the source geometry.
 
 #ifndef THREEPP_BVH_HPP
 #define THREEPP_BVH_HPP
@@ -47,6 +51,12 @@ namespace threepp {
             Vector3 normal;// geometric normal, flipped to face the ray origin
         };
 
+        // maxTrianglesPerNode: a node with this many triangles or fewer becomes a
+        // leaf; larger nodes are split where the surface-area heuristic says, and
+        // may stop a little above it when no split pays off.
+        // maxSubdivisions: a safety limit on the tree depth, not a target; values
+        // below 64 are raised to 64 (and above 128 lowered to 128), so it never
+        // caps a large mesh's leaf size.
         explicit BVH(int maxTrianglesPerNode = 8, int maxSubdivisions = 10)
             : maxTrianglesPerNode(maxTrianglesPerNode), maxSubdivisions(maxSubdivisions) {}
 
@@ -82,6 +92,7 @@ namespace threepp {
                                             float maxDistance = std::numeric_limits<float>::infinity());
 
         // Closest hit within maxDistance, or nullopt. The ray is in the BVH's local space.
+        // Safe to call from several threads at once.
         [[nodiscard]] std::optional<RayHit> raycast(const Ray& ray, float maxDistance = std::numeric_limits<float>::infinity()) const;
 
         // Early-out boolean occlusion query. The ray is in the BVH's local space.
@@ -97,34 +108,45 @@ namespace threepp {
 
         // Root bounds in the BVH's own space; empty when nothing was built.
         [[nodiscard]] Box3 boundingBox() const {
-            return root ? root->boundingBox : Box3{};
+            return nodes.empty() ? Box3{} : nodes.front().box();
         }
 
     private:
-        class BVHNode {
-        public:
-            Box3 boundingBox;
-            std::unique_ptr<BVHNode> left;
-            std::unique_ptr<BVHNode> right;
-            std::vector<int> triangleIndices;
-
-            BVHNode() = default;
+        // 32 bytes; plain floats so the ray's slab test inlines.
+        struct Node {
+            float min[3];
+            int first;// leaf: first triangle (leaf order); inner: left child, the right is first + 1
+            float max[3];
+            int count;// > 0 for a leaf
 
             [[nodiscard]] bool isLeaf() const {
-                return left == nullptr && right == nullptr;
+                return count > 0;
+            }
+
+            [[nodiscard]] Box3 box() const {
+                return {{min[0], min[1], min[2]}, {max[0], max[1], max[2]}};
             }
         };
 
-        std::unique_ptr<BVHNode> root;
+        // What the ray test reads per triangle: a vertex and the two edges from it.
+        struct RayTriangle {
+            float v0[3];
+            float e1[3];
+            float e2[3];
+        };
+
         int maxTrianglesPerNode;
         int maxSubdivisions;
 
-        std::vector<Triangle> triangles;
+        std::vector<Node> nodes;               // nodes[0] is the root
+        std::vector<Triangle> triangles;       // leaf order
+        std::vector<RayTriangle> rayTriangles; // leaf order
+        std::vector<int> sourceIndex;          // leaf order -> index in the source geometry
         const BufferGeometry* geometry = nullptr;
 
-        std::unique_ptr<BVHNode> buildNode(std::vector<int>& indices, int depth);
+        void buildTree();
 
-        static void collectBoxes(const BVHNode* node, std::vector<BVHBox3>& boxes);
+        void collectBoxes(int node, std::vector<BVHBox3>& boxes) const;
     };
 
 
