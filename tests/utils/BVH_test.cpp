@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/curves/LineCurve.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/TubeGeometry.hpp"
@@ -680,6 +681,51 @@ TEST_CASE("BVH axis-aligned rays hit with the origin on a node face", "[BVH]") {
             CHECK_FALSE(bvh.raycast(Ray({past, 1, 2}, {zero, -1, zero})));
             CHECK_FALSE(bvh.raycast(Ray({2, 1, past}, {zero, -1, zero})));
             CHECK_FALSE(bvh.raycastAny(Ray({past, 1, past}, {zero, -1, zero}), 2.f));
+        }
+    }
+}
+
+TEST_CASE("BVH built from a geometry leaves out a trailing partial triangle", "[BVH]") {
+
+    // Two floor triangles and one or two vertices left over. The arrays are cut
+    // short with resize, so their spare capacity still holds a third triangle
+    // that a read past the end would pick up.
+    const Ray down({0.25f, 1, 0.25f}, {0, -1, 0});
+
+    SECTION("an index count that is not a multiple of 3") {
+        for (const std::size_t leftover : {1u, 2u}) {
+            CAPTURE(leftover);
+            std::vector<unsigned int> index{0, 3, 1, 1, 3, 2, 0, 1, 2};
+            index.resize(6 + leftover);
+            const auto geometry = BufferGeometry::create();
+            geometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1}, 3));
+            geometry->setIndex(std::move(index));
+
+            BVH bvh;
+            bvh.build(*geometry);
+            CHECK(bvh.triangleCount() == 2);
+            const auto hit = bvh.raycast(down);
+            REQUIRE(hit);
+            CHECK(hit->triangleIndex == 0);
+        }
+    }
+
+    SECTION("a vertex count that is not a multiple of 3") {
+        for (const std::size_t leftover : {1u, 2u}) {
+            CAPTURE(leftover);
+            std::vector<float> positions{0, 0, 0, 0, 0, 1, 1, 0, 0,
+                                         1, 0, 0, 0, 0, 1, 1, 0, 1,
+                                         0, 0, 0, 1, 0, 0, 1, 0, 1};
+            positions.resize(3 * (6 + leftover));
+            const auto geometry = BufferGeometry::create();
+            geometry->setAttribute("position", FloatBufferAttribute::create(std::move(positions), 3));
+
+            BVH bvh;
+            bvh.build(*geometry);
+            CHECK(bvh.triangleCount() == 2);
+            const auto hit = bvh.raycast(down);
+            REQUIRE(hit);
+            CHECK(hit->triangleIndex == 0);
         }
     }
 }

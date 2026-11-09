@@ -325,10 +325,14 @@ void BVH::build(const BufferGeometry& geom) {
     const auto posAttr = geom.getAttribute<float>("position");
     if (!posAttr) return;
 
+    // Whole triangles only: one or two indices (or vertices) left over at the
+    // end are not a triangle, and reading their missing corners would run past
+    // the end of the array.
     if (geom.hasIndex()) {
         const auto index = geom.getIndex();
-        triangles.reserve(index->count() / 3);
-        for (int i = 0; i < index->count(); i += 3) {
+        const int count = index->count() - index->count() % 3;
+        triangles.reserve(count / 3);
+        for (int i = 0; i < count; i += 3) {
             const auto a = index->getX(i);
             const auto b = index->getX(i + 1);
             const auto c = index->getX(i + 2);
@@ -339,8 +343,9 @@ void BVH::build(const BufferGeometry& geom) {
                     Vector3(posAttr->getX(c), posAttr->getY(c), posAttr->getZ(c)));
         }
     } else {
-        triangles.reserve(posAttr->count() / 3);
-        for (int i = 0; i < posAttr->count(); i += 3) {
+        const int count = posAttr->count() - posAttr->count() % 3;
+        triangles.reserve(count / 3);
+        for (int i = 0; i < count; i += 3) {
             triangles.emplace_back(
                     Vector3(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i)),
                     Vector3(posAttr->getX(i + 1), posAttr->getY(i + 1), posAttr->getZ(i + 1)),

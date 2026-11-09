@@ -63,6 +63,8 @@ namespace threepp {
             : maxTrianglesPerNode(maxTrianglesPerNode), maxSubdivisions(maxSubdivisions) {}
 
         // Keeps a raw pointer to `geometry` (see getGeometry); it must outlive the BVH.
+        // One or two indices (or vertices, without an index) left over after the
+        // last whole triangle are ignored.
         void build(const BufferGeometry& geometry);
 
         // Build from raw buffers: `positions` is xyz-interleaved, `indices` a flat
