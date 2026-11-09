@@ -1566,6 +1566,10 @@ if (THREEPP_WITH_VULKAN)
         kIfftPermuteCompSpv
         _ifft_permute_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_shared.comp"
+        kIfftSharedCompSpv
+        _ifft_shared_spv_h)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
         kWaterDisplaceCompSpv
         _water_displace_spv_h)

@@ -4,6 +4,9 @@
 // DynamicSpectrum    — Time-evolves h0(k) into ht/dht/displacement (per frame).
 // IFFT               — log2(N) horizontal + vertical butterfly + permute pass,
 //                      transforms a frequency-domain RG32F image into spatial.
+//                      Path::Shared (the default; THREEPP_OCEAN_FFT) does the
+//                      same transform in one rows and one columns dispatch,
+//                      each line whole in workgroup shared memory.
 // OceanCascade       — Aggregate of one Phillips/Dynamic/IFFT chain plus
 //                      spatial-domain output images consumed by the
 //                      water_displace.comp pass.
@@ -167,12 +170,33 @@ namespace threepp::water {
     };
 
     // ─── IFFT ──────────────────────────────────────────────────────────
-    // log2(N)+1 dispatches per direction. Caller provides the input image
-    // (frequency-domain RG32F) and a scratch image (same format/size)
-    // used for ping-pong. Writes the spatial-domain result back into the
-    // input image.
+    // Caller provides the input image (frequency-domain RG32F) and a scratch
+    // image (same format/size). Writes the spatial-domain result back into the
+    // input image: out(x,y) = (-1)^(x+y) * sum over (k,l) of
+    // in(k,l) * exp(+2*pi*i*(k*x + l*y)/N), unnormalised (no 1/N).
+    //
+    // Two implementations of that one transform, equal to float rounding:
+    //   Butterfly  log2(N)+1 dispatches per direction, a pipeline barrier
+    //              after each, ping-ponging through `scratch`.
+    //   Shared     ifft_shared.comp: one dispatch for all rows and one for all
+    //              columns, each row or column whole in workgroup shared
+    //              memory, in place (`scratch` is not touched). Several images
+    //              of the same size go in the same two dispatches
+    //              (recordApplyBatch). Sizes it cannot hold (a 256-thread
+    //              workgroup, or its shared memory: 10 KB at N = 512, 20 KB
+    //              at 1024, past the device's limits) fall back to Butterfly.
+    // THREEPP_OCEAN_FFT=butterfly|shared picks the default for every IFFT
+    // (shared when unset); setPath overrides it per instance.
     class IFFT {
     public:
+        enum class Path { Butterfly, Shared };
+        // THREEPP_OCEAN_FFT, read once per process.
+        static Path defaultPath();
+
+        // The most images one recordApplyBatch takes (ifft_shared.comp's
+        // image array). A cascade set has at most six, the wake ripples eight.
+        static constexpr uint32_t kMaxBatch = 8;
+
         // maxGroups: how many distinct (input, scratch) image pairs this IFFT
         // will be applied to over its life (a cascade has two; the wake
         // field's ripples have one a patch).
@@ -194,7 +218,39 @@ namespace threepp::water {
         // wrong claim of GENERAL suppresses that first-use barrier.
         void recordApply(VkCommandBuffer cb, OceanImage& input, OceanImage& scratch);
 
+        // recordApply on images[i] for every bit i of `mask` (i < count <=
+        // kMaxBatch), all textureSize square. On the Shared path that is one
+        // rows and one columns dispatch for all of them, and the barriers end
+        // the call as recordApply's do; on the Butterfly path it is
+        // recordApply on each in turn. The images may belong to other IFFTs of
+        // the same size (cascades that share a resolution). Every one of the
+        // `count` images is bound whatever the mask, so a set of images whose
+        // live subset changes frame to frame (the wake patches) costs one
+        // descriptor set; a distinct set of views counts against maxGroups as
+        // a distinct pair does.
+        void recordApplyBatch(VkCommandBuffer cb, OceanImage* const* images, uint32_t count,
+                              OceanImage& scratch, uint32_t mask = ~0u);
+
+        // Several batches, each through its own IFFT (the cascades' different
+        // resolutions), with one barrier after all their rows and one after
+        // all their columns. Exactly recordApplyBatch on each job in turn
+        // unless every job's IFFT is on the Shared path; at most 8 jobs.
+        struct Job {
+            IFFT*              fft     = nullptr;
+            OceanImage* const* images  = nullptr;
+            uint32_t           count   = 0;
+            OceanImage*        scratch = nullptr;
+            uint32_t           mask    = ~0u;
+        };
+        static void recordApplyJobs(VkCommandBuffer cb, const Job* jobs, uint32_t jobCount);
+
         uint32_t textureSize() const { return textureSize_; }
+
+        // The path this instance records. setPath(Shared) is ignored where
+        // the shared path is not supported (see above).
+        Path path() const { return path_; }
+        void setPath(Path p) { path_ = (p == Path::Shared && sharedSupported_) ? Path::Shared : Path::Butterfly; }
+        bool sharedSupported() const { return sharedSupported_; }
 
     private:
         vulkan::VulkanContext& ctx_;
@@ -241,10 +297,34 @@ namespace threepp::water {
 
         bool twiddleComputed_ = false;
 
+        // The shared path: its two pipelines (rows, columns) share a layout of
+        // the twiddle table + kMaxBatch storage images, and one set per
+        // distinct list of image views, written once like the groups above.
+        Path path_ = Path::Butterfly;
+        bool sharedSupported_ = false;
+        uint32_t sharedRows_ = 1;// lines a workgroup (ifft_shared.comp ROWS)
+        VkDescriptorSetLayout dslShared_    = VK_NULL_HANDLE;
+        VkPipelineLayout      layoutShared_ = VK_NULL_HANDLE;
+        VkPipeline pipeSharedRows_ = VK_NULL_HANDLE;
+        VkPipeline pipeSharedCols_ = VK_NULL_HANDLE;
+        struct SharedSet {
+            std::array<VkImageView, kMaxBatch> views{};
+            uint32_t        count = 0;
+            VkDescriptorSet ds    = VK_NULL_HANDLE;
+        };
+        std::vector<SharedSet> sharedSets_;
+
         void createTwiddleImage();
         void createPipelines();
+        void createSharedPipelines();
         void recordTwiddleOnce(VkCommandBuffer cb);
         DescGroup& groupFor(const OceanImage& input, const OceanImage& scratch);
+        VkDescriptorSet sharedSetFor(OceanImage* const* images, uint32_t count);
+        // Twiddle, set, layouts and z slots for one batch; returns its layer count.
+        uint32_t prepareShared(VkCommandBuffer cb, OceanImage* const* images, uint32_t count, uint32_t mask,
+                               VkDescriptorSet& ds, uint32_t& slots);
+        void dispatchShared(VkCommandBuffer cb, VkDescriptorSet ds, uint32_t slots, uint32_t layers,
+                            bool columns) const;
     };
 
     // ─── OceanCascade ──────────────────────────────────────────────────

@@ -628,14 +628,36 @@ namespace threepp::vulkan {
             vkCmdPushConstants(cb, ripplePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, groups, groups, 1);
         };
-        for (uint32_t i = 0; i < st.layers; ++i) {
-            if (!(rippleMask & (1u << i))) continue;
-            dispatch(i, 0u);// turn the spectrum, and force it
+        if (st.ifft->path() == water::IFFT::Path::Shared) {
+            // The shared-memory IFFT takes every live patch in one rows and
+            // one columns dispatch, so each step runs for all patches before
+            // the next. A patch's dispatches touch only its own layer and its
+            // own work image, so the order between patches is free.
+            for (uint32_t i = 0; i < st.layers; ++i) {
+                if (rippleMask & (1u << i)) dispatch(i, 0u);
+            }
             computeBarrier(cb);
-            dispatch(i, 1u);// the slopes' spectrum
+            for (uint32_t i = 0; i < st.layers; ++i) {
+                if (rippleMask & (1u << i)) dispatch(i, 1u);
+            }
             computeBarrier(cb);
-            st.ifft->recordApply(cb, st.work[i], st.scratch);
-            dispatch(i, 2u);// the slopes, into the patch's layer
+            static_assert(DisplacedMesh::kMaxWakePatches <= water::IFFT::kMaxBatch);
+            std::array<water::OceanImage*, DisplacedMesh::kMaxWakePatches> work{};
+            for (uint32_t i = 0; i < st.layers; ++i) work[i] = &st.work[i];
+            st.ifft->recordApplyBatch(cb, work.data(), st.layers, st.scratch, rippleMask);
+            for (uint32_t i = 0; i < st.layers; ++i) {
+                if (rippleMask & (1u << i)) dispatch(i, 2u);
+            }
+        } else {
+            for (uint32_t i = 0; i < st.layers; ++i) {
+                if (!(rippleMask & (1u << i))) continue;
+                dispatch(i, 0u);// turn the spectrum, and force it
+                computeBarrier(cb);
+                dispatch(i, 1u);// the slopes' spectrum
+                computeBarrier(cb);
+                st.ifft->recordApply(cb, st.work[i], st.scratch);
+                dispatch(i, 2u);// the slopes, into the patch's layer
+            }
         }
 
         // The mips, every layer at once: each a box of the one above, so the
