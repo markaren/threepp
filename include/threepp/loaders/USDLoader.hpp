@@ -41,12 +41,14 @@ namespace threepp {
             float target = 0.f;   // rad or m
             bool acceleration = false;// physics:type "acceleration", else "force"
         };
-        /// A PhysxMimicJointAPI coupling: the joint moving `link` follows the
-        /// joint moving `referenceLink` so that q + gearing·qRef + offset = 0,
-        /// the rule PhysX enforces. In this description's units: USD authors
-        /// the coupling with angles in degrees, so a revolute joint's offset is
-        /// converted, and so is the gearing of a coupling between a revolute
-        /// and a prismatic joint. naturalFrequency and dampingRatio both above
+        /// A PhysxMimicJointAPI coupling (or a NewtonMimicAPI one, q = coef0 +
+        /// coef1·qRef, which is gearing -coef1 and offset -coef0): the joint
+        /// moving `link` follows the joint moving `referenceLink` so that
+        /// q + gearing·qRef + offset = 0, the rule PhysX enforces. In this
+        /// description's units: USD authors the coupling with angles in degrees,
+        /// so a revolute joint's offset is converted, and so is the gearing of a
+        /// coupling between a revolute and a prismatic joint. naturalFrequency
+        /// and dampingRatio (PhysX's API only) both above
         /// zero make the coupling compliant; either at zero is a hard constraint.
         struct Mimic {
             std::string joint;         // prim path of the coupled joint

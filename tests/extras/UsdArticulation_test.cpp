@@ -449,6 +449,35 @@ TEST_CASE("a mimic coupling holds q + gearing * qRef + offset = 0", "[physx][usd
     REQUIRE_THAT(passive - 0.5f * hinge + math::degToRad(5.f), WithinAbs(0.f, 1e-3f));
 }
 
+TEST_CASE("a Newton mimic coupling holds q = coef0 + coef1 * qLeader", "[physx][usd]") {
+    PhysxWorld world(settings());
+    // The same coupling as above, as NewtonMimicAPI authors it: half the hinge's angle, less five degrees.
+    const std::string mimic = R"(        float newton:mimicCoef0 = -5
+        float newton:mimicCoef1 = 0.5
+        rel newton:mimicJoint = </robot/hinge>
+)";
+    auto robot = loadUsdArticulation(world, writeFixture("usd_articulation_newton_mimic.usda", document(rootJoint, mimic)));
+    REQUIRE(robot.articulation);
+    REQUIRE(robot.mimics.size() == 1);
+    CHECK(robot.mimics[0].joint == "/robot/passive");
+    CHECK(robot.mimics[0].referenceJoint == "/robot/hinge");
+    REQUIRE_THAT(robot.mimics[0].gearing, WithinAbs(-0.5f, 1e-6f));
+    REQUIRE_THAT(robot.mimics[0].offset, WithinAbs(math::degToRad(5.f), 1e-6f));
+    CHECK(robot.articulation->mimicJoints().size() == 1);
+    CHECK(robot.diagnostics.size() == 2);
+
+    auto targets = robot.articulation->jointPositions();
+    targets[jointIndex(robot, "hinge")] = math::degToRad(60.f);
+    robot.articulation->setDriveTargets(targets.data(), targets.size());
+    for (int i = 0; i < 960; ++i) world.step(1.f / 240.f);
+
+    const auto q = robot.articulation->jointPositions();
+    const float hinge = q[jointIndex(robot, "hinge")];
+    const float passive = q[jointIndex(robot, "passive")];
+    REQUIRE_THAT(hinge, WithinAbs(math::degToRad(60.f), 2e-2f));
+    REQUIRE_THAT(passive - 0.5f * hinge + math::degToRad(5.f), WithinAbs(0.f, 1e-3f));
+}
+
 TEST_CASE("a mimic coupling that cannot be built is said, and the joint stays free", "[physx][usd]") {
     PhysxWorld world(settings());
     const std::string dangling = R"(        float physxMimicJoint:rotY:gearing = 1

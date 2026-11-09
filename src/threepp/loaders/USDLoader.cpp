@@ -1531,6 +1531,46 @@ namespace threepp {
                     m.dampingRatio = floatProperty(prim, prefix + "dampingRatio").value_or(0.f);
                     desc.mimics.push_back(std::move(m));
                 }
+
+                // NewtonMimicAPI, the Newton engine's own coupling (all that the SimReady
+                // AgiBot G2 authors for its grippers' linkages): `newton:mimicJoint` names the
+                // leader, and the follower holds q = coef0 + coef1·qLeader in the joints' USD
+                // units. That is the rule above with gearing -coef1 and offset -coef0. A joint
+                // that also authors a PhysX coupling keeps that one.
+                if (!instances.empty()) continue;
+                const auto* leader = prim.GetRelationship("newton:mimicJoint");
+                if (!leader || leader->empty()) continue;
+                const auto skip = [&](const std::string& why) {
+                    desc.diagnostics.push_back(link.jointPath + ": Newton mimic coupling " + why);
+                };
+                if (link.jointType == Robot::JointType::Fixed) {
+                    skip("on a fixed joint is ignored");
+                    continue;
+                }
+                const std::string reference = leader->front().str();
+                const int ref = linkMovedBy(reference);
+                if (ref < 0 || desc.links[ref].jointType == Robot::JointType::Fixed) {
+                    skip("follows " + reference + ", which is not a moving joint of this articulation");
+                    continue;
+                }
+                if (ref == static_cast<int>(i)) {
+                    skip("follows itself");
+                    continue;
+                }
+                const float coef1 = floatProperty(prim, "newton:mimicCoef1").value_or(1.f);
+                if (coef1 == 0.f) {
+                    skip("has a coefficient of zero");
+                    continue;
+                }
+                USDArticulationDesc::Mimic m;
+                m.joint = link.jointPath;
+                m.referenceJoint = reference;
+                m.link = static_cast<int>(i);
+                m.referenceLink = ref;
+                const float k = perDegree(link.jointType);
+                m.gearing = -coef1 * perDegree(desc.links[ref].jointType) / k;
+                m.offset = -floatProperty(prim, "newton:mimicCoef0").value_or(0.f) / k;
+                desc.mimics.push_back(std::move(m));
             }
         }
 

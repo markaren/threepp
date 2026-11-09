@@ -12,8 +12,8 @@
 // centre of mass and principal inertia, and one convex hull per collider mesh. A file's "PhysX"
 // variant is selected, which is where SimReady keeps solver iterations, self-collision and joint speed
 // limits. Revolute and prismatic joints become DOFs; a fixed joint stays a link with its own mass. A
-// link with no authored mass takes it from its colliders. A PhysxMimicJointAPI coupling becomes a PhysX
-// mimic joint, so a gripper's follower fingers close with the finger its drive moves. What the
+// link with no authored mass takes it from its colliders. A PhysxMimicJointAPI (or NewtonMimicAPI) coupling
+// becomes a PhysX mimic joint, so a gripper's follower fingers close with the finger its drive moves. What the
 // description could not carry is in `diagnostics`: spherical/D6 joints, kinematic loops, a decomposition
 // collider cooked as one hull. Stage-level metersPerUnit and kilogramsPerUnit are not applied.
 #ifndef THREEPP_PHYSX_USDARTICULATION_HPP
