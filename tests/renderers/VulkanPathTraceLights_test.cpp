@@ -15,6 +15,8 @@
 //   [4] blended and additive cards pass the ray (THREEPP_PT_BLEND_PASS): a flat
 //       blend shows the background untinted by its transmission, an additive
 //       card adds its glow; the old way drew unlit ones as opaque cards;
+//   [5] a mirrored single-sided emitter's photons leave its front (no switch):
+//       a glass ball's caustic is the same under the panel and its mirror;
 //
 // THREEPP_TEST_IMAGES=<dir>: the traces are also written there as PNGs.
 // Exit 42 (SKIP) without a Vulkan device with ray query.
@@ -385,6 +387,43 @@ int main() {
         const auto [aOn, aOff] = cardLum(add, "4_additive");
         std::printf("  additive, strength 0.5: %.4f (old %.4f), expected %.4f\n", aOn, aOff, 1.0 + 0.5 * addL);
         check(std::abs(aOn - (1.0 + 0.5 * addL)) < 0.03, "an additive card adds its glow to the background");
+    }
+
+    // ── 5. A mirrored single-sided emitter's photons ───────────────────────
+    // A front-side panel over a solid glass ball over a floor: the ball's
+    // caustic on the floor under it (photons; the floor's NEE stops at the
+    // solid) is the same with the panel mirrored (scale.x = -1), whose front
+    // still faces down: facing is the object's.
+    std::printf("\n[5] a mirrored single-sided emitter's photons leave its front\n");
+    {
+        const auto causticLum = [&](float sx, const std::string& name) {
+            Scene scene;
+            scene.environment = black;
+            scene.background  = black;
+            scene.add(floorPlane(0.8f, 1.f));
+            auto p     = panel(0.5f, 2.f, 30.f, Side::Front);
+            p->scale.x = sx;
+            scene.add(p);
+            auto glass          = MeshPhysicalMaterial::create();
+            glass->transmission = 1.f;
+            glass->roughness    = 0.f;
+            glass->ior          = 1.5f;
+            glass->thickness    = 0.8f;
+            auto ball           = Mesh::create(SphereGeometry::create(0.4f, 48, 32), glass);
+            ball->position.y    = 0.8f;
+            scene.add(ball);
+            auto camera = PerspectiveCamera::create(40, float(kW) / float(kH), 0.1f, 100.f);
+            camera->position.set(0, 0.3f, 3.f);
+            camera->lookAt(0, 0, 0);
+            camera->updateMatrixWorld();
+            const auto img = tr.trace(scene, *camera, 128, 3, name);
+            return lum(img, kW / 2 - 8, kW / 2 + 8, kH / 2 - 3, kH / 2 + 3);
+        };
+        const double plain    = causticLum(1.f, "5_panel");
+        const double mirrored = causticLum(-1.f, "5_panel_mirrored");
+        std::printf("  floor under the ball: panel %.4f, mirrored panel %.4f\n", plain, mirrored);
+        check(plain > 0.02, "the ball focuses the panel's light on the floor");
+        check(std::abs(mirrored / plain - 1.0) < 0.15, "and as much of the mirrored panel's");
     }
 
     // ── Validation ─────────────────────────────────────────────────────────

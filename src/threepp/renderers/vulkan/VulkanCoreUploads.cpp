@@ -491,6 +491,16 @@ namespace threepp {
                 wy = M[1] * x + M[5] * y + M[9]  * z + M[13];
                 wz = M[2] * x + M[6] * y + M[10] * z + M[14];
             };
+            // A mirrored instance (det < 0) turns the world-space cross product
+            // the photons take their front from (path_trace.comp tracePhoton)
+            // to the face the ray finds as its back: facing is decided in object
+            // space. Its sides swap, here and not in the TLAS flags.
+            float sides = emSides;
+            {
+                const float det = M[0] * (M[5] * M[10] - M[9] * M[6]) - M[4] * (M[1] * M[10] - M[9] * M[2]) +
+                                  M[8] * (M[1] * M[6] - M[5] * M[2]);
+                if (det < 0.f && sides != 0.f) sides = 3.f - sides;
+            }
             // This instance's light record: its tri range in the CDF, total area,
             // area-weighted (outward) normal sum and bounding sphere.
             const uint32_t triBegin = static_cast<uint32_t>(data.size() / 16);
@@ -544,7 +554,7 @@ namespace threepp {
                 data.push_back(w2x); data.push_back(w2y); data.push_back(w2z);
                 data.push_back(power);
                 data.push_back(emR); data.push_back(emG); data.push_back(emB);
-                data.push_back(emSides);
+                data.push_back(sides);
             }
             const uint32_t triCnt = static_cast<uint32_t>(data.size() / 16) - triBegin;
             if (triCnt > 0) {
