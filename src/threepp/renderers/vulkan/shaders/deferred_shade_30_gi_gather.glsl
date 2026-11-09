@@ -286,7 +286,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float smV = (kSM && doShadows && !cheapHit)
                 ? smLampVis(lights.pointLights[i].shadowSlot, false, P, N, lights.pointLights[i].position,
                             vec2(gl_GlobalInvocationID.xy)) : -1.0;
-        const float vis = (smV >= 0.0 ? smV : doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
+        const float vis = (smV >= 0.0 ? smV : doShadows ? lampShadowVis(shadowOrig, toL, dist - 1e-2, cheapHit) : 1.0) * wPick;
         if (vis <= 0.0) continue;
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.pointLights[i].color * atten * vis;
@@ -316,7 +316,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float smV = (kSM && doShadows && !cheapHit)
                 ? smLampVis(lights.spotLights[i].shadowSlot, true, P, N, lights.spotLights[i].position,
                             vec2(gl_GlobalInvocationID.xy)) : -1.0;
-        const float vis = (smV >= 0.0 ? smV : doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
+        const float vis = (smV >= 0.0 ? smV : doShadows ? lampShadowVis(shadowOrig, toL, dist - 1e-2, cheapHit) : 1.0) * wPick;
         if (vis <= 0.0) continue;
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.spotLights[i].color * atten * vis;
@@ -348,7 +348,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float smV = (kSM && doShadows && !cheapHit)
                 ? smLampVis(clusterLights[li].shadowSlot, clusterLights[li].type > 0.5, P, N,
                             clusterLights[li].position, vec2(gl_GlobalInvocationID.xy)) : -1.0;
-        const float vis = smV >= 0.0 ? smV : doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        const float vis = smV >= 0.0 ? smV : doShadows ? lampShadowVis(shadowOrig, toL, dist - 1e-2, cheapHit) : 1.0;
         if (vis <= 0.0) continue;
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * clusterLights[li].color * atten * vis;

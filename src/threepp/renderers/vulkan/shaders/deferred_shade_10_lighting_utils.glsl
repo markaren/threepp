@@ -762,14 +762,29 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
 // glass and blend instances only (kRayMaskAlpha; flat blends and additive
 // cards pass), every candidate visited (NoOpaque), none committed. The ocean
 // is in the opaque mask and stays out.
+// No BLAS asks for NO_DUPLICATE_ANY_HIT, so a driver may report one triangle
+// as a candidate more than once (one that splits triangles across nodes), and
+// a product counts each report: the last four glass faces counted, by
+// (instance, geometry, primitive), are skipped when they come again.
 float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
     float T = 1.0;
+    const uvec3 kNone = uvec3(0xFFFFFFFFu);
+    uvec3 seen0 = kNone, seen1 = kNone, seen2 = kNone, seen3 = kNone;
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
         const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
         if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
+        if (kFixGlassDedupe) {
+            const uvec3 face = uvec3(rayQueryGetIntersectionInstanceIdEXT(rq, false),
+                                     rayQueryGetIntersectionGeometryIndexEXT(rq, false),
+                                     rayQueryGetIntersectionPrimitiveIndexEXT(rq, false));
+            if (all(equal(face, seen0)) || all(equal(face, seen1)) || all(equal(face, seen2)) ||
+                all(equal(face, seen3)))
+                continue;
+            seen3 = seen2; seen2 = seen1; seen1 = seen0; seen0 = face;
+        }
         const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
         const float face = 1.0 - f0n * f0n;
         const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
@@ -780,6 +795,26 @@ float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
         if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
     }
     return T;
+}
+
+// A lamp's shadow ray in the inline loops (shadeDiffuseDirect's point, spot
+// and cell lamps): shadowVis, times what the glass on the way lets through.
+// Those loops shade the primary with the denoiser off, dispatch B,
+// transmissive pixels, sharp traced hits, the water's screen-space refraction
+// hit, and the ocean's aerated wake, foam and film (those three with the
+// denoiser on too: each lit lamp there pays this ray); the denoised primary
+// gets the same product from shadowRayVisTo. They took the opaque test alone,
+// so a seat behind a smoked pane took about a tenth of the lamp with the
+// denoiser on and all of it with the denoiser off. Still undimmed by glass:
+// the cheapHit callers (the reflection channel's hits, as in sunShadowVis,
+// and blend content seen inside glass), a lamp or the sun answered by a
+// shadow map (kSM), the rect lights' soft shadows, the emitter NEE, the lamps
+// at GI hits (giHitDirect), the water's and the glass's own lamp glints, and
+// the lamps' light in the fog (no shadow ray) and in the froxel media (an
+// opaque-only ray).
+float lampShadowVis(vec3 origin, vec3 dir, float tMax, bool cheapHit) {
+    const float v = shadowVis(origin, dir, tMax);
+    return (kFixLampGlass && v > 0.0 && !cheapHit) ? v * glassTransmittance(origin, dir, tMax) : v;
 }
 
 // FOG-ONLY shadow ray (setFogShadowOpaqueCutouts, pc.flags bit 29): the same

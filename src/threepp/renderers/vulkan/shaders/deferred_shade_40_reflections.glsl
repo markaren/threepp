@@ -568,6 +568,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 break;
             }
             ++b;// the water's mirror is a reflective bounce
+            // The water draws no emitter NEE: an emitter its mirror meets
+            // keeps its whole glow, not the share a glossy hit before it left.
+            if (kFixWaterBounceEm) bounceEmScale = 1.0;
             tput      *= wF;
             d          = wR;
             o          = wP + hitN * SHADOW_EPS;
@@ -706,6 +709,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                         if (dot(rd, rd) < 1e-6) {
                             passDir  = reflect(d, nOut);
                             passFrom = sP + nOut * SHADOW_EPS;
+                            // Turned back inside, the ray never crossed the
+                            // surface: the tint is the crossing's (the path
+                            // tracer's is the refraction's), and the volume's
+                            // own colour is insideAtt's. The (1 - t) share
+                            // stays the covered part's.
+                            if (kFixTirTint) hitPass = vec3(1.0 - cov) + cov * t;
                         } else {
                             passDir  = normalize(rd);
                             passFrom = sP - nOut * SHADOW_EPS;
@@ -966,7 +975,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // Continue the reflection one bounce deeper, along the mirror direction
         // (one Fibonacci sample is the mirror: ggxHalfVectorFib).
         bounceEmScale = 1.0 - hSpecNEET;
-        ++b;// the ONLY place a reflective bounce is counted
+        ++b;// a glossy hit's reflective bounce (the water's mirror is the other)
         tput      *= specW;
         d          = (hRough < 0.08) ? hitR : sampleGGXReflectionFib(hitV, hitN, hRough, 0, 1);
         if (dot(d, hitN) <= 0.0) d = hitR;

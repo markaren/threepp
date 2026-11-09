@@ -516,6 +516,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanDielectricIor_test COMMAND VulkanDielectricIor_test)
     set_tests_properties(VulkanDielectricIor_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A lamp is dimmed by the glass it shines through with the denoiser off too:
+    # the inline lamp loops took the opaque shadow test alone, so a floor under
+    # a smoked pane took a tenth of a point lamp denoised and all of it without.
+    add_executable(VulkanLampGlass_test VulkanLampGlass_test.cpp)
+    target_link_libraries(VulkanLampGlass_test PRIVATE threepp)
+    target_include_directories(VulkanLampGlass_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanLampGlass_test COMMAND VulkanLampGlass_test)
+    set_tests_properties(VulkanLampGlass_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # The indirect rays and alpha-tested cutouts (setIndirectOpaqueCutouts): a
     # half-open checkerboard roof over grey ground under a uniform sky, the
     # ground under it read with the GI, probe and AO rays taking the cards as

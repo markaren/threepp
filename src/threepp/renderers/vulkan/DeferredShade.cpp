@@ -61,6 +61,18 @@ namespace threepp::vulkan {
     // of its register cliff (deferred_shade.comp, the specialization constants).
     constexpr uint32_t kShadeSpecMsaa = 0x60u;
 
+    // The review-fix A/B switches, the shade's kShadeFixes (deferred_shade_00):
+    // one bit per fix, set unless its knob is 0, which gives the shade it
+    // replaced. Read once per process. Only a value that starts with '0'
+    // turns a fix off (env::flag): "false" or "off" leave it on.
+    static uint32_t shadeFixes() {
+        static const uint32_t bits = (env::flag("THREEPP_VK_FIX_LAMP_GLASS", true) ? 1u : 0u) |
+                                     (env::flag("THREEPP_VK_FIX_WATER_BOUNCE_EM", true) ? 2u : 0u) |
+                                     (env::flag("THREEPP_VK_FIX_TIR_TINT", true) ? 4u : 0u) |
+                                     (env::flag("THREEPP_VK_FIX_GLASS_DEDUPE", true) ? 8u : 0u);
+        return bits;
+    }
+
     DeferredShade::DeferredShade(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         createPipeline();
@@ -1217,7 +1229,8 @@ namespace threepp::vulkan {
 
     // The shade pipeline for this dispatch: the permutation for
     // key = (flags & mask) | probe state << 32 | shadow maps << 40 | the ray
-    // budget features << 41 | Ray Reconstruction << 45, built on first use
+    // budget features << 41 | Ray Reconstruction << 45 | the review-fix
+    // switches << 48, built on first use
     // (see createPipeline). With no knob set the key is the MSAA code and the
     // shadow mode alone, so an app holds one pipeline per G-buffer sample count
     // and shadow mode its views use, and one more for each set of ray-budget
@@ -1228,7 +1241,8 @@ namespace threepp::vulkan {
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
                              (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u) |
-                             (rayRecon ? (1ull << 45u) : 0ull);
+                             (rayRecon ? (1ull << 45u) : 0ull) |
+                             (static_cast<uint64_t>(shadeFixes() & 0xFFFFu) << 48u);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1238,14 +1252,15 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 6> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+        const std::array<uint32_t, 7> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
                                             static_cast<uint32_t>((key >> 40u) & 1u),
                                             static_cast<uint32_t>((key >> 41u) & kRayBudgetAll),
-                                            static_cast<uint32_t>((key >> 45u) & 1u)};
-        std::array<VkSpecializationMapEntry, 6> entries{};
-        for (uint32_t i = 0; i < 6; ++i) {
-            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon
+                                            static_cast<uint32_t>((key >> 45u) & 1u),
+                                            static_cast<uint32_t>((key >> 48u) & 0xFFFFu)};
+        std::array<VkSpecializationMapEntry, 7> entries{};
+        for (uint32_t i = 0; i < 7; ++i) {
+            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon, kShadeFixes
             entries[i].offset     = i * sizeof(uint32_t);
             entries[i].size       = sizeof(uint32_t);
         }
