@@ -2152,14 +2152,18 @@ namespace threepp {
                         auto light = SpotLight::create(color, intensity, /*distance*/ 0.f,
                                                        /*angle*/ math::PI / 4.f, /*penumbra*/ 0.5f, /*decay*/ 1.f);
                         light->position.copy(pos);
-                        // Aim along the rotated local -Z via a target object.
+                        // Aim along the rotated local -Z via a target object. The
+                        // target is the light's own child (the light has no
+                        // rotation, so its local position is the aim), as a glTF
+                        // spot light's is: a clone of the stage then aims at its
+                        // own copy, not at the original's, which dies with it.
                         Vector3 dir(0, 0, -1);
                         dir.applyQuaternion(rot).normalize();
                         auto tgt = std::make_shared<Object3D>();
-                        tgt->position.set(pos.x + dir.x, pos.y + dir.y, pos.z + dir.z);
+                        tgt->position.copy(dir);
+                        light->add(tgt);
                         light->setTarget(*tgt);
                         root.add(light);
-                        root.add(tgt);
                         break;
                     }
                     default:
