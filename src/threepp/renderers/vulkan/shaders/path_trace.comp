@@ -59,7 +59,28 @@
 // (setUnderwaterMurk) is the half-space below the water surface, a medium of
 // its own on the submerged part of every leg (murkLeg); a surface under it
 // is lit by the sun refracted at a flat surface and dimmed by the water above
-// it. An ocean surface refracts with water's ior. Caustics are not modelled.
+// it. An ocean surface refracts with water's ior. Light a solid glass bends
+// reaches a surface only along the path refracted through it, for the lights
+// a path can find (shadowVisFindable): emissive triangles and the
+// environment's extracted sun, whose disc a miss reads: their caustics. Point
+// and spot lamps, a scene's own sun and the water's light (the murk) keep
+// passing glass along the shadow ray.
+//
+// The emissive triangles' caustics are photon-mapped, since a path from a
+// diffuse surface finds a small emitter through glass by chance alone (a
+// sparse speckle that never settles). Each pass begins with the photons
+// (tracePhoton): they leave the emitters by power, take the glass and water
+// events a camera path takes, and land on the first surface with an opaque
+// share after a glass event (a mirror off any glass, a bend through a solid),
+// where they are sorted into a hashed grid. A camera path gathers them at
+// each diffuse vertex (gatherPhotons) through the share of the BSDF they
+// carry (evalPhotonBsdfCos: the diffuse and translucent lobes, and a broad
+// GGX one), in a disc that shrinks pass by pass (progressive photon mapping,
+// Knaus and Zwicker 2011), and the bounce on from that vertex through glass to
+// an emitter keeps only the rest (pmKeep), so no light comes twice. The
+// receiving surfaces may be seen through glass or water themselves (a pool's
+// floor through its wall), which a light tracer's straight connection to the
+// camera could not show.
 //
 // The surface at a hit is the one gbuffer.frag makes of a raster fragment
 // (path_trace_surface.glsl): normal maps, per-vertex colours, the detail
@@ -73,8 +94,9 @@
 // modelled here: iridescence, the ocean's whitecap foam.
 //
 // Shadow rays trace the frame's occlusion mask (kRayMaskOpaque): alpha-cutouts
-// tested, blended and transmissive surfaces pass (no caustic path exists to
-// light what a blocking glass would darken), nothing under a camera node
+// tested, blended and transmissive surfaces pass, dimmed by the glass on the
+// way (glassTransmittance: for a light no path through glass can find, the
+// glass's shadow stands in for its caustic), nothing under a camera node
 // casts; every other surface blocks — emitters included, unlike the deferred
 // shade's test. An ocean surface carries its wake (ocean_wake.glsl) and,
 // like every dielectric interface, the point and spot lights' glints.
@@ -119,6 +141,31 @@ layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emis
 // a = how many. Row-major, top row first.
 layout(set = 0, binding = 8, scalar) buffer AccumBuf { vec4 accum[]; };
 
+// The photons of the pass (the emitters' caustics): each where it landed, the
+// direction it came from, its power over pgPowerScale and the geometric
+// normal of the surface it landed on, turned to its side. The buffer holds two
+// halves of pgCapacity: as the photons landed, then sorted by grid bucket.
+struct Photon {
+    vec3 pos;
+    uint wi;   // octahedral, snorm 2x16
+    uint powRG;// half 2x16
+    uint powB; // half, low 16 bits
+    uint n;    // octahedral, snorm 2x16
+    uint pad;
+};
+layout(set = 0, binding = 10, scalar) buffer PhotonBuf { Photon photons[]; };
+layout(set = 0, binding = 11, scalar) buffer PhotonGridBuf {
+    uint  pgStored;    // photons landed this pass (past pgCapacity they are dropped)
+    uint  pgCursor;    // the bucket allocator
+    uint  pgCapacity;  // photons a half of the buffer holds
+    uint  pgHashMask;  // buckets - 1 (a power of two)
+    float pgRadius;    // the gather radius this pass (m)
+    float pgCellInv;   // 1 / the grid's cell, twice the radius
+    float pgPowerScale;// the emitters' total power over the photons traced
+    uint  pgPad;
+    uint  pgCells[];   // three arrays of the buckets: count, start, end
+};
+
 // The scene-fog block (GpuFogUbo) as far as the deferred shade reads it: the
 // air medium and the underwater murk.
 layout(set = 0, binding = 9, scalar) uniform FogUbo {
@@ -161,6 +208,10 @@ layout(push_constant) uniform Pc {
     uint  flags;             // bit 0 = reset: overwrite the accumulator instead of adding
                              // bit 1 = the environment's sun was extracted into a directional light
                              // bits 2-3 = the lens model (LENS_MODEL_*), 0 = none
+                             // bit 4 = the extracted sun is the last directional light
+                             // bits 5-6 = the mode: 0 = the camera paths, 1 = trace the
+                             //   photons, 2 = allocate the grid's buckets, 3 = sort into them
+                             // bit 7 = this pass's photons are built: gather them
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
     uint  envMipCount;       // PMREM mip levels (>= 1)
@@ -178,7 +229,8 @@ layout(push_constant) uniform Pc {
     float lensRadius;        // thin-lens aperture radius (m), 0 = a pinhole
     float focusDistance;     // the plane in focus, view depth (m)
     float aspectScale;       // the picture's aspect over the camera's
-    uint  rows;              // this dispatch's band: its first row (low 16 bits), how many (high 16)
+    uint  rows;              // this dispatch's band: its first row (low 16 bits), how many (high 16);
+                             // in the photon modes, how many photons (or buckets)
     float domeRadius;        // a dome port's radius about the lens (m), 0 = none
 } pc;
 
@@ -377,7 +429,12 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 // glass and blend instances only (kRayMaskAlpha; flat blends and additive
 // cards pass), every candidate visited (NoOpaque), none committed. The ocean
 // is in the opaque mask and stays out.
-float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
+//
+// solidsBlock: a SOLID's surface (thickness > 0) stops the ray outright. For
+// the environment's sun (envSunLight) the light a solid bends is found by the
+// path itself, refracted through it to the sun's disc (the miss branch), so a
+// straight shadow ray through the solid would count it a second time.
+float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
     float T = 1.0;
@@ -385,6 +442,7 @@ float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
         const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
         if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
+        if (solidsBlock && m.thinWalled == 0) { T = 0.0; rayQueryTerminateEXT(rq); break; }
         const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
         const float face = 1.0 - f0n * f0n;
         const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
@@ -396,12 +454,26 @@ float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
     }
     return T;
 }
+float glassTransmittance(vec3 origin, vec3 dir, float tMax) { return glassTransmittanceImpl(origin, dir, tMax, false); }
 
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax);
 // The occlusion test times what the glass on the way lets through.
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
     const float v = shadowVisOpaque(origin, dir, tMax);
     return v > 0.0 ? v * glassTransmittance(origin, dir, tMax) : 0.0;
+}
+// A light a path through glass can FIND has its shadow rays stop at solids
+// (glassTransmittanceImpl), so the light a solid bends reaches a surface only
+// along the path refracted through it to the light: its caustics. An emissive
+// triangle is found by the hit's emission (whole after a glass event); the
+// environment's sun, the last directional light (the host appends it,
+// pc.flags bit 4), by its disc, which stays in env mip 0 (the miss branch).
+// Point and spot lamps, and a scene's own sun, are found by no ray: their
+// light keeps passing glass along the shadow ray, dimmed (shadowVis).
+bool envSunLight() { return (pc.flags & 16u) != 0u && lights.dirCount > 0u; }
+float shadowVisFindable(vec3 origin, vec3 dir, float tMax) {
+    const float v = shadowVisOpaque(origin, dir, tMax);
+    return v > 0.0 ? v * glassTransmittanceImpl(origin, dir, tMax, true) : 0.0;
 }
 float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
@@ -545,6 +617,35 @@ float pdfBsdf(const Surf s, vec3 V, vec3 L) {
     return s.pick.z * -NdotL / PI;
 }
 
+// The share of evalBsdfCos the photons carry: the diffuse and translucent
+// lobes, and the base GGX lobe where it is broad (alpha >= kPmGlossAlpha), with
+// the sheen's and the clearcoat's dimming of the base. The sharp lobes (a
+// glossy base, the coat, the sheen itself) stay with the camera path's own
+// bounce, which finds their light far better than a density estimate would.
+const float kPmGlossAlpha = 0.16;// roughness 0.4
+vec3 evalPhotonBsdfCos(const Surf s, vec3 V, vec3 L) {
+    const float NdotV = dot(s.N, V);
+    if (NdotV <= 0.0) return vec3(0.0);
+    const float NdotL = dot(s.N, L);
+    const float NgL   = dot(s.Ng, L);
+    const float coatV = s.cc > 0.0 ? 1.0 - s.cc * coatFresnel(max(dot(s.Nc, V), 0.0)) : 1.0;
+    if (NdotL > 0.0 && NgL > 0.0) {
+        vec3 f = s.kd * (1.0 / PI);
+        if (s.alpha >= kPmGlossAlpha) f += ggxEval(s.N, s.alpha, s.F0, V, L);
+        const float sh = max(max(s.sheen.r, s.sheen.g), s.sheen.b);
+        if (sh > 0.0) f *= 1.0 - 0.157 * sh;
+        return f * (coatV * NdotL);
+    }
+    if (NdotL < 0.0 && NgL < 0.0 && max(max(s.kt.r, s.kt.g), s.kt.b) > 0.0)
+        return s.kt * (coatV * -NdotL / PI);
+    return vec3(0.0);
+}
+// Whether any of it is there: the vertices that gather photons.
+bool photonShare(const Surf s) {
+    return max(max(s.kd.r, s.kd.g), s.kd.b) > 0.0 || max(max(s.kt.r, s.kt.g), s.kt.b) > 0.0 ||
+           (s.alpha >= kPmGlossAlpha && max(max(s.F0.r, s.F0.g), s.F0.b) > 0.0);
+}
+
 // Heitz 2018: a GGX microfacet normal distributed by the visible normals.
 // Ve is the view direction in the tangent frame (z = N).
 vec3 sampleGgxVndf(vec3 Ve, float a, vec2 u) {
@@ -644,7 +745,7 @@ vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
     if (max(max(fc.r, fc.g), fc.b) <= 0.0) return vec3(0.0);
     const float tMax = dist - SHADOW_EPS - dist * 1e-3;
     if (tMax <= 1e-4) return vec3(0.0);
-    if (shadowVis(offsetOrigin(s, toL), toL, tMax) <= 0.0) return vec3(0.0);
+    if (shadowVisFindable(offsetOrigin(s, toL), toL, tMax) <= 0.0) return vec3(0.0);// its caustics: shadowVisFindable
     const float pdfB = pdfBsdf(s, V, toL);
     const float w    = pdfSolid * pdfSolid / (pdfSolid * pdfSolid + pdfB * pdfB);
     return fc * (w / pdfSolid) * tri.emission.xyz;
@@ -766,7 +867,9 @@ vec3 analyticNee(const Surf s, vec3 V, inout uint seed) {
         }
         const vec3 fc = evalBsdfCos(s, V, L);
         if (max(max(fc.r, fc.g), fc.b) <= 0.0) continue;
-        const float vis = shadowVis(offsetOrigin(s, L), L, 1e30) * cloudSunTransmittance(s.P, L);
+        const bool  envSun = envSunLight() && i == lights.dirCount - 1u;// its caustics: the miss branch
+        const float vis = (envSun ? shadowVisFindable(offsetOrigin(s, L), L, 1e30) : shadowVis(offsetOrigin(s, L), L, 1e30))
+                        * cloudSunTransmittance(s.P, L);
         lit += fc * col * (vis * wL);
     }
     for (uint i = 0u; i < lights.pointCount; ++i) {
@@ -1138,6 +1241,132 @@ vec3 dielectricGlints(vec3 P, vec3 N, vec3 Ng, vec3 V, float ior, float rough) {
     return sum;
 }
 
+// One event at a dielectric interface, the camera path's and the photons':
+// Fresnel reflect or refract about a GGX microfacet normal (rough) or the
+// shading normal N (smooth); a thin-walled sheet lets its refracted share
+// straight on, a rough one scattered about the facet's mirror through the
+// sheet. V points back along the arriving ray, eta = n(from) / n(to). False
+// when a refraction would leave on the side it came from (the path ends).
+bool dielectricScatter(vec3 V, vec3 N, vec3 Ng, float ior, float eta, bool thin, float rough,
+                       inout uint seed, out vec3 next, out bool reflected) {
+    // Microfacet normal for rough glass; the shading one when smooth.
+    vec3 H = N;
+    if (rough > 0.05) {
+        vec3 T, B;
+        tangentFrame(N, T, B);
+        const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
+        const vec3 Ht = sampleGgxVndf(Vt, rough * rough, vec2(rnd(seed), rnd(seed)));
+        H = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+    }
+    const float VdotH = clamp(dot(V, H), 0.0, 1.0);
+    const float F0    = (ior - 1.0) / (ior + 1.0);
+    float F = F0 * F0 + (1.0 - F0 * F0) * pow(1.0 - VdotH, 5.0);
+    // Total internal reflection
+    const float sin2t = eta * eta * (1.0 - VdotH * VdotH);
+    if (sin2t >= 1.0) F = 1.0;
+    // A facet turned past the view (a grazing ray on a rough or choppy
+    // face: most of them, at the waterline) would send the ray into
+    // the face it came from. Killing that path drew a black band where
+    // water is nearly a perfect mirror; the face's own refraction or
+    // mirror takes it instead (and its refraction's total internal
+    // reflection, the mirror).
+    reflected = rnd(seed) < F;
+    if (!reflected && !thin) {
+        next = refract(-V, H, eta);
+        if (dot(next, next) < 1e-6 || dot(next, Ng) >= 0.0) {
+            next = refract(-V, Ng, eta);
+            reflected = dot(next, next) < 1e-6;
+        }
+    }
+    if (reflected) {
+        next = reflect(-V, H);
+        if (dot(next, Ng) <= 0.0) next = reflect(-V, Ng);
+        return true;
+    }
+    if (thin) {
+        // A rough thin sheet scatters what it lets through: its
+        // reflection lobe about a facet drawn at the roughness the
+        // deferred glass uses (three.js's ior ramp), mirrored
+        // through the sheet (Burley 2015). Smooth: straight on.
+        next = -V;
+        const float tr = rough * clamp(2.0 * ior - 2.0, 0.0, 1.0);
+        if (tr > 0.05) {
+            vec3 T, B;
+            tangentFrame(N, T, B);
+            const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
+            const vec3 Ht = sampleGgxVndf(Vt, tr * tr, vec2(rnd(seed), rnd(seed)));
+            const vec3 H2 = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+            const vec3 R2 = reflect(-V, H2);
+            const vec3 T2 = R2 - 2.0 * dot(R2, N) * N;
+            if (dot(T2, Ng) < 0.0) next = normalize(T2);
+        }
+    }
+    next = normalize(next);
+    return dot(next, Ng) < 0.0;
+}
+
+// ── The photon grid ─────────────────────────────────────────────────────────
+// Cells of twice the gather radius, hashed into pgHashMask + 1 buckets; a
+// bucket's photons sit together in the sorted half of the photon buffer,
+// [start, end). A disc of the radius about a point lies in the 2x2x2 cells
+// nearest it. PT_PHOTONS: the variant that builds and gathers photons
+// (kPathTracePhotonsCompSpv, the host's for a scene with emitters and glass).
+// The other holds none of their code: the literal false folds it away in the
+// compiler, so a scene without them traces the very SPIR-V it did before
+// there were photons.
+#if defined(PT_PHOTONS) && PT_PHOTONS
+const bool kPhotons = true;
+#else
+const bool kPhotons = false;
+#endif
+bool photonsOn() { return kPhotons && (pc.flags & 128u) != 0u; }
+ivec3 pgCell(vec3 p) { return ivec3(floor(p * pgCellInv)); }
+uint pgBucket(ivec3 c) { return pcgHash(uint(c.x) + pcgHash(uint(c.y) + pcgHash(uint(c.z)))) & pgHashMask; }
+
+vec2 octEncodePt(vec3 v) {
+    v /= abs(v.x) + abs(v.y) + abs(v.z);
+    if (v.z < 0.0) {
+        const vec2 s = vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+        v.xy = (1.0 - abs(v.yx)) * s;
+    }
+    return v.xy;
+}
+
+// The reflected radiance the pass's photons around s.P make: the density
+// estimate sum(f · power) / (π r²) over a disc of pgRadius on the surface,
+// f the photons' share of the BSDF (evalPhotonBsdfCos) over the geometric
+// cosine (Veach's shading-normal correction, capped at 4). A photon on
+// another face (a corner's other wall) or off the disc's plane is not this
+// surface's.
+vec3 gatherPhotons(const Surf s, vec3 V) {
+    const float r   = pgRadius;
+    const float r2  = r * r;
+    const uint  nb  = pgHashMask + 1u;
+    const uint  cap = pgCapacity;
+    const ivec3 c0  = ivec3(floor(s.P * pgCellInv - 0.5));
+    vec3 sum = vec3(0.0);
+    for (int k = 0; k < 8; ++k) {
+        const ivec3 c  = c0 + ivec3(k & 1, (k >> 1) & 1, k >> 2);
+        const uint  b  = pgBucket(c);
+        const uint  i1 = pgCells[2u * nb + b];
+        for (uint i = pgCells[nb + b]; i < i1; ++i) {
+            const Photon ph = photons[cap + i];
+            const vec3   dp = ph.pos - s.P;
+            if (dot(dp, dp) >= r2 || abs(dot(dp, s.Ng)) > 0.25 * r) continue;
+            if (pgCell(ph.pos) != c) continue;// a bucket two of the cells share
+            const vec3 n = gfetchOctDecode(unpackSnorm2x16(ph.n));
+            if (abs(dot(n, s.Ng)) < 0.5) continue;
+            const vec3  wi = gfetchOctDecode(unpackSnorm2x16(ph.wi));
+            const float cg = abs(dot(s.Ng, wi));
+            if (cg <= 1e-4) continue;
+            const vec3 fc = evalPhotonBsdfCos(s, V, wi);
+            sum += fc * (vec3(unpackHalf2x16(ph.powRG), unpackHalf2x16(ph.powB).x) /
+                         max(cg, 0.25 * abs(dot(s.N, wi))));
+        }
+    }
+    return sum * (pgPowerScale / (PI * r2));
+}
+
 // ── The camera ray's hit: alpha-cutouts tested, culled sides passed ─────────
 // An alpha-BLEND texel is hit with the probability of its alpha (stochastic
 // transparency, the trace's form of the raster's screen-door): over the
@@ -1168,6 +1397,24 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     float lastPdf    = 0.0;  // BSDF pdf of the bounce that produced the current ray
     bool  delta      = true; // the current ray came from the camera or a delta event: emitters count whole
     bool  camChain   = true; // the camera ray, or one it continued through glass: a miss shows the background
+    // Since the path's last diffuse or glossy bounce, a glass event that NEE to
+    // the environment's sun cannot reproduce: a mirror off any glass, or a bend
+    // through a solid (shadowVisFindable stops at solids). A miss then sees the
+    // sun's disc (mip 0): the sun's caustics. A straight pass through a thin
+    // pane is what the shadow ray already dims, and the water's own light is
+    // the murk's (murkCaustic), so neither sets it.
+    bool  causticPath = false;
+    // The photon-mapped caustics (photonsOn): a diffuse vertex gathers the
+    // emitters' light that came through glass from the photons, so the
+    // bounce on from it through glass to an emitter keeps only the share of
+    // that vertex's BSDF the photons do not carry (pmKeep). pmGlass: a glass
+    // event the photons follow since the vertex (a mirror off any glass, a
+    // bend through a solid); pmOcean: an ocean event since, where photons end.
+    uint  pmVertex   = 0u;
+    bool  pmChain    = false;
+    bool  pmGlass    = false;
+    bool  pmOcean    = false;
+    vec3  pmKeep     = vec3(1.0);
     bool  inside     = false;// travelling inside a dielectric (Beer-Lambert on the next leg)
     vec3  insideAtt  = vec3(1.0);// per-metre transmittance while inside
     float insideDist = 0.0;      // attenuationDistance of that medium
@@ -1252,8 +1499,11 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             if (camChain) {
                 L += throughput * (sampleBackground(d) + proceduralStars(d));
             } else {
+                // Through glass NEE cannot follow (causticPath), the disc is
+                // the sun's only way to this path: mip 0 keeps it.
                 const bool  sunExtracted = (pc.flags & 2u) != 0u;
-                const float lod = (!sunExtracted || pc.envMipCount < 2u) ? 0.0 : 1.0;
+                const bool  sunDisc      = causticPath && envSunLight();
+                const float lod = (!sunExtracted || pc.envMipCount < 2u || sunDisc) ? 0.0 : 1.0;
                 L += throughput * sampleEnvLod(d, lod);
             }
             break;
@@ -1369,7 +1619,11 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                     const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, max(dot(Ng, V), 0.0));
                     w = lastPdf * lastPdf / max(lastPdf * lastPdf + pdfL * pdfL, 1e-20);
                 }
-                L += throughput * Le * w;
+                // Through glass from a diffuse vertex: the photons' share is theirs.
+                if (pmChain && pmGlass && !pmOcean && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u)
+                    L += throughput * Le * w * pmKeep;
+                else
+                    L += throughput * Le * w;
             }
         }
 
@@ -1389,15 +1643,6 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             const vec3  NgUp = dot(hh.Ng, airUp()) >= 0.0 ? hh.Ng : -hh.Ng;
             const bool  entering = isOcean ? dot(d, NgUp) < 0.0 : front;
             const float eta  = thin ? 1.0 : (entering ? 1.0 / ior : ior);
-            // Microfacet normal for rough glass; the shading one when smooth.
-            vec3 H = N;
-            if (rough > 0.05) {
-                vec3 T, B;
-                tangentFrame(N, T, B);
-                const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
-                const vec3 Ht = sampleGgxVndf(Vt, rough * rough, vec2(rnd(seed), rnd(seed)));
-                H = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
-            }
             // The point and spot lights' glints on the interface: a GGX
             // reflection lobe at the surface's roughness (at least 0.03), by
             // next-event estimation, since a delta light is never found by the
@@ -1405,52 +1650,13 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             // background's disc on that mirror ray, so it is left out here.
             // A thin-walled pane glints like any other glass (it was skipped).
             L += throughput * dielectricGlints(P, N, Ng, V, ior, max(rough, 0.03));
-            const float VdotH = clamp(dot(V, H), 0.0, 1.0);
-            const float F0    = (ior - 1.0) / (ior + 1.0);
-            float F = F0 * F0 + (1.0 - F0 * F0) * pow(1.0 - VdotH, 5.0);
-            // Total internal reflection
-            const float sin2t = eta * eta * (1.0 - VdotH * VdotH);
-            if (sin2t >= 1.0) F = 1.0;
-            // A facet turned past the view (a grazing ray on a rough or choppy
-            // face: most of them, at the waterline) would send the ray into
-            // the face it came from. Killing that path drew a black band where
-            // water is nearly a perfect mirror; the face's own refraction or
-            // mirror takes it instead (and its refraction's total internal
-            // reflection, the mirror).
             vec3 next;
-            bool reflected = rnd(seed) < F;
-            if (!reflected && !thin) {
-                next = refract(-V, H, eta);
-                if (dot(next, next) < 1e-6 || dot(next, Ng) >= 0.0) {
-                    next = refract(-V, Ng, eta);
-                    reflected = dot(next, next) < 1e-6;
-                }
-            }
+            bool reflected;
+            const bool goesOn = dielectricScatter(V, N, Ng, ior, eta, thin, rough, seed, next, reflected);
             if (reflected) {
-                next = reflect(-V, H);
-                if (dot(next, Ng) <= 0.0) next = reflect(-V, Ng);
                 o = P + Ng * SHADOW_EPS;
             } else {
-                if (thin) {
-                    // A rough thin sheet scatters what it lets through: its
-                    // reflection lobe about a facet drawn at the roughness the
-                    // deferred glass uses (three.js's ior ramp), mirrored
-                    // through the sheet (Burley 2015). Smooth: straight on.
-                    next = d;
-                    const float tr = rough * clamp(2.0 * ior - 2.0, 0.0, 1.0);
-                    if (tr > 0.05) {
-                        vec3 T, B;
-                        tangentFrame(N, T, B);
-                        const vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
-                        const vec3 Ht = sampleGgxVndf(Vt, tr * tr, vec2(rnd(seed), rnd(seed)));
-                        const vec3 H2 = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
-                        const vec3 R2 = reflect(-V, H2);
-                        const vec3 T2 = R2 - 2.0 * dot(R2, N) * N;
-                        if (dot(T2, Ng) < 0.0) next = normalize(T2);
-                    }
-                }
-                next = normalize(next);
-                if (dot(next, Ng) >= 0.0) break;
+                if (!goesOn) break;
                 throughput *= albedo;
                 o = P - Ng * SHADOW_EPS;
                 if (!thin) {
@@ -1464,6 +1670,9 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             d       = next;
             delta   = true;
             lastPdf = 0.0;
+            if (!isOcean && (reflected || !thin)) causticPath = true;// see causticPath
+            if (isOcean) pmOcean = true;
+            else if (reflected || !thin) pmGlass = true;
             continue;
         }
 
@@ -1506,11 +1715,26 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
 
         L += throughput * analyticNee(s, V, seed);
         L += throughput * emitterNee(s, V, seed);
+        // The photons: the emitters' light through glass, at every diffuse
+        // vertex. Past the second, a vertex gathers by chance (one in two,
+        // weighted back), the bounce on keeping out of the photons' share
+        // regardless, so deep vertices cost less and add no speckle.
+        const bool pmHere = photonsOn() && !isOcean && photonShare(s);
+        if (pmHere) {
+            ++pmVertex;
+            const float pgP = pmVertex <= 2u ? 1.0 : 0.5;
+            if (pgStored > 0u && (pgP >= 1.0 || rnd(seed) < pgP))
+                L += throughput * gatherPhotons(s, V) * (1.0 / pgP);
+        }
 
         if (bounce == pc.maxBounces) break;
 
         vec3 wi; float pdf; vec3 wgt;
         if (!sampleBsdf(s, V, seed, wi, pdf, wgt)) break;
+        pmChain = pmHere;
+        pmGlass = false;
+        pmOcean = false;
+        if (pmHere) pmKeep = clamp(vec3(1.0) - evalPhotonBsdfCos(s, V, wi) / max(wgt * pdf, vec3(1e-20)), 0.0, 1.0);
         throughput *= wgt;
 
         // Russian roulette from the third bounce
@@ -1525,11 +1749,179 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         lastPdf  = pdf;
         delta    = false;
         camChain = false;
+        causticPath = false;// a new NEE vertex: the next glass event starts over
         // An opaque surface inside a dielectric (a seabed under the water, a
         // stone in a glass block) leaves the path inside it: the next leg is
         // still absorbed, until the path refracts out through the boundary.
     }
     return L;
+}
+
+// ── The photons ─────────────────────────────────────────────────────────────
+// A photon lands: its slot in the first half, its count in its bucket.
+void depositPhoton(vec3 P, vec3 wi, vec3 n, vec3 beta) {
+    const uint i = atomicAdd(pgStored, 1u);
+    if (i >= pgCapacity) return;
+    Photon ph;
+    ph.pos   = P;
+    ph.wi    = packSnorm2x16(octEncodePt(wi));
+    ph.powRG = packHalf2x16(beta.rg);
+    ph.powB  = packHalf2x16(vec2(beta.b, 0.0));
+    ph.n     = packSnorm2x16(octEncodePt(n));
+    ph.pad   = 0u;
+    photons[i] = ph;
+    atomicAdd(pgCells[pgBucket(pgCell(P))], 1u);
+}
+
+// One photon of the pass: an emissive triangle by power (the emitter NEE's
+// table), a point on it, a face (those its material shows) and a direction
+// by the cosine; then the glass and water events a camera path
+// takes (dielectricScatter), until the first surface with an opaque share,
+// where it lands if a glass event came first: a mirror off any glass or a
+// bend through a solid, the light the emitter NEE cannot follow. A straight
+// pass through a thin pane is the NEE's own; an ocean surface ends it (the
+// water's light is the murk's), as does an unlit one. The air and the murk
+// dim its legs (their transmittance; the dust and the clouds are left out),
+// Beer-Lambert its legs inside a medium. Its power is in the camera paths'
+// terms: they carry no n² across an interface, so neither does a photon's
+// density (beta · eta² at each refraction).
+const uint kPhotonMaxEvents = 16u;
+void tracePhoton(uint pid) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return;
+    uint seed = pcgHash(pid * 9781u ^ pcgHash(pc.sampleIndex * 6271u + pc.seed * 2654435761u + 0x2545f491u));
+    const float xi = rnd(seed) * pc.emissiveTotalPower;
+    uint lo = 0u, hi = pc.emissiveCount - 1u;
+    while (lo < hi) {
+        const uint mid = (lo + hi) >> 1u;
+        if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
+    }
+    const EmTri tri = emissiveTris[lo];
+    const float lum = dot(tri.emission.xyz, LUM);
+    if (tri.v2.w <= 0.0 || tri.v0.w <= 0.0 || lum <= 0.0) return;
+    const float su = sqrt(rnd(seed));
+    const float r2 = rnd(seed);
+    const vec3  p  = (1.0 - su) * tri.v0.xyz + su * (1.0 - r2) * tri.v1.xyz + su * r2 * tri.v2.xyz;
+    vec3        nL = cross(tri.v1.xyz - tri.v0.xyz, tri.v2.xyz - tri.v0.xyz);
+    const float nl = length(nL);
+    if (nl <= 1e-12) return;
+    nL /= nl;
+    // The faces a camera ray finds it from (emission.w: 0 both, 1 the front,
+    // 2 the back, as its material's side): a single-sided emitter's light
+    // leaves its front alone. What its back sent would pass out through the
+    // far wall of a closed emitter, whose back faces no ray meets.
+    const uint sides   = uint(tri.emission.w + 0.5);
+    float      sidePdf = 1.0;
+    if (sides == 2u) nL = -nL;
+    else if (sides == 0u) {
+        if (rnd(seed) < 0.5) nL = -nL;
+        sidePdf = 0.5;
+    }
+    vec3 d = sampleCosine(nL, seed);
+    // Le cos / (pdfA · pdfω) with pdfA = lum / total and pdfω = sidePdf ·
+    // cos / π, the total over the photon count being pgPowerScale.
+    vec3 beta = tri.emission.xyz * (PI / (lum * sidePdf));
+    const float beta0 = max(max(beta.r, beta.g), beta.b);
+    SHADOW_EPS = max(1e-3, max(max(abs(p.x), abs(p.y)), abs(p.z)) * 1e-5);
+    vec3  o          = p + nL * SHADOW_EPS;
+    bool  glass      = false;
+    bool  inside     = false;
+    vec3  insideAtt  = vec3(1.0);
+    float insideDist = 0.0;
+    for (uint ev = 0u; ev < kPhotonMaxEvents; ++ev) {
+        rayQueryEXT rq;
+        const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                    rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, false),
+                                    rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
+                rayQueryConfirmIntersectionEXT(rq);
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return;
+        const float tHit = rayQueryGetIntersectionTEXT(rq, true);
+        const vec3  P    = o + d * tHit;
+        if (!inside) {
+            if (airOn()) beta *= exp(-airOpticalDepth(o, P));
+            float t0, t1;
+            if (murkOn() && murkClip(o, d, tHit, t0, t1)) beta *= exp(-fog.murkSigma * (t1 - t0));
+        } else if (insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater)) {
+            beta *= pow(insideAtt, vec3(tHit / insideDist));
+        }
+
+        const int hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        if (geoms[hitId].foamAddress != 0ul) return;// an ocean
+        const MaterialDesc hm    = entryMat(hitId);
+        const bool         front = rayQueryGetIntersectionFrontFaceEXT(rq, true);
+        const PtHit hh = ptFetchHit(hitId, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                    rayQueryGetIntersectionObjectToWorldEXT(rq, true),
+                                    rayQueryGetIntersectionWorldToObjectEXT(rq, true));
+        const vec3 V  = -d;
+        const vec3 Ng = dot(hh.Ng, V) >= 0.0 ? hh.Ng : -hh.Ng;
+        const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
+        const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
+        if (sf.roughness < 0.0) return;// unlit
+        SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+
+        if (glass && hm.transmission < 1.0) depositPhoton(P, V, Ng, beta);
+        if (!(hm.transmission > 0.0 && rnd(seed) < hm.transmission)) return;
+
+        vec3 N = sf.N;
+        {
+            const float nv = dot(N, V);
+            if (nv < 1e-3) N = normalize(N + V * (1e-3 - nv));
+        }
+        const float ior  = max(hm.ior, 1.0001);
+        const bool  thin = hm.thinWalled != 0;
+        const float eta  = thin ? 1.0 : (front ? 1.0 / ior : ior);
+        vec3 next;
+        bool reflected;
+        const bool goesOn = dielectricScatter(V, N, Ng, ior, eta, thin, sf.roughness, seed, next, reflected);
+        if (reflected) {
+            o = P + Ng * SHADOW_EPS;
+        } else {
+            if (!goesOn) return;
+            beta *= sf.albedo;
+            o = P - Ng * SHADOW_EPS;
+            if (!thin) {
+                beta *= eta * eta;
+                inside = front;
+                if (inside) {
+                    insideDist = hm.attenuationDistance;
+                    insideAtt  = clamp(hm.attenuationColor, vec3(0.0), vec3(1.0));
+                }
+            }
+        }
+        if (reflected || !thin) glass = true;
+        d = next;
+        // Russian roulette once it has lost most of its power.
+        const float bm = max(max(beta.r, beta.g), beta.b);
+        if (bm < 0.05 * beta0) {
+            if (rnd(seed) >= 0.5) return;
+            beta *= 2.0;
+        }
+    }
+}
+
+// The grid's buckets (one thread each, live below pc.rows): each takes its
+// range of the sorted half.
+void photonAllocate(uint b, bool live) {
+    if (!live) return;
+    const uint nb    = pgHashMask + 1u;
+    const uint n     = pgCells[b];
+    const uint start = n > 0u ? atomicAdd(pgCursor, n) : 0u;
+    pgCells[nb + b]      = start;
+    pgCells[2u * nb + b] = start;// the sort's cursor, the bucket's end after it
+}
+
+// A landed photon to its bucket's range.
+void photonScatter(uint i) {
+    if (i >= min(pgStored, pgCapacity)) return;
+    const Photon ph  = photons[i];
+    const uint   dst = atomicAdd(pgCells[2u * (pgHashMask + 1u) + pgBucket(pgCell(ph.pos))], 1u);
+    photons[pgCapacity + dst] = ph;
 }
 
 // ── The camera ──────────────────────────────────────────────────────────────
@@ -1583,6 +1975,23 @@ void ptCameraRay(vec2 uv, inout uint seed, out vec3 ro, out vec3 rd) {
 }
 
 void main() {
+    // The photon modes: one thread per photon (trace, sort) or bucket
+    // (allocate), the dispatch's threads in rows of its x extent, pc.rows of
+    // them live.
+    const uint mode = (pc.flags >> 5) & 3u;
+    if (mode != 0u) {
+        if (!kPhotons) return;
+        const uint id = gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+        if (mode == 2u) {
+            photonAllocate(id, id < pc.rows);
+            return;
+        }
+        if (id >= pc.rows) return;
+        if (mode == 1u) tracePhoton(id);
+        else photonScatter(id);
+        return;
+    }
+
     // One band of rows a dispatch: a picture larger than the frame is traced
     // band by band, each pass over all of them one more set of samples.
     const uvec2 px = uvec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + (pc.rows & 0xFFFFu));

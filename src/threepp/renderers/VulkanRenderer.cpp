@@ -128,10 +128,18 @@ namespace threepp {
         // segment only: it reads the primary camera and writes nothing the
         // frame shows. The accumulator follows the render extent.
         if (pathTracer_ && pathTracer_->active() && asyncPart && !view().secondary) {
-            pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, frameSerial_);
+            // Photons for the emitters' caustics: a scene with emitters and a
+            // transmissive material in use (a dielectric to the paths).
+            bool photons = false;
+            if (emissiveTriCountThisFrame_ > 0) {
+                for (size_t s = 1; s < matTable_.size() && s < matTableRefs_.size() && !photons; ++s)
+                    photons = matTableRefs_[s] > 0 && matTable_[s].transmission > 0.f;
+            }
+            pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, frameSerial_, photons);
             vulkan::PathTracer::FrameInputs pin;
             pin.sunTanHalfAngle   = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
             pin.sunExtracted      = envSun_.found;
+            pin.envSunLastDirLight = envSunInjected_;
             pin.starIntensity     = deferredStarIntensity_;
             pin.volDensity        = deferredVolDensity_;
             pin.volAniso          = deferredVolAniso_;
@@ -162,6 +170,29 @@ namespace threepp {
                 // distance, this one's on the pinhole's at f.
                 pin.lensRadius    = fl / (2.f * std::max(camAperture_, 0.1f)) * S / (S - fl);
                 pin.focusDistance = S;
+            }
+            // The photon gather's scale: the view's vertical extent at the
+            // emitters' power-weighted distance (every triangle up to 4096 of
+            // them, a sample of more), a parallel projection's own extent.
+            if (emissiveTriCountThisFrame_ > 0 && std::abs(po.projP5) > 1e-6f &&
+                cachedEmissiveData_.size() >= size_t(cachedEmissiveTriCount_) * 16) {
+                const float extent = 2.f / std::abs(po.projP5) * effectiveOverscan();
+                if (view().orthoFrame_) {
+                    pin.photonViewHeight = extent;
+                } else {
+                    const uint32_t n      = cachedEmissiveTriCount_;
+                    const uint32_t stride = std::max(1u, n / 4096u);
+                    double         wd = 0.0, ws = 0.0;
+                    for (uint32_t t = 0; t < n; t += stride) {
+                        const float* e = cachedEmissiveData_.data() + size_t(t) * 16;
+                        const double cx = (e[0] + e[4] + e[8]) / 3.0 - probeCamPos_[0];
+                        const double cy = (e[1] + e[5] + e[9]) / 3.0 - probeCamPos_[1];
+                        const double cz = (e[2] + e[6] + e[10]) / 3.0 - probeCamPos_[2];
+                        wd += e[11] * std::sqrt(cx * cx + cy * cy + cz * cz);
+                        ws += e[11];
+                    }
+                    if (ws > 0.0) pin.photonViewHeight = float(extent * (wd / ws));
+                }
             }
             auto pass = g.addPass("pathTrace", [this, f, pin](VkCommandBuffer c) {
                 auto in               = pin;

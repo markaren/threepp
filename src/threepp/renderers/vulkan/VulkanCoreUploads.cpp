@@ -345,7 +345,9 @@ namespace threepp {
     //   v0.xyz = world pos0,    v0.w = triangle area
     //   v1.xyz = world pos1,    v1.w = running cumPower (CDF)
     //   v2.xyz = world pos2,    v2.w = per-tri power (lum * area)
-    //   emission.xyz = emissive*intensity, emission.w = unused
+    //   emission.xyz = emissive*intensity, emission.w = the faces a ray finds it
+    //   from: 0 both (DoubleSide, or transmissive), 1 the front, 2 the back (the
+    //   path tracer's photons leave from those alone)
     // followed by a 64-byte HEADER (v0.x = emissive-instance count L, v0.y =
     // the range gate's exposure term, v1 and v2 = the entry index of lights
     // 0..7 when L <= kEmissiveCoverMaxLights, which is the instanceCustomIndex
@@ -453,6 +455,11 @@ namespace threepp {
             const float emB = em->emissive.b * em->emissiveIntensity;
             const float emLum = 0.2126f * emR + 0.7152f * emG + 0.0722f * emB;
             if (emLum < 1e-6f) continue;
+            // The faces a camera ray finds it from (path_trace.comp's
+            // cameraCandidateHits: a transmissive surface from both).
+            float emSides = em->side == Side::Front ? 1.f : em->side == Side::Back ? 2.f : 0.f;
+            if (const auto* tr = dynamic_cast<const MaterialWithTransmission*>(em); tr && tr->transmission > 0.f)
+                emSides = 0.f;
             // emissiveMap modulates per-texel; we don't sample textures here,
             // so use the constant tint for power. Slightly under-samples
             // bright textured emissives but keeps the build lightweight.
@@ -537,7 +544,7 @@ namespace threepp {
                 data.push_back(w2x); data.push_back(w2y); data.push_back(w2z);
                 data.push_back(power);
                 data.push_back(emR); data.push_back(emG); data.push_back(emB);
-                data.push_back(0.0f);
+                data.push_back(emSides);
             }
             const uint32_t triCnt = static_cast<uint32_t>(data.size() / 16) - triBegin;
             if (triCnt > 0) {
@@ -1468,8 +1475,10 @@ namespace threepp {
         // turns it into world space, environmentIntensity scales it.
         envKnobs_ = vulkan::SceneEnvKnobs::fromScene(scene);
         const bool sceneHasSun = ubo.dirCount > 0;
+        envSunInjected_ = false;
         if (envSunExtractionWanted() && envSun_.found && ubo.dirCount < kMaxDirLights &&
             !(envSunDefersToSceneSun() && sceneHasSun)) {
+            envSunInjected_ = true;// the last directional light (the path tracer's sun caustics)
             auto& g = ubo.dirLights[ubo.dirCount++];
             g.direction[0] = envSun_.dir[0];
             g.direction[1] = envSun_.dir[1];

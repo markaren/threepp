@@ -1454,6 +1454,15 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace.comp"
         kPathTraceCompSpv
         _path_trace_spv_h)
+    # The same with its photons (the emitters' caustics), for a scene with
+    # emitters and glass: compiled apart, so the camera paths of every other
+    # scene carry none of its code.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace.comp"
+        kPathTracePhotonsCompSpv
+        _path_trace_photons_spv_h
+        VARIANT_SUFFIX photons
+        DEFINES PT_PHOTONS=1)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace_resolve.comp"
         kPathTraceResolveCompSpv

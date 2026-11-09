@@ -7,7 +7,10 @@
 // while a session is active, and sums its samples into an accumulation buffer
 // the host reads back: averaged linear floats (read), or through the
 // renderer's display transform to 8-bit (readRGB, path_trace_resolve.comp).
-// The frame on screen is untouched.
+// The frame on screen is untouched. In a scene with emitters and glass, each
+// pass begins by tracing photons from the emitters and sorting them into a
+// grid its camera paths gather from: the emitters' caustics, on the shader's
+// photon variant (path_trace.comp, PT_PHOTONS).
 //
 // Driven by VulkanRenderer::pathTraceBegin / pathTraceRead / pathTraceStop:
 // each render() while active traces params().samplesPerFrame paths per pixel
@@ -60,6 +63,10 @@ namespace threepp::vulkan {
             // light, so bounce rays read the sun-clamped mip 1.
             float    sunTanHalfAngle    = 0.f;
             bool     sunExtracted       = false;
+            // The extracted sun is the LAST directional light this frame (the
+            // one-sun policy did not defer it to a scene sun): its disc in env
+            // mip 0 is what a ray through glass finds (sun caustics).
+            bool     envSunLastDirLight = false;
             float    oceanFineTileSize  = 0.f;// the fine cascade's tile (m), 0 = no ocean
             float    starIntensity      = 0.f;// the procedural star field, 0 = none
             // setDeferredVolumetrics: the lamps' beam medium in clear air and its g.
@@ -78,6 +85,11 @@ namespace threepp::vulkan {
             float    lensOverscan       = 1.f;
             float    lensRadius         = 0.f;
             float    focusDistance      = 10.f;
+            // The view's vertical extent (m) at the emitters' power-weighted
+            // distance from the camera (a parallel projection's own): the
+            // photon gather's first radius is a couple of the picture's
+            // pixels there. 0 = no emitters.
+            float    photonViewHeight   = 0.f;
         };
 
         // The subset of DeferredShade's set the paths need, plus the primary
@@ -150,8 +162,12 @@ namespace threepp::vulkan {
         // ── Frame graph ─────────────────────────────────────────────────────
         // Size the accumulator for the picture (params' extent, or this
         // frame's render extent; a change restarts the session) and bind it
-        // in frame `frame`'s set. Call at graph build, before declare().
-        void prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial);
+        // in frame `frame`'s set. `photons`: the scene has emitters and glass,
+        // so the passes build photons for the emitters' caustics
+        // (path_trace.comp): their buffers and pipeline are made and bound.
+        // Call at graph build, before declare().
+        void prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial,
+                     bool photons);
         void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
         // Trace the next band of rows.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const FrameInputs& in);
@@ -179,6 +195,10 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout        dsLayout_   = VK_NULL_HANDLE;
         VkPipelineLayout             pipeLayout_ = VK_NULL_HANDLE;
         VkPipeline                   pipe_       = VK_NULL_HANDLE;
+        // The shader's photon variant (PT_PHOTONS) and its bindings, made the
+        // first time a scene wants it.
+        VkPipeline                   pipePhotons_ = VK_NULL_HANDLE;
+        std::vector<SpirvBinding>    reflPhotons_;
         VkDescriptorPool             descPool_   = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
         // The density volumes' samplers: nearest for the integer volumes
@@ -215,10 +235,29 @@ namespace threepp::vulkan {
         uint32_t samples_      = 0;
         uint32_t seed_         = 0;
 
+        // The photons (bindings 10 and 11): the buffer of two halves (as
+        // landed, sorted by bucket) and the grid (its header, then the
+        // buckets' count, start and end), sized for photonCap_ photons a
+        // pass; a small stand-in bound until a scene with emitters needs
+        // them (one each). photonsLive_: this pass built its photons.
+        Buffer                photonBuf_{};
+        Buffer                photonGrid_{};
+        Buffer                photonStandIn_[2]{};
+        uint32_t              photonCap_     = 0;
+        uint32_t              photonBuckets_ = 0;
+        uint64_t              photonSerial_  = 1;
+        std::vector<uint64_t> boundPhotons_;
+        bool                  photonsWanted_ = false;// this frame's prepare(): emitters and glass
+        bool                  photonsLive_   = false;
+
         void createPipeline();
         void createResolvePipeline();
         void createDescriptorPool();
         void bindAccumulator(uint32_t frame);
+        void bindPhotons(uint32_t frame);
+        // Trace this pass's photons and sort them into the grid (the pass's
+        // first band, before its dispatch).
+        void recordPhotons(VkCommandBuffer cb, const FrameInputs& in, const void* cameraPush);
         void freeRetired(uint64_t frameSerial, bool all);
         // Record `record(cb)` in a one-off command buffer on the graphics
         // queue and wait for it.
