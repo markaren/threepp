@@ -672,6 +672,7 @@ int main(int argc, char** argv) {
 
     // --shot <name.png> [--frames N] [--pinned] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
     // [--chop <lambda>] [--chop-normals 0|1] [--spread 0|1] [--swell <Hs m>,<Tp s>]
+    // [--press <key>@<frame>[,<key>@<frame>...]]  (N, L or K, as if pressed then)
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -685,6 +686,9 @@ int main(int argc, char** argv) {
     int   chopNormalsArg = -1;// --chop-normals 0|1: Params::chopNormals for this run
     int   spreadArg = -1;     // --spread 0|1: Params::measuredSpreading for this run
     float swellHs = 0.f, swellTp = 12.f;// --swell Hs,Tp: a swell 45 deg off the wind, as K adds
+    // --press N@60,N@120: the water switches' keys pressed at those capture
+    // frames, so a headless run exercises the live toggle path.
+    std::vector<std::pair<char, int>> shotPresses;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -699,6 +703,18 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--chop-normals") == 0 && i + 1 < argc) chopNormalsArg = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--spread") == 0 && i + 1 < argc) spreadArg = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--swell") == 0 && i + 1 < argc) std::sscanf(argv[++i], "%f,%f", &swellHs, &swellTp);
+        else if (std::strcmp(argv[i], "--press") == 0 && i + 1 < argc) {
+            std::string list = argv[++i];
+            size_t pos = 0;
+            while (pos < list.size()) {
+                const size_t comma = list.find(',', pos);
+                const std::string item = list.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                const size_t at = item.find('@');
+                if (at == 1) shotPresses.emplace_back(item[0], std::atoi(item.c_str() + 2));
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+        }
     }
     const bool capturing = !shotPath.empty();
     // Shared capture machinery (capture_util.hpp): --cam/--look override the
@@ -1382,48 +1398,53 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(camKey);
 
-    // N flips the chop normals (DisplacedMesh::Params::chopNormals) for a live
-    // A/B. THREEPP_OCEAN_CHOP_NORMALS=1 starts with them on.
-    std::cout << "[vulkan_ocean] chop normals " << (ocean->params.chopNormals ? "ON" : "OFF")
-              << " (N toggles)" << std::endl;
-    KeyAdapter chopKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
-        if (ev.key == Key::N) {
-            ocean->params.chopNormals = !ocean->params.chopNormals;
-            std::cout << "[vulkan_ocean] chop normals " << (ocean->params.chopNormals ? "ON" : "OFF") << std::endl;
-        }
-    });
-    canvas.addKeyListener(chopKey);
-
-    // L: directional spreading A/B. Measured Donelan-Banner spreading (waves
-    // run downwind, long crests) against the historical symmetric cos^2. The
-    // renderer regenerates the spectra on the change; THREEPP_OCEAN_SPREAD=1
-    // starts in the measured state.
-    std::printf("[ocean] spreading: %s (L toggles)\n",
-                ocean->params.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2");
-    KeyAdapter spreadKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
-        if (ev.key == Key::L) {
-            ocean->params.measuredSpreading = !ocean->params.measuredSpreading;
-            std::printf("[ocean] spreading: %s\n",
-                        ocean->params.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2");
-            std::fflush(stdout);
-        }
-    });
-    canvas.addKeyListener(spreadKey);
-
-    // K: adds or removes a swell under the wind sea: 1 m significant height,
-    // 12 s period (225 m crests), running 45 degrees off the wind, s = 50.
-    KeyAdapter swellKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
-        if (ev.key == Key::K) {
-            auto& p = ocean->params;
+    // The water look switches, each a live A/B of one change, all off by
+    // default (Lars judges each in motion). Their keys are free in this demo:
+    // W A S D and the arrows steer, C cycles the camera, F12 saves a frame.
+    //   N  chop normals (DisplacedMesh::Params::chopNormals; the first press
+    //      builds the feature's images and pipelines, and the shade compiles
+    //      its chop variant, which can take minutes on a cold pipeline cache)
+    //   L  measured directional spreading (Params::measuredSpreading): waves
+    //      run downwind in long crests instead of the symmetric cos^2
+    //   K  a swell under the wind sea: 1 m significant height, 12 s period
+    //      (225 m crests), 45 degrees off the wind, s = 50
+    // THREEPP_OCEAN_CHOP_NORMALS=1 and THREEPP_OCEAN_SPREAD=1 start with them
+    // on. Every toggle prints all three states.
+    auto printWaterSwitches = [&] {
+        const auto& p = ocean->params;
+        char swell[64];
+        if (p.swellHeight > 0.f)
+            std::snprintf(swell, sizeof(swell), "%.2f m, %.1f s", double(p.swellHeight), double(p.swellPeriod));
+        else
+            std::snprintf(swell, sizeof(swell), "off");
+        std::printf("[vulkan_ocean] water: chop normals %s (N), spreading %s (L), swell %s (K)\n",
+                    p.chopNormals ? "ON" : "OFF",
+                    p.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2", swell);
+        std::fflush(stdout);
+    };
+    printWaterSwitches();
+    auto pressWaterKey = [&](char key) {
+        auto& p = ocean->params;
+        if (key == 'N') {
+            p.chopNormals = !p.chopNormals;
+        } else if (key == 'L') {
+            p.measuredSpreading = !p.measuredSpreading;
+        } else if (key == 'K') {
             p.swellHeight = p.swellHeight > 0.f ? 0.f : 1.0f;
             p.swellPeriod = 12.f;
             p.swellTheta  = p.windTheta - 0.785f;
             p.swellSpread = 50.f;
-            std::printf("[ocean] swell: %s\n", p.swellHeight > 0.f ? "1 m, 12 s, 45 deg off the wind" : "off");
-            std::fflush(stdout);
+        } else {
+            return;
         }
+        printWaterSwitches();
+    };
+    KeyAdapter waterKeys(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        if (ev.key == Key::N) pressWaterKey('N');
+        else if (ev.key == Key::L) pressWaterKey('L');
+        else if (ev.key == Key::K) pressWaterKey('K');
     });
-    canvas.addKeyListener(swellKey);
+    canvas.addKeyListener(waterKeys);
 
     // ── Sound: engine + ocean/wind ambience ─────────────────────────────────
     // Skipped in --shot capture runs (headless iteration shouldn't bleep).
@@ -1622,6 +1643,7 @@ int main(int argc, char** argv) {
         if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f")) {
             ocean->params.choppiness = choppiness;
         }
+        ImGui::Checkbox("Chop normals (N)", &ocean->params.chopNormals);
         ImGui::Checkbox("Measured spreading (L)", &ocean->params.measuredSpreading);
         ImGui::SliderFloat("Swell Hs (K)", &ocean->params.swellHeight, 0.f, 3.f, "%.2f m");
         // 9.5-17.5 s: the band cascade 0 carries on this 1 km ocean (its
@@ -2557,6 +2579,10 @@ int main(int argc, char** argv) {
         if (capturing && toggleNightAt > 0 && shotFrame == toggleNightAt) {
             night = true;// runtime day→night flip — the path the UI checkbox takes
             applyMode();
+        }
+        if (capturing) {
+            for (const auto& [key, frame] : shotPresses)
+                if (frame == shotFrame) pressWaterKey(key);
         }
         if (capturing && ++shotFrame >= shotFrames) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
