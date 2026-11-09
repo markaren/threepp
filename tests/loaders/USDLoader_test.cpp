@@ -272,3 +272,78 @@ def Xform "decal" {
     CHECK(mat->emissive == Color(1, 0.5f, 0));
     CHECK_THAT(mat->emissiveIntensity, WithinAbs(2.f, 1e-6f));
 }
+
+TEST_CASE("a UsdPreviewSurface UDIM texture gives each tile's part of a mesh that tile's image", "[usd]") {
+    // As a Blender or Substance export writes it: a UsdUVTexture whose file is a UDIM set.
+    // LightUSD resolves the texture's image to the set's first tile (1001), so every part
+    // drew 1001's image unless the tile is looked up in the set's own list.
+    const std::string preview = R"(#usda 1.0
+(
+    defaultPrim = "crate"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "crate" {
+    def Mesh "mesh" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        int[] faceVertexCounts = [3, 3]
+        int[] faceVertexIndices = [0, 1, 2, 3, 4, 5]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (2, 0, 0), (3, 0, 0), (2, 1, 0)]
+        texCoord2f[] primvars:st = [(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (1.1, 0.1), (1.9, 0.1), (1.1, 0.9)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </crate/Looks/Crate>
+    }
+
+    def Scope "Looks" {
+        def Material "Crate" {
+            token outputs:surface.connect = </crate/Looks/Crate/Surface.outputs:surface>
+
+            def Shader "Surface" {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor.connect = </crate/Looks/Crate/Albedo.outputs:rgb>
+                token outputs:surface
+            }
+
+            def Shader "Albedo" {
+                uniform token info:id = "UsdUVTexture"
+                asset inputs:file = @./textures/Crate_Albedo.<UDIM>.png@
+                float2 inputs:st.connect = </crate/Looks/Crate/Reader.outputs:result>
+                float3 outputs:rgb
+            }
+
+            def Shader "Reader" {
+                uniform token info:id = "UsdPrimvarReader_float2"
+                string inputs:varname = "st"
+                float2 outputs:result
+            }
+        }
+    }
+}
+)";
+    const auto dir = std::filesystem::temp_directory_path() / "usd_udim_preview";
+    std::filesystem::remove_all(dir);
+    write(dir / "crate.usda", preview);
+    for (const char* t : {"Crate_Albedo.1001", "Crate_Albedo.1002"}) {
+        writePng(dir / "textures" / (std::string(t) + ".png"));
+    }
+
+    USDLoader loader;
+    const auto scene = loader.load(dir / "crate.usda");
+    REQUIRE(scene);
+    std::vector<Mesh*> meshes;
+    scene->traverse([&](Object3D& o) {
+        if (auto* mesh = o.as<Mesh>()) meshes.push_back(mesh);
+    });
+    REQUIRE(meshes.size() == 2);
+    std::set<std::string> textures;
+    for (auto* mesh : meshes) {
+        const auto mat = std::dynamic_pointer_cast<MeshStandardMaterial>(mesh->material());
+        REQUIRE(mat);
+        REQUIRE(mat->map);
+        textures.insert(mat->map->name);
+    }
+    CHECK(textures == std::set<std::string>{"Crate_Albedo.1001", "Crate_Albedo.1002"});
+}
