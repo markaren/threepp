@@ -18,7 +18,9 @@
 //                                       lampglass_denoise_{off,on}.ppm
 //
 // Plain exit-code program, not Catch2, the same shape as the other Vulkan tests
-// here. Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
+// here. Exits 42 (CTest "Skipped") when no Vulkan GPU is available, and when it
+// has no ray query (or THREEPP_VULKAN_NO_RT=1): lamps then cast no ray-traced
+// shadow, so there is no glass on the shadow ray to dim them.
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -85,6 +87,10 @@ int main(int argc, char** argv) {
     if (!gpu) return kSkipCode;
     Canvas& canvas = *gpu.canvas;
     VulkanRenderer& renderer = *gpu.renderer;
+    if (!renderer.rayTracingSupported()) {
+        std::printf("[skip] no ray query: the lamps' shadow rays are not traced\n");
+        return kSkipCode;
+    }
 
     renderer.setRenderScale(1.0f);
     renderer.setDlss(false);
