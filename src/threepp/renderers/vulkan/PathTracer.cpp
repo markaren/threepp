@@ -593,7 +593,8 @@ namespace threepp::vulkan {
                               | (in.envSunLastDirLight ? 16u : 0u) | (waveScale << 16)
                               | (ptSwitch("THREEPP_PT_THIN_GLASS_NEE") ? 1024u : 0u)
                               | (ptSwitch("THREEPP_PT_LAST_BOUNCE_MIS") ? 2048u : 0u)
-                              | (ptSwitch("THREEPP_PT_AMBIENT_LIGHTS") ? 4096u : 0u);
+                              | (ptSwitch("THREEPP_PT_AMBIENT_LIGHTS") ? 4096u : 0u)
+                              | (ptSwitch("THREEPP_PT_BLEND_PASS") ? 8192u : 0u);
         pc.emissiveCount      = in.emissiveCount;
         pc.emissiveTotalPower = in.emissiveTotalPower;
         pc.envMipCount        = std::max(1u, in.envMipCount);

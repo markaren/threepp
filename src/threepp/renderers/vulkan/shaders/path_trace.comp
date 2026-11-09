@@ -230,6 +230,7 @@ layout(push_constant) uniform Pc {
                              // bit 10 = thinGlassNeeOwns (THREEPP_PT_THIN_GLASS_NEE)
                              // bit 11 = lastBounceMis (THREEPP_PT_LAST_BOUNCE_MIS)
                              // bit 12 = ambientLights (THREEPP_PT_AMBIENT_LIGHTS)
+                             // bit 13 = blendPass (THREEPP_PT_BLEND_PASS)
                              // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
@@ -276,6 +277,14 @@ bool lastBounceMis() { return (pc.flags & 2048u) != 0u; }
 // radiance a lighting ray that escapes meets (ambientRadiance). Off: neither
 // lights a surface.
 bool ambientLights() { return (pc.flags & 4096u) != 0u; }
+// Bit 13 (THREEPP_PT_BLEND_PASS): a flat alpha blend (transmission 1 - opacity,
+// ior 0) or an additive surface (transmission 1 + strength), lit or unlit, is
+// a null event the ray passes (blendPass): a flat blend straight through,
+// untinted, with the chance of its transmission; an additive one always, its
+// glow added. The path keeps delta, lastPdf and its photon flags. Off: unlit
+// ones were opaque cards, lit ones tinted what lay behind and did not glow.
+bool blendPass() { return (pc.flags & 8192u) != 0u; }
+const uint kPtMaxBlendPasses = 8u;// per path, past which a pass costs a bounce
 bool sunPhotonsOn() { return photonsOn() && (pc.flags & 512u) != 0u && pgRegion.w > 0.0; }
 
 // The ocean's FFT fine-cascade height, the chop its wave mesh cannot resolve
@@ -493,7 +502,7 @@ float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock
         if (m.ior < 0.5) {// a flat blend (ior 0)
             if (!thinGlassNeeOwns()) continue;
             T *= clamp(m.transmission, 0.0, 1.0);
-            crossed = true;
+            if (!blendPass()) crossed = true;// with blendPass the bounce ray passes it as a null event: MIS holds
             if (T < 0.01) { T = 0.0; rayQueryTerminateEXT(rq); }
             continue;
         }
@@ -1621,6 +1630,10 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     // emitter the ray then hits is the emitter NEE's, which crossed the same
     // panes dimmed by them, so the hit adds nothing.
     bool  neeChain    = false;
+    // blendPass: the distance since the last vertex the null events cover
+    // (the emitter's MIS pdf is over the whole leg), and how many passed.
+    float legDist     = 0.0;
+    uint  blendPasses = 0u;
     // The photon-mapped caustics (photonsOn): a diffuse vertex gathers the
     // emitters' light that came through glass from the photons, so the
     // bounce on from it through glass to an emitter keeps only the share of
@@ -1748,6 +1761,40 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
         const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
         vec3 albedo = sf.albedo;
+        // A flat blend or an additive surface (blendPass), before the unlit
+        // test: the ray passes on with the chance of its transmission (an
+        // additive one: always, its glow added), a null event. What stays is
+        // the surface's opaque share, shaded below; an additive lit one is
+        // shaded by chance, both ways weighted by 1 + strength.
+        const bool flatOrAdd = blendPass() && hm.transmission > 0.0 && hm.ior < 0.5 &&
+                               geoms[hitId].foamAddress == 0ul;
+        if (flatOrAdd) {
+            bool passes;
+            if (hm.transmission > 1.0) {
+                const float st = clamp(hm.transmission - 1.0, 0.0, 1.0);
+                if (sf.roughness < 0.0) {
+                    L += throughput * albedo * st;
+                    passes = true;
+                } else {
+                    passes = rnd(seed) * (1.0 + st) < 1.0;
+                    throughput *= 1.0 + st;
+                }
+            } else {
+                passes = rnd(seed) < hm.transmission;
+            }
+            if (passes) {
+                SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+                o = P - Ng * SHADOW_EPS;
+                legDist += tHit;
+                // A pass is not a bounce (up to kPtMaxBlendPasses): the loop's
+                // ++ undoes this (unsigned, wraps at 0).
+                if (blendPasses < kPtMaxBlendPasses) {
+                    ++blendPasses;
+                    bounce -= 1u;
+                }
+                continue;
+            }
+        }
         if (sf.roughness < 0.0) {// unlit
             L += throughput * albedo;
             break;
@@ -1801,7 +1848,8 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             if (max(max(Le.r, Le.g), Le.b) > 0.0) {
                 float w = 1.0;
                 if (!delta && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u) {
-                    const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, max(dot(Ng, V), 0.0));
+                    const float leg  = legDist + tHit;
+                    const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, leg * leg, max(dot(Ng, V), 0.0));
                     w = lastPdf * lastPdf / max(lastPdf * lastPdf + pdfL * pdfL, 1e-20);
                 }
                 if (delta && neeChain && (geoms[hitId].flags & kGeomFlagGlowOnly) == 0u) w = 0.0;// see neeChain
@@ -1816,7 +1864,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
 
         // ── Transmission: a dielectric slab or shell ────────────────────────
-        if (hm.transmission > 0.0 && !wakeLayer && rnd(seed) < hm.transmission) {
+        if (hm.transmission > 0.0 && !wakeLayer && !flatOrAdd && rnd(seed) < hm.transmission) {
             // An ocean surface (a DisplacedMesh: GeometryDesc.foamAddress set)
             // is water whatever its material's ior.
             // Whatever its material says, here it is a real interface, entered through
@@ -1952,6 +2000,7 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         o        = offsetOrigin(s, wi);
         d        = wi;
         lastPdf  = pdf;
+        legDist  = 0.0;
         delta    = false;
         camChain = false;
         causticPath = false;// a new NEE vertex: the next glass event starts over
@@ -2037,10 +2086,20 @@ void tracePhotonPath(vec3 o, vec3 d, vec3 beta, bool sun, inout uint seed) {
         const vec3 Ng = dot(hh.Ng, V) >= 0.0 ? hh.Ng : -hh.Ng;
         const vec3 Nv = dot(hh.Ns, Ng) >= 0.0 ? hh.Ns : -hh.Ns;
         const PtSurface sf = ptSurface(hm, hh, P, Nv, Nv);
+        // A flat blend or an additive surface (blendPass) passes the photon
+        // as it passes a camera path (an additive one always, its glow no
+        // light here); what stays meets the surface's opaque share.
+        if (blendPass() && !isOcean && hm.transmission > 0.0 && hm.ior < 0.5 &&
+            (hm.transmission > 1.0 || rnd(seed) < hm.transmission)) {
+            SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
+            o = P - Ng * SHADOW_EPS;
+            continue;
+        }
         if (sf.roughness < 0.0) return;// unlit
         SHADOW_EPS = max(1e-3, max(max(abs(P.x), abs(P.y)), abs(P.z)) * 1e-5);
 
         if (glass && !isOcean && hm.transmission < 1.0) depositPhoton(P, V, Ng, beta, sun ? 1u : 0u);
+        if (blendPass() && !isOcean && hm.transmission > 0.0 && hm.ior < 0.5) return;// its opaque share
 
         vec3 N = sf.N;
         {

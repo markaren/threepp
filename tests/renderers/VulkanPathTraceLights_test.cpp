@@ -12,6 +12,9 @@
 //   [3] a RectAreaLight lights a floor once (through its emissive quad), and
 //       AmbientLight and HemisphereLight light a sphere as the frame does
 //       (THREEPP_PT_AMBIENT_LIGHTS); the old way left both out;
+//   [4] blended and additive cards pass the ray (THREEPP_PT_BLEND_PASS): a flat
+//       blend shows the background untinted by its transmission, an additive
+//       card adds its glow; the old way drew unlit ones as opaque cards;
 //
 // THREEPP_TEST_IMAGES=<dir>: the traces are also written there as PNGs.
 // Exit 42 (SKIP) without a Vulkan device with ray query.
@@ -68,6 +71,17 @@ namespace {
         tex->type       = Type::Float;
         tex->colorSpace = ColorSpace::Linear;
         tex->mapping    = Mapping::EquirectangularReflection;
+        tex->needsUpdate();
+        return tex;
+    }
+
+    // A white 4x4 RGBA8 map: an untextured transparent MeshBasicMaterial is
+    // drawn as a UI overlay and never traced; a textured one is.
+    std::shared_ptr<Texture> whiteMap() {
+        std::vector<unsigned char> data(4 * 4 * 4, 255);
+        Image img{ImageData(std::move(data)), 4u, 4u};
+        auto  tex = Texture::create(img);
+        tex->format = Format::RGBA;
         tex->needsUpdate();
         return tex;
     }
@@ -314,6 +328,63 @@ int main() {
         // is at N.up ~ 0.78 (0.45), the centre at 0 (0.25), the bottom ~ -0.78.
         check(std::abs(centre(hem) - 0.25) < 0.04, "the hemisphere lights the sphere's side by half its sky");
         check(top(hem) > 0.38 && bottom(hem) < 0.10, "and its top by the sky, its bottom by the black ground");
+    }
+
+    // ── 4. Blended and additive cards ──────────────────────────────────────
+    // A card over the background: a flat blend (opacity 0.25) shows 0.75 of
+    // the background untinted and 0.25 of itself; an additive one (strength
+    // 0.5) shows all of the background and half of its colour on top.
+    std::printf("\n[4] blended and additive cards pass the ray\n");
+    {
+        Scene scene;
+        auto white        = constantEnv(1.f, 1.f, 1.f);
+        scene.environment = white;
+        scene.background  = white;
+        auto camera = PerspectiveCamera::create(40, float(kW) / float(kH), 0.1f, 100.f);
+        camera->position.set(0, 0, 4.f);
+        camera->lookAt(0, 0, 0);
+        camera->updateMatrixWorld();
+        const auto cardLum = [&](const std::shared_ptr<Material>& mat, const std::string& name) {
+            auto card = Mesh::create(PlaneGeometry::create(1.5f, 1.5f), mat);
+            scene.add(card);
+            const auto on = tr.trace(scene, *camera, 64, 2, name + "_on");
+            setEnv("THREEPP_PT_BLEND_PASS", "0");
+            const auto off = tr.trace(scene, *camera, 64, 2, name + "_off");
+            setEnv("THREEPP_PT_BLEND_PASS", "1");
+            scene.remove(*card);
+            return std::pair{lum(on, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10),
+                             lum(off, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10)};
+        };
+        const double redL = 0.2126;
+        auto basic         = MeshBasicMaterial::create();
+        basic->color       = Color(1.f, 0.f, 0.f);
+        basic->map         = whiteMap();
+        basic->transparent = true;
+        basic->opacity     = 0.25f;
+        const auto [bOn, bOff] = cardLum(basic, "4_unlit_blend");
+        std::printf("  unlit blend, opacity 0.25: %.4f (old %.4f), expected %.4f\n", bOn, bOff, 0.75 + 0.25 * redL);
+        check(std::abs(bOn - (0.75 + 0.25 * redL)) < 0.03, "an unlit blended card shows the background through it");
+
+        auto lit         = MeshStandardMaterial::create();
+        lit->color       = Color(1.f, 0.f, 0.f);
+        lit->roughness   = 1.f;
+        lit->transparent = true;
+        lit->opacity     = 0.25f;
+        lit->side        = Side::Double;
+        const auto [lOn, lOff] = cardLum(lit, "4_lit_blend");
+        std::printf("  lit blend, opacity 0.25: %.4f (old %.4f), expected about %.4f\n", lOn, lOff, 0.75 + 0.25 * redL);
+        check(std::abs(lOn - (0.75 + 0.25 * redL)) < 0.05, "a lit blended card lets the background through untinted");
+
+        auto add         = MeshBasicMaterial::create();
+        add->color       = Color(0.2f, 0.4f, 0.6f);
+        add->map         = whiteMap();
+        add->blending    = Blending::Additive;
+        add->transparent = true;
+        add->opacity     = 0.5f;
+        const double addL = 0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.6;
+        const auto [aOn, aOff] = cardLum(add, "4_additive");
+        std::printf("  additive, strength 0.5: %.4f (old %.4f), expected %.4f\n", aOn, aOff, 1.0 + 0.5 * addL);
+        check(std::abs(aOn - (1.0 + 0.5 * addL)) < 0.03, "an additive card adds its glow to the background");
     }
 
     // ── Validation ─────────────────────────────────────────────────────────
