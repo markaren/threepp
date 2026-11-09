@@ -588,9 +588,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         //   • flat alpha blend (host: transmission = 1−opacity, ior = 0):
         //     α = opacity · texel alpha (the texel only when alphaCutoff < 0),
         //   • glass (transmission t, a real ior): the covered part shades opaque
-        //     by (1−t); of the rest, the Fresnel share F mirrors the environment
-        //     and t·(1−F)·tint goes STRAIGHT through (no refraction for a
-        //     secondary ray: the thin-shell approximation),
+        //     by (1−t); of the rest, the Fresnel share F of the environment in
+        //     the mirror direction is added and t·tint goes STRAIGHT through (no
+        //     refraction for a secondary ray: the thin-shell approximation),
         //   • additive (transmission > 1): glows by its strength, passes fully.
         // Skipping blend hits made every blend surface invisible through
         // glass/reflections (the TransmissionOrderTest "missing alpha blend"
@@ -612,7 +612,6 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 const vec3  tint = isFlatAlphaBlend(hm.ior) ? vec3(1.0)
                                                             : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo, hitDuvA, hitDuvB);
                 hitAlpha = cov * (1.0 - t);
-                vec3 glassF = vec3(0.0);
                 if (!isFlatAlphaBlend(hm.ior) && t > 0.0) {
                     // GLASS met by a traced ray reflects too. It used to pass
                     // straight on with its tint alone, so glass seen in a
@@ -622,22 +621,34 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                     // a photo) shows the sky in them, more so the more grazing
                     // the view. The Fresnel share of the environment in the
                     // mirror direction is added here, at the facing side's
-                    // sky visibility (the probes; 1 without them); the ray
-                    // carries the rest straight on. The mirror is the
-                    // environment only, not a second trace: one probe read and
-                    // one env sample per glass hit, no ray.
+                    // sky visibility (the probes; 1 without them). The mirror
+                    // is the environment only, not a second trace: one probe
+                    // read and one env sample per glass hit, no ray.
+                    //
+                    // The share is ADDED, not taken out of what the glass lets
+                    // through. Taking F out (t·(1−F)·tint) is right only where
+                    // the environment is the whole mirror image; the room the
+                    // glass would mirror is not traced, so where no sky reaches
+                    // that share was simply lost, and at a slant F goes to 1: a
+                    // wavy glass sheet in a closed box with no environment
+                    // (gltf-research-scenes' cornell-caustic), seen through
+                    // itself, turned into black creases where the path tracer
+                    // shows it faint and clear. Added, a slanted pane in front
+                    // of something bright under a bright sky can come out
+                    // brighter than the path tracer, by F times what lies
+                    // behind it; it is never darker than before.
                     const vec3  gN   = dot(hitN, d) < 0.0 ? hitN : -hitN;
                     const float gIor = max(hm.ior, 1.0);
                     const float gF0n = (gIor - 1.0) / (gIor + 1.0);
-                    glassF = glassFresnel(gF0n * gF0n, clamp(-dot(gN, d), 0.0, 1.0),
-                                          hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm);
+                    const vec3  gF   = glassFresnel(gF0n * gF0n, clamp(-dot(gN, d), 0.0, 1.0),
+                                                    hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm);
                     const vec3  gR   = reflect(d, gN);
                     const vec3  gP   = o + d * tHit;
                     const float gLod = max(glassRough(hm.roughness, gIor), 0.10) * maxLod;
-                    radiance += tput * (cov * t) * glassF * murkAmbient(sampleEnvLod(gR, gLod), gP, gR)
+                    radiance += tput * (cov * t) * gF * murkAmbient(sampleEnvLod(gR, gLod), gP, gR)
                               * probeEnvFillVis(gP + gN * SHADOW_EPS, gN, maxLod) * envInt;
                 }
-                hitPass  = vec3(1.0 - cov) + cov * t * (vec3(1.0) - glassF) * tint;
+                hitPass  = vec3(1.0 - cov) + cov * t * tint;
             }
             if (hitAlpha <= 0.01) {// nothing to composite — carry on
                 tput *= hitPass;
