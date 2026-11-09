@@ -330,7 +330,8 @@ namespace {
 
 TEST_CASE("BVH raycast matches a brute-force loop", "[BVH]") {
 
-    const auto mesh = deformedSphere(160, 157, {0.1f, -0.2f, 0.05f}, 1.f, 1234);
+    const Vector3 center(0.1f, -0.2f, 0.05f);
+    const auto mesh = deformedSphere(160, 157, center, 1.f, 1234);
     REQUIRE(mesh.triangleCount() > 49000);
 
     BVH bvh;
@@ -345,10 +346,26 @@ TEST_CASE("BVH raycast matches a brute-force loop", "[BVH]") {
 
     Rng rng{42};
     int hits = 0, mismatches = 0, anyMismatches = 0;
-    constexpr int rayCount = 10000;
+    // Each ray costs a pass over all 50k triangles in the brute-force loop, so
+    // the count is kept low enough for the sanitizer CI job.
+    constexpr int rayCount = 1500;
     std::vector<float> triDistance(tris.size());
     for (int r = 0; r < rayCount; ++r) {
-        const Vector3 origin(rng.range(-2.f, 2.f), rng.range(-2.f, 2.f), rng.range(-2.f, 2.f));
+        // A third of the origins anywhere around the mesh, a third inside it,
+        // and a third near its surface, where the hits are short and the 0.4
+        // and 1.2 limits and rayEps decide.
+        Vector3 origin;
+        switch (r % 3) {
+            case 0:
+                origin = Vector3{rng.range(-2.f, 2.f), rng.range(-2.f, 2.f), rng.range(-2.f, 2.f)};
+                break;
+            case 1:
+                origin = rng.unitVector().multiplyScalar(rng.range(0.f, 0.6f)).add(center);
+                break;
+            default:
+                origin = rng.unitVector().multiplyScalar(rng.range(0.8f, 1.3f)).add(center);
+                break;
+        }
         Vector3 direction = rng.unitVector();
         // Every 16th ray runs along an axis, so the slab test sees zero direction components.
         if (r % 16 == 0) {
