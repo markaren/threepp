@@ -188,6 +188,10 @@ layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
 vec4 gWake = vec4(0.0);
 // The field's own scale on what its film and bubbles turn back (WakeField::albedo).
 float gWakeAlbedo = 1.0;
+// Breaking crests (DisplacedMesh::Params::breakingCrests): this pixel's crest
+// steepness, interpolated from the per-vertex value water_displace.comp wrote
+// into the ocean's UVs; -1e30 when the ocean carries none (the switch is off).
+float gCrestEps = -1e30;
 // Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
 // (designed for a 4 m world mapping), G = ridged lace/filament pattern
 // (12 m mapping). Replaces the per-pixel procedural noise octaves in the

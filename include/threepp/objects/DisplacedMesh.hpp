@@ -97,6 +97,17 @@ namespace threepp {
             // forces it. Live-tunable.
             bool boundWaves = false;
 
+            // Breaking-crest whitecaps (default OFF, the historical Jacobian
+            // foam accumulator). ON draws natural foam only where the current
+            // crest is breaking, from the instantaneous surface: the local
+            // steepness of the Lagrangian map (the most compressive eigenvalue
+            // of the choppiness-1 displacement gradient, a k for a single
+            // wave at its crest) above kBreakingSteepness. It rides the crest
+            // as it moves, has no texture and no lag, and is lit with the
+            // foam albedo Whitlock et al. (1982) measured. Vessel and splat
+            // foam are unchanged. THREEPP_OCEAN_BREAKING_CRESTS = 1 / 0
+            // forces it. Live-tunable.
+            bool breakingCrests = false;
 
             // Global Y-displacement multiplier. 1.0 is physical; higher values
             // exaggerate wave height.
@@ -136,12 +147,18 @@ namespace threepp {
         // 1 / 0, read once, named with the field) forces it for every ocean.
         [[nodiscard]] bool cwmOn() const;
         [[nodiscard]] bool boundWavesOn() const;
+        [[nodiscard]] bool breakingCrestsOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under
         // the Choppy Wave Model, else params.choppiness.
         [[nodiscard]] float effectiveChoppiness() const;
 
         // The CWM limiter's floor on the Jacobian of the drawn map.
         static constexpr float kCwmMinJacobian = 0.1f;
+        // The breaking threshold on the local steepness of the choppiness-1
+        // map (cascades 0 and 1, differenced at the mesh's grid spacing).
+        // Mirrors kOceanBreakingSteepness (vulkan_shared.h), where its
+        // calibration is written down.
+        static constexpr float kBreakingSteepness = 0.15f;
 
         // Hull exclusion zone: suppresses wave displacement inside a
         // world-space oriented rectangle so the ocean doesn't clip through

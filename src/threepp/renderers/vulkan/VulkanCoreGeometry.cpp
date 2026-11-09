@@ -3423,8 +3423,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // The wave-model switches (DisplacedMesh::Params, each forced by
             // its environment variable). All off is the historical path,
             // untouched.
+            static_assert(DisplacedMesh::kBreakingSteepness == kOceanBreakingSteepness,
+                          "DisplacedMesh::kBreakingSteepness mirrors vulkan_shared.h");
             const bool cwmOn      = dm.cwmOn();
             const bool boundOn    = dm.boundWavesOn();
+            const bool breakingOn = dm.breakingCrestsOn();
             // Bound waves: each band's mean wavenumber (Tayfun 1980's k_m from
             // the band's mean frequency), recomputed on the CPU from the
             // cascade's own spectrum whenever the sea state changes.
@@ -3772,7 +3775,17 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.wakeTrailAddr  = wakeTrailAddr;
             pc.hullAddr       = hullAddr;
             pc.hullCount      = hullCount;
-            pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u);
+            // breakingCrests writes each vertex's crest steepness into the UV
+            // buffer (water has no texture to read UVs for); no UV buffer, no
+            // crests.
+            const bool crestsOut = breakingOn && st.blas->uv.handle != VK_NULL_HANDLE;
+            // Switched off after it drew: one more pass writes an untagged UV
+            // (G = 0) over every vertex, so the shade stops reading crests.
+            const bool crestsClear = !crestsOut && st.crestUvTagged && st.blas->uv.handle != VK_NULL_HANDLE;
+            st.crestUvTagged  = crestsOut;
+            pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u) | (crestsOut ? 4u : 0u) |
+                                (crestsClear ? 8u : 0u);
+            pc.uvOut          = (crestsOut || crestsClear) ? st.blas->uv.address : 0ull;
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
@@ -3821,7 +3834,10 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 fpc.wakeTrailAddr  = wakeTrailAddr;
                 fpc.hullAddr       = hullAddr;
                 fpc.hullCount      = hullCount;
-                fpc.natFoamScale   = std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
+                // Breaking crests draw the natural whitecaps in the shade from
+                // the current surface, so the accumulator keeps only the
+                // vessels' and splats' foam (unchanged).
+                fpc.natFoamScale   = breakingOn ? 0.f : std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
                 if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
                 if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFoam, currentFrame);

@@ -49,8 +49,8 @@ namespace threepp::vulkan {
         // combined-image-samplers (3 cascades × 2 images).
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match water_displace.comp's `Pc` struct (112 bytes):
-        // 4 × VkDeviceAddress (32) + 20 × u32/float (80). The vessels live in
+        // Must match water_displace.comp's `Pc` struct (120 bytes):
+        // 5 × VkDeviceAddress (40) + 20 × u32/float (80). The vessels live in
         // a per-frame buffer (hullAddr → OceanHullGpu[hullCount]); one hull
         // alone used to fill this block to the 128-byte maximum.
         struct PushConstants {
@@ -77,10 +77,12 @@ namespace threepp::vulkan {
             // The wave-model switches (DisplacedMesh::Params). With
             // waveModel 0 the shader runs the historical path and touches
             // nothing below.
-            uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves
+            uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests,
+                                          // bit 3 clear the crest tags breakingCrests left
             float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
             float           boundKm1;     // 0 = none on that cascade
             uint32_t        _pad0;
+            VkDeviceAddress uvOut;        // the mesh's UV buffer: breakingCrests writes (eps, -1) here
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

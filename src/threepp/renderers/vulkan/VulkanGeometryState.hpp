@@ -606,6 +606,7 @@ namespace threepp::vulkan::impl {
         // second-order harmonic, valid until the sea state changes.
         float boundKm[2]       = {0.f, 0.f};
         bool  boundKmValid     = false;
+        bool  crestUvTagged    = false;// breaking crests wrote (eps, -1) into the UV buffer
         water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;
         uint32_t vertexCount = 0;

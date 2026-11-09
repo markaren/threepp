@@ -899,6 +899,34 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     //   residue     — a ridged filament web (the lace a collapsed whitecap
     //                 leaves behind) outlives the sheet, thinning to streaks
     // Matches closest_hit's foam shading.
+    // Breaking crests (DisplacedMesh::Params::breakingCrests): white water
+    // where the crest under this pixel is breaking NOW, from the surface's
+    // own local steepness (water_displace.comp), so it sits on the crest top,
+    // rides it and is gone when the crest relaxes: a step of half-width
+    // kOceanBreakingRamp on the threshold, so cover > 0.5 exactly where it is
+    // exceeded, and the steepness itself shapes it (largest on the crest,
+    // falling down both faces). No texture, no noise, no accumulator. Thick
+    // fresh foam is a Lambertian reflector of albedo 0.55, flat across the
+    // visible (Whitlock, Bartlett and Gurganus 1982), with the specular of
+    // water's own interface (n = 1.333, F0 = 0.02). From below the raft is
+    // the dull patch the accumulator's foam is.
+    if (gCrestEps > -1e29) {
+        const float crestCover = smoothstep(kOceanBreakingSteepness - kOceanBreakingRamp,
+                                            kOceanBreakingSteepness + kOceanBreakingRamp, gCrestEps) *
+                                 (below ? 0.12 : 1.0);
+        if (crestCover > 0.0) {
+            const vec3 crestAmb = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
+            const vec3 crestLit = shadeDiffuseDirect(P, N, V, vec3(kOceanFoamAlbedoWhitlock), 1.0, 0.0,
+                                                     vec3(0.0), doShadows, crestAmb,
+                                                     vec3(0.0), 0.0,
+                                                     vec3(0.02),
+                                                     0.0, 1.3, 0.0, seed,
+                                                     /*addEmissive=*/true,
+                                                     /*cheapHit=*/false);
+            col = mix(col, crestLit, crestCover);
+        }
+    }
+
     if (pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
         // Bicubic + 1.3 gain: the B-spline kernel approximates rather than
         // interpolates, attenuating an isolated single-texel whitecap to

@@ -248,6 +248,27 @@ static_assert(((kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFl
 #define kOceanCascade1RotSin   0.4472135954999579f
 #define kOceanCascade1RotCos   0.8944271909999159f
 
+// Breaking crests (DisplacedMesh::Params::breakingCrests). A crest breaks
+// where the local steepness of the choppiness-1 Lagrangian map, eps = minus
+// the most compressive eigenvalue of grad D over cascades 0 and 1 (for one
+// wave at its crest eps = a k, so J = 1 - eps), exceeds this. The Stokes
+// limit is a k = 0.443 (Toffoli et al. 2010 measured onset at 0.44 and front
+// faces to 0.55), but a linear field differenced at the mesh's stencil
+// reaches it far less often than real crests do (they are sharpened by the
+// nonlinearity it lacks, and the stencil smooths the shortest waves), so the
+// threshold is calibrated instead, once: ocean_metrics (Hs fix on, fully
+// developed, U10 = 15 m/s) puts the area above 0.14 on Monahan and
+// O'Muircheartaigh (1980) and above 0.155 on Callaghan et al. (2008); 0.15
+// sits between them. Other winds are graded against the same two curves, not
+// refit. Mirrored by DisplacedMesh::kBreakingSteepness.
+#define kOceanBreakingSteepness 0.15f
+// Half-width of the shade's step around it (same units): the cover rises
+// from 0 to 1 over threshold +- this, so cover > 0.5 is exactly eps > it.
+#define kOceanBreakingRamp      0.03f
+// Foam's diffuse reflectance in the visible, Whitlock, Bartlett and Gurganus
+// (1982): about 0.55 for thick fresh foam, flat from 0.4 to 0.7 um.
+#define kOceanFoamAlbedoWhitlock 0.55f
+
 #ifdef __cplusplus
 
 #include <cstdint>
