@@ -117,6 +117,18 @@ namespace {
         return s;
     }
 
+    // The ocean spectrum's Hs calibration (DisplacedMesh::Params::hsFix).
+    // THREEPP_OCEAN_HS_FIX = 1 / 0 forces it on / off for every ocean; unset,
+    // the mesh's own field decides. Read once.
+    bool oceanHsFix(const threepp::DisplacedMesh::Params& p) {
+        static const int env = [] {
+            const char* e = std::getenv("THREEPP_OCEAN_HS_FIX");
+            if (!e || !*e) return -1;
+            return (e[0] == '0') ? 0 : 1;
+        }();
+        return env < 0 ? p.hsFix : env == 1;
+    }
+
 }// namespace
 
 namespace threepp {
@@ -3386,9 +3398,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // so the sea MORPHS into the new state over a few swell periods
             // instead of popping. (Mapped-UBO rewrite mid-flight follows the
             // same convention as DynamicSpectrum's per-frame time update.)
+            const bool hsFix = oceanHsFix(dm.params);
             if (dm.params.windSpeed != st.appliedWindSpeed ||
                 dm.params.windTheta != st.appliedWindTheta ||
-                dm.params.fetch     != st.appliedFetch) {
+                dm.params.fetch     != st.appliedFetch ||
+                hsFix               != st.appliedHsFix) {
                 for (uint32_t i = 0; i < 3; ++i) {
                     if (!(st.cascadeMask & (1u << i))) continue;
                     // Cascade 1's sample domain is rotated; keep its world
@@ -3396,12 +3410,13 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     const float theta = dm.params.windTheta +
                             (i == 1 ? kOceanCascade1RotTheta : 0.f);
                     st.cascades[i].phillips->updateSeaState(theta, dm.params.windSpeed,
-                                                            dm.params.fetch);
+                                                            dm.params.fetch, hsFix);
                     st.cascades[i].phillipsRecorded = false;
                 }
                 st.appliedWindSpeed = dm.params.windSpeed;
                 st.appliedWindTheta = dm.params.windTheta;
                 st.appliedFetch     = dm.params.fetch;
+                st.appliedHsFix     = hsFix;
             }
 
             // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
@@ -5065,6 +5080,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                                  (i == 1 ? kOceanCascade1RotTheta : 0.f);
                 ps.windSpeed   = dm.params.windSpeed;
                 ps.fetch       = dm.params.fetch;
+                ps.hsFix       = oceanHsFix(dm.params);
                 if (i == 0) {
                     ps.kMin = 0.f;
                     ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound
@@ -5109,6 +5125,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->appliedWindSpeed = dm.params.windSpeed;
             state->appliedWindTheta = dm.params.windTheta;
             state->appliedFetch     = dm.params.fetch;
+            state->appliedHsFix     = oceanHsFix(dm.params);
 
             // Per-cascade height readback DIMENSIONS. Each cascade can run at
             // a different FFT resolution, so each readback buffer is sized to

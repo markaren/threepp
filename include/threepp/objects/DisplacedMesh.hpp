@@ -59,6 +59,19 @@ namespace threepp {
             // tunable like windSpeed: the renderer regenerates the spectra.
             float fetch = 0.0f;
 
+            // Hs calibration switch (default OFF, the historical sea). The
+            // plain spectrum's constant (A = 0.01, set by eye) and Phillips
+            // peak exponent give a significant wave height of only ~0.52x
+            // Pierson-Moskowitz (Hs ~ 0.0115 U^2 against 0.021-0.025 U^2;
+            // ~0.55x JONSWAP at a finite fetch). ON uses Pierson and
+            // Moskowitz's own alpha = 8.1e-3 and beta = 0.74: Hs x1.85 at
+            // every wind and fetch, the peak at 1.16x the wavelength (Tp
+            // x1.08, onto PM's and Hasselmann's). Every scene tuned its
+            // waveScale against the OFF sea. The environment variable
+            // THREEPP_OCEAN_HS_FIX = 1 / 0 forces it on / off for every
+            // ocean. Live-tunable like windSpeed.
+            bool hsFix = false;
+
             // Global Y-displacement multiplier. 1.0 is physical; higher values
             // exaggerate wave height.
             float waveScale = 1.0f;
