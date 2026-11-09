@@ -1027,6 +1027,7 @@ namespace threepp {
         VkImageView oceanFineHeightView   = VK_NULL_HANDLE;// either dummy or cascade-2 view
         VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
         float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
+        float       oceanWaveScale        = 1.f;          // its params.waveScale (the path tracer's fine slope)
 
         // World-space foam (deferred shade ocean binding). Built by
         // FoamWorldPipeline each frame from a DisplacedMesh's foamImage.

@@ -3733,6 +3733,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.tileSize1    = dm.params.tileSize1;
             pc.tileSize2    = dm.params.tileSize2;
             pc.waveScale    = dm.params.waveScale;
+            oceanWaveScale  = dm.params.waveScale;
             pc.choppiness   = dm.params.choppiness;
             pc.cascadeMask  = st.cascadeMask;
             pc.warpCenterX    = dm.warp.centerX;

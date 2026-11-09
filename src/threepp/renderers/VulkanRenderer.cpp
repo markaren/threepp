@@ -129,13 +129,16 @@ namespace threepp {
         // frame shows. The accumulator follows the render extent.
         if (pathTracer_ && pathTracer_->active() && asyncPart && !view().secondary) {
             // Photons for the emitters' caustics: a scene with emitters and a
-            // transmissive material in use (a dielectric to the paths).
+            // transmissive material in use (a dielectric to the paths); and
+            // for the sun's through the waves: a scene with an ocean (its fine
+            // cascade) and a sun.
             bool photons = false;
             if (emissiveTriCountThisFrame_ > 0) {
                 for (size_t s = 1; s < matTable_.size() && s < matTableRefs_.size() && !photons; ++s)
                     photons = matTableRefs_[s] > 0 && matTable_[s].transmission > 0.f;
             }
-            pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, frameSerial_, photons);
+            const bool sunPhotons = oceanFineTileSize > 0.f && shadowSun_.valid && shadowSun_.dir[1] > 0.f;
+            pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, frameSerial_, photons, sunPhotons);
             vulkan::PathTracer::FrameInputs pin;
             pin.sunTanHalfAngle   = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
             pin.sunExtracted      = envSun_.found;
@@ -200,6 +203,7 @@ namespace threepp {
                 in.emissiveTotalPower = emissiveTotalPowerThisFrame_;
                 in.envMipCount        = envImage.mipLevels;
                 in.oceanFineTileSize  = oceanFineTileSize;
+                in.oceanWaveScale     = oceanWaveScale;
                 pathTracer_->recordDispatch(c, f, in);
             });
             pathTracer_->declare(g, pass, f);
