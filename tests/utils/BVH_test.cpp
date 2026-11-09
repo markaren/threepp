@@ -672,9 +672,10 @@ TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
 TEST_CASE("BVH axis-aligned rays hit with the origin on a node face", "[BVH]") {
 
     // Straight down onto a 4 x 4 floor from every half-unit grid point, the
-    // edges included. The origins lie on the faces of the root box and of
-    // inner nodes, in the axes where the direction is zero; which face the old
-    // slab test dropped depended on the sign of that zero.
+    // edges included. The origins lie on node faces in the axes where the
+    // direction is zero; which face the old slab test dropped depended on the
+    // sign of that zero. Inside the floor a face one node drops is shared by a
+    // sibling holding the same edge, so this part tests the root's faces.
     const auto mesh = floorGrid(4);
     for (const int leafSize : {1, 8}) {
         BVH bvh(leafSize);
@@ -707,6 +708,49 @@ TEST_CASE("BVH axis-aligned rays hit with the origin on a node face", "[BVH]") {
             CHECK_FALSE(bvh.raycast(Ray({2, 1, past}, {zero, -1, zero})));
             CHECK_FALSE(bvh.raycastAny(Ray({past, 1, past}, {zero, -1, zero}), 2.f));
         }
+    }
+
+    // Four 1 x 1 patches with 2-unit gaps between them: the nodes around a
+    // patch have faces at x or z = 1 and 3, inside the root, that no other
+    // node shares, so a ray started on one is found there or not at all.
+    Mesh patches;
+    for (const float pz : {0.f, 3.f}) {
+        for (const float px : {0.f, 3.f}) {
+            const auto v = static_cast<unsigned int>(patches.positions.size() / 3);
+            patches.positions.insert(patches.positions.end(), {px, 0, pz, px + 1, 0, pz, px + 1, 0, pz + 1, px, 0, pz + 1});
+            patches.indices.insert(patches.indices.end(), {v, v + 3, v + 1, v + 1, v + 3, v + 2});
+        }
+    }
+    for (const int leafSize : {1, 2}) {
+        BVH bvh(leafSize);
+        bvh.build(patches.positions, patches.indices);
+
+        int hits = 0;
+        for (const float zero : {0.f, -0.f}) {
+            for (const float pz : {0.f, 3.f}) {
+                for (const float px : {0.f, 3.f}) {
+                    for (const float dz : {0.f, 0.5f, 1.f}) {
+                        for (const float dx : {0.f, 0.5f, 1.f}) {
+                            CAPTURE(leafSize, zero, px + dx, pz + dz);
+                            const Ray ray({px + dx, 1, pz + dz}, {zero, -1, zero});
+                            const auto hit = bvh.raycast(ray);
+                            CHECK(hit);
+                            if (hit) {
+                                CHECK(hit->distance == 1.f);
+                                CHECK(onTriangle(patches.triangle(hit->triangleIndex), hit->point));
+                                ++hits;
+                            }
+                            CHECK(bvh.raycastAny(ray, 2.f));
+                        }
+                    }
+                }
+            }
+            // In the gaps nothing is hit.
+            CAPTURE(leafSize, zero);
+            CHECK_FALSE(bvh.raycast(Ray({2, 1, 0.5f}, {zero, -1, zero})));
+            CHECK_FALSE(bvh.raycastAny(Ray({0.5f, 1, 2}, {zero, -1, zero}), 2.f));
+        }
+        CHECK(hits == 2 * 4 * 9);
     }
 }
 
