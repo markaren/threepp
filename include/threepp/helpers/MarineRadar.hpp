@@ -78,6 +78,7 @@ namespace threepp {
 
         bool started_ = false;
         std::int64_t nextFire_ = 0, nextSpoke_ = 0, tracedUpTo_ = 0;
+        std::int64_t lastNow_ = 0;// the antenna's slot at the last update()
         // The range scale the ring and the picture were laid out for.
         unsigned builtRangeBins_ = 0;
         float builtMinRange_ = 0.f, builtMaxRange_ = 0.f;

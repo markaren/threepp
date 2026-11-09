@@ -14,6 +14,7 @@
 #include "threepp/scenes/Scene.hpp"
 #include "vulkan_test_util.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 
@@ -156,4 +157,32 @@ TEST_CASE("ImagingSonar: new fan geometry re-bakes the ray table at the next pin
     sonar.ping(*r, frame);
     CHECK(sonar.rayCount() == 64u * 2u * 12u);
     CHECK(hitsBeyond(sonar.lastReturns(), 5.f) > 0);
+}
+
+TEST_CASE("MarineRadar: a clock set back by less than a revolution restarts the sweep") {
+    REQUIRE_RT_GPU(r);
+    Scene scene;
+    auto target = box(20.f, 20.f, 20.f);
+    target->position.set(0, 10, -150);
+    scene.add(target);
+    build(*r, scene);
+
+    MarineRadar radar(smallRadar());// one revolution a second
+    radar.position.set(0, 10, 0);
+    radar.updateMatrixWorld();
+
+    // Two episodes of 0.8 s, the clock reset to zero between them.
+    radar.setSimTime(0.0);
+    radar.update(*r);
+    CHECK(runAt(radar, *r, 0.8) > 0u);
+
+    radar.setSimTime(0.0);
+    radar.update(*r);
+    CHECK(runAt(radar, *r, 0.4) > 0u);
+    // The picture is of the second episode: nothing from later than its clock.
+    const auto& image = radar.image();
+    double latest = -1.0;
+    for (const double t : image.time) latest = std::max(latest, t);
+    CHECK(latest >= 0.0);
+    CHECK(latest <= 0.4);
 }

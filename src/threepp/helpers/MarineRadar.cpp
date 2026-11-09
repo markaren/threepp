@@ -4,6 +4,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include <cmath>
+#include <limits>
 
 using namespace threepp;
 
@@ -50,6 +51,7 @@ void MarineRadar::rebuild() {
     // folded into the new ring (the renderer reclaims its scan slot).
     handle_ = -1;
     lastSpokes_.clear();
+    lastNow_ = std::numeric_limits<std::int64_t>::min();
     builtRangeBins_ = model.rangeBins;
     builtMinRange_ = model.minRange;
     builtMaxRange_ = model.maxRange;
@@ -79,14 +81,18 @@ unsigned MarineRadar::update(VulkanRenderer& renderer) {
     const std::int64_t K = synth_->kernelHalfSlots();
     const std::int64_t now = slotNow();
 
-    if (!started_ || now < nextSpoke_ - static_cast<std::int64_t>(spokes)) {
-        // First call, or the clock went back: start the sweep here.
+    if (!started_ || now < lastNow_) {
+        // First call, or the clock went back (by any amount: an episode
+        // reset): start the sweep here. The picture is of a time that has
+        // not happened yet, so it goes too.
         if (handle_ >= 0) collect(renderer);
+        if (started_) image_.reset(image_.spokes, image_.bins, image_.minRange, image_.maxRange);
         started_ = true;
         nextSpoke_ = now;
         nextFire_ = now - K;
         tracedUpTo_ = nextFire_;
     }
+    lastNow_ = now;
 
     if (handle_ >= 0 && (renderer.scanLidarReady(handle_) || ++framesWaiting_ > 3)) collect(renderer);
 
