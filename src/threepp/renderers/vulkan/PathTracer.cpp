@@ -4,11 +4,14 @@
 #include "threepp/renderers/vulkan/ParticleFieldPass.hpp"// OverlayGradeGpu
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
+#include "threepp/renderers/vulkan/shaders/path_trace.comp.photons.spv.h"
 #include "threepp/renderers/vulkan/shaders/path_trace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/path_trace_resolve.comp.spv.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace threepp::vulkan {
@@ -56,7 +59,22 @@ namespace threepp::vulkan {
         };
         static_assert(sizeof(ResolvePush) == 112);
 
-        constexpr uint32_t kNumBindings = 17;// 0-9, then 67-69, 58, 13, 78 and 79
+        constexpr uint32_t kNumBindings = 19;// 0-9, then 67-69, 58, 13, 78, 79, 10 and 11
+
+        // The photon grid's header (path_trace.comp's PhotonGridBuf), ahead of
+        // its buckets' count, start and end arrays.
+        struct PhotonGridHeader {
+            uint32_t stored;
+            uint32_t cursor;
+            uint32_t capacity;
+            uint32_t hashMask;
+            float    radius;
+            float    cellInv;
+            float    powerScale;
+            uint32_t pad;
+        };
+        static_assert(sizeof(PhotonGridHeader) == 32);
+        constexpr VkDeviceSize kPhotonBytes = 32;// path_trace.comp's Photon
 
         VkPipeline makeComputePipeline(VulkanContext& ctx, const uint32_t* spv, size_t bytes,
                                        VkPipelineLayout layout, const char* what) {
@@ -75,9 +93,19 @@ namespace threepp::vulkan {
             cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
             cpci.stage  = stage;
             cpci.layout = layout;
+            // THREEPP_VULKAN_PIPELINE_STATS: the driver's statistics (register
+            // count, spills), past the cache, which keeps none.
+            const bool stats = ctx.pipelineStatsEnabled();
+            if (stats) cpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
             VkPipeline pipe = VK_NULL_HANDLE;
-            check(vkCreateComputePipelines(ctx.device(), ctx.pipelineCache(), 1, &cpci, nullptr, &pipe), what);
+            check(vkCreateComputePipelines(ctx.device(), stats ? VK_NULL_HANDLE : ctx.pipelineCache(), 1, &cpci,
+                                           nullptr, &pipe), what);
             vkDestroyShaderModule(ctx.device(), mod, nullptr);
+            if (stats) {
+                if (const int64_t n = ctx.pipelineStat(pipe, "Register Count"); n >= 0)
+                    std::fprintf(stderr, "[path-trace] %s: %lld registers\n", what, static_cast<long long>(n));
+                ctx.dumpPipelineStats(pipe, what);
+            }
             return pipe;
         }
 
@@ -103,16 +131,24 @@ namespace threepp::vulkan {
         createResolvePipeline();
         createDescriptorPool();
         boundAccum_.assign(framesInFlight_, 0);
+        boundPhotons_.assign(framesInFlight_, 0);
+        for (auto& b : photonStandIn_)
+            b = createBuffer(ctx_.allocator(), ctx_.device(), 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
     }
 
     PathTracer::~PathTracer() {
         VkDevice d = ctx_.device();
         freeRetired(0, /*all=*/true);
         destroyBuffer(ctx_.allocator(), accum_);
+        destroyBuffer(ctx_.allocator(), photonBuf_);
+        destroyBuffer(ctx_.allocator(), photonGrid_);
+        for (auto& b : photonStandIn_) destroyBuffer(ctx_.allocator(), b);
         for (auto s : sets_) forgetDescriptorSet(s);
         if (resolveSet_) forgetDescriptorSet(resolveSet_);
         if (descPool_) vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (pipe_) vkDestroyPipeline(d, pipe_, nullptr);
+        if (pipePhotons_) vkDestroyPipeline(d, pipePhotons_, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_) vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (resolvePipe_) vkDestroyPipeline(d, resolvePipe_, nullptr);
@@ -161,6 +197,8 @@ namespace threepp::vulkan {
         setAt(14, 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // ocean fine-cascade height
         setAt(15, 78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // ocean wake field
         setAt(16, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // its ripples
+        setAt(17, 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);                         // the photons
+        setAt(18, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);                         // their grid
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -224,7 +262,7 @@ namespace threepp::vulkan {
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (4 + kMaxMaterialTextures + 2 * kMaxDensityFields);// env + ocean x3 + bindless + volumes
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[2].descriptorCount = framesInFlight_ * 4 + 2;// materials + geometry + emissive + accumulation; the resolve's two
+        sizes[2].descriptorCount = framesInFlight_ * 6 + 2;// materials + geometry + emissive + accumulation + photons x2; the resolve's two
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;
 
@@ -400,6 +438,29 @@ namespace threepp::vulkan {
         boundAccum_[frame] = accumSerial_;
     }
 
+    void PathTracer::bindPhotons(uint32_t frame) {
+        if (sets_.empty()) return;
+        // photonSerial_ 1 is the stand-ins, until a scene with emitters and
+        // glass allocates the photons.
+        if (boundPhotons_[frame] == photonSerial_) return;
+        const bool             real = photonBuf_.handle != VK_NULL_HANDLE;
+        VkDescriptorBufferInfo info[2]{};
+        info[0].buffer = real ? photonBuf_.handle : photonStandIn_[0].handle;
+        info[1].buffer = real ? photonGrid_.handle : photonStandIn_[1].handle;
+        info[0].range = info[1].range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet w[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet          = sets_[frame];
+            w[i].dstBinding      = 10 + i;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[i].pBufferInfo     = &info[i];
+        }
+        updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+        boundPhotons_[frame] = photonSerial_;
+    }
+
     void PathTracer::freeRetired(uint64_t frameSerial, bool all) {
         for (auto it = retired_.begin(); it != retired_.end();) {
             if (all || frameSerial >= it->second + framesInFlight_ + 1) {
@@ -424,7 +485,8 @@ namespace threepp::vulkan {
         ++seed_;
     }
 
-    void PathTracer::prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial) {
+    void PathTracer::prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial,
+                             bool photons) {
         if (!available() || !active_) return;
         freeRetired(frameSerial, false);
         if (renderWidth == 0 || renderHeight == 0) return;
@@ -451,11 +513,43 @@ namespace threepp::vulkan {
             rowCursor_    = 0;
         }
         bindAccumulator(frame);
+        // The photons: half a photon a pixel each pass (at most a million),
+        // a power of two of buckets at least as many, and the pipeline that
+        // builds and gathers them.
+        if (photons && pipePhotons_ == VK_NULL_HANDLE) {
+            reflPhotons_ = reflectSpirvBindings(kPathTracePhotonsCompSpv);
+            pipePhotons_ = makeComputePipeline(ctx_, kPathTracePhotonsCompSpv, sizeof(kPathTracePhotonsCompSpv),
+                                               pipeLayout_, "vkCreateComputePipelines(path_trace photons)");
+        }
+        photonsWanted_ = photons;
+        if (photons) {
+            const uint32_t cap = std::clamp<uint32_t>(uint32_t((uint64_t(width_) * height_) / 2), 16384u, 1u << 20);
+            if (cap != photonCap_ || photonBuf_.handle == VK_NULL_HANDLE) {
+                if (photonBuf_.handle != VK_NULL_HANDLE) retired_.emplace_back(photonBuf_, frameSerial);
+                if (photonGrid_.handle != VK_NULL_HANDLE) retired_.emplace_back(photonGrid_, frameSerial);
+                uint32_t buckets = 4096;
+                while (buckets < cap) buckets <<= 1;
+                photonBuf_  = createBuffer(ctx_.allocator(), ctx_.device(), VkDeviceSize(cap) * 2 * kPhotonBytes,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+                photonGrid_ = createBuffer(ctx_.allocator(), ctx_.device(),
+                                           sizeof(PhotonGridHeader) + VkDeviceSize(buckets) * 3 * 4,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+                photonCap_     = cap;
+                photonBuckets_ = buckets;
+                ++photonSerial_;
+                photonsLive_ = false;// a pass begun on the old ones gathers nothing more
+            }
+        }
+        bindPhotons(frame);
     }
 
     void PathTracer::declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const {
         if (sets_.empty()) return;
-        declareDescriptorSet(graph, pass, sets_[frame], 0, refl_, rg::kCompute);
+        // The photon variant also writes the photons (bindings 10 and 11),
+        // which the other leaves out of its code.
+        const bool photons = pipePhotons_ != VK_NULL_HANDLE && (photonsWanted_ || photonsLive_);
+        declareDescriptorSet(graph, pass, sets_[frame], 0, photons ? reflPhotons_ : refl_, rg::kCompute);
     }
 
     void PathTracer::recordDispatch(VkCommandBuffer cb, uint32_t frame, const FrameInputs& in) {
@@ -469,7 +563,8 @@ namespace threepp::vulkan {
         pc.maxBounces         = params_.maxBounces;
         // The reset holds for every band of the first pass: each overwrites
         // its own rows once.
-        pc.flags              = (resetPending_ ? 1u : 0u) | (in.sunExtracted ? 2u : 0u) | ((in.lensModel & 3u) << 2);
+        pc.flags              = (resetPending_ ? 1u : 0u) | (in.sunExtracted ? 2u : 0u) | ((in.lensModel & 3u) << 2)
+                              | (in.envSunLastDirLight ? 16u : 0u);
         pc.emissiveCount      = in.emissiveCount;
         pc.emissiveTotalPower = in.emissiveTotalPower;
         pc.envMipCount        = std::max(1u, in.envMipCount);
@@ -499,8 +594,15 @@ namespace threepp::vulkan {
         pc.rows           = rowCursor_ | (rows << 16);
         pc.domeRadius     = params_.domePort;
 
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+        // A pass begins with its photons, in a scene with emitters and glass;
+        // its bands gather them, on the pipeline that holds the photon code.
+        if (rowCursor_ == 0)
+            photonsLive_ = photonsWanted_ && pipePhotons_ != VK_NULL_HANDLE && photonBuf_.handle != VK_NULL_HANDLE &&
+                           in.emissiveCount > 0 && in.emissiveTotalPower > 0.f;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, photonsLive_ ? pipePhotons_ : pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        if (rowCursor_ == 0 && photonsLive_) recordPhotons(cb, in, &pc);
+        if (photonsLive_) pc.flags |= 128u;
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cb, (width_ + 7) / 8, (rows + 7) / 8, 1);
 
@@ -510,6 +612,61 @@ namespace threepp::vulkan {
             resetPending_ = false;
             samples_ += params_.samplesPerFrame;
         }
+    }
+
+    void PathTracer::recordPhotons(VkCommandBuffer cb, const FrameInputs& in, const void* cameraPush) {
+        // The gather radius: two of the picture's pixels at the emitters'
+        // distance in the first pass, shrinking as Knaus and Zwicker's
+        // progressive photon mapping has it, r² by (i + α) / (i + 1) a pass
+        // (α = 2/3): r_i² = r_0² Γ(i + 1 + α) / (Γ(1 + α) Γ(i + 2)).
+        constexpr double kAlpha        = 2.0 / 3.0;
+        constexpr double kRadiusPixels = 2.0;
+        const double pass    = double(samples_ / std::max(1u, params_.samplesPerFrame));
+        const double shrink2 = std::exp(std::lgamma(pass + 1.0 + kAlpha) - std::lgamma(1.0 + kAlpha) -
+                                        std::lgamma(pass + 2.0));
+        const double pixel   = in.photonViewHeight > 0.f ? double(in.photonViewHeight) / std::max(1u, height_) : 0.01;
+        const float  r       = float(std::max(kRadiusPixels * pixel * std::sqrt(shrink2), 1e-5));
+
+        PhotonGridHeader hdr{};
+        hdr.capacity   = photonCap_;
+        hdr.hashMask   = photonBuckets_ - 1u;
+        hdr.radius     = r;
+        hdr.cellInv    = 1.f / (2.f * r);
+        hdr.powerScale = in.emissiveTotalPower / float(photonCap_);
+
+        // The last pass's gathers are done with the grid before it is cleared.
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 1, &mb, 0, nullptr, 0, nullptr);
+        vkCmdUpdateBuffer(cb, photonGrid_.handle, 0, sizeof(hdr), &hdr);
+        vkCmdFillBuffer(cb, photonGrid_.handle, sizeof(hdr), VkDeviceSize(photonBuckets_) * 4, 0u);
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &mb, 0, nullptr, 0, nullptr);
+
+        // Trace (mode 1), allocate the buckets (2), sort (3): each a thread a
+        // photon or bucket, in rows of 1024, each reading what the last wrote.
+        auto step = [&](uint32_t mode, uint32_t count) {
+            PushConstants pc = *static_cast<const PushConstants*>(cameraPush);
+            pc.flags = (pc.flags & ~(3u << 5)) | (mode << 5);
+            pc.rows  = count;
+            vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            const uint32_t threadRows = (count + 1023u) / 1024u;
+            vkCmdDispatch(cb, 128, (threadRows + 7u) / 8u, 1);
+            VkMemoryBarrier b{};
+            b.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 1, &b, 0, nullptr, 0, nullptr);
+        };
+        step(1u, photonCap_);
+        step(2u, photonBuckets_);
+        step(3u, photonCap_);
     }
 
     template<class F>

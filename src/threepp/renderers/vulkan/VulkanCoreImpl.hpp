@@ -1002,6 +1002,11 @@ namespace threepp {
         // envSunExtractionWanted). found=false when no sun / extraction off.
         // updateLightsUbo re-injects it as an analytic directional light.
         vulkan::EnvPrefilter::SunExtract envSun_{};
+        // updateLightsUbo appended envSun_ as the LAST directional light this
+        // frame (the one-sun policy can defer it to the scene's own sun). The
+        // path tracer reads it: that light's disc is still in env mip 0, so a
+        // ray it sends through glass can find it (sun caustics).
+        bool envSunInjected_ = false;
         // The scene's environment/background knobs (SceneEnvKnobs.hpp), as
         // updateLightsUbo last packed them. envSun_ above stays in ENV space;
         // the lights UBO and envSunDirection()/envSunColor() turn and scale it
