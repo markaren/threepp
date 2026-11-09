@@ -1514,6 +1514,114 @@ namespace threepp {
         return true;
     }
 
+    namespace {
+
+        // Copies mip 0 of one layer of a colour image resting in GENERAL to
+        // the host, after draining the device. For the audit readbacks below,
+        // never per frame.
+        std::vector<uint8_t> copyGeneralImageToHost(vulkan::VulkanContext& ctx, VkImage image,
+                                                    uint32_t width, uint32_t height, uint32_t layer,
+                                                    uint32_t bytesPerTexel, const char* label) {
+            // Drain first: the producers rewrite these images in every frame
+            // in flight.
+            vkDeviceWaitIdle(ctx.device());
+
+            const VkDeviceSize bytes = VkDeviceSize(width) * height * bytesPerTexel;
+            vulkan::Buffer staging = vulkan::createBuffer(
+                    ctx.allocator(), ctx.device(), bytes,
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+            VkCommandPoolCreateInfo cpci{};
+            cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            cpci.queueFamilyIndex = ctx.queueFamilies().graphics;
+            VkCommandPool cpool = VK_NULL_HANDLE;
+            vulkan::check(vkCreateCommandPool(ctx.device(), &cpci, nullptr, &cpool), label);
+            VkCommandBufferAllocateInfo cbai{};
+            cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            cbai.commandPool        = cpool;
+            cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            cbai.commandBufferCount = 1;
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            vulkan::check(vkAllocateCommandBuffers(ctx.device(), &cbai, &cb), label);
+            VkCommandBufferBeginInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vulkan::check(vkBeginCommandBuffer(cb, &bi), label);
+
+            // GENERAL may be read by a copy directly. The drain retired the
+            // compute writes (and the mip blits); this barrier makes them
+            // visible to the copy.
+            VkMemoryBarrier mb{};
+            mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+            VkBufferImageCopy region{};
+            region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.baseArrayLayer = layer;
+            region.imageSubresource.layerCount     = 1;
+            region.imageExtent                     = {width, height, 1};
+            vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, staging.handle, 1, &region);
+            vulkan::check(vkEndCommandBuffer(cb), label);
+
+            VkFenceCreateInfo fci{};
+            fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            VkFence fence = VK_NULL_HANDLE;
+            vulkan::check(vkCreateFence(ctx.device(), &fci, nullptr, &fence), label);
+            VkSubmitInfo si{};
+            si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers    = &cb;
+            vulkan::check(vkQueueSubmit(ctx.graphicsQueue(), 1, &si, fence), label);
+            vulkan::check(vkWaitForFences(ctx.device(), 1, &fence, VK_TRUE, UINT64_MAX), label);
+
+            std::vector<uint8_t> out(static_cast<size_t>(bytes));
+            void* mapped = nullptr;
+            vulkan::check(vmaMapMemory(ctx.allocator(), staging.alloc, &mapped), label);
+            vulkan::invalidateHostReads(ctx.allocator(), staging.alloc, 0, bytes);
+            std::memcpy(out.data(), mapped, out.size());
+            vmaUnmapMemory(ctx.allocator(), staging.alloc);
+
+            vkDestroyFence(ctx.device(), fence, nullptr);
+            vkDestroyCommandPool(ctx.device(), cpool, nullptr);
+            vulkan::destroyBuffer(ctx.allocator(), staging);
+            return out;
+        }
+
+        // IEEE 754 binary16 to float.
+        float halfBitsToFloat(uint16_t h) {
+            const uint32_t sign = uint32_t(h >> 15) << 31;
+            const uint32_t expo = (h >> 10) & 0x1fu;
+            uint32_t mant       = h & 0x3ffu;
+            uint32_t bits;
+            if (expo == 0) {
+                if (mant == 0) {
+                    bits = sign;
+                } else {// subnormal: shift until the implicit bit appears
+                    uint32_t e = 0;
+                    while ((mant & 0x400u) == 0) {
+                        mant <<= 1;
+                        ++e;
+                    }
+                    bits = sign | ((113u - e) << 23) | ((mant & 0x3ffu) << 13);
+                }
+            } else if (expo == 31) {
+                bits = sign | 0x7f800000u | (mant << 13);
+            } else {
+                bits = sign | ((expo + 112u) << 23) | (mant << 13);
+            }
+            float f;
+            std::memcpy(&f, &bits, sizeof(f));
+            return f;
+        }
+
+    }// namespace
+
     bool VulkanRenderer::readOceanFoam(const DisplacedMesh& mesh, std::vector<float>& out,
                                        uint32_t& resolution, float& tileSize) {
         auto& impl = *core();
@@ -1522,81 +1630,42 @@ namespace threepp {
         const auto it = impl.displacedStates.find(&mesh);
         if (it == impl.displacedStates.end() || !it->second) return false;
         const auto& st = *it->second;
-        const VkImage image = st.foamImage.image;
-        const uint32_t res  = st.foamRes;
-        if (image == VK_NULL_HANDLE || res == 0) return false;
+        const uint32_t res = st.foamRes;
+        if (st.foamImage.image == VK_NULL_HANDLE || res == 0) return false;
 
-        // Drain first: foam_world rewrites the image in every frame in flight.
-        vkDeviceWaitIdle(ctx->device());
-
-        const VkDeviceSize bytes = VkDeviceSize(res) * res * sizeof(float);
-        vulkan::Buffer staging = vulkan::createBuffer(
-                ctx->allocator(), ctx->device(), bytes,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
-
-        VkCommandPoolCreateInfo cpci{};
-        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
-        VkCommandPool cpool = VK_NULL_HANDLE;
-        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
-                      "vkCreateCommandPool(readOceanFoam)");
-        VkCommandBufferAllocateInfo cbai{};
-        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cbai.commandPool        = cpool;
-        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cbai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
-                      "vkAllocateCommandBuffers(readOceanFoam)");
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readOceanFoam)");
-
-        // The accumulator rests in GENERAL (foam_world's storage image, the
-        // shade's sampler), which a copy may read directly. The drain retired
-        // foam_world's writes; this barrier makes them visible to the copy.
-        VkMemoryBarrier mb{};
-        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 1, &mb, 0, nullptr, 0, nullptr);
-        VkBufferImageCopy region{};
-        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.layerCount = 1;
-        region.imageExtent                 = {res, res, 1};
-        vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, staging.handle, 1, &region);
-        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readOceanFoam)");
-
-        VkFenceCreateInfo fci{};
-        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        VkFence fence = VK_NULL_HANDLE;
-        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence), "vkCreateFence(readOceanFoam)");
-        VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cb;
-        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence), "vkQueueSubmit(readOceanFoam)");
-        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
-                      "vkWaitForFences(readOceanFoam)");
-
+        const auto bytes = copyGeneralImageToHost(*ctx, st.foamImage.image, res, res, 0u, sizeof(float),
+                                                  "readOceanFoam");
         out.resize(static_cast<size_t>(res) * res);
-        void* mapped = nullptr;
-        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped), "vmaMapMemory(readOceanFoam)");
-        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
-        std::memcpy(out.data(), mapped, static_cast<size_t>(bytes));
-        vmaUnmapMemory(ctx->allocator(), staging.alloc);
-
-        vkDestroyFence(ctx->device(), fence, nullptr);
-        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
-        vulkan::destroyBuffer(ctx->allocator(), staging);
+        std::memcpy(out.data(), bytes.data(), bytes.size());
         resolution = res;
         tileSize   = st.foamTileSize;
+        return true;
+    }
+
+    bool VulkanRenderer::readWakeRipples(const DisplacedMesh& mesh, uint32_t patch, std::vector<float>& out,
+                                         uint32_t& resolution, float& period) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx) return false;
+        const auto it = impl.displacedStates.find(&mesh);
+        if (it == impl.displacedStates.end() || !it->second || !it->second->wake) return false;
+        const auto& w = *it->second->wake;
+        if (w.slopeImage == VK_NULL_HANDLE || w.rippleRes == 0 || patch >= w.layers) return false;
+
+        // rgba16f: slope x, slope z, the sum of their squares (alpha unused).
+        const uint32_t n = w.rippleRes;
+        const auto bytes = copyGeneralImageToHost(*ctx, w.slopeImage, n, n, patch, 8u, "readWakeRipples");
+        const size_t texels = static_cast<size_t>(n) * n;
+        out.resize(texels * 3u);
+        for (size_t i = 0; i < texels; ++i) {
+            for (size_t c = 0; c < 3; ++c) {
+                uint16_t h;
+                std::memcpy(&h, bytes.data() + i * 8u + c * 2u, sizeof(h));
+                out[i * 3u + c] = halfBitsToFloat(h);
+            }
+        }
+        resolution = n;
+        period     = w.rippleSize[patch];
         return true;
     }
 

@@ -202,6 +202,22 @@ namespace threepp {
                                          std::vector<float>& out,
                                          uint32_t& resolution, float& tileSize);
 
+        // ── Wake ripple readback (TEST / AUDIT) ──────────────────────────
+        // Copy one wake patch's ripple slopes (wake_ripple.comp, mip 0) to
+        // the host: `out` holds resolution^2 texels of 3 floats (slope x,
+        // slope z, the sum of their squares), row-major, texel (ix, iz) at world
+        // (ix, iz) * period / resolution modulo `period`: the patch's small
+        // sea is periodic and world-anchored, and is shown only through its
+        // ripples' window (DisplacedMesh::WakePatch). Exists so the Kelvin
+        // wake's angle and transverse wavelength can be measured headless
+        // (examples/vulkan/audits/ocean_metrics.cpp --wake).
+        //
+        // DRAINS THE DEVICE. Not a per-frame call. Returns false when the
+        // mesh has no ripples or `patch` is out of range.
+        [[nodiscard]] bool readWakeRipples(const DisplacedMesh& mesh, uint32_t patch,
+                                           std::vector<float>& out,
+                                           uint32_t& resolution, float& period);
+
         // ── Gaussian-splat depth AOV ─────────────────────────────────────
         // A splat cloud is composited by a compute tile rasterizer and is in no
         // acceleration structure, so it writes no G-buffer depth and every
