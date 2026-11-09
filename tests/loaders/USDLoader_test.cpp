@@ -8,10 +8,13 @@
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace threepp;
@@ -274,11 +277,23 @@ def Xform "decal" {
     CHECK_THAT(mat->emissiveIntensity, WithinAbs(2.f, 1e-6f));
 }
 
-TEST_CASE("a UsdPreviewSurface UDIM texture gives each tile's part of a mesh that tile's image", "[usd]") {
-    // As a Blender or Substance export writes it: a UsdUVTexture whose file is a UDIM set.
-    // LightUSD resolves the texture's image to the set's first tile (1001), so every part
-    // drew 1001's image unless the tile is looked up in the set's own list.
-    const std::string preview = R"(#usda 1.0
+namespace {
+
+    // As a Blender or Substance export writes it: a UsdPreviewSurface whose UsdUVTexture
+    // file is a UDIM set, on one triangle per entry of `tiles`, the (u, v) tile its UVs lie in.
+    std::string udimPreviewStage(const std::vector<std::pair<int, int>>& tiles) {
+        std::ostringstream counts, indices, points, st;
+        for (size_t i = 0; i < tiles.size(); ++i) {
+            const auto [u, v] = tiles[i];
+            const auto x = 2 * i;
+            const char* sep = i ? ", " : "";
+            counts << sep << 3;
+            indices << sep << 3 * i << ", " << 3 * i + 1 << ", " << 3 * i + 2;
+            points << sep << "(" << x << ", 0, 0), (" << x + 1 << ", 0, 0), (" << x << ", 1, 0)";
+            st << sep << "(" << u + 0.1 << ", " << v + 0.1 << "), (" << u + 0.9 << ", " << v + 0.1
+               << "), (" << u + 0.1 << ", " << v + 0.9 << ")";
+        }
+        return R"(#usda 1.0
 (
     defaultPrim = "crate"
     metersPerUnit = 1
@@ -289,10 +304,10 @@ def Xform "crate" {
     def Mesh "mesh" (
         prepend apiSchemas = ["MaterialBindingAPI"]
     ) {
-        int[] faceVertexCounts = [3, 3]
-        int[] faceVertexIndices = [0, 1, 2, 3, 4, 5]
-        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (2, 0, 0), (3, 0, 0), (2, 1, 0)]
-        texCoord2f[] primvars:st = [(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (1.1, 0.1), (1.9, 0.1), (1.1, 0.9)] (
+        int[] faceVertexCounts = [)" + counts.str() + R"(]
+        int[] faceVertexIndices = [)" + indices.str() + R"(]
+        point3f[] points = [)" + points.str() + R"(]
+        texCoord2f[] primvars:st = [)" + st.str() + R"(] (
             interpolation = "vertex"
         )
         rel material:binding = </crate/Looks/Crate>
@@ -324,9 +339,30 @@ def Xform "crate" {
     }
 }
 )";
+    }
+
+    // The name of each mesh's map in a loaded stage, "" for a mesh with none, sorted.
+    std::vector<std::string> mapNames(Object3D& scene) {
+        std::vector<std::string> names;
+        scene.traverse([&](Object3D& o) {
+            auto* mesh = o.as<Mesh>();
+            if (!mesh) return;
+            const auto mat = std::dynamic_pointer_cast<MeshStandardMaterial>(mesh->material());
+            REQUIRE(mat);
+            names.push_back(mat->map ? mat->map->name : "");
+        });
+        std::sort(names.begin(), names.end());
+        return names;
+    }
+
+}// namespace
+
+TEST_CASE("a UsdPreviewSurface UDIM texture gives each tile's part of a mesh that tile's image", "[usd]") {
+    // LightUSD resolves the texture's image to the set's first tile (1001), so every part
+    // drew 1001's image unless the tile is looked up in the set's own list.
     const auto dir = std::filesystem::temp_directory_path() / "usd_udim_preview";
     std::filesystem::remove_all(dir);
-    write(dir / "crate.usda", preview);
+    write(dir / "crate.usda", udimPreviewStage({{0, 0}, {1, 0}}));
     for (const char* t : {"Crate_Albedo.1001", "Crate_Albedo.1002"}) {
         writePng(dir / "textures" / (std::string(t) + ".png"));
     }
@@ -334,19 +370,24 @@ def Xform "crate" {
     USDLoader loader;
     const auto scene = loader.load(dir / "crate.usda");
     REQUIRE(scene);
-    std::vector<Mesh*> meshes;
-    scene->traverse([&](Object3D& o) {
-        if (auto* mesh = o.as<Mesh>()) meshes.push_back(mesh);
-    });
-    REQUIRE(meshes.size() == 2);
-    std::set<std::string> textures;
-    for (auto* mesh : meshes) {
-        const auto mat = std::dynamic_pointer_cast<MeshStandardMaterial>(mesh->material());
-        REQUIRE(mat);
-        REQUIRE(mat->map);
-        textures.insert(mat->map->name);
+    CHECK(mapNames(*scene) == std::vector<std::string>{"Crate_Albedo.1001", "Crate_Albedo.1002"});
+}
+
+TEST_CASE("a UDIM tile LightUSD's set lacks is looked for by the authored path", "[usd]") {
+    // LightUSD 1.0.0 looks only for tiles 1001 to 1100, so a second row of tiles (1101 on)
+    // is not in its set; the loader finds that tile beside the stage. A tile that is on
+    // disk under neither gives no map.
+    const auto dir = std::filesystem::temp_directory_path() / "usd_udim_outside_set";
+    std::filesystem::remove_all(dir);
+    write(dir / "crate.usda", udimPreviewStage({{0, 0}, {0, 10}, {1, 0}}));
+    for (const char* t : {"Crate_Albedo.1001", "Crate_Albedo.1101"}) {
+        writePng(dir / "textures" / (std::string(t) + ".png"));
     }
-    CHECK(textures == std::set<std::string>{"Crate_Albedo.1001", "Crate_Albedo.1002"});
+
+    USDLoader loader;
+    const auto scene = loader.load(dir / "crate.usda");
+    REQUIRE(scene);
+    CHECK(mapNames(*scene) == std::vector<std::string>{"", "Crate_Albedo.1001", "Crate_Albedo.1101"});
 }
 
 TEST_CASE("OmniPBR's texture_scale, translate and rotate place its maps, which repeat", "[usd]") {

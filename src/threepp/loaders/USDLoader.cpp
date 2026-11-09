@@ -1007,16 +1007,15 @@ namespace threepp {
             // A UDIM set LightUSD found the tiles of: its image is the first tile
             // (1001), a concrete path with nothing left to substitute, so the tile
             // the material is for comes from the set's own list. A tile the set
-            // lacks gives no map.
+            // lacks leaves `resolved` empty and loadImage looks for it by the
+            // authored path: LightUSD scans only 1001..1100 and skips a tile its
+            // resolver cannot find, so a tile it lacks may still be on disk.
             const bool udimSet = rt.udim_texture_id >= 0 && static_cast<size_t>(rt.udim_texture_id) < b.scene.udim_textures.size();
-            bool missingTile = false;
             if (udimSet) {
-                missingTile = true;
                 for (const auto& tile : b.scene.udim_textures[rt.udim_texture_id].tiles) {
                     if (static_cast<int>(tile.udim) != b.udimTile) continue;
                     if (tile.image_id >= 0 && static_cast<size_t>(tile.image_id) < b.scene.images.size()) {
                         resolved = b.scene.images[tile.image_id].resolved_path;
-                        missingTile = false;
                     }
                     break;
                 }
@@ -1032,7 +1031,6 @@ namespace threepp {
                 if (b.textureDone[texId]) return b.textures[texId];
                 b.textureDone[texId] = true;
             }
-            if (missingTile) return nullptr;
 
             // Every material instance carries its own RenderTexture records;
             // uses that sample one image the same way share one texture
