@@ -142,7 +142,9 @@ void MarineRadar::fire(VulkanRenderer& renderer, std::int64_t upTo) {
     beginScan();
     if (!parent) updateMatrixWorld();
     getWorldPosition(pendingOrigin_);
-    pendingRotation_.setFromMatrix4(*matrixWorld);
+    // The rotation alone: it is inverted by transposing below, which a scaled
+    // parent would turn into a scale of the vertical pattern's argument.
+    pendingRotation_.setFromMatrix4(Matrix4().extractRotation(*matrixWorld));
     Vector3 fwd(0.f, 0.f, -1.f);
     fwd.applyMatrix3(pendingRotation_);
     heading_ = static_cast<float>(std::atan2(static_cast<double>(fwd.x), -static_cast<double>(fwd.z)) * 180.0 /

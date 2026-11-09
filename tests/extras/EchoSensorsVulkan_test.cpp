@@ -186,3 +186,94 @@ TEST_CASE("MarineRadar: a clock set back by less than a revolution restarts the 
     CHECK(latest >= 0.0);
     CHECK(latest <= 0.4);
 }
+
+namespace {
+
+    // The strongest echo's bearing (deg) in a frame.
+    float peakBearing(const SonarFrame& f) {
+        const auto peak = static_cast<std::size_t>(std::max_element(f.levelDb.begin(), f.levelDb.end()) -
+                                                   f.levelDb.begin());
+        return f.bearingsDeg[peak / f.bins];
+    }
+
+    // The strongest SNR (dB) of the picture between two ranges.
+    float peakSnrBetween(const RadarPolarImage& img, float r0, float r1) {
+        float best = -1e9f;
+        const float binW = (img.maxRange - img.minRange) / static_cast<float>(img.bins);
+        for (unsigned s = 0; s < img.spokes; ++s) {
+            if (img.time[s] < 0.0) continue;
+            for (unsigned j = 0; j < img.bins; ++j) {
+                const float R = img.minRange + (static_cast<float>(j) + 0.5f) * binW;
+                if (R < r0 || R > r1) continue;
+                best = std::max(best, img.snrDb[static_cast<std::size_t>(s) * img.bins + j]);
+            }
+        }
+        return best;
+    }
+
+}// namespace
+
+TEST_CASE("ImagingSonar: a scaled parent does not pull the fan toward broadside") {
+    REQUIRE_RT_GPU(r);
+    Scene scene;
+    // 20 deg to starboard, 10 m out.
+    auto target = box(1.f, 4.f, 1.f);
+    target->position.set(static_cast<float>(10.0 * std::sin(20.0 * kDeg)), 0.f,
+                         static_cast<float>(-10.0 * std::cos(20.0 * kDeg)));
+    scene.add(target);
+    build(*r, scene);
+
+    SonarFrame plain, scaled;
+    ImagingSonar level(smallSonar());
+    level.updateMatrixWorld();
+    level.ping(*r, plain);
+
+    // The same sonar, at the same place, under a centimetre root.
+    auto root = std::make_shared<Object3D>();
+    root->scale.setScalar(0.01f);
+    auto sonar = std::make_shared<ImagingSonar>(smallSonar());
+    root->add(sonar);
+    root->updateMatrixWorld(true);
+    sonar->ping(*r, scaled);
+
+    INFO("unscaled peak at " << peakBearing(plain) << " deg, scaled at " << peakBearing(scaled) << " deg");
+    CHECK(std::abs(peakBearing(plain) - 20.f) < 3.f);
+    CHECK(std::abs(peakBearing(scaled) - peakBearing(plain)) < 0.5f);
+}
+
+TEST_CASE("MarineRadar: a scaled parent does not widen the vertical beam") {
+    REQUIRE_RT_GPU(r);
+    Scene scene;
+    // Dead ahead, 100 m out and 16 deg up: on the vertical pattern's skirt.
+    auto target = box(20.f, 10.f, 20.f);
+    target->position.set(0.f, static_cast<float>(10.0 + 100.0 * std::tan(16.0 * kDeg)), -100.f);
+    scene.add(target);
+    build(*r, scene);
+
+    auto model = smallRadar();
+    model.horizonShare = 0.f;// every ray spread evenly over the vertical fan
+    model.aboveHorizonShare = 0.f;
+
+    MarineRadar level(model);
+    level.position.set(0, 10, 0);
+    level.updateMatrixWorld();
+    level.setSimTime(0.0);
+    level.update(*r);
+    runAt(level, *r, 0.99);
+
+    auto root = std::make_shared<Object3D>();
+    root->scale.setScalar(0.01f);
+    auto radar = std::make_shared<MarineRadar>(model);
+    radar->position.set(0, 1000, 0);// 10 m in the world
+    root->add(radar);
+    root->updateMatrixWorld(true);
+    radar->setSimTime(0.0);
+    radar->update(*r);
+    runAt(*radar, *r, 0.99);
+
+    const float a = peakSnrBetween(level.image(), 80.f, 120.f);
+    const float b = peakSnrBetween(radar->image(), 80.f, 120.f);
+    INFO("target SNR " << a << " dB unscaled, " << b << " dB under the scaled root");
+    CHECK(a > 10.f);
+    CHECK(std::abs(a - b) < 0.5f);
+}

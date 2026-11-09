@@ -266,7 +266,8 @@ namespace threepp {
         /**
          * Fold one ping. `returns` holds one return per ray in rayDirections()
          * order, traced from `origin` with the directions rotated by
-         * `worldFromSensor`. `pingKey` seeds the noise and reverberation.
+         * `worldFromSensor`, a rotation (no scale: it is inverted by
+         * transposing). `pingKey` seeds the noise and reverberation.
          * `threads` 0 = hardware concurrency (capped at 8).
          */
         void synthesize(const ImagingSonarModel& model, const AcousticMaterials& materials,

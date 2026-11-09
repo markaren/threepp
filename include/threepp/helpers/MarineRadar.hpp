@@ -88,7 +88,7 @@ namespace threepp {
         std::int64_t pendingFirst_ = 0;
         unsigned pendingCount_ = 0;
         Vector3 pendingOrigin_;
-        Matrix3 pendingRotation_;// world from the antenna
+        Matrix3 pendingRotation_;// world from the antenna, rotation only
         Matrix3 pendingLevel_;   // world from the antenna's level frame (its heading only)
         Matrix3 pendingTilt_;    // the antenna from its level frame: its pitch and roll
         std::vector<Vector3> pendingDirs_;

@@ -102,7 +102,7 @@ namespace threepp {
         std::vector<LidarBeam> beams_;
         std::vector<LidarReturn> returns_;
         Vector3 origin_;
-        Matrix3 rotation_;
+        Matrix3 rotation_;// world from the sensor, rotation only
         std::uint64_t pingKey_ = 0;
         std::uint64_t pings_ = 0;
         int handle_ = -1;

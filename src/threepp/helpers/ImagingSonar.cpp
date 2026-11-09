@@ -74,7 +74,9 @@ void ImagingSonar::pingBegin(VulkanRenderer& renderer) {
 
     if (!parent) updateMatrixWorld();
     getWorldPosition(origin_);
-    rotation_.setFromMatrix4(*matrixWorld);
+    // The rotation alone: the synthesizer inverts it by transposing, which a
+    // scaled parent (a centimetre glTF root) would turn into a scale of u.
+    rotation_.setFromMatrix4(Matrix4().extractRotation(*matrixWorld));
 
     const auto& dirs = synth_->rayDirections();
     beams_.resize(dirs.size());
