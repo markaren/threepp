@@ -495,10 +495,22 @@ float glassTransmittanceImpl(vec3 origin, vec3 dir, float tMax, bool solidsBlock
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
     float T = 1.0;
+    // The faces counted so far, (instance, geometry, primitive): no BLAS sets
+    // NO_DUPLICATE_ANY_HIT, so a driver may hand the same triangle over twice,
+    // and the product would take its face in twice. Past eight, unchecked.
+    uvec3 seen[8];
+    uint  nSeen = 0u;
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
         const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
         if (m.transmission <= 0.0 || m.transmission > 1.0) continue;// not glass: additive
+        const uvec3 key = uvec3(uint(rayQueryGetIntersectionInstanceIdEXT(rq, false)),
+                                uint(rayQueryGetIntersectionGeometryIndexEXT(rq, false)),
+                                uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
+        bool dup = false;
+        for (uint k = 0u; k < nSeen; ++k) dup = dup || seen[k] == key;
+        if (dup) continue;
+        if (nSeen < 8u) seen[nSeen++] = key;
         if (m.ior < 0.5) {// a flat blend (ior 0)
             if (!thinGlassNeeOwns()) continue;
             T *= clamp(m.transmission, 0.0, 1.0);
