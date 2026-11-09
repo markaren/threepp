@@ -51,7 +51,7 @@ void SpotLight::copy(const Object3D& source, bool recursive) {
         this->radius = l->radius;
 
         shadow->copy(*l->shadow);
-        copyTarget(*l);
+        copyTarget(*l, source, *this, recursive);
     }
 }
 
