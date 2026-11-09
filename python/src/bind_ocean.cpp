@@ -195,6 +195,9 @@ namespace threepp_py {
                 .def_readwrite("forward_speed", &DisplacedMesh::VesselWake::forwardSpeed,
                                "m/s along +heading. The whole wake fades out below ~0.5 m/s; 0 disables it.")
                 .def_readwrite("enabled", &DisplacedMesh::VesselWake::enabled)
+                .def_readwrite("analytic_waves", &DisplacedMesh::VesselWake::analyticWaves,
+                               "Its bow bump, V-wedge and V-ridge foam (the default). False for a vessel whose "
+                               "waves the wake field makes (a VesselWash with ripples); the stern foam trail stays.")
                 .def_readwrite("trail", &DisplacedMesh::VesselWake::trail,
                                "Historical pose snapshots (list of WakeSample). Reading COPIES and "
                                "writing REPLACES — mutating the returned list does not write through. "
@@ -283,6 +286,10 @@ namespace threepp_py {
                                "m2/s: a ripple of wavenumber k also dies at 2 nu k^2, the shortest first.")
                 .def_readwrite("ripple_gain", &DisplacedMesh::WakeField::rippleGain,
                                "Scales the slope the water shade reads; 1 = what linear theory gives.")
+                .def_readwrite("ripple_heights", &DisplacedMesh::WakeField::rippleHeights,
+                               "The ripples' height is part of the ocean's geometry, and an absorbing layer at "
+                               "each window's edge takes up the waves that reach it instead of the forced decay. "
+                               "Off by default (THREEPP_WAKE_HEIGHTS=1 turns it on). Live.")
                 .def_readwrite("albedo", &DisplacedMesh::WakeField::albedo,
                                "Scales the light the film and the bubbles turn back; 1 = as the water shade "
                                "has them (the default). Read every frame. A scene whose camera opens wide at "

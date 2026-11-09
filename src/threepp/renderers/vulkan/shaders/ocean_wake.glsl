@@ -45,7 +45,7 @@ struct WakeSource {
     float push;         // N it bears down on the water with (the ripples' forcing)
     vec2  axis;         // the push is a line that reaches this far to either side of the point
     int   owner;        // the patch whose ripples it forces (the CPU has resolved a -1)
-    float _pad;
+    float taper;        // the line convolved with one of taper x its half length (0 = none)
 };
 
 // 64-byte header, then the patches, then the sources of this step.

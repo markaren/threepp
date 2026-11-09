@@ -304,7 +304,7 @@ namespace threepp {
     bool DisplacedMesh::defaultRippleHeights() {
         static const bool on = [] {
             const char* v = std::getenv("THREEPP_WAKE_HEIGHTS");
-            return !(v && v[0] == '0' && v[1] == '\0');
+            return v && v[0] == '1' && v[1] == '\0';
         }();
         return on;
     }

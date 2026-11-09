@@ -6,7 +6,6 @@
 #extension GL_GOOGLE_include_directive                  : enable
 
 #include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break), sampleBicubicRG
-#include "ocean_wake.glsl"   // the wake field's table: its ripple windows
 
 // Writes displaced positions and normals for an FFT-driven ocean surface
 // directly into the BLAS vertex/normal buffers (host-mapped, same memory
@@ -41,7 +40,10 @@ layout(set = 0, binding = 5) uniform sampler2D displace2;
 // The wake field's ripples, a layer a patch (WakeFieldPipeline): .a is the
 // height of its waves where the patch has rippleHeight on. The 1x1 stand-in
 // when the ocean has no ripples (then wakeTableAddr is 0 and it is not read).
-layout(set = 0, binding = 6) uniform sampler2DArray wakeRipples;
+// (WaterDisplacePipeline::kRippleBinding; 6-9 are left to other inputs.)
+layout(set = 0, binding = 10) uniform sampler2DArray wakeRipples;
+#define OCEAN_WAKE_SAMPLER wakeRipples// (oceanWakeBicubic's B-spline taps)
+#include "ocean_wake.glsl"            // the wake field's table: its ripple windows
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
@@ -62,7 +64,7 @@ struct WakeSample {
 layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
-// 104 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants.
+// 112 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants.
 // The vessels live in a per-frame buffer (hullAddr), not here: one hull alone
 // used to fill this block to the 128-byte maximum.
 layout(push_constant, scalar) uniform Pc {
@@ -87,17 +89,25 @@ layout(push_constant, scalar) uniform Pc {
     float   warpCoefA;
     uint    hullCount;      // active vessels; 0 = no hull exclusion, no wake
     uint64_t wakeTableAddr; // the wake field's table; 0 = no ripple heights
+    uint    rtStride;       // grid lines the ray-tracing proxy keeps one of (1 = all)
+    uint    _pad;
 } pc;
 
 // The height of the waves the wake field's ripples hold (m), at a rest XZ,
 // added over the patches whose rippleHeight is on, each through its ripple
 // window with the same outer fade the shade gives its slopes
 // (oceanWakeRipples), so geometry and shading show one sea. Read from the
-// mip whose texel is the mesh's own spacing here: the box mips hold no wave
-// shorter than two of their texels, so the mesh is never handed a wave it
-// cannot carry (a shorter one would alias into a coarser false pattern). The
-// shade still adds the ripples' full slope per pixel, and the vertex normal
-// holds none of it, so the slope the mesh carries is counted once.
+// mip whose texel is the spacing of the ray-tracing proxy here (the caller's
+// `spacing`, the grid's times rtStride): the box mips hold no wave shorter
+// than two of their texels, so neither the drawn mesh nor the coarser traced
+// one is handed a wave it cannot carry (a shorter one would alias into a
+// coarser false pattern), and both carry the same waves. Where that spacing
+// is under two texels (lod < 1) the taps are a cubic B-spline over mip 0
+// (oceanWakeBicubic), whose slope is continuous where bilinear's breaks at
+// every texel, blended into mip 1 as the lod nears 1 so the two meet without
+// a seam. The shade still adds the ripples' full slope per pixel, and the
+// vertex normal holds none of it, so the slope the mesh carries is counted
+// once.
 float wakeRippleHeight(vec2 xz, float spacing) {
     WakeTable tb = WakeTable(pc.wakeTableAddr);
     if (tb.rippleRes == 0u) return 0.0;
@@ -112,7 +122,14 @@ float wakeRippleHeight(vec2 xz, float spacing) {
         const vec2  e    = min(uv, 1.0 - uv);
         const float edge = smoothstep(0.0, 0.10, min(e.x, e.y));
         const float lod  = max(log2(spacing * res / p.rippleSize), 0.0);
-        h += edge * textureLod(wakeRipples, vec3(xz / p.rippleSize + 0.5 / res, float(k)), lod).a;
+        const vec2  tuv  = xz / p.rippleSize + 0.5 / res;
+        float a;
+        if (lod < 1.0) {
+            a = mix(oceanWakeBicubic(tuv, float(k), res).a, textureLod(wakeRipples, vec3(tuv, float(k)), 1.0).a, lod);
+        } else {
+            a = textureLod(wakeRipples, vec3(tuv, float(k)), lod).a;
+        }
+        h += edge * a;
     }
     return h;
 }
@@ -457,7 +474,8 @@ void main() {
 
     // === The wake field's waves ===
     // Their height (wakeRippleHeight), gone inside every footprint as the
-    // analytic wake is. The mesh's spacing here is the warp's derivative.
+    // analytic wake is. The mesh's spacing here is the warp's derivative,
+    // times the ray-tracing proxy's stride.
     if (pc.wakeTableAddr != 0ul) {
         float spX = pc.planeSizeX / float(pc.gridDimX - 1u);
         float spZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
@@ -470,7 +488,7 @@ void main() {
         }
         float fade = 1.0;
         for (uint k = 0u; k < pc.hullCount; ++k) fade *= hullLocal(hulls.h[k], rest.xz).z;
-        if (fade > 0.0) disp.y += fade * wakeRippleHeight(rest.xz, max(spX, spZ));
+        if (fade > 0.0) disp.y += fade * wakeRippleHeight(rest.xz, max(spX, spZ) * float(max(pc.rtStride, 1u)));
     }
 
     const vec3 outPos = rest + disp;

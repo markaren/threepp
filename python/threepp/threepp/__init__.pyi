@@ -2125,6 +2125,14 @@ class DisplacedMesh(Mesh):
     class VesselWake:
         enabled: bool
         @property
+        def analytic_waves(self) -> bool:
+            """
+            Its bow bump, V-wedge and V-ridge foam (the default). False for a vessel whose waves the wake field makes (a VesselWash with ripples); the stern foam trail stays.
+            """
+        @analytic_waves.setter
+        def analytic_waves(self, arg0: bool) -> None:
+            ...
+        @property
         def forward_speed(self) -> float:
             """
             m/s along +heading. The whole wake fades out below ~0.5 m/s; 0 disables it.
@@ -2215,6 +2223,14 @@ class DisplacedMesh(Mesh):
             """
         @ripple_gain.setter
         def ripple_gain(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_heights(self) -> bool:
+            """
+            The ripples' height is part of the ocean's geometry, and an absorbing layer at each window's edge takes up the waves that reach it instead of the forced decay. Off by default (THREEPP_WAKE_HEIGHTS=1 turns it on). Live.
+            """
+        @ripple_heights.setter
+        def ripple_heights(self, arg0: bool) -> None:
             ...
         @property
         def ripple_life(self) -> float:

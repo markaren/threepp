@@ -9,8 +9,8 @@
 
 namespace threepp::vulkan {
 
-    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 104,
-                  "WaterDisplacePipeline::PushConstants must match water_displace.comp's Pc layout (104 bytes)");
+    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 112,
+                  "WaterDisplacePipeline::PushConstants must match water_displace.comp's Pc layout (112 bytes)");
 
     WaterDisplacePipeline::WaterDisplacePipeline(VulkanContext& ctx)
         : ctx_(ctx) {
@@ -28,10 +28,11 @@ namespace threepp::vulkan {
 
     void WaterDisplacePipeline::createPipeline() {
         // 7 combined-image-sampler bindings — three (height, displacement)
-        // cascade pairs, then the wake field's ripples (an array, a layer a patch).
+        // cascade pairs at 0-5, then the wake field's ripples (an array, a
+        // layer a patch) at kRippleBinding.
         std::array<VkDescriptorSetLayoutBinding, 7> bb{};
         for (uint32_t i = 0; i < bb.size(); ++i) {
-            bb[i].binding         = i;
+            bb[i].binding         = i < 6u ? i : kRippleBinding;
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bb[i].descriptorCount = 1;
             bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -85,7 +86,7 @@ namespace threepp::vulkan {
         // destroyed; bump kMaxOceans if scenes ever exceed it.
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps.descriptorCount = 7 * kMaxOceans;
+        ps.descriptorCount = static_cast<uint32_t>(bb.size()) * kMaxOceans;// every binding of the layout, a set an ocean
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = kMaxOceans;

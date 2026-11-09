@@ -300,7 +300,8 @@ namespace threepp {
         // the renderer first sees the mesh; the other knobs are live.
         static constexpr uint32_t kMaxWakePatches = 8;
         static constexpr uint32_t kMaxWakeSources = 256;
-        // THREEPP_WAKE_HEIGHTS from the environment, read once: "0" = false.
+        // THREEPP_WAKE_HEIGHTS from the environment, read once: "1" = true,
+        // anything else or unset = false.
         static bool defaultRippleHeights();
         struct WakeField {
             uint32_t resolution = 0;              // texels a side per patch; 0 = off (latched)
@@ -334,8 +335,9 @@ namespace threepp {
             // wave being made to die before it can wrap round the window, so a
             // wake keeps its transverse waves. false = slopes only, every wave
             // decaying at the window's crossing rate (the model before
-            // 2026-11). The default is the environment's THREEPP_WAKE_HEIGHTS,
-            // read once (0 = false); unset = true. Live.
+            // 2026-11). Off by default until it is judged: the environment's
+            // THREEPP_WAKE_HEIGHTS=1 (read once) or this field turns it on.
+            // Live.
             bool  rippleHeights   = defaultRippleHeights();
             // Scales the light the film and the bubbles turn back (their albedo);
             // 1 = as the water shade has them. A scene whose camera opens wide
@@ -380,7 +382,11 @@ namespace threepp {
             // The patch whose ripples it forces; -1 = the first that holds it.
             // (The other quantities go into every patch the source lies in.)
             int32_t patch    = -1;
-            float _pad       = 0.f;
+            // The push's line ends gently: it is the line above (half length
+            // a) convolved with one of half length t = taper x a along it, a
+            // trapezoid, full where |s| < a - t and nothing past a + t.
+            // 0 = the line ends as a step, rounded only by the gaussian.
+            float taper      = 0.f;
         };
         std::vector<WakeSource> wakeSources;
 

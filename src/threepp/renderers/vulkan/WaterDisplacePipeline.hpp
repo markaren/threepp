@@ -48,13 +48,16 @@ namespace threepp::vulkan {
 
     public:
         // Max simultaneous DisplacedMesh instances. Each set holds 7
-        // combined-image-samplers (3 cascades × 2 images, and binding 6: the
-        // wake field's ripples, or its 1x1 stand-in).
+        // combined-image-samplers (3 cascades × 2 images at bindings 0-5, and
+        // kRippleBinding: the wake field's ripples, or its 1x1 stand-in).
         static constexpr uint32_t kMaxOceans = 16;
+        // water_displace.comp's binding of the wake field's ripples (6-9 are
+        // left to other ocean inputs).
+        static constexpr uint32_t kRippleBinding = 10;
 
-        // Must match water_displace.comp's `Pc` struct (104 bytes):
+        // Must match water_displace.comp's `Pc` struct (112 bytes):
         // 4 × VkDeviceAddress (32) + 16 × u32/float (64) + the wake table's
-        // address (8). The vessels live in
+        // address (8) + the RT proxy's stride and a pad (8). The vessels live in
         // a per-frame buffer (hullAddr → OceanHullGpu[hullCount]); one hull
         // alone used to fill this block to the 128-byte maximum.
         struct PushConstants {
@@ -80,8 +83,14 @@ namespace threepp::vulkan {
             uint32_t        hullCount;     // active vessels (0 = none)
             // The ocean's wake-field table (WakeFieldPipeline::State::tableAddress),
             // whose patches with rippleHeight on add their waves' height
-            // from binding 6; 0 = none (the geometry is exactly the old one).
+            // from kRippleBinding; 0 = none (the geometry is exactly the old one).
             VkDeviceAddress wakeTableAddr;
+            // Grid lines the ray-tracing proxy keeps one of (DisplacedMesh::
+            // rtProxyCells; 1 = every line): the ripples' height is read at the
+            // proxy's spacing, so the traced and the drawn surface carry the
+            // same waves.
+            uint32_t        rtStride;
+            uint32_t        _pad;
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

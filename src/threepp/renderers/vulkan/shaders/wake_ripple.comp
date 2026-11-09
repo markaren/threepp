@@ -30,7 +30,8 @@
 //
 //   0 TURN    a <- a e^(-i omega dt) + the step's forcing, in place; then
 //             what is not a weight's still dent decays. A source is a force W over a gaussian of its radius,
-//             drawn out to a line (its axis), that moved from p0 to p1 in the
+//             drawn out to a line (its axis; with a taper, a trapezoid
+//             along it, so the line ends gently), that moved from p0 to p1 in the
 //             step: the forcing is integrated over that move exactly,
 //                 -i c omega dt sinc(theta / 2) e^(-i (omega dt / 2 + k . pm))
 //             with c = W shape(k) / (rho g L^2), pm the midpoint and
@@ -116,8 +117,11 @@ void main() {
         // window, and how many texels it lies inside the window's nearest edge.
         const vec2  u    = fract((vec2(id) * (p.rippleSize / float(N)) - vec2(p.rippleOriginX, p.rippleOriginZ)) / p.rippleSize);
         const vec2  e    = min(u, 1.0 - u) * float(N);
-        const float band = max(22.0, 0.08 * float(N));
-        const float sg   = smoothstep(band, 0.0, min(e.x, e.y));
+        // 22 cells (tidewater's), 8% of the window from 512 up, and never
+        // more than a tenth of it: a vessel a fifth inside the window's
+        // leading edge keeps her bow out of the layer at every resolution
+        const float band = min(max(22.0, 0.08 * float(N)), 0.1 * float(N));
+        const float sg   = 1.0 - smoothstep(0.0, band, min(e.x, e.y));
         f *= exp(-6.0 * sg * sg * tb.dt);
         imageStore(workImg, id, vec4(alt * vec2(f.x, -f.y), 0.0, 0.0));
         return;
@@ -153,6 +157,11 @@ void main() {
             float shape = exp(-0.25 * kl * kl * r * r);
             const float ka = dot(k, sc.axis);
             if (abs(ka) > 1e-3) shape *= sin(ka) / ka;
+            // a line whose ends fall off gently: convolved with a second box
+            // along it, taper x as long (a trapezoid), whose transform is a
+            // second sinc
+            const float kt = ka * sc.taper;
+            if (abs(kt) > 1e-3) shape *= sin(kt) / kt;
             const float c = sc.push * shape / (RHO * G * L * L);
             if (abs(c) < 1e-12) continue;
             const float ps = -dot(k, sc.p1);

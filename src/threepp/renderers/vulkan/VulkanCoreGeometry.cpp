@@ -3757,6 +3757,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
                 pc.wakeTableAddr = st.wake->tableAddress();
+                pc.rtStride      = st.rtStride;
             }
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
@@ -4978,10 +4979,12 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // grid costs 5.0 ms, a 512-cell grid's 0.36 ms — the cost is not
             // linear in the triangle count, the full grid sits past a cliff.
             std::vector<uint32_t> rtIndices;
+            uint32_t rtStride = 1;
             if (dm.rtProxyCells > 0u) {
                 const uint32_t cellsX = gridDimX - 1u, cellsZ = gridDimZ - 1u;
                 const uint32_t stride = (std::max(cellsX, cellsZ) + dm.rtProxyCells - 1u) / dm.rtProxyCells;
                 if (stride > 1u) {
+                    rtStride = stride;
                     auto lines = [stride](uint32_t n) {
                         std::vector<uint32_t> l;
                         for (uint32_t i = 0; i + 1u < n; i += stride) l.push_back(i);
@@ -5026,6 +5029,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->vertexCount = vertexCount;
             state->gridDimX = gridDimX;
             state->gridDimZ = gridDimZ;
+            state->rtStride = rtStride;
             state->planeSizeX = planeSizeX;
             state->planeSizeZ = planeSizeZ;
             state->liveCheck = dm.geometry();
@@ -5419,8 +5423,8 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 oceanWakeView = state->wake->stateView();
                 if (state->wake->rippleView() != VK_NULL_HANDLE) oceanRippleView = state->wake->rippleView();
             }
-            // Binding 6 of the displace set: the ripples whose height the
-            // geometry takes, or the 1x1 stand-in (never read then).
+            // The ripples whose height the geometry takes, or the 1x1
+            // stand-in (never read then): kRippleBinding of the displace set.
             {
                 VkDescriptorImageInfo ri{};
                 ri.sampler     = wakeField_->rippleSampler();
@@ -5431,7 +5435,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 VkWriteDescriptorSet rw{};
                 rw.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 rw.dstSet          = state->displaceDS;
-                rw.dstBinding      = 6;
+                rw.dstBinding      = vulkan::WaterDisplacePipeline::kRippleBinding;
                 rw.descriptorCount = 1;
                 rw.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 rw.pImageInfo      = &ri;
