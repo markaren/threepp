@@ -32,7 +32,7 @@ void DirectionalLight::copy(const Object3D& source, bool recursive) {
     if (const auto l = source.as<DirectionalLight>()) {
 
         shadow->copy(*l->shadow);
-        copyTarget(*l);
+        copyTarget(*l, source, *this, recursive);
     }
 }
 

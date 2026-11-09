@@ -158,6 +158,85 @@ TEST_CASE("lights clone their shadow settings and target") {
     CHECK(pl->shadow->mapSize == Vector2(128, 128));
 }
 
+TEST_CASE("a light aiming at its own child aims its clone at the clone's child") {
+
+    // GLTFLoader aims a directional or spot light at a "target" child one unit down
+    // its -Z. A clone that kept the source's pointer aimed at the source's child,
+    // which dies with the source: the renderers then read freed memory.
+    const auto worldPosition = [](const Object3D& o) {
+        Vector3 at;
+        at.setFromMatrixPosition(*o.matrixWorld);
+        return at;
+    };
+
+    SECTION("a directional light's target child, cloned through its parent") {
+        auto root = Group::create();
+        auto light = DirectionalLight::create();
+        light->position.set(0, 0, 0);
+        auto spacer = Object3D::create();// the target is not the first child
+        light->add(spacer);
+        auto target = Object3D::create();
+        target->position.set(0, 0, -1);
+        light->add(target);
+        light->setTarget(*target);
+        auto holder = Group::create();
+        holder->position.set(5, 0, 0);
+        holder->add(light);
+        root->add(holder);
+
+        auto copy = root->clone<Group>();
+        root.reset();
+        holder.reset();
+        light.reset();
+        target.reset();
+
+        copy->position.set(0, 10, 0);
+        copy->updateMatrixWorld(true);
+        auto* copiedLight = copy->children[0]->children[0]->as<DirectionalLight>();
+        REQUIRE(copiedLight != nullptr);
+        REQUIRE(copiedLight->children.size() == 2);
+        CHECK(&copiedLight->target() == copiedLight->children[1]);
+        CHECK(worldPosition(copiedLight->target()) == Vector3(5, 10, -1));
+    }
+
+    SECTION("a spot light's target grandchild, cloned directly") {
+        auto light = SpotLight::create();
+        auto arm = Object3D::create();
+        arm->position.set(0, 0, -2);
+        light->add(arm);
+        auto target = Object3D::create();
+        target->position.set(1, 0, 0);
+        arm->add(target);
+        light->setTarget(*target);
+
+        auto copy = light->clone<SpotLight>();
+        light.reset();
+        arm.reset();
+        target.reset();
+
+        REQUIRE(copy->children.size() == 1);
+        REQUIRE(copy->children[0]->children.size() == 1);
+        CHECK(&copy->target() == copy->children[0]->children[0]);
+    }
+
+    SECTION("a copy without the children falls back to the default target") {
+        auto light = SpotLight::create();
+        auto target = Object3D::create();
+        light->add(target);
+        light->setTarget(*target);
+
+        auto copy = SpotLight::create();
+        copy->copy(*light, false);
+        CHECK(&copy->target() != target.get());
+        light.reset();
+        target.reset();
+
+        CHECK(copy->children.empty());
+        CHECK(copy->target().parent == nullptr);
+        CHECK(worldPosition(copy->target()) == Vector3(0, 0, 0));
+    }
+}
+
 TEST_CASE("a RectAreaLight clone keeps its size and has one quad") {
 
     auto light = RectAreaLight::create(0xffffff, 2, 3, 0.5f);

@@ -514,6 +514,11 @@ namespace threepp::gltf {
                 }
                 if (light) {
                     light->name = lightDef.value("name", "light_" + std::to_string(lightIdx));
+                    // The light sits at its node's origin. DirectionalLight and
+                    // SpotLight are constructed one unit up, which three.js's loader
+                    // also resets.
+                    light->position.set(0, 0, 0);
+                    light->updateMatrix();
                     light->visible = false;  // hidden by default; user opts in
                     obj->add(light);
                     std::cerr << "[GLTFLoader] Light: " << light->name
