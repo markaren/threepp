@@ -12,12 +12,19 @@
 // computed, which pins the sign the waves' travel direction depends on:
 //   out(x,y) = (-1)^(x+y) * sum over (k,l) of in(k,l) * exp(+2*pi*i*(k*x + l*y)/N)
 // (unnormalised; the analytic answer for delta and wave, a direct DFT for
-// random up to 256). Last, one recordApplyBatch over three images with a mask
-// of two must transform those two exactly as single calls do and leave the
-// third untouched.
+// random up to 256). Then the batches: one recordApplyBatch over three images
+// with a mask of two must transform those two exactly as single calls do and
+// leave the third untouched; at N = 64 and 512 a full batch of eight (every
+// image slot, the eighth the shader's default case) and a batch with only
+// slots 1 and 7 live; a batch of no image or no live bit records nothing.
+// Last, recordApplyJobs over two resolutions, all shared and with one job on
+// the butterfly path, and a butterfly batch past maxGroups must throw before
+// recording.
 //
 // Plain exit-code program like the other Vulkan tests here: 0 pass, 1 fail,
-// 42 (CTest "Skipped") without a Vulkan device.
+// 42 (CTest "Skipped") without a Vulkan device or with no size compared. N =
+// 512, the cascades' size, must be compared: a device that cannot run it
+// there fails.
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
@@ -286,6 +293,8 @@ int main() {
         if (!ok) ++failures;
     };
 
+    uint32_t compared = 0;
+    bool compared512 = false;
     {
         Gpu gpu(*ctx);
         std::mt19937 rng(0x0CEA4u);
@@ -293,10 +302,13 @@ int main() {
 
         for (const uint32_t n : {8u, 64u, 128u, 256u, 512u, 1024u}) {
             water::IFFT fft(*ctx, n, 8);
+            fft.setPath(water::IFFT::Path::Shared);// builds the shared pipelines whatever THREEPP_OCEAN_FFT says
             if (!fft.sharedSupported()) {
                 std::printf("  N=%u: the shared path is not supported on this device; skipped\n", n);
                 continue;
             }
+            ++compared;
+            if (n == 512u) compared512 = true;
             const size_t count = size_t(n) * n;
             Plane a(gpu, n), scratch(gpu, n);
 
@@ -383,6 +395,66 @@ int main() {
                 expect(r0 <= kSharedVsButterfly, "batch slot 0 vs butterfly", n, r0, kSharedVsButterfly);
                 expect(r2 <= kSharedVsButterfly, "batch slot 2 vs butterfly", n, r2, kSharedVsButterfly);
                 expect(untouched, "batch slot 1 (masked out) unchanged", n, untouched ? 0.0 : 1.0, 0.0);
+
+                // No image, and no live bit: nothing recorded, nothing touched.
+                gpu.submit([&](VkCommandBuffer cb) {
+                    fft.recordApplyBatch(cb, imgs, 0, scratch.img);
+                    fft.recordApplyBatch(cb, imgs, 3, scratch.img, 0u);
+                    fft.recordApplyBatch(cb, imgs, 2, scratch.img, 0b100u);// live bit past count
+                    for (int i = 0; i < 3; ++i) planes[i]->recordReadback(cb);
+                });
+                bool same = true;
+                for (int i = 0; i < 3; ++i) {
+                    const auto again = planes[i]->host();
+                    same = same && std::memcmp(again.data(), got[i].data(), again.size() * sizeof(float)) == 0;
+                }
+                expect(same, "empty batches record nothing", n, same ? 0.0 : 1.0, 0.0);
+            }
+
+            // A full batch of eight: z = 0..7 reach every image slot, the
+            // eighth through the shader's default case. Then only slots 1 and
+            // 7 live (two layers, z = 1 picking slot 7), the rest untouched.
+            if (n == 64u || n == 512u) {
+                constexpr int kB = int(water::IFFT::kMaxBatch);
+                std::vector<std::vector<float>> in(kB, std::vector<float>(count * 2));
+                for (auto& v : in)
+                    for (auto& f : v) f = gauss(rng);
+                std::vector<std::vector<float>> want(kB);
+                for (int i = 0; i < kB; ++i) want[i] = transform(gpu, fft, water::IFFT::Path::Butterfly, a, scratch, in[i]);
+
+                fft.setPath(water::IFFT::Path::Shared);
+                std::vector<std::unique_ptr<Plane>> planes;
+                water::OceanImage* imgs[kB];
+                for (int i = 0; i < kB; ++i) {
+                    planes.push_back(std::make_unique<Plane>(gpu, n));
+                    imgs[i] = &planes.back()->img;
+                }
+                auto run = [&](uint32_t mask) {
+                    gpu.submit([&](VkCommandBuffer cb) {
+                        for (int i = 0; i < kB; ++i) planes[i]->recordUpload(cb, in[i]);
+                    });
+                    gpu.submit([&](VkCommandBuffer cb) {
+                        fft.recordApplyBatch(cb, imgs, kB, scratch.img, mask);
+                        for (int i = 0; i < kB; ++i) planes[i]->recordReadback(cb);
+                    });
+                };
+                run(0xFFu);
+                double worst = 0.0;
+                for (int i = 0; i < kB; ++i) worst = std::max(worst, relRms(planes[i]->host(), want[i]));
+                expect(worst <= kSharedVsButterfly, "batch of 8 (all slots) vs butterfly", n, worst, kSharedVsButterfly);
+
+                run((1u << 1) | (1u << 7));
+                const double r1 = relRms(planes[1]->host(), want[1]);
+                const double r7 = relRms(planes[7]->host(), want[7]);
+                bool rest = true;
+                for (int i = 0; i < kB; ++i) {
+                    if (i == 1 || i == 7) continue;
+                    const auto h = planes[i]->host();
+                    rest = rest && std::memcmp(h.data(), in[i].data(), h.size() * sizeof(float)) == 0;
+                }
+                expect(r1 <= kSharedVsButterfly, "batch of 8, slot 1 live", n, r1, kSharedVsButterfly);
+                expect(r7 <= kSharedVsButterfly, "batch of 8, slot 7 live", n, r7, kSharedVsButterfly);
+                expect(rest, "batch of 8, other slots unchanged", n, rest ? 0.0 : 1.0, 0.0);
             }
         }
     }
@@ -422,11 +494,52 @@ int main() {
                 const double r = relRms(planes[i]->host(), want[i]);
                 expect(r <= kSharedVsButterfly, "jobs (128 + 256) vs butterfly", planes[i]->n, r, kSharedVsButterfly);
             }
+
+            // One job on the butterfly path: every job falls back to its own
+            // recordApplyBatch, and the results are the same.
+            small.setPath(water::IFFT::Path::Butterfly);
+            gpu.submit([&](VkCommandBuffer cb) {
+                for (int i = 0; i < 4; ++i) planes[i]->recordUpload(cb, in[i]);
+                water::IFFT::recordApplyJobs(cb, jobs, 2);
+                for (int i = 0; i < 4; ++i) planes[i]->recordReadback(cb);
+            });
+            for (int i = 0; i < 4; ++i) {
+                const double r = relRms(planes[i]->host(), want[i]);
+                expect(r <= kSharedVsButterfly, "jobs, one butterfly vs butterfly", planes[i]->n, r, kSharedVsButterfly);
+            }
         }
+    }
+
+    // The butterfly path's descriptor groups are capped at maxGroups: a batch
+    // that needs more (here three images through an IFFT built for two)
+    // throws before it records a dispatch, instead of half-way through.
+    {
+        Gpu gpu(*ctx);
+        water::IFFT fft(*ctx, 64, 2);
+        fft.setPath(water::IFFT::Path::Butterfly);
+        Plane p0(gpu, 64), p1(gpu, 64), p2(gpu, 64), s(gpu, 64);
+        water::OceanImage* imgs[3] = {&p0.img, &p1.img, &p2.img};
+        bool threw = false;
+        gpu.submit([&](VkCommandBuffer cb) {
+            try {
+                fft.recordApplyBatch(cb, imgs, 3, s.img);
+            } catch (const std::runtime_error& e) {
+                threw = std::strstr(e.what(), "maxGroups") != nullptr;
+            }
+        });
+        expect(threw, "butterfly batch past maxGroups throws", 64, threw ? 0.0 : 1.0, 0.0);
     }
 
     ctx.reset();
     if (window) glfwDestroyWindow(window);
+    if (!compared512 && compared > 0) {
+        std::printf("  N=512, the cascades' size, could not run the shared path: FAIL\n");
+        ++failures;
+    }
+    if (compared == 0) {
+        std::printf("OceanFftShared_test: no size could run the shared path; skipped\n");
+        return kSkipCode;
+    }
     std::printf(failures ? "OceanFftShared_test: %d FAILED\n" : "OceanFftShared_test: all passed\n", failures);
     return failures ? 1 : 0;
 }

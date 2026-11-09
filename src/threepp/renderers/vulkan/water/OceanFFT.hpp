@@ -227,7 +227,10 @@ namespace threepp::water {
         // `count` images is bound whatever the mask, so a set of images whose
         // live subset changes frame to frame (the wake patches) costs one
         // descriptor set; a distinct set of views counts against maxGroups as
-        // a distinct pair does.
+        // a distinct pair does. On the Butterfly path every live (image,
+        // scratch) pair counts against maxGroups, other IFFTs' images
+        // included: a call that would pass it throws before recording
+        // anything. No image (count 0) or no live bit records nothing.
         void recordApplyBatch(VkCommandBuffer cb, OceanImage* const* images, uint32_t count,
                               OceanImage& scratch, uint32_t mask = ~0u);
 
@@ -247,9 +250,13 @@ namespace threepp::water {
         uint32_t textureSize() const { return textureSize_; }
 
         // The path this instance records. setPath(Shared) is ignored where
-        // the shared path is not supported (see above).
+        // the shared path is not supported (see above). The shared pipelines
+        // are built on the first setPath(Shared), the constructor's included,
+        // so a THREEPP_OCEAN_FFT=butterfly run never builds them, and a
+        // driver that rejects them leaves this IFFT on the butterfly path
+        // (sharedSupported() then turns false) instead of failing it.
         Path path() const { return path_; }
-        void setPath(Path p) { path_ = (p == Path::Shared && sharedSupported_) ? Path::Shared : Path::Butterfly; }
+        void setPath(Path p);
         bool sharedSupported() const { return sharedSupported_; }
 
     private:
@@ -316,9 +323,18 @@ namespace threepp::water {
 
         void createTwiddleImage();
         void createPipelines();
-        void createSharedPipelines();
+        void checkSharedLimits();    // sharedSupported_ and sharedRows_ from the device limits
+        bool ensureSharedPipelines();// builds them once; false (and unsupported) if the driver refuses
+        void buildSharedPipelines(); // throws on a refused create; ensureSharedPipelines catches
+        void destroySharedPipelines();
         void recordTwiddleOnce(VkCommandBuffer cb);
         DescGroup& groupFor(const OceanImage& input, const OceanImage& scratch);
+        // How many of these live pairs have no group yet (recordApplyBatch's
+        // up-front check against maxGroups on the Butterfly path).
+        uint32_t newGroupsFor(OceanImage* const* images, uint32_t count, const OceanImage& scratch,
+                              uint32_t mask) const;
+        void checkButterflyGroups(OceanImage* const* images, uint32_t count, const OceanImage& scratch,
+                                  uint32_t mask) const;
         VkDescriptorSet sharedSetFor(OceanImage* const* images, uint32_t count);
         // Twiddle, set, layouts and z slots for one batch; returns its layer count.
         uint32_t prepareShared(VkCommandBuffer cb, OceanImage* const* images, uint32_t count, uint32_t mask,

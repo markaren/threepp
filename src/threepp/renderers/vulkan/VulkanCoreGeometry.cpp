@@ -5173,11 +5173,16 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // it to the largest enabled cascade. Smaller cascades' IFFT runs
             // only touch their own extent within the scratch — the unused
             // tail is harmless.
+            // The shared-memory IFFT works in place and never touches it, so
+            // it is made only when some cascade runs the butterfly path.
             uint32_t scratchDim = 0;
+            bool needScratch = false;
             for (uint32_t i = 0; i < 3; ++i) {
                 if (tileSizes[i] > 0.f) scratchDim = std::max(scratchDim, textureSizes[i]);
+                if ((state->cascadeMask & (1u << i)) &&
+                    state->cascades[i].ifft->path() != water::IFFT::Path::Shared) needScratch = true;
             }
-            {
+            if (needScratch) {
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
                 ici.imageType     = VK_IMAGE_TYPE_2D;

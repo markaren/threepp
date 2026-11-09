@@ -355,8 +355,12 @@ namespace threepp::vulkan {
                        st->slopeImage, st->slopeAlloc, st->slopeView);
             st->slopeTarget = viewOf(ctx_, st->slopeImage, kSlopeFormat, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 0, 1, st->layers,
                                      "ocean.wake.rippleSlopes (mip 0)");
-            st->scratch = planeImage(ctx_, n, "ocean.wake.rippleScratch");
             st->ifft    = std::make_unique<water::IFFT>(ctx_, n, st->layers);
+            // Only the butterfly path ping-pongs through a scratch plane; the
+            // shared-memory one works in place.
+            if (st->ifft->path() != water::IFFT::Path::Shared) {
+                st->scratch = planeImage(ctx_, n, "ocean.wake.rippleScratch");
+            }
 
             std::array<VkDescriptorSetLayout, DisplacedMesh::kMaxWakePatches> rl{};
             rl.fill(rippleDsLayout_);
@@ -396,8 +400,10 @@ namespace threepp::vulkan {
             clearToGeneral(cb, st.slopeImage);
             // The IFFT tracks its planes' layouts itself; these are in GENERAL
             // from here on, which is what it wants to find.
-            clearToGeneral(cb, st.scratch.image);
-            st.scratch.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+            if (st.scratch.image) {
+                clearToGeneral(cb, st.scratch.image);
+                st.scratch.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
             for (uint32_t i = 0; i < st.layers; ++i) {
                 clearToGeneral(cb, st.work[i].image);
                 st.work[i].currentLayout = VK_IMAGE_LAYOUT_GENERAL;

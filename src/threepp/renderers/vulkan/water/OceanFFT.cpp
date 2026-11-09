@@ -577,8 +577,12 @@ namespace threepp::water {
         sampler_ = makeNearestSampler(ctx_);
         createTwiddleImage();
         createPipelines();
-        createSharedPipelines();
+        checkSharedLimits();
         setPath(defaultPath());
+    }
+
+    void IFFT::setPath(Path p) {
+        path_ = (p == Path::Shared && sharedSupported_ && ensureSharedPipelines()) ? Path::Shared : Path::Butterfly;
     }
 
     IFFT::Path IFFT::defaultPath() {
@@ -818,7 +822,7 @@ namespace threepp::water {
         return groups_.back();
     }
 
-    void IFFT::createSharedPipelines() {
+    void IFFT::checkSharedLimits() {
         // 256 threads (ifft_shared.comp's fixed size), ROWS lines a
         // workgroup so that every thread has a butterfly up to N = 512, and in
         // shared memory each line's ping-pong pair plus one twiddle column:
@@ -835,8 +839,38 @@ namespace threepp::water {
                            kThreads <= props.limits.maxComputeWorkGroupSize[0] &&
                            sharedBytes <= props.limits.maxComputeSharedMemorySize &&
                            textureSize_ / sharedRows_ <= props.limits.maxComputeWorkGroupCount[1];
-        if (!sharedSupported_) return;
+    }
 
+    void IFFT::destroySharedPipelines() {
+        VkDevice d = ctx_.device();
+        if (pipeSharedRows_ != VK_NULL_HANDLE) vkDestroyPipeline(d, pipeSharedRows_, nullptr);
+        if (pipeSharedCols_ != VK_NULL_HANDLE) vkDestroyPipeline(d, pipeSharedCols_, nullptr);
+        if (layoutShared_   != VK_NULL_HANDLE) vkDestroyPipelineLayout(d, layoutShared_, nullptr);
+        if (dslShared_      != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(d, dslShared_, nullptr);
+        pipeSharedRows_ = pipeSharedCols_ = VK_NULL_HANDLE;
+        layoutShared_ = VK_NULL_HANDLE;
+        dslShared_ = VK_NULL_HANDLE;
+    }
+
+    bool IFFT::ensureSharedPipelines() {
+        if (pipeSharedRows_ != VK_NULL_HANDLE && pipeSharedCols_ != VK_NULL_HANDLE) return true;
+        if (!sharedSupported_) return false;
+        try {
+            buildSharedPipelines();
+            return true;
+        } catch (const std::exception& e) {
+            // A driver that will not build the shared kernel (its shared array
+            // is sized by specialization constants) must not take the
+            // butterfly path down with it: this IFFT stays on that path.
+            destroySharedPipelines();
+            sharedSupported_ = false;
+            std::fprintf(stderr, "[IFFT] N=%u: the shared-memory FFT did not build (%s); the butterfly path runs\n",
+                         textureSize_, e.what());
+            return false;
+        }
+    }
+
+    void IFFT::buildSharedPipelines() {
         const std::array<VkDescriptorSetLayoutBinding, 2> bindings{
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          kMaxBatch, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -884,8 +918,12 @@ namespace threepp::water {
             cpci.stage.pSpecializationInfo = &si;
             cpci.layout       = layoutShared_;
             VkPipeline& p = vertical ? pipeSharedCols_ : pipeSharedRows_;
-            check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &cpci, nullptr, &p),
-                  "vkCreateComputePipelines(ifft shared)");
+            const VkResult r = vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &cpci, nullptr, &p);
+            if (r != VK_SUCCESS) {
+                p = VK_NULL_HANDLE;
+                vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+                check(r, "vkCreateComputePipelines(ifft shared)");
+            }
         }
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
     }
@@ -964,10 +1002,57 @@ namespace threepp::water {
         vkCmdDispatch(cb, 1, textureSize_ / sharedRows_, layers);
     }
 
+    namespace {
+        // The live bits of a batch of `count` images.
+        uint32_t liveMask(uint32_t count, uint32_t mask) {
+            return count >= 32u ? mask : mask & ((1u << count) - 1u);
+        }
+    }// namespace
+
+    uint32_t IFFT::newGroupsFor(OceanImage* const* images, uint32_t count, const OceanImage& scratch,
+                                uint32_t mask) const {
+        uint32_t fresh = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!(mask & (1u << i))) continue;
+            bool known = false;
+            for (const auto& g : groups_) known = known || (g.input == images[i]->view && g.scratch == scratch.view);
+            // A repeat of an image earlier in this batch is one group, not two.
+            for (uint32_t k = 0; k < i && !known; ++k) {
+                known = (mask & (1u << k)) && images[k]->view == images[i]->view;
+            }
+            if (!known) ++fresh;
+        }
+        return fresh;
+    }
+
+    void IFFT::checkButterflyGroups(OceanImage* const* images, uint32_t count, const OceanImage& scratch,
+                                    uint32_t mask) const {
+        const uint32_t fresh = newGroupsFor(images, count, scratch, mask);
+        if (groups_.size() + fresh > maxGroups_) {
+            throw std::runtime_error(
+                    "[IFFT] butterfly path: this batch needs " + std::to_string(groups_.size() + fresh) +
+                    " (image, scratch) descriptor groups but the IFFT was built with maxGroups " +
+                    std::to_string(maxGroups_) +
+                    "; every image a batch hands it, other IFFTs' included, takes one, so build it with "
+                    "maxGroups at least the number of distinct images it will transform");
+        }
+    }
+
     void IFFT::recordApplyJobs(VkCommandBuffer cb, const Job* jobs, uint32_t jobCount) {
+        if (jobCount > 8u) throw std::runtime_error("[IFFT] recordApplyJobs: more than 8 jobs");
         bool allShared = true;
         for (uint32_t j = 0; j < jobCount; ++j) allShared = allShared && jobs[j].fft->path_ == Path::Shared;
         if (!allShared) {
+            // Checked for every job before any is recorded, so a batch the
+            // butterfly caches cannot take throws without leaving half a
+            // transform in the command buffer. (A job on the Shared path
+            // goes through its own recordApplyBatch below unchanged.)
+            for (uint32_t j = 0; j < jobCount; ++j) {
+                if (jobs[j].fft->path_ != Path::Shared) {
+                    jobs[j].fft->checkButterflyGroups(jobs[j].images, jobs[j].count, *jobs[j].scratch,
+                                                      liveMask(jobs[j].count, jobs[j].mask));
+                }
+            }
             for (uint32_t j = 0; j < jobCount; ++j) {
                 jobs[j].fft->recordApplyBatch(cb, jobs[j].images, jobs[j].count, *jobs[j].scratch, jobs[j].mask);
             }
@@ -979,9 +1064,13 @@ namespace threepp::water {
             uint32_t slots = 0, layers = 0;
         };
         std::array<Prepared, 8> prep{};
-        if (jobCount > prep.size()) throw std::runtime_error("[IFFT] recordApplyJobs: more than 8 jobs");
         uint32_t live = 0;
         for (uint32_t j = 0; j < jobCount; ++j) {
+            if (jobs[j].count > kMaxBatch) {
+                throw std::runtime_error("[IFFT] recordApplyBatch: more than kMaxBatch images");
+            }
+            // An empty job binds nothing: its descriptor set would name no image.
+            if (liveMask(jobs[j].count, jobs[j].mask) == 0u) continue;
             prep[j].layers = jobs[j].fft->prepareShared(cb, jobs[j].images, jobs[j].count, jobs[j].mask,
                                                         prep[j].ds, prep[j].slots);
             live += prep[j].layers;
@@ -1011,11 +1100,14 @@ namespace threepp::water {
         if (count > kMaxBatch) {
             throw std::runtime_error("[IFFT] recordApplyBatch: more images than kMaxBatch");
         }
+        mask = liveMask(count, mask);
+        if (mask == 0u) return;// no image, or none live: nothing to record
         if (path_ == Path::Shared) {
             const Job job{this, images, count, &scratch, mask};
             recordApplyJobs(cb, &job, 1u);
             return;
         }
+        checkButterflyGroups(images, count, scratch, mask);
         for (uint32_t i = 0; i < count; ++i) {
             if (mask & (1u << i)) recordApply(cb, *images[i], scratch);
         }
@@ -1102,11 +1194,8 @@ namespace threepp::water {
     }
 
     IFFT::~IFFT() {
-        if (pipeSharedRows_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeSharedRows_, nullptr);
-        if (pipeSharedCols_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeSharedCols_, nullptr);
-        if (layoutShared_   != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layoutShared_, nullptr);
-        if (dslShared_      != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dslShared_, nullptr);
-        if (pipeTwiddle_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeTwiddle_, nullptr);
+        destroySharedPipelines();
+        if (pipeTwiddle_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeTwiddle_, nullptr);
         if (pipeHorizontal_ != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeHorizontal_, nullptr);
         if (pipeVertical_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipeVertical_, nullptr);
         if (pipePermute_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipePermute_, nullptr);
