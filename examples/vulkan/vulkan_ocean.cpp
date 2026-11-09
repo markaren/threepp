@@ -669,7 +669,7 @@ namespace {
 
 int main(int argc, char** argv) {
 
-    // --shot <name.png> [--frames N] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
+    // --shot <name.png> [--frames N] [--pinned] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -678,6 +678,7 @@ int main(int argc, char** argv) {
     bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
     bool shotBow    = false;// ahead of the boat looking back at the stem (bow foam)
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
+    bool pinnedClock = false;// --pinned: fixed 1/60 s steps on a pinned renderer clock (replayable captures)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -687,6 +688,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
         else if (std::strcmp(argv[i], "--bow") == 0) shotBow = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
+        else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
     }
     const bool capturing = !shotPath.empty();
     // Shared capture machinery (capture_util.hpp): --cam/--look override the
@@ -1777,9 +1779,18 @@ int main(int argc, char** argv) {
         col.setHSL((1.f - t) * 0.66f, 1.f, 0.5f);
     };
 
+    // --pinned: every frame is 1/60 s of sim time and the renderer's clock is
+    // pinned to it, so two captures of the same flags match pixel for pixel
+    // and an A/B of a water change compares like with like.
+    double pinnedTime = 0.0;
     canvas.animate([&] {
-        const float dt = std::min(clock.getDelta(), 0.1f);  // clamp dt — pause / breakpoints shouldn't teleport the boat
-        fpsAccum += dt;
+        const float wallDt = std::min(clock.getDelta(), 0.1f);  // clamp dt — pause / breakpoints shouldn't teleport the boat
+        const float dt = pinnedClock ? 1.f / 60.f : wallDt;
+        if (pinnedClock) {
+            pinnedTime += 1.0 / 60.0;
+            renderer.setSimTime(pinnedTime);
+        }
+        fpsAccum += wallDt;
         ++fpsFrames;
         if (fpsAccum >= 0.5f) {
             fps = fpsFrames / fpsAccum;
