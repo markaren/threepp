@@ -342,8 +342,9 @@ void BVH::build(const BufferGeometry& geom) {
             const auto b = index->getX(i + 1);
             const auto c = index->getX(i + 2);
             if (a >= vertexCount || b >= vertexCount || c >= vertexCount) {
-                // As the raw-array build does; the BVH is left empty.
+                // As the raw-array build does; the BVH is left empty, with no geometry.
                 triangles.clear();
+                geometry = nullptr;
                 throw std::out_of_range("BVH::build: index out of range for the geometry's positions");
             }
 

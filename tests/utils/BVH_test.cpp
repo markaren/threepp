@@ -883,6 +883,7 @@ TEST_CASE("BVH build rejects an index past the last vertex and is left empty", "
         CHECK_THROWS_AS(bvh.build(*geometry), std::out_of_range);
         CHECK(bvh.triangleCount() == 0);
         CHECK(bvh.keptTriangleCount() == 0);
+        CHECK(bvh.getGeometry() == nullptr);
         CHECK_FALSE(bvh.raycast(down));
     }
 
