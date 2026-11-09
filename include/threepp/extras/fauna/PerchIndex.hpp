@@ -1086,13 +1086,13 @@ namespace threepp::fauna {
 
         // ── Phase 4 — the BVH ray grid ───────────────────────────────────
         //
-        // A BVH BUILD IS ATOMIC AND CANNOT BE SPLIT. BVH::buildNode sorts the
-        // index array at every level with a comparator doing two random-access
-        // getMidpoint calls into a 36-byte-per-triangle array; at 40 000
-        // triangles that is roughly 0.1 s of one frozen frame. bvhMaxTriangles
-        // therefore defaults to 40 000 and not to the quarter-million a
-        // "just build everything" design would use — and a mesh above the limit
-        // is not skipped, it is served by the phase 2 sampler instead.
+        // A BVH BUILD IS ATOMIC AND CANNOT BE SPLIT. BVH::buildTree bins the
+        // triangle centroids and partitions the triangle order at every level
+        // of the tree in one call, so its whole cost lands in one frozen frame.
+        // bvhMaxTriangles therefore defaults to 40 000 and not to the
+        // quarter-million a "just build everything" design would use; a mesh
+        // above the limit is not skipped, it is served by the phase 2 sampler
+        // instead.
         std::int64_t castProbeGrid(std::int64_t budget) {
 
             std::int64_t work = 0;
