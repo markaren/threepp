@@ -25,6 +25,7 @@
 #include "next/resolver/asset-resolver.hh"
 #include "next/schema/usd-shade.hh"
 #include "tydra/next/render-converter.hh"
+#include "tydra/next/scene-access.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -162,6 +163,13 @@ namespace threepp {
                     m.m[1], m.m[5], m.m[9], m.m[13],
                     m.m[2], m.m[6], m.m[10], m.m[14],
                     m.m[3], m.m[7], m.m[11], m.m[15]);
+        }
+
+        // Skeletons carry their transforms in double.
+        Matrix4 toMatrix4(const tnext::Matrix4d& m) {
+            tnext::Matrix4 f;
+            for (int i = 0; i < 16; ++i) f.m[i] = static_cast<float>(m.m[i]);
+            return toMatrix4(f);
         }
 
         std::string lowercaseExtension(const std::filesystem::path& p) {
@@ -517,7 +525,8 @@ namespace threepp {
         std::map<std::string, std::string> variants;
 
         // State of one load: the converted scene plus caches keyed by its ids.
-        // The scene grows when a material rc4 skipped is converted on demand.
+        // The scene grows when a material LightUSD skipped is converted on
+        // demand.
         struct Build {
             const lnext::Stage& stage;
             tnext::RenderScene& scene;
@@ -646,18 +655,14 @@ namespace threepp {
         std::shared_ptr<Object3D> buildNode(Build& b, int32_t id) {
             const auto* node = b.scene.get_node(id);
             if (!node || b.prototypeNodes.count(id)) return nullptr;
-            bool resetsXformStack = false;
             if (const auto prim = b.stage.GetPrimAtPath(node->prim_path); prim.IsValid()) {
                 // Colliders and other guide/proxy geometry (purpose is
                 // inherited, so skipping the subtree covers it) are not for
-                // rendering.
+                // rendering. LightUSD works out a prim's purpose but keeps
+                // every prim in the render scene.
                 const auto* purpose = prim.GetPropertyValue("purpose");
-                const std::string* token = purpose ? purpose->as_token() : nullptr;
+                const auto token = purpose ? purpose->as_token() : lnext::StringView();
                 if (token && (*token == "guide" || *token == "proxy")) return nullptr;
-
-                const auto* order = prim.GetPropertyValue("xformOpOrder");
-                const auto* ops = order ? order->as_token_array() : nullptr;
-                resetsXformStack = ops && !ops->empty() && ops->front() == "!resetXformStack!";
             }
 
             std::shared_ptr<Object3D> obj;
@@ -672,7 +677,7 @@ namespace threepp {
             obj->visible = node->visible;
             b.objectByPath[node->prim_path] = obj;
             Matrix4 local = toMatrix4(node->local_transform);
-            if (resetsXformStack) {
+            if (node->has_reset_xform) {
                 // The prim's ops are world-space (rigid bodies in physics
                 // layers author `!resetXformStack!` + their simulation pose);
                 // express that pose under the parent this hierarchy keeps.
@@ -691,11 +696,12 @@ namespace threepp {
             return obj;
         }
 
-        // The scene's material for a bound path. LightUSD v1.0.0-rc4 treats
-        // an `instanceable` Material prim as a native instance and converts
-        // only some of them (the SimReady layout gives every mesh instance
-        // its own instanceable VisualMaterials), so bindings to the rest
-        // would come back unbound. Convert those here, once per path.
+        // The scene's material for a bound path. LightUSD (1.0.0 as rc4)
+        // treats an `instanceable` Material prim as a native instance and
+        // converts only some of them (the SimReady layout gives every mesh
+        // instance its own instanceable VisualMaterials: the AgiBot G2 comes
+        // back with 42 of its 64 meshes unbound), so bindings to the rest
+        // would be lost. Convert those here, once per path.
         int materialId(Build& b, const std::string& path) {
             if (path.empty()) return -1;
             if (auto it = b.scene.material_by_path.find(path); it != b.scene.material_by_path.end()) return it->second;
@@ -712,16 +718,16 @@ namespace threepp {
 
         // The material of every triangle: the mesh's (inherited) binding,
         // overridden by its materialBind GeomSubsets. Resolved here rather
-        // than taken from the RenderMesh, which drops the bindings rc4 did
-        // not convert (see materialId).
+        // than taken from the RenderMesh, which drops the bindings LightUSD
+        // did not convert (see materialId).
         std::vector<int> triangleMaterials(Build& b, const tnext::RenderMesh& rm) {
             const size_t numTris = rm.triangulated_indices.size() / 3;
             std::vector<int> out(numTris, rm.material_id);
             const auto prim = b.stage.GetPrimAtPath(rm.prim_path);
             const auto& offsets = rm.face_triangle_offsets;
             if (!prim.IsValid() || offsets.empty()) {
-                // Untriangulated topology: rc4's subset runs are face ranges
-                // we cannot map, so keep its whole-mesh binding.
+                // Untriangulated topology: LightUSD's subset runs are face
+                // ranges we cannot map, so keep its whole-mesh binding.
                 return out;
             }
             const int meshMaterial = materialId(b, lnext::GetInheritedBoundMaterialPathForPurpose(b.stage, rm.prim_path, "preview"));
@@ -1206,7 +1212,7 @@ namespace threepp {
             auto tryTexture = [&](std::initializer_list<const char*> names) -> std::shared_ptr<Texture> {
                 for (const char* name : names) {
                     const auto* value = shader.GetPropertyValue(name);
-                    const std::string* raw = value ? value->as_asset_path() : nullptr;
+                    const auto raw = value ? value->as_asset_path() : lnext::StringView();
                     if (!raw || raw->empty()) continue;
                     std::string rel = resolveUDIM(*raw);
                     std::replace(rel.begin(), rel.end(), '\\', '/');
@@ -1350,7 +1356,7 @@ namespace threepp {
                 d.maxForce = floatProperty(prim, drive + "maxForce").value_or(std::numeric_limits<float>::infinity());
                 d.target = floatProperty(prim, drive + "targetPosition").value_or(0.f) / perDegree;
                 const auto* type = prim.GetPropertyValue(drive + "type");
-                const std::string* token = type ? type->as_token() : nullptr;
+                const auto token = type ? type->as_token() : lnext::StringView();
                 d.acceleration = token && *token == "acceleration";
                 link.drive = d;
             }
@@ -1503,7 +1509,7 @@ namespace threepp {
                         continue;
                     }
                     const auto* axisValue = prim.GetPropertyValue(prefix + "referenceJointAxis");
-                    const std::string* axisToken = axisValue ? axisValue->as_token() : nullptr;
+                    const auto axisToken = axisValue ? axisValue->as_token() : lnext::StringView();
                     if (axisToken && axisToken->rfind(kindOf(desc.links[ref].jointType), 0) != 0) {
                         skip("follows the " + *axisToken + " axis of " + reference + ", which that joint has not");
                         continue;

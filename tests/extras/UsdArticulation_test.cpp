@@ -463,6 +463,45 @@ TEST_CASE("a mimic coupling that cannot be built is said, and the joint stays fr
     }));
 }
 
+TEST_CASE("a mimic coupling follows the axis it names, if its reference joint has it", "[physx][usd]") {
+    PhysxWorld world(settings());
+    const std::string onRotation = R"(        float physxMimicJoint:rotY:gearing = -0.5
+        rel physxMimicJoint:rotY:referenceJoint = </robot/hinge>
+        uniform token physxMimicJoint:rotY:referenceJointAxis = "rotY"
+)";
+    auto robot = loadUsdArticulation(world, writeFixture("usd_articulation_mimic_axis.usda", document(rootJoint, onRotation)));
+    REQUIRE(robot.articulation);
+    CHECK(robot.mimics.size() == 1);
+
+    // The hinge is revolute: it has no translation to follow.
+    const std::string onTranslation = R"(        float physxMimicJoint:rotY:gearing = -0.5
+        rel physxMimicJoint:rotY:referenceJoint = </robot/hinge>
+        uniform token physxMimicJoint:rotY:referenceJointAxis = "transX"
+)";
+    auto unbuilt = loadUsdArticulation(world, writeFixture("usd_articulation_mimic_axis_missing.usda", document(rootJoint, onTranslation)));
+    REQUIRE(unbuilt.articulation);
+    CHECK(unbuilt.mimics.empty());
+    CHECK(std::ranges::any_of(unbuilt.diagnostics, [](const auto& d) {
+        return d == "/robot/passive: mimic coupling follows the transX axis of /robot/hinge, which that joint has not";
+    }));
+}
+
+TEST_CASE("a drive keeps the type the file gives it", "[physx][usd]") {
+    const auto driveType = [](const std::string& name, const std::string& text) {
+        PhysxWorld world(settings());
+        auto robot = loadUsdArticulation(world, writeFixture(name, text));
+        REQUIRE(robot.articulation);
+        const auto index = jointIndex(robot, "hinge");
+        return robot.links[index].raw()->getInboundJoint()->getDriveParams(robot.links[index].axis()).driveType;
+    };
+    std::string text = document(rootJoint);
+    CHECK(driveType("usd_articulation_drive_force.usda", text) == ::physx::PxArticulationDriveType::eFORCE);
+
+    const std::string force = R"(uniform token drive:angular:physics:type = "force")";
+    text.replace(text.find(force), force.size(), R"(uniform token drive:angular:physics:type = "acceleration")");
+    CHECK(driveType("usd_articulation_drive_acceleration.usda", text) == ::physx::PxArticulationDriveType::eACCELERATION);
+}
+
 TEST_CASE("a file that holds no robot is an error, not an empty result", "[physx][usd]") {
     PhysxWorld world(settings());
     const auto missing = loadUsdArticulation(world, std::filesystem::temp_directory_path() / "usd_articulation_missing.usda");
