@@ -59,8 +59,9 @@
         // perturbation so the chop tilt is added in the correct (up) frame.
         if (dot(N, V) < 0.0) N = -N;
         Nmacro = N;// post-flip, pre-tilt: the surface's own plane
-      if (kOceanChop != 0u && (pc.oceanFlags & 1u) != 0u) {
-        // ── CHOP NORMALS (THREEPP_OCEAN_CHOP_NORMALS, water::ChopMoments) ────
+      if (kOceanChop != 0u) {
+        // ── CHOP NORMALS (DisplacedMesh::Params::chopNormals, water::ChopMoments)
+        // Compiled in only for a frame that has them on (spec constant 6).
         // oceanFineHeight is the fine cascade's moment chain here:
         // (h, mean slope x, mean slope z, mean squared slope) of the DISPLACED
         // surface, from exact derivatives (no stencil) with the chop's
@@ -129,12 +130,19 @@
             }
         }
         N = normalize(N + vec3(-gKept.x, 0.0, -gKept.y));
-        // Beckmann roughness alpha^2 is the sum of the two axes' slope
-        // variances (Walter et al. 2007, "Microfacet Models for Refraction
-        // through Rough Surfaces", section 5.1: sigma^2 per axis = alpha^2/2).
-        // The lane takes the short waves away, banked or not; the boil's own
-        // go in as on the other path.
-        fineKernelSq = slopeVar * wakeCalm * wakeCalm + 2.0 * wakeBoilVar;
+        // The slope variance the pixel cannot hold widens the lobe. For a
+        // microfacet surface the total slope variance (both axes) is alpha^2
+        // (Walter et al. 2007, "Microfacet Models for Refraction through Rough
+        // Surfaces", section 5.1: sigma^2 per axis = alpha^2/2), so the
+        // material's alpha = r^2 and the variance add as squares:
+        // alpha^2 = r^4 + var. shadeWater takes effRough = sqrt(r^2 + fks)
+        // and distGGX squares it to alpha = r^2 + fks, so the banked term is
+        // fks = sqrt(r^4 + var) - r^2. The lane takes the short waves away,
+        // banked or not; the boil's and the producers' ripples' unresolved
+        // variance (the same both-axes measure) goes in beside them.
+        const float r2   = pm.roughness * pm.roughness;
+        const float vTot = slopeVar * wakeCalm * wakeCalm + wakeBoilVar;
+        fineKernelSq = sqrt(r2 * r2 + vTot) - r2;
         // The footprint floor for the coarse mesh's own sub-pixel normals
         // (cascades 0+1 in the vertex normal), as on the other path.
         const float footRough = 0.45 * smoothstep(0.25, 4.0, pixWorld);

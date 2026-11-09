@@ -158,25 +158,40 @@ namespace threepp::water {
         DynamicSpectrum(const DynamicSpectrum&) = delete;
         DynamicSpectrum& operator=(const DynamicSpectrum&) = delete;
 
-        // Push-constant block of dynamic_spectrum.comp (std430, 16 bytes).
+        // Push-constant block of dynamic_spectrum.comp (std430, 12 bytes).
         struct PushParams {
             uint32_t textureSize;
             float    tileSize;
             float    elapsedSeconds;
-            uint32_t writeChop;// 0 = height + displacement only (the plain path)
+        };
+        // ...and of its OCEAN_CHOP variant (16 bytes).
+        struct ChopPushParams {
+            uint32_t textureSize;
+            float    tileSize;
+            float    elapsedSeconds;
+            float    taperSpacing;// m, the vertex grid's nominal spacing; 0 = no taper
         };
 
-        // writeChop: also store the slope spectrum i*k*h, the displacement
-        // gradient's diagonal, and pack its off-diagonal into ht's imaginary
-        // part (see dynamic_spectrum.comp). The slope and jacDiag images are
-        // allocated for every cascade either way, so the bindings stay valid
-        // and the switch can flip at runtime.
-        void recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool writeChop = false);
+        // Chop normals (DisplacedMesh::Params::chopNormals): creates the slope
+        // and jacDiag images and the OCEAN_CHOP variant's pipeline and set,
+        // the first time only, so a mesh that never asks for the feature runs
+        // exactly the plain pipeline, set and images. taperSpacing (m, may
+        // change on later calls) tapers the derivative fields to the vertex
+        // grid's Nyquist for the cascades that feed the vertex normal; 0 for
+        // the per-pixel cascade (see dynamic_spectrum.comp).
+        void enableChop(float taperSpacing);
+        bool chopEnabled() const { return chopPipe_ != VK_NULL_HANDLE; }
+
+        // chop (only once enableChop ran): the OCEAN_CHOP variant, which also
+        // stores the slope spectrum i*k*h, the displacement gradient's
+        // diagonal, and packs its off-diagonal into ht's imaginary part (see
+        // dynamic_spectrum.comp). Otherwise the plain pass.
+        void recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool chop = false);
 
         const OceanImage& ht()           const { return ht_; }
         const OceanImage& displacement() const { return displacement_; }
-        OceanImage&       slope()              { return slope_; }
-        OceanImage&       jacDiag()            { return jacDiag_; }
+        OceanImage&       slope()              { return slope_; }  // null until enableChop
+        OceanImage&       jacDiag()            { return jacDiag_; }// null until enableChop
 
     private:
         vulkan::VulkanContext& ctx_;
@@ -193,6 +208,14 @@ namespace threepp::water {
         VkPipelineLayout      layout_ = VK_NULL_HANDLE;
         VkPipeline            pipe_   = VK_NULL_HANDLE;
 
+        // The OCEAN_CHOP variant (enableChop).
+        VkDescriptorPool      chopPool_   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout chopDsl_    = VK_NULL_HANDLE;
+        VkDescriptorSet       chopDs_     = VK_NULL_HANDLE;
+        VkPipelineLayout      chopLayout_ = VK_NULL_HANDLE;
+        VkPipeline            chopPipe_   = VK_NULL_HANDLE;
+        float                 chopTaperSpacing_ = 0.f;
+
         void createImages();
         void createPipeline();
     };
@@ -205,9 +228,10 @@ namespace threepp::water {
     class IFFT {
     public:
         // maxGroups: how many distinct (input, scratch) image pairs this IFFT
-        // will be applied to over its life (a cascade has two; the wake
-        // field's ripples have one a patch).
-        IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize, uint32_t maxGroups = 4);
+        // will be applied to over its life (a cascade has two, four with the
+        // chop normals' slope and jacDiag; the wake field's ripples have one
+        // a patch).
+        IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize, uint32_t maxGroups = 6);
         ~IFFT();
 
         IFFT(const IFFT&) = delete;
@@ -267,7 +291,7 @@ namespace threepp::water {
             std::array<VkDescriptorSet, 2> v{};
             std::array<VkDescriptorSet, 2> p{};// same orientation convention
         };
-        uint32_t maxGroups_ = 4;// 2 pairs/cascade (height, displacement) + headroom
+        uint32_t maxGroups_ = 6;// 4 pairs/cascade (height, displacement, chop slope, chop jacDiag) + headroom
         std::vector<DescGroup> groups_;
 
         bool twiddleComputed_ = false;
@@ -279,14 +303,14 @@ namespace threepp::water {
     };
 
     // ─── ChopMoments ───────────────────────────────────────────────────
-    // The fine cascade's per-pixel surface for the deferred shade when the
-    // chop normals are on (THREEPP_OCEAN_CHOP_NORMALS). One RGBA32F image
-    // with a full mip chain:
+    // The fine cascade's per-pixel surface for the deferred shade while the
+    // chop normals are on (DisplacedMesh::Params::chopNormals; built the
+    // first time they are). One RGBA32F image with a full mip chain:
     //   .r = the height exactly as the IFFT left it (so every reader of the
     //        old fine-height binding, the path tracer included, sees the
     //        same value at LOD 0)
     //   .g, .b = the slope of the DISPLACED (choppy) surface, world units
-    //   .a = its squared length
+    //   .a = its squared length, plus the variance the fold fade banked
     // Level L is the box average of 2^L x 2^L texels (linear blits), so one
     // filtered fetch over a pixel's footprint gives the mean slope (tilts N)
     // and E[s^2] - |E[s]|^2, the slope variance the pixel cannot hold (goes

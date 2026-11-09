@@ -6,7 +6,9 @@
 #extension GL_GOOGLE_include_directive                  : enable
 
 #include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break), sampleBicubicRG
+#ifdef OCEAN_CHOP
 #include "ocean_chop_normal.glsl"// oceanChopSlope: slope of the displaced surface
+#endif
 
 // Writes displaced positions and normals for an FFT-driven ocean surface
 // directly into the BLAS vertex/normal buffers (host-mapped, same memory
@@ -38,14 +40,17 @@ layout(set = 0, binding = 2) uniform sampler2D height1;
 layout(set = 0, binding = 3) uniform sampler2D displace1;
 layout(set = 0, binding = 4) uniform sampler2D height2;
 layout(set = 0, binding = 5) uniform sampler2D displace2;
-// Chop normals (cascadeMask bit 31): the exact derivative fields of cascades
-// 0 and 1, the inverse FFTs of i*k*h (dh/dx, dh/dz) and of the displacement
-// gradient's diagonal (dDx/dx, dDz/dz); the off-diagonal dDx/dz rides in
-// heightN.g. See dynamic_spectrum.comp.
+#ifdef OCEAN_CHOP
+// Chop normals (this variant is compiled with -DOCEAN_CHOP=1 and bound only
+// while DisplacedMesh::Params::chopNormals is on): the exact derivative fields
+// of cascades 0 and 1, the inverse FFTs of i*k*h (dh/dx, dh/dz) and of the
+// displacement gradient's diagonal (dDx/dx, dDz/dz); the off-diagonal dDx/dz
+// rides in heightN.g. See dynamic_spectrum.comp.
 layout(set = 0, binding = 6) uniform sampler2D slope0;
 layout(set = 0, binding = 7) uniform sampler2D jac0;
 layout(set = 0, binding = 8) uniform sampler2D slope1;
 layout(set = 0, binding = 9) uniform sampler2D jac1;
+#endif
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
@@ -84,7 +89,7 @@ layout(push_constant, scalar) uniform Pc {
     float   tileSize2;
     float   waveScale;
     float   choppiness;
-    uint    cascadeMask;    // bits 0-2: cascades; bit 31: chop normals
+    uint    cascadeMask;
     float   warpCenterX;
     float   warpCenterZ;
     float   warpHalfRange;
@@ -429,7 +434,8 @@ void main() {
 
     const vec3 outPos = rest + disp;
 
-    if ((pc.cascadeMask & 0x80000000u) != 0u) {
+#ifdef OCEAN_CHOP
+    {
         // Chop normals: the normal of the surface this vertex actually sits
         // on, from exact derivatives at the REST point (no stencil), the
         // horizontal chop included: oceanChopSlope (ocean_chop_normal.glsl)
@@ -465,8 +471,11 @@ void main() {
             jzz += sn * sn * p - 2.0 * c * sn * q + c * c * r;
             jxz += c * sn * (r - p) + (c * c - sn * sn) * q;
         }
+        // Near a fold the chop correction fades back to the rest slope
+        // (ocean_chop_normal.glsl); a vertex has no roughness to bank the
+        // difference in, the per-pixel moments do.
         const vec2 sd = oceanChopSlope(sl * pc.waveScale,
-                                       jxx * pc.choppiness, jzz * pc.choppiness, jxz * pc.choppiness);
+                                       jxx * pc.choppiness, jzz * pc.choppiness, jxz * pc.choppiness).xy;
         const vec3 nc = normalize(vec3(-sd.x, 1.0, -sd.y));
         pc.posOut.v[i * 3u + 0u]  = outPos.x;
         pc.posOut.v[i * 3u + 1u]  = outPos.y;
@@ -474,9 +483,8 @@ void main() {
         pc.normOut.v[i * 3u + 0u] = nc.x;
         pc.normOut.v[i * 3u + 1u] = nc.y;
         pc.normOut.v[i * 3u + 2u] = nc.z;
-        return;
     }
-
+#else
     // Finite-difference normal from BICUBIC height taps (cascades 0+1 —
     // see sampleHeightSmooth for why cascade 2 is excluded). eps matches
     // the vertex grid PER AXIS (the old tileSize0/256 ≈ 2× spacing
@@ -500,6 +508,7 @@ void main() {
     pc.normOut.v[i * 3u + 0u] = n.x;
     pc.normOut.v[i * 3u + 1u] = n.y;
     pc.normOut.v[i * 3u + 2u] = n.z;
+#endif
 
     // Foam used to be computed per-vertex right here (Jacobian + wake
     // formulas + disturbance splats + persistence decay) and written to a

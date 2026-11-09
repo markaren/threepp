@@ -13,6 +13,7 @@
 #include "threepp/renderers/vulkan/shaders/ifft_vertical.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ifft_permute.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ocean_chop_moments.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/dynamic_spectrum.comp.chop.spv.h"
 
 #include "threepp/math/Rng.hpp"
 
@@ -508,8 +509,6 @@ namespace threepp::water {
     void DynamicSpectrum::createImages() {
         ht_           = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.ht");
         displacement_ = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.displacement");
-        slope_        = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.slope");
-        jacDiag_      = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.jacDiag");
     }
 
     void DynamicSpectrum::createPipeline() {
@@ -519,12 +518,10 @@ namespace threepp::water {
         // layout qualifiers stay put.
         // (Binding 4, the params UBO, is gone too: the per-frame time rides in
         // push constants — see recordCompute.)
-        const std::array<VkDescriptorSetLayoutBinding, 5> bindings{
+        const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // H0
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // HT
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Displacement
-            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Slope (chop normals)
-            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // JacDiag (chop normals)
         };
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -552,7 +549,7 @@ namespace threepp::water {
 
         const std::array<VkDescriptorPoolSize, 2> poolSizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          4},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          2},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -586,14 +583,7 @@ namespace threepp::water {
         dispInfo.imageView   = displacement_.view;
         dispInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkDescriptorImageInfo slopeInfo{};
-        slopeInfo.imageView   = slope_.view;
-        slopeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkDescriptorImageInfo jacInfo{};
-        jacInfo.imageView   = jacDiag_.view;
-        jacInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        std::array<VkWriteDescriptorSet, 5> writes{};
+        std::array<VkWriteDescriptorSet, 3> writes{};
         for (auto& w : writes) {
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w.dstSet = ds_;
@@ -602,40 +592,131 @@ namespace threepp::water {
         writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[0].pImageInfo = &h0Info;
         writes[1].dstBinding = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[1].pImageInfo = &htInfo;
         writes[2].dstBinding = 3; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[2].pImageInfo = &dispInfo;
-        writes[3].dstBinding = 2; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[3].pImageInfo = &slopeInfo;
-        writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[4].pImageInfo = &jacInfo;
         vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
-    void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool writeChop) {
+    void DynamicSpectrum::enableChop(float taperSpacing) {
+        chopTaperSpacing_ = taperSpacing;
+        if (chopPipe_ != VK_NULL_HANDLE) return;
+        slope_   = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.slope");
+        jacDiag_ = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.jacDiag");
+
+        // The OCEAN_CHOP variant's own set: the plain bindings plus Slope (2)
+        // and JacDiag (4). Its own layout, pipeline and pool, so the plain
+        // path above keeps exactly the ones it had.
+        const std::array<VkDescriptorSetLayoutBinding, 5> bindings{
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // H0
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // HT
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Displacement
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Slope
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // JacDiag
+        };
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
+        dlci.pBindings    = bindings.data();
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &chopDsl_),
+              "vkCreateDescriptorSetLayout(dyn chop)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(ChopPushParams);
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &chopDsl_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &chopLayout_),
+              "vkCreatePipelineLayout(dyn chop)");
+
+        VkShaderModule mod = makeShader(ctx_, kDynamicSpectrumChopCompSpv, sizeof(kDynamicSpectrumChopCompSpv));
+        chopPipe_ = makeComputePipeline(ctx_, mod, chopLayout_);
+        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
+        const std::array<VkDescriptorPoolSize, 2> poolSizes{
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          4},
+        };
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = 1;
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        dpci.pPoolSizes    = poolSizes.data();
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &chopPool_),
+              "vkCreateDescriptorPool(dyn chop)");
+
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = chopPool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &chopDsl_;
+        check(vkAllocateDescriptorSets(ctx_.device(), &dai, &chopDs_),
+              "vkAllocateDescriptorSets(dyn chop)");
+
+        VkDescriptorImageInfo h0Info{};
+        h0Info.sampler     = sampler_;
+        h0Info.imageView   = src_.h0View();
+        h0Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        const std::array<VkImageView, 4> storage{ht_.view, displacement_.view, slope_.view, jacDiag_.view};
+        const std::array<uint32_t, 4> storageBinding{1u, 3u, 2u, 4u};
+        std::array<VkDescriptorImageInfo, 4> infos{};
+        std::array<VkWriteDescriptorSet, 5> writes{};
+        for (auto& w : writes) {
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = chopDs_;
+            w.descriptorCount = 1;
+        }
+        writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[0].pImageInfo = &h0Info;
+        for (uint32_t i = 0; i < 4; ++i) {
+            infos[i].imageView           = storage[i];
+            infos[i].imageLayout         = VK_IMAGE_LAYOUT_GENERAL;
+            writes[i + 1].dstBinding     = storageBinding[i];
+            writes[i + 1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i + 1].pImageInfo     = &infos[i];
+        }
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool chop) {
+        chop = chop && chopPipe_ != VK_NULL_HANDLE;
         cmdTransitionToGeneral(cb, ht_);
         cmdTransitionToGeneral(cb, displacement_);
-        // Statically used bindings of this set: in a declared layout every
-        // frame whether or not this one stores to them.
-        cmdTransitionToGeneral(cb, slope_);
-        cmdTransitionToGeneral(cb, jacDiag_);
+        if (chop) {
+            cmdTransitionToGeneral(cb, slope_);
+            cmdTransitionToGeneral(cb, jacDiag_);
+        }
 
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
-                                0, 1, &ds_, 0, nullptr);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, chop ? chopPipe_ : pipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, chop ? chopLayout_ : layout_,
+                                0, 1, chop ? &chopDs_ : &ds_, 0, nullptr);
         // The frame time is a PUSH CONSTANT, recorded into this command buffer.
         // It used to be a single host-mapped UBO rewritten here every frame —
         // with two frames in flight, recording frame N+1 overwrote it before
         // frame N's dispatch had necessarily read it, so frame N's cascades
         // could evolve to frame N+1's time (a pacing-dependent skew that
         // showed up as sample_height() mismatches run to run).
-        PushParams p{};
-        p.textureSize    = textureSize_;
-        p.tileSize       = tileSize_;
-        p.elapsedSeconds = elapsedSeconds;
-        p.writeChop      = writeChop ? 1u : 0u;
-        vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        if (chop) {
+            ChopPushParams p{};
+            p.textureSize    = textureSize_;
+            p.tileSize       = tileSize_;
+            p.elapsedSeconds = elapsedSeconds;
+            p.taperSpacing   = chopTaperSpacing_;
+            vkCmdPushConstants(cb, chopLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        } else {
+            PushParams p{};
+            p.textureSize    = textureSize_;
+            p.tileSize       = tileSize_;
+            p.elapsedSeconds = elapsedSeconds;
+            vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        }
         const uint32_t g = groupCountFor(textureSize_);
         vkCmdDispatch(cb, g, g, 1);
 
         cmdShaderRWBarrier(cb, ht_.image);
         cmdShaderRWBarrier(cb, displacement_.image);
-        if (writeChop) {
+        if (chop) {
             cmdShaderRWBarrier(cb, slope_.image);
             cmdShaderRWBarrier(cb, jacDiag_.image);
         }
@@ -646,10 +727,14 @@ namespace threepp::water {
         if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layout_, nullptr);
         if (dsl_    != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dsl_, nullptr);
         if (pool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
+        if (chopPipe_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), chopPipe_, nullptr);
+        if (chopLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), chopLayout_, nullptr);
+        if (chopDsl_    != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), chopDsl_, nullptr);
+        if (chopPool_   != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), chopPool_, nullptr);
         if (sampler_!= VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
         destroyImage(ctx_, ht_);
         destroyImage(ctx_, displacement_);
-        destroyImage(ctx_, slope_);
+        destroyImage(ctx_, slope_);// no-ops while the chop variant was never enabled
         destroyImage(ctx_, jacDiag_);
     }
 

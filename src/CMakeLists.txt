@@ -1549,6 +1549,15 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dynamic_spectrum.comp"
         kDynamicSpectrumCompSpv
         _dynamic_spv_h)
+    # The chop normals' variant (DisplacedMesh::Params::chopNormals): the same
+    # source with its slope and displacement-gradient stores compiled in. The
+    # plain compile above stays the shader the feature-off path has always run.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dynamic_spectrum.comp"
+        kDynamicSpectrumChopCompSpv
+        _dynamic_chop_spv_h
+        VARIANT_SUFFIX chop
+        DEFINES OCEAN_CHOP=1)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ocean_chop_moments.comp"
         kOceanChopMomentsCompSpv
@@ -1573,6 +1582,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
         kWaterDisplaceCompSpv
         _water_displace_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
+        kWaterDisplaceChopCompSpv
+        _water_displace_chop_spv_h
+        VARIANT_SUFFIX chop
+        DEFINES OCEAN_CHOP=1)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
         kFoamWorldCompSpv

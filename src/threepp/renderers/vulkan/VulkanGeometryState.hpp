@@ -595,10 +595,12 @@ namespace threepp::vulkan::impl {
         uint32_t cascadeMask = 0;            // bit i set = cascade i enabled
         // Chop normals (DisplacedMesh::Params::chopNormals): the finest
         // cascade's slope-moment mip chain, the deferred shade's per-pixel
-        // surface. null when THREEPP_OCEAN_CHOP_NORMALS=0.
+        // surface, and the OCEAN_CHOP displace set. Both null until the mesh
+        // first turns the feature on (VulkanRenderer::Impl::syncOceanChop).
         std::unique_ptr<water::ChopMoments> chopMoments;
-        uint32_t chopFineIdx = 0;            // which cascade feeds chopMoments
-        bool     chopOn      = false;        // resolved this frame (env and params)
+        VkDescriptorSet displaceChopDS = VK_NULL_HANDLE;
+        uint32_t chopFineIdx = 0;            // the finest enabled cascade (feeds chopMoments)
+        bool     chopOn      = false;        // on this frame (resolved by syncOceanChop)
         // Wind + fetch actually baked into the cascades' h0 spectra. When
         // dm.params drifts from these, recordDisplacedDeform rewrites the
         // Phillips params and re-dispatches the (normally one-shot) h0

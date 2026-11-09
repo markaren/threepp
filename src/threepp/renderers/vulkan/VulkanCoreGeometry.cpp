@@ -3449,9 +3449,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                         0, 1, &mb, 0, nullptr, 0, nullptr);
             }
-            // Chop normals this frame: the feature exists (the env var did not
-            // remove it at setup) and the mesh's live param asks for it.
-            st.chopOn = st.chopMoments && dm.params.chopNormals;
+            // st.chopOn (chop normals this frame) was resolved by
+            // syncOceanChop in the scene build, with the shade's binding.
             for (uint32_t i = 0; i < 3; ++i) {
                 if (!(st.cascadeMask & (1u << i))) continue;
                 auto& c = st.cascades[i];
@@ -3570,17 +3569,15 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                             0, 0, nullptr, 1, &bmb, 0, nullptr);
                 }
             }
-            // The fine cascade's per-pixel surface for the deferred shade:
-            // height (always, every reader of the fine-height binding reads
-            // it) plus the displaced surface's slope moments and their mip
-            // chain. Runs every frame the feature exists, on or off, because
-            // the binding points at this image either way.
-            if (st.chopMoments) {
+            // The fine cascade's per-pixel surface for the deferred shade while
+            // the chop normals are on (the shade's binding 13 points at it
+            // then): the height, unchanged, plus the displaced surface's
+            // slope moments and their mip chain.
+            if (st.chopOn) {
                 const auto& fc = st.cascades[st.chopFineIdx];
                 st.chopMoments->record(cb, dm.params.waveScale / fc.tileSize,
                                        dm.params.choppiness / fc.tileSize,
                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
-                if (oceanFineHeightView == st.chopMoments->sampledView()) oceanChopNormals = st.chopOn;
             }
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFFT, currentFrame);
 
@@ -3773,7 +3770,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.waveScale    = dm.params.waveScale;
             oceanWaveScale  = dm.params.waveScale;
             pc.choppiness   = dm.params.choppiness;
-            pc.cascadeMask  = st.cascadeMask | (st.chopOn ? 0x80000000u : 0u);// bit 31: chop normals
+            pc.cascadeMask  = st.cascadeMask;
             pc.warpCenterX    = dm.warp.centerX;
             pc.warpCenterZ    = dm.warp.centerZ;
             pc.warpHalfRange  = dm.warp.halfRange;
@@ -3782,7 +3779,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.hullAddr       = hullAddr;
             pc.hullCount      = hullCount;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
-            waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
+            waterDisplace_->recordDispatch(cb, st.chopOn ? st.displaceChopDS : st.displaceDS, pc, st.chopOn);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
 
             // (4c) World-space foam pass — same inputs as water_displace
@@ -5356,7 +5353,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // slot pair. Disabled cascades are filled with cascade 0's images
             // so the shader's combined-image-sampler bindings are always valid;
             // the shader gates which slots are actually sampled via cascadeMask.
-            std::array<VkDescriptorImageInfo, 10> imageInfos{};
+            std::array<VkDescriptorImageInfo, 6> imageInfos{};
             for (uint32_t i = 0; i < 3; ++i) {
                 const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
                 const auto& c = state->cascades[srcCascade];
@@ -5367,20 +5364,8 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 imageInfos[i * 2 + 1].imageView   = c.dyn->displacement().view;
                 imageInfos[i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
-            // Bindings 6-9: the chop normals' slope + jacDiag of cascades 0
-            // and 1 (same fallback to cascade 0 for a disabled slot).
-            for (uint32_t i = 0; i < 2; ++i) {
-                const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
-                auto& c = state->cascades[srcCascade];
-                imageInfos[6 + i * 2 + 0].sampler     = waterDisplace_->sampler();
-                imageInfos[6 + i * 2 + 0].imageView   = c.dyn->slope().view;
-                imageInfos[6 + i * 2 + 0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                imageInfos[6 + i * 2 + 1].sampler     = waterDisplace_->sampler();
-                imageInfos[6 + i * 2 + 1].imageView   = c.dyn->jacDiag().view;
-                imageInfos[6 + i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            }
-            std::array<VkWriteDescriptorSet, 10> ws{};
-            for (uint32_t i = 0; i < 10; ++i) {
+            std::array<VkWriteDescriptorSet, 6> ws{};
+            for (uint32_t i = 0; i < 6; ++i) {
                 ws[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 ws[i].dstSet = state->displaceDS;
                 ws[i].dstBinding = i;
@@ -5440,26 +5425,9 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                         fineTile = state->cascades[i].tileSize;
                     }
                 }
-                // Chop normals (THREEPP_OCEAN_CHOP_NORMALS, default on; 0 at
-                // startup removes the feature): the binding gets the fine
-                // cascade's slope-moment chain instead, whose .r is the same
-                // height, so the other readers of it are unchanged.
-                static const bool chopAvailable =
-                        vulkan::env::integer("THREEPP_OCEAN_CHOP_NORMALS").value_or(1) != 0;
-                if (fineTile > 0.f && chopAvailable) {
-                    auto& fc = state->cascades[fineIdx];
-                    state->chopMoments = std::make_unique<water::ChopMoments>(
-                            *ctx, fc.dyn->ht().width, fc.dyn->ht().view,
-                            fc.dyn->slope().view, fc.dyn->jacDiag().view);
-                    state->chopFineIdx = fineIdx;
-                }
+                state->chopFineIdx = fineIdx;// the cascade a chop-normal moment chain would read
                 if (fineTile > 0.f) {
-                    if (state->chopMoments) {
-                        oceanFineHeightView    = state->chopMoments->sampledView();
-                        oceanFineHeightSampler = state->chopMoments->sampler();
-                    } else {
-                        oceanFineHeightView = state->cascades[fineIdx].dyn->ht().view;
-                    }
+                    oceanFineHeightView = state->cascades[fineIdx].dyn->ht().view;
                     oceanFineTileSize   = fineTile;
                     rewriteDeferredDescriptors();
                 }
@@ -5485,11 +5453,98 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 oceanWakeView = state->wake->stateView();
                 if (state->wake->rippleView() != VK_NULL_HANDLE) oceanRippleView = state->wake->rippleView();
             }
+            // Chop normals, when the mesh starts with them on: built here so
+            // the priming update below already runs them (the all-slots
+            // rewrite that follows picks up the binding it moves).
+            syncOceanChop(dm, *state);
             rewriteDeferredDescriptors();
 
             auto* raw = state.get();
             displacedStates.emplace(&dm, std::move(state));
             return raw;
+        }
+
+void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& st) {
+            // Chop normals (DisplacedMesh::Params::chopNormals), resolved once
+            // per frame in the scene build, before the frame's fence wait and
+            // before anything is recorded.
+            //
+            // Nothing of the feature exists until the mesh first asks for it:
+            // then every cascade gets its slope and displacement-gradient
+            // images and the OCEAN_CHOP variant of dynamic_spectrum.comp,
+            // water_displace.comp gets its OCEAN_CHOP pipeline and a set for
+            // this mesh, and the fine cascade gets its slope-moment chain
+            // (water::ChopMoments). A scene that never turns it on keeps dev's
+            // images, SPIR-V, layouts and the shade kernel without the
+            // branch. Turned off again, the mesh goes back to all of those;
+            // what was built stays for the next toggle.
+            if (dm.params.chopNormals && !st.chopMoments) {
+                // The vertex normal's derivative fields are tapered to the
+                // vertex grid's Nyquist (dynamic_spectrum.comp): the nominal
+                // spacing, the one the plain path's finite difference uses.
+                // The per-pixel cascade is not tapered, its mip chain filters.
+                const float spacing = std::max(st.planeSizeX / float(st.gridDimX - 1u),
+                                               st.planeSizeZ / float(st.gridDimZ - 1u));
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (!(st.cascadeMask & (1u << i))) continue;
+                    st.cascades[i].dyn->enableChop(i < 2u && i != st.chopFineIdx ? spacing : 0.f);
+                }
+                // The OCEAN_CHOP displace set: the plain six bindings, then
+                // the slope + jacDiag of cascades 0 and 1 (bindings 6-9), a
+                // disabled cascade falling back to cascade 0 as in the plain set.
+                st.displaceChopDS = waterDisplace_->allocateChopDescriptorSet();
+                std::array<VkDescriptorImageInfo, 10> infos{};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    const auto& c = st.cascades[(st.cascadeMask & (1u << i)) ? i : 0u];
+                    infos[i * 2 + 0] = {waterDisplace_->sampler(), c.dyn->ht().view, VK_IMAGE_LAYOUT_GENERAL};
+                    infos[i * 2 + 1] = {waterDisplace_->sampler(), c.dyn->displacement().view, VK_IMAGE_LAYOUT_GENERAL};
+                }
+                for (uint32_t i = 0; i < 2; ++i) {
+                    auto& c = st.cascades[(st.cascadeMask & (1u << i)) ? i : 0u];
+                    infos[6 + i * 2 + 0] = {waterDisplace_->sampler(), c.dyn->slope().view, VK_IMAGE_LAYOUT_GENERAL};
+                    infos[6 + i * 2 + 1] = {waterDisplace_->sampler(), c.dyn->jacDiag().view, VK_IMAGE_LAYOUT_GENERAL};
+                }
+                std::array<VkWriteDescriptorSet, 10> ws{};
+                for (uint32_t i = 0; i < 10; ++i) {
+                    ws[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    ws[i].dstSet          = st.displaceChopDS;
+                    ws[i].dstBinding      = i;
+                    ws[i].descriptorCount = 1;
+                    ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    ws[i].pImageInfo      = &infos[i];
+                }
+                vulkan::updateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+
+                auto& fc = st.cascades[st.chopFineIdx];
+                st.chopMoments = std::make_unique<water::ChopMoments>(
+                        *ctx, fc.dyn->ht().width, fc.dyn->ht().view,
+                        fc.dyn->slope().view, fc.dyn->jacDiag().view);
+            }
+            st.chopOn = st.chopMoments && dm.params.chopNormals;
+            if (!st.chopMoments) return;
+
+            // The shade's fine-height binding (13) is scene-global: it belongs
+            // to this ocean only while it names one of this ocean's two views
+            // (the cascade's height, or the moment chain whose .r is that same
+            // height, so the path tracer and the plain shade read the same
+            // value from either).
+            const VkImageView htView    = st.cascades[st.chopFineIdx].dyn->ht().view;
+            const VkImageView chainView = st.chopMoments->sampledView();
+            if (oceanFineHeightView != htView && oceanFineHeightView != chainView) return;
+            const VkImageView want = st.chopOn ? chainView : htView;
+            if (oceanFineHeightView != want) {
+                oceanFineHeightView    = want;
+                oceanFineHeightSampler = st.chopOn ? st.chopMoments->sampler() : oceanFineHeightDummy.sampler;
+                // Each frame-in-flight slot rewrites its sets at the top of its
+                // own frame, once its fence has signalled, so no recorded or
+                // pending frame sees the switch, and this frame's shade (spec
+                // constant below) and its set agree.
+                deferredDescDirty_.fill(true);
+            }
+            // The shade compiles its chop branch in only for a frame that has
+            // it on (spec constant 6): every other frame and every scene
+            // without an ocean keeps the kernel it had.
+            oceanChopNormals = st.chopOn;
         }
 
 VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(GrassMesh& gm) {

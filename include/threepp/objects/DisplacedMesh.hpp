@@ -33,6 +33,11 @@ namespace threepp {
     // environment sets THREEPP_OCEAN_SPREAD=0 (read once per process).
     bool defaultMeasuredSpreading();
 
+    // Default of DisplacedMesh::Params::chopNormals: false unless the
+    // environment sets THREEPP_OCEAN_CHOP_NORMALS to 1, on or true; 0 is off
+    // (read once per process).
+    bool defaultChopNormals();
+
     class DisplacedMesh : public Mesh {
 
     public:
@@ -116,10 +121,13 @@ namespace threepp {
             // product of the displaced surface's tangents, and the fine
             // cascade's per-pixel slope comes from a mip chain of slope moments
             // (mean tilts the normal, the variance a pixel cannot hold goes to
-            // roughness). false = the height-only finite-difference normals.
-            // Live-tunable. The env var THREEPP_OCEAN_CHOP_NORMALS=0, read at
-            // startup, removes the feature entirely (the old path, bit for bit).
-            bool chopNormals = true;
+            // roughness). Near a fold the chop correction fades back to the
+            // rest slope and its remainder goes to roughness. false = the
+            // height-only finite-difference normals, the renderer's original
+            // path bit for bit: the feature's images, pipelines and shade
+            // branch are built only the first time a mesh turns it on.
+            // Live-tunable. THREEPP_OCEAN_CHOP_NORMALS=1 makes true the default.
+            bool chopNormals = defaultChopNormals();
 
             // FFT texture resolution per cascade (must be power of two).
             // Band-passed cascades need only enough texels to resolve their

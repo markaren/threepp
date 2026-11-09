@@ -241,7 +241,7 @@ namespace threepp::vulkan {
             float emissiveTotalPower = 0.f;
             float fireflyClamp       = 0.f;
             float oceanFineTileSize  = 0.f;
-            bool  oceanChopNormals   = false;// oceanFineHeight is a ChopMoments chain, on
+            bool  oceanChopNormals   = false;// chop normals on this frame: oceanFineHeight is a ChopMoments chain
             float oceanFoamTileSize  = 0.f;
             bool denoise  = true;
             bool restirDI = false;
@@ -483,12 +483,12 @@ namespace threepp::vulkan {
         // (see shadePipeline). The mask always holds the MSAA sample-count bits,
         // so the default path has one pipeline per sample count in use; the
         // THREEPP_VK_SHADE_* knobs read at construction add diagnostics to it.
-        bool                  oceanChopSpec_ = false;// spec constant 6: chop-normal branch compiled in
         uint32_t              specMask_     = 0;    // kShadeSpecMsaa | THREEPP_VK_SHADE_SPEC_MASK
         bool                  specProbe_    = false;// THREEPP_VK_SHADE_SPEC_PROBE
         VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept for the lazy creates
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
-        VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget, bool rayRecon);
+        VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget, bool rayRecon,
+                                 bool oceanChop);
         VkPipeline createShadePipeline(uint64_t key);
         // What the pipeline-cache blob holds of the shade, kept in a text file
         // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"

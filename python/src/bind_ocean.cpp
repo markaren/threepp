@@ -134,6 +134,11 @@ namespace threepp_py {
                 .def_readwrite("foam_amount", &DisplacedMesh::Params::foamAmount,
                                "Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; "
                                "wake/disturbance foam unaffected). Ocean auto-derives ~size/300.")
+                .def_readwrite("chop_normals", &DisplacedMesh::Params::chopNormals,
+                               "Shade the surface the choppy displacement draws: exact slope and displacement-gradient "
+                               "fields give the vertex normal, the fine cascade's slope moments the per-pixel one (what a "
+                               "pixel cannot hold goes to roughness). False (default) = the height-only normals. "
+                               "Live-tunable; THREEPP_OCEAN_CHOP_NORMALS=1 makes True the default.")
                 .def_readwrite("texture_size_0", &DisplacedMesh::Params::textureSize0, "Cascade-0 FFT resolution (power of two).")
                 .def_readwrite("texture_size_1", &DisplacedMesh::Params::textureSize1, "Cascade-1 FFT resolution (power of two).")
                 .def_readwrite("texture_size_2", &DisplacedMesh::Params::textureSize2, "Cascade-2 FFT resolution (power of two).");

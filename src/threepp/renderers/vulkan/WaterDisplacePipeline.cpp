@@ -4,6 +4,7 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/water_displace.comp.chop.spv.h"
 
 #include <array>
 
@@ -24,13 +25,16 @@ namespace threepp::vulkan {
         if (dsLayout_)       vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)       vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)        vkDestroySampler(d, sampler_, nullptr);
+        if (chopPipeline_)       vkDestroyPipeline(d, chopPipeline_, nullptr);
+        if (chopPipelineLayout_) vkDestroyPipelineLayout(d, chopPipelineLayout_, nullptr);
+        if (chopDsLayout_)       vkDestroyDescriptorSetLayout(d, chopDsLayout_, nullptr);
+        if (chopDescPool_)       vkDestroyDescriptorPool(d, chopDescPool_, nullptr);
     }
 
     void WaterDisplacePipeline::createPipeline() {
-        // 10 combined-image-sampler bindings: three (height, displacement)
-        // cascade pairs, then the chop normals' (slope, jacDiag) pairs of
-        // cascades 0 and 1 (water_displace.comp bindings 6-9).
-        std::array<VkDescriptorSetLayoutBinding, 10> bb{};
+        // 6 combined-image-sampler bindings — three (height, displacement)
+        // cascade pairs.
+        std::array<VkDescriptorSetLayoutBinding, 6> bb{};
         for (uint32_t i = 0; i < bb.size(); ++i) {
             bb[i].binding         = i;
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -86,7 +90,7 @@ namespace threepp::vulkan {
         // destroyed; bump kMaxOceans if scenes ever exceed it.
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps.descriptorCount = 10 * kMaxOceans;
+        ps.descriptorCount = 6 * kMaxOceans;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = kMaxOceans;
@@ -120,13 +124,92 @@ namespace threepp::vulkan {
         return ds;
     }
 
+    void WaterDisplacePipeline::createChopPipeline() {
+        // The plain six bindings, then the chop normals' (slope, jacDiag)
+        // pairs of cascades 0 and 1 (water_displace.comp bindings 6-9).
+        std::array<VkDescriptorSetLayoutBinding, 10> bb{};
+        for (uint32_t i = 0; i < bb.size(); ++i) {
+            bb[i].binding         = i;
+            bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bb[i].descriptorCount = 1;
+            bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<uint32_t>(bb.size());
+        dlci.pBindings    = bb.data();
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &chopDsLayout_),
+              "vkCreateDescriptorSetLayout(displace chop)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(PushConstants);
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &chopDsLayout_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &chopPipelineLayout_),
+              "vkCreatePipelineLayout(displace chop)");
+
+        VkShaderModuleCreateInfo smci{};
+        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = sizeof(kWaterDisplaceChopCompSpv);
+        smci.pCode    = kWaterDisplaceChopCompSpv;
+        VkShaderModule mod = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
+              "vkCreateShaderModule(displace chop)");
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = mod;
+        stage.pName  = "main";
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage  = stage;
+        cpci.layout = chopPipelineLayout_;
+        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
+                                       1, &cpci, nullptr, &chopPipeline_),
+              "vkCreateComputePipelines(displace chop)");
+        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
+        VkDescriptorPoolSize ps{};
+        ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ps.descriptorCount = 10 * kMaxOceans;
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = kMaxOceans;
+        dpci.poolSizeCount = 1;
+        dpci.pPoolSizes    = &ps;
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &chopDescPool_),
+              "vkCreateDescriptorPool(displace chop)");
+    }
+
+    VkDescriptorSet WaterDisplacePipeline::allocateChopDescriptorSet() {
+        if (chopPipeline_ == VK_NULL_HANDLE) createChopPipeline();
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = chopDescPool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &chopDsLayout_;
+        VkDescriptorSet ds = VK_NULL_HANDLE;
+        check(vkAllocateDescriptorSets(ctx_.device(), &dai, &ds),
+              "vkAllocateDescriptorSets(displace chop)");
+        return ds;
+    }
+
     void WaterDisplacePipeline::recordDispatch(VkCommandBuffer cb,
                                                VkDescriptorSet ds,
-                                               const PushConstants& pc) {
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+                                               const PushConstants& pc,
+                                               bool chop) {
+        chop = chop && chopPipeline_ != VK_NULL_HANDLE;
+        const VkPipelineLayout layout = chop ? chopPipelineLayout_ : pipelineLayout_;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, chop ? chopPipeline_ : pipeline_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipelineLayout_, 0, 1, &ds, 0, nullptr);
-        vkCmdPushConstants(cb, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                                layout, 0, 1, &ds, 0, nullptr);
+        vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), &pc);
         const uint32_t groups = (pc.vertexCount + 63u) / 64u;
         vkCmdDispatch(cb, groups, 1, 1);

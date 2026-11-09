@@ -4355,6 +4355,9 @@ namespace threepp {
         // cascade. Returns nullptr if the geometry is unsupported (must be a
         // square indexed plane with N×N vertices for some power-of-two N).
         DisplacedMeshState* ensureDisplacedState(DisplacedMesh& dm);
+        // Chop normals: builds their resources the first time the mesh asks,
+        // resolves st.chopOn and points binding 13 to match (see the definition).
+        void syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& st);
 
         // Per-frame: run the FFT chain → water_displace → BLAS rebuild for
         // one DisplacedMesh. Mirrors refreshSkinnedBlas's structure.

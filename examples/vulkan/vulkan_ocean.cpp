@@ -1371,15 +1371,9 @@ int main(int argc, char** argv) {
     canvas.addKeyListener(camKey);
 
     // N flips the chop normals (DisplacedMesh::Params::chopNormals) for a live
-    // A/B. THREEPP_OCEAN_CHOP_NORMALS=0 at startup removes them altogether.
-    {
-        const char* chopEnv = std::getenv("THREEPP_OCEAN_CHOP_NORMALS");
-        if (chopEnv && std::atoi(chopEnv) == 0)
-            std::cout << "[vulkan_ocean] chop normals REMOVED (THREEPP_OCEAN_CHOP_NORMALS=0)" << std::endl;
-        else
-            std::cout << "[vulkan_ocean] chop normals " << (ocean->params.chopNormals ? "ON" : "OFF")
-                      << " (N toggles)" << std::endl;
-    }
+    // A/B. THREEPP_OCEAN_CHOP_NORMALS=1 starts with them on.
+    std::cout << "[vulkan_ocean] chop normals " << (ocean->params.chopNormals ? "ON" : "OFF")
+              << " (N toggles)" << std::endl;
     KeyAdapter chopKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::N) {
             ocean->params.chopNormals = !ocean->params.chopNormals;

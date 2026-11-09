@@ -8,10 +8,32 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 
 namespace threepp {
+
+    namespace {
+        // An ocean look switch's environment variable: exactly "0" is off,
+        // "1", "on" or "true" is on; unset keeps `fallback`, and anything
+        // else keeps it too, with a warning.
+        bool envSwitch(const char* name, bool fallback) {
+            const char* v = std::getenv(name);
+            if (!v || !*v) return fallback;
+            if (std::strcmp(v, "0") == 0) return false;
+            if (std::strcmp(v, "1") == 0 || std::strcmp(v, "on") == 0 || std::strcmp(v, "true") == 0) return true;
+            std::fprintf(stderr, "[DisplacedMesh] %s=%s not understood (0 is off; 1, on or true is on); it stays %s\n",
+                         name, v, fallback ? "on" : "off");
+            return fallback;
+        }
+    }// namespace
+
+    bool defaultChopNormals() {
+        static const bool value = envSwitch("THREEPP_OCEAN_CHOP_NORMALS", false);
+        return value;
+    }
 
     bool defaultMeasuredSpreading() {
         static const bool value = [] {

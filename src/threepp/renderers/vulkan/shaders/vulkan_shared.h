@@ -499,11 +499,10 @@ namespace threepp::vulkan {
         uint32_t clusterLightCount;// # lights in the cluster buffer (0 = none)
         uint32_t shadeMode;        // 0 = dispatch A; 1 = MSAA per-sample dispatch B
         uint32_t preExpBits;       // float-bits pre-exposure baked into sceneHdr stores
-        uint32_t oceanFlags;       // bit 0: oceanFineHeight is a chop-normal moment chain, in use
     };
-    static_assert(sizeof(ShadePush) == 84,
+    static_assert(sizeof(ShadePush) == 80,
                   "ShadePush size changed - update the GLSL mirror in this file "
-                  "and the push range in DeferredShade::createPipeline.");
+                  "and the 80-byte push range in DeferredShade::createPipeline.");
 }
 
 #else  // GLSL
@@ -529,7 +528,6 @@ struct ShadePush {
     uint  clusterLightCount;
     uint  shadeMode;
     uint  preExpBits;
-    uint  oceanFlags;
 };
 // Every consumer declares:
 //   layout(push_constant) uniform Pc { ShadePush pc; };

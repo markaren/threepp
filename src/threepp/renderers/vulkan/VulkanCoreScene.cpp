@@ -3051,6 +3051,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
                             auto stIt = displacedStates.find(dm);
                             if (stIt == displacedStates.end()) continue;
+                            syncOceanChop(*dm, *stIt->second);
                             pendingDisplacedDeforms_.emplace_back(dm, stIt->second.get(), now);
                             ++dm->frameTick;
                         }
@@ -4559,6 +4560,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // recordCommandBuffer refits it before the shade trace,
                         // and beginDeferredFrame mirrors the height field after
                         // the fence wait, as on the per-frame path.
+                        syncOceanChop(*dm, *st);
                         pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(frameNowSec()));
                         ++dm->frameTick;
                     } else {
