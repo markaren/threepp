@@ -771,12 +771,20 @@ int main(int argc, char** argv) {
     // render), so without it the sea is exactly the analytic-wake one.
     const bool hasWakeField = wakeNew;
     if (hasWakeField) {
-        ocean->wakeField.resolution       = 1024;
+        // One patch, hers. It holds only her waves (her sources push and
+        // leave nothing else: no race, no lane), so the field's own grid
+        // carries nothing and is kept small.
+        ocean->wakeField.resolution       = 256;
+        ocean->wakeField.patches          = 1;
         ocean->wakeField.rippleResolution = 512;
         // Waves tens of metres long lose next to nothing to viscosity in
         // minutes (the 2 nu k^2 term takes the short ones); the window's
         // absorbing layer, not this, is what ends them.
         ocean->wakeField.rippleLife = 120.f;
+        // The ripples' height in the geometry, for her (the engine's default
+        // is off); THREEPP_WAKE_HEIGHTS=0 keeps it off, key H flips it.
+        const char* heights = std::getenv("THREEPP_WAKE_HEIGHTS");
+        ocean->wakeField.rippleHeights = !(heights && std::strcmp(heights, "0") == 0);
     }
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
@@ -1119,12 +1127,10 @@ int main(int argc, char** argv) {
     constexpr float kSpeedTrim   = 0.021f;// rad bow-up trim at full speed
     constexpr float kDraft       = 2.5f;  // m, grounding depth
 
-    // --wake new: her wash in the ocean's wake field. Her weight is laid out
-    // over her footprint and spread over her draft (VesselWash::footprintStrips).
-    // ASSUMED displacement: block coefficient 0.55 x 28 x 9 x 2.5 m x 1025 kg/m3
-    // = 355 t. A 240 m window (she sits a fifth of it inside its leading edge)
-    // keeps about 190 m astern: eight transverse waves (2 pi U^2 / g = 23 m at
-    // her 6 m/s cruise) where 120 m kept three.
+    // --wake new: her waves in the ocean's wake field, from ONE smooth line
+    // source along her hull (VesselWash::Waves::Line) and the entry head at
+    // her stem. ASSUMED displacement: block coefficient 0.55 x 28 x 9 x 2.5 m
+    // x 1025 kg/m3 = 355 t.
     std::unique_ptr<marine::VesselWash> gunnerusWash;
     if (hasWakeField) {
         marine::VesselWash::Hull hull;
@@ -1134,26 +1140,24 @@ int main(int argc, char** argv) {
         hull.centre     = 0.f;
         hull.mass       = 355000.f;
         hull.draft      = kDraft;
-        // Her weight along her length follows a sectional area curve, not her
-        // plan form: a plan form keeps three quarters of her beam to the
-        // transom, and a load that stops that abruptly throws a stern wave of
-        // metres (the linear sea's steady answer to it: 2.6 m crests 5 m off her
-        // hull at 5 m/s, against 0.9 m with this curve). ASSUMED: the power-law
-        // curve A / A_max = 1 - |s|^n (s = -1 at the stern, 1 at the stem),
-        // whose mean is the prismatic coefficient C_p = n / (n + 1), with
-        // C_p = 0.6 for her block coefficient of 0.55.
-        hull.strips = marine::VesselWash::footprintStrips(hull);
-        {
-            constexpr float kPrismatic = 0.6f;
-            const float n = kPrismatic / (1.f - kPrismatic);
-            float total = 0.f;
-            for (auto& s : hull.strips) {
-                s.share = 1.f - std::pow(std::min(std::abs(s.x / hull.halfLength), 1.f), n);
-                total += s.share;
-            }
-            for (auto& s : hull.strips) s.share /= total;
-        }
-        gunnerusWash = std::make_unique<marine::VesselWash>(*ocean, 0u, hull, 240.f, 240.f);
+        // Her weight along her length: a trapezoid whose mean is her
+        // prismatic coefficient, 0.6 ASSUMED for her block coefficient of
+        // 0.55, so it rises from her stem and falls to her transom without a
+        // step (a load that stops abruptly at the transom throws a stern wave
+        // of metres). K = 0.35 in her stem's entry head K U^2 / (2 g) is
+        // tidewater WakeSim's; THREEPP_WAKE_ENTRY_K overrides it (0 = none).
+        hull.waves     = marine::VesselWash::Waves::Line;
+        hull.prismatic = 0.6f;
+        hull.entryHead = 0.35f;
+        if (const char* k = std::getenv("THREEPP_WAKE_ENTRY_K")) hull.entryHead = static_cast<float>(std::atof(k));
+        // Her window: cells of min(lambda_T / 24, L / 10) at her 6 m/s
+        // cruise (lambda_T = 2 pi U^2 / g = 23.1 m), 0.96 m, so 492 m at 512
+        // cells. She sits a fifth of it inside its leading edge; the
+        // absorbing layer and the display fade take the outer 8% and 10%.
+        const float window = marine::VesselWash::rippleCell(kBoatLength, 6.f) *
+                             static_cast<float>(ocean->wakeField.rippleResolution);
+        gunnerusWash = std::make_unique<marine::VesselWash>(*ocean, 0u, hull, window, window);
+        gunnerusWash->lanes = false;
     }
 
     GLTFLoader gltfLoader;
@@ -1412,14 +1416,18 @@ int main(int argc, char** argv) {
 
     // The wake A/B keys (see --wake): K = the wake field's waves or the
     // analytic ones, H = the ripples' height in the geometry.
-    bool wakeSwitched = false;// set by K: the wash starts a fresh trail
+    bool washRestart = false;// set by K back to new: one frame with her patch off, then a fresh sea
     KeyAdapter camKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::K) {
             if (!hasWakeField) {
                 std::printf("[wake] K: no wake field in this run; start with --wake new\n");
             } else {
-                wakeNew      = !wakeNew;
-                wakeSwitched = true;
+                wakeNew = !wakeNew;
+                // To old: her patch off now, so none of her ripples stay on
+                // top of the analytic wake; she is not updated while old.
+                // Back to new: see washRestart.
+                if (wakeNew) washRestart = true;
+                else gunnerusWash->clear();
                 std::printf("[wake] %s\n", wakeNew ? "new: the wake field's waves (VesselWash ripples)"
                                                     : "old: the analytic bow bump + V-wedge");
             }
@@ -2107,25 +2115,18 @@ int main(int argc, char** argv) {
         ocean->wake.analyticWaves = !(hasWakeField && wakeNew);
         if (hasWakeField) {
             ocean->clearWakeSources();
-            if (wakeNew) {
-                if (wakeSwitched) gunnerusWash->clear();
+            if (wakeNew && washRestart) {
+                // One frame with her patch off, so the GPU starts her ripples
+                // from still water instead of carrying on the old ones.
+                gunnerusWash->clear();
+                washRestart = false;
+            } else if (wakeNew) {
+                // Her waves alone: no propulsors are handed in and her hull
+                // drags no lane, so her patch holds no foam, air or
+                // turbulence (the analytic stern trail and prop foam stay).
                 const Vector3 fwd{sinY, 0.f, cosY};
-                const Vector3 side{cosY, 0.f, -sinY};
-                // Two propellers 2 m under her stern, sharing the thrust the
-                // surge model applies (its acceleration times her mass).
-                const float thrust = 355000.f * kMaxAccel * (bs.throttle > 0.f ? bs.throttle : kAsternFrac * bs.throttle);
-                std::vector<marine::VesselWash::Propulsor> props(2);
-                for (int k = 0; k < 2; ++k) {
-                    props[k].name     = k == 0 ? "port" : "starboard";
-                    props[k].position = Vector3(bs.position.x, bs.y - 2.f, bs.position.z)
-                                                .addScaledVector(fwd, -(0.5f * kBoatLength - 2.f))
-                                                .addScaledVector(side, k == 0 ? -2.4f : 2.4f);
-                    props[k].force    = fwd * (0.5f * thrust);
-                    props[k].radius   = 1.0f;
-                }
-                gunnerusWash->update(dt, Vector3(bs.position.x, bs.y, bs.position.z), fwd, fwd * bs.forwardSpeed, props);
+                gunnerusWash->update(dt, Vector3(bs.position.x, bs.y, bs.position.z), fwd, fwd * bs.forwardSpeed);
             }
-            wakeSwitched = false;
         }
         {
             constexpr float kEmitInterval     = 0.10f;     // 10 Hz cadence
