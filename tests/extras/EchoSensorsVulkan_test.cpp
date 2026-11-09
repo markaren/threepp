@@ -187,6 +187,37 @@ TEST_CASE("MarineRadar: a clock set back by less than a revolution restarts the 
     CHECK(latest <= 0.4);
 }
 
+TEST_CASE("MarineRadar: a clock set back drops the trace in flight instead of waiting for it") {
+    REQUIRE_RT_GPU(r);
+    Scene scene;
+    auto target = box(20.f, 20.f, 20.f);
+    target->position.set(0, 10, -150);
+    scene.add(target);
+    build(*r, scene);
+
+    MarineRadar radar(smallRadar());
+    radar.position.set(0, 10, 0);
+    radar.updateMatrixWorld();
+    radar.setSimTime(0.0);
+    radar.update(*r);
+    runAt(radar, *r, 0.8);
+
+    // The antenna moves on: the slots ahead of it go out as a new trace.
+    radar.setSimTime(0.9);
+    radar.update(*r);
+    const std::uint64_t collected = radar.scansCollected();
+
+    // An episode reset with that trace still out: it is of the old timeline,
+    // so the reset neither reads it back nor waits on its fence.
+    radar.setSimTime(0.0);
+    radar.update(*r);
+    CHECK(radar.scansCollected() == collected);
+
+    // The new episode's own traces are taken delivery of as usual.
+    CHECK(runAt(radar, *r, 0.4) > 0u);
+    CHECK(radar.scansCollected() > collected);
+}
+
 namespace {
 
     // The strongest echo's bearing (deg) in a frame.

@@ -63,6 +63,9 @@ namespace threepp {
         [[nodiscard]] float headingDeg() const { return heading_; }
         [[nodiscard]] unsigned raysPerSlot() const { return synth_->raysPerSlot(); }
         [[nodiscard]] const MarineRadarSynthesizer& synthesizer() const { return *synth_; }
+        // Traces taken delivery of since construction, each one a readback
+        // that waits on its fence if the GPU has not finished it.
+        [[nodiscard]] std::uint64_t scansCollected() const { return scansCollected_; }
 
     private:
         std::unique_ptr<MarineRadarSynthesizer> synth_;
@@ -85,6 +88,7 @@ namespace threepp {
 
         int handle_ = -1;
         int framesWaiting_ = 0;
+        std::uint64_t scansCollected_ = 0;
         std::int64_t pendingFirst_ = 0;
         unsigned pendingCount_ = 0;
         Vector3 pendingOrigin_;

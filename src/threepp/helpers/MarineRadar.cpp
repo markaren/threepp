@@ -84,8 +84,10 @@ unsigned MarineRadar::update(VulkanRenderer& renderer) {
     if (!started_ || now < lastNow_) {
         // First call, or the clock went back (by any amount: an episode
         // reset): start the sweep here. The picture is of a time that has
-        // not happened yet, so it goes too.
-        if (handle_ >= 0) collect(renderer);
+        // not happened yet, so it goes too. A trace in flight is of the old
+        // timeline: it is dropped as rebuild() drops one, not read back,
+        // which would wait on its fence for rows that are traced again.
+        handle_ = -1;
         if (started_) image_.reset(image_.spokes, image_.bins, image_.minRange, image_.maxRange);
         started_ = true;
         nextSpoke_ = now;
@@ -187,6 +189,7 @@ void MarineRadar::fire(VulkanRenderer& renderer, std::int64_t upTo) {
 void MarineRadar::collect(VulkanRenderer& renderer) {
     const int h = handle_;
     handle_ = -1;
+    ++scansCollected_;
     returns_.clear();
     if (!renderer.scanLidarCollect(h, returns_)) return;
     const unsigned per = synth_->raysPerSlot();
