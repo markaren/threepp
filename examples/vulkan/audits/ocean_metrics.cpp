@@ -11,16 +11,44 @@
 //   ocean_metrics                         the sweep: U10 = 7, 10, 15 m/s at
 //                                         fetch 0 (fully developed) and 20 km,
 //                                         then two wakes (30 m at 10 kn, 4 m
-//                                         at 15 kn), each in its own process
+//                                         at 15 kn) and the engine's foam
+//                                         interval, each in its own process
 //   ocean_metrics --wind 10 --fetch 0     one case
 //   ocean_metrics --json metrics.jsonl    also append JSON lines to this file
 //   ocean_metrics --wake 5.14 --hull 30   one wake case: a hull of 30 m at
 //                                         5.14 m/s on a calm sea
+//   ocean_metrics --foam-default          the foam interval the engine runs
+//                                         under the current environment
 //
 //   ocean_metrics --compare base.jsonl    run, then print each metric's change
 //                                         against a saved run
 //   ocean_metrics --compare base.jsonl --against new.jsonl
 //                                         compare two saved runs, no GPU
+//
+// Comparing another water branch against dev
+//   1. Bring the audit to the branch: it lives in examples/vulkan/audits and
+//      needs readOceanFoam and readWakeRipples (VulkanRenderer); cherry-pick
+//      this audit's commits if the branch lacks them, then build the
+//      ocean_metrics target in that branch's own build tree.
+//   2. Check the whitecap mask first. The whitecap area is graded through
+//      FoamShade below, a CPU copy of dev's water-shade foam mask
+//      (deferred_shade_50_water_glass.glsl, the foam block; sampleFoamBicubic;
+//      generateFoamDetailTile_). A branch that changes that mask, the detail
+//      tile or how foam_world.comp fills the accumulator must mirror its
+//      change into FoamShade before running, or the whitecap rows measure
+//      dev's mask on the branch's foam and mean nothing.
+//   3. Run the sweep with dev's saved run as the baseline:
+//        ocean_metrics --json branch.jsonl --compare dev_baseline_v3.jsonl
+//      (about 6 minutes; one case is --wind 15 --fetch 0 with the same flags).
+//      Rows print base, now, change, the choppiness of both runs and the
+//      verdicts; '*' marks a verdict that changed.
+//   4. Read the chop column. '!' marks a row whose choppiness differs from
+//      the baseline's: the dispersion, slope, crest and whitecap rows depend
+//      on it, so rerun with --chop at the baseline's value to split the
+//      branch's change from its change of default.
+//   5. MARGINAL means the estimators of that row fall on both sides of a
+//      limit; it is neither a PASS nor a FAIL (and not a FAIL under
+//      --strict). Two saved runs compare with no GPU: --compare a --against b.
 //
 // Flags
 //   --wind U      wind speed at 10 m (m/s)                 default 10
@@ -45,13 +73,15 @@
 //                 region) and --wake-scalar auto | slope | height (auto reads
 //                 height when the ripple image's alpha carries it)
 //   --dump prefix for a look: a sea case writes the gauge PSD to
-//                 <prefix>_psd.txt and the dispersion diagram to
-//                 <prefix>_kw.txt; a wake case writes the image and the ridge
-//                 maxima to <prefix>.f32 and <prefix>.txt
-//   --strict      exit 1 when any graded metric FAILs
+//                 <prefix>_psd.txt, the dispersion diagram to <prefix>_kw.txt
+//                 and the graded dispersion rings to <prefix>_rings.txt; a
+//                 wake case writes the image and the ridge maxima to
+//                 <prefix>.f32 and <prefix>.txt
+//   --strict      exit 1 when any graded metric FAILs (MARGINAL does not)
+//   --foam-default  measure the engine's foam interval (see above)
 // Exit codes: 0 ran, 1 a FAIL under --strict or a renderer that failed to
 // start, 2 bad arguments, 42 no Vulkan device (the ctest skip code of the
-// other Vulkan tests).
+// other Vulkan tests). The sweep returns the worst of its children's codes.
 //
 // How each metric is read
 //   Wave gauges and the dispersion grid: DisplacedMesh::sampleHeight at fixed
@@ -66,7 +96,9 @@
 //
 //   Whitecaps: VulkanRenderer::readOceanFoam, the foam accumulator itself,
 //     put through a CPU copy of the water shade's foam mask, in a segment run
-//     at a game frame rate with the foam stepped every frame.
+//     at a game frame rate with the foam stepped every frame. The engine's
+//     own default steps it less often; the 'engine defaults' case reports
+//     that interval (INFO).
 //
 // Not measured here: the shade's view-dependent LEAN banking (reported only
 // as its footprint floor) and the analytic wake (bow bump and V-wedge in
@@ -92,6 +124,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
 using namespace threepp;
 
@@ -169,8 +205,22 @@ namespace {
         std::string target;   // the published value, readable
         std::string tolerance;
         std::string source;
+        // Other estimators of the same quantity. When one of them falls on
+        // the other side of a limit from `measured`, the verdict is MARGINAL:
+        // the estimator, not the sea, decides PASS or FAIL.
+        std::vector<double> alt;
         bool graded() const { return lo <= hi; }
         bool pass() const { return measured >= lo && measured <= hi; }
+        int side(double v) const { return v < lo ? -1 : (v > hi ? 1 : 0); }
+        bool marginal() const {
+            if (!graded()) return false;
+            for (double a: alt)
+                if (side(a) != side(measured)) return true;
+            return false;
+        }
+        const char* verdict() const {
+            return !graded() ? "INFO" : marginal() ? "MARGINAL" : pass() ? "PASS" : "FAIL";
+        }
     };
 
     std::string fmt(const char* f, double v) {
@@ -205,6 +255,7 @@ namespace {
         double wakeSeconds = 0.0;  // 0: 0.8 S / U
         std::string wakeScalar = "auto";
         std::string dump;          // --dump prefix: the wake image and ridge, for a look
+        bool foamDefault = false;  // --foam-default: measure the engine's foam interval
     };
 
     // The foam accumulator is stepped every frame here, so a foam step is one
@@ -253,6 +304,7 @@ namespace {
     struct Row {
         std::string kase, metric, verdict;
         double measured = 0;
+        double chop = -1;// the case's choppiness; < 0 where it does not apply
     };
 
     // The value of "key":"..." or "key":number in one JSON line written by
@@ -285,40 +337,65 @@ namespace {
             const std::string m = jsonField(line, "measured");
             if (r.metric.empty() || m.empty()) continue;
             r.measured = std::atof(m.c_str());
+            const std::string c = jsonField(line, "chop");
+            r.chop = c.empty() ? -1.0 : std::atof(c.c_str());
             rows.push_back(std::move(r));
         }
         return rows;
     }
 
-    // One line per metric of `now`: the saved value, the new one, the change
-    // and the verdicts; a '*' marks a verdict that changed.
+    // The chop column of --compare: the choppiness both runs used, or
+    // "base->now !" where they differ.
+    std::string chopCell(double base, double now, bool& differs) {
+        differs = false;
+        if (base < 0 && now < 0) return "-";
+        if (base < 0 || now < 0) return fmt("%.2f", base < 0 ? now : base) + "?";
+        if (std::fabs(base - now) <= 1e-3) return fmt("%.2f", now);
+        differs = true;
+        return fmt("%.2f", base) + fmt("->%.2f !", now);
+    }
+
+    // One line per metric of `now`: the saved value, the new one, the change,
+    // the choppiness of both runs and the verdicts; a '*' marks a verdict
+    // that changed, a '!' a row whose choppiness differs from the baseline.
     void printCompare(const std::vector<Row>& base, const std::vector<Row>& now) {
-        std::printf("\n%-24s %-44s %12s %12s %10s  %s\n", "case", "metric", "base", "now", "change", "verdict");
+        std::printf("\n%-24s %-44s %12s %12s %10s %-12s %s\n", "case", "metric", "base", "now", "change", "chop",
+                    "verdict");
         std::string last;
+        int chopRows = 0;
         for (const auto& r: now) {
             const Row* b = nullptr;
             for (const auto& x: base)
                 if (x.kase == r.kase && x.metric == r.metric) b = &x;
             if (r.kase != last) std::printf("\n"), last = r.kase;
             if (!b) {
-                std::printf("%-24s %-44s %12s %12.5g %10s  %s (new)\n", r.kase.c_str(), r.metric.c_str(), "-", r.measured,
-                            "", r.verdict.c_str());
+                std::printf("%-24s %-44s %12s %12.5g %10s %-12s %s (new)\n", r.kase.c_str(), r.metric.c_str(), "-",
+                            r.measured, "", r.chop < 0 ? "-" : fmt("%.2f", r.chop).c_str(), r.verdict.c_str());
                 continue;
             }
             char change[32] = "";
             if (b->measured != 0.0) std::snprintf(change, sizeof(change), "%+.1f%%", 100.0 * (r.measured / b->measured - 1.0));
             else if (r.measured != 0.0) std::snprintf(change, sizeof(change), "%+.3g", r.measured);
             else std::snprintf(change, sizeof(change), "0");
-            std::printf("%-24s %-44s %12.5g %12.5g %10s  %s -> %s%s\n", r.kase.c_str(), r.metric.c_str(), b->measured,
-                        r.measured, change, b->verdict.c_str(), r.verdict.c_str(), b->verdict != r.verdict ? " *" : "");
+            bool differs = false;
+            const std::string chop = chopCell(b->chop, r.chop, differs);
+            chopRows += differs ? 1 : 0;
+            std::printf("%-24s %-44s %12.5g %12.5g %10s %-12s %s -> %s%s\n", r.kase.c_str(), r.metric.c_str(),
+                        b->measured, r.measured, change, chop.c_str(), b->verdict.c_str(), r.verdict.c_str(),
+                        b->verdict != r.verdict ? " *" : "");
         }
         for (const auto& b: base) {
             bool seen = false;
             for (const auto& r: now) seen = seen || (r.kase == b.kase && r.metric == b.metric);
             if (!seen && std::any_of(now.begin(), now.end(), [&](const Row& r) { return r.kase == b.kase; }))
-                std::printf("%-24s %-44s %12.5g %12s %10s  %s (gone)\n", b.kase.c_str(), b.metric.c_str(), b.measured, "-",
-                            "", b.verdict.c_str());
+                std::printf("%-24s %-44s %12.5g %12s %10s %-12s %s (gone)\n", b.kase.c_str(), b.metric.c_str(),
+                            b.measured, "-", "", "", b.verdict.c_str());
         }
+        if (chopRows > 0)
+            std::printf("\n! %d rows ran at a different choppiness from the baseline. The dispersion, slope, crest and\n"
+                        "  whitecap rows depend on it: rerun the branch with --chop at the baseline's value to\n"
+                        "  separate its change from the change of default.\n",
+                        chopRows);
         std::fflush(stdout);
     }
 
@@ -326,12 +403,14 @@ namespace {
     // the case in the JSON (wind and fetch, or the wake; never a tunable, so
     // a run on another branch matches its baseline row by row).
     int report(const std::vector<Metric>& out, const Config& cfg, const std::string& tag, double chop = -1.0) {
-        std::printf("\n%-42s %12s  %-14s %-16s %-6s %s\n", "metric", "measured", "target", "tolerance", "", "source");
+        std::printf("\n%-42s %12s  %-14s %-16s %-8s %s\n", "metric", "measured", "target", "tolerance", "", "source");
+        // MARGINAL is not a FAIL under --strict: the estimators disagree on
+        // the side of the limit, so the row cannot decide either way.
         bool anyFail = false;
         for (const auto& m: out) {
-            const char* v = m.graded() ? (m.pass() ? "PASS" : "FAIL") : "INFO";
-            if (m.graded() && !m.pass()) anyFail = true;
-            std::printf("%-42s %12.5g  %-14s %-16s %-6s %s\n", m.name.c_str(), m.measured, m.target.c_str(),
+            const char* v = m.verdict();
+            if (std::strcmp(v, "FAIL") == 0) anyFail = true;
+            std::printf("%-42s %12.5g  %-14s %-16s %-8s %s\n", m.name.c_str(), m.measured, m.target.c_str(),
                         m.tolerance.c_str(), v, m.source.c_str());
         }
         std::fflush(stdout);
@@ -339,7 +418,7 @@ namespace {
         for (const auto& m: out) {
             std::string name = m.name;
             name.erase(0, name.find_first_not_of(' '));
-            rows.push_back({tag, name, m.graded() ? (m.pass() ? "PASS" : "FAIL") : "INFO", m.measured});
+            rows.push_back({tag, name, m.verdict(), m.measured, chop});
         }
         if (!cfg.json.empty()) {
             std::ofstream js(cfg.json, std::ios::app);
@@ -663,9 +742,20 @@ namespace {
         int staleFrames = 0;
 
         // Eulerian dispersion: the grid's spatial spectrum every frame; the
-        // time series of each bin up to half the grid's Nyquist wavenumber
-        // (above it the grid's aliases of shorter waves would carry their own
-        // frequency into the bin).
+        // time series of each bin up to half the grid's Nyquist wavenumber.
+        // The cut does not keep aliases out: the grid takes point samples,
+        // so a wave with a component in [1.5, 2.5] kNyq folds to within
+        // 0.5 kNyq of zero, inside the graded band, and carries its own
+        // frequency sqrt(g k) there. What it brings in is the sea's energy
+        // at k >= 1.5 kNyq: waves under 1.3 m at the default 128 points over
+        // a cascade-1 tile (a 0.99 m grid, against cascade 1's 0.5 m texel),
+        // under 0.66 m at 256 (a 0.5 m grid). Measured at U15 with the chop
+        // off: the rings in the spectrum's holes peak at 7-8.5 rad/s, the
+        // aliases of 0.9-1.2 m waves, but 256 points lift the 4-8.5 m band's
+        // in-band share by only 0.7 points; the rest of its 2-4 % floor is
+        // the Hann window's main lobe (+-2 bins) reaching past the 5 % band
+        // at the band's long end. The graded peak position moves by 0.3
+        // points between 128 and 256, so 128 stays the default.
         const double hE = W / D, dkE = 2.0 * kPi / W, kNyqE = kPi / hE;
         Fft fftE(D);
         std::vector<float> hannE(D);
@@ -1051,8 +1141,12 @@ namespace {
         // (6 % in f), S(f) = variance / band width. Near the peak the tile
         // holds only a few bins, so the band maximum still jumps between
         // lattice radii; fp is taken as Young's (1995) weighted mean
-        // sum f S^4 / sum S^4, the robust peak estimator for a noisy
-        // spectrum. The band maximum is reported beside it.
+        // fp = int f S^4 df / int S^4 df, the robust peak estimator for a
+        // noisy spectrum, summed over the bands with each band's width
+        // df_b (proportional to f on 1/12-octave bands; leaving df out
+        // would bias fp low by about the variance of ln f under S^4). The
+        // band maximum and the gauge peak are reported beside it; when an
+        // estimator falls on the other side of a limit the row is MARGINAL.
         double tpK = 0, tpKBand = 0;
         {
             const double fLo = 0.02, step = std::pow(2.0, 1.0 / 12.0);
@@ -1079,12 +1173,18 @@ namespace {
             const double sMax = sb[bp] > 0 ? sb[bp] : 1.0;
             for (int b = 0; b < nb; ++b) {
                 const double q = std::pow(sb[b] / sMax, 4.0);
-                num += fLo * std::pow(step, b + 0.5) * q, den += q;
+                const double width = fLo * std::pow(step, b) * (step - 1.0);// df_b
+                num += fLo * std::pow(step, b + 0.5) * q * width, den += q * width;
             }
             tpK = den > 0 ? den / num : 0.0;
             tpKBand = 1.0 / (fLo * std::pow(step, bp + 0.5));
         }
-        out.push_back({"Tp (tile k-spectrum, Young 1995)", tpK, 0.9 * tpT, 1.1 * tpT, fmt("%.2f s", tpT), "+-10%", tpSrc});
+        {
+            Metric tp{"Tp (tile k-spectrum, Young 1995)", tpK, 0.9 * tpT, 1.1 * tpT, fmt("%.2f s", tpT), "+-10%", tpSrc};
+            tp.alt = {tpKBand, 1.0 / fp};
+            if (tp.marginal()) tp.source += "; estimators disagree";
+            out.push_back(tp);
+        }
         out.push_back({"  Tp (tile k-spectrum, band maximum)", tpKBand, 1, 0, "", "", "1/12-octave bands"});
         out.push_back({"  Tp (gauge PSD peak, 0.01 Hz bands)", 1.0 / fp, 1, 0, fmt("%.2f s", tpT), "",
                        "unstable on the tile's comb of lines"});
@@ -1121,52 +1221,109 @@ namespace {
         }
 
         // ── 2. Dispersion ────────────────────────────────────────────────────
-        // Target: energy on omega^2 = g k (deep water; the engine has no depth
-        // term) within 5 % in omega (research_targets 1.1). Pass mark 95 % of
-        // the energy (my choice; the research gives no fraction).
+        // Target: omega^2 = g k (deep water; the engine has no depth term)
+        // within 5 % in omega (research_targets 1.1).
         //
         // Graded on the Eulerian grid: sampleHeight over a D x D square, so
-        // the chop's resampling, the B-spline reconstruction and any aliasing
-        // in them are in the data. Hann windows in x, z and t (the square is
-        // not periodic for any cascade). A bin is graded when the 5 % band is
-        // at least 1.5 bins wide both ways, i.e. 10 % of k >= 1.5 dk (5 % in
-        // omega is 10 % in k) and 5 % of omega >= 1.5 d omega, and it lies at
-        // or below half the grid's Nyquist wavenumber.
+        // the chop's resampling and the B-spline reconstruction are in the
+        // data. Hann windows in x, z and t (the square is not periodic for
+        // any cascade). A bin is graded when the 5 % band is at least 1.5
+        // bins wide both ways, i.e. 10 % of k >= 1.5 dk (5 % in omega is 10 %
+        // in k) and 5 % of omega >= 1.5 d omega, and it lies at or below half
+        // the grid's Nyquist wavenumber.
+        //
+        // Graded: where the peak of the frequency spectrum sits in each |k|
+        // ring of the grid (rings dk wide), against sqrt(g k) for the ring's
+        // energy-weighted k, within 5 %; the row is the energy share of the
+        // rings whose peak is inside, pass mark 95 % (my choice; the research
+        // gives no fraction). Not the energy share inside the 5 % band: the
+        // chop carries a short wave on the long waves' horizontal motion,
+        // which keeps its peak on the curve but moves about 1 - exp(-(k
+        // sigma_D)^2) of its power to sidebands (sigma_D the rms horizontal
+        // displacement), as the full orbital motion does on a real sea
+        // (Leckler et al. 2015, stereo (k, omega) spectra). That share falls
+        // with Hs whatever the dispersion, so it is INFO.
         {
             const double dOm = 2.0 * kPi / (nDisp * dt);
             const double kLo = std::max(15.0 * dkE, std::pow(30.0 * dOm, 2.0) / kG), kHi = 0.5 * kNyqE;
             Fft ft(nDisp);
             std::vector<cfloat> ts(nDisp);
             double inBand = 0, graded = 0, gradedRaw = 0;
-            // Dispersion diagram for --dump: energy by |k| bin (dkE) and |omega| bin.
+            // Energy by |k| ring (dkE) and |omega| bin: the graded rings, and
+            // the dispersion diagram for --dump.
             const int nk = int(std::ceil(kHi / dkE)) + 1, nw = nDisp / 2 + 1;
-            std::vector<double> diag(cfg.dump.empty() ? 0 : size_t(nk) * nw, 0.0);
+            std::vector<double> diag(size_t(nk) * nw, 0.0);
+            std::vector<double> ringE(nk, 0.0), ringOm(nk, 0.0);
+            std::vector<char> ringGraded(nk, 0);
             for (size_t j = 0; j < eBins.size(); ++j) {
                 const int m = eBins[j];
                 const double k = dkE * std::hypot(signedIndex(m % D, D), signedIndex(m / D, D));
                 const double om = std::sqrt(kG * k);
                 const bool g = k >= kLo && k <= kHi;
+                const size_t ring = size_t(std::lround(k / dkE));
                 for (int i = 0; i < nDisp; ++i) {
                     const float w = float(0.5 - 0.5 * std::cos(2.0 * kPi * i / nDisp));
                     ts[i] = eSeries[j][i] * w;
                     if (g) gradedRaw += std::norm(eSeries[j][i]);
                 }
                 ft.run(ts.data(), false);
+                double e = 0;
                 for (int i = 0; i < nDisp; ++i) {
                     const double omi = std::abs(signedIndex(i, nDisp)) * dOm;
                     const double p = std::norm(ts[i]);
-                    if (!diag.empty()) diag[size_t(std::lround(k / dkE)) * nw + std::abs(signedIndex(i, nDisp))] += p;
+                    diag[ring * nw + std::abs(signedIndex(i, nDisp))] += p;
+                    e += p;
                     if (!g) continue;
                     graded += p;
                     if (std::abs(omi - om) <= 0.05 * om) inBand += p;
                 }
+                if (g) ringE[ring] += e, ringOm[ring] += e * om, ringGraded[ring] = 1;
             }
-            out.push_back({"dispersion, Eulerian grid, in 5% band", graded > 0 ? inBand / graded : 0.0, 0.95, 1.0,
-                           "w^2 = g k", ">= 95% of energy",
-                           fmt("linear deep-water theory; lambda %.1f", 2.0 * kPi / kHi) +
-                                   fmt("-%.1f m", 2.0 * kPi / kLo)});
+            // Per graded ring: the peak omega (i >= 1, refined by a parabola
+            // through its neighbours) against the ring's sqrt(g k).
+            double eIn = 0, eAll = 0, offW = 0, offMax = 0;
+            int ringsIn = 0, rings = 0;
+            std::string ringDump;
+            for (int a = 0; a < nk; ++a) {
+                if (!ringGraded[a] || !(ringE[a] > 0)) continue;
+                const double* row = &diag[size_t(a) * nw];
+                int ip = 1;
+                for (int i = 2; i < nw - 1; ++i)
+                    if (row[i] > row[ip]) ip = i;
+                double delta = 0;
+                if (ip > 1 && ip < nw - 1) {
+                    const double den = row[ip - 1] - 2 * row[ip] + row[ip + 1];
+                    if (den < 0) delta = 0.5 * (row[ip - 1] - row[ip + 1]) / den;
+                }
+                const double omRef = ringOm[a] / ringE[a], omPeak = (ip + delta) * dOm;
+                const double off = omPeak / omRef - 1.0;
+                const bool in = std::abs(off) <= 0.05;
+                ++rings, ringsIn += in ? 1 : 0;
+                eAll += ringE[a], eIn += in ? ringE[a] : 0.0;
+                offW += ringE[a] * std::abs(off), offMax = std::max(offMax, std::abs(off));
+                char b[160];
+                std::snprintf(b, sizeof(b), "%d %.5f %.5f %.5f %+.5f %.6g %d\n", a, kG > 0 ? omRef * omRef / kG : 0.0,
+                              omRef, omPeak, off, ringE[a], in ? 1 : 0);
+                ringDump += b;
+            }
+            const std::string band = fmt("lambda %.1f", 2.0 * kPi / kHi) + fmt("-%.1f m", 2.0 * kPi / kLo);
+            out.push_back({"dispersion, Eulerian grid, peak in 5%", eAll > 0 ? eIn / eAll : 0.0, 0.95, 1.0,
+                           "w^2 = g k", ">= 95% of energy", "linear deep-water theory; " + band});
+            out.push_back({"  rings with the peak in 5% (share)", rings > 0 ? double(ringsIn) / rings : 0.0, 1, 0, "",
+                           "", fmt("%.0f rings", double(rings))});
+            out.push_back({"  peak offset, energy-weighted mean |dw/w|", eAll > 0 ? offW / eAll : 0.0, 1, 0, "<= 0.05",
+                           "", ""});
+            out.push_back({"  peak offset, worst ring |dw/w|", offMax, 1, 0, "", "", ""});
+            out.push_back({"  energy share in the 5% band", graded > 0 ? inBand / graded : 0.0, 1, 0, "", "",
+                           "falls with Hs: the chop's sidebands"});
             out.push_back({"  grid variance share in the graded band", eGridAll > 0 ? gradedRaw / eGridAll : 0.0, 1, 0, "",
                            "", fmt("grid %.0f", double(D)) + fmt("^2 over %.1f m", W)});
+            if (!cfg.dump.empty()) {
+                // For a look: one line per graded ring: index, k, sqrt(g k),
+                // peak omega, offset, energy, inside.
+                std::ofstream rtxt(cfg.dump + "_rings.txt");
+                rtxt << ringDump;
+            }
             if (!cfg.dump.empty()) {
                 // For a look: one line per |k| bin, k (rad/m) then the energy
                 // at omega = i d omega, i = 0 .. nDisp / 2.
@@ -1362,6 +1519,9 @@ namespace {
             out.push_back({"  foam value mean (raw)", foamRaw / foamReads, 1, 0, "", "", "foam_world.comp"});
             out.push_back({"  foam step (s)", 1.0 / cfg.foamHz, 0.0, kMaxFoamStep, "<= 0.25 s", "",
                            "foam every frame at --foam-hz"});
+            const char* iv = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
+            out.push_back({"  foam interval in this segment (frames)", iv ? std::atof(iv) : -1.0, 1, 0, "", "",
+                           "forced by this audit; the engine's own default is the 'engine defaults' case"});
         } else {
             out.push_back({"whitecap area (shade mask > 0.5)", -1, 1, 0, "", "", "no foam readback"});
         }
@@ -1371,6 +1531,69 @@ namespace {
         char tag[96];
         std::snprintf(tag, sizeof(tag), "U10=%.1f fetch=%.0f", U, double(cfg.fetch));
         return report(out, cfg, tag, chop);
+    }
+
+    // ── The engine's foam interval ───────────────────────────────────────────
+    // The sea cases force THREEPP_OCEAN_FOAM_INTERVAL=1, so they grade foam
+    // stepped every frame. The engine reads that variable once, with its own
+    // default when it is unset (VulkanCoreGeometry.cpp, kFoamInterval). This
+    // case measures what it runs: a U15 sea at 30 frames a second, the
+    // accumulator read after every frame once foam has formed; a frame whose
+    // read differs from the one before ran foam_world, and the interval is
+    // frames over such frames. The sweep runs it with the variable unset.
+    int runFoamDefault(const Config& cfg) {
+        Gpu gpu;
+        if (const int rc = makeGpu(gpu)) return rc;
+        Canvas& canvas = *gpu.canvas;
+        VulkanRenderer& renderer = *gpu.renderer;
+
+        Scene scene;
+        PerspectiveCamera camera(55.f, float(kW) / kH, 0.5f, 4000.f);
+        camera.position.set(0.f, 40.f, 120.f);
+        camera.lookAt(Vector3{0.f, 0.f, 0.f});
+        Ocean::Options opt;
+        opt.windSpeed = 15.f;
+        opt.fetch = 0.f;
+        auto ocean = Ocean::create(opt);
+        scene.add(ocean);
+
+        const char* env = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
+        std::printf("engine defaults: foam interval with THREEPP_OCEAN_FOAM_INTERVAL %s\n",
+                    env ? (std::string("= ") + env).c_str() : "unset");
+        std::fflush(stdout);
+        const double fps = 30.0;
+        double t = 10.0;
+        auto renderAt = [&](double tt) {
+            renderer.setSimTime(tt);
+            canvas.animateOnce([&] { renderer.render(scene, camera); });
+        };
+        for (int i = 0; i < int(2 * fps); ++i) renderAt(t += 1.0 / fps);
+        std::vector<float> prev, now;
+        uint32_t res = 0;
+        float tile = 0.f;
+        std::vector<Metric> out;
+        if (!renderer.readOceanFoam(*ocean, prev, res, tile) || prev.empty()) {
+            out.push_back({"foam interval, engine default (frames)", -1, 1, 0, "", "", "no foam readback"});
+        } else {
+            const int frames = 24;
+            int ran = 0, reads = 0;
+            for (int i = 0; i < frames; ++i) {
+                renderAt(t += 1.0 / fps);
+                if (!renderer.readOceanFoam(*ocean, now, res, tile)) continue;
+                ++reads;
+                if (now != prev) ++ran;
+                std::swap(prev, now);
+            }
+            if (reads != frames) ran = 0;// a missed read would hide a step
+            const double interval = ran > 0 ? double(frames) / ran : -1.0;
+            const std::string src = env ? std::string("THREEPP_OCEAN_FOAM_INTERVAL=") + env
+                                        : std::string("VulkanCoreGeometry.cpp, variable unset");
+            out.push_back({"foam interval, engine default (frames)", interval, 1, 0, "1 (every frame)", "", src});
+            out.push_back({"  foam step at 30 fps, engine default (s)", interval / 30.0, 1, 0, "0.033 s", "", ""});
+            out.push_back({"  foam step at 60 fps, engine default (s)", interval / 60.0, 1, 0, "0.017 s", "", ""});
+            out.push_back({"  frames that ran foam_world, of 24", double(ran), 1, 0, "", "", "accumulator changed"});
+        }
+        return report(out, cfg, "engine defaults");
     }
 
     // ── 6. Kelvin wake ───────────────────────────────────────────────────────
@@ -1679,6 +1902,24 @@ namespace {
 #endif
     }
 
+    void unsetEnv(const char* name) {
+#ifdef _WIN32
+        _putenv_s(name, "");// an empty value removes it
+#else
+        ::unsetenv(name);
+#endif
+    }
+
+    // A child's exit code from std::system: cmd.exe returns it as is; POSIX
+    // returns a wait status (the code is in its second byte).
+    int exitCodeOf(int status) {
+#ifdef _WIN32
+        return status < 0 ? 1 : status;
+#else
+        return (status != -1 && WIFEXITED(status)) ? WEXITSTATUS(status) : 1;
+#endif
+    }
+
 }// namespace
 
 int main(int argc, char** argv) {
@@ -1712,6 +1953,7 @@ int main(int argc, char** argv) {
         else if (const char* s = val("--wake-scalar")) cfg.wakeScalar = s;
         else if (const char* s = val("--dump")) cfg.dump = s;
         else if (std::strcmp(argv[i], "--strict") == 0) cfg.strict = true;
+        else if (std::strcmp(argv[i], "--foam-default") == 0) cfg.foamDefault = true, single = true;
         else {
             std::printf("unknown argument %s (see the usage block in ocean_metrics.cpp)\n", argv[i]);
             return 2;
@@ -1738,10 +1980,16 @@ int main(int argc, char** argv) {
     }
 
     if (single) {
+        // The engine's own interval, under whatever the environment says.
+        if (cfg.foamDefault) return runFoamDefault(cfg);
         // Foam every frame, read once by the renderer at its first frame.
         setEnv("THREEPP_OCEAN_FOAM_INTERVAL", "1");
         return cfg.wakeSpeed > 0.f ? runWake(cfg) : runCase(cfg);
     }
+    // The sweep's 'engine defaults' case measures the interval the engine
+    // ships, so the variable is removed for every child (the sea cases set
+    // their own).
+    unsetEnv("THREEPP_OCEAN_FOAM_INTERVAL");
 
     // The sweep: each case in its own process, so no renderer state carries
     // from one ocean to the next. Every other flag but --compare is passed
@@ -1779,6 +2027,8 @@ int main(int argc, char** argv) {
     // and a 4 m USV at 15 kn (Fr_L 1.23, a narrowed wake).
     cases.emplace_back(" --wake 5.14 --hull 30 --beam 8");
     cases.emplace_back(" --wake 7.72 --hull 4 --beam 1.6");
+    // The foam interval the engine ships (INFO).
+    cases.emplace_back(" --foam-default");
     int worst = 0;
     for (const auto& c: cases) {
 #ifdef _WIN32
@@ -1788,7 +2038,7 @@ int main(int argc, char** argv) {
         const std::string cmd = std::string("\"") + argv[0] + "\"" + c + pass;
 #endif
         std::fflush(stdout);
-        const int rc = std::system(cmd.c_str());
+        const int rc = exitCodeOf(std::system(cmd.c_str()));
         if (rc == kSkipCode) return kSkipCode;
         worst = std::max(worst, rc);
     }
@@ -1800,6 +2050,11 @@ int main(int argc, char** argv) {
         if (cfg.strict && g[0].verdict == "FAIL") worst = std::max(worst, 1);
     }
     rows.insert(rows.end(), extra.begin(), extra.end());
+    for (const auto& r: rows)
+        if (r.kase == "engine defaults" && r.metric == "foam interval, engine default (frames)" && r.measured > 1.0)
+            std::printf("\nNOTE: the engine steps the whitecap foam every %.3g frames by default (VulkanCoreGeometry.cpp,\n"
+                        "      kFoamInterval), a reduced update rate; the sea cases above grade it stepped every frame.\n",
+                        r.measured);
     if (!cfg.compare.empty()) printCompare(loadRows(cfg.compare), rows);
     return worst;
 }
