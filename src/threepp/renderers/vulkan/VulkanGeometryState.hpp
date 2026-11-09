@@ -607,6 +607,8 @@ namespace threepp::vulkan::impl {
         float appliedWindSpeed = 0.f;
         float appliedWindTheta = 0.f;
         float appliedFetch     = 0.f;
+        bool  appliedMeasuredSpreading = false;
+        float appliedSwell[4] = {0.f, 0.f, 0.f, 0.f};// height, period, theta, spread
         water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;
         uint32_t vertexCount = 0;

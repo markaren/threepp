@@ -22,6 +22,16 @@
 // enhancement. Net: less swell, more steep chop at the 10-40 m scale --
 // the sea a coastal boat actually sails in. fetch = 0 is bit-identical to
 // the plain Phillips spectrum.
+//
+// `spread` picks the directional distribution D(theta) that shares the
+// energy of each wavenumber ring out over directions. 0 = the historical
+// symmetric cos^2(theta): as much energy against the wind as with it, which
+// draws standing, sloshing short crests. 1 = the measured distribution of
+// Donelan, Hamilton & Hui (1985) with Banner's (1990) high-frequency form:
+// narrow and downwind at the spectral peak, broader for the short waves,
+// with a little counter-wind energy there. Both integrate to the same value
+// over the circle, so the omnidirectional spectrum and the significant wave
+// height do not change; only where the energy points does.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -40,9 +50,79 @@ layout(push_constant) uniform Params {
     float kMin;
     float kMax;
     float fetch;
+    uint  spread;// 0 = symmetric cos^2 (historical), 1 = Donelan-Banner sech^2
+    // Optional swell system, added on top of the wind sea (cascade 0 only;
+    // swellScale = 0 elsewhere and when there is no swell). swellScale is
+    // computed on the host (PhillipsSpectrum::swellScale) so that the swell's
+    // discrete sum over this grid gives exactly the requested Hs.
+    float swellScale;
+    float swellPeriod; // Tp, s
+    float swellTheta;  // direction the swell runs toward, rad, sample domain
+    float swellSpread; // s of cos^(2s)(theta/2)
 } P;
 
 const float PI = 3.14159265358979;
+
+// Directional spreading of Donelan, Hamilton & Hui (1985), "Directional
+// spectra of wind-generated waves", Phil. Trans. R. Soc. A 315:
+//   D(theta) = beta/2 sech^2(beta theta), theta from the downwind direction,
+//   beta = 2.61 (w/wp)^1.3   for 0.56 < w/wp < 0.95
+//          2.28 (w/wp)^-1.3  for 0.95 <= w/wp < 1.6
+//          1.24              below 0.56,
+// and above w/wp = 1.6 the form fitted by Banner (1990), "Equilibrium
+// spectra of wind waves", J. Phys. Oceanogr. 20:
+//   beta = 10^(-0.4 + 0.8393 exp(-0.567 ln((w/wp)^2))).
+// (Both as collected in Horvath (2015), "Empirical directional wave spectra
+// for computer graphics", DigiPro.) The branches meet within 1% at 0.56,
+// 0.95 and 1.6. On (-pi, pi] the sech^2 integrates to tanh(beta pi), so
+// dividing by it makes D integrate to exactly 1; the factor pi is the
+// integral of the historical cos^2 over the circle, so the returned weight
+// keeps the omnidirectional spectrum (and Hs) of the cos^2 path.
+float donelanBannerWeight(float cosTheta, float wOverWp) {
+    float beta;
+    if (wOverWp < 0.56) {
+        beta = 1.24;
+    } else if (wOverWp < 0.95) {
+        beta = 2.61 * pow(wOverWp, 1.3);
+    } else if (wOverWp < 1.6) {
+        beta = 2.28 * pow(wOverWp, -1.3);
+    } else {
+        beta = pow(10.0, -0.4 + 0.8393 * exp(-0.567 * log(wOverWp * wOverWp)));
+    }
+    const float theta = acos(clamp(cosTheta, -1.0, 1.0));
+    const float ch = cosh(beta * theta);
+    return PI * 0.5 * beta / (ch * ch * tanh(beta * PI));
+}
+
+// Shape of the swell's 2D wavenumber spectrum, up to a constant (the host
+// scales it to the requested Hs). Mirrored in OceanFFT.cpp (swellShapeCpu);
+// keep the two identical.
+// Frequency spectrum: the JONSWAP form of Hasselmann et al. (1973),
+// Dtsch. Hydrogr. Z. A8(12), written with the peak at fp = 1 / Tp:
+//   S(f) ~ f^-5 exp(-1.25 (Tp f)^-4) gamma^exp(-(Tp f - 1)^2 / (2 sigma^2)),
+//   sigma = 0.07 below the peak, 0.09 above; gamma = 6, a narrow swell peak
+//   (the 3.3 of a growing wind sea sharpens as the swell travels).
+// Direction: Mitsuyasu et al. (1975) cos^(2s)(theta/2), theta measured from
+// the swell's direction of travel; Goda (2000) gives s ~ 25 for swell from a
+// nearby storm, ~ 75 for swell that has travelled far.
+// To the wavenumber plane: F(kx, kz) = S(f) (df/dk) D(theta) / k with deep-
+// water f = sqrt(g k) / 2 pi, so df/dk ~ 1 / w.
+float swellShape(vec2 k) {
+    const float g  = 9.81;
+    const float kl = length(k);
+    const float w  = sqrt(g * kl);
+    const float x  = P.swellPeriod * w / (2.0 * PI);// f / fp
+    const float sg = (x <= 1.0) ? 0.07 : 0.09;
+    const float d  = (x - 1.0) / sg;
+    const float gammaPeak = pow(6.0, exp(-0.5 * d * d));
+    const float x2 = x * x;
+    const float sf = exp(-1.25 / (x2 * x2)) * gammaPeak / (x2 * x2 * x);
+    // Runs toward -k, as the wind sea (see phillips2D).
+    const vec2  dir = vec2(cos(P.swellTheta), sin(P.swellTheta));
+    const float c   = clamp(-dot(k, dir) / kl, -1.0, 1.0);
+    const float halfCos = sqrt(0.5 * (1.0 + c));// cos(theta / 2)
+    return sf * pow(halfCos, 2.0 * P.swellSpread) / (w * kl);
+}
 
 float phillips2D(vec2 k) {
     if (length(k) < 1e-4) return 0.0;
@@ -80,7 +160,20 @@ float phillips2D(vec2 k) {
     const float kL2 = k2 * L * L;
     const float k4 = k2 * k2;
     float kw = dot(normalize(k), windDir);
-    kw *= kw;
+    if (P.spread != 0u) {
+        // The amplitude stored at k runs toward -k: dynamic_spectrum.comp
+        // evolves it as h0(k) e^{+i w t} and the IFFT sums it as e^{+i k.x},
+        // so its phase k.x + w t is constant along x moving opposite k. The
+        // downwind angle is therefore measured from -k, so the energy ends
+        // up in waves that run WITH the wind.
+        // Peak frequency: the same PM / JONSWAP peak kp = 0.894 / L as the
+        // gamma branch below (L already carries the fetch scaling).
+        const float w  = sqrt(g * sqrt(k2));
+        const float wp = sqrt(g * 0.894 / L);
+        kw = donelanBannerWeight(-kw, w / wp);
+    } else {
+        kw *= kw;
+    }
     const float l = P.smallWaveLengthCutoff;
     float p = Aeff * exp(-1.0 / kL2) * kw * exp(-k2 * l * l) / k4;
     if (gamma > 1.0) {
@@ -91,6 +184,10 @@ float phillips2D(vec2 k) {
         const float sg = (w <= wp) ? 0.07 : 0.09;
         const float d  = (w - wp) / (sg * wp);
         p *= pow(gamma, exp(-0.5 * d * d));
+    }
+    if (P.swellScale > 0.0) {
+        // The swell carries the same short-wave taper as the band it is in.
+        p += P.swellScale * swellShape(k) * exp(-k2 * l * l);
     }
     return p;
 }

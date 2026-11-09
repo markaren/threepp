@@ -403,6 +403,11 @@ namespace threepp::water {
         p.kMin            = settings_.kMin;
         p.kMax            = settings_.kMax;
         p.fetch           = settings_.fetch;
+        p.spread          = settings_.spread;
+        p.swellScale      = swellScale(settings_);
+        p.swellPeriod     = settings_.swellPeriod;
+        p.swellTheta      = settings_.swellTheta;
+        p.swellSpread     = settings_.swellSpread;
         vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(settings_.textureSize);
         vkCmdDispatch(cb, g, g, 1);
@@ -410,10 +415,71 @@ namespace threepp::water {
         cmdShaderRWBarrier(cb, h0_.image);
     }
 
-    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch) {
+    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch, uint32_t spread) {
         settings_.windTheta = windTheta;
         settings_.windSpeed = windSpeed;
         settings_.fetch     = fetch;
+        settings_.spread    = spread;
+    }
+
+    void PhillipsSpectrum::updateSwell(float height, float period, float theta, float spread) {
+        settings_.swellHeight = height;
+        settings_.swellPeriod = period;
+        settings_.swellTheta  = theta;
+        settings_.swellSpread = spread;
+    }
+
+    namespace {
+        // CPU mirror of swellShape in phillips_spectrum.comp; keep the two
+        // identical (the sources of each factor are cited there).
+        double swellShapeCpu(double kx, double kz, double tp, double theta, double s) {
+            constexpr double g  = 9.81;
+            constexpr double pi = 3.14159265358979323846;
+            const double kl = std::sqrt(kx * kx + kz * kz);
+            const double w  = std::sqrt(g * kl);
+            const double x  = tp * w / (2.0 * pi);
+            const double sg = (x <= 1.0) ? 0.07 : 0.09;
+            const double d  = (x - 1.0) / sg;
+            const double gammaPeak = std::pow(6.0, std::exp(-0.5 * d * d));
+            const double x2 = x * x;
+            const double sf = std::exp(-1.25 / (x2 * x2)) * gammaPeak / (x2 * x2 * x);
+            const double c  = std::clamp(-(kx * std::cos(theta) + kz * std::sin(theta)) / kl, -1.0, 1.0);
+            const double halfCos = std::sqrt(0.5 * (1.0 + c));
+            return sf * std::pow(halfCos, 2.0 * s) / (w * kl);
+        }
+    }// namespace
+
+    float PhillipsSpectrum::swellScale(const Settings& s) {
+        if (!(s.swellHeight > 0.f) || !(s.swellPeriod > 0.f) || !(s.tileSize > 0.f)) return 0.f;
+        constexpr double g  = 9.81;
+        constexpr double pi = 3.14159265358979323846;
+        const double dk = 2.0 * pi / s.tileSize;
+        // Peak wavenumber kp = (2 pi / Tp)^2 / g must sit inside the band and
+        // at least two modes out from the origin, or the swell cannot be
+        // drawn on this grid (and normalising its tail up to Hs would be wrong).
+        const double kp = std::pow(2.0 * pi / s.swellPeriod, 2.0) / g;
+        if (kp < 2.0 * dk || kp < s.kMin || (s.kMax > 0.f && kp > s.kMax)) return 0.f;
+        const int n = static_cast<int>(s.textureSize);
+        const double l = s.smallWaveCutoff;
+        double sum = 0.0;
+        for (int iz = 0; iz < n; ++iz) {
+            for (int ix = 0; ix < n; ++ix) {
+                const double kx = (ix - 0.5 * n) * dk;
+                const double kz = (iz - 0.5 * n) * dk;
+                const double k2 = kx * kx + kz * kz;
+                const double kl = std::sqrt(k2);
+                // The shader's band mask and its length(k) < 1e-4 guard.
+                if (kl < 1e-4 || kl < s.kMin || (s.kMax > 0.f && kl > s.kMax)) continue;
+                sum += swellShapeCpu(kx, kz, s.swellPeriod, s.swellTheta, s.swellSpread) *
+                       std::exp(-k2 * l * l);
+            }
+        }
+        if (!(sum > 0.0)) return 0.f;
+        // The rendered height is the un-normalised IFFT over tileSize, and
+        // h0 = xi sqrt(P / 2) with E|xi|^2 = 2 gives E|h(k, t)|^2 = P(k) + P(-k),
+        // so the height variance is 2 sum P / tile^2. Hs = 4 sqrt(variance).
+        const double variance = (double(s.swellHeight) * s.swellHeight) / 16.0;
+        return static_cast<float>(variance * double(s.tileSize) * s.tileSize / (2.0 * sum));
     }
 
     PhillipsSpectrum::~PhillipsSpectrum() {

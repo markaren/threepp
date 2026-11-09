@@ -29,6 +29,10 @@
 
 namespace threepp {
 
+    // Default of DisplacedMesh::Params::measuredSpreading: true unless the
+    // environment sets THREEPP_OCEAN_SPREAD=0 (read once per process).
+    bool defaultMeasuredSpreading();
+
     class DisplacedMesh : public Mesh {
 
     public:
@@ -58,6 +62,35 @@ namespace threepp {
             // developed fetch (~1600 V² m, i.e. 145 km at 9.5 m/s). Live-
             // tunable like windSpeed: the renderer regenerates the spectra.
             float fetch = 0.0f;
+
+            // Directional spreading of the wave energy. true = the measured
+            // distribution of Donelan, Hamilton & Hui (1985) with Banner's
+            // (1990) short-wave form: near the spectral peak the energy
+            // runs in a narrow fan downwind (long crests travelling with the
+            // wind), the short waves spread wider, and a little energy runs
+            // against the wind. false = the historical symmetric cos^2, as
+            // much energy upwind as downwind (standing, short-crested
+            // slosh). Both carry the same energy per wavelength, so the
+            // significant wave height is the same. Live-tunable like
+            // windSpeed: the renderer regenerates the spectra.
+            // THREEPP_OCEAN_SPREAD=0 makes false the default.
+            bool measuredSpreading = defaultMeasuredSpreading();
+
+            // Optional swell: a second, narrow wave system from a distant
+            // storm, added to the wind sea with its own height, period and
+            // direction (a JONSWAP peak with gamma = 6 and cos^(2s)(theta/2)
+            // spreading; sources in phillips_spectrum.comp). swellHeight is
+            // its significant height in metres; 0 (the default) = no swell.
+            // It lives on cascade 0 only, so its peak wavelength g Tp^2 / 2 pi
+            // must lie between tileSize1 and tileSize0 / 2 (9 to 18 s on the
+            // default 1 km ocean); outside that it is not drawn. swellTheta is
+            // the direction it travels toward (radians, 0 = +X). swellSpread
+            // is s: ~25 for swell from a nearby storm, ~75 from a far one
+            // (Goda 2000). Live-tunable: the renderer regenerates the spectra.
+            float swellHeight = 0.0f;
+            float swellPeriod = 12.0f;
+            float swellTheta  = 0.0f;
+            float swellSpread = 50.0f;
 
             // Global Y-displacement multiplier. 1.0 is physical; higher values
             // exaggerate wave height.

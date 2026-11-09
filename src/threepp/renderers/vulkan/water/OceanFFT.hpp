@@ -59,9 +59,15 @@ namespace threepp::water {
             float    kMin = 0.0f;
             float    kMax = 0.0f;     // 0 = no upper bound
             float    fetch = 0.0f;    // m of upwind open water; 0 = fully developed (plain Phillips)
+            uint32_t spread = 0;      // 0 = symmetric cos^2, 1 = Donelan-Banner sech^2 (see the shader)
+            // Optional swell system (see swellShape in the shader). Height 0 = none.
+            float    swellHeight = 0.0f;  // significant height, m
+            float    swellPeriod = 12.0f; // peak period Tp, s
+            float    swellTheta  = 0.0f;  // direction of travel, rad (sample domain)
+            float    swellSpread = 50.0f; // s of cos^(2s)(theta/2)
         };
 
-        // Push-constant block of phillips_spectrum.comp (std430, 32 bytes).
+        // Push-constant block of phillips_spectrum.comp (std430, 52 bytes).
         struct PushParams {
             uint32_t textureSize;
             float    tileSize;
@@ -71,6 +77,11 @@ namespace threepp::water {
             float    kMin;
             float    kMax;
             float    fetch;
+            uint32_t spread;
+            float    swellScale;
+            float    swellPeriod;
+            float    swellTheta;
+            float    swellSpread;
         };
 
         PhillipsSpectrum(vulkan::VulkanContext& ctx, const Settings& s);
@@ -90,7 +101,19 @@ namespace threepp::water {
         // sea state morphs smoothly. The params are push constants recorded
         // into the command buffer, so a frame in flight never sees the
         // change meant for the next one.
-        void updateSeaState(float windTheta, float windSpeed, float fetch);
+        void updateSeaState(float windTheta, float windSpeed, float fetch, uint32_t spread);
+
+        // Live swell change; the next recordCompute regenerates h0 with it.
+        void updateSwell(float height, float period, float theta, float spread);
+
+        // Factor on the shader's swellShape that makes the swell's discrete
+        // sum over this cascade's grid (its band and short-wave taper
+        // included) carry exactly the requested significant height: a
+        // swell is so narrow that it lands on a handful of modes, and a
+        // continuous normalisation would miss Hs by tens of percent
+        // depending on where the lattice falls. 0 when there is no swell or
+        // its peak is not inside the band with at least two modes below it.
+        static float swellScale(const Settings& s);
 
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }

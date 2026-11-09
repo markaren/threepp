@@ -3378,7 +3378,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
 void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed) {
 
             // (0) Live sea state. The Phillips h0 pass is normally one-shot,
-            // but windSpeed/windTheta/fetch are plain Params fields — when
+            // but windSpeed/windTheta/fetch/measuredSpreading are plain Params fields — when
             // they drift from what the cascades were baked with, rewrite each
             // cascade's spectrum params and drop the phillipsRecorded latch so
             // the loop below re-dispatches h0 this frame. The persistent per-
@@ -3388,7 +3388,12 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // same convention as DynamicSpectrum's per-frame time update.)
             if (dm.params.windSpeed != st.appliedWindSpeed ||
                 dm.params.windTheta != st.appliedWindTheta ||
-                dm.params.fetch     != st.appliedFetch) {
+                dm.params.fetch     != st.appliedFetch ||
+                dm.params.measuredSpreading != st.appliedMeasuredSpreading ||
+                dm.params.swellHeight != st.appliedSwell[0] ||
+                dm.params.swellPeriod != st.appliedSwell[1] ||
+                dm.params.swellTheta  != st.appliedSwell[2] ||
+                dm.params.swellSpread != st.appliedSwell[3]) {
                 for (uint32_t i = 0; i < 3; ++i) {
                     if (!(st.cascadeMask & (1u << i))) continue;
                     // Cascade 1's sample domain is rotated; keep its world
@@ -3396,12 +3401,23 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     const float theta = dm.params.windTheta +
                             (i == 1 ? kOceanCascade1RotTheta : 0.f);
                     st.cascades[i].phillips->updateSeaState(theta, dm.params.windSpeed,
-                                                            dm.params.fetch);
+                                                            dm.params.fetch,
+                                                            dm.params.measuredSpreading ? 1u : 0u);
+                    // The swell lives on cascade 0 only (its finest k sampling).
+                    st.cascades[i].phillips->updateSwell(i == 0 ? dm.params.swellHeight : 0.f,
+                                                         dm.params.swellPeriod,
+                                                         dm.params.swellTheta,
+                                                         dm.params.swellSpread);
                     st.cascades[i].phillipsRecorded = false;
                 }
                 st.appliedWindSpeed = dm.params.windSpeed;
                 st.appliedWindTheta = dm.params.windTheta;
                 st.appliedFetch     = dm.params.fetch;
+                st.appliedMeasuredSpreading = dm.params.measuredSpreading;
+                st.appliedSwell[0] = dm.params.swellHeight;
+                st.appliedSwell[1] = dm.params.swellPeriod;
+                st.appliedSwell[2] = dm.params.swellTheta;
+                st.appliedSwell[3] = dm.params.swellSpread;
             }
 
             // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
@@ -5088,6 +5104,13 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                                  (i == 1 ? kOceanCascade1RotTheta : 0.f);
                 ps.windSpeed   = dm.params.windSpeed;
                 ps.fetch       = dm.params.fetch;
+                ps.spread      = dm.params.measuredSpreading ? 1u : 0u;
+                // Swell on cascade 0 only: its 1 km-scale k spacing is the only
+                // one fine enough for a peak this narrow.
+                ps.swellHeight = (i == 0) ? dm.params.swellHeight : 0.f;
+                ps.swellPeriod = dm.params.swellPeriod;
+                ps.swellTheta  = dm.params.swellTheta;
+                ps.swellSpread = dm.params.swellSpread;
                 if (i == 0) {
                     ps.kMin = 0.f;
                     ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound
@@ -5132,6 +5155,11 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->appliedWindSpeed = dm.params.windSpeed;
             state->appliedWindTheta = dm.params.windTheta;
             state->appliedFetch     = dm.params.fetch;
+            state->appliedMeasuredSpreading = dm.params.measuredSpreading;
+            state->appliedSwell[0] = dm.params.swellHeight;
+            state->appliedSwell[1] = dm.params.swellPeriod;
+            state->appliedSwell[2] = dm.params.swellTheta;
+            state->appliedSwell[3] = dm.params.swellSpread;
 
             // Per-cascade height readback DIMENSIONS. Each cascade can run at
             // a different FFT resolution, so each readback buffer is sized to
