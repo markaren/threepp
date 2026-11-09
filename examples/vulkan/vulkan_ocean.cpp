@@ -41,6 +41,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -1176,6 +1177,16 @@ int main(int argc, char** argv) {
         return group;
     });
     scene.add(boat);
+    // --pinned: the boat's GLB loads on a worker thread and joins the scene at
+    // the first render after it finishes, a race with the frame loop that put
+    // her in on frame 3, 5, 7 or 6 in four --bow runs (and the load ran
+    // beside the rest of this setup). Everything that carries history (TAA,
+    // probe GI, ReSTIR, the LOD schedule) carried that to the capture, so
+    // pinned runs still differed in about 40,000 pixels. Pinned, the load is
+    // waited for here, so she is in from the first frame of every run.
+    if (pinnedClock) {
+        while (boat->isLoading()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     BoatState bs;
     BoatInput bi;
     canvas.addKeyListener(bi);
