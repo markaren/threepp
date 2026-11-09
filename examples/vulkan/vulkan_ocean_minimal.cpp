@@ -103,9 +103,11 @@ int main(int argc, char** argv) {
     // --bench runs headless so THREEPP_VULKAN_SUPPRESS_PRESENT=1 can engage
     // (present to a hidden window host-blocks ~a GPU frame and poisons the
     // wall-clock columns; the per-pass GPU brackets don't care, but cpuFrame /
-    // gpuTotal do).
+    // gpuTotal do). --shot runs headless too: a capture never opens a window
+    // on the desktop.
     Canvas canvas("Vulkan Deferred - Ocean (minimal)",
-                  {{"vsync", false}, {"size", WindowSize{1600, 900}}, {"headless", benchFrames > 0}});
+                  {{"vsync", false}, {"size", WindowSize{1600, 900}},
+                   {"headless", benchFrames > 0 || !shotPath.empty()}});
 
     auto renderer = VulkanRenderer(canvas);
     renderer.setDenoise(true);
