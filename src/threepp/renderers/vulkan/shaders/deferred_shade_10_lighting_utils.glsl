@@ -762,14 +762,29 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
 // glass and blend instances only (kRayMaskAlpha; flat blends and additive
 // cards pass), every candidate visited (NoOpaque), none committed. The ocean
 // is in the opaque mask and stays out.
+// No BLAS asks for NO_DUPLICATE_ANY_HIT, so a driver may report one triangle
+// as a candidate more than once (one that splits triangles across nodes), and
+// a product counts each report: the last four glass faces counted, by
+// (instance, geometry, primitive), are skipped when they come again.
 float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoOpaqueEXT, kRayMaskAlpha, origin, 0.0, dir, tMax);
     float T = 1.0;
+    const uvec3 kNone = uvec3(0xFFFFFFFFu);
+    uvec3 seen0 = kNone, seen1 = kNone, seen2 = kNone, seen3 = kNone;
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
         const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
         if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
+        if (kFixGlassDedupe) {
+            const uvec3 face = uvec3(rayQueryGetIntersectionInstanceIdEXT(rq, false),
+                                     rayQueryGetIntersectionGeometryIndexEXT(rq, false),
+                                     rayQueryGetIntersectionPrimitiveIndexEXT(rq, false));
+            if (all(equal(face, seen0)) || all(equal(face, seen1)) || all(equal(face, seen2)) ||
+                all(equal(face, seen3)))
+                continue;
+            seen3 = seen2; seen2 = seen1; seen1 = seen0; seen0 = face;
+        }
         const float f0n  = (max(m.ior, 1.0) - 1.0) / (max(m.ior, 1.0) + 1.0);
         const float face = 1.0 - f0n * f0n;
         const bool  entry = rayQueryGetIntersectionFrontFaceEXT(rq, false);
