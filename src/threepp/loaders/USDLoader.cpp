@@ -1436,6 +1436,13 @@ namespace threepp {
             // project_uvw projects the maps from 3D, which no transform of the UVs gives, so it
             // keeps them as they are. The texture loader shares a texture by path, so each map
             // is a clone, shared by the materials that place it the same way.
+            //
+            // That costs memory: Texture::copy copies the pixels (an Image holds them by value,
+            // not shared), so each (path, placement) pair keeps its own copy of the image in RAM
+            // and is uploaded to the GPU on its own, and a map placed here no longer shares its
+            // texture with a UsdPreviewSurface material that reads the same file. A stage with
+            // many per-material scales of one image pays for each. Sharing them needs an Image
+            // whose pixels can be shared between textures.
             const auto scale = tryFloat2("inputs:texture_scale").value_or(std::array<float, 2>{1.f, 1.f});
             const auto translate = tryFloat2("inputs:texture_translate").value_or(std::array<float, 2>{0.f, 0.f});
             const float rotate = tryFloat({"inputs:texture_rotate"}).value_or(0.f);
