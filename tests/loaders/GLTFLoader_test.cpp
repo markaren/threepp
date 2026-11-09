@@ -625,6 +625,65 @@ TEST_CASE("GLTFLoader aims directional and spot lights down their node's -Z") {
     }
 }
 
+TEST_CASE("GLTFLoader puts directional and spot lights at their node's origin") {
+    // KHR_lights_punctual: a light sits at its node's origin. DirectionalLight and
+    // SpotLight are constructed one unit up (+Y), as in three.js, whose loader moves
+    // them back to (0, 0, 0). The nodes are turned and scaled, so a leftover offset
+    // would show as a shift along world -Z of the node's scale.
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "extensionsUsed":["KHR_lights_punctual"],
+      "extensions":{"KHR_lights_punctual":{"lights":[
+        {"name":"Sun","type":"directional","intensity":3.0},
+        {"name":"Spot","type":"spot","intensity":5.0,"spot":{"outerConeAngle":0.5}},
+        {"name":"Bulb","type":"point","intensity":1.0}]}},
+      "nodes":[
+        {"name":"sunNode","translation":[3,5,-2],"rotation":[-0.70710678,0,0,0.70710678],
+         "scale":[2,2,2],"extensions":{"KHR_lights_punctual":{"light":0}}},
+        {"name":"spotNode","translation":[-4,2,6],"rotation":[-0.70710678,0,0,0.70710678],
+         "extensions":{"KHR_lights_punctual":{"light":1}}},
+        {"name":"bulbNode","translation":[1,2,3],
+         "extensions":{"KHR_lights_punctual":{"light":2}}}],
+      "scenes":[{"nodes":[0,1,2]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, {}));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    res->scene->updateMatrixWorld(true);
+    DirectionalLight* sun = nullptr;
+    SpotLight* spot = nullptr;
+    PointLight* bulb = nullptr;
+    res->scene->traverse([&](Object3D& o) {
+        if (auto* d = o.as<DirectionalLight>()) sun = d;
+        else if (auto* s = o.as<SpotLight>()) spot = s;
+        else if (auto* p = o.as<PointLight>()) bulb = p;
+    });
+    REQUIRE(sun);
+    REQUIRE(spot);
+    REQUIRE(bulb);
+
+    const auto checkWorldPosition = [](const Object3D& light, const Vector3& expected) {
+        Vector3 at;
+        at.setFromMatrixPosition(*light.matrixWorld);
+        INFO(light.name << " at (" << at.x << ", " << at.y << ", " << at.z << ")");
+        CHECK_THAT(at.x, Catch::Matchers::WithinAbs(expected.x, 1e-5));
+        CHECK_THAT(at.y, Catch::Matchers::WithinAbs(expected.y, 1e-5));
+        CHECK_THAT(at.z, Catch::Matchers::WithinAbs(expected.z, 1e-5));
+    };
+    checkWorldPosition(*sun, {3, 5, -2});
+    checkWorldPosition(*spot, {-4, 2, 6});
+    checkWorldPosition(*bulb, {1, 2, 3});
+
+    // The target stays a unit step down the node's -Z, here straight down; the sun's
+    // node is scaled by 2, so its step is 2.
+    checkWorldPosition(sun->target(), {3, 3, -2});
+    checkWorldPosition(spot->target(), {-4, 1, 6});
+}
+
 TEST_CASE("GLTFLoader preserves normalized uint8 COLOR_0 as a narrow attribute") {
     Bin bin;
     size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
