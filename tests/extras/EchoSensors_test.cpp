@@ -246,19 +246,19 @@ TEST_CASE("ImagingSonar: a surface just past max range stays in the last bins of
     const Vector3 origin(0, 0, 0);
 
     // Two targets inside the window, one each side, and the wall dead ahead.
-    auto near = targetColumn(syn, origin, -40.f, 2.f, 0.6f, 3);
+    auto sides = targetColumn(syn, origin, -40.f, 2.f, 0.6f, 3);
     const auto right = targetColumn(syn, origin, 40.f, 2.f, 0.6f, 4);
-    for (std::size_t i = 0; i < near.size(); ++i) {
-        if (right[i].returnNo > 0) near[i] = right[i];
+    for (std::size_t i = 0; i < sides.size(); ++i) {
+        if (right[i].returnNo > 0) sides[i] = right[i];
     }
-    auto withWall = near;
+    auto withWall = sides;
     const auto wall = targetColumn(syn, origin, 0.f, 2.f, 1.04f, 5);
     for (std::size_t i = 0; i < wall.size(); ++i) {
         if (wall[i].returnNo > 0) withWall[i] = wall[i];
     }
 
     SonarFrame a, b;
-    syn.synthesize(model, AcousticMaterials{}, near, origin, Matrix3{}, 1, a, 1);
+    syn.synthesize(model, AcousticMaterials{}, sides, origin, Matrix3{}, 1, a, 1);
     syn.synthesize(model, AcousticMaterials{}, withWall, origin, Matrix3{}, 1, b, 1);
     REQUIRE(a.levelDb.size() == b.levelDb.size());
     // The wall only adds to the bins its response reaches, the last ~150.

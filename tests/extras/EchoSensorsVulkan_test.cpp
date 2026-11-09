@@ -64,10 +64,15 @@ namespace {
 
     // Holds the clock at `t` and calls update() until it forms nothing more
     // (every slot the antenna has passed is traced, collected and formed).
-    unsigned runAt(MarineRadar& radar, VulkanRenderer& r, double t) {
+    // lastSpokes() holds only the last call's, so `spokes` gathers them all.
+    unsigned runAt(MarineRadar& radar, VulkanRenderer& r, double t,
+                   std::vector<RadarSpoke>* spokes = nullptr) {
         radar.setSimTime(t);
         unsigned formed = 0;
-        for (int i = 0; i < 40; ++i) formed += radar.update(r);
+        for (int i = 0; i < 40; ++i) {
+            formed += radar.update(r);
+            if (spokes) spokes->insert(spokes->end(), radar.lastSpokes().begin(), radar.lastSpokes().end());
+        }
         return formed;
     }
 
@@ -117,18 +122,22 @@ TEST_CASE("MarineRadar: a new range scale rebuilds the ring instead of writing p
     radar.update(*r);
     REQUIRE(radar.image().bins == 512u);
 
-    CHECK(runAt(radar, *r, 0.5) > 0u);
-    for (const auto& sp : radar.lastSpokes()) REQUIRE(sp.snrDb.size() == 512u);
+    std::vector<RadarSpoke> spokes;
+    CHECK(runAt(radar, *r, 0.5, &spokes) > 0u);
+    REQUIRE(!spokes.empty());
+    for (const auto& sp : spokes) REQUIRE(sp.snrDb.size() == 512u);
 
     // Mid-sweep, with slots of the old geometry in flight: a range-scale
     // switch, and the ring grows four times over.
     radar.update(*r);
     radar.model.rangeBins = 2048;
     radar.model.maxRange = 600.f;
-    CHECK(runAt(radar, *r, 1.0) > 0u);
+    spokes.clear();
+    CHECK(runAt(radar, *r, 1.0, &spokes) > 0u);
     CHECK(radar.image().bins == 2048u);
     CHECK(radar.image().maxRange == 600.f);
-    for (const auto& sp : radar.lastSpokes()) CHECK(sp.snrDb.size() == 2048u);
+    REQUIRE(!spokes.empty());
+    for (const auto& sp : spokes) CHECK(sp.snrDb.size() == 2048u);
 }
 
 TEST_CASE("ImagingSonar: new fan geometry re-bakes the ray table at the next ping") {
