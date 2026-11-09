@@ -490,3 +490,155 @@ TEST_CASE("BVH mesh-mesh queries on a procedural pair", "[BVH]") {
     CHECK_THAT(BVH::distance(a, b), WithinAbs(0.f, 1e-6f));
     CHECK_THAT(gap, WithinRel(0.987624466f, 1e-5f));
 }
+
+namespace {
+
+    // A flat grid of unit quads in the y = 0 plane, x and z in [0, cells]. The
+    // vertices are whole numbers, so a ray test against it is exact arithmetic.
+    Mesh floorGrid(int cells) {
+        Mesh mesh;
+        for (int z = 0; z <= cells; ++z) {
+            for (int x = 0; x <= cells; ++x) {
+                mesh.positions.insert(mesh.positions.end(), {static_cast<float>(x), 0.f, static_cast<float>(z)});
+            }
+        }
+        const auto vertex = [cells](int x, int z) {
+            return static_cast<unsigned int>(z * (cells + 1) + x);
+        };
+        for (int z = 0; z < cells; ++z) {
+            for (int x = 0; x < cells; ++x) {
+                const auto a = vertex(x, z), b = vertex(x + 1, z), c = vertex(x + 1, z + 1), d = vertex(x, z + 1);
+                mesh.indices.insert(mesh.indices.end(), {a, d, b, b, d, c});
+            }
+        }
+        return mesh;
+    }
+
+    bool onTriangle(const Triangle& tri, const Vector3& p) {
+        Vector3 closest;
+        tri.closestPointToPoint(p, closest);
+        return closest.distanceToSquared(p) < 1e-10f;
+    }
+
+}// namespace
+
+TEST_CASE("BVH leaves out triangles with a non-finite vertex", "[BVH]") {
+
+    // A no-data cell in a DEM or point cloud: one vertex with a NaN or infinite coordinate.
+    const float badValues[] = {std::numeric_limits<float>::quiet_NaN(),
+                               std::numeric_limits<float>::infinity(),
+                               -std::numeric_limits<float>::infinity()};
+    const Ray down({0, 1, 0}, {0, -1, 0});
+
+    SECTION("a NaN or infinite coordinate") {
+        for (const float bad : badValues) {
+            // A mesh big enough to be split: 32 floor triangles, and one bad
+            // triangle placed in the middle of the source order, so every
+            // triangle after it would be misnumbered if the bad one were
+            // skipped rather than left out of the tree. The bad value is tried
+            // as a height, then as an x the build bins on.
+            for (const int axis : {1, 0}) {
+                for (const int leafSize : {1, 8}) {
+                    CAPTURE(bad, axis, leafSize);
+                    auto mesh = floorGrid(4);
+                    const auto badVertex = static_cast<unsigned int>(mesh.positions.size() / 3);
+                    mesh.positions.insert(mesh.positions.end(), {2.5f, 0.f, 1.5f});
+                    mesh.positions[badVertex * 3 + axis] = bad;
+                    constexpr std::size_t badTriangle = 10;
+                    mesh.indices.insert(mesh.indices.begin() + badTriangle * 3, {0u, 1u, badVertex});
+
+                    BVH bvh(leafSize);
+                    bvh.build(mesh.positions, mesh.indices);
+                    CHECK(bvh.triangleCount() == mesh.triangleCount() - 1);
+
+                    // Straight down onto the inside of each floor triangle: the
+                    // hit is that triangle, numbered as in the source.
+                    int found = 0;
+                    for (int z = 0; z < 4; ++z) {
+                        for (int x = 0; x < 4; ++x) {
+                            for (const auto& offset : {Vector3(0.25f, 1, 0.25f), Vector3(0.75f, 1, 0.75f)}) {
+                                const Ray ray(Vector3(static_cast<float>(x), 0, static_cast<float>(z)).add(offset), {0, -1, 0});
+                                const auto hit = bvh.raycast(ray);
+                                REQUIRE(hit);
+                                CHECK(hit->distance == 1.f);
+                                REQUIRE(hit->triangleIndex >= 0);
+                                REQUIRE(hit->triangleIndex < static_cast<int>(mesh.triangleCount()));
+                                CHECK(hit->triangleIndex != static_cast<int>(badTriangle));
+                                CHECK(onTriangle(mesh.triangle(hit->triangleIndex), hit->point));
+                                CHECK(bvh.raycastAny(ray, 2.f));
+                                ++found;
+                            }
+                        }
+                    }
+                    CHECK(found == 32);
+
+                    // Off the floor nothing is hit; a box over everything finds the 32 good triangles.
+                    CHECK_FALSE(bvh.raycast(Ray({6, 1, 6}, {0, -1, 0})));
+                    auto all = bvh.intersect(Box3({-1, -1, -1}, {5, 1, 5}));
+                    std::ranges::sort(all);
+                    CHECK(all.size() == mesh.triangleCount() - 1);
+                    CHECK(std::ranges::find(all, static_cast<int>(badTriangle)) == all.end());
+                }
+            }
+
+            // A single leaf: one floor quad and the bad triangle reaching out
+            // to x = z = 3. A ray down at (2.5, 2.5) misses the quad and must
+            // not report the bad one.
+            CAPTURE(bad);
+            Mesh mesh;
+            mesh.positions = {0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 3, bad, 3};
+            mesh.indices = {0, 3, 1, 1, 3, 2, 1, 2, 4};
+            BVH bvh;
+            bvh.build(mesh.positions, mesh.indices);
+            CHECK(bvh.triangleCount() == 2);
+
+            const Ray miss({2.5f, 1, 2.5f}, {0, -1, 0});
+            CHECK_FALSE(bvh.raycast(miss));
+            CHECK_FALSE(bvh.raycastAny(miss, 10.f));
+            const auto hit = bvh.raycast(Ray({0.5f, 1, 0.25f}, {0, -1, 0}));
+            REQUIRE(hit);
+            CHECK(hit->distance == 1.f);
+        }
+    }
+
+    SECTION("only bad triangles build an empty tree") {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        BVH bvh;
+        bvh.build({0, 0, 0, 1, 0, 0, nan, 0, 1});
+        CHECK(bvh.triangleCount() == 0);
+        CHECK_FALSE(bvh.raycast(down));
+        CHECK(bvh.intersect(Box3({-10, -10, -10}, {10, 10, 10})).empty());
+    }
+
+    SECTION("a triangle too large for float edges never gives a NaN hit") {
+        // The vertices are finite, but their differences overflow to infinity,
+        // so the ray-triangle test returns NaN for a ray through one. Their
+        // centroid z sums overflow to -inf too, next to four small triangles
+        // with finite centroids, so the build bins an infinite centroid range.
+        constexpr float big = 3e38f;
+        std::vector<float> positions;
+        for (int i = 0; i < 12; ++i) {
+            const float y = -0.5f - static_cast<float>(i) * 0.1f;
+            positions.insert(positions.end(), {-big, y, -big, big, y, -big, 0, y, big});
+        }
+        for (int i = 0; i < 4; ++i) {
+            const float x = 10.f + static_cast<float>(i);
+            positions.insert(positions.end(), {x, 0, 0, x, 0, 1, x + 1, 0, 0});
+        }
+        BVH bvh(1);
+        bvh.build(positions);
+        CHECK(bvh.triangleCount() == 16);
+
+        const auto hit = bvh.raycast(down);
+        if (hit) {
+            CHECK(std::isfinite(hit->distance));
+            CHECK(std::isfinite(hit->point.y));
+        }
+        CHECK(bvh.raycastAny(down, 10.f) == hit.has_value());
+
+        const auto small = bvh.raycast(Ray({10.25f, 1, 0.25f}, {0, -1, 0}));
+        REQUIRE(small);
+        CHECK(small->distance == 1.f);
+        CHECK(small->triangleIndex == 12);
+    }
+}

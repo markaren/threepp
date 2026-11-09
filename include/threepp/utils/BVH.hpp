@@ -2,7 +2,9 @@
 //
 // Built with a binned surface-area heuristic and stored as a flat node array,
 // so ray queries walk it iteratively, near child first. Triangle indices handed
-// back by any query are the triangle's position in the source geometry.
+// back by any query are the triangle's position in the source geometry. A
+// triangle with a NaN or infinite vertex is left out of the tree and is never
+// reported.
 
 #ifndef THREEPP_BVH_HPP
 #define THREEPP_BVH_HPP
@@ -102,6 +104,7 @@ namespace threepp {
 
         [[nodiscard]] const BufferGeometry* getGeometry() const;
 
+        // The triangles in the tree: the source's, less any with a non-finite vertex.
         [[nodiscard]] std::size_t triangleCount() const {
             return triangles.size();
         }

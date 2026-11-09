@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
 #include <utility>
 
@@ -87,6 +86,17 @@ namespace {
         return dx * dy + dy * dz + dz * dx;
     }
 
+    // The centroid bin a triangle falls in along one axis. A NaN position (a
+    // centroid whose sum overflowed, or an infinite offset times the zero scale
+    // of an infinite centroid range) goes to bin 0 instead of reaching a
+    // float-to-int conversion, which is undefined for NaN and infinity.
+    int centroidBin(float centroid, float lo, float scale) {
+        const float x = (centroid - lo) * scale;
+        if (!(x > 0.f)) return 0;
+        if (!(x < static_cast<float>(sahBins - 1))) return sahBins - 1;
+        return static_cast<int>(x);
+    }
+
     struct Bounds {
         float min[3]{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
         float max[3]{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
@@ -140,26 +150,37 @@ void BVH::buildTree() {
     const auto n = static_cast<int>(triangles.size());
     if (n == 0) return;
 
-    // Per-triangle bounds and centroids, in source order.
+    // Per-triangle bounds and centroids, in source order. A triangle with a
+    // NaN or infinite vertex (a no-data value) is left out of `order`, so no
+    // node holds it and no query reports it; sourceIndex still maps the rest
+    // to their positions in the source.
     std::vector<float> triMin(3 * static_cast<std::size_t>(n)), triMax(triMin.size()), centroid(triMin.size());
+    std::vector<int> order;
+    order.reserve(n);
     for (int i = 0; i < n; ++i) {
         const Triangle& t = triangles[i];
         const Vector3* v[3] = {&t.a(), &t.b(), &t.c()};
+        bool finite = true;
         for (int k = 0; k < 3; ++k) {
             const float a = (*v[0])[k], b = (*v[1])[k], c = (*v[2])[k];
+            finite = finite && std::isfinite(a) && std::isfinite(b) && std::isfinite(c);
             triMin[i * 3 + k] = std::min({a, b, c});
             triMax[i * 3 + k] = std::max({a, b, c});
             centroid[i * 3 + k] = (a + b + c) / 3.f;
         }
+        if (finite) order.push_back(i);
     }
 
-    std::vector<int> order(n);
-    std::iota(order.begin(), order.end(), 0);
+    const auto kept = static_cast<int>(order.size());
+    if (kept == 0) {
+        triangles.clear();
+        return;
+    }
 
     const int leafSize = std::max(1, maxTrianglesPerNode);
     const int depthLimit = std::clamp(maxSubdivisions, minDepthLimit, maxDepthLimit);
 
-    nodes.reserve(2 * static_cast<std::size_t>(n));
+    nodes.reserve(2 * static_cast<std::size_t>(kept));
     nodes.emplace_back();
 
     const auto split = [&](auto&& self, int index, int begin, int end, int depth) -> void {
@@ -200,7 +221,7 @@ void BVH::buildTree() {
             const float scale = sahBins / extent;
             for (int i = begin; i < end; ++i) {
                 const int t = order[i];
-                const int b = std::min(sahBins - 1, static_cast<int>((centroid[t * 3 + axis] - centroids.min[axis]) * scale));
+                const int b = centroidBin(centroid[t * 3 + axis], centroids.min[axis], scale);
                 ++binCount[b];
                 binBounds[b].grow(&triMin[t * 3], &triMax[t * 3]);
             }
@@ -233,7 +254,7 @@ void BVH::buildTree() {
             const float lo = centroids.min[bestAxis];
             const float scale = sahBins / (centroids.max[bestAxis] - lo);
             const auto it = std::partition(order.begin() + begin, order.begin() + end, [&](int t) {
-                return std::min(sahBins - 1, static_cast<int>((centroid[t * 3 + bestAxis] - lo) * scale)) < bestSplit;
+                return centroidBin(centroid[t * 3 + bestAxis], lo, scale) < bestSplit;
             });
             mid = static_cast<int>(it - order.begin());
             if (mid == begin || mid == end) mid = begin + count / 2;
@@ -263,14 +284,14 @@ void BVH::buildTree() {
         self(self, left + 1, mid, end, depth + 1);
     };
 
-    split(split, 0, 0, n, 0);
+    split(split, 0, 0, kept, 0);
     nodes.shrink_to_fit();
 
     // Reorder into leaf order, keeping the way back to the source index.
     std::vector<Triangle> sorted;
-    sorted.reserve(n);
-    rayTriangles.resize(n);
-    for (int i = 0; i < n; ++i) {
+    sorted.reserve(kept);
+    rayTriangles.resize(kept);
+    for (int i = 0; i < kept; ++i) {
         const Triangle& t = triangles[order[i]];
         sorted.emplace_back(t);
         RayTriangle& r = rayTriangles[i];
@@ -644,7 +665,8 @@ std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const
     traverse(nodes, data, (maxDistance - rayEps) / length, [&](int first, int count, float tLimit) {
         for (int i = first; i < first + count; ++i) {
             const float t = hitTriangle(rayTriangles[i], data);
-            if (t < tMin || t > tLimit) continue;
+            // Written so a NaN t (from edges that overflow) is never a hit.
+            if (!(t >= tMin && t <= tLimit)) continue;
             tLimit = t;
             bestT = t;
             best = i;
@@ -679,7 +701,8 @@ bool BVH::raycastAny(const Ray& ray, float maxDistance) const {
     traverse(nodes, data, (maxDistance - rayEps) / length, [&](int first, int count, float tLimit) {
         for (int i = first; i < first + count; ++i) {
             const float t = hitTriangle(rayTriangles[i], data);
-            if (t < tMin || t > tLimit) continue;
+            // Written so a NaN t (from edges that overflow) is never a hit.
+            if (!(t >= tMin && t <= tLimit)) continue;
             hit = true;
             return -1.f;
         }
