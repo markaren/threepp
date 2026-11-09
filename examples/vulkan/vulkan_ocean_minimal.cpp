@@ -33,6 +33,10 @@
 //                      (THREEPP_OCEAN_BOUND_WAVES overrides it)
 //   --breaking 0|1     Params::breakingCrests, foam only on breaking crests
 //                      (THREEPP_OCEAN_BREAKING_CRESTS overrides it)
+//   --crests           the physical-crests set in one flag: hs-fix, cwm,
+//                      bound waves, breaking crests, chop normals and the
+//                      measured spreading all on (each flag above, given
+//                      after it or not, still sets its own switch)
 //   --pinned           1/60 s sim-time steps on a pinned renderer clock, so
 //                      captures with the same sea flags show the same waves
 // Validation hooks:
@@ -85,6 +89,7 @@ int main(int argc, char** argv) {
     float theta = -1e9f;
     int hsFix = -1;
     int cwm = -1, bound = -1, breaking = -1;
+    bool crests = false;
     bool pinnedClock = false;
     for (int i = 1; i < argc; ++i) {
         auto num = [&](const char* flag, float& out) {
@@ -98,6 +103,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--cwm") == 0 && i + 1 < argc) cwm = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--bound") == 0 && i + 1 < argc) bound = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--breaking") == 0 && i + 1 < argc) breaking = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--crests") == 0) crests = true;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -201,13 +207,20 @@ int main(int argc, char** argv) {
     if (theta > -1e8f) opts.windTheta = theta;
     auto ocean = Ocean::create(opts);
     if (foam >= 0.f) ocean->params.foamAmount = foam;
+    if (crests) {
+        auto& p = ocean->params;
+        p.hsFix = p.cwm = p.boundWaves = p.breakingCrests = true;
+        p.chopNormals = p.measuredSpreading = true;
+    }
     if (hsFix >= 0) ocean->params.hsFix = hsFix != 0;
     if (cwm >= 0) ocean->params.cwm = cwm != 0;
     if (bound >= 0) ocean->params.boundWaves = bound != 0;
     if (breaking >= 0) ocean->params.breakingCrests = breaking != 0;
-    std::printf("wave model: hs-fix %d, cwm %d, bound waves %d, breaking crests %d (with environment overrides)\n",
+    std::printf("wave model: hs-fix %d, cwm %d, bound waves %d, breaking crests %d, chop normals %d, "
+                "measured spreading %d (with environment overrides)\n",
                 int(ocean->params.hsFix), int(ocean->cwmOn()), int(ocean->boundWavesOn()),
-                int(ocean->breakingCrestsOn()));
+                int(ocean->breakingCrestsOn()), int(ocean->params.chopNormals),
+                int(ocean->params.measuredSpreading));
     scene.add(ocean);
 
     // Live wind control — setWind() takes effect next frame; the sea morphs
