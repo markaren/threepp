@@ -10,10 +10,12 @@
 #include "external/stb/stb_image_write.h"
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -223,7 +225,37 @@ namespace {
         return path;
     }
 
+    // While an AllocationCap is alive, any single allocation in this test binary larger
+    // than its cap throws std::bad_alloc instead, and the cap records that it tripped.
+    // A decoder that sizes a buffer from a hostile header then fails the test at once,
+    // rather than zero-filling gigabytes first.
+    std::atomic<size_t> allocationCap{0};// 0: no cap
+    std::atomic<bool> allocationCapTripped{false};
+
+    struct AllocationCap {
+        explicit AllocationCap(size_t bytes) {
+            allocationCapTripped = false;
+            allocationCap = bytes;
+        }
+        ~AllocationCap() { allocationCap = 0; }
+        [[nodiscard]] bool tripped() const { return allocationCapTripped; }
+    };
+
 }// namespace
+
+void* operator new(std::size_t size) {
+    const size_t cap = allocationCap.load(std::memory_order_relaxed);
+    if (cap != 0 && size > cap) {
+        allocationCapTripped = true;
+        throw std::bad_alloc();
+    }
+    if (void* p = std::malloc(size != 0 ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+
+void operator delete(void* p) noexcept { std::free(p); }
+
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 TEST_CASE("ImageLoader preserves pixel layout") {
 
@@ -525,6 +557,42 @@ TEST_CASE("ImageLoader decodes TIFF") {
         // 4 bytes * 1717882064 * 2684518405 = 2^64 + 64.
         const auto file = tiledRgbaTiff(4, 4, 1717882064u, 2684518405u, smallTile, 2);
         CHECK_FALSE(loader.load(file, 4, false).has_value());
+    }
+
+    // The two above are refused by the row-size check alone. These two reach the clamp
+    // of a tile's rows to the image's and the check on the rows it keeps.
+    SECTION("a 4 x 2^31 tile on a 4x4 image loads into a buffer for the image's 4 rows") {
+        std::vector<unsigned char> tile(smallTile.size());
+        for (unsigned y = 0; y < 4; ++y) {
+            for (unsigned x = 0; x < 4; ++x) {
+                unsigned char* p = tile.data() + (size_t(y) * 4 + x) * 4;
+                p[0] = static_cast<unsigned char>(10 * x);
+                p[1] = static_cast<unsigned char>(10 * y);
+                p[2] = 200;
+                p[3] = 255;
+            }
+        }
+        const auto file = tiledRgbaTiff(4, 4, 4, 0x80000000u, tile);
+        // 2^31 rows of 16 bytes would be a 32 GiB buffer; the image's 4 are 64 bytes.
+        AllocationCap cap(size_t(1) << 20);
+        auto img = loader.load(file, 4, false);
+        CHECK_FALSE(cap.tripped());
+        REQUIRE(img.has_value());
+        for (unsigned y = 0; y < 4; ++y) {
+            for (unsigned x = 0; x < 4; ++x) {
+                CHECK(rgbAt(*img, x, y, 4) == std::array<unsigned char, 3>{
+                                                      static_cast<unsigned char>(10 * x),
+                                                      static_cast<unsigned char>(10 * y), 200});
+            }
+        }
+    }
+
+    SECTION("a 2^28 x 2 tile on a 4x2 image is rejected before its buffer is allocated") {
+        // Each row is 1 GiB and both rows are inside the image: a 2 GiB buffer.
+        const auto file = tiledRgbaTiff(4, 2, 1u << 28, 2, smallTile);
+        AllocationCap cap(size_t(1) << 20);
+        CHECK_FALSE(loader.load(file, 4, false).has_value());
+        CHECK_FALSE(cap.tripped());
     }
 }
 
