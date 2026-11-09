@@ -1618,45 +1618,62 @@ bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front, uint ra
 // max_bounces 0. This traces that ray (o, d, its BSDF pdf) and returns the
 // emission it hits under the bounce's MIS weight, dimmed by the air, the murk
 // and the medium it travels in; nothing else (no environment, no unlit or
-// glow-only surface, nothing past glass): the light the NEE's weight left out.
+// glow-only surface, nothing past glass, only past the blended and additive
+// cards the main walk passes): the light the NEE's weight left out.
 vec3 lastBounceEmission(vec3 o, vec3 d, float pdf, bool inside, vec3 insideAtt, float insideDist, inout uint seed) {
-    rayQueryEXT rq;
     const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
-    while (rayQueryProceedEXT(rq)) {
-        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
-            cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
-                                rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
-                                rayQueryGetIntersectionBarycentricsEXT(rq, false),
-                                rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
-            rayQueryConfirmIntersectionEXT(rq);
+    // blendPass: a flat blend or an additive card on the way is passed as the
+    // main walk passes it (up to kPtMaxBlendPasses), in expectation: its
+    // emission on its opaque share, what lies behind by its pass weight
+    // (a flat blend's transmission, an additive card's 1), so the NEE's MIS
+    // weight through a card has its bounce share too.
+    vec3  sum   = vec3(0.0);
+    float carry = 1.0;
+    float tMin  = 0.0;
+    for (uint pass = 0u; pass <= kPtMaxBlendPasses; ++pass) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, tMin, d, 1e30);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                    rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, false),
+                                    rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
+                rayQueryConfirmIntersectionEXT(rq);
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) break;
+        const int          hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const MaterialDesc hm    = entryMat(hitId);
+        const float        tHit  = rayQueryGetIntersectionTEXT(rq, true);
+        const bool flatOrAdd = blendPass() && hm.transmission > 0.0 && hm.ior < 0.5 && geoms[hitId].foamAddress == 0ul;
+        // A flat blend or an additive card (blendPass): its emission on its
+        // opaque share, as the main walk adds it and the NEE (emitterShare) counts it.
+        const float share = !flatOrAdd ? 1.0 : hm.transmission > 1.0 ? clamp(hm.transmission - 1.0, 0.0, 1.0) : 1.0 - hm.transmission;
+        if ((geoms[hitId].flags & kGeomFlagGlowOnly) == 0u && hm.roughness >= 0.0 &&
+            max(max(hm.emissive.r, hm.emissive.g), hm.emissive.b) * hm.emissiveIntensity > 0.0) {
+            const PtHit hh = ptFetchHit(hitId, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
+                                        rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                        rayQueryGetIntersectionObjectToWorldEXT(rq, true),
+                                        rayQueryGetIntersectionWorldToObjectEXT(rq, true));
+            const vec3 Le = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hh.uv, hm.emissive * hm.emissiveIntensity) * share;
+            if (max(max(Le.r, Le.g), Le.b) > 0.0) {
+                const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, abs(dot(hh.Ng, d)));
+                const float w    = pdf * pdf / max(pdf * pdf + pdfL * pdfL, 1e-20);
+                vec3 T = vec3(1.0);
+                if (!inside && airOn()) T *= exp(-airOpticalDepth(o, o + d * tHit));
+                float t0, t1;
+                if (murkOn() && murkClip(o, d, tHit, t0, t1)) T *= exp(-fog.murkSigma * (t1 - t0));
+                if (inside && insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater))
+                    T *= pow(insideAtt, vec3(tHit / insideDist));
+                sum += Le * T * (w * carry);
+            }
+        }
+        if (!flatOrAdd) break;
+        carry *= hm.transmission > 1.0 ? 1.0 : hm.transmission;
+        if (carry <= 0.0) break;
+        tMin = tHit + max(1e-4, tHit * 1e-5);
     }
-    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return vec3(0.0);
-    const int hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    if ((geoms[hitId].flags & kGeomFlagGlowOnly) != 0u) return vec3(0.0);
-    const MaterialDesc hm = entryMat(hitId);
-    if (hm.roughness < 0.0 || max(max(hm.emissive.r, hm.emissive.g), hm.emissive.b) * hm.emissiveIntensity <= 0.0)
-        return vec3(0.0);
-    const float tHit = rayQueryGetIntersectionTEXT(rq, true);
-    const PtHit hh   = ptFetchHit(hitId, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
-                                  rayQueryGetIntersectionBarycentricsEXT(rq, true),
-                                  rayQueryGetIntersectionObjectToWorldEXT(rq, true),
-                                  rayQueryGetIntersectionWorldToObjectEXT(rq, true));
-    vec3 Le = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hh.uv, hm.emissive * hm.emissiveIntensity);
-    if (max(max(Le.r, Le.g), Le.b) <= 0.0) return vec3(0.0);
-    // A flat blend or an additive card (blendPass): its emission on its
-    // opaque share, as the main walk adds it and the NEE (emitterShare) counts it.
-    if (blendPass() && hm.transmission > 0.0 && hm.ior < 0.5 && geoms[hitId].foamAddress == 0ul)
-        Le *= hm.transmission > 1.0 ? clamp(hm.transmission - 1.0, 0.0, 1.0) : 1.0 - hm.transmission;
-    const float pdfL = emitterHitPdf(hm.emissive * hm.emissiveIntensity, tHit * tHit, abs(dot(hh.Ng, d)));
-    const float w    = pdf * pdf / max(pdf * pdf + pdfL * pdfL, 1e-20);
-    vec3 T = vec3(1.0);
-    if (!inside && airOn()) T *= exp(-airOpticalDepth(o, o + d * tHit));
-    float t0, t1;
-    if (murkOn() && murkClip(o, d, tHit, t0, t1)) T *= exp(-fog.murkSigma * (t1 - t0));
-    if (inside && insideDist > 0.0 && !(murkOn() && fog.murkDensity >= kPtMurkIsWater))
-        T *= pow(insideAtt, vec3(tHit / insideDist));
-    return Le * T * w;
+    return sum;
 }
 
 // ── One path ────────────────────────────────────────────────────────────────

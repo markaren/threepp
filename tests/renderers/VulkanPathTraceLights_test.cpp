@@ -301,6 +301,27 @@ int main() {
         std::printf("  reflection: max_bounces 1 %.4f | max_bounces 0 %.4f (old %.4f)\n", full, last, old);
         check(full > 0.1, "the floor mirrors the panel");
         check(std::abs(last / full - 1.0) < 0.1, "max_bounces 0 keeps the whole reflection");
+
+        // A black unlit card at opacity 0.5 between the floor and the panel
+        // (above the camera's rays to the floor): the reflection through it is
+        // half the open one at either depth; the last vertex's bounce stopped
+        // at the card, which kept only the NEE's MIS share of the half.
+        auto cardMat         = MeshBasicMaterial::create();
+        cardMat->color       = Color(0.f, 0.f, 0.f);
+        cardMat->map         = whiteMap();
+        cardMat->transparent = true;
+        cardMat->opacity     = 0.5f;
+        cardMat->side        = Side::Double;
+        auto card            = Mesh::create(PlaneGeometry::create(3.f, 3.f), cardMat);
+        card->rotation.x     = -math::PI / 2;
+        card->position.y     = 1.2f;
+        scene.add(card);
+        const double cardFull = refl(1, "2_card_bounces1");
+        const double cardLast = refl(0, "2_card_bounces0");
+        std::printf("  through a card at opacity 0.5: max_bounces 1 %.4f | max_bounces 0 %.4f (open %.4f)\n",
+                    cardFull, cardLast, full);
+        check(std::abs(cardFull / full - 0.5) < 0.06, "a card at opacity 0.5 halves the reflection");
+        check(std::abs(cardLast / cardFull - 1.0) < 0.1, "and max_bounces 0 keeps it, through the card");
     }
 
     // ── 3. Rect, ambient and hemisphere lights ──────────────────────────────
