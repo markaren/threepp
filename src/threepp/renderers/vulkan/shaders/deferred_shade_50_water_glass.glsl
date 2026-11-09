@@ -1098,45 +1098,10 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
 // it's a clean soft — not the milky 1-sample grain. Raise kGlassFrost for
 // softer/dreamier glass, drop to 0 for a perfect lens; raise GSAMP if the soft
 // shows residual grain on moving glass (costs proportionally).
-const float kGlassFrost = 0.04;// near-sharp glass: a wide frost lobe scatters the HDR sun into static speckle
-const float kGlassMaxRough = 0.14;// Clamps the primary refraction lobe to
-                              // alpha 0.02 (≈ roughness 0.14) because a wide refraction lobe is
-                              // per-pixel variance no denoiser can fix. Deferred used the raw material
-                              // roughness here, so asset glass with a mid-grey roughness map (e.g. the
-                              // OpenChessSet pawn domes) blurred into a milky ball — structureless,
-                              // duller than intended. The trade: frosted glass
-                              // renders polished at primary, but it stays GLASS.
 const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO discrete-microfacet ghost
                               // copies. The frost (roughness blur) is applied afterwards by the reflection
                               // filter (deferred_refl_filter.comp), exactly like opaque reflections.
 
-// Effective glass shading/blur roughness — used by shadeGlass AND the demod
-// recombine below; both must agree or the denoise blur mismatches the lobe.
-// Roughness frosts what comes THROUGH by scattering it at the interface, and an
-// interface with no index contrast cannot scatter: at ior 1 every microfacet
-// refracts straight on. three.js's applyIorToRoughness, same ramp (full by ior
-// 1.5). glTF sample TransmissionRoughnessTest's "1.0 - Air" row is sharp from its
-// smooth end to its rough one for this reason. The floor stays: the lobe maths and
-// the filter's negative-alpha glass marker both need a roughness above zero.
-float glassRough(float matRoughness, float ior) {
-    return clamp(matRoughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0), kGlassFrost, kGlassMaxRough);
-}
-
-// Reflectance of the glass surface at cosine c: Schlick from the ior, and under a
-// thin film (KHR_materials_iridescence) the film's interference reflectance in
-// its place, by the iridescence factor. The opaque shade has applied the film to
-// its F0 all along; glass weights the opaque shade by (1 − transmission) and takes
-// its whole reflection from here, where the Fresnel was a scalar from the ior
-// alone — so a film on glass did nothing. It matters most where it is the ONLY
-// reflector: SunglassesKhronos coats an ior 1.0 lens (r0 = 0, no reflection of its
-// own) with an ior 2 film, and that film is the entire mirror finish.
-// evalIridescence returns the reflectance AT the angle, so it is used as is.
-vec3 glassFresnel(float r0, float c, float iridescence, float iridescenceIOR, float iridescenceThicknessNm) {
-    vec3 F = vec3(r0 + (1.0 - r0) * pow(1.0 - c, 5.0));
-    if (iridescence > 0.0)
-        F = mix(F, min(evalIridescence(1.0, iridescenceIOR, c, iridescenceThicknessNm, vec3(r0)), vec3(1.0)), iridescence);
-    return F;
-}
 
 // matRough is the pixel's G-buffer roughness (factor x roughness map), not
 // pm.roughness: glTF leaves roughnessFactor at 1 when a map carries it, and the
