@@ -5,7 +5,7 @@
 //
 // The obvious design keeps a BVH per host geometry alive and probes it a few
 // rays per frame. BVH caches a raw `const BufferGeometry*` with no dirty
-// tracking (BVH.hpp:96), so the first time the host regenerates a terrain tile
+// tracking (BVH::getGeometry), so the first time the host regenerates a terrain tile
 // or frees a tree, the next probe dereferences freed memory — an intermittent
 // crash in the render loop, in a subsystem nobody will suspect. Every BVH built
 // here is destroyed when the bake completes; the products below are plain
@@ -1086,13 +1086,13 @@ namespace threepp::fauna {
 
         // ── Phase 4 — the BVH ray grid ───────────────────────────────────
         //
-        // A BVH BUILD IS ATOMIC AND CANNOT BE SPLIT. BVH::buildNode sorts the
-        // index array at every level with a comparator doing two random-access
-        // getMidpoint calls into a 36-byte-per-triangle array; at 40 000
-        // triangles that is roughly 0.1 s of one frozen frame. bvhMaxTriangles
-        // therefore defaults to 40 000 and not to the quarter-million a
-        // "just build everything" design would use — and a mesh above the limit
-        // is not skipped, it is served by the phase 2 sampler instead.
+        // A BVH BUILD IS ATOMIC AND CANNOT BE SPLIT. BVH::buildTree bins the
+        // triangle centroids and partitions the triangle order at every level
+        // of the tree in one call, so its whole cost lands in one frozen frame.
+        // bvhMaxTriangles therefore defaults to 40 000 and not to the
+        // quarter-million a "just build everything" design would use; a mesh
+        // above the limit is not skipped, it is served by the phase 2 sampler
+        // instead.
         std::int64_t castProbeGrid(std::int64_t budget) {
 
             std::int64_t work = 0;
@@ -1135,7 +1135,7 @@ namespace threepp::fauna {
                 if (probeCursor_ >= probeCount) {
                     // Destroyed the instant this mesh's rays are done, not at the
                     // end of the bake: nothing that outlives a step() may hold a
-                    // BufferGeometry*, and BVH holds one (BVH.hpp:96).
+                    // BufferGeometry*, and BVH holds one (BVH::getGeometry).
                     bvh_.reset();
                     bvhReady_ = false;
                     ++rayMesh_;
@@ -1196,7 +1196,7 @@ namespace threepp::fauna {
             localDir.multiplyScalar(1.f / scale);
 
             // rayEps is 1e-4 and the effective range is (maxDistance - rayEps)
-            // (BVH.cpp:14, 291, 338): a probe started exactly on a surface
+            // (rayEps in BVH.cpp, BVH::raycast): a probe started exactly on a surface
             // legitimately misses. Offset the origin, as the acoustics probe does.
             localOrigin.addScaledVector(localDir, 1e-4f);
 
@@ -1212,7 +1212,7 @@ namespace threepp::fauna {
             normal.applyNormalMatrix(normalMatrix);
 
             // BVH::RayHit::normal is ALREADY flipped toward the ray origin
-            // (BVH.hpp:47), unlike Intersection::face->normal, which is neither
+            // (its comment in BVH.hpp), unlike Intersection::face->normal, which is neither
             // flipped nor in world space. Mixing the two conventions silently
             // inverts half the perch set; this bake uses only the BVH one. The
             // guard below exists solely for a mirrored (negative-determinant)

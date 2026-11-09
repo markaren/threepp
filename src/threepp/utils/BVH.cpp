@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
 #include <utility>
 
@@ -87,6 +86,17 @@ namespace {
         return dx * dy + dy * dz + dz * dx;
     }
 
+    // The centroid bin a triangle falls in along one axis. A NaN position (a
+    // centroid whose sum overflowed, or an infinite offset times the zero scale
+    // of an infinite centroid range) goes to bin 0 instead of reaching a
+    // float-to-int conversion, which is undefined for NaN and infinity.
+    int centroidBin(float centroid, float lo, float scale) {
+        const float x = (centroid - lo) * scale;
+        if (!(x > 0.f)) return 0;
+        if (!(x < static_cast<float>(sahBins - 1))) return sahBins - 1;
+        return static_cast<int>(x);
+    }
+
     struct Bounds {
         float min[3]{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
         float max[3]{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
@@ -100,30 +110,44 @@ namespace {
     };
 
     // The ray as the traversal reads it: origin, direction and a finite inverse
-    // direction (a zero component becomes +-1e30, so an origin lying on a slab
-    // plane gives 0 * 1e30 = 0 rather than 0 * inf = NaN).
+    // direction (a tiny component's inverse is clamped to +-1e30, so an origin
+    // lying on a slab plane gives 0 * 1e30 = 0 rather than 0 * inf = NaN).
     struct RayData {
         float o[3];
         float d[3];
         float inv[3];
+        bool still[3];// no motion along this axis
 
         explicit RayData(const Ray& ray) {
             for (int k = 0; k < 3; ++k) {
                 o[k] = ray.origin[k];
                 d[k] = ray.direction[k];
+                still[k] = d[k] == 0.f;
                 const float i = 1.f / d[k];
                 inv[k] = std::abs(i) > 1e30f ? std::copysign(1e30f, d[k]) : i;
             }
         }
 
         // Entry distance (in units of t) into the box, when the ray meets it within [0, tLimit].
+        // An axis the ray does not move along has no slab interval: the box is
+        // met only if the origin lies within it on that axis, faces included.
+        // (A 1e30 inverse there gave an origin on a face the interval [-big, 0]
+        // on one face or the other, depending on the sign of the zero.)
         [[nodiscard]] bool slab(const float* mn, const float* mx, float tLimit, float& tEntry) const {
-            float t0 = (mn[0] - o[0]) * inv[0], t1 = (mx[0] - o[0]) * inv[0];
-            float tNear = std::min(t0, t1), tFar = std::max(t0, t1);
-            t0 = (mn[1] - o[1]) * inv[1], t1 = (mx[1] - o[1]) * inv[1];
-            tNear = std::max(tNear, std::min(t0, t1)), tFar = std::min(tFar, std::max(t0, t1));
-            t0 = (mn[2] - o[2]) * inv[2], t1 = (mx[2] - o[2]) * inv[2];
-            tNear = std::max(tNear, std::min(t0, t1)), tFar = std::min(tFar, std::max(t0, t1));
+            float tNear = -std::numeric_limits<float>::infinity();
+            float tFar = std::numeric_limits<float>::infinity();
+            // Written on every path, so no caller ever reads it uninitialised
+            // (GCC's -Wmaybe-uninitialized cannot see that callers check the result).
+            tEntry = tNear;
+            for (int k = 0; k < 3; ++k) {
+                if (still[k]) {
+                    if (!(o[k] >= mn[k] && o[k] <= mx[k])) return false;
+                    continue;
+                }
+                const float t0 = (mn[k] - o[k]) * inv[k], t1 = (mx[k] - o[k]) * inv[k];
+                tNear = std::max(tNear, std::min(t0, t1));
+                tFar = std::min(tFar, std::max(t0, t1));
+            }
             tEntry = tNear;
             return tNear <= tFar && tFar >= 0.f && tNear <= tLimit;
         }
@@ -136,30 +160,42 @@ void BVH::buildTree() {
     nodes.clear();
     rayTriangles.clear();
     sourceIndex.clear();
+    sourceTriangles = triangles.size();
 
     const auto n = static_cast<int>(triangles.size());
     if (n == 0) return;
 
-    // Per-triangle bounds and centroids, in source order.
+    // Per-triangle bounds and centroids, in source order. A triangle with a
+    // NaN or infinite vertex (a no-data value) is left out of `order`, so no
+    // node holds it and no query reports it; sourceIndex still maps the rest
+    // to their positions in the source.
     std::vector<float> triMin(3 * static_cast<std::size_t>(n)), triMax(triMin.size()), centroid(triMin.size());
+    std::vector<int> order;
+    order.reserve(n);
     for (int i = 0; i < n; ++i) {
         const Triangle& t = triangles[i];
         const Vector3* v[3] = {&t.a(), &t.b(), &t.c()};
+        bool finite = true;
         for (int k = 0; k < 3; ++k) {
             const float a = (*v[0])[k], b = (*v[1])[k], c = (*v[2])[k];
+            finite = finite && std::isfinite(a) && std::isfinite(b) && std::isfinite(c);
             triMin[i * 3 + k] = std::min({a, b, c});
             triMax[i * 3 + k] = std::max({a, b, c});
             centroid[i * 3 + k] = (a + b + c) / 3.f;
         }
+        if (finite) order.push_back(i);
     }
 
-    std::vector<int> order(n);
-    std::iota(order.begin(), order.end(), 0);
+    const auto kept = static_cast<int>(order.size());
+    if (kept == 0) {
+        triangles.clear();
+        return;
+    }
 
     const int leafSize = std::max(1, maxTrianglesPerNode);
     const int depthLimit = std::clamp(maxSubdivisions, minDepthLimit, maxDepthLimit);
 
-    nodes.reserve(2 * static_cast<std::size_t>(n));
+    nodes.reserve(2 * static_cast<std::size_t>(kept));
     nodes.emplace_back();
 
     const auto split = [&](auto&& self, int index, int begin, int end, int depth) -> void {
@@ -200,7 +236,7 @@ void BVH::buildTree() {
             const float scale = sahBins / extent;
             for (int i = begin; i < end; ++i) {
                 const int t = order[i];
-                const int b = std::min(sahBins - 1, static_cast<int>((centroid[t * 3 + axis] - centroids.min[axis]) * scale));
+                const int b = centroidBin(centroid[t * 3 + axis], centroids.min[axis], scale);
                 ++binCount[b];
                 binBounds[b].grow(&triMin[t * 3], &triMax[t * 3]);
             }
@@ -233,7 +269,7 @@ void BVH::buildTree() {
             const float lo = centroids.min[bestAxis];
             const float scale = sahBins / (centroids.max[bestAxis] - lo);
             const auto it = std::partition(order.begin() + begin, order.begin() + end, [&](int t) {
-                return std::min(sahBins - 1, static_cast<int>((centroid[t * 3 + bestAxis] - lo) * scale)) < bestSplit;
+                return centroidBin(centroid[t * 3 + bestAxis], lo, scale) < bestSplit;
             });
             mid = static_cast<int>(it - order.begin());
             if (mid == begin || mid == end) mid = begin + count / 2;
@@ -263,14 +299,14 @@ void BVH::buildTree() {
         self(self, left + 1, mid, end, depth + 1);
     };
 
-    split(split, 0, 0, n, 0);
+    split(split, 0, 0, kept, 0);
     nodes.shrink_to_fit();
 
     // Reorder into leaf order, keeping the way back to the source index.
     std::vector<Triangle> sorted;
-    sorted.reserve(n);
-    rayTriangles.resize(n);
-    for (int i = 0; i < n; ++i) {
+    sorted.reserve(kept);
+    rayTriangles.resize(kept);
+    for (int i = 0; i < kept; ++i) {
         const Triangle& t = triangles[order[i]];
         sorted.emplace_back(t);
         RayTriangle& r = rayTriangles[i];
@@ -293,13 +329,24 @@ void BVH::build(const BufferGeometry& geom) {
     const auto posAttr = geom.getAttribute<float>("position");
     if (!posAttr) return;
 
+    // Whole triangles only: one or two indices (or vertices) left over at the
+    // end are not a triangle, and reading their missing corners would run past
+    // the end of the array.
     if (geom.hasIndex()) {
         const auto index = geom.getIndex();
-        triangles.reserve(index->count() / 3);
-        for (int i = 0; i < index->count(); i += 3) {
+        const int count = index->count() - index->count() % 3;
+        const auto vertexCount = static_cast<unsigned int>(posAttr->count());
+        triangles.reserve(count / 3);
+        for (int i = 0; i < count; i += 3) {
             const auto a = index->getX(i);
             const auto b = index->getX(i + 1);
             const auto c = index->getX(i + 2);
+            if (a >= vertexCount || b >= vertexCount || c >= vertexCount) {
+                // As the raw-array build does; the BVH is left empty, with no geometry.
+                triangles.clear();
+                geometry = nullptr;
+                throw std::out_of_range("BVH::build: index out of range for the geometry's positions");
+            }
 
             triangles.emplace_back(
                     Vector3(posAttr->getX(a), posAttr->getY(a), posAttr->getZ(a)),
@@ -307,8 +354,9 @@ void BVH::build(const BufferGeometry& geom) {
                     Vector3(posAttr->getX(c), posAttr->getY(c), posAttr->getZ(c)));
         }
     } else {
-        triangles.reserve(posAttr->count() / 3);
-        for (int i = 0; i < posAttr->count(); i += 3) {
+        const int count = posAttr->count() - posAttr->count() % 3;
+        triangles.reserve(count / 3);
+        for (int i = 0; i < count; i += 3) {
             triangles.emplace_back(
                     Vector3(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i)),
                     Vector3(posAttr->getX(i + 1), posAttr->getY(i + 1), posAttr->getZ(i + 1)),
@@ -338,6 +386,7 @@ void BVH::build(const std::vector<float>& positions, const std::vector<unsigned 
         for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
             const auto a = indices[i], b = indices[i + 1], c = indices[i + 2];
             if (a >= vertexCount || b >= vertexCount || c >= vertexCount) {
+                triangles.clear();// left empty, not holding the triangles read so far
                 throw std::out_of_range("BVH::build: index out of range for the given positions");
             }
             triangles.emplace_back(vertex(a), vertex(b), vertex(c));
@@ -568,7 +617,7 @@ namespace {
         Entry stack[stackSize];
         int sp = 0;
 
-        float tEntry;
+        float tEntry = 0.f;
         if (!ray.slab(nodes[0].min, nodes[0].max, tLimit, tEntry)) return;
         int current = 0;
 
@@ -579,7 +628,7 @@ namespace {
                 if (tLimit < 0.f) return;
             } else {
                 const int left = node.first;
-                float tLeft, tRight;
+                float tLeft = 0.f, tRight = 0.f;
                 const bool hitLeft = ray.slab(nodes[left].min, nodes[left].max, tLimit, tLeft);
                 const bool hitRight = ray.slab(nodes[left + 1].min, nodes[left + 1].max, tLimit, tRight);
                 if (hitLeft && hitRight) {
@@ -607,6 +656,13 @@ namespace {
         }
     }
 
+    // A NaN origin on an axis the ray moves along drops out of the slab test's
+    // min/max, so every node would pass and every triangle be tested for no
+    // hit; an infinite one never meets a box. Either way there is no hit.
+    bool finiteOrigin(const Ray& ray) {
+        return std::isfinite(ray.origin.x) && std::isfinite(ray.origin.y) && std::isfinite(ray.origin.z);
+    }
+
     // Moller-Trumbore, both faces; the t along the (unnormalized) direction, or
     // a negative value on a miss.
     template<class RayTriangle>
@@ -630,7 +686,7 @@ namespace {
 }// namespace
 
 std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const {
-    if (nodes.empty()) return std::nullopt;
+    if (nodes.empty() || !finiteOrigin(ray)) return std::nullopt;
 
     const float length = ray.direction.length();
     if (!(length > 0.f)) return std::nullopt;
@@ -644,7 +700,8 @@ std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const
     traverse(nodes, data, (maxDistance - rayEps) / length, [&](int first, int count, float tLimit) {
         for (int i = first; i < first + count; ++i) {
             const float t = hitTriangle(rayTriangles[i], data);
-            if (t < tMin || t > tLimit) continue;
+            // Written so a NaN t (from edges that overflow) is never a hit.
+            if (!(t >= tMin && t <= tLimit)) continue;
             tLimit = t;
             bestT = t;
             best = i;
@@ -667,7 +724,7 @@ std::optional<BVH::RayHit> BVH::raycast(const Ray& ray, float maxDistance) const
 }
 
 bool BVH::raycastAny(const Ray& ray, float maxDistance) const {
-    if (nodes.empty()) return false;
+    if (nodes.empty() || !finiteOrigin(ray)) return false;
 
     const float length = ray.direction.length();
     if (!(length > 0.f)) return false;
@@ -679,7 +736,8 @@ bool BVH::raycastAny(const Ray& ray, float maxDistance) const {
     traverse(nodes, data, (maxDistance - rayEps) / length, [&](int first, int count, float tLimit) {
         for (int i = first; i < first + count; ++i) {
             const float t = hitTriangle(rayTriangles[i], data);
-            if (t < tMin || t > tLimit) continue;
+            // Written so a NaN t (from edges that overflow) is never a hit.
+            if (!(t >= tMin && t <= tLimit)) continue;
             hit = true;
             return -1.f;
         }

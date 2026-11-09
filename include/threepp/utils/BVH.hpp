@@ -2,7 +2,9 @@
 //
 // Built with a binned surface-area heuristic and stored as a flat node array,
 // so ray queries walk it iteratively, near child first. Triangle indices handed
-// back by any query are the triangle's position in the source geometry.
+// back by any query are the triangle's position in the source geometry. A
+// triangle with a NaN or infinite vertex is left out of the tree and is never
+// reported.
 
 #ifndef THREEPP_BVH_HPP
 #define THREEPP_BVH_HPP
@@ -61,11 +63,17 @@ namespace threepp {
             : maxTrianglesPerNode(maxTrianglesPerNode), maxSubdivisions(maxSubdivisions) {}
 
         // Keeps a raw pointer to `geometry` (see getGeometry); it must outlive the BVH.
+        // One or two indices (or vertices, without an index) left over after the
+        // last whole triangle are ignored. An index past the last vertex throws
+        // std::out_of_range and leaves the BVH empty.
         void build(const BufferGeometry& geometry);
 
         // Build from raw buffers: `positions` is xyz-interleaved, `indices` a flat
         // triangle list or empty for a soup (three consecutive vertices per face).
         // The triangles are copied; the inputs are not referenced afterwards.
+        // Malformed input throws (std::invalid_argument for a count that is not a
+        // whole number of triangles, std::out_of_range for an index past the last
+        // vertex) and leaves the BVH empty.
         void build(const std::vector<float>& positions, const std::vector<unsigned int>& indices = {});
 
         // Helper methods for single-shape intersections
@@ -92,6 +100,7 @@ namespace threepp {
                                             float maxDistance = std::numeric_limits<float>::infinity());
 
         // Closest hit within maxDistance, or nullopt. The ray is in the BVH's local space.
+        // A ray from a NaN or infinite origin hits nothing, here and in raycastAny.
         // Safe to call from several threads at once.
         [[nodiscard]] std::optional<RayHit> raycast(const Ray& ray, float maxDistance = std::numeric_limits<float>::infinity()) const;
 
@@ -102,7 +111,14 @@ namespace threepp {
 
         [[nodiscard]] const BufferGeometry* getGeometry() const;
 
+        // The triangles in the source geometry, kept or not: every triangleIndex
+        // a query hands back is below it, so it can size a per-triangle array.
         [[nodiscard]] std::size_t triangleCount() const {
+            return sourceTriangles;
+        }
+
+        // The triangles in the tree: the source's, less any with a non-finite vertex.
+        [[nodiscard]] std::size_t keptTriangleCount() const {
             return triangles.size();
         }
 
@@ -142,6 +158,7 @@ namespace threepp {
         std::vector<Triangle> triangles;       // leaf order
         std::vector<RayTriangle> rayTriangles; // leaf order
         std::vector<int> sourceIndex;          // leaf order -> index in the source geometry
+        std::size_t sourceTriangles = 0;       // the source's triangle count, kept or not
         const BufferGeometry* geometry = nullptr;
 
         void buildTree();
