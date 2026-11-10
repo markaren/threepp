@@ -228,6 +228,15 @@ bool gTraceHitMoved = false;
 // Water reflected in OTHER surfaces is unaffected — only water's own
 // reflection sets this.
 bool gTraceSkipWater = false;
+// Water triage (SCOUT_WATER, see deferred_shade_50): mode 8 records how the
+// water's reflection ray ended.
+#ifndef SCOUT_WATER
+#define SCOUT_WATER 0
+#endif
+#if SCOUT_WATER == 8
+int gScoutKind  = -1;
+int gScoutWHits = 0;
+#endif
 
 // Escape before any reflective bounce, handed back instead of shaded. When the
 // caller sets gTraceDeferMiss, a ray that leaves the scene with b == 0 adds
@@ -479,6 +488,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     int   diveId  = -1;
     float diveT   = 0.0;
     vec3  diveRad = vec3(0.0);
+    // ... and the last face it went in by, kept past the exit that followed
+    // (see the submerged test below).
+    int   wetId   = -1;
+    float wetT    = 0.0;
+    vec3  wetRad  = vec3(0.0);
     for (; step < REFL_MAX_STEPS; ++step) {
         bool cutoutCapped = false;// this traversal's budget confirmed a transparent texel
         rayQueryEXT rq;
@@ -499,6 +513,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         }
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             if (diveId >= 0) {// dived into a wave and met nothing: the face it went in by
+#if SCOUT_WATER == 8
+                gScoutKind = 1;
+#endif
                 radiance += tput * diveRad;
                 if (gTraceHitT < 0.0) gTraceHitT = diveT;
                 break;
@@ -509,6 +526,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             // the caller's business — the water's reflection starts in a trough).
             else if (b > 0) radiance += tput * murkAmbient(sampleEnvLod(d, curMissLod), legOrigin, d) * envInt;
             else radiance += tput * sampleEnvLod(d, curMissLod) * envInt;// escaped → environment
+#if SCOUT_WATER == 8
+            if (gScoutKind < 0) gScoutKind = 0;
+#endif
             break;
         }
         const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
@@ -527,6 +547,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // crest and keep tracing; the offset scales with the hit distance so a
         // far grazing hit doesn't re-hit the same triangle from float error.
         if (gTraceSkipWater && geoms[hitId].foamAddress != 0ul) {
+#if SCOUT_WATER == 8
+            ++gScoutWHits;
+#endif
             // Wave reflections (DisplacedMesh::Params::waveReflections, spec
             // constant 8). The pass-through is right for a crest the ray
             // clips: it goes in one side and out the other, and what it
@@ -542,19 +565,45 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             // out again that is dropped and nothing has changed; if it
             // meets something while inside, or nothing at all, that is
             // what it sees.
+            //
+            // In or out is the triangle's own side, not the smooth normal's.
+            // The normal is interpolated from the vertices, and on a crest
+            // the limiter pinches it can lean past the ray even though the
+            // ray meets the facet from the air: that entry was read as an
+            // exit, the ray carried on through the wave to the seabed, and
+            // the crest showed a black slit (proven with SCOUT_WATER 8: on
+            // the slits the reflection ray ends on the seabed after a
+            // crossing whose facet and smooth normal disagree). The face is
+            // still shaded with the smooth normal, bent to the horizon of
+            // the ray where it leans past it (N' = N - V (N.V - e), V = -d),
+            // so the face's Fresnel and mirror stay continuous across it.
             if (kOceanWaveReflect != 0u) {
-                if (dot(d, hitN) < 0.0) {
-                    const float wNdV = max(dot(hitN, -d), 1e-4);
+                const GeometryDesc wg = geoms[hitId];
+                const uvec3 wi = gfetchTri(wg, primId);
+                PosBuf wp = PosBuf(wg.vertexAddress);
+                const vec3 p0 = vec3(wp.p[wi.x * 3u], wp.p[wi.x * 3u + 1u], wp.p[wi.x * 3u + 2u]);
+                const vec3 p1 = vec3(wp.p[wi.y * 3u], wp.p[wi.y * 3u + 1u], wp.p[wi.y * 3u + 2u]);
+                const vec3 p2 = vec3(wp.p[wi.z * 3u], wp.p[wi.z * 3u + 1u], wp.p[wi.z * 3u + 2u]);
+                vec3 fN = transpose(mat3(w2o)) * cross(p1 - p0, p2 - p0);
+                if (dot(fN, hitN) < 0.0) fN = -fN;// the side the smooth normal calls up
+                if (dot(d, fN) < 0.0) {
+                    vec3 sN = hitN;
+                    const float sNdV = dot(sN, -d);
+                    if (sNdV < 0.02) sN = normalize(sN + d * (sNdV - 0.02));
+                    const float wNdV = max(dot(sN, -d), 1e-4);
                     const float wIor = max(hm.ior, 1.0);
                     const float wF0n = (1.0 - wIor) / (1.0 + wIor);
                     const float wF   = wF0n * wF0n + (1.0 - wF0n * wF0n) * pow(1.0 - wNdV, 5.0);
-                    vec3 wR = reflect(d, hitN);
-                    const float wUp = dot(wR, hitN);
-                    if (wUp < 0.02) wR = normalize(wR + hitN * (0.02 - wUp));// never below its own plane
+                    vec3 wR = reflect(d, sN);
+                    const float wUp = dot(wR, sN);
+                    if (wUp < 0.02) wR = normalize(wR + sN * (0.02 - wUp));// never below its own plane
                     diveId  = hitId;
                     diveT   = length(o + d * tHit - origin);
                     diveRad = wF * sampleEnvLod(wR, max(curMissLod, max(0.12, hm.roughness) * maxLod)) * envInt +
                               (1.0 - wF) * waterHitBody(hm, -d, maxLod);
+                    wetId  = diveId;
+                    wetT   = diveT;
+                    wetRad = diveRad;
                 } else {
                     diveId = -1;
                 }
@@ -562,10 +611,36 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             o = o + d * (tHit + max(1e-3, tHit * 1e-4));
             continue;
         }
+#if SCOUT_WATER == 8
+        if (gScoutKind < 0) gScoutKind = diveId >= 0 ? 1 : 2;
+#endif
         if (diveId >= 0) {// met something under the surface of the wave it dived into
             radiance += tput * diveRad;
             if (gTraceHitT < 0.0) gTraceHitT = diveT;
             break;
+        }
+        // Wave reflections: a ray that went into a wave and was let out
+        // again can still end on something under the water: an exit and the
+        // next entry closer than the step past each crossing (a pinched
+        // crest's two faces), so the entry was never seen. What it meets is
+        // then the seabed through metres of water, lit as if in air: the lee
+        // of a crest showed the sand. If the water lies over the hit (the
+        // first thing straight up is the sea), the ray was in the water and
+        // what it sees is the face it last went in by.
+        if (kOceanWaveReflect != 0u && wetId >= 0) {
+            rayQueryEXT uq;
+            rayQueryInitializeEXT(uq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, o + d * tHit, 1e-3,
+                                  vec3(0.0, 1.0, 0.0), 1e4);
+            while (rayQueryProceedEXT(uq)) {}
+            if (rayQueryGetIntersectionTypeEXT(uq, true) != gl_RayQueryCommittedIntersectionNoneEXT &&
+                rayQueryGetIntersectionInstanceCustomIndexEXT(uq, true) == wetId) {
+#if SCOUT_WATER == 8
+                gScoutKind = 1;
+#endif
+                radiance += tput * wetRad;
+                if (gTraceHitT < 0.0) gTraceHitT = wetT;
+                break;
+            }
         }
 
         // The hit's textures are read over the pixel's footprint there. Every

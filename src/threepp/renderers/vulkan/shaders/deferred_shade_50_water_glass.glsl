@@ -3,7 +3,10 @@
 
 // Term isolation for water-artefact triage (-DSCOUT_WATER=N):
 //   1 = reflection only, 2 = transmission only, 3 = Fresnel F as grey,
-//   4 = foam mask as grey, 5 = |N - up| amplified. 0 = normal shading.
+//   4 = foam mask as grey, 5 = |N - up| amplified, 6 = the reflection
+//   hit's distance class, 8 = how the reflection ray ended (see there).
+//   0 = normal shading. deferred_shade_40 is included first and sets the
+//   default, so a define given here alone does not take.
 #ifndef SCOUT_WATER
 #define SCOUT_WATER 0
 #endif
@@ -366,6 +369,9 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // (Wave reflections, DisplacedMesh::Params::waveReflections, change what
     // the pass-through does when the ray never comes out of the wave it
     // entered: see traceRadiance's skip.)
+#if SCOUT_WATER == 8
+    gScoutKind = -1; gScoutWHits = 0;
+#endif
     gTraceSkipWater = true;
     const vec3 reflOrig = P + Nmacro * SHADOW_EPS;// this water's own reflection: pass through crests
 #ifdef THREEPP_NO_RAY_QUERY
@@ -789,6 +795,13 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     if (gTraceHitT < 0.0)      return vec3(0.0, 0.0, 1.0);
     if (gTraceHitT < 60.0)     return vec3(1.0, 0.0, 0.0);
     return vec3(0.0, 1.0, 0.0);
+#elif SCOUT_WATER == 8
+    // How the reflection ray ended (traceRadiance): blue escaped to the
+    // sky, green the face of a wave it went into; on something that is not
+    // water, red with no water crossed on the way, yellow after some.
+    if (gScoutKind == 0) return vec3(0.0, 0.0, 4.0);
+    if (gScoutKind == 1) return vec3(0.0, 4.0, 0.0);
+    return gScoutWHits == 0 ? vec3(4.0, 0.0, 0.0) : vec3(4.0, 4.0, 0.0);
 #elif SCOUT_WATER == 1
     return reflectColor;
 #elif SCOUT_WATER == 2
