@@ -1553,11 +1553,12 @@ namespace threepp::water {
     //   CrestFoam
     // ─────────────────────────────────────────────────────────────────
 
-    static_assert(sizeof(CrestFoam::PushParams) == 64,
-                  "CrestFoam::PushParams must match foam_crest.comp's Pc layout (64 bytes)");
+    static_assert(sizeof(CrestFoam::PushParams) == 72,
+                  "CrestFoam::PushParams must match foam_crest.comp's Pc layout (72 bytes)");
 
     CrestFoam::CrestFoam(vulkan::VulkanContext& ctx, uint32_t resolution,
-                         VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1)
+                         VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1,
+                         VkSampler c1Sampler)
         : ctx_(ctx), res_(resolution) {
         for (uint32_t n = res_; n > 1u; n >>= 1u) ++mipLevels_;
 
@@ -1667,7 +1668,8 @@ namespace threepp::water {
         std::array<VkDescriptorImageInfo, 5> infos{};
         std::array<VkWriteDescriptorSet, 5> w{};
         for (uint32_t i = 0; i < 5; ++i) {
-            infos[i].sampler     = i != 4u ? fieldSampler_ : VK_NULL_HANDLE;
+            infos[i].sampler     = i == 4u ? VK_NULL_HANDLE
+                                 : ((i == 2u || i == 3u) && c1Sampler != VK_NULL_HANDLE) ? c1Sampler : fieldSampler_;
             infos[i].imageView   = views[i];
             infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

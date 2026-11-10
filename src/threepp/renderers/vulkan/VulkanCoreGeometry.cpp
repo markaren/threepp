@@ -3949,6 +3949,27 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 cp.centerX     = warpActive ? dm.warp.centerX : 0.f;
                 cp.centerZ     = warpActive ? dm.warp.centerZ : 0.f;
                 cp.model       = dm.waveModulationOn() ? 1u : 0u;
+                if (dm.foldFoamOn()) {
+                    // Fold foam: the J under which the drawn surface takes
+                    // foam, its ramp, and the shortest wave that counts (m).
+                    static const float kFoldJ = static_cast<float>(
+                            vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_J").value_or(DisplacedMesh::kFoldFoamJacobian));
+                    static const float kFoldRamp = std::max(1e-4f, static_cast<float>(
+                            vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_RAMP").value_or(DisplacedMesh::kFoldFoamRamp)));
+                    static const float kFoldLength = std::max(0.f, static_cast<float>(
+                            vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_LENGTH").value_or(DisplacedMesh::kFoldFoamLength)));
+                    cp.model    |= 2u;
+                    cp.threshold = kFoldJ;
+                    cp.invRamp   = 1.f / kFoldRamp;
+                    cp.sharpness = dm.effectiveCrestSharpness();
+                    // Mip level L of cascade 1 averages over 2^L texels, so a
+                    // wave of 2^(L+1) texels is its shortest left: that is the
+                    // fold-foam length.
+                    if (st.crestFoamC1Band) {
+                        const float texel1 = dm.params.tileSize1 / float(st.cascades[1].dyn->ht().width);
+                        cp.c1Lod = std::max(0.f, std::log2(kFoldLength / (2.f * texel1)));
+                    }
+                }
                 st.crestFoam->record(cb, cp, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
             } else {
                 st.crestFoamPrevTimeSec = -1.0;
@@ -5739,9 +5760,17 @@ void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshSt
                 while (res < kResCap && float(res) * 0.5f < dm.params.tileSize0) res *= 2u;
                 auto& c0 = st.cascades[0];
                 auto& c1 = st.cascades[(st.cascadeMask & 2u) ? 1u : 0u];
+                // Fold foam reads cascade 1 band-limited, through the mipped
+                // copies the short waves keep of it (water::FieldMips: ht,
+                // displacement, slope, jacDiag). Decided when the texture is
+                // made; without the copies it reads level 0 as before.
+                const bool c1Band = dm.foldFoamOn() && st.c1Mips && (st.cascadeMask & 2u);
+                st.crestFoamC1Band = c1Band;
                 st.crestFoam = std::make_unique<water::CrestFoam>(
                         *ctx, res, c0.dyn->jacDiag().view, c0.dyn->ht().view,
-                        c1.dyn->jacDiag().view, c1.dyn->ht().view);
+                        c1Band ? st.c1Mips->view(3) : c1.dyn->jacDiag().view,
+                        c1Band ? st.c1Mips->view(0) : c1.dyn->ht().view,
+                        c1Band ? st.c1Mips->sampler() : VK_NULL_HANDLE);
                 if (crestFoamPatternImage.view == VK_NULL_HANDLE) {
                     createCrestFoamPattern_();
                     deferredDescDirty_.fill(true);

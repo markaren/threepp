@@ -74,9 +74,32 @@ layout(push_constant, scalar) uniform Pc {
     float maxFoam;
     float centerX;      // where the mesh is centred in rest space (its warp
     float centerZ;      // centre): each texel stands for the copy of q nearest it
-    uint  model;        // bit 0 waveModulation: cascade 1 rides cascade 0 (water_displace.comp)
-    uint  _pad1;
+    uint  model;        // bit 0 waveModulation: cascade 1 rides cascade 0 (water_displace.comp),
+                        // bit 1 foldFoam: deposit on the drawn map's Jacobian, cascade 1 band-limited
+    float sharpness;    // foldFoam: DisplacedMesh::effectiveCrestSharpness (the drawn choppiness is 1 + s)
+    float c1Lod;        // foldFoam: the mip level cascade 1 is read at (its fields are mipped then)
+    uint  _pad2;
 } pc;
+
+// The Choppy Wave Model's limiter, as water_displace.comp's cwmLimit: the
+// largest l <= lMax with det(I + l A) >= kCwmMinJacobian on all of [0, l].
+float cwmLimit(float trA, float detA, float lMax) {
+    const float c = 1.0 - 0.1;// 1 - DisplacedMesh::kCwmMinJacobian
+    float r = 1e30;
+    if (abs(detA) < 1e-8) {
+        if (trA < 0.0) r = -c / trA;
+    } else {
+        const float disc = trA * trA - 4.0 * detA * c;
+        if (disc >= 0.0) {
+            const float q  = -0.5 * (trA + (trA >= 0.0 ? 1.0 : -1.0) * sqrt(disc));
+            const float r1 = q / detA;
+            const float r2 = (q != 0.0) ? c / q : 1e30;
+            if (r1 > 0.0) r = min(r, r1);
+            if (r2 > 0.0) r = min(r, r2);
+        }
+    }
+    return min(lMax, r);
+}
 
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -106,10 +129,13 @@ void main() {
         // as R^T J R (as in water_displace.comp).
         const float invTile = 1.0 / pc.tileSize1;
         const vec2  uv = oceanC1Domain(q) * invTile;
-        const vec2  jd = texture(jac1, uv).rg * (invTile * gain1);
+        // foldFoam reads it through its mip chain at c1Lod: only the waves
+        // longer than the fold-foam length count (see below).
+        const bool  band = (pc.model & 2u) != 0u;
+        const vec2  jd = (band ? textureLod(jac1, uv, pc.c1Lod).rg : texture(jac1, uv).rg) * (invTile * gain1);
         const float p  = jd.x;
         const float r  = jd.y;
-        const float o  = texture(height1, uv).g * (invTile * gain1);
+        const float o  = (band ? textureLod(height1, uv, pc.c1Lod).g : texture(height1, uv).g) * (invTile * gain1);
         const float cs = kOceanCascade1RotCos;
         const float sn = kOceanCascade1RotSin;
         jxx += cs * cs * p + 2.0 * cs * sn * o + sn * sn * r;
@@ -129,7 +155,22 @@ void main() {
         for (uint k = 0u; k < pc.hullCount; ++k) hullFade *= hullLocal(hulls.h[k], q).z;
     }
 
-    const float deposit = pc.maxFoam * clamp((eps - pc.threshold) * pc.invRamp, 0.0, 1.0) * hullFade;
+    // Fold foam (DisplacedMesh::Params::foldFoam): the measure is the drawn
+    // map's own Jacobian, J = det(I + l A) with l the choppiness the CWM
+    // limiter draws cascades 0 and 1 with (1 + crest sharpness, or less where
+    // it binds), so foam forms where the drawn surface is about to fold,
+    // graded by how close it comes to the limiter's floor: pc.threshold is the
+    // J under which it starts. A is band-limited: cascade 1 is read at the mip
+    // level whose texel is half the fold-foam length, so the waves that count
+    // are the same in metres whatever the cascades' tiles and hand-offs are.
+    float measure = eps - pc.threshold;
+    if ((pc.model & 2u) != 0u) {
+        const float trA  = (jxx + jzz) * pc.steepScale;
+        const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
+        const float l    = cwmLimit(trA, detA, 1.0 + pc.sharpness);
+        measure = pc.threshold - (1.0 + l * trA + l * l * detA);
+    }
+    const float deposit = pc.maxFoam * clamp(measure * pc.invRamp, 0.0, 1.0) * hullFade;
     float f = max(imageLoad(foam, px).r * pc.decay, deposit);
     if (f < 1.0 / 1024.0) f = 0.0;// below anything the shade draws: a clean zero
     const float c01 = (pc.model & 1u) != 0u ? -(jxx + jzz) * pc.steepScale : 0.0;

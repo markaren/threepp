@@ -426,13 +426,16 @@ namespace threepp::water {
         // The views are cascade 0's and cascade 1's jacDiag and height images
         // (a mesh without cascade 1 passes cascade 0's twice; the mask gates it).
         CrestFoam(vulkan::VulkanContext& ctx, uint32_t resolution,
-                  VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1);
+                  VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1,
+                  // Cascade 1's sampler when its views are mipped copies
+                  // (Params::foldFoam reads them at a level); null = single level.
+                  VkSampler c1Sampler = VK_NULL_HANDLE);
         ~CrestFoam();
 
         CrestFoam(const CrestFoam&) = delete;
         CrestFoam& operator=(const CrestFoam&) = delete;
 
-        // foam_crest.comp's push block, field for field (64 bytes).
+        // foam_crest.comp's push block, field for field (72 bytes).
         struct PushParams {
             VkDeviceAddress hullAddr;
             uint32_t        res;
@@ -447,8 +450,10 @@ namespace threepp::water {
             float           maxFoam;
             float           centerX;
             float           centerZ;
-            uint32_t        model;// bit 0: Params::waveModulation
-            uint32_t        _pad1 = 0;
+            uint32_t        model;// bit 0: Params::waveModulation, bit 1: Params::foldFoam
+            float           sharpness = 0.f;// foldFoam: the drawn choppiness is 1 + this
+            float           c1Lod     = 0.f;// foldFoam: cascade 1's mip level
+            uint32_t        _pad2     = 0;
         };
 
         // After the cascades' IFFTs, same command buffer; fills p.res itself.

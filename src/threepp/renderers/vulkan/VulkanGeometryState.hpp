@@ -616,6 +616,7 @@ namespace threepp::vulkan::impl {
         // that every vertex reads them at its own spacing. Null without
         // shortWaves or until the chop normals first come on.
         std::unique_ptr<water::FieldMips> c1Mips;
+        bool     crestFoamC1Band = false;// the foam pass reads cascade 1's mipped copies (Params::foldFoam)
         double   crestFoamPrevTimeSec = -1.0;// its previous pass, for the decay step (-1 = none yet)
         // Wind + fetch actually baked into the cascades' h0 spectra. When
         // dm.params drifts from these, recordDisplacedDeform rewrites the

@@ -242,6 +242,28 @@ namespace threepp {
             // THREEPP_OCEAN_CREST_SHARPNESS = <s> forces it for every ocean.
             // Live-tunable.
             float crestSharpness = 0.f;
+
+            // Fold foam (default OFF: the crest foam deposits on the crest
+            // steepness eps of cascades 0 and 1 against a fixed threshold).
+            // That threshold does not carry between setups: eps is dominated
+            // by the shortest waves in those cascades, and where cascade 1
+            // ends depends on its tile (3 m on a 127 m tile, 1.1 m on the
+            // Norvasundet twin's 47 m one), so one value dotted the twin's
+            // strait at 10 m/s and left the open sea at 16 m/s bare. ON
+            // changes two things in foam_crest.comp. The waves that count are
+            // the same in metres everywhere: cascade 1 is read through its
+            // mipped copies (needs shortWaves) at the level that keeps the
+            // waves longer than kFoldFoamLength. And the measure is the drawn
+            // surface's own: the Jacobian J = det(I + l A) of the map the
+            // mesh draws, l the choppiness the CWM limiter allows (1 + crest
+            // sharpness, less where it binds), so foam forms where the drawn
+            // crest is about to fold, the more the closer J comes to the
+            // limiter's floor (kCwmMinJacobian): the deposit starts under
+            // kFoldFoamJacobian and is full kFoldFoamRamp below it.
+            // Needs crestFoam. THREEPP_OCEAN_FOLD_FOAM = 1 / 0 forces it;
+            // THREEPP_OCEAN_FOLD_FOAM_J / _RAMP / _LENGTH move the constants.
+            // Read when the crest foam is first made.
+            bool foldFoam = false;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -345,6 +367,15 @@ namespace threepp {
         // field, held to [0, 4]; 0 without the Choppy Wave Model (whose
         // limiter it needs).
         [[nodiscard]] float effectiveCrestSharpness() const;
+        [[nodiscard]] bool foldFoamOn() const;
+        // Params::foldFoam's look constants (see there; env overrides).
+        // 0.78 puts Monahan and O'Muircheartaigh's (1980) whitecap cover
+        // (4.4 %) on the open sea at 16 m/s and none on the Norvasundet
+        // strait at 10 m/s, crest sharpness 0; at sharpness 1 the same holds
+        // near 0.53 (ocean_metrics' crest-foam row; the twin from the drone).
+        static constexpr float kFoldFoamJacobian = 0.78f;
+        static constexpr float kFoldFoamRamp     = 0.2f;
+        static constexpr float kFoldFoamLength   = 3.0f;// metres
 
         // The CWM limiter's floor on the Jacobian of the drawn map.
         static constexpr float kCwmMinJacobian = 0.1f;

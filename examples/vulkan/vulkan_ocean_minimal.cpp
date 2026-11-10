@@ -45,6 +45,7 @@
 //   --short-spectrum 0|1  Params::shortWaveSpectrum, Elfouhaily et al. (1997)'s short waves
 //   --wave-mod 0|1     Params::waveModulation, short waves steeper on the long waves' crests
 //   --sharpness S      Params::crestSharpness, crests pinched into ridges (a look control; needs cwm)
+//   --fold-foam 0|1    Params::foldFoam, crest foam where the drawn surface nears its fold
 //   --crests           the physical-crests set in one flag: hs-fix, cwm,
 //                      bound waves, breaking crests, chop normals and the
 //                      measured spreading all on (each flag above, given
@@ -102,6 +103,7 @@ int main(int argc, char** argv) {
     int hsFix = -1;
     int cwm = -1, bound = -1, breaking = -1, crestFoam = -1, waveRefl = -1, shortWaves = -1, detile = -1, shortSpectrum = -1, waveMod = -1;
     float sharpness = -1.f;
+    int foldFoam = -1;
     bool crests = false;
     bool pinnedClock = false;
     for (int i = 1; i < argc; ++i) {
@@ -122,6 +124,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--detile") == 0 && i + 1 < argc) detile = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--short-spectrum") == 0 && i + 1 < argc) shortSpectrum = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--wave-mod") == 0 && i + 1 < argc) waveMod = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--fold-foam") == 0 && i + 1 < argc) foldFoam = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--sharpness") == 0 && i + 1 < argc) sharpness = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--crests") == 0) crests = true;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
@@ -242,6 +245,7 @@ int main(int argc, char** argv) {
     if (shortSpectrum >= 0) ocean->params.shortWaveSpectrum = shortSpectrum != 0;
     if (waveMod >= 0) ocean->params.waveModulation = waveMod != 0;
     if (sharpness >= 0.f) ocean->params.crestSharpness = sharpness;
+    if (foldFoam >= 0) ocean->params.foldFoam = foldFoam != 0;
     if (crestFoam >= 0) {
         ocean->params.crestFoam = crestFoam != 0;
         if (crestFoam != 0) ocean->params.chopNormals = true;

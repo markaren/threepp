@@ -108,6 +108,11 @@ namespace threepp {
         return cwmOn() ? 1.f : params.choppiness;
     }
 
+    bool DisplacedMesh::foldFoamOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_FOLD_FOAM");
+        return env < 0 ? params.foldFoam : env == 1;
+    }
+
     float DisplacedMesh::effectiveCrestSharpness() const {
         static const float env = [] {
             const char* e = std::getenv("THREEPP_OCEAN_CREST_SHARPNESS");
