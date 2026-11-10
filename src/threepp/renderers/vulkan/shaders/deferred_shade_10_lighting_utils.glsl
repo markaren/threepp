@@ -776,7 +776,7 @@ float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
         const MaterialDesc m = entryMat(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
         if (m.transmission <= 0.0 || m.transmission > 1.0 || m.ior < 0.5) continue;// not glass: a flat blend (ior 0) or additive
-        if (kFixGlassDedupe) {
+        {
             const uvec3 face = uvec3(rayQueryGetIntersectionInstanceIdEXT(rq, false),
                                      rayQueryGetIntersectionGeometryIndexEXT(rq, false),
                                      rayQueryGetIntersectionPrimitiveIndexEXT(rq, false));
@@ -814,7 +814,7 @@ float glassTransmittance(vec3 origin, vec3 dir, float tMax) {
 // opaque-only ray).
 float lampShadowVis(vec3 origin, vec3 dir, float tMax, bool cheapHit) {
     const float v = shadowVis(origin, dir, tMax);
-    return (kFixLampGlass && v > 0.0 && !cheapHit) ? v * glassTransmittance(origin, dir, tMax) : v;
+    return (v > 0.0 && !cheapHit) ? v * glassTransmittance(origin, dir, tMax) : v;
 }
 
 // FOG-ONLY shadow ray (setFogShadowOpaqueCutouts, pc.flags bit 29): the same

@@ -696,7 +696,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             ++b;// the water's mirror is a reflective bounce
             // The water draws no emitter NEE: an emitter its mirror meets
             // keeps its whole glow, not the share a glossy hit before it left.
-            if (kFixWaterBounceEm) bounceEmScale = 1.0;
+            bounceEmScale = 1.0;
             tput      *= wF;
             d          = wR;
             o          = wP + hitN * SHADOW_EPS;
@@ -841,7 +841,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                             // tracer's is the refraction's), and the volume's
                             // own colour is insideAtt's. The (1 - t) share
                             // stays the covered part's.
-                            if (kFixTirTint) hitPass = vec3(1.0 - cov) + cov * t;
+                            hitPass = vec3(1.0 - cov) + cov * t;
                         } else {
                             passDir  = normalize(rd);
                             passFrom = sP - nOut * SHADOW_EPS;

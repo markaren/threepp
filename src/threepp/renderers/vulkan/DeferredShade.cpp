@@ -61,18 +61,6 @@ namespace threepp::vulkan {
     // of its register cliff (deferred_shade.comp, the specialization constants).
     constexpr uint32_t kShadeSpecMsaa = 0x60u;
 
-    // The review-fix A/B switches, the shade's kShadeFixes (deferred_shade_00):
-    // one bit per fix, set unless its knob is 0, which gives the shade it
-    // replaced. Read once per process. Only a value that starts with '0'
-    // turns a fix off (env::flag): "false" or "off" leave it on.
-    static uint32_t shadeFixes() {
-        static const uint32_t bits = (env::flag("THREEPP_VK_FIX_LAMP_GLASS", true) ? 1u : 0u) |
-                                     (env::flag("THREEPP_VK_FIX_WATER_BOUNCE_EM", true) ? 2u : 0u) |
-                                     (env::flag("THREEPP_VK_FIX_TIR_TINT", true) ? 4u : 0u) |
-                                     (env::flag("THREEPP_VK_FIX_GLASS_DEDUPE", true) ? 8u : 0u);
-        return bits;
-    }
-
     DeferredShade::DeferredShade(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         createPipeline();
@@ -1256,8 +1244,8 @@ namespace threepp::vulkan {
 
     // The shade pipeline for this dispatch: the permutation for
     // key = (flags & mask) | probe state << 32 | shadow maps << 40 | the ray
-    // budget features << 41 | Ray Reconstruction << 45 | the review-fix
-    // switches << 48 (eight bits) | the ocean's switches, each specialised
+    // budget features << 41 | Ray Reconstruction << 45 | the ocean's
+    // switches (bits 48-55 are free), each specialised
     // only for a pipeline that has it on: chop normals << 46 (spec constant
     // 7), crest foam << 47 (8), wave reflections << 56 (9), detile << 57
     // (10), wave modulation << 58 (11) and the wave climate's two bits << 59
@@ -1275,7 +1263,6 @@ namespace threepp::vulkan {
                              (shadowMaps ? (1ull << 40u) : 0ull) |
                              (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u) |
                              (rayRecon ? (1ull << 45u) : 0ull) |
-                             (static_cast<uint64_t>(shadeFixes() & 0xFFu) << 48u) |
                              (oceanChop ? (1ull << 46u) : 0ull) |
                              (oceanCrestFoam ? (1ull << 47u) : 0ull) |
                              (oceanWaveReflect ? (1ull << 56u) : 0ull) |
@@ -1296,7 +1283,7 @@ namespace threepp::vulkan {
                                             static_cast<uint32_t>((key >> 40u) & 1u),
                                             static_cast<uint32_t>((key >> 41u) & kRayBudgetAll),
                                             static_cast<uint32_t>((key >> 45u) & 1u),
-                                            static_cast<uint32_t>((key >> 48u) & 0xFFu),
+                                            0u,// spec constant 6 is retired
                                             static_cast<uint32_t>((key >> 46u) & 1u),
                                             static_cast<uint32_t>((key >> 47u) & 1u),
                                             static_cast<uint32_t>((key >> 56u) & 1u),
@@ -1304,16 +1291,16 @@ namespace threepp::vulkan {
                                             static_cast<uint32_t>((key >> 58u) & 1u),
                                             static_cast<uint32_t>((key >> 59u) & 3u)};
         std::array<VkSpecializationMapEntry, 13> entries{};
-        // kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon
-        // and kShadeFixes (0..6) always; kOceanChop (7), kOceanCrestFoam (8),
+        // kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget and
+        // kRayRecon (0..5) always; kOceanChop (7), kOceanCrestFoam (8),
         // kOceanWaveReflect (9), kOceanDetile (10), kOceanWaveMod (11) and
         // kOceanClimate (12, two bits) are specialised only for a pipeline
-        // that has them on, so every other one passes the seven entries it
+        // that has them on, so every other one passes the six entries it
         // always did (the constants keep their default 0).
         uint32_t entryCount = 0;
         uint32_t dataWords  = 0;
         for (uint32_t i = 0; i < 13; ++i) {
-            if (i >= 7u && values[i] == 0u) continue;
+            if (i >= 6u && values[i] == 0u) continue;
             entries[entryCount].constantID = i;
             entries[entryCount].offset     = i * sizeof(uint32_t);
             entries[entryCount].size       = sizeof(uint32_t);
