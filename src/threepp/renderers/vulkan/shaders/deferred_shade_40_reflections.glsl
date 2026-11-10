@@ -414,6 +414,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // texel: the terminal for a ray that exhausts the step budget inside a
     // canopy (see the exhaustion branch after the loop).
     vec3  lastCutout = vec3(-1.0);
+    // ...and how far from the caller's origin that card is: the hit distance
+    // the trace reports when it ends there (gTraceHitT, after the loop).
+    float lastCutoutT = -1.0;
     vec3  radiance   = vec3(0.0);
     vec3  tput       = vec3(1.0);
     vec3  o          = origin;
@@ -593,6 +596,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             // leaf colour): if the ray never escapes the canopy, THIS is what
             // it is looking at, not the sky.
             lastCutout = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+            lastCutoutT = length(o + d * tHit - origin);
             if (cutoutCapped) {
                 // Past the budget: shade this card, as the exhausted step budget
                 // does (the branch after the loop), and do not pass it again.
@@ -1006,6 +1010,13 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             const vec3 nFace = -d;
             const vec3 fill = sampleEnvDiffuse(nFace) + lights.ambient + hemiAmbient(nFace);
             radiance += tput * lastCutout * fill * (1.0 / PI) * envInt;
+            // It is a HIT, and the callers must hear so. gTraceHitT stayed -1
+            // here (no shaded hit committed), which reads as "escaped to the
+            // sky": the callers that put the air on the reflected leg then gave
+            // this leaf the sky's fog, saturated at a grazing ray, and the
+            // white canopy blotches came back as a white seam along every
+            // fogged shoreline's reflected treeline.
+            if (gTraceHitT < 0.0) gTraceHitT = lastCutoutT;
         } else if (b == 0 && !bent && gTraceDeferMiss) {
             gTraceMissTput = tput;// the caller shades it, as in the miss branch
         } else {

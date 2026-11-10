@@ -17,6 +17,9 @@ bool murkLive();
 vec3 applyMurkSky(vec3 dir);
 bool camPortWetDryEye();
 vec3 applyMurk(vec3 col, vec3 ro, vec3 hit);
+// The air medium on shadeWater's reflected leg (also deferred_shade_60).
+vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit);
+vec3 applySkyFog(vec3 sky, vec3 dir);
 // The Henyey-Greenstein phase the fog/particle/cloud volumetrics all use — the
 // water column gets the SAME phase function, not a second one (hg_phase.glsl,
 // included by deferred_shade_60).
@@ -409,6 +412,43 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // gTraceHitT < 0 is the environment escape (deferred_shade_40_reflections.glsl:148).
     // Defaults to 1.0, so every existing scene runs the pre-change arithmetic textually.
     if (gTraceHitT > 0.0) reflectColor *= clamp(pm.specularIntensity, 0.0, 1.0);
+
+    // ── THE AIR ON THE REFLECTED LEG ─────────────────────────────────────────
+    // The caller fogs the camera->water leg and nothing else, so a calm fjord
+    // under haze mirrored the far mountains clear and saturated while the same
+    // mountains seen directly stood blue in the air: the reflection read
+    // clearer than the view. The opaque mirror ray got its own leg's air in
+    // deferred_shade.comp ("THE AIR ON THE REFLECTED LEG"); this is the water's
+    // twin, with the same two closed forms: the height fog's extinction and
+    // ambient in-scatter over the hit distance (applyHeteroSurfaceFog), and the
+    // sky pixel's fog on an escape (applySkyFog).
+    //
+    // BEFORE the fire and the splats below, and that order is the point: this
+    // fogs what the TRACE returned, a surface at gTraceHitT or the sky at
+    // infinity. The media below are composited over it at their own, near
+    // distance. Placed after them, an escape gave a campfire and a splat cloud
+    // a few metres up the leg the sky's fog, saturated at a grazing ray, and
+    // both vanished from the mirror (rg_ab outdoor).
+    //
+    // Two terms of the opaque block are left out on purpose. The sun's
+    // in-scatter march (volumetricDirScatter) is 16 shadow rays a pixel, and an
+    // ocean is most of a frame. The ParticleField media have their own leg
+    // below (pdEmissiveLeg); applyParticleFog here would count them twice.
+    //
+    // AFTER the specularIntensity scale: that knob dims reflected geometry and
+    // leaves an escape at full Fresnel, and the haze a far shore fades into is
+    // the horizon sky's colour, so the leg's in-scatter belongs with the escape.
+    //
+    // Above water only (`below` takes the murk, further down), and only with
+    // the air medium on: a scene without fog runs the arithmetic it ran before.
+    // With heteroActive raised by a density volume alone hfDensity is 0, and
+    // both forms return their input.
+    if (!below && clouds.heteroActive > 0.5) {
+        reflectColor = (gTraceHitT > 0.0)
+                           ? applyHeteroSurfaceFog(reflectColor, vec2(0.0), gTraceHitT, reflOrig,
+                                                   reflOrig + R * gTraceHitT)
+                           : applySkyFog(reflectColor, R);
+    }
 
     // ── FIRE IN THE MIRROR ───────────────────────────────────────────────────
     // The traced leg above sees geometry and the environment. It does NOT see
