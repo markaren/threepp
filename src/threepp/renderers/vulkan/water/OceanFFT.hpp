@@ -450,10 +450,10 @@ namespace threepp::water {
             float           maxFoam;
             float           centerX;
             float           centerZ;
-            uint32_t        model;// bit 0: Params::waveModulation, bit 1: Params::foldFoam
+            uint32_t        model;// bit 0: Params::waveModulation, bit 1: Params::foldFoam, bit 2: Params::crestLineFoam
             float           sharpness = 0.f;// foldFoam: the drawn choppiness is 1 + this
             float           c1Lod     = 0.f;// foldFoam: cascade 1's mip level
-            uint32_t        _pad2     = 0;
+            float           crestHalf = 0.f;// crestLineFoam: reach along the crest either way (m)
         };
 
         // After the cascades' IFFTs, same command buffer; fills p.res itself.

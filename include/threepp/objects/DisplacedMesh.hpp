@@ -264,6 +264,19 @@ namespace threepp {
             // THREEPP_OCEAN_FOLD_FOAM_J / _RAMP / _LENGTH move the constants.
             // Read when the crest foam is first made.
             bool foldFoam = false;
+
+            // Crest-line foam (default OFF: fold foam lands where the
+            // measure peaks, and on a short-crested sum of linear waves its
+            // peaks are blobs a few metres across, not caps along a crest).
+            // ON, foam_crest.comp takes the largest fold measure met along
+            // the local crest line (perpendicular to the most compressive
+            // direction of grad D) within kCrestLineFoamReach times the
+            // fold-foam length either way, so a cap runs along its crest as
+            // far as the crest nearly breaks over that length and does not
+            // grow across it. Needs foldFoam. THREEPP_OCEAN_CREST_LINE_FOAM
+            // = 1 / 0 forces it; THREEPP_OCEAN_CREST_LINE_FOAM_REACH moves
+            // the reach. Read when the crest foam is first made.
+            bool crestLineFoam = false;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -368,6 +381,7 @@ namespace threepp {
         // limiter it needs).
         [[nodiscard]] float effectiveCrestSharpness() const;
         [[nodiscard]] bool foldFoamOn() const;
+        [[nodiscard]] bool crestLineFoamOn() const;
         // Params::foldFoam's look constants (see there; env overrides).
         // 0.78 puts Monahan and O'Muircheartaigh's (1980) whitecap cover
         // (4.4 %) on the open sea at 16 m/s and none on the Norvasundet
@@ -376,6 +390,13 @@ namespace threepp {
         static constexpr float kFoldFoamJacobian = 0.78f;
         static constexpr float kFoldFoamRamp     = 0.2f;
         static constexpr float kFoldFoamLength   = 3.0f;// metres
+        // Params::crestLineFoam's reach along a crest, either way, in units
+        // of kFoldFoamLength (the shortest wave the fold foam counts).
+        static constexpr float kCrestLineFoamReach = 1.0f;
+        // ... and the J it starts under (replaces kFoldFoamJacobian while it
+        // is on): 0.76 puts 4.7 % cover on the open sea at 16 m/s and none
+        // at 10 m/s over 1.5 km of fetch, crest sharpness 0 (ocean_metrics).
+        static constexpr float kCrestLineFoamJacobian = 0.76f;
 
         // The CWM limiter's floor on the Jacobian of the drawn map.
         static constexpr float kCwmMinJacobian = 0.1f;

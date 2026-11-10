@@ -3952,8 +3952,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 if (dm.foldFoamOn()) {
                     // Fold foam: the J under which the drawn surface takes
                     // foam, its ramp, and the shortest wave that counts (m).
-                    static const float kFoldJ = static_cast<float>(
-                            vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_J").value_or(DisplacedMesh::kFoldFoamJacobian));
+                    // Crest-line foam spreads each cap along its crest, so
+                    // the same cover needs a lower J (its own constant).
+                    static const auto kEnvJ = vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_J");
+                    const float kFoldJ = static_cast<float>(kEnvJ.value_or(
+                            dm.crestLineFoamOn() ? DisplacedMesh::kCrestLineFoamJacobian : DisplacedMesh::kFoldFoamJacobian));
                     static const float kFoldRamp = std::max(1e-4f, static_cast<float>(
                             vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_RAMP").value_or(DisplacedMesh::kFoldFoamRamp)));
                     static const float kFoldLength = std::max(0.f, static_cast<float>(
@@ -3968,6 +3971,14 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     if (st.crestFoamC1Band) {
                         const float texel1 = dm.params.tileSize1 / float(st.cascades[1].dyn->ht().width);
                         cp.c1Lod = std::max(0.f, std::log2(kFoldLength / (2.f * texel1)));
+                    }
+                    if (dm.crestLineFoamOn()) {
+                        // Crest-line foam: a cap reaches along its crest by
+                        // a multiple of the band's shortest wavelength.
+                        static const float kReach = std::max(0.f, static_cast<float>(
+                                vulkan::env::number("THREEPP_OCEAN_CREST_LINE_FOAM_REACH").value_or(DisplacedMesh::kCrestLineFoamReach)));
+                        cp.model    |= 4u;
+                        cp.crestHalf = kReach * kFoldLength;
                     }
                 }
                 st.crestFoam->record(cb, cp, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
