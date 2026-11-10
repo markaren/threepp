@@ -19,6 +19,7 @@
 
 #ifdef THREEPP_PY_HAS_VULKAN
 
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include <algorithm>
@@ -503,7 +504,37 @@ namespace threepp_py {
                 .def("sample_height", &DisplacedMesh::sampleHeight,
                      py::arg("world_x"), py::arg("world_z"), py::arg("cascade_mask") = 0b111u,
                      "Combined wave height (m) at a world XZ. cascade_mask selects cascades "
-                     "(bit i = cascade i). Returns 0 until a Vulkan render() has run.");
+                     "(bit i = cascade i). Returns 0 until a Vulkan render() has run.")
+                .def(
+                        "set_wave_climate",
+                        [](DisplacedMesh& o, py::array_t<float, py::array::c_style | py::array::forcecast> a,
+                           float originX, float originZ, float sizeX, float sizeZ) {
+                            if (a.ndim() != 3 || a.shape(2) != 4)
+                                throw py::value_error("set_wave_climate: the map must be an H x W x 4 float array");
+                            const auto h = static_cast<uint32_t>(a.shape(0));
+                            const auto w = static_cast<uint32_t>(a.shape(1));
+                            std::vector<float> data(a.data(), a.data() + a.size());
+                            o.setWaveClimate(std::move(data), w, h, originX, originZ, sizeX, sizeZ);
+                        },
+                        py::arg("map"), py::arg("origin_x"), py::arg("origin_z"), py::arg("size_x"), py::arg("size_z"),
+                        "The site's wave climate: an H x W x 4 float32 map over the rectangle "
+                        "[origin_x, origin_x + size_x] x [origin_z, origin_z + size_z] of the ocean's XZ, "
+                        "row j along z, column i along x, read bilinearly between texel centres and clamped "
+                        "at its edges. Channels 0, 1, 2 scale cascades 0, 1, 2 (height and horizontal "
+                        "displacement, per vertex and per pixel; the crest foam and sample_height follow); "
+                        "channel 3 is not read. 1 everywhere is the sea without a map. Set it before the first "
+                        "render for the crest foam to follow it.")
+                .def("clear_wave_climate", &DisplacedMesh::clearWaveClimate,
+                     "Drop the wave climate map: one sea everywhere again.")
+                .def_property_readonly("has_wave_climate", &DisplacedMesh::hasWaveClimate)
+                .def(
+                        "wave_climate_gain",
+                        [](const DisplacedMesh& o, float x, float z) {
+                            const auto g = o.waveClimateGain(x, z);
+                            return py::make_tuple(g[0], g[1], g[2]);
+                        },
+                        py::arg("x"), py::arg("z"),
+                        "The wave climate's three cascade gains at a rest point (1, 1, 1 without a map).");
 
         // ---- Ocean -----------------------------------------------------------
         // The one-liner: builds the plane geometry, the tuned transmissive water

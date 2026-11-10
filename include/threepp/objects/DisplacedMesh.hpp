@@ -814,6 +814,49 @@ namespace threepp {
         };
         mutable CascadeField heightFields[3];
 
+        // The site's wave climate (default none: one sea everywhere, as
+        // before). A small world-anchored map, baked by the caller from the
+        // site's land, seabed and wind, whose channel c (0, 1, 2) scales
+        // cascade c's height and horizontal displacement at a water parcel's
+        // rest point; channel 3 is the caller's own (e.g. the depth) and is
+        // not read. So the lee of land can be calm while the open reach keeps
+        // its sea, and waves can die out on a beach: water_displace.comp
+        // scales the cascades' fields per vertex, the shade the fine
+        // cascade's per-pixel slope (by s, its variance by s^2), the crest
+        // foam forms at the scaled sea, and sampleHeight follows the drawn
+        // surface. The map varies slowly, so its own gradient is left out of
+        // the normals. Texel (i, j) is the value at the centre of the cell
+        // [originX + i sizeX / width, ...) x [originZ + j sizeZ / height, ...),
+        // in the ocean's own XZ (the frame of its rest points); read
+        // bilinearly between centres, clamped to the edge texels outside.
+        // Row-major, x fastest: data[(j * width + i) * 4 + c].
+        // The renderer uploads it when the map changes; the crest foam's
+        // levels (water::CrestFoam) are made when the crest foam is first
+        // made, so a map set after that scales the sea but not the foam.
+        struct WaveClimate {
+            std::vector<float> data;
+            uint32_t width   = 0;
+            uint32_t height  = 0;
+            float    originX = 0.f;
+            float    originZ = 0.f;
+            float    sizeX   = 0.f;
+            float    sizeZ   = 0.f;
+            // Bumped by every set / clear: the renderer re-uploads on a change.
+            uint64_t version = 0;
+        };
+        // Set the map (width x height texels of 4 floats, as WaveClimate
+        // describes; width at least 2). Throws std::invalid_argument on a
+        // size mismatch or an empty extent.
+        void setWaveClimate(std::vector<float> data, uint32_t width, uint32_t height,
+                            float originX, float originZ, float sizeX, float sizeZ);
+        // Back to one sea everywhere.
+        void clearWaveClimate();
+        [[nodiscard]] const WaveClimate& waveClimate() const { return waveClimate_; }
+        [[nodiscard]] bool hasWaveClimate() const { return waveClimate_.width > 0u; }
+        // The map's three cascade gains at a rest point (1, 1, 1 without a
+        // map): the same bilinear read the shaders make.
+        [[nodiscard]] std::array<float, 3> waveClimateGain(float x, float z) const;
+
         // Combined wave height of the rendered surface over (worldX, worldZ).
         // Mirrors water_displace.comp's sampleDisplacement(): cascades 0 and 1
         // are B-spline filtered, cascade 2 bilinear, and each contributes
@@ -866,6 +909,9 @@ namespace threepp {
         // crossing a ship's wake that samples this under her own hull feels
         // the ship's wake.
         float sampleWakeHeight(float worldX, float worldZ) const;
+
+    private:
+        WaveClimate waveClimate_;
     };
 
 }// namespace threepp

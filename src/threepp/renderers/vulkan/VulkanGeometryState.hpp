@@ -617,6 +617,12 @@ namespace threepp::vulkan::impl {
         // shortWaves or until the chop normals first come on.
         std::unique_ptr<water::FieldMips> c1Mips;
         bool     crestFoamC1Band = false;// the foam pass reads cascade 1's mipped copies (Params::foldFoam)
+        // The wave climate (DisplacedMesh::WaveClimate): its map with the
+        // header row (ocean_climate.glsl), SHADER_READ_ONLY_OPTIMAL, uploaded
+        // when the mesh's map version changes; null while it has none.
+        Image2D  climateImage{};
+        uint64_t climateVersion = 0;
+        float    climateBanked  = -1.f;// the shortWaveBankedMss its header row holds
         double   crestFoamPrevTimeSec = -1.0;// its previous pass, for the decay step (-1 = none yet)
         // Wind + fetch actually baked into the cascades' h0 spectra. When
         // dm.params drifts from these, recordDisplacedDeform rewrites the

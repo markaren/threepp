@@ -3846,7 +3846,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                                 // which only the OCEAN_CHOP variant binds.
                                 ((st.chopOn && dm.waveModulationOn()) ? 64u : 0u) |
                                 // Hull contact: the narrow blend to each waterline plane.
-                                ((hullCount > 0u && dm.hullContactOn()) ? 128u : 0u);
+                                ((hullCount > 0u && dm.hullContactOn()) ? 128u : 0u) |
+                                // The wave climate: its map at kClimateBinding scales the cascades.
+                                (st.climateImage.view != VK_NULL_HANDLE ? 256u : 0u);
             pc.uvOut          = (crestsOut || crestsClear || foamOut) ? st.blas->uv.address : 0ull;
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
@@ -5672,7 +5674,14 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 rw.descriptorCount = 1;
                 rw.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 rw.pImageInfo      = &ri;
-                vulkan::updateDescriptorSets(ctx->device(), 1, &rw, 0, nullptr);
+                // The wave climate's map at kClimateBinding: the stand-in
+                // until syncOceanClimate uploads one.
+                VkDescriptorImageInfo ci{oceanFoamDummy.sampler, oceanFoamDummy.view, VK_IMAGE_LAYOUT_GENERAL};
+                VkWriteDescriptorSet cw = rw;
+                cw.dstBinding = vulkan::WaterDisplacePipeline::kClimateBinding;
+                cw.pImageInfo = &ci;
+                const VkWriteDescriptorSet both[2] = {rw, cw};
+                vulkan::updateDescriptorSets(ctx->device(), 2, both, 0, nullptr);
             }
             // Chop normals, when the mesh starts with them on: built here so
             // the priming update below already runs them (the all-slots
@@ -5689,6 +5698,9 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
             // Chop normals (DisplacedMesh::Params::chopNormals), resolved once
             // per frame in the scene build, before the frame's fence wait and
             // before anything is recorded.
+            //
+            // The wave climate first: the chop set made below binds its map.
+            syncOceanClimate(dm, st);
             //
             // Nothing of the feature exists until the mesh first asks for it:
             // then every cascade gets its slope and displacement-gradient
@@ -5718,7 +5730,7 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                 // the slope + jacDiag of cascades 0 and 1 (bindings 6-9), a
                 // disabled cascade falling back to cascade 0 as in the plain set.
                 st.displaceChopDS = waterDisplace_->allocateChopDescriptorSet();
-                std::array<VkDescriptorImageInfo, 11> infos{};
+                std::array<VkDescriptorImageInfo, 12> infos{};
                 for (uint32_t i = 0; i < 3; ++i) {
                     const auto& c = st.cascades[(st.cascadeMask & (1u << i)) ? i : 0u];
                     infos[i * 2 + 0] = {waterDisplace_->sampler(), c.dyn->ht().view, VK_IMAGE_LAYOUT_GENERAL};
@@ -5735,11 +5747,19 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                              st.wake && st.wake->rippleView() != VK_NULL_HANDLE ? st.wake->rippleView()
                                                                                   : wakeField_->dummyView(),
                              VK_IMAGE_LAYOUT_GENERAL};
-                std::array<VkWriteDescriptorSet, 11> ws{};
-                for (uint32_t i = 0; i < 11; ++i) {
+                // ... and the wave climate's map at kClimateBinding (the
+                // stand-in while the ocean has none).
+                infos[11] = st.climateImage.view != VK_NULL_HANDLE
+                                    ? VkDescriptorImageInfo{st.climateImage.sampler, st.climateImage.view,
+                                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                                    : VkDescriptorImageInfo{oceanFoamDummy.sampler, oceanFoamDummy.view,
+                                                            VK_IMAGE_LAYOUT_GENERAL};
+                std::array<VkWriteDescriptorSet, 12> ws{};
+                for (uint32_t i = 0; i < 12; ++i) {
                     ws[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                     ws[i].dstSet          = st.displaceChopDS;
-                    ws[i].dstBinding      = i < 10u ? i : vulkan::WaterDisplacePipeline::kRippleBinding;
+                    ws[i].dstBinding      = i < 10u ? i : (i == 10u ? vulkan::WaterDisplacePipeline::kRippleBinding
+                                                                    : vulkan::WaterDisplacePipeline::kClimateBinding);
                     ws[i].descriptorCount = 1;
                     ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     ws[i].pImageInfo      = &infos[i];
@@ -5797,6 +5817,73 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
             oceanDetile      = st.chopOn && dm.detileOn();// the shade's spec constant 9
         }
 
+void VulkanRenderer::Impl::syncOceanClimate(DisplacedMesh& dm, DisplacedMeshState& st) {
+            // The wave climate (DisplacedMesh::WaveClimate). The map is set
+            // rarely (a site's bake), so a change waits for the device to go
+            // idle, replaces the image and rewrites its bindings: the
+            // displace sets' kClimateBinding and the shade's 93. With no map
+            // ever set nothing here runs, and nothing is made.
+            const auto& wc = dm.waveClimate();
+            // The header also carries the slope variance the shade banks for
+            // the short waves no cascade holds: a change of it re-uploads.
+            const bool bankMoved = dm.hasWaveClimate() && st.climateBanked != st.shortWaveBankedMss;
+            if (wc.version != st.climateVersion || bankMoved) {
+                st.climateVersion = wc.version;
+                st.climateBanked  = st.shortWaveBankedMss;
+                vkDeviceWaitIdle(ctx->device());
+                const bool wasShade = st.climateImage.view != VK_NULL_HANDLE && oceanClimateView == st.climateImage.view;
+                destroyImage2D(ctx->allocator(), ctx->device(), st.climateImage);
+                if (dm.hasWaveClimate()) {
+                    // One row taller than the map: row 0 the header
+                    // (originX, originZ, 1 / sizeX, 1 / sizeZ), ocean_climate.glsl.
+                    std::vector<float> px(size_t(wc.width) * (wc.height + 1u) * 4u, 0.f);
+                    px[0] = wc.originX;
+                    px[1] = wc.originZ;
+                    px[2] = 1.f / wc.sizeX;
+                    px[3] = 1.f / wc.sizeZ;
+                    px[4] = st.shortWaveBankedMss;// texel (1, 0).x
+                    std::copy(wc.data.begin(), wc.data.end(), px.begin() + std::ptrdiff_t(wc.width) * 4);
+                    st.climateImage = createSampledImage2D(wc.width, wc.height + 1u, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                                           px.data(), px.size() * sizeof(float), VK_FILTER_LINEAR,
+                                                           VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                                                           VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                                                           "ocean.waveClimate (RGBA32F + header row)");
+                }
+                const bool on = st.climateImage.view != VK_NULL_HANDLE;
+                const VkDescriptorImageInfo info = on
+                        ? VkDescriptorImageInfo{st.climateImage.sampler, st.climateImage.view,
+                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                        : VkDescriptorImageInfo{oceanFoamDummy.sampler, oceanFoamDummy.view, VK_IMAGE_LAYOUT_GENERAL};
+                std::array<VkWriteDescriptorSet, 2> ws{};
+                uint32_t n = 0;
+                for (VkDescriptorSet ds : {st.displaceDS, st.displaceChopDS}) {
+                    if (ds == VK_NULL_HANDLE) continue;
+                    ws[n].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    ws[n].dstSet          = ds;
+                    ws[n].dstBinding      = vulkan::WaterDisplacePipeline::kClimateBinding;
+                    ws[n].descriptorCount = 1;
+                    ws[n].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    ws[n].pImageInfo      = &info;
+                    ++n;
+                }
+                if (n > 0u) vulkan::updateDescriptorSets(ctx->device(), n, ws.data(), 0, nullptr);
+                // The shade's binding 93 is scene-global: the first ocean with
+                // a map holds it, as the crest foam's 91.
+                if (wasShade || (on && oceanClimateView == oceanFoamDummy.view)) {
+                    oceanClimateView    = on ? st.climateImage.view : oceanFoamDummy.view;
+                    oceanClimateSampler = on ? st.climateImage.sampler : oceanFoamDummy.sampler;
+                    oceanClimateLayout  = on ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+                    deferredDescDirty_.fill(true);
+                }
+            }
+            // The shade's spec constant 11, for the ocean that holds binding 93.
+            if (st.climateImage.view != VK_NULL_HANDLE && oceanClimateView == st.climateImage.view) {
+                oceanClimate = 1u | ((st.crestFoam && st.crestFoam->climateLevels()) ? 2u : 0u);
+            } else if (st.climateImage.view == VK_NULL_HANDLE && oceanClimateView == oceanFoamDummy.view) {
+                oceanClimate = 0u;
+            }
+        }
+
 void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshState& st) {
             // Crest foam (DisplacedMesh::Params::crestFoam), resolved with the
             // chop normals and on their terms: it reads the derivative fields
@@ -5827,7 +5914,9 @@ void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshSt
                         *ctx, res, c0.dyn->jacDiag().view, c0.dyn->ht().view,
                         c1Band ? st.c1Mips->view(3) : c1.dyn->jacDiag().view,
                         c1Band ? st.c1Mips->view(0) : c1.dyn->ht().view,
-                        c1Band ? st.c1Mips->sampler() : VK_NULL_HANDLE);
+                        c1Band ? st.c1Mips->sampler() : VK_NULL_HANDLE,
+                        // The wave climate's levels, when the ocean has a map now.
+                        dm.hasWaveClimate());
                 if (crestFoamPatternImage.view == VK_NULL_HANDLE) {
                     createCrestFoamPattern_();
                     deferredDescDirty_.fill(true);

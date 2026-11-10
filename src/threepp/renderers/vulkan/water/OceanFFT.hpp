@@ -429,7 +429,11 @@ namespace threepp::water {
                   VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1,
                   // Cascade 1's sampler when its views are mipped copies
                   // (Params::foldFoam reads them at a level); null = single level.
-                  VkSampler c1Sampler = VK_NULL_HANDLE);
+                  VkSampler c1Sampler = VK_NULL_HANDLE,
+                  // The wave climate's levels (DisplacedMesh::WaveClimate):
+                  // RGBA16F and foam_crest.comp's climate variant, which keeps
+                  // the foam of the sea scaled by 2/3 and 1/3 in .b and .a.
+                  bool climateLevels = false);
         ~CrestFoam();
 
         CrestFoam(const CrestFoam&) = delete;
@@ -464,11 +468,13 @@ namespace threepp::water {
         VkSampler   sampler()     const { return sampler_; }
         VkImage     image()       const { return foam_.image; }
         uint32_t    resolution()  const { return res_; }
+        bool        climateLevels() const { return climateLevels_; }
 
     private:
         vulkan::VulkanContext& ctx_;
         uint32_t res_;
         uint32_t mipLevels_ = 1;
+        bool     climateLevels_ = false;
 
         OceanImage  foam_;                         // .view = mip 0 storage view
         VkImageView sampledView_ = VK_NULL_HANDLE; // all levels

@@ -15,6 +15,7 @@
 #include "threepp/renderers/vulkan/shaders/ocean_chop_moments.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/dynamic_spectrum.comp.chop.spv.h"
 #include "threepp/renderers/vulkan/shaders/foam_crest.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/foam_crest.comp.climate.spv.h"
 
 #include "threepp/math/Rng.hpp"
 
@@ -1558,12 +1559,13 @@ namespace threepp::water {
 
     CrestFoam::CrestFoam(vulkan::VulkanContext& ctx, uint32_t resolution,
                          VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1,
-                         VkSampler c1Sampler)
-        : ctx_(ctx), res_(resolution) {
+                         VkSampler c1Sampler, bool climateLevels)
+        : ctx_(ctx), res_(resolution), climateLevels_(climateLevels) {
         for (uint32_t n = res_; n > 1u; n >>= 1u) ++mipLevels_;
 
         // .r the foam, .g the compression the wave modulation reads.
-        foam_.format = VK_FORMAT_R16G16_SFLOAT;
+        // With the wave climate's levels, .b and .a their foam.
+        foam_.format = climateLevels_ ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R16G16_SFLOAT;
         foam_.width  = res_;
         foam_.height = res_;
         VkImageCreateInfo ici{};
@@ -1643,7 +1645,8 @@ namespace threepp::water {
         plci.pPushConstantRanges    = &pcr;
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &layout_), "vkCreatePipelineLayout(crestFoam)");
 
-        VkShaderModule mod = makeShader(ctx_, kFoamCrestCompSpv, sizeof(kFoamCrestCompSpv));
+        VkShaderModule mod = climateLevels_ ? makeShader(ctx_, kFoamCrestClimateCompSpv, sizeof(kFoamCrestClimateCompSpv))
+                                            : makeShader(ctx_, kFoamCrestCompSpv, sizeof(kFoamCrestCompSpv));
         pipe_ = makeComputePipeline(ctx_, mod, layout_);
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
 

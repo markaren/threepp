@@ -58,6 +58,11 @@ layout(set = 0, binding = 9) uniform sampler2D jac1;
 layout(set = 0, binding = 10) uniform sampler2DArray wakeRipples;
 #define OCEAN_WAKE_SAMPLER wakeRipples// (oceanWakeBicubic's B-spline taps)
 #include "ocean_wake.glsl"            // the wake field's table: its ripple windows
+// The site's wave climate (DisplacedMesh::WaveClimate, waveModel bit 8): its
+// map with the header row ocean_climate.glsl reads, or the 1x1 stand-in (not
+// read then). (WaterDisplacePipeline::kClimateBinding.)
+layout(set = 0, binding = 11) uniform sampler2D waveClimate;
+#include "ocean_climate.glsl"
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
@@ -109,7 +114,8 @@ layout(push_constant, scalar) uniform Pc {
                             // bit 4 crestFoam (the drawn displacement into the UVs),
                             // bit 5 cascade 1 is mipped: read it at the vertex spacing's level,
                             // bit 6 waveModulation (OCEAN_CHOP only): cascade 1 rides cascade 0,
-                            // bit 7 hullContact: the blend to a hull's waterline plane keeps to a narrow band
+                            // bit 7 hullContact: the blend to a hull's waterline plane keeps to a narrow band,
+                            // bit 8 the wave climate: each cascade scaled by its channel of waveClimate
     float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
     float   boundKm1;
     float   crestSharpness; // DisplacedMesh::Params::crestSharpness (bit 0 only): cascades 0+1 at choppiness 1 + s
@@ -224,6 +230,19 @@ float gC1Lod = 0.0;
 // every field of it read here, so its height, displacement, slope and
 // displacement gradient describe one scaled wave train. 1 with the bit off.
 float gC1Gain = 1.0;
+// The wave climate (DisplacedMesh::WaveClimate, waveModel bit 8): cascades 0
+// and 2's amplitude factors at this vertex's rest point (set in main; cascade
+// 1's goes into gC1Gain), on every field of their cascade read here, so a
+// cascade's height, displacement, slope and displacement gradient describe
+// one scaled wave train, and the bound harmonic, quadratic in them, scales
+// with the square. All of a vertex's stencil taps take the factor of its rest
+// point: the map changes over tens of metres, so its own gradient, against the
+// waves' slope a ratio of a wavelength to that, is left out of the normal. 1
+// without a map, which multiplies every read by exactly 1.
+float gC0Gain = 1.0;
+float gC2Gain = 1.0;
+float c0R(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicR(tex, uv); }
+vec2 c0RG(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicRG(tex, uv); }
 vec2 c1RG(sampler2D tex, vec2 uv) {
     if (gC1Lod <= 0.0) return gC1Gain * sampleBicubicRG(tex, uv);
     const vec2 lo = textureLod(tex, uv, gC1Lod).rg;
@@ -244,7 +263,7 @@ float sampleHeightSmooth(vec2 worldXZ) {
     float h = 0.0;
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
-        h += sampleBicubicR(height0, worldXZ * invTile) * invTile;
+        h += c0R(height0, worldXZ * invTile) * invTile;
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
@@ -277,8 +296,8 @@ vec3 sampleDisplacement(vec2 worldXZ) {
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
         const vec2 uv = worldXZ * invTile;
-        d.y += sampleBicubicR(height0, uv) * invTile;
-        const vec2 dxz = sampleBicubicRG(displace0, uv) * invTile;
+        d.y += c0R(height0, uv) * invTile;
+        const vec2 dxz = c0RG(displace0, uv) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -296,8 +315,8 @@ vec3 sampleDisplacement(vec2 worldXZ) {
     if ((pc.cascadeMask & 4u) != 0u) {
         const float invTile = 1.0 / pc.tileSize2;
         const vec2 uv = worldXZ * invTile;
-        d.y += texture(height2,   uv).r * invTile;
-        const vec2 dxz = texture(displace2, uv).rg * invTile;
+        d.y += gC2Gain * texture(height2,   uv).r * invTile;
+        const vec2 dxz = gC2Gain * texture(displace2, uv).rg * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -334,8 +353,8 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
         const vec2 uv = worldXZ * invTile;
-        const vec2 dxz = sampleBicubicRG(displace0, uv) * invTile;
-        const float h  = sampleBicubicR(height0, uv) * invTile * pc.waveScale;
+        const vec2 dxz = c0RG(displace0, uv) * invTile;
+        const float h  = c0R(height0, uv) * invTile * pc.waveScale;
         d.y += h;
         if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm0);
         d.x += dxz.x;
@@ -361,8 +380,8 @@ vec3 sampleFineRaw(vec2 worldXZ) {
     if ((pc.cascadeMask & 4u) == 0u) return vec3(0.0);
     const float invTile = 1.0 / pc.tileSize2;
     const vec2 uv = worldXZ * invTile;
-    const vec2 dxz = texture(displace2, uv).rg * invTile;
-    return vec3(dxz.x, texture(height2, uv).r * invTile * pc.waveScale, dxz.y);
+    const vec2 dxz = gC2Gain * texture(displace2, uv).rg * invTile;
+    return vec3(dxz.x, gC2Gain * texture(height2, uv).r * invTile * pc.waveScale, dxz.y);
 }
 
 // The Choppy Wave Model's limiter. The drawn map x = q + l D(q) has Jacobian
@@ -440,6 +459,15 @@ void main() {
         gC1Lod = max(log2(max(sx, sz) / texel1), 0.0);
     }
 
+    // The wave climate at the rest point (waveModel bit 8).
+    float climate1 = 1.0;
+    if ((pc.waveModel & 256u) != 0u) {
+        const vec4 cl = oceanClimate(waveClimate, rest.xz);
+        gC0Gain  = cl.x;
+        climate1 = cl.y;
+        gC2Gain  = cl.z;
+    }
+
 #ifdef OCEAN_CHOP
     // Wave modulation: short waves ride the long ones. Longuet-Higgins and
     // Stewart (1960), J. Fluid Mech. 8(4): on a long wave of steepness A K a
@@ -455,10 +483,13 @@ void main() {
     // wave's slope it is of order (A K)(K / k), a few percent here.
     if ((pc.waveModel & 64u) != 0u && (pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
-        const vec2  jd = sampleBicubicRG(jac0, rest.xz * invTile) * invTile;
+        const vec2  jd = c0RG(jac0, rest.xz * invTile) * invTile;
         gC1Gain = clamp(1.0 - (jd.x + jd.y) * pc.waveScale, 0.5, 1.5);
     }
 #endif
+    // The climate's factor on cascade 1, on top of the modulation's (which
+    // rides the scaled cascade 0).
+    if ((pc.waveModel & 256u) != 0u) gC1Gain *= climate1;
 
     // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the
     // vertex grid's spacing (the historical normal stencil) gives the
@@ -746,11 +777,11 @@ void main() {
         if ((pc.cascadeMask & 1u) != 0u) {
             const float invTile = 1.0 / pc.tileSize0;
             const vec2  uv = rest.xz * invTile;
-            sl += sampleBicubicRG(slope0, uv) * invTile;
-            const vec2 jd = sampleBicubicRG(jac0, uv) * invTile;
+            sl += c0RG(slope0, uv) * invTile;
+            const vec2 jd = c0RG(jac0, uv) * invTile;
             jxx += jd.x;
             jzz += jd.y;
-            jxz += sampleBicubicRG(height0, uv).g * invTile;
+            jxz += c0RG(height0, uv).g * invTile;
         }
         if ((pc.cascadeMask & 2u) != 0u) {
             // Rotated sample domain d = R*x: a gradient comes back as

@@ -40,7 +40,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 92;
+    constexpr uint32_t kDeferredBindingCount = 93;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -298,6 +298,10 @@ namespace threepp::vulkan {
         // coordinates and the foam photograph (their stand-ins while off).
         set(91, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // oceanCrestFoam (R16F, mipped)
         set(92, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // oceanCrestFoamPattern (R8, mipped)
+        // The wave climate (DisplacedMesh::WaveClimate), read only by the
+        // kOceanClimate permutation: its map with the header row, or the foam
+        // dummy while off.
+        set(93, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // oceanClimate (RGBA32F)
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -1171,6 +1175,12 @@ namespace threepp::vulkan {
             crestPatternInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             setw(90, 91, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &crestFoamInfo,    nullptr);
             setw(91, 92, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &crestPatternInfo, nullptr);
+            // The wave climate's map (93), in its own layout.
+            VkDescriptorImageInfo climateInfo{};
+            climateInfo.sampler     = in.oceanClimateSampler;
+            climateInfo.imageView   = in.oceanClimateView;
+            climateInfo.imageLayout = in.oceanClimateLayout;
+            setw(92, 93, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &climateInfo, nullptr);
             // Without ray query the layout has no binding 8: drop its write.
             uint32_t writeCount = static_cast<uint32_t>(w.size());
             if (!ctx_.rayQuerySupported()) {
@@ -1246,7 +1256,8 @@ namespace threepp::vulkan {
     // knobs it turns on.
     VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget,
                                             bool rayRecon, bool oceanChop, bool oceanCrestFoam,
-                                            bool oceanWaveReflect, bool oceanDetile, bool oceanWaveMod) {
+                                            bool oceanWaveReflect, bool oceanDetile, bool oceanWaveMod,
+                                            uint32_t oceanClimate) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
@@ -1256,7 +1267,8 @@ namespace threepp::vulkan {
                              (oceanCrestFoam ? (1ull << 47u) : 0ull) |
                              (oceanWaveReflect ? (1ull << 48u) : 0ull) |
                              (oceanDetile ? (1ull << 49u) : 0ull) |
-                             (oceanWaveMod ? (1ull << 50u) : 0ull);
+                             (oceanWaveMod ? (1ull << 50u) : 0ull) |
+                             (static_cast<uint64_t>(oceanClimate & 3u) << 51u);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1266,7 +1278,7 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 11> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+        const std::array<uint32_t, 12> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
                                             static_cast<uint32_t>((key >> 40u) & 1u),
                                             static_cast<uint32_t>((key >> 41u) & kRayBudgetAll),
@@ -1275,8 +1287,9 @@ namespace threepp::vulkan {
                                             static_cast<uint32_t>((key >> 47u) & 1u),
                                             static_cast<uint32_t>((key >> 48u) & 1u),
                                             static_cast<uint32_t>((key >> 49u) & 1u),
-                                            static_cast<uint32_t>((key >> 50u) & 1u)};
-        std::array<VkSpecializationMapEntry, 11> entries{};
+                                            static_cast<uint32_t>((key >> 50u) & 1u),
+                                            static_cast<uint32_t>((key >> 51u) & 3u)};
+        std::array<VkSpecializationMapEntry, 12> entries{};
         // kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon
         // always; kOceanChop (6), kOceanCrestFoam (7), kOceanWaveReflect (8) and
         // kOceanDetile (9) and kOceanWaveMod (10) are specialised only for a pipeline that has them on, so every other
@@ -1284,8 +1297,10 @@ namespace threepp::vulkan {
         // default 0).
         uint32_t entryCount = 0;
         uint32_t dataWords  = 0;
-        for (uint32_t i = 0; i < 11; ++i) {
-            if (i >= 6u && !((key >> (40u + i)) & 1u)) continue;// 6 -> bit 46, ... 10 -> bit 50
+        // kOceanClimate (11) is two bits, 51 and 52, specialised when either is set.
+        for (uint32_t i = 0; i < 12; ++i) {
+            if (i >= 6u && i < 11u && !((key >> (40u + i)) & 1u)) continue;// 6 -> bit 46, ... 10 -> bit 50
+            if (i == 11u && values[11] == 0u) continue;
             entries[entryCount].constantID = i;
             entries[entryCount].offset     = i * sizeof(uint32_t);
             entries[entryCount].size       = sizeof(uint32_t);
@@ -1385,7 +1400,8 @@ namespace threepp::vulkan {
         const ShadePush push = shadePush(p);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                           shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget, p.rayRecon, p.oceanChopNormals,
-                                        p.oceanCrestFoam, p.oceanWaveReflections, p.oceanDetile, p.oceanWaveMod));
+                                        p.oceanCrestFoam, p.oceanWaveReflections, p.oceanDetile, p.oceanWaveMod,
+                                        p.oceanClimate));
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
     }

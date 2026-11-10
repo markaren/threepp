@@ -32,12 +32,13 @@ namespace threepp::vulkan {
     }
 
     void WaterDisplacePipeline::createPipeline() {
-        // 7 combined-image-sampler bindings — three (height, displacement)
+        // 8 combined-image-sampler bindings — three (height, displacement)
         // cascade pairs at 0-5, then the wake field's ripples (an array, a
-        // layer a patch) at kRippleBinding.
-        std::array<VkDescriptorSetLayoutBinding, 7> bb{};
+        // layer a patch) at kRippleBinding and the wave climate's map at
+        // kClimateBinding.
+        std::array<VkDescriptorSetLayoutBinding, 8> bb{};
         for (uint32_t i = 0; i < bb.size(); ++i) {
-            bb[i].binding         = i < 6u ? i : kRippleBinding;
+            bb[i].binding         = i < 6u ? i : (i == 6u ? kRippleBinding : kClimateBinding);
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bb[i].descriptorCount = 1;
             bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -128,10 +129,11 @@ namespace threepp::vulkan {
     void WaterDisplacePipeline::createChopPipeline() {
         // The plain six bindings, then the chop normals' (slope, jacDiag)
         // pairs of cascades 0 and 1 (water_displace.comp bindings 6-9), then
-        // the wake field's ripples at kRippleBinding.
-        std::array<VkDescriptorSetLayoutBinding, 11> bb{};
+        // the wake field's ripples at kRippleBinding and the wave climate's
+        // map at kClimateBinding.
+        std::array<VkDescriptorSetLayoutBinding, 12> bb{};
         for (uint32_t i = 0; i < bb.size(); ++i) {
-            bb[i].binding         = i < 10u ? i : kRippleBinding;
+            bb[i].binding         = i < 10u ? i : (i == 10u ? kRippleBinding : kClimateBinding);
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bb[i].descriptorCount = 1;
             bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;

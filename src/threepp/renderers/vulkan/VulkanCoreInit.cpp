@@ -387,6 +387,7 @@ VulkanRenderer::Impl::~Impl() {
                 if (st->blas) destroyBlasRecord(*st->blas);
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
+                destroyImage2D(ctx->allocator(), d, st->climateImage);
                 if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->foamImage.view, nullptr);
                 if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
                 for (auto& ring : st->heightReadback)

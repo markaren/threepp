@@ -364,6 +364,9 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // the foam detail tile standing in until then (both READ_ONLY).
             in.oceanCrestFoamView    = oceanCrestFoamView;
             in.oceanCrestFoamSampler = oceanCrestFoamSampler;
+            in.oceanClimateView      = oceanClimateView;
+            in.oceanClimateSampler   = oceanClimateSampler;
+            in.oceanClimateLayout    = oceanClimateLayout;
             const bool crestPattern  = crestFoamPatternImage.view != VK_NULL_HANDLE;
             in.crestFoamPatternView    = crestPattern ? crestFoamPatternImage.view : foamDetailImage.view;
             in.crestFoamPatternSampler = crestPattern ? crestFoamPatternImage.sampler : foamDetailImage.sampler;

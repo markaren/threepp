@@ -47,13 +47,17 @@ namespace threepp::vulkan {
     class WaterDisplacePipeline {
 
     public:
-        // Max simultaneous DisplacedMesh instances. Each set holds 7
-        // combined-image-samplers (3 cascades × 2 images at bindings 0-5, and
-        // kRippleBinding: the wake field's ripples, or its 1x1 stand-in).
+        // Max simultaneous DisplacedMesh instances. Each set holds 8
+        // combined-image-samplers (3 cascades × 2 images at bindings 0-5,
+        // kRippleBinding: the wake field's ripples, or its 1x1 stand-in, and
+        // kClimateBinding: the wave climate's map, or a 1x1 stand-in).
         static constexpr uint32_t kMaxOceans = 16;
         // water_displace.comp's binding of the wake field's ripples (6-9 are
         // left to other ocean inputs).
         static constexpr uint32_t kRippleBinding = 10;
+        // ... and of the wave climate's map (DisplacedMesh::WaveClimate, with
+        // its header row), or a 1x1 stand-in while the ocean has none.
+        static constexpr uint32_t kClimateBinding = 11;
 
         // Must match water_displace.comp's `Pc` struct (128 bytes, the
         // maximum): 5 × VkDeviceAddress (40) + 20 × u32/float (80) + the wake
@@ -87,7 +91,8 @@ namespace threepp::vulkan {
             uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests,
                                           // bit 3 clear the crest tags breakingCrests left,
                                           // bit 4 crestFoam: the drawn disp.xz into the UVs,
-                                          // bit 7 hullContact: the narrow blend to each hull's plane
+                                          // bit 7 hullContact: the narrow blend to each hull's plane,
+                                          // bit 8 the wave climate (kClimateBinding scales the cascades)
             float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
             float           boundKm1;     // 0 = none on that cascade
             float           crestSharpness;// DisplacedMesh::effectiveCrestSharpness (cwm only; 0 = off)

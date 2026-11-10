@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 
 namespace threepp {
 
@@ -350,8 +351,12 @@ namespace threepp {
         // binds). Crest sharpness draws cascades 0 and 1 with 1 + s of it.
         const float chop = effectiveChoppiness();
         const float chop01 = chop * (1.f + effectiveCrestSharpness());
+        // The wave climate's gains at a rest point (waveClimateGain), on every
+        // field of its cascade, as water_displace.comp applies them.
+        const bool climate = hasWaveClimate();
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
+            const std::array<float, 3> g = climate ? waveClimateGain(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
             for (uint32_t i = 0; i < 3; ++i) {
                 if ((cascadeMask & (1u << i)) == 0u) continue;
                 const CascadeField& cf = heightFields[i];
@@ -367,6 +372,7 @@ namespace threepp {
                 }
                 // Sharpness 0 keeps the historical sum, bit for bit.
                 const float c = (chop01 == chop) ? 1.f : (i < 2 ? chop01 : chop) / chop;
+                if (climate) v = {v.x * g[i], v.y * g[i]};
                 d.x += v.x * invTile * c;
                 d.y += v.y * invTile * c;
             }
@@ -408,27 +414,71 @@ namespace threepp {
 
         float total = 0.f;
         float bound = 0.f;// second-order harmonic, already in world metres
+        const std::array<float, 3> gq = climate ? waveClimateGain(bestX, bestZ) : std::array<float, 3>{1.f, 1.f, 1.f};
         for (uint32_t i = 0; i < 3; ++i) {
             if ((cascadeMask & (1u << i)) == 0u) continue;
             const CascadeField& cf = heightFields[i];
             if (!hasField(cf, cf.data)) continue;
             const float invTile = 1.f / cf.tileSize;
             const Vec2f p = cascadeDomain(i, bestX, bestZ);
-            const Vec2f h = sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
-                                        cascadeBicubic(i));
+            Vec2f h = sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
+                                  cascadeBicubic(i));
+            if (climate) h.x *= gq[i];
             total += h.x * invTile;
             if (cf.boundKm > 0.f && hasField(cf, cf.disp)) {
                 // eta2 = (k_m / 2)(eta^2 - |R[eta]|^2) of the drawn
                 // (waveScale'd) first-order field, R[eta] = -D at choppiness
                 // 1: water_displace.comp's boundHeight().
-                const Vec2f d = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile,
-                                            cascadeBicubic(i));
+                Vec2f d = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile,
+                                      cascadeBicubic(i));
+                if (climate) d = {d.x * gq[i], d.y * gq[i]};
                 const float s = invTile * params.waveScale;
                 const float e = h.x * s, rx = d.x * s, rz = d.y * s;
                 bound += 0.5f * cf.boundKm * (e * e - rx * rx - rz * rz);
             }
         }
         return total * params.waveScale + bound;
+    }
+
+    void DisplacedMesh::setWaveClimate(std::vector<float> data, uint32_t width, uint32_t height,
+                                       float originX, float originZ, float sizeX, float sizeZ) {
+        if (width < 2u || height == 0u || data.size() != size_t(width) * height * 4u) {
+            throw std::invalid_argument("DisplacedMesh::setWaveClimate: data must hold width x height x 4 floats");
+        }
+        if (!(sizeX > 0.f) || !(sizeZ > 0.f)) {
+            throw std::invalid_argument("DisplacedMesh::setWaveClimate: the map's extent must be positive");
+        }
+        const uint64_t v = waveClimate_.version + 1u;
+        waveClimate_ = WaveClimate{std::move(data), width, height, originX, originZ, sizeX, sizeZ, v};
+    }
+
+    void DisplacedMesh::clearWaveClimate() {
+        const uint64_t v = waveClimate_.version + 1u;
+        waveClimate_ = WaveClimate{};
+        waveClimate_.version = v;
+    }
+
+    std::array<float, 3> DisplacedMesh::waveClimateGain(float x, float z) const {
+        const WaveClimate& w = waveClimate_;
+        if (w.width == 0u) return {1.f, 1.f, 1.f};
+        // Texel centres at (i + 0.5) / width of the extent; clamp to the edge
+        // texels as the shaders' reads do (ocean_cascade.glsl, oceanClimate).
+        const float fx = std::clamp((x - w.originX) / w.sizeX * float(w.width) - 0.5f, 0.f, float(w.width - 1u));
+        const float fz = std::clamp((z - w.originZ) / w.sizeZ * float(w.height) - 0.5f, 0.f, float(w.height - 1u));
+        const uint32_t i0 = std::min(uint32_t(fx), w.width - 1u);
+        const uint32_t j0 = std::min(uint32_t(fz), w.height - 1u);
+        const uint32_t i1 = std::min(i0 + 1u, w.width - 1u);
+        const uint32_t j1 = std::min(j0 + 1u, w.height - 1u);
+        const float tx = fx - float(i0);
+        const float tz = fz - float(j0);
+        std::array<float, 3> g{};
+        for (uint32_t c = 0; c < 3; ++c) {
+            const auto at = [&](uint32_t i, uint32_t j) { return w.data[(size_t(j) * w.width + i) * 4u + c]; };
+            const float a = at(i0, j0) + (at(i1, j0) - at(i0, j0)) * tx;
+            const float b = at(i0, j1) + (at(i1, j1) - at(i0, j1)) * tx;
+            g[c] = a + (b - a) * tz;
+        }
+        return g;
     }
 
     bool DisplacedMesh::defaultRippleHeights() {

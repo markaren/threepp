@@ -4350,6 +4350,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             oceanCrestFoam        = false;
                             oceanWaveMod          = false;
                         }
+                        // The wave climate's map (binding 93), the same way.
+                        if (st->climateImage.view != VK_NULL_HANDLE) {
+                            if (st->climateImage.view == oceanClimateView) {
+                                oceanClimateView    = oceanFoamDummy.view;
+                                oceanClimateSampler = oceanFoamDummy.sampler;
+                                oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
+                                oceanClimate        = 0u;
+                            }
+                            destroyImage2D(ctx->allocator(), ctx->device(), st->climateImage);
+                        }
                         oceanWaveReflections = false;// the next ocean's sync sets it again
                         if (st->wake) {
                             if (st->wake->stateView() == oceanWakeView) oceanWakeView = wakeField_->dummyView();

@@ -343,6 +343,8 @@ namespace threepp {
         shadeParams.oceanWaveReflections = oceanWaveReflections;
         shadeParams.oceanDetile        = oceanDetile && oceanChopNormals;
         shadeParams.oceanWaveMod       = oceanWaveMod && oceanCrestFoam && oceanChopNormals;
+        shadeParams.oceanClimate       = (oceanChopNormals ? (oceanClimate & 1u) : 0u) |
+                                         (oceanCrestFoam && oceanChopNormals ? (oceanClimate & 2u) : 0u);
         shadeParams.denoise            = denoiseEnabled_;
         shadeParams.restirDI           = restirDIEnabled_;
         shadeParams.volFog             = deferredVolFog_;

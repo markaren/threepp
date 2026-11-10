@@ -1056,6 +1056,14 @@ namespace threepp {
         // DisplacedMesh::Params::waveModulation on this frame, with the crest
         // foam texture that carries its compression (the shade's spec constant 10).
         bool        oceanWaveMod          = false;
+        // The wave climate (DisplacedMesh::WaveClimate; deferred binding 93):
+        // the live ocean's map, or the foam dummy, with the layout it is in.
+        // oceanClimate: the shade's spec constant 11, bit 0 the map is on this
+        // frame, bit 1 its crest foam keeps the climate's levels.
+        VkImageView   oceanClimateView    = VK_NULL_HANDLE;
+        VkSampler     oceanClimateSampler = VK_NULL_HANDLE;
+        VkImageLayout oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
+        uint32_t      oceanClimate        = 0u;
         Image2D     crestFoamPatternImage{};
         // The wake field's state images (deferred shade binding 78): the live
         // ocean's, or WakeFieldPipeline's 1x1 dummy. The shade samples it only
@@ -4377,6 +4385,7 @@ namespace threepp {
         // resolves st.chopOn and points binding 13 to match (see the definition).
         void syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& st);
         void syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshState& st);// called by syncOceanChop
+        void syncOceanClimate(DisplacedMesh& dm, DisplacedMeshState& st);  // called by syncOceanChop
 
         // Per-frame: run the FFT chain → water_displace → BLAS rebuild for
         // one DisplacedMesh. Mirrors refreshSkinnedBlas's structure.

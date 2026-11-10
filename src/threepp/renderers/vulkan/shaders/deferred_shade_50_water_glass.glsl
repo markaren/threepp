@@ -943,7 +943,19 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         const vec2  gA       = along * pixAlong;
         const vec2  gX       = vec2(-along.y, along.x) * pixWorld;
         const float invTile  = 1.0 / pc.oceanFoamTileSize;
-        float       foamF    = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile).r;
+        float       foamF;
+        if ((kOceanClimate & 2u) != 0u) {
+            // The wave climate: the texture keeps the foam this water would
+            // have with cascades 0 and 1 at 1, 2/3 and 1/3 of the sea
+            // (foam_crest.comp, OCEAN_CLIMATE_LEVELS); take it at the map's
+            // level here, cascade 1's (the waves the fold foam counts are
+            // mostly its), linearly between levels and to none at 0.
+            const vec4  lv = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile);
+            const float L  = clamp(oceanClimate(oceanClimateMap, q).y, 0.0, 1.0) * 3.0;
+            foamF = L >= 2.0 ? mix(lv.b, lv.r, L - 2.0) : L >= 1.0 ? mix(lv.a, lv.b, L - 1.0) : lv.a * L;
+        } else {
+            foamF = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile).r;
+        }
         // What the vessels left on the water is the same stuff, so it is
         // drawn the same way: the wake field's film (how much foam its flow
         // has carried here) reads as a foam level. It stops just short of a

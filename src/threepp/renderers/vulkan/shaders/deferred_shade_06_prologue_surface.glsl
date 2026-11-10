@@ -134,12 +134,30 @@
             // slope spread the pixel cannot show scales with the slope.
             const vec2  qW   = worldPos.xz - gCrestDisp;
             const float invF = 1.0 / pc.oceanFoamTileSize;
-            const float c01  = textureGrad(oceanCrestFoam, qW * invF,
+            float       c01  = textureGrad(oceanCrestFoam, qW * invF,
                                            alongM * (pixAlong * invF),
                                            vec2(-alongM.y, alongM.x) * (pixWorld * invF)).g;
+            // The wave climate scales the long waves' compression with them
+            // (cascade 1's gain: the compression is mostly its waves').
+            if ((kOceanClimate & 1u) != 0u) c01 *= oceanClimate(oceanClimateMap, qW).y;
             const float a    = clamp(1.0 + c01, 0.5, 1.5);
             gKept    *= a * a;
             slopeVar *= a * a * a * a;
+        }
+        if ((kOceanClimate & 1u) != 0u) {
+            // ── WAVE CLIMATE (DisplacedMesh::WaveClimate, spec constant 11) ──
+            // The site's map scales this cascade's amplitude by its .z at the
+            // pixel's rest point (as water_displace.comp scales its geometry):
+            // the slope by s, the slope spread the pixel cannot show by s^2.
+            // Not the banked short waves no cascade holds (centimetres long):
+            // they come to equilibrium with the local wind within metres of
+            // fetch (Cox and Munk's slope statistics follow the wind, not the
+            // fetch), so the glitter of sheltered water stays a wind's. The
+            // map changes over tens of metres, so its own gradient is left out.
+            const float s  = oceanClimate(oceanClimateMap, worldPos.xz - gCrestDisp).z;
+            const float bk = oceanClimateBanked(oceanClimateMap);
+            gKept    *= s;
+            slopeVar  = s * s * max(slopeVar - bk, 0.0) + min(slopeVar, bk);
         }
         // ── WAKE FIELD ────────────────────────────────────────────────────────
         // Where something has churned the water the short wind waves are gone

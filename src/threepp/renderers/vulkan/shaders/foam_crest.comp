@@ -55,7 +55,21 @@ layout(set = 0, binding = 3) uniform sampler2D height1;
 // cascades 0 and 1 at the texel, -div D (choppiness 1, waveScale), for the
 // shade's wave modulation (DisplacedMesh::Params::waveModulation; 0 with it
 // off). The shade's mips average both.
+#ifdef OCEAN_CLIMATE_LEVELS
+// The wave climate's variant (DisplacedMesh::WaveClimate, compiled with
+// OCEAN_CLIMATE_LEVELS=1 and run for an ocean that had a climate map when its
+// crest foam was made): .b and .a are the foam of the same water with
+// cascades 0 and 1 scaled by 2/3 and by 1/3, each formed and aged as .r is.
+// This texture is laid over rest space and repeats with cascade 0's tile, so
+// a texel is the same parcel of every tile and cannot hold one place's foam;
+// the levels hold the foam each sea state would have, and the shade picks
+// between them by the climate where it is drawn. Scaling cascades 0 and 1 by
+// L scales grad D by L: the fold measure is J = det(I + l L A) with the CWM
+// limiter's l for L A, and the steepness measure L eps.
+layout(set = 0, binding = 4, rgba16f) uniform image2D foam;
+#else
 layout(set = 0, binding = 4, rg16f) uniform image2D foam;
+#endif
 
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
@@ -177,6 +191,34 @@ float crestMeasure(vec2 q, vec2 t) {
     return pc.threshold - (1.0 + l * trA + l * l * detA);
 }
 
+#ifdef OCEAN_CLIMATE_LEVELS
+// The levels' scales: .r's 1, then .b's and .a's (deferred_shade_50_water_glass's
+// crest foam read interpolates between them, and to no foam at 0).
+const vec3 kLevels = vec3(1.0, 2.0 / 3.0, 1.0 / 3.0);
+
+// The fold measure (foldMeasure) at the three levels, from one grad D.
+vec3 foldLevels(float trA, float detA) {
+    vec3 m;
+    for (int k = 0; k < 3; ++k) {
+        const float L = kLevels[k];
+        const float l = cwmLimit(L * trA, L * L * detA, 1.0 + pc.sharpness);
+        m[k] = pc.threshold - (1.0 + l * L * trA + l * l * L * L * detA);
+    }
+    return m;
+}
+
+// crestMeasure at the three levels (the crest's direction does not change
+// with a uniform scale of the waves, only how near it is to breaking).
+vec3 crestLevels(vec2 q, vec2 t) {
+    float jxx, jzz, jxz, g1;
+    gradD(q, jxx, jzz, jxz, g1);
+    float an;
+    const vec2 ts = crestDir(jxx, jzz, jxz, an);
+    if (an < 0.3 || abs(dot(ts, t)) < 0.94) return vec3(-1e30);
+    return foldLevels((jxx + jzz) * pc.steepScale, (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale);
+}
+#endif
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.res) || px.y >= int(pc.res)) return;
@@ -246,9 +288,41 @@ void main() {
             }
         }
     }
+#ifdef OCEAN_CLIMATE_LEVELS
+    // The levels below 1, as the measure above (.r keeps exactly its own).
+    vec3 lv = (eps - pc.threshold / kLevels) * kLevels;// L eps - threshold
+    if ((pc.model & 2u) != 0u) {
+        const float trA = (jxx + jzz) * pc.steepScale;
+        const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
+        lv = foldLevels(trA, detA);
+        if ((pc.model & 4u) != 0u) {
+            float an;
+            const vec2 t = crestDir(jxx, jzz, jxz, an);
+            if (an >= 0.3) {
+                const vec3  own  = lv;
+                const float lift = 0.5 / pc.invRamp;
+                const int kN = 4;
+                for (int i = 1; i <= kN; ++i) {
+                    const vec2 s = t * (pc.crestHalf * float(i) / float(kN));
+                    const vec3 m = max(crestLevels(q + s, t), crestLevels(q - s, t));
+                    lv = max(lv, min(m, own + lift));
+                }
+            }
+        }
+    }
+    const vec4 old = imageLoad(foam, px);
+#else
+    const vec2 old = imageLoad(foam, px).rg;
+#endif
     const float deposit = pc.maxFoam * clamp(measure * pc.invRamp, 0.0, 1.0) * hullFade;
-    float f = max(imageLoad(foam, px).r * pc.decay, deposit);
+    float f = max(old.r * pc.decay, deposit);
     if (f < 1.0 / 1024.0) f = 0.0;// below anything the shade draws: a clean zero
     const float c01 = (pc.model & 1u) != 0u ? -(jxx + jzz) * pc.steepScale : 0.0;
+#ifdef OCEAN_CLIMATE_LEVELS
+    vec2 fl = max(old.ba * pc.decay, pc.maxFoam * clamp(lv.yz * pc.invRamp, 0.0, 1.0) * hullFade);
+    fl = mix(fl, vec2(0.0), lessThan(fl, vec2(1.0 / 1024.0)));
+    imageStore(foam, px, vec4(f, c01, fl));
+#else
     imageStore(foam, px, vec4(f, c01, 0.0, 0.0));
+#endif
 }

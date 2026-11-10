@@ -561,6 +561,10 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
             // Crest foam's texture (deferred binding 91) starts on the same dummy.
             oceanCrestFoamView    = oceanFoamDummy.view;
             oceanCrestFoamSampler = oceanFoamDummy.sampler;
+            // The wave climate's map (binding 93) too.
+            oceanClimateView    = oceanFoamDummy.view;
+            oceanClimateSampler = oceanFoamDummy.sampler;
+            oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
             // The wake field's stand-in (binding 78), same contract.
             {
                 VkCommandBuffer cb = beginOneShot();

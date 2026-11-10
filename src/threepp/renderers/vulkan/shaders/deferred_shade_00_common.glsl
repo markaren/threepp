@@ -205,6 +205,11 @@ float gCrestEps = -1e30;
 layout(set = 0, binding = 91) uniform sampler2D oceanCrestFoam;
 layout(set = 0, binding = 92) uniform sampler2D oceanCrestFoamPattern;
 vec2 gCrestDisp = vec2(0.0);
+// The wave climate (DisplacedMesh::WaveClimate; read only where kOceanClimate
+// is set, the foam dummy bound otherwise): the site's map of the cascades'
+// gains with its header row (ocean_climate.glsl), read at a pixel's rest point.
+layout(set = 0, binding = 93) uniform sampler2D oceanClimateMap;
+#include "ocean_climate.glsl"
 // Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
 // (designed for a 4 m world mapping), G = ridged lace/filament pattern
 // (12 m mapping). Replaces the per-pixel procedural noise octaves in the
@@ -338,6 +343,11 @@ layout(constant_id = 9) const uint kOceanDetile = 0u;
 // compression in .g): the fine cascade's per-pixel slope is steeper on the
 // long waves' crests. 0 = the slope as the cascade has it.
 layout(constant_id = 10) const uint kOceanWaveMod = 0u;
+// The wave climate this frame (DisplacedMesh::WaveClimate): bit 0 the fine
+// cascade's per-pixel slope is scaled by the map's .z (with the chop
+// normals), bit 1 the crest foam is read at the map's level (its texture
+// keeps the foam of the sea at 1, 2/3 and 1/3 in .r, .b, .a). 0 = no map.
+layout(constant_id = 11) const uint kOceanClimate = 0u;
 const bool kSM = kShadowMaps != 0u;
 bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
 // probe_common.glsl's own gate, made the same test here (its default is the UBO).
