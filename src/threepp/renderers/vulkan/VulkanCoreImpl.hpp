@@ -1050,9 +1050,6 @@ namespace threepp {
         // DisplacedMesh::Params::waveReflections on this frame (the shade's
         // spec constant 9): the water's mirror ray shades water it meets.
         bool        oceanWaveReflections  = false;
-        // DisplacedMesh::Params::detile on this frame, with the chop normals
-        // (the shade's spec constant 10).
-        bool        oceanDetile           = false;
         // The wave climate (DisplacedMesh::WaveClimate; deferred binding 93):
         // the live ocean's map, or the foam dummy, with the layout it is in.
         // oceanClimate: the shade's spec constant 12, bit 0 the map is on this

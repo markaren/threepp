@@ -90,11 +90,6 @@ namespace threepp {
         return env < 0 ? params.shortWaves : env == 1;
     }
 
-    bool DisplacedMesh::detileOn() const {
-        static const int env = envSwitch("THREEPP_OCEAN_DETILE");
-        return env < 0 ? params.detile : env == 1;
-    }
-
     bool DisplacedMesh::shortWaveSpectrumOn() const {
         static const int env = envSwitch("THREEPP_OCEAN_SHORT_WAVE_SPECTRUM");
         return env < 0 ? params.shortWaveSpectrum : env == 1;

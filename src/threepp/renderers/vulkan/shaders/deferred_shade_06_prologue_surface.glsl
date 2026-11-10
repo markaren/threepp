@@ -96,8 +96,8 @@
                                            vec2(-alongM.y, alongM.x) * (pixWorld * invTile));
         float slopeVar = max(mom.a - dot(mom.gb, mom.gb), 0.0);
         vec2 gKept = mom.gb;
-        if (kOceanDetile != 0u) {
-            // ── DETILE (DisplacedMesh::Params::detile, spec constant 10) ──────
+        {
+            // ── DETILE ──────────────────────────────────────────────────────
             // The fine cascade repeats every tile, a few metres: from a mast
             // or a drone the same ripples come round again and again, a
             // scale pattern. A second placement of the same cascade, turned

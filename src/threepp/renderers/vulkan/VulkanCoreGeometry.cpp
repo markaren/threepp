@@ -5884,7 +5884,6 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
             // it on (spec constant 7): every other frame and every scene
             // without an ocean keeps the kernel it had.
             oceanChopNormals = st.chopOn;
-            oceanDetile      = st.chopOn && dm.detileOn();// the shade's spec constant 10
         }
 
 void VulkanRenderer::Impl::syncOceanClimate(DisplacedMesh& dm, DisplacedMeshState& st) {

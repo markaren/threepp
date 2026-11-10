@@ -148,10 +148,6 @@ namespace threepp_py {
                                "Cox and Munk's at the wind it is given. Needs chop_normals for the part no texel "
                                "holds. Read when the renderer first sees the ocean: set it before the first frame. "
                                "THREEPP_OCEAN_SHORT_WAVE_SPECTRUM=1/0 overrides it.")
-                .def_readwrite("detile", &DisplacedMesh::Params::detile,
-                               "Draw the fine cascade's per-pixel slope as two placements of it, summed, so its "
-                               "tile's period does not show from above (default False). Needs chop_normals. "
-                               "Live-tunable; THREEPP_OCEAN_DETILE=1/0 overrides it.")
                 .def_readwrite("wave_reflections", &DisplacedMesh::Params::waveReflections,
                                "The water's mirror ray shades the wave it meets as water instead of passing "
                                "through it to the seabed (default False): no dark slits along steep crests. "
@@ -183,7 +179,8 @@ namespace threepp_py {
                 .def_readwrite("chop_normals", &DisplacedMesh::Params::chopNormals,
                                "Shade the surface the choppy displacement draws: exact slope and displacement-gradient "
                                "fields give the vertex normal, the fine cascade's slope moments the per-pixel one (what a "
-                               "pixel cannot hold goes to roughness). False (default) = the height-only normals. "
+                               "pixel cannot hold goes to roughness), read as two placements of the cascade so its "
+                               "tile's period does not show. False (default) = the height-only normals. "
                                "Live-tunable; THREEPP_OCEAN_CHOP_NORMALS=1 makes True the default.")
                 .def_readwrite("texture_size_0", &DisplacedMesh::Params::textureSize0, "Cascade-0 FFT resolution (power of two).")
                 .def_readwrite("texture_size_1", &DisplacedMesh::Params::textureSize1, "Cascade-1 FFT resolution (power of two).")

@@ -341,7 +341,6 @@ namespace threepp {
         shadeParams.oceanFoamTileSize  = oceanFoamTileSize;
         shadeParams.oceanCrestFoam     = oceanCrestFoam;
         shadeParams.oceanWaveReflections = oceanWaveReflections;
-        shadeParams.oceanDetile        = oceanDetile && oceanChopNormals;
         shadeParams.oceanClimate       = (oceanChopNormals ? (oceanClimate & 1u) : 0u) |
                                          (oceanCrestFoam && oceanChopNormals ? (oceanClimate & 2u) : 0u);
         shadeParams.denoise            = denoiseEnabled_;

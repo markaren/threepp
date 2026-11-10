@@ -172,14 +172,6 @@ namespace threepp {
             // first sees the mesh. THREEPP_OCEAN_SHORT_WAVES = 1 / 0 forces it.
             bool shortWaves = false;
 
-            // Detile (default OFF). ON draws the fine cascade's per-pixel
-            // slope as two placements of it, turned, scaled and shifted
-            // against each other and summed, so its tile's period does not
-            // show from above. The same sea statistically (independent
-            // samples of one spectrum, variance kept). Needs chopNormals.
-            // THREEPP_OCEAN_DETILE = 1 / 0 forces it. Live-tunable.
-            bool detile = false;
-
             // The measured short-wave spectrum (default OFF, the historical
             // Phillips tail alone). The k^-3 tail carries a constant slope
             // variance per octave and no dependence on the wind, while the
@@ -323,7 +315,9 @@ namespace threepp {
             // product of the displaced surface's tangents, and the fine
             // cascade's per-pixel slope comes from a mip chain of slope moments
             // (mean tilts the normal, the variance a pixel cannot hold goes to
-            // roughness). Near a fold the chop correction fades back to the
+            // roughness), read as two placements of the cascade, turned,
+            // scaled and shifted against each other and summed, so its tile's
+            // period does not show from above. Near a fold the chop correction fades back to the
             // rest slope and its remainder goes to roughness. false = the
             // height-only finite-difference normals, the renderer's original
             // path bit for bit: the feature's images, pipelines and shade
@@ -357,7 +351,6 @@ namespace threepp {
         [[nodiscard]] bool crestFoamOn() const;
         [[nodiscard]] bool waveReflectionsOn() const;
         [[nodiscard]] bool shortWavesOn() const;
-        [[nodiscard]] bool detileOn() const;
         [[nodiscard]] bool shortWaveSpectrumOn() const;
         [[nodiscard]] bool hullContactOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under

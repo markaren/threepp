@@ -334,10 +334,6 @@ layout(constant_id = 8) const uint kOceanCrestFoam = 0u;
 // waveReflections): the water's own mirror ray shades water it meets instead
 // of passing through it. 0 keeps the pass-through.
 layout(constant_id = 9) const uint kOceanWaveReflect = 0u;
-// 1 = an ocean's fine cascade is drawn without its tile's period this frame
-// (DisplacedMesh::Params::detile, with the chop normals): the per-pixel
-// slope is two placements of the cascade, summed. 0 = one placement.
-layout(constant_id = 10) const uint kOceanDetile = 0u;
 // The wave climate this frame (DisplacedMesh::WaveClimate): bit 0 the fine
 // cascade's per-pixel slope is scaled by the map's .z (with the chop
 // normals), bit 1 the crest foam is read at the map's level (its texture

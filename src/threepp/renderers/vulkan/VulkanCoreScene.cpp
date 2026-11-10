@@ -4337,7 +4337,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             oceanFineHeightSampler = oceanFineHeightDummy.sampler;
                             oceanFineTileSize      = 0.0f;
                             oceanChopNormals       = false;
-                            oceanDetile            = false;
                         }
                         if (st->foamImage.view == oceanFoamView) {
                             oceanFoamView     = oceanFoamDummy.view;
