@@ -222,6 +222,26 @@ namespace threepp {
             // modulated middle cascade. THREEPP_OCEAN_WAVE_MODULATION = 1 / 0
             // forces it. Live-tunable.
             bool waveModulation = false;
+
+            // Crest sharpness (default 0, off). A LOOK CONTROL, not physics:
+            // a sum of linear waves, even drawn as the Lagrangian sea of the
+            // Choppy Wave Model, keeps rounded crests, and the sharp, short-
+            // crested chop of a real wind sea comes from nonlinear steepening
+            // this surface does not model. s > 0 draws the horizontal
+            // displacement of cascades 0 and 1 with a choppiness of 1 + s
+            // instead of 1, so the crests pinch into ridges and the troughs
+            // widen, under the CWM limiter (needs cwm; nothing happens
+            // without it): where the Jacobian of the drawn map would fall
+            // under kCwmMinJacobian the vertex takes the largest choppiness
+            // that keeps it there, so a crest becomes a ridge and never loops.
+            // Heights are untouched: the wave height, and what a sensor
+            // ranges to at a given rest point, stay as they are; only where a
+            // crest is drawn moves. The vertex normals, the crest foam's rest
+            // points and sampleHeight's inversion all use the drawn
+            // choppiness; the fine cascade keeps choppiness 1.
+            // THREEPP_OCEAN_CREST_SHARPNESS = <s> forces it for every ocean.
+            // Live-tunable.
+            float crestSharpness = 0.f;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -321,6 +341,10 @@ namespace threepp {
         // The horizontal-displacement scale the surface is drawn with: 1 under
         // the Choppy Wave Model, else params.choppiness.
         [[nodiscard]] float effectiveChoppiness() const;
+        // Params::crestSharpness as drawn: its environment override, else the
+        // field, held to [0, 4]; 0 without the Choppy Wave Model (whose
+        // limiter it needs).
+        [[nodiscard]] float effectiveCrestSharpness() const;
 
         // The CWM limiter's floor on the Jacobian of the drawn map.
         static constexpr float kCwmMinJacobian = 0.1f;

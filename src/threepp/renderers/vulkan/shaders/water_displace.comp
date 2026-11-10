@@ -104,7 +104,7 @@ layout(push_constant, scalar) uniform Pc {
                             // bit 6 waveModulation (OCEAN_CHOP only): cascade 1 rides cascade 0
     float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
     float   boundKm1;
-    uint    _pad0;
+    float   crestSharpness; // DisplacedMesh::Params::crestSharpness (bit 0 only): cascades 0+1 at choppiness 1 + s
     UvBuf   uvOut;          // breakingCrests: (crest steepness, -1) per vertex; crestFoam: disp.xz
 } pc;
 
@@ -420,15 +420,28 @@ void main() {
         bGZ = (tU.w - tD.w) * iz;
         // Choppy Wave Model (Nouguier, Guerin and Chapron 2009): the
         // first-order Lagrangian surface is x = q + D(q), choppiness 1,
-        // limited per vertex so the drawn map never folds.
+        // limited per vertex so the drawn map never folds. Crest sharpness
+        // (a look control, DisplacedMesh::Params::crestSharpness) raises the
+        // choppiness cascades 0 and 1 are drawn with to 1 + s under the same
+        // limiter: where J would pass under the floor the vertex takes the
+        // largest choppiness that keeps it there, so the crest becomes a
+        // ridge and never loops. A is cascades 0+1 only, so that is the
+        // drawn map the limit holds for; the fine cascade keeps choppiness
+        // min(l, 1). Everything below that describes the drawn surface (the
+        // vertex normal, the UV channel's displacement) reads wmLambda.
         if ((pc.waveModel & 1u) != 0u)
-            wmLambda = cwmLimit(aXX + aZZ, aXX * aZZ - aXZ * aZX, 1.0);
+            wmLambda = cwmLimit(aXX + aZZ, aXX * aZZ - aXZ * aZX, 1.0 + pc.crestSharpness);
     }
 
     vec3 disp;
     if ((pc.waveModel & 3u) != 0u) {
         const vec3 f = sampleFineRaw(rest.xz);
-        disp = vec3(wmLambda * (wmC.x + f.x), wmC.y + f.y, wmLambda * (wmC.z + f.z));
+        if (pc.crestSharpness > 0.0) {
+            const float lf = min(wmLambda, 1.0);
+            disp = vec3(wmLambda * wmC.x + lf * f.x, wmC.y + f.y, wmLambda * wmC.z + lf * f.z);
+        } else {
+            disp = vec3(wmLambda * (wmC.x + f.x), wmC.y + f.y, wmLambda * (wmC.z + f.z));
+        }
     } else {
         disp = sampleDisplacement(rest.xz);
     }

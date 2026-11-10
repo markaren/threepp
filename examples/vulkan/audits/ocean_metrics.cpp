@@ -746,6 +746,8 @@ namespace {
         // Model (DisplacedMesh::effectiveChoppiness).
         const double chop = ocean->effectiveChoppiness();
         const bool cwmOn = ocean->cwmOn();
+        // Crest sharpness: cascades 0+1 drawn at choppiness 1 + s under the limiter.
+        const double sharp = ocean->effectiveCrestSharpness();
         const bool breakOn = ocean->breakingCrestsOn();
         // The engine's crest stencil: the vertex grid's spacing.
         const double meshEps = double(opt.size) / double(std::max(2u, opt.resolution) - 1u);
@@ -773,9 +775,9 @@ namespace {
                     "frames=%d at %.1f Hz, dispersion grid %d^2 over %.1f m, foam at %.0f Hz\n",
                     U, double(cfg.fetch), chop, theta, P.tileSize0, P.tileSize1, P.tileSize2,
                     P.textureSize0, P.textureSize1, P.textureSize2, nFrames, cfg.hz, D, W, cfg.foamHz);
-        std::printf("wave model: hs-fix %s, cwm %d, bound waves %d, breaking crests %d\n",
+        std::printf("wave model: hs-fix %s, cwm %d, bound waves %d, breaking crests %d, crest sharpness %.2f\n",
                     std::getenv("THREEPP_OCEAN_HS_FIX") ? std::getenv("THREEPP_OCEAN_HS_FIX") : "params",
-                    int(cwmOn), int(ocean->boundWavesOn()), int(breakOn));
+                    int(cwmOn), int(ocean->boundWavesOn()), int(breakOn), sharp);
         std::fflush(stdout);
 
         auto renderAt = [&](double t) {
@@ -1066,11 +1068,15 @@ namespace {
                     // limiter's (water_displace.comp), from cascades 0+1.
                     double lam = chop;
                     if (cwmOn) {
-                        lam = cwmLimit(a01[0] + a01[3], a01[0] * a01[3] - a01[1] * a01[2], 1.0);
-                        if (lam < 1.0) ++jLimited;
+                        lam = cwmLimit(a01[0] + a01[3], a01[0] * a01[3] - a01[1] * a01[2], 1.0 + sharp);
+                        if (lam < 1.0 + sharp) ++jLimited;
                     }
-                    const double m00 = 1 + lam * axx, m01 = lam * axz;
-                    const double m10 = lam * azx, m11 = 1 + lam * azz;
+                    // With sharpness the fine cascade keeps min(lam, 1) (water_displace.comp).
+                    const double lf = sharp > 0 ? std::min(lam, 1.0) : lam;
+                    const double m00 = sharp > 0 ? 1 + lam * a01[0] + lf * (axx - a01[0]) : 1 + lam * axx;
+                    const double m01 = sharp > 0 ? lam * a01[1] + lf * (axz - a01[1]) : lam * axz;
+                    const double m10 = sharp > 0 ? lam * a01[2] + lf * (azx - a01[2]) : lam * azx;
+                    const double m11 = sharp > 0 ? 1 + lam * a01[3] + lf * (azz - a01[3]) : 1 + lam * azz;
                     const double J = m00 * m11 - m01 * m10;
                     const double J01 = (1 + lam * a01[0]) * (1 + lam * a01[3]) - lam * lam * a01[1] * a01[2];
                     if (breakOn && J > 0) {
@@ -1621,7 +1627,7 @@ namespace {
         out.push_back({"area with J < 0, all cascades", jf, 0.0, 0.001, "< 0.1%", "", "research_targets 1.3"});
         if (cwmOn)
             out.push_back({"  area where the CWM limiter binds", jSamples ? double(jLimited) / jSamples : 0.0, 1, 0,
-                           "", "", "choppiness < 1 there (water_displace.comp cwmLimit)"});
+                           "", "", "choppiness < 1 + sharpness there (water_displace.comp cwmLimit)"});
         out.push_back({"  area with J < 0, cascades 0+1 (foam's)", jSamples ? double(jNeg01) / jSamples : 0.0, 1, 0,
                        "", "", "foam_world.comp sees these"});
         for (int c = 0; c < 3; ++c)

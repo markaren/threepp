@@ -108,6 +108,15 @@ namespace threepp {
         return cwmOn() ? 1.f : params.choppiness;
     }
 
+    float DisplacedMesh::effectiveCrestSharpness() const {
+        static const float env = [] {
+            const char* e = std::getenv("THREEPP_OCEAN_CREST_SHARPNESS");
+            return (e && *e) ? static_cast<float>(std::atof(e)) : -1.f;
+        }();
+        if (!cwmOn()) return 0.f;
+        return std::clamp(env >= 0.f ? env : params.crestSharpness, 0.f, 4.f);
+    }
+
     namespace {
 
         struct Vec2f {
@@ -323,8 +332,9 @@ namespace threepp {
         // is the full displacement (choppiness 1); the shader's per-vertex
         // limiter, which lowers it where the Jacobian would fall under
         // kCwmMinJacobian, is not mirrored here (the audit reports where it
-        // binds).
+        // binds). Crest sharpness draws cascades 0 and 1 with 1 + s of it.
         const float chop = effectiveChoppiness();
+        const float chop01 = chop * (1.f + effectiveCrestSharpness());
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
             for (uint32_t i = 0; i < 3; ++i) {
@@ -340,8 +350,10 @@ namespace threepp {
                     v = {kOceanCascade1RotCos * v.x + kOceanCascade1RotSin * v.y,
                          -kOceanCascade1RotSin * v.x + kOceanCascade1RotCos * v.y};
                 }
-                d.x += v.x * invTile;
-                d.y += v.y * invTile;
+                // Sharpness 0 keeps the historical sum, bit for bit.
+                const float c = (chop01 == chop) ? 1.f : (i < 2 ? chop01 : chop) / chop;
+                d.x += v.x * invTile * c;
+                d.y += v.y * invTile * c;
             }
             d.x *= chop;
             d.y *= chop;

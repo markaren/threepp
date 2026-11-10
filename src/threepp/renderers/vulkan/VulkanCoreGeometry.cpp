@@ -3847,6 +3847,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.uvOut          = (crestsOut || crestsClear || foamOut) ? st.blas->uv.address : 0ull;
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
+            pc.crestSharpness = cwmOn ? dm.effectiveCrestSharpness() : 0.f;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.chopOn ? st.displaceChopDS : st.displaceDS, pc, st.chopOn);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);

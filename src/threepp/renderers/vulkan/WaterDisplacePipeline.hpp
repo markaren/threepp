@@ -82,7 +82,7 @@ namespace threepp::vulkan {
                                           // bit 4 crestFoam: the drawn disp.xz into the UVs
             float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
             float           boundKm1;     // 0 = none on that cascade
-            uint32_t        _pad0;
+            float           crestSharpness;// DisplacedMesh::effectiveCrestSharpness (cwm only; 0 = off)
             VkDeviceAddress uvOut;        // the mesh's UV buffer: breakingCrests writes (eps, -1) here, crestFoam disp.xz
         };
 
