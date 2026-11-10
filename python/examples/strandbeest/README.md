@@ -30,7 +30,10 @@ python strandbeest_walk.py                           # window: drag to orbit
 python strandbeest_walk.py --wind 9                  # a stronger wind, m/s
 python strandbeest_walk.py --telemetry --seconds 30  # no window: the run in numbers
 python strandbeest_walk.py --shot 12 --out walk.png  # headless still at t = 12 s
+python strandbeest_walk.py --gl                      # the GLRenderer where Vulkan is available
 ```
+
+It draws with the VulkanRenderer where this threepp has one, else with the GLRenderer.
 
 ## How it is simulated
 

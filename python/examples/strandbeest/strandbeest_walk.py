@@ -4,12 +4,16 @@
     python strandbeest_walk.py --wind 9                 # a stronger wind (m/s; 6 only rocks it, 19 blows it over)
     python strandbeest_walk.py --telemetry --seconds 30 # no window: the run in numbers
     python strandbeest_walk.py --shot 12 --out walk.png # headless still at t = 12 s
+    python strandbeest_walk.py --gl                     # the GLRenderer where Vulkan is available
+
+It draws with the VulkanRenderer where this threepp has one, else with the GLRenderer.
 
 The machine is ../rigs/strandbeest_rig.py: Theo Jansen's linkage, twenty legs on one crankshaft, as
 one PhysX articulation whose loops are closed by joints between its own links. The wind pushes on
 the sails; the feet's grip on the ground turns the legs and the crank. It surges in the gusts and
 slows in the lulls, and where the wind is too weak to lift it over the gait's humps it rocks in
-place. The sand is a height field with gentle swells.
+place. The sand is a height field with gentle swells, under a clear sky built in numpy that
+lights the scene (an environment map) and is its backdrop.
 
 Build the model once for the lashed canes (plain tubes are drawn without it):
 
@@ -30,6 +34,8 @@ import strandbeest_rig as SB  # noqa: E402
 HZ = 480                       # physics rate
 FRAME = 1.0 / 60.0             # the sails and the picture
 X0, X1, Z0, Z1, CELL = -40.0, 200.0, -50.0, 50.0, 0.5
+SUN = (42.0, 39.0, 78.0)       # where the sun shines from (the light's position; it aims at the origin)
+SKY_FILL = 0.7                 # scene.environment_intensity: the sky lights as much as the HemisphereLight it replaced
 
 
 def parse(argv=None):
@@ -40,6 +46,7 @@ def parse(argv=None):
     ap.add_argument("--shot", type=float, default=None, help="headless still at this time, s")
     ap.add_argument("--out", default="strandbeest_walk.png")
     ap.add_argument("--size", default="1280x720")
+    ap.add_argument("--gl", action="store_true", help="draw with the GLRenderer even where Vulkan is available")
     return ap.parse_args(argv)
 
 
@@ -133,25 +140,53 @@ def sand_normal_map(tp, n=256, seed=4):
     return tex
 
 
+def sky_texture(tp, h=256):
+    """A clear sky over sand as an equirect map of linear radiance (row 0 is straight down).
+
+    Tone mapped (ACES, exposure 1), the horizon is the fog's colour, so far sand fades into it, and
+    the zenith a pale blue, with a soft warm aureole round the sun. Below the horizon, hazy far sand
+    for the background past the sand's edge, then the near sand's bounce. The sun itself is the
+    DirectionalLight, not in the map."""
+    el = ((np.arange(h) + 0.5) / h - 0.5)[:, None] * np.pi
+    az = ((np.arange(2 * h) + 0.5) / (2 * h) - 0.5)[None, :] * 2 * np.pi
+    d = np.stack([np.cos(el) * np.cos(az), np.sin(el) * np.ones_like(az), np.cos(el) * np.sin(az)], -1)
+    horizon, zenith = np.array([0.389, 0.511, 0.682]), np.array([0.128, 0.238, 0.515])
+    far, near = np.array([0.446, 0.388, 0.305]), np.array([0.103, 0.059, 0.024])
+    up = (np.sin(np.clip(el, 0.0, None)) ** 0.5)[..., None]
+    haze = np.clip(-el / math.radians(2.0), 0.0, 1.0)[..., None]                       # the first 2 degrees down
+    deep = np.clip((-el - math.radians(2.0)) / math.radians(13.0), 0.0, 1.0)[..., None]
+    sky = horizon * (1.0 - up) + zenith * up
+    ground = (horizon * (1.0 - haze) + far * haze) * (1.0 - deep) + near * deep
+    s = np.array(SUN) / np.linalg.norm(SUN)
+    angle = np.arccos(np.clip(d @ s, -1.0, 1.0))
+    aureole = 0.45 * np.exp(-(angle / math.radians(12.0)) ** 2) * (el >= 0.0)
+    L = np.where(el[..., None] >= 0.0, sky, ground) + aureole[..., None] * np.array([0.60, 0.50, 0.36])
+    return tp.float_texture(np.ascontiguousarray(L, np.float32))
+
+
 class Scene:
-    def __init__(self, tp, walk, w, h, headless):
-        self.tp, self.walk = tp, walk
-        self.canvas = tp.Canvas("threepp - Strandbeest", width=w, height=h, antialiasing=4, headless=headless, vsync=not headless)
-        r = self.r = tp.GLRenderer(self.canvas)
+    def __init__(self, tp, walk, w, h, headless, vulkan):
+        self.tp, self.walk, self.vulkan = tp, walk, vulkan
+        # Vulkan presents without vsync (MAILBOX), as its other examples do. It traces the sun's
+        # shadow and smooths edges with TAA, so the canvas's antialiasing, the shadow map's size and
+        # bias and the shadow box follow() slides are read by GL only.
+        self.canvas = tp.Canvas("threepp - Strandbeest", width=w, height=h, antialiasing=4, headless=headless,
+                                vsync=not (headless or vulkan))
+        r = self.r = tp.VulkanRenderer(self.canvas) if vulkan else tp.GLRenderer(self.canvas)
         r.shadow_map_enabled = True
         r.tone_mapping = tp.ToneMapping.ACESFilmic
         r.tone_mapping_exposure = 1.0
         s = self.scene = tp.Scene()
-        s.background = 0xb9c6d3
+        s.background = s.environment = sky_texture(tp)       # the sky is the fill light and the backdrop
+        s.environment_intensity = SKY_FILL
         s.set_fog(tp.Color(0xb9c6d3), 70.0, 240.0)
-        s.add(tp.HemisphereLight(0xcfdcee, 0x8a6a45, 0.9))
         self.sun = tp.DirectionalLight(0xffe2b8, 2.6)
         self.sun.cast_shadow = True
         self.sun.shadow.map_size.set(4096, 4096)
         self.sun.shadow.bias = -0.0004
         # the sun shines at the world's origin from far off; its shadow box is slid along with the machine
-        self.sun.position.set(42.0, 39.0, 78.0)
-        z = np.array([42.0, 39.0, 78.0]) / np.linalg.norm([42.0, 39.0, 78.0])
+        self.sun.position.set(*SUN)
+        z = np.array(SUN) / np.linalg.norm(SUN)
         self._sun_x = np.cross([0.0, 1.0, 0.0], z) / np.linalg.norm(np.cross([0.0, 1.0, 0.0], z))
         self._sun_y = np.cross(z, self._sun_x)
         s.add(self.sun)
@@ -209,22 +244,25 @@ class Scene:
         self.r.render(self.scene, self.cam)
 
 
-def still(tp, a, w, h):
+def still(tp, a, w, h, vulkan):
     from threepp import capture
-    sc = Scene(tp, Walk(tp, a), w, h, headless=True)
+    sc = Scene(tp, Walk(tp, a), w, h, headless=True, vulkan=vulkan)
     while sc.walk.t < a.shot - 1e-9:
         sc.advance(FRAME)
     sc.follow()
     sc.cam.look_at(*[float(v) for v in sc.target])
-    for _ in range(3):
+    if vulkan:
+        sc.r.sim_time = sc.walk.t       # the walk's clock, not the wall's, for TAA and anything else timed
+    for _ in range(16 if vulkan else 3):  # Vulkan: let TAA settle on the held pose
         sc.render()
     capture.write_png(a.out, np.ascontiguousarray(sc.r.read_pixels()))
     o, R = sc.walk.machine.frame()
-    print(f"wrote {a.out}: t = {sc.walk.t:.1f} s, x = {o[0]:+.2f} m, loop gap {sc.walk.machine.loop_gap() * 1000:.1f} mm")
+    print(f"wrote {a.out} ({'Vulkan' if vulkan else 'GL'}): t = {sc.walk.t:.1f} s, x = {o[0]:+.2f} m, "
+          f"loop gap {sc.walk.machine.loop_gap() * 1000:.1f} mm")
 
 
-def window(tp, a, w, h):
-    state = {"sc": Scene(tp, Walk(tp, a), w, h, headless=False), "debt": 0.0}
+def window(tp, a, w, h, vulkan):
+    state = {"sc": Scene(tp, Walk(tp, a), w, h, headless=False, vulkan=vulkan), "debt": 0.0}
     sc = state["sc"]
     controls = tp.OrbitControls(sc.cam, sc.canvas)
     controls.target.set(*[float(v) for v in sc.target])
@@ -254,10 +292,11 @@ def main(argv=None):
         telemetry(tp, a)
         return
     w, h = (int(v) for v in a.size.lower().split("x"))
+    vulkan = tp.HAS_VULKAN and not a.gl
     if a.shot is not None:
-        still(tp, a, w, h)
+        still(tp, a, w, h, vulkan)
         return
-    window(tp, a, w, h)
+    window(tp, a, w, h, vulkan)
 
 
 if __name__ == "__main__":
