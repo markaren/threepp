@@ -1007,6 +1007,22 @@ def race(thrust, advance, area, jet=False, rho=1025.0):
     return math.sqrt(v * v + 2.0 * t / (rho * area)) - v
 
 
+HULL_FOAM_PARTS = ("bow", "waterline", "transom")
+
+
+def hull_foam_parts(boat, setting=None):
+    """Which of a hull's own foam sources (Wash: bow, waterline, transom) are on for a boat, from
+    the environment variable HULL_FOAM (or `setting`): a comma-separated list of boat names
+    (her spec's name, e.g. mariner; "all" for every boat), each with all three or with only the
+    ones named after a colon, e.g. "mariner" or "mariner:bow+transom". Unset: none, and every
+    Wash leaves what it left before."""
+    for item in (os.environ.get("HULL_FOAM", "") if setting is None else setting).split(","):
+        name, _, parts = item.strip().partition(":")
+        if name and name in (boat, "all"):
+            return set(p for p in parts.split("+") if p in HULL_FOAM_PARTS) if parts else set(HULL_FOAM_PARTS)
+    return set()
+
+
 class Wash:
     """What a boat leaves on the water behind her: a patch of the ocean's wake field that
     trails her, and her sources in it. Two kinds of producer, and neither knows the other:
@@ -1034,6 +1050,15 @@ class Wash:
                        waves a weight of that shape makes at her speed. No wave is drawn: at
                        rest she makes none, at speed the fan has the angle and the wavelengths
                        of that speed, and it bends where she turned.
+      her hull's own   three sources more, each OFF unless HULL_FOAM names her (hull_foam_parts();
+      foam             the switches bow, waterline and transom on a Wash):
+                       bow        her bow wave where it breaks: at the shoulders, thrown out to
+                                  the side, from a Froude number on the bow's draft
+                       waterline  the water running up her side where the sea and her motion
+                                  bring it up faster than a slamming threshold
+                       transom    the stern lane's air and foam from a Froude number on her
+                                  transom's immersion: a dry transom white, a wet one its eddy's
+                                  milky water
 
     hull, drive   the boat; the drive need not be the one that moves her (see Drive.thrusts),
                   and None is a hull with no propulsor (a kayak: her paddle is put() by the scene)
@@ -1057,6 +1082,42 @@ class Wash:
     STRIPS = 8            # stretches a side her weight is laid out in along her hulls
     G = 9.81
 
+    # ---- her hull's own foam (off unless HULL_FOAM names her)
+    # Bow. The bow wave's height scales as Z = 2.2 (U^2 / g) tan(a) / (1 + F_D), F_D = U / sqrt(g D),
+    # D the bow's draft and a its half entry angle at the water (Noblesse, Hendrix, Faul and Slutsky,
+    # "Simple analytical expressions for the height, location and steepness of a ship bow wave",
+    # J. Ship Res. 50(4), 2006). Whether it breaks goes with F_D: a wedge's bow wave in a flume
+    # spills and plunges at F_D of about 2 and above (Waniewski, Brennen and Raichlen, J. Fluid Mech.
+    # 452, 2002). Where between "none" and "breaking all the time" a hull sits is a LOOK CHOICE:
+    BOW_FD = (1.3, 3.0)        # F_D where her bow wave starts to break, and where it breaks fully (by eye)
+    BOW_FOAM = 0.35            # LOOK: the film's thickness where it breaks fully (the shade's foam reaches
+                               # its full level at 0.40; less is lace through which the water shows)
+    BOW_AIR = 0.15             # LOOK: the bubbles it takes down, fully broken
+    BOW_TURB = 0.25            # rms turbulent speed of the broken water, as a share of her speed (assumed)
+    # The breaking crest moves out from her with her first divergent crest: over the ground at
+    # U tan(19.47 deg), the Kelvin wedge's half angle, so the foam leaves her side as a V.
+    KELVIN_TAN = 0.3536
+    # Waterline. A hull's side meets the water hard when the two close at more than Ochi's slamming
+    # threshold, v = 0.093 sqrt(g L) (Ochi, "Prediction of occurrence and severity of ship slamming
+    # at sea", 5th ONR Symp. Naval Hydrodynamics, 1964); the water it throws up is white. Ochi's
+    # criterion also asks that the bow have come out first; here only the speed is asked.
+    OCHI = 0.093
+    WL_STATIONS = 4            # stations a side along her waterline where the water is read
+    WL_FOAM = 0.35             # LOOK: the film where the water closes twice the threshold or more
+    WL_AIR = 0.15              # LOOK: and its bubbles
+    WL_TAU = 0.08              # s, the closing speed's smoothing (the sea is read once a frame)
+    WL_MEAN = 2.0              # s, the level the water stands at on her side, on average (her squat and
+                               # running trim): only water above it counts as thrown up
+    # Transom. A transom runs dry once U / sqrt(g T) is past about 2 to 4 (T its immersion; where in
+    # that range goes with its breadth over T and the Reynolds number: Doctors, "Influence of the
+    # transom-hollow length on wave resistance", 21st IWWWFB, 2006, and Maki, Doctors, Beck and
+    # Troesch, "Hydrodynamics of the dry transom stern", 2006); below that, the water closes behind
+    # it in a churning eddy that takes some air down and makes little foam.
+    TR_DRY = (2.0, 4.0)        # F_T over which her transom clears (the literature's range)
+    TR_EDDY = (0.9, 2.2)       # F_T over which the wet transom's eddy grows white (LOOK, by eye)
+    TR_EDDY_AIR = 0.40         # LOOK: the eddy's bubbles at their most
+    TR_EDDY_FOAM = 0.14        # LOOK: and its film: lace, never a sheet
+
     def __init__(self, hull, drive, ocean, index, size=None, air=1.0, ripples=None):
         self.hull, self.drive, self.ocean = hull, drive, ocean
         self.patch = ocean.wake_patch(index) if hasattr(ocean, "wake_patch") else None
@@ -1070,6 +1131,106 @@ class Wash:
         self.report = {}                       # each producer's last figures, for a readout
         self.t = 0.0
         self.put_names = set()                 # the scene's own producers that put() since the last update
+        parts = hull_foam_parts(hull.boat)
+        self.bow, self.waterline, self.transom = ("bow" in parts), ("waterline" in parts), ("transom" in parts)
+        self.lines = None                      # her lines at the design waterline (hull_lines(), once)
+        self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
+
+    def hull_lines(self):
+        """Her lines at the design waterline, from the Bonjean tables (starboard half), vessel frame:
+        station x, half-breadth at the water, keel height; and the stem, the shoulder (where the
+        half-breadth first reaches half its most), the transom (the aftmost station that wide),
+        the bow's mean draft and half entry angle."""
+        h = self.hull
+        t = min(max((h.design["waterline_y_at_x0"] - h.h0) / h.dh, 0.0), h.nh - 1.001)
+        i = int(t)
+        ns = len(h.sx) // 2
+        xs = h.sx[:ns]
+        b = (h.tab_a[:ns, i + 1] - h.tab_a[:ns, i]) / h.dh
+        keel = np.array([h.h0 + h.dh * int(np.argmax(row > 1e-6)) for row in h.tab_a[:ns]])
+        wl = h.design["waterline_y_at_x0"] - xs * math.tan(math.radians(h.design["trim_deg"]))
+        wide = np.flatnonzero(b > 0.5 * float(b.max()))
+        fwd = int(wide.max())                                    # the shoulder's station
+        wet = np.flatnonzero(b > 0.01 * float(b.max()))
+        x_stem = float(xs[wet.max()] + 0.5 * h.dx)
+        x_sh = float(xs[fwd])
+        bow = np.flatnonzero(xs >= x_sh)
+        d_bow = float(np.mean(np.maximum(wl[bow] - keel[bow], 0.0)))
+        return {"x": xs, "b": b, "keel": keel, "wl": wl, "x_stem": x_stem, "x_shoulder": x_sh,
+                "b_all": np.diff(h.tab_a[:ns], axis=1) / h.dh,   # half-breadth at every station and height
+                "b_shoulder": float(b[fwd]), "x_transom": float(xs[wide.min()] - 0.5 * h.dx),
+                "keel_transom": float(keel[wide.min()]), "draft_bow": max(d_bow, 0.05),
+                "tan_entry": float(b[fwd]) / max(x_stem - x_sh, 1e-3)}
+
+    def _bow(self, u, texel):
+        """Her bow wave where it breaks (BOW_*)."""
+        h, L = self.hull, self.lines
+        U = max(u, 0.0)
+        fd = U / math.sqrt(self.G * L["draft_bow"])
+        brk = smoothstep(self.BOW_FD[0], self.BOW_FD[1], fd)
+        self.report["bow"] = {"F_D": fd, "breaking": brk,
+                              "Z": 2.2 * U * U / self.G * L["tan_entry"] / (1.0 + fd)}
+        if brk <= 1e-3:
+            for n in [n for n in self.last if n.startswith("bow_")]:
+                del self.last[n]
+            return
+        zb = self.report["bow"]["Z"]
+        r = max(min(0.5 * zb, 0.4), 1.25 * texel)               # LOOK: the broken crest is about half its height wide
+        nb = L["b_all"].shape[1]
+        # the crest stands along her entry, from half way down it to the shoulder (two sources a side)
+        for k, (x, share) in enumerate(((0.5 * (L["x_stem"] + L["x_shoulder"]), 0.8), (L["x_shoulder"], 1.0))):
+            y = float(np.interp(x, L["x"], L["wl"]))
+            # the wave runs up her flare to about its height and breaks off it there: the broken water
+            # lands as far out as she is wide that high (seen from above, not under her flare)
+            i0 = int(min(max((y - h.h0) / h.dh, 0), nb - 1))
+            i1 = int(min(max((y + min(1.5 * zb, 0.8) - h.h0) / h.dh, i0 + 1), nb))
+            bx = float(np.interp(x, L["x"], L["b_all"][:, i0:i1].max(axis=1)))
+            for s, side in (("s", 1.0), ("p", -1.0)):
+                q = h.to_world([x, y, side * (bx + 0.6 * r)])   # on the water beside her, not under her
+                out = h.R @ np.array([0.0, 0.0, side])
+                v = out[[0, 2]] / max(float(np.linalg.norm(out[[0, 2]])), 1e-9) * (self.KELVIN_TAN * U)
+                self._put(f"bow_{s}{k}", q[[0, 2]], v, r, self.BOW_FOAM * brk * share, self.BOW_AIR * brk * share,
+                          self.BOW_TURB * U * brk, 0.5 * brk)
+
+    def _waterline(self, u, dt, texel):
+        """The water thrown up her side where it closes on her hard (OCHI, WL_*)."""
+        h, L = self.hull, self.lines
+        xs = np.linspace(L["x_transom"] + 0.3, L["x_stem"] - 0.25, self.WL_STATIONS)
+        bx = np.interp(xs, L["x"], L["b"])
+        y = np.interp(xs, L["x"], L["wl"])
+        lvl = np.empty(2 * len(xs))
+        pts = []
+        for j, side in enumerate((1.0, -1.0)):
+            for k in range(len(xs)):
+                q = h.to_world([xs[k], y[k], side * bx[k]])
+                lvl[j * len(xs) + k] = float(self.ocean.sample_height(float(q[0]), float(q[2]), h.mask)) - float(q[1])
+                pts.append(q)
+        if self.wl_state is None or dt <= 0.0:
+            self.wl_state = {"lvl": lvl, "mean": lvl.copy(), "rate": np.zeros_like(lvl)}
+            return
+        st = self.wl_state
+        raw = (lvl - st["lvl"]) / dt
+        st["rate"] += (raw - st["rate"]) * min(dt / self.WL_TAU, 1.0)
+        st["mean"] += (lvl - st["mean"]) * min(dt / self.WL_MEAN, 1.0)
+        st["lvl"] = lvl
+        vth = self.OCHI * math.sqrt(self.G * 2.0 * self.hull.excl[0])
+        top = 0.0
+        for n, q in enumerate(pts):
+            side = 1.0 if n < len(xs) else -1.0
+            name = f"wl_{n}"
+            up = lvl[n] - st["mean"][n]
+            k = smoothstep(vth, 2.0 * vth, float(st["rate"][n])) * smoothstep(0.0, 0.08, up)
+            top = max(top, k)
+            if k <= 1e-3:
+                self.last.pop(name, None)
+                continue
+            r = max(0.18, 1.25 * texel)                          # LOOK: a sheet of water a hand or two wide
+            out = h.R @ np.array([0.0, 0.0, side])
+            o = out[[0, 2]] / max(float(np.linalg.norm(out[[0, 2]])), 1e-9)
+            p = q[[0, 2]] + o * (0.6 * r)
+            self._put(name, p, o * (0.5 * float(st["rate"][n])), r, self.WL_FOAM * k,
+                      self.WL_AIR * k, 0.3 * float(st["rate"][n]) * k, k)
+        self.report["waterline"] = {"threshold": vth, "closing_max": float(st["rate"].max()), "white": top}
 
     def clear(self):
         """Empty her patch and forget where her producers were (after she is seated elsewhere)."""
@@ -1205,15 +1366,37 @@ class Wash:
         self.patch.eddy = float(max(self.EDDY * max(widest, rh), 4.0 * texel))
         fn = abs(u) / math.sqrt(self.G * 2.0 * hl)
         lane = smoothstep(0.15, 0.6, abs(u))
+        if (self.bow or self.waterline or self.transom) and self.lines is None:
+            self.lines = self.hull_lines()
         if lane > 0.0:
             air = smoothstep(0.35, 0.85, fn)                     # a transom runs dry and white when she is fast for her length
+            foam = smoothstep(0.45, 1.05, fn) * air
+            turb = 0.07 * abs(u)
+            if self.transom and u > 0.0:                         # TR_*: on her transom's own Froude number instead
+                Lh = self.lines
+                q = h.to_world([Lh["x_transom"], Lh["keel_transom"], 0.0])
+                tt = max(float(self.ocean.sample_height(float(q[0]), float(q[2]), h.mask)) - float(q[1]), 0.02)
+                ft = u / math.sqrt(self.G * tt)
+                dry = smoothstep(self.TR_DRY[0], self.TR_DRY[1], ft)
+                eddy = smoothstep(self.TR_EDDY[0], self.TR_EDDY[1], ft) * (1.0 - dry)
+                air = max(dry, self.TR_EDDY_AIR * eddy)
+                foam = max(dry * dry, self.TR_EDDY_FOAM * eddy)
+                turb = max(turb, 0.15 * u * eddy)                # the eddy churns at a share of her speed (assumed)
+                self.report["transom"] = {"T": tt, "F_T": ft, "dry": dry, "eddy": eddy}
             for k, z in enumerate((-zs, zs) if zs > 0.0 else (0.0,)):
                 q = h.to_world([xc - math.copysign(hl, u), h.design["waterline_y_at_x0"], z])
-                self._put(f"hull_{k}", q[[0, 2]], 0.15 * vb, max(rh, 1.25 * texel), smoothstep(0.45, 1.05, fn) * air,
-                          air, 0.07 * abs(u), lane)
+                self._put(f"hull_{k}", q[[0, 2]], 0.15 * vb, max(rh, 1.25 * texel), foam, air, turb, lane)
         else:
             for k in range(2):
                 self.last.pop(f"hull_{k}", None)
+
+        # her hull's own foam (HULL_FOAM): the bow wave where it breaks, the water thrown up her side
+        if self.bow:
+            self._bow(u, texel)
+        if self.waterline:
+            self._waterline(u, dt, texel)
+        if os.environ.get("HULL_FOAM_DEBUG") and (self.bow or self.waterline or self.transom) and int(self.t / 2.0) != int((self.t - dt) / 2.0):
+            print(f"[hullfoam] t {self.t:.1f} u {u:.2f}", {k: self.report.get(k) for k in ("bow", "waterline", "transom")}, flush=True)
 
         # her weight on the water, laid out along her hulls: what makes her waves
         if self.ripples:
