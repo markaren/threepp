@@ -8,9 +8,38 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
+#include <stdexcept>
 
 namespace threepp {
+
+    namespace {
+        // An ocean look switch's environment variable: exactly "0" is off,
+        // "1", "on" or "true" is on; unset keeps `fallback`, and anything
+        // else keeps it too, with a warning.
+        bool envSwitch(const char* name, bool fallback) {
+            const char* v = std::getenv(name);
+            if (!v || !*v) return fallback;
+            if (std::strcmp(v, "0") == 0) return false;
+            if (std::strcmp(v, "1") == 0 || std::strcmp(v, "on") == 0 || std::strcmp(v, "true") == 0) return true;
+            std::fprintf(stderr, "[DisplacedMesh] %s=%s not understood (0 is off; 1, on or true is on); it stays %s\n",
+                         name, v, fallback ? "on" : "off");
+            return fallback;
+        }
+    }// namespace
+
+    bool defaultChopNormals() {
+        static const bool value = envSwitch("THREEPP_OCEAN_CHOP_NORMALS", false);
+        return value;
+    }
+
+    bool defaultMeasuredSpreading() {
+        static const bool value = envSwitch("THREEPP_OCEAN_SPREAD", false);
+        return value;
+    }
 
     DisplacedMesh::DisplacedMesh(const std::shared_ptr<BufferGeometry>& geometry,
                                  const std::shared_ptr<Material>& material)
@@ -19,6 +48,89 @@ namespace threepp {
     const std::string& DisplacedMesh::type() const {
         static const std::string typeName = "DisplacedMesh";
         return typeName;
+    }
+
+    namespace {
+        // A wave-model switch's environment override: 1 / 0 forces it on /
+        // off, unset or empty leaves the mesh's own field in charge (-1).
+        int envSwitch(const char* name) {
+            const char* e = std::getenv(name);
+            if (!e || !*e) return -1;
+            return e[0] == '0' ? 0 : 1;
+        }
+    }// namespace
+
+    bool DisplacedMesh::cwmOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_CWM");
+        return env < 0 ? params.cwm : env == 1;
+    }
+
+    bool DisplacedMesh::boundWavesOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_BOUND_WAVES");
+        return env < 0 ? params.boundWaves : env == 1;
+    }
+
+    bool DisplacedMesh::breakingCrestsOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_BREAKING_CRESTS");
+        return env < 0 ? params.breakingCrests : env == 1;
+    }
+
+    bool DisplacedMesh::crestFoamOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_CREST_FOAM");
+        return env < 0 ? params.crestFoam : env == 1;
+    }
+
+    bool DisplacedMesh::waveReflectionsOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_WAVE_REFLECTIONS");
+        return env < 0 ? params.waveReflections : env == 1;
+    }
+
+    bool DisplacedMesh::shortWavesOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_SHORT_WAVES");
+        return env < 0 ? params.shortWaves : env == 1;
+    }
+
+    bool DisplacedMesh::detileOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_DETILE");
+        return env < 0 ? params.detile : env == 1;
+    }
+
+    bool DisplacedMesh::shortWaveSpectrumOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_SHORT_WAVE_SPECTRUM");
+        return env < 0 ? params.shortWaveSpectrum : env == 1;
+    }
+
+    bool DisplacedMesh::waveModulationOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_WAVE_MODULATION");
+        return env < 0 ? params.waveModulation : env == 1;
+    }
+
+    bool DisplacedMesh::hullContactOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_HULL_CONTACT");
+        return env < 0 ? params.hullContact : env == 1;
+    }
+
+    float DisplacedMesh::effectiveChoppiness() const {
+        return cwmOn() ? 1.f : params.choppiness;
+    }
+
+    bool DisplacedMesh::foldFoamOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_FOLD_FOAM");
+        return env < 0 ? params.foldFoam : env == 1;
+    }
+
+    bool DisplacedMesh::crestLineFoamOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_CREST_LINE_FOAM");
+        return foldFoamOn() && (env < 0 ? params.crestLineFoam : env == 1);
+    }
+
+    float DisplacedMesh::effectiveCrestSharpness() const {
+        static const float env = [] {
+            const char* e = std::getenv("THREEPP_OCEAN_CREST_SHARPNESS");
+            return (e && *e) ? static_cast<float>(std::atof(e)) : -1.f;
+        }();
+        if (!cwmOn()) return 0.f;
+        return std::clamp(env >= 0.f ? env : params.crestSharpness, 0.f, 4.f);
     }
 
     namespace {
@@ -127,7 +239,7 @@ namespace threepp {
             // bow at ~20° half-angle. The V-wedge is taken as MAX over the
             // historical trail samples — same combiner as the shader, so
             // 60 samples don't stack into fountain-shaped pillars.
-            if (!wake.enabled || hullExclusion.halfLength <= 0.f) return 0.f;
+            if (!wake.enabled || !wake.analyticWaves || hullExclusion.halfLength <= 0.f) return 0.f;
 
             auto smoothstepF = [](float a, float b, float x) {
                 const float t = std::clamp((x - a) / (b - a), 0.f, 1.f);
@@ -232,9 +344,19 @@ namespace threepp {
         wantsHeightReadback = true;
 
         // World-space horizontal displacement D(q) of the selected cascades at
-        // rest position q, choppiness applied.
+        // rest position q, choppiness applied. Under the Choppy Wave Model it
+        // is the full displacement (choppiness 1); the shader's per-vertex
+        // limiter, which lowers it where the Jacobian would fall under
+        // kCwmMinJacobian, is not mirrored here (the audit reports where it
+        // binds). Crest sharpness draws cascades 0 and 1 with 1 + s of it.
+        const float chop = effectiveChoppiness();
+        const float chop01 = chop * (1.f + effectiveCrestSharpness());
+        // The wave climate's gains at a rest point (waveClimateGain), on every
+        // field of its cascade, as water_displace.comp applies them.
+        const bool climate = hasWaveClimate();
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
+            const std::array<float, 3> g = climate ? waveClimateGain(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
             for (uint32_t i = 0; i < 3; ++i) {
                 if ((cascadeMask & (1u << i)) == 0u) continue;
                 const CascadeField& cf = heightFields[i];
@@ -248,11 +370,14 @@ namespace threepp {
                     v = {kOceanCascade1RotCos * v.x + kOceanCascade1RotSin * v.y,
                          -kOceanCascade1RotSin * v.x + kOceanCascade1RotCos * v.y};
                 }
-                d.x += v.x * invTile;
-                d.y += v.y * invTile;
+                // Sharpness 0 keeps the historical sum, bit for bit.
+                const float c = (chop01 == chop) ? 1.f : (i < 2 ? chop01 : chop) / chop;
+                if (climate) v = {v.x * g[i], v.y * g[i]};
+                d.x += v.x * invTile * c;
+                d.y += v.y * invTile * c;
             }
-            d.x *= params.choppiness;
-            d.y *= params.choppiness;
+            d.x *= chop;
+            d.y *= chop;
             return d;
         };
 
@@ -265,7 +390,7 @@ namespace threepp {
         // default choppiness, 14 at choppiness 1 on a steep (ak = 0.59) wave.
         float bestX = worldX;
         float bestZ = worldZ;
-        if (params.choppiness != 0.f) {
+        if (chop != 0.f) {
             constexpr int kMaxIterations = 16;
             constexpr float kTolerance = 1e-3f;// metres
             float qx = worldX;
@@ -288,16 +413,88 @@ namespace threepp {
         }
 
         float total = 0.f;
+        float bound = 0.f;// second-order harmonic, already in world metres
+        const std::array<float, 3> gq = climate ? waveClimateGain(bestX, bestZ) : std::array<float, 3>{1.f, 1.f, 1.f};
         for (uint32_t i = 0; i < 3; ++i) {
             if ((cascadeMask & (1u << i)) == 0u) continue;
             const CascadeField& cf = heightFields[i];
             if (!hasField(cf, cf.data)) continue;
             const float invTile = 1.f / cf.tileSize;
             const Vec2f p = cascadeDomain(i, bestX, bestZ);
-            total += sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
-                                 cascadeBicubic(i)).x * invTile;
+            Vec2f h = sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
+                                  cascadeBicubic(i));
+            if (climate) h.x *= gq[i];
+            total += h.x * invTile;
+            if (cf.boundKm > 0.f && hasField(cf, cf.disp)) {
+                // eta2 = (k_m / 2)(eta^2 - |R[eta]|^2) of the drawn
+                // (waveScale'd) first-order field, R[eta] = -D at choppiness
+                // 1: water_displace.comp's boundHeight().
+                Vec2f d = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile,
+                                      cascadeBicubic(i));
+                if (climate) d = {d.x * gq[i], d.y * gq[i]};
+                const float s = invTile * params.waveScale;
+                const float e = h.x * s, rx = d.x * s, rz = d.y * s;
+                bound += 0.5f * cf.boundKm * (e * e - rx * rx - rz * rz);
+            }
         }
-        return total * params.waveScale;
+        return total * params.waveScale + bound;
+    }
+
+    void DisplacedMesh::setWaveClimate(std::vector<float> data, uint32_t width, uint32_t height,
+                                       float originX, float originZ, float sizeX, float sizeZ) {
+        if (width < 2u || height == 0u || data.size() != size_t(width) * height * 4u) {
+            throw std::invalid_argument("DisplacedMesh::setWaveClimate: data must hold width x height x 4 floats");
+        }
+        if (!(sizeX > 0.f) || !(sizeZ > 0.f)) {
+            throw std::invalid_argument("DisplacedMesh::setWaveClimate: the map's extent must be positive");
+        }
+        const uint64_t v = waveClimate_.version + 1u;
+        waveClimate_ = WaveClimate{std::move(data), width, height, originX, originZ, sizeX, sizeZ, v};
+    }
+
+    void DisplacedMesh::clearWaveClimate() {
+        const uint64_t v = waveClimate_.version + 1u;
+        waveClimate_ = WaveClimate{};
+        waveClimate_.version = v;
+    }
+
+    std::array<float, 3> DisplacedMesh::waveClimateGain(float x, float z) const {
+        const WaveClimate& w = waveClimate_;
+        if (w.width == 0u) return {1.f, 1.f, 1.f};
+        // Texel centres at (i + 0.5) / width of the extent; clamp to the edge
+        // texels as the shaders' reads do (ocean_cascade.glsl, oceanClimate).
+        const float fx = std::clamp((x - w.originX) / w.sizeX * float(w.width) - 0.5f, 0.f, float(w.width - 1u));
+        const float fz = std::clamp((z - w.originZ) / w.sizeZ * float(w.height) - 0.5f, 0.f, float(w.height - 1u));
+        const uint32_t i0 = std::min(uint32_t(fx), w.width - 1u);
+        const uint32_t j0 = std::min(uint32_t(fz), w.height - 1u);
+        const uint32_t i1 = std::min(i0 + 1u, w.width - 1u);
+        const uint32_t j1 = std::min(j0 + 1u, w.height - 1u);
+        const float tx = fx - float(i0);
+        const float tz = fz - float(j0);
+        std::array<float, 3> g{};
+        for (uint32_t c = 0; c < 3; ++c) {
+            const auto at = [&](uint32_t i, uint32_t j) { return w.data[(size_t(j) * w.width + i) * 4u + c]; };
+            const float a = at(i0, j0) + (at(i1, j0) - at(i0, j0)) * tx;
+            const float b = at(i0, j1) + (at(i1, j1) - at(i0, j1)) * tx;
+            g[c] = a + (b - a) * tz;
+        }
+        return g;
+    }
+
+    bool DisplacedMesh::defaultRippleHeights() {
+        static const bool on = [] {
+            const char* v = std::getenv("THREEPP_WAKE_HEIGHTS");
+            return v && v[0] == '1' && v[1] == '\0';
+        }();
+        return on;
+    }
+
+    bool DisplacedMesh::defaultRippleBreaking() {
+        static const bool on = [] {
+            const char* v = std::getenv("THREEPP_WAKE_BREAKING");
+            return v && v[0] == '1' && v[1] == '\0';
+        }();
+        return on;
     }
 
     float DisplacedMesh::sampleWakeHeight(float worldX, float worldZ) const {

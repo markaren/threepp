@@ -63,9 +63,18 @@ namespace threepp::water {
             float    kMax = 0.0f;     // 0 = no upper bound
             float    fetch = 0.0f;    // m of upwind open water; 0 = fully developed (plain Phillips)
             bool     hsFix = false;   // Pierson-Moskowitz constants (DisplacedMesh::Params::hsFix)
+            uint32_t spread = 0;      // 0 = symmetric cos^2, 1 = Donelan-Banner sech^2 (see the shader)
+            // Optional swell system (see swellShape in the shader). Height 0 = none.
+            float    swellHeight = 0.0f;  // significant height, m
+            float    swellPeriod = 12.0f; // peak period Tp, s
+            float    swellTheta  = 0.0f;  // direction of travel, rad (sample domain)
+            float    swellSpread = 50.0f; // s of cos^(2s)(theta/2); below 1 is taken as 1
+            // The measured short-wave spectrum (DisplacedMesh::Params::
+            // shortWaveSpectrum, see elfouhailyShortCurvature in the shader).
+            bool     shortWaveSpectrum = false;
         };
 
-        // Push-constant block of phillips_spectrum.comp (std430, 36 bytes).
+        // Push-constant block of phillips_spectrum.comp (std430, 56 bytes).
         struct PushParams {
             uint32_t textureSize;
             float    tileSize;
@@ -76,6 +85,12 @@ namespace threepp::water {
             float    kMax;
             float    fetch;
             uint32_t hsFix;
+            uint32_t spread;
+            float    swellScale;
+            float    swellPeriod;
+            float    swellTheta;
+            float    swellSpread;
+            uint32_t shortWave;
         };
 
         PhillipsSpectrum(vulkan::VulkanContext& ctx, const Settings& s);
@@ -95,7 +110,37 @@ namespace threepp::water {
         // sea state morphs smoothly. The params are push constants recorded
         // into the command buffer, so a frame in flight never sees the
         // change meant for the next one.
-        void updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix);
+        void updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix, uint32_t spread);
+
+        // Live swell change; the next recordCompute regenerates h0 with it.
+        void updateSwell(float height, float period, float theta, float spread);
+
+        // Factor on the shader's swellShape that makes the swell's discrete
+        // sum over this cascade's grid (its band and short-wave taper
+        // included) carry exactly the requested significant height: a
+        // swell is so narrow that it lands on a handful of modes, and a
+        // continuous normalisation would miss Hs by tens of percent
+        // depending on where the lattice falls. 0 when there is no swell or
+        // its peak is not inside the band with at least two modes below it.
+        static float swellScale(const Settings& s);
+
+        // swellSpread as the shader gets it: at least 1.
+        static float swellSpreadClamped(float s);
+
+        // The band's mean wavenumber in Tayfun's (1980) sense, k_m = w_m^2 / g
+        // with w_m = sum(w P) / sum(P) over this cascade's own k grid and band
+        // (kMin, kMax, the small-wave taper): the k of the bound-wave harmonic
+        // (DisplacedMesh::Params::boundWaves). A CPU copy of the shader's
+        // phillips2D (spreading and swell included), evaluated for the current settings. 0 for an empty band.
+        float meanWavenumber() const;
+
+        // Params::shortWaveSpectrum: the slope variance (both axes, m^2/m^2)
+        // of the short-wave spectrum that this cascade's grid does not draw,
+        // what its roll-off exp(-(k l)^2) takes and everything past its
+        // Nyquist (the capillary peak), integrated over ln k on the CPU.
+        // Only for the open band (kMax == 0, the finest cascade): a lower
+        // band's cut tail is the next cascade's. 0 when the switch is off.
+        float unresolvedShortWaveMss() const;
 
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }
@@ -146,11 +191,34 @@ namespace threepp::water {
             float    tileSize;
             float    elapsedSeconds;
         };
+        // ...and of its OCEAN_CHOP variant (16 bytes).
+        struct ChopPushParams {
+            uint32_t textureSize;
+            float    tileSize;
+            float    elapsedSeconds;
+            float    taperSpacing;// m, the vertex grid's nominal spacing; 0 = no taper
+        };
 
-        void recordCompute(VkCommandBuffer cb, float elapsedSeconds);
+        // Chop normals (DisplacedMesh::Params::chopNormals): creates the slope
+        // and jacDiag images and the OCEAN_CHOP variant's pipeline and set,
+        // the first time only, so a mesh that never asks for the feature runs
+        // exactly the plain pipeline, set and images. taperSpacing (m, may
+        // change on later calls) tapers the derivative fields to the vertex
+        // grid's Nyquist for the cascades that feed the vertex normal; 0 for
+        // the per-pixel cascade (see dynamic_spectrum.comp).
+        void enableChop(float taperSpacing);
+        bool chopEnabled() const { return chopPipe_ != VK_NULL_HANDLE; }
+
+        // chop (only once enableChop ran): the OCEAN_CHOP variant, which also
+        // stores the slope spectrum i*k*h, the displacement gradient's
+        // diagonal, and packs its off-diagonal into ht's imaginary part (see
+        // dynamic_spectrum.comp). Otherwise the plain pass.
+        void recordCompute(VkCommandBuffer cb, float elapsedSeconds, bool chop = false);
 
         const OceanImage& ht()           const { return ht_; }
         const OceanImage& displacement() const { return displacement_; }
+        OceanImage&       slope()              { return slope_; }  // null until enableChop
+        OceanImage&       jacDiag()            { return jacDiag_; }// null until enableChop
 
     private:
         vulkan::VulkanContext& ctx_;
@@ -158,7 +226,7 @@ namespace threepp::water {
         uint32_t textureSize_;
         float    tileSize_;
 
-        OceanImage  ht_, displacement_;
+        OceanImage  ht_, displacement_, slope_, jacDiag_;
         VkSampler   sampler_ = VK_NULL_HANDLE;
 
         VkDescriptorPool      pool_   = VK_NULL_HANDLE;
@@ -166,6 +234,14 @@ namespace threepp::water {
         VkDescriptorSet       ds_     = VK_NULL_HANDLE;
         VkPipelineLayout      layout_ = VK_NULL_HANDLE;
         VkPipeline            pipe_   = VK_NULL_HANDLE;
+
+        // The OCEAN_CHOP variant (enableChop).
+        VkDescriptorPool      chopPool_   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout chopDsl_    = VK_NULL_HANDLE;
+        VkDescriptorSet       chopDs_     = VK_NULL_HANDLE;
+        VkPipelineLayout      chopLayout_ = VK_NULL_HANDLE;
+        VkPipeline            chopPipe_   = VK_NULL_HANDLE;
+        float                 chopTaperSpacing_ = 0.f;
 
         void createImages();
         void createPipeline();
@@ -200,9 +276,10 @@ namespace threepp::water {
         static constexpr uint32_t kMaxBatch = 8;
 
         // maxGroups: how many distinct (input, scratch) image pairs this IFFT
-        // will be applied to over its life (a cascade has two; the wake
-        // field's ripples have one a patch).
-        IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize, uint32_t maxGroups = 4);
+        // will be applied to over its life (a cascade has two, four with the
+        // chop normals' slope and jacDiag; the wake field's ripples have one
+        // a patch).
+        IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize, uint32_t maxGroups = 6);
         ~IFFT();
 
         IFFT(const IFFT&) = delete;
@@ -301,7 +378,7 @@ namespace threepp::water {
             std::array<VkDescriptorSet, 2> v{};
             std::array<VkDescriptorSet, 2> p{};// same orientation convention
         };
-        uint32_t maxGroups_ = 4;// 2 pairs/cascade (height, displacement) + headroom
+        uint32_t maxGroups_ = 6;// 4 pairs/cascade (height, displacement, chop slope, chop jacDiag) + headroom
         std::vector<DescGroup> groups_;
 
         bool twiddleComputed_ = false;
@@ -343,6 +420,168 @@ namespace threepp::water {
                                VkDescriptorSet& ds, uint32_t& slots);
         void dispatchShared(VkCommandBuffer cb, VkDescriptorSet ds, uint32_t slots, uint32_t layers,
                             bool columns) const;
+    };
+
+    // ─── ChopMoments ───────────────────────────────────────────────────
+    // The fine cascade's per-pixel surface for the deferred shade while the
+    // chop normals are on (DisplacedMesh::Params::chopNormals; built the
+    // first time they are). One RGBA32F image with a full mip chain:
+    //   .r = the height exactly as the IFFT left it (so every reader of the
+    //        old fine-height binding, the path tracer included, sees the
+    //        same value at LOD 0)
+    //   .g, .b = the slope of the DISPLACED (choppy) surface, world units
+    //   .a = its squared length, plus the variance the fold fade banked
+    // Level L is the box average of 2^L x 2^L texels (linear blits), so one
+    // filtered fetch over a pixel's footprint gives the mean slope (tilts N)
+    // and E[s^2] - |E[s]|^2, the slope variance the pixel cannot hold (goes
+    // to roughness): LEAN mapping, Olano and Baker 2010, "LEAN Mapping".
+    class ChopMoments {
+    public:
+        ChopMoments(vulkan::VulkanContext& ctx, uint32_t textureSize,
+                    VkImageView htView, VkImageView slopeView, VkImageView jacView);
+        ~ChopMoments();
+
+        ChopMoments(const ChopMoments&) = delete;
+        ChopMoments& operator=(const ChopMoments&) = delete;
+
+        struct PushParams {
+            uint32_t textureSize;
+            float    slopeScale;// raw IFFT slope -> world slope (waveScale / tile)
+            float    chopScale; // raw IFFT dD/dx -> world, times lambda (choppiness / tile)
+            float    bankedVar; // slope variance added to .a everywhere (shortWaveSpectrum); 0 = none
+        };
+
+        // After the cascade's IFFTs, same command buffer. Leaves every level
+        // in GENERAL, visible to compute and ray-tracing sampled reads.
+        void record(VkCommandBuffer cb, float slopeScale, float chopScale, VkPipelineStageFlags readerStages,
+                    float bankedVar = 0.f);
+
+        VkImageView sampledView() const { return sampledView_; }
+        VkSampler   sampler()     const { return sampler_; }
+
+    private:
+        vulkan::VulkanContext& ctx_;
+        uint32_t textureSize_;
+        uint32_t mipLevels_ = 1;
+
+        OceanImage  moments_;                      // .view = mip 0 storage view
+        VkImageView sampledView_ = VK_NULL_HANDLE; // all levels
+        VkSampler   sampler_     = VK_NULL_HANDLE; // linear, trilinear, repeat, anisotropic
+
+        VkDescriptorPool      pool_   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout dsl_    = VK_NULL_HANDLE;
+        VkDescriptorSet       ds_     = VK_NULL_HANDLE;
+        VkPipelineLayout      layout_ = VK_NULL_HANDLE;
+        VkPipeline            pipe_   = VK_NULL_HANDLE;
+    };
+
+    // ─── FieldMips ─────────────────────────────────────────────────────
+    // Mipped copies of a cascade's spatial fields (RG32F, one per source),
+    // rebuilt every frame: level 0 is the field as the inverse FFT left it,
+    // level L its box average over 2^L x 2^L texels. For short waves as
+    // geometry (DisplacedMesh::Params::shortWaves): water_displace reads the
+    // middle cascade at the level whose texel matches the vertex spacing
+    // where the vertex is, so the mesh never carries a wave it cannot hold
+    // (the far, thin part of a warped mesh would alias it into moire).
+    class FieldMips {
+    public:
+        FieldMips(vulkan::VulkanContext& ctx, uint32_t size, std::vector<VkImage> sources);
+        ~FieldMips();
+
+        FieldMips(const FieldMips&) = delete;
+        FieldMips& operator=(const FieldMips&) = delete;
+
+        // After the cascade's IFFTs, same command buffer. Leaves every level
+        // in GENERAL, visible to compute sampled reads.
+        void record(VkCommandBuffer cb);
+
+        VkImageView view(size_t i) const { return views_[i]; }// all levels of copy i
+        VkSampler   sampler()      const { return sampler_; } // trilinear, repeat
+
+    private:
+        vulkan::VulkanContext& ctx_;
+        uint32_t size_;
+        uint32_t mipLevels_ = 1;
+        std::vector<VkImage>     sources_;
+        std::vector<OceanImage>  copies_;// .view unused
+        std::vector<VkImageView> views_;
+        VkSampler sampler_ = VK_NULL_HANDLE;
+    };
+
+    // ─── CrestFoam ─────────────────────────────────────────────────────
+    // Crest foam (DisplacedMesh::Params::crestFoam; built the first time a
+    // mesh turns it on): the foam texture over the water's rest coordinates
+    // and the pass that deposits into it where a crest breaks and decays the
+    // rest (foam_crest.comp says how and why). One RG16F image (.r the foam, .g
+    // the compression of cascades 0 and 1 for Params::waveModulation), tileSize0
+    // across, REPEAT, with a full mip chain rebuilt every frame by linear
+    // blits, so the shade's footprint fetch over a pixel returns the covered
+    // fraction of that footprint.
+    class CrestFoam {
+    public:
+        // The views are cascade 0's and cascade 1's jacDiag and height images
+        // (a mesh without cascade 1 passes cascade 0's twice; the mask gates it).
+        CrestFoam(vulkan::VulkanContext& ctx, uint32_t resolution,
+                  VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1,
+                  // Cascade 1's sampler when its views are mipped copies
+                  // (Params::foldFoam reads them at a level); null = single level.
+                  VkSampler c1Sampler = VK_NULL_HANDLE,
+                  // The wave climate's levels (DisplacedMesh::WaveClimate):
+                  // RGBA16F and foam_crest.comp's climate variant, which keeps
+                  // the foam of the sea scaled by 2/3 and 1/3 in .b and .a.
+                  bool climateLevels = false);
+        ~CrestFoam();
+
+        CrestFoam(const CrestFoam&) = delete;
+        CrestFoam& operator=(const CrestFoam&) = delete;
+
+        // foam_crest.comp's push block, field for field (72 bytes).
+        struct PushParams {
+            VkDeviceAddress hullAddr;
+            uint32_t        res;
+            float           tileSize;
+            float           tileSize1;
+            float           steepScale;
+            uint32_t        cascadeMask;
+            uint32_t        hullCount;
+            float           decay;
+            float           threshold;
+            float           invRamp;
+            float           maxFoam;
+            float           centerX;
+            float           centerZ;
+            uint32_t        model;// bit 0: Params::waveModulation, bit 1: Params::foldFoam, bit 2: Params::crestLineFoam
+            float           sharpness = 0.f;// foldFoam: the drawn choppiness is 1 + this
+            float           c1Lod     = 0.f;// foldFoam: cascade 1's mip level
+            float           crestHalf = 0.f;// crestLineFoam: reach along the crest either way (m)
+        };
+
+        // After the cascades' IFFTs, same command buffer; fills p.res itself.
+        // Leaves every level in GENERAL, visible to readerStages' sampled reads.
+        void record(VkCommandBuffer cb, PushParams p, VkPipelineStageFlags readerStages);
+
+        VkImageView sampledView() const { return sampledView_; }
+        VkSampler   sampler()     const { return sampler_; }
+        VkImage     image()       const { return foam_.image; }
+        uint32_t    resolution()  const { return res_; }
+        bool        climateLevels() const { return climateLevels_; }
+
+    private:
+        vulkan::VulkanContext& ctx_;
+        uint32_t res_;
+        uint32_t mipLevels_ = 1;
+        bool     climateLevels_ = false;
+
+        OceanImage  foam_;                         // .view = mip 0 storage view
+        VkImageView sampledView_ = VK_NULL_HANDLE; // all levels
+        VkSampler   sampler_     = VK_NULL_HANDLE; // trilinear, repeat, anisotropic (the shade's)
+        VkSampler   fieldSampler_ = VK_NULL_HANDLE;// linear, repeat (the cascade fields)
+
+        VkDescriptorPool      pool_   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout dsl_    = VK_NULL_HANDLE;
+        VkDescriptorSet       ds_     = VK_NULL_HANDLE;
+        VkPipelineLayout      layout_ = VK_NULL_HANDLE;
+        VkPipeline            pipe_   = VK_NULL_HANDLE;
     };
 
     // ─── OceanCascade ──────────────────────────────────────────────────

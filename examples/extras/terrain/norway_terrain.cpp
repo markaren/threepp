@@ -1129,7 +1129,9 @@ int main(int argc, char** argv) {
             // chop falls under this sheet's ~25 m vertex spacing — reads dead
             // flat. Live-tunable in the settings panel; NT_SEA_WIND pins it.
             oo.windSpeed = envF("NT_SEA_WIND", cliffPack ? 5.5f : 9.0f);
-            oo.windTheta = 215.f * kDeg2Rad;// swell rolling in from the SW (the sun heading)
+            // windTheta is the direction the wind blows TOWARD: 35 deg, so the
+            // sea rolls in from 215 deg, the SW, the side the default sun is on.
+            oo.windTheta = 35.f * kDeg2Rad;
             oo.choppiness = 0.45f;
             oo.tileSize1 = 90.f;
             oo.tileSize2 = 7.f;

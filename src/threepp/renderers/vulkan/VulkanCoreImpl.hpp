@@ -1028,6 +1028,7 @@ namespace threepp {
         VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
         float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
         float       oceanWaveScale        = 1.f;          // its params.waveScale (the path tracer's fine slope)
+        bool        oceanChopNormals      = false;        // binding 13 is a ChopMoments chain and it is on this frame
 
         // World-space foam (deferred shade ocean binding). Built by
         // FoamWorldPipeline each frame from a DisplacedMesh's foamImage.
@@ -1038,6 +1039,32 @@ namespace threepp {
         VkImageView oceanFoamView   = VK_NULL_HANDLE;
         VkSampler   oceanFoamSampler = VK_NULL_HANDLE;
         float       oceanFoamTileSize = 0.f;              // 0 disables sampling
+        // Crest foam (deferred shade bindings 91 and 92): the live ocean's
+        // foam texture over its rest coordinates (water::CrestFoam), or the
+        // foam dummy, and the foam photograph old foam opens against, uploaded
+        // the first time an ocean turns the feature on (the foam detail tile
+        // stands in until then). oceanCrestFoam: on this frame, the shade's spec constant 8.
+        VkImageView oceanCrestFoamView    = VK_NULL_HANDLE;
+        VkSampler   oceanCrestFoamSampler = VK_NULL_HANDLE;
+        bool        oceanCrestFoam        = false;
+        // DisplacedMesh::Params::waveReflections on this frame (the shade's
+        // spec constant 9): the water's mirror ray shades water it meets.
+        bool        oceanWaveReflections  = false;
+        // DisplacedMesh::Params::detile on this frame, with the chop normals
+        // (the shade's spec constant 10).
+        bool        oceanDetile           = false;
+        // DisplacedMesh::Params::waveModulation on this frame, with the crest
+        // foam texture that carries its compression (the shade's spec constant 11).
+        bool        oceanWaveMod          = false;
+        // The wave climate (DisplacedMesh::WaveClimate; deferred binding 93):
+        // the live ocean's map, or the foam dummy, with the layout it is in.
+        // oceanClimate: the shade's spec constant 12, bit 0 the map is on this
+        // frame, bit 1 its crest foam keeps the climate's levels.
+        VkImageView   oceanClimateView    = VK_NULL_HANDLE;
+        VkSampler     oceanClimateSampler = VK_NULL_HANDLE;
+        VkImageLayout oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
+        uint32_t      oceanClimate        = 0u;
+        Image2D     crestFoamPatternImage{};
         // The wake field's state images (deferred shade binding 78): the live
         // ocean's, or WakeFieldPipeline's 1x1 dummy. The shade samples it only
         // through the patch table the ocean's GeometryDesc::foamAddress names.
@@ -4354,6 +4381,11 @@ namespace threepp {
         // cascade. Returns nullptr if the geometry is unsupported (must be a
         // square indexed plane with N×N vertices for some power-of-two N).
         DisplacedMeshState* ensureDisplacedState(DisplacedMesh& dm);
+        // Chop normals: builds their resources the first time the mesh asks,
+        // resolves st.chopOn and points binding 13 to match (see the definition).
+        void syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& st);
+        void syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshState& st);// called by syncOceanChop
+        void syncOceanClimate(DisplacedMesh& dm, DisplacedMeshState& st);  // called by syncOceanChop
 
         // Per-frame: run the FFT chain → water_displace → BLAS rebuild for
         // one DisplacedMesh. Mirrors refreshSkinnedBlas's structure.
@@ -6034,6 +6066,9 @@ namespace threepp {
         std::vector<unsigned char> generateFoamDetailTile_(int res);
 
         void createFoamDetailImage_();
+        // Crest foam's detail tile (deferred binding 92), uploaded the first
+        // time an ocean turns crest foam on (syncOceanCrestFoam).
+        void createCrestFoamPattern_();
 
         // 1×1 R32F dummy ocean height used when no DisplacedMesh is in the
         // scene. deferred_shade.comp gates on oceanFineTileSize > 0 so the

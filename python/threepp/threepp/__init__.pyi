@@ -2125,6 +2125,14 @@ class DisplacedMesh(Mesh):
     class VesselWake:
         enabled: bool
         @property
+        def analytic_waves(self) -> bool:
+            """
+            Its bow bump, V-wedge and V-ridge foam (the default). False for a vessel whose waves the wake field makes (a VesselWash with ripples); the stern foam trail stays.
+            """
+        @analytic_waves.setter
+        def analytic_waves(self, arg0: bool) -> None:
+            ...
+        @property
         def forward_speed(self) -> float:
             """
             m/s along +heading. The whole wake fades out below ~0.5 m/s; 0 disables it.
@@ -2215,6 +2223,14 @@ class DisplacedMesh(Mesh):
             """
         @ripple_gain.setter
         def ripple_gain(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_heights(self) -> bool:
+            """
+            The ripples' height is part of the ocean's geometry, and an absorbing layer at each window's edge takes up the waves that reach it instead of the forced decay. Off by default (THREEPP_WAKE_HEIGHTS=1 turns it on). Live.
+            """
+        @ripple_heights.setter
+        def ripple_heights(self, arg0: bool) -> None:
             ...
         @property
         def ripple_life(self) -> float:
@@ -2384,7 +2400,7 @@ class DisplacedMesh(Mesh):
         """
         Emit one wake snapshot at the vessel's current pose (age 0), dropping the oldest once the trail is full. The renderer's hard cap is 64 samples; overflow beyond it is dropped silently on upload. The C++ showcase's cadence is 10 Hz OR every 1 m travelled, whichever fires first.
         """
-    def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None, push: typing.SupportsFloat | typing.SupportsIndex = 0.0, ax: typing.SupportsFloat | typing.SupportsIndex = 0.0, az: typing.SupportsFloat | typing.SupportsIndex = 0.0, patch: typing.SupportsInt | typing.SupportsIndex = -1) -> None:
+    def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None, push: typing.SupportsFloat | typing.SupportsIndex = 0.0, ax: typing.SupportsFloat | typing.SupportsIndex = 0.0, az: typing.SupportsFloat | typing.SupportsIndex = 0.0, patch: typing.SupportsInt | typing.SupportsIndex = -1, taper: typing.SupportsFloat | typing.SupportsIndex = 0.0, draft: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
         One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from (x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.
         

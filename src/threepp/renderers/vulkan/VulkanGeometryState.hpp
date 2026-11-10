@@ -593,6 +593,37 @@ namespace threepp::vulkan::impl {
         };
         std::array<Cascade, 3> cascades;
         uint32_t cascadeMask = 0;            // bit i set = cascade i enabled
+        // Chop normals (DisplacedMesh::Params::chopNormals): the finest
+        // cascade's slope-moment mip chain, the deferred shade's per-pixel
+        // surface, and the OCEAN_CHOP displace set. Both null until the mesh
+        // first turns the feature on (VulkanRenderer::Impl::syncOceanChop).
+        std::unique_ptr<water::ChopMoments> chopMoments;
+        VkDescriptorSet displaceChopDS = VK_NULL_HANDLE;
+        uint32_t chopFineIdx = 0;            // the finest enabled cascade (feeds chopMoments)
+        bool     chopOn      = false;        // on this frame (resolved by syncOceanChop)
+        // Crest foam (DisplacedMesh::Params::crestFoam): the foam texture over
+        // the water's rest coordinates and its pass. Null until the mesh first
+        // turns the feature on with the chop normals on (it reads their
+        // derivative fields); resolved with them, by syncOceanChop.
+        std::unique_ptr<water::CrestFoam> crestFoam;
+        bool     crestFoamOn = false;        // on this frame
+        // DisplacedMesh::Params::shortWaves as the cascades were built: the
+        // 1 -> 2 hand-off wavelength (m), 0 = the historical split.
+        float    shortWaveHandoff = 0.f;
+        // Short waves as geometry: mipped copies of the middle cascade's
+        // height, displacement, slope and jacDiag (in that order), which the
+        // chop displace set binds in place of the cascade's own images so
+        // that every vertex reads them at its own spacing. Null without
+        // shortWaves or until the chop normals first come on.
+        std::unique_ptr<water::FieldMips> c1Mips;
+        bool     crestFoamC1Band = false;// the foam pass reads cascade 1's mipped copies (Params::foldFoam)
+        // The wave climate (DisplacedMesh::WaveClimate): its map with the
+        // header row (ocean_climate.glsl), SHADER_READ_ONLY_OPTIMAL, uploaded
+        // when the mesh's map version changes; null while it has none.
+        Image2D  climateImage{};
+        uint64_t climateVersion = 0;
+        float    climateBanked  = -1.f;// the shortWaveBankedMss its header row holds
+        double   crestFoamPrevTimeSec = -1.0;// its previous pass, for the decay step (-1 = none yet)
         // Wind + fetch actually baked into the cascades' h0 spectra. When
         // dm.params drifts from these, recordDisplacedDeform rewrites the
         // Phillips params and re-dispatches the (normally one-shot) h0
@@ -602,6 +633,18 @@ namespace threepp::vulkan::impl {
         float appliedWindTheta = 0.f;
         float appliedFetch     = 0.f;
         bool  appliedHsFix     = false;// the Hs calibration (Params::hsFix / THREEPP_OCEAN_HS_FIX)
+        // Bound waves: cascades 0 and 1's mean wavenumbers (rad/m) for the
+        // second-order harmonic, valid until the sea state changes.
+        float boundKm[2]       = {0.f, 0.f};
+        bool  boundKmValid     = false;
+        // Params::shortWaveSpectrum: the finest cascade's unresolved short-
+        // wave slope variance (PhillipsSpectrum::unresolvedShortWaveMss),
+        // banked into the chop moments; recomputed with the sea state.
+        float shortWaveBankedMss = 0.f;
+        bool  shortWaveBankValid = false;
+        bool  crestUvTagged    = false;// the UV buffer holds breaking crests' (eps, -1) or crest foam's disp.xz
+        bool  appliedMeasuredSpreading = false;
+        float appliedSwell[4] = {0.f, 0.f, 0.f, 0.f};// height, period, theta, spread
         water::OceanImage scratchA;          // RG32F IFFT scratch, shared across cascades (sequential dispatch); null when every cascade's IFFT is on the shared path
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;
         uint32_t vertexCount = 0;
@@ -674,7 +717,7 @@ namespace threepp::vulkan::impl {
         // reallocated; null handles until then.
         static constexpr uint32_t kMaxVessels     = 8;// = DisplacedMesh::kMaxVessels (asserted at the upload)
         static constexpr uint32_t kMaxWakeSamples = 64;// per vessel
-        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 48u;// vulkan::OceanHullGpu
+        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 56u;// vulkan::OceanHullGpu
         static constexpr VkDeviceSize kVesselTrailBytes = kMaxVessels * kMaxWakeSamples * 32u;
         Buffer    vesselBuffer[kFramesInFlight] = {};
 
@@ -694,6 +737,10 @@ namespace threepp::vulkan::impl {
         // The wake field (DisplacedMesh::WakeField), when the mesh had one
         // switched on as the renderer first saw it; null otherwise.
         std::unique_ptr<vulkan::WakeFieldPipeline::State> wake;
+        // Grid lines the ray-tracing proxy keeps one of (rtProxyCells; 1 =
+        // the full grid is traced): water_displace reads the wake field's
+        // ripple heights at the proxy's spacing.
+        uint32_t rtStride = 1;
         uint32_t foamRes      = 0;          // texels per side
         float    foamTileSize = 0.f;        // world extent (m) covered
         VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;

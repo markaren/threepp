@@ -3051,6 +3051,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
                             auto stIt = displacedStates.find(dm);
                             if (stIt == displacedStates.end()) continue;
+                            syncOceanChop(*dm, *stIt->second);
                             pendingDisplacedDeforms_.emplace_back(dm, stIt->second.get(), now);
                             ++dm->frameTick;
                         }
@@ -4329,10 +4330,37 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 oceanFineTileSize   = 0.0f;
                             }
                         }
+                        // The chop normals' moment chain stood in for the
+                        // height view, with its own sampler.
+                        if (st->chopMoments && st->chopMoments->sampledView() == oceanFineHeightView) {
+                            oceanFineHeightView    = oceanFineHeightDummy.view;
+                            oceanFineHeightSampler = oceanFineHeightDummy.sampler;
+                            oceanFineTileSize      = 0.0f;
+                            oceanChopNormals       = false;
+                            oceanDetile            = false;
+                        }
                         if (st->foamImage.view == oceanFoamView) {
                             oceanFoamView     = oceanFoamDummy.view;
                             oceanFoamTileSize = 0.0f;
                         }
+                        // Crest foam's texture (binding 91), the same way.
+                        if (st->crestFoam && st->crestFoam->sampledView() == oceanCrestFoamView) {
+                            oceanCrestFoamView    = oceanFoamDummy.view;
+                            oceanCrestFoamSampler = oceanFoamDummy.sampler;
+                            oceanCrestFoam        = false;
+                            oceanWaveMod          = false;
+                        }
+                        // The wave climate's map (binding 93), the same way.
+                        if (st->climateImage.view != VK_NULL_HANDLE) {
+                            if (st->climateImage.view == oceanClimateView) {
+                                oceanClimateView    = oceanFoamDummy.view;
+                                oceanClimateSampler = oceanFoamDummy.sampler;
+                                oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
+                                oceanClimate        = 0u;
+                            }
+                            destroyImage2D(ctx->allocator(), ctx->device(), st->climateImage);
+                        }
+                        oceanWaveReflections = false;// the next ocean's sync sets it again
                         if (st->wake) {
                             if (st->wake->stateView() == oceanWakeView) oceanWakeView = wakeField_->dummyView();
                             if (st->wake->rippleView() == oceanRippleView) oceanRippleView = wakeField_->dummyView();
@@ -4551,6 +4579,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // recordCommandBuffer refits it before the shade trace,
                         // and beginDeferredFrame mirrors the height field after
                         // the fence wait, as on the per-frame path.
+                        syncOceanChop(*dm, *st);
                         pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(frameNowSec()));
                         ++dm->frameTick;
                     } else {

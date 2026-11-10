@@ -13,6 +13,36 @@
 // from finite differences of the SPATIAL fields — so they were retired. The
 // remaining bindings keep their historical numbers.)
 //
+// Chop normals (the OCEAN_CHOP variant, compiled with -DOCEAN_CHOP=1 and run
+// only while DisplacedMesh::Params::chopNormals is on; the plain variant is
+// the shader as it was before the feature): the exact derivatives the
+// displaced-surface normal needs, as more inverse FFTs of the same h(k,t), so
+// no finite-difference stencil is needed anywhere:
+//   slope (binding 2)  i*k*h, packed like the displacement:
+//                      IFFT -> .r = dh/dx, .g = dh/dz
+//   jac   (binding 4)  -(kx^2 + i*kz^2)/|k| * h, the diagonal of the
+//                      displacement's own gradient: IFFT -> .r = dDx/dx,
+//                      .g = dDz/dz
+//   ht    (binding 1)  h + i*(-kx*kz/|k| * h): the height keeps .r and the
+//                      off-diagonal dDx/dz = dDz/dx rides in the otherwise
+//                      zero imaginary part (.g), which costs no extra IFFT.
+// Derivative of a Fourier mode e^{i k.x} is i k times it (Tessendorf 2001,
+// "Simulating Ocean Water", eq. 37 for the slope, eq. 44-45 for the
+// displacement whose x-derivatives give the Jacobian terms).
+// Two real Hermitian spectra A and B can share one complex IFFT as A + i*B:
+// the real part returns IFFT(A) and the imaginary part IFFT(B).
+// Two corrections on those derivative fields only (the height and the
+// displacement stay as they are):
+//  - The row and column n = -N/2 have no partner frequency on the grid, so
+//    i*k*h there is not Hermitian and its IFFT leaks into the other packed
+//    channel as a one-texel checkerboard. They are zeroed (the spectrum's
+//    short-wave cutoff leaves almost nothing there anyway).
+//  - taperSpacing > 0 (the cascades that feed the VERTEX normal): a raised
+//    cosine from half the vertex grid's Nyquist pi/dx to zero at it, so a
+//    normal sampled once per vertex never carries a wave the grid cannot
+//    hold (on a large plane those alias and shimmer). The finite difference
+//    over one vertex spacing that the plain path uses filters the same band.
+//
 // Dispatched once per frame per cascade. The params ride in PUSH CONSTANTS,
 // recorded into the frame's command buffer: with two frames in flight a
 // host-mapped UBO rewritten at record time handed frame N the time of frame
@@ -25,10 +55,17 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0)            uniform sampler2D H0;
 layout(set = 0, binding = 1, rg32f)     uniform writeonly image2D HT;
 layout(set = 0, binding = 3, rg32f)     uniform writeonly image2D Displacement;
+#ifdef OCEAN_CHOP
+layout(set = 0, binding = 2, rg32f)     uniform writeonly image2D Slope;
+layout(set = 0, binding = 4, rg32f)     uniform writeonly image2D JacDiag;
+#endif
 layout(push_constant) uniform Params {
     uint  textureSize;
     float tileSize;
     float elapsedSeconds;
+#ifdef OCEAN_CHOP
+    float taperSpacing;// m; nominal vertex spacing of the mesh, 0 = no taper
+#endif
 } P;
 
 const float PI = 3.14159265358979;
@@ -36,6 +73,18 @@ const float PI = 3.14159265358979;
 #include "complex_math.glsl"// complexMul
 
 float omega(vec2 k) { return sqrt(length(k) * 9.81); }
+
+#ifdef OCEAN_CHOP
+// Weight of the derivative fields at wavenumber magnitude kl (see the header).
+float vertexTaper(float kl) {
+    if (P.taperSpacing <= 0.0) return 1.0;
+    const float x = kl * P.taperSpacing;// pi at the vertex grid's Nyquist
+    if (x <= 0.5 * PI) return 1.0;
+    if (x >= PI) return 0.0;
+    const float c = cos(x - 0.5 * PI);
+    return c * c;
+}
+#endif
 
 void main() {
     const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
@@ -61,6 +110,15 @@ void main() {
     const float kLen = length(k) + 1e-3;
     const vec2  displacement = ikh / kLen;
 
+#ifdef OCEAN_CHOP
+    // Displacement D = i k/|k| h, so dD/dx = i kx D = -kx k/|k| h.
+    const float t   = (id.x == 0 || id.y == 0) ? 0.0 : vertexTaper(length(k));
+    const vec2  jxz = (-k.x * k.y / kLen) * h * t;
+    imageStore(HT,      id, vec4(h + vec2(-jxz.y, jxz.x), 0.0, 0.0));// h + i*jxz
+    imageStore(Slope,   id, vec4(ikh * t, 0.0, 0.0));
+    imageStore(JacDiag, id, vec4(-(k.x * k.x * h + k.y * k.y * ih) * (t / kLen), 0.0, 0.0));
+#else
     imageStore(HT,           id, vec4(h,            0.0, 0.0));
+#endif
     imageStore(Displacement, id, vec4(displacement, 0.0, 0.0));
 }

@@ -25,7 +25,7 @@ namespace threepp::vulkan {
     // One vessel as water_displace.comp and foam_world.comp read it: the
     // DisplacedMesh::HullExclusion pose, the wake's forward speed and the
     // vessel's slice of the wake-trail buffer. Mirrors `OceanHull` in
-    // ocean_cascade.glsl field for field (scalar layout, 48 bytes).
+    // ocean_cascade.glsl field for field (scalar layout, 56 bytes).
     struct OceanHullGpu {
         float    centerX;
         float    centerZ;
@@ -39,18 +39,29 @@ namespace threepp::vulkan {
         float    roll;
         uint32_t trailFirst;  // first WakeSample of this vessel in the trail buffer
         uint32_t trailCount;
+        uint32_t analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam (VesselWake::analyticWaves)
+        uint32_t _pad;
     };
-    static_assert(sizeof(OceanHullGpu) == 48, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
+    static_assert(sizeof(OceanHullGpu) == 56, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
 
     class WaterDisplacePipeline {
 
     public:
-        // Max simultaneous DisplacedMesh instances. Each set holds 6
-        // combined-image-samplers (3 cascades × 2 images).
+        // Max simultaneous DisplacedMesh instances. Each set holds 8
+        // combined-image-samplers (3 cascades × 2 images at bindings 0-5,
+        // kRippleBinding: the wake field's ripples, or its 1x1 stand-in, and
+        // kClimateBinding: the wave climate's map, or a 1x1 stand-in).
         static constexpr uint32_t kMaxOceans = 16;
+        // water_displace.comp's binding of the wake field's ripples (6-9 are
+        // left to other ocean inputs).
+        static constexpr uint32_t kRippleBinding = 10;
+        // ... and of the wave climate's map (DisplacedMesh::WaveClimate, with
+        // its header row), or a 1x1 stand-in while the ocean has none.
+        static constexpr uint32_t kClimateBinding = 11;
 
-        // Must match water_displace.comp's `Pc` struct (96 bytes):
-        // 4 × VkDeviceAddress (32) + 16 × u32/float (64). The vessels live in
+        // Must match water_displace.comp's `Pc` struct (128 bytes, the
+        // maximum): 5 × VkDeviceAddress (40) + 20 × u32/float (80) + the wake
+        // table's address (8). The vessels live in
         // a per-frame buffer (hullAddr → OceanHullGpu[hullCount]); one hull
         // alone used to fill this block to the 128-byte maximum.
         struct PushConstants {
@@ -74,6 +85,26 @@ namespace threepp::vulkan {
             float           warpHalfRange; // gates the whole feature on
             float           warpCoefA;     // warpHalfRange > 0.
             uint32_t        hullCount;     // active vessels (0 = none)
+            // The wave-model switches (DisplacedMesh::Params). With
+            // waveModel 0 the shader runs the historical path and touches
+            // nothing below.
+            uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests,
+                                          // bit 3 clear the crest tags breakingCrests left,
+                                          // bit 4 crestFoam: the drawn disp.xz into the UVs,
+                                          // bit 7 hullContact: the narrow blend to each hull's plane,
+                                          // bit 8 the wave climate (kClimateBinding scales the cascades)
+            float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
+            float           boundKm1;     // 0 = none on that cascade
+            float           crestSharpness;// DisplacedMesh::effectiveCrestSharpness (cwm only; 0 = off)
+            VkDeviceAddress uvOut;        // the mesh's UV buffer: breakingCrests writes (eps, -1) here, crestFoam disp.xz
+            // The ocean's wake-field table (WakeFieldPipeline::State::tableAddress),
+            // whose patches with rippleHeight on add their waves' height
+            // from kRippleBinding; 0 = none (the geometry is exactly the old
+            // one). The ray-tracing proxy's stride (DisplacedMesh::rtProxyCells,
+            // grid lines it keeps one of) rides in cascadeMask's bits 8-15
+            // while this is set: the ripples' height is read at the proxy's
+            // spacing, so the traced and the drawn surface carry the same waves.
+            VkDeviceAddress wakeTableAddr;
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);
@@ -95,9 +126,20 @@ namespace threepp::vulkan {
 
         // Per-mesh dispatch — binds pipeline + descriptor set + push
         // constants and dispatches over `pc.vertexCount` in 64-thread groups.
+        // chop: the OCEAN_CHOP variant (chop normals) with a set from
+        // allocateChopDescriptorSet; otherwise the plain pipeline.
         void recordDispatch(VkCommandBuffer cb,
                             VkDescriptorSet ds,
-                            const PushConstants& pc);
+                            const PushConstants& pc,
+                            bool chop = false);
+
+        // Chop normals (DisplacedMesh::Params::chopNormals). The OCEAN_CHOP
+        // variant of water_displace.comp reads four more combined-image-
+        // samplers (bindings 6-9: slope and jacDiag of cascades 0 and 1), so it
+        // has its own set layout, pipeline and pool, all created on the first
+        // call here: a scene that never turns the feature on keeps exactly the
+        // plain pipeline and layout above. Same push block as the plain one.
+        VkDescriptorSet allocateChopDescriptorSet();
 
     private:
         VulkanContext&        ctx_;
@@ -107,7 +149,14 @@ namespace threepp::vulkan {
         VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
         VkSampler             sampler_        = VK_NULL_HANDLE;
 
+        // The OCEAN_CHOP variant (allocateChopDescriptorSet).
+        VkDescriptorSetLayout chopDsLayout_       = VK_NULL_HANDLE;
+        VkPipelineLayout      chopPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline            chopPipeline_       = VK_NULL_HANDLE;
+        VkDescriptorPool      chopDescPool_       = VK_NULL_HANDLE;
+
         void createPipeline();
+        void createChopPipeline();
     };
 
 }// namespace threepp::vulkan

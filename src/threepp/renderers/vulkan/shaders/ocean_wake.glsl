@@ -14,7 +14,7 @@
 #define OCEAN_WAKE_MAX_PATCHES 8
 
 // One patch: a square window of water, world-anchored, `res` texels a side.
-// 56 bytes.
+// 72 bytes.
 struct WakePatch {
     float originX;      // world min corner, snapped to whole texels
     float originZ;
@@ -29,10 +29,14 @@ struct WakePatch {
     float rippleOriginX;// the window its ripples are shown through (world min corner)
     float rippleOriginZ;
     float rippleSize;   // that window's side, and the period of its small sea (m)
-    float _pad;
+    float rippleHeight; // 1 = the ripples' fourth channel holds their height (m), which the geometry takes
+    float breakSlope0;  // its waves break where their slope passes this (WakeField::rippleBreaking) ...
+    float breakSlope1;  // ... fully at this; 0 = they never do
+    float breakFoam;    // the film and the bubbles a fully broken crest lays in the field
+    float breakAir;
 };
 
-// What makes a mark. 64 bytes (= DisplacedMesh::WakeSource).
+// What makes a mark. 68 bytes (= DisplacedMesh::WakeSource).
 struct WakeSource {
     vec2  p0;           // where the producer was at the last step (world xz)
     vec2  p1;           // where it is now
@@ -45,7 +49,8 @@ struct WakeSource {
     float push;         // N it bears down on the water with (the ripples' forcing)
     vec2  axis;         // the push is a line that reaches this far to either side of the point
     int   owner;        // the patch whose ripples it forces (the CPU has resolved a -1)
-    float _pad;
+    float taper;        // the line convolved with one of taper x its half length (0 = none)
+    float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
 };
 
 // 64-byte header, then the patches, then the sources of this step.

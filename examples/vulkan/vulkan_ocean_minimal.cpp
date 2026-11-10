@@ -27,6 +27,30 @@
 //   --foam <amount>    whitecap scale, Params::foamAmount (1 for the ocean)
 //   --hs-fix 0|1       Params::hsFix, the Pierson-Moskowitz-calibrated
 //                      spectrum (THREEPP_OCEAN_HS_FIX overrides it)
+//   --cwm 0|1          Params::cwm, the Choppy Wave Model's choppiness 1 with
+//                      its fold limiter (THREEPP_OCEAN_CWM overrides it)
+//   --bound 0|1        Params::boundWaves, second-order bound harmonics
+//                      (THREEPP_OCEAN_BOUND_WAVES overrides it)
+//   --breaking 0|1     Params::breakingCrests, foam only on breaking crests
+//                      (THREEPP_OCEAN_BREAKING_CRESTS overrides it)
+//   --crest-foam 0|1   Params::crestFoam, foam laid down where a crest
+//                      breaks and kept on the water it was laid on; turns
+//                      the chop normals on with it, whose derivative
+//                      fields it reads (THREEPP_OCEAN_CREST_FOAM overrides it)
+//   --wave-refl 0|1    Params::waveReflections, the water's mirror ray
+//                      shades a wave it meets as water (no black spots where
+//                      a face cannot see the sky)
+//   --short-waves 0|1  Params::shortWaves, the 3 to 9 m waves as geometry
+//   --detile 0|1       Params::detile, the fine cascade without its period
+//   --short-spectrum 0|1  Params::shortWaveSpectrum, Elfouhaily et al. (1997)'s short waves
+//   --wave-mod 0|1     Params::waveModulation, short waves steeper on the long waves' crests
+//   --sharpness S      Params::crestSharpness, crests pinched into ridges (a look control; needs cwm)
+//   --fold-foam 0|1    Params::foldFoam, crest foam where the drawn surface nears its fold
+//   --crest-line 0|1   Params::crestLineFoam, fold foam runs along its crest
+//   --crests           the physical-crests set in one flag: hs-fix, cwm,
+//                      bound waves, breaking crests, chop normals and the
+//                      measured spreading all on (each flag above, given
+//                      after it or not, still sets its own switch)
 //   --pinned           1/60 s sim-time steps on a pinned renderer clock, so
 //                      captures with the same sea flags show the same waves
 // Validation hooks:
@@ -78,6 +102,10 @@ int main(int argc, char** argv) {
     float fetch = -1.f, chop = -1.f, waveScale = -1.f, tile2 = -1.f, foam = -1.f;
     float theta = -1e9f;
     int hsFix = -1;
+    int cwm = -1, bound = -1, breaking = -1, crestFoam = -1, waveRefl = -1, shortWaves = -1, detile = -1, shortSpectrum = -1, waveMod = -1;
+    float sharpness = -1.f;
+    int foldFoam = -1, crestLine = -1;
+    bool crests = false;
     bool pinnedClock = false;
     for (int i = 1; i < argc; ++i) {
         auto num = [&](const char* flag, float& out) {
@@ -88,6 +116,19 @@ int main(int argc, char** argv) {
         if (num("--fetch", fetch) || num("--chop", chop) || num("--wave-scale", waveScale) ||
             num("--tile2", tile2) || num("--theta", theta) || num("--foam", foam)) continue;
         if (std::strcmp(argv[i], "--hs-fix") == 0 && i + 1 < argc) hsFix = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--cwm") == 0 && i + 1 < argc) cwm = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--bound") == 0 && i + 1 < argc) bound = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--breaking") == 0 && i + 1 < argc) breaking = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--crest-foam") == 0 && i + 1 < argc) crestFoam = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--wave-refl") == 0 && i + 1 < argc) waveRefl = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--short-waves") == 0 && i + 1 < argc) shortWaves = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--detile") == 0 && i + 1 < argc) detile = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--short-spectrum") == 0 && i + 1 < argc) shortSpectrum = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--wave-mod") == 0 && i + 1 < argc) waveMod = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--fold-foam") == 0 && i + 1 < argc) foldFoam = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--crest-line") == 0 && i + 1 < argc) crestLine = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--sharpness") == 0 && i + 1 < argc) sharpness = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--crests") == 0) crests = true;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -103,9 +144,11 @@ int main(int argc, char** argv) {
     // --bench runs headless so THREEPP_VULKAN_SUPPRESS_PRESENT=1 can engage
     // (present to a hidden window host-blocks ~a GPU frame and poisons the
     // wall-clock columns; the per-pass GPU brackets don't care, but cpuFrame /
-    // gpuTotal do).
+    // gpuTotal do). --shot runs headless too: a capture never opens a window
+    // on the desktop.
     Canvas canvas("Vulkan Deferred - Ocean (minimal)",
-                  {{"vsync", false}, {"size", WindowSize{1600, 900}}, {"headless", benchFrames > 0}});
+                  {{"vsync", false}, {"size", WindowSize{1600, 900}},
+                   {"headless", benchFrames > 0 || !shotPath.empty()}});
 
     auto renderer = VulkanRenderer(canvas);
     renderer.setDenoise(true);
@@ -189,7 +232,32 @@ int main(int argc, char** argv) {
     if (theta > -1e8f) opts.windTheta = theta;
     auto ocean = Ocean::create(opts);
     if (foam >= 0.f) ocean->params.foamAmount = foam;
+    if (crests) {
+        auto& p = ocean->params;
+        p.hsFix = p.cwm = p.boundWaves = p.breakingCrests = true;
+        p.chopNormals = p.measuredSpreading = true;
+    }
     if (hsFix >= 0) ocean->params.hsFix = hsFix != 0;
+    if (cwm >= 0) ocean->params.cwm = cwm != 0;
+    if (bound >= 0) ocean->params.boundWaves = bound != 0;
+    if (breaking >= 0) ocean->params.breakingCrests = breaking != 0;
+    if (waveRefl >= 0) ocean->params.waveReflections = waveRefl != 0;
+    if (shortWaves >= 0) ocean->params.shortWaves = shortWaves != 0;
+    if (detile >= 0) ocean->params.detile = detile != 0;
+    if (shortSpectrum >= 0) ocean->params.shortWaveSpectrum = shortSpectrum != 0;
+    if (waveMod >= 0) ocean->params.waveModulation = waveMod != 0;
+    if (sharpness >= 0.f) ocean->params.crestSharpness = sharpness;
+    if (foldFoam >= 0) ocean->params.foldFoam = foldFoam != 0;
+    if (crestLine >= 0) ocean->params.crestLineFoam = crestLine != 0;
+    if (crestFoam >= 0) {
+        ocean->params.crestFoam = crestFoam != 0;
+        if (crestFoam != 0) ocean->params.chopNormals = true;
+    }
+    std::printf("wave model: hs-fix %d, cwm %d, bound waves %d, breaking crests %d, chop normals %d, "
+                "measured spreading %d, crest foam %d (with environment overrides)\n",
+                int(ocean->params.hsFix), int(ocean->cwmOn()), int(ocean->boundWavesOn()),
+                int(ocean->breakingCrestsOn()), int(ocean->params.chopNormals),
+                int(ocean->params.measuredSpreading), int(ocean->crestFoamOn()));
     scene.add(ocean);
 
     // Live wind control — setWind() takes effect next frame; the sea morphs

@@ -19,6 +19,7 @@
 
 #ifdef THREEPP_PY_HAS_VULKAN
 
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include <algorithm>
@@ -107,7 +108,9 @@ namespace threepp_py {
                                "Cascade-0 world tile (m); the largest swell wavelength. Must be > 0.")
                 .def_readwrite("tile_size_1", &DisplacedMesh::Params::tileSize1, "Cascade-1 tile (m); 0 disables.")
                 .def_readwrite("tile_size_2", &DisplacedMesh::Params::tileSize2, "Cascade-2 tile (m); 0 disables.")
-                .def_readwrite("wind_theta", &DisplacedMesh::Params::windTheta, "Wind direction (radians, 0 = +X).")
+                .def_readwrite("wind_theta", &DisplacedMesh::Params::windTheta,
+                               "Direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X); "
+                               "with measured_spreading the waves run that way.")
                 .def_readwrite("wind_speed", &DisplacedMesh::Params::windSpeed,
                                "Wind speed (m/s); the dominant wave-height lever (Phillips amplitude ~ V^4).")
                 .def_readwrite("fetch", &DisplacedMesh::Params::fetch,
@@ -119,12 +122,47 @@ namespace threepp_py {
                                "Pierson-Moskowitz-calibrated spectrum (default False, the historical sea): "
                                "significant wave height x1.85 at every wind and fetch, peak wavelength x1.16. "
                                "THREEPP_OCEAN_HS_FIX=1/0 overrides it. Live-tunable.")
+                .def_readwrite("cwm", &DisplacedMesh::Params::cwm,
+                               "Choppy Wave Model (default False): choppiness 1, the first-order Lagrangian "
+                               "surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter. "
+                               "THREEPP_OCEAN_CWM=1/0 overrides it. Live-tunable.")
+                .def_readwrite("bound_waves", &DisplacedMesh::Params::boundWaves,
+                               "Second-order bound harmonics (default False): sharper crests, flatter troughs "
+                               "(Longuet-Higgins 1963, Tayfun 1980). THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.")
+                .def_readwrite("breaking_crests", &DisplacedMesh::Params::breakingCrests,
+                               "Natural foam only where the crest breaks now (default False), from the surface's "
+                               "local steepness; vessel foam unchanged. THREEPP_OCEAN_BREAKING_CRESTS=1/0 overrides it.")
+                .def_readwrite("crest_foam", &DisplacedMesh::Params::crestFoam,
+                               "Foam laid down where a crest breaks and kept on the water it was laid on (default "
+                               "False): a field on the water's rest coordinates, so it rides the crest, trails "
+                               "behind it and opens up as it thins, drawn from a foam photograph. Needs chop_normals. "
+                               "THREEPP_OCEAN_CREST_FOAM=1/0 overrides it.")
+                .def_readwrite("measured_spreading", &DisplacedMesh::Params::measuredSpreading,
+                               "True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with "
+                               "long crests at the peak. False (default) = the old symmetric cos^2 (as much energy "
+                               "upwind as downwind). Hs agrees within about 10% on the cascade grids. Live-tunable; "
+                               "THREEPP_OCEAN_SPREAD=1 makes True the default.")
+                .def_readwrite("swell_height", &DisplacedMesh::Params::swellHeight,
+                               "Significant height (m) of an optional swell added to the wind sea; 0 = none. "
+                               "Drawn on cascade 0 only: its peak wavelength must lie between tile_size_1 and "
+                               "tile_size_0 / 2 (9.5-17.5 s on a 1 km ocean); outside that it is not drawn and the "
+                               "renderer warns once. Live-tunable.")
+                .def_readwrite("swell_period", &DisplacedMesh::Params::swellPeriod, "Swell peak period Tp (s).")
+                .def_readwrite("swell_theta", &DisplacedMesh::Params::swellTheta,
+                               "Direction the swell travels toward (radians, 0 = +X).")
+                .def_readwrite("swell_spread", &DisplacedMesh::Params::swellSpread,
+                               "Swell spreading s of cos^(2s)(theta/2): ~25 nearby storm, ~75 far away; below 1 is taken as 1.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
                 .def_readwrite("foam_amount", &DisplacedMesh::Params::foamAmount,
                                "Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; "
                                "wake/disturbance foam unaffected). Ocean auto-derives ~size/300.")
+                .def_readwrite("chop_normals", &DisplacedMesh::Params::chopNormals,
+                               "Shade the surface the choppy displacement draws: exact slope and displacement-gradient "
+                               "fields give the vertex normal, the fine cascade's slope moments the per-pixel one (what a "
+                               "pixel cannot hold goes to roughness). False (default) = the height-only normals. "
+                               "Live-tunable; THREEPP_OCEAN_CHOP_NORMALS=1 makes True the default.")
                 .def_readwrite("texture_size_0", &DisplacedMesh::Params::textureSize0, "Cascade-0 FFT resolution (power of two).")
                 .def_readwrite("texture_size_1", &DisplacedMesh::Params::textureSize1, "Cascade-1 FFT resolution (power of two).")
                 .def_readwrite("texture_size_2", &DisplacedMesh::Params::textureSize2, "Cascade-2 FFT resolution (power of two).");
@@ -199,6 +237,9 @@ namespace threepp_py {
                 .def_readwrite("forward_speed", &DisplacedMesh::VesselWake::forwardSpeed,
                                "m/s along +heading. The whole wake fades out below ~0.5 m/s; 0 disables it.")
                 .def_readwrite("enabled", &DisplacedMesh::VesselWake::enabled)
+                .def_readwrite("analytic_waves", &DisplacedMesh::VesselWake::analyticWaves,
+                               "Its bow bump, V-wedge and V-ridge foam (the default). False for a vessel whose "
+                               "waves the wake field makes (a VesselWash with ripples); the stern foam trail stays.")
                 .def_readwrite("trail", &DisplacedMesh::VesselWake::trail,
                                "Historical pose snapshots (list of WakeSample). Reading COPIES and "
                                "writing REPLACES — mutating the returned list does not write through. "
@@ -287,6 +328,10 @@ namespace threepp_py {
                                "m2/s: a ripple of wavenumber k also dies at 2 nu k^2, the shortest first.")
                 .def_readwrite("ripple_gain", &DisplacedMesh::WakeField::rippleGain,
                                "Scales the slope the water shade reads; 1 = what linear theory gives.")
+                .def_readwrite("ripple_heights", &DisplacedMesh::WakeField::rippleHeights,
+                               "The ripples' height is part of the ocean's geometry, and an absorbing layer at "
+                               "each window's edge takes up the waves that reach it instead of the forced decay. "
+                               "Off by default (THREEPP_WAKE_HEIGHTS=1 turns it on). Live.")
                 .def_readwrite("albedo", &DisplacedMesh::WakeField::albedo,
                                "Scales the light the film and the bubbles turn back; 1 = as the water shade "
                                "has them (the default). Read every frame. A scene whose camera opens wide at "
@@ -413,7 +458,7 @@ namespace threepp_py {
                 .def("add_wake_source",
                      [](DisplacedMesh& o, float x, float z, float vx, float vz, float radius, float foam,
                         float aeration, float turbulence, float lane, const py::object& xPrev, const py::object& zPrev,
-                        float push, float ax, float az, int patch) {
+                        float push, float ax, float az, int patch, float taper, float draft) {
                          DisplacedMesh::WakeSource s{};
                          s.x1 = x;
                          s.z1 = z;
@@ -430,12 +475,15 @@ namespace threepp_py {
                          s.ax         = ax;
                          s.az         = az;
                          s.patch      = patch;
+                         s.taper      = taper;
+                         s.draft      = draft;
                          o.addWakeSource(s);
                      },
                      py::arg("x"), py::arg("z"), py::arg("vx") = 0.0f, py::arg("vz") = 0.0f, py::arg("radius") = 0.3f,
                      py::arg("foam") = 0.0f, py::arg("aeration") = 0.0f, py::arg("turbulence") = 0.0f,
                      py::arg("lane") = 0.0f, py::arg("x_prev") = py::none(), py::arg("z_prev") = py::none(),
                      py::arg("push") = 0.0f, py::arg("ax") = 0.0f, py::arg("az") = 0.0f, py::arg("patch") = -1,
+                     py::arg("taper") = 0.0f, py::arg("draft") = 0.0f,
                      "One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from "
                      "(x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time "
                      "step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a "
@@ -447,13 +495,46 @@ namespace threepp_py {
                      "reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along "
                      "its length; where it moves, the waves that keep up with it are the ones that grow, "
                      "which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that "
-                     "holds it); a source with a push and nothing else leaves only waves.")
+                     "holds it); a source with a push and nothing else leaves only waves. `taper` rounds the line's "
+                     "ends (a trapezoid, the line convolved with one of taper x its half length). `draft` (m) is "
+                     "how deep the load is carried: the push spread over 0..draft, which weakens its waves of "
+                     "wavenumber k by (1 - e^(-k draft)) / (k draft), as a hull's are (0 = a load on the surface).")
                 // CPU mirror of the GPU wave height — for buoyancy / placing floats.
                 // Valid after a Vulkan render() has filled the height fields.
                 .def("sample_height", &DisplacedMesh::sampleHeight,
                      py::arg("world_x"), py::arg("world_z"), py::arg("cascade_mask") = 0b111u,
                      "Combined wave height (m) at a world XZ. cascade_mask selects cascades "
-                     "(bit i = cascade i). Returns 0 until a Vulkan render() has run.");
+                     "(bit i = cascade i). Returns 0 until a Vulkan render() has run.")
+                .def(
+                        "set_wave_climate",
+                        [](DisplacedMesh& o, py::array_t<float, py::array::c_style | py::array::forcecast> a,
+                           float originX, float originZ, float sizeX, float sizeZ) {
+                            if (a.ndim() != 3 || a.shape(2) != 4)
+                                throw py::value_error("set_wave_climate: the map must be an H x W x 4 float array");
+                            const auto h = static_cast<uint32_t>(a.shape(0));
+                            const auto w = static_cast<uint32_t>(a.shape(1));
+                            std::vector<float> data(a.data(), a.data() + a.size());
+                            o.setWaveClimate(std::move(data), w, h, originX, originZ, sizeX, sizeZ);
+                        },
+                        py::arg("map"), py::arg("origin_x"), py::arg("origin_z"), py::arg("size_x"), py::arg("size_z"),
+                        "The site's wave climate: an H x W x 4 float32 map over the rectangle "
+                        "[origin_x, origin_x + size_x] x [origin_z, origin_z + size_z] of the ocean's XZ, "
+                        "row j along z, column i along x, read bilinearly between texel centres and clamped "
+                        "at its edges. Channels 0, 1, 2 scale cascades 0, 1, 2 (height and horizontal "
+                        "displacement, per vertex and per pixel; the crest foam and sample_height follow); "
+                        "channel 3 is not read. 1 everywhere is the sea without a map. Set it before the first "
+                        "render for the crest foam to follow it.")
+                .def("clear_wave_climate", &DisplacedMesh::clearWaveClimate,
+                     "Drop the wave climate map: one sea everywhere again.")
+                .def_property_readonly("has_wave_climate", &DisplacedMesh::hasWaveClimate)
+                .def(
+                        "wave_climate_gain",
+                        [](const DisplacedMesh& o, float x, float z) {
+                            const auto g = o.waveClimateGain(x, z);
+                            return py::make_tuple(g[0], g[1], g[2]);
+                        },
+                        py::arg("x"), py::arg("z"),
+                        "The wave climate's three cascade gains at a rest point (1, 1, 1 without a map).");
 
         // ---- Ocean -----------------------------------------------------------
         // The one-liner: builds the plane geometry, the tuned transmissive water
@@ -502,7 +583,8 @@ namespace threepp_py {
                      "'ocean'/'pond' pin it regardless of scale; 'fjord' is the glacial recipe whose turquoise "
                      "comes from volume SCATTERING (Vulkan deferred only). fetch (m) = 0 is a fully developed sea "
                      "(long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea "
-                     "(see Params.fetch).")
+                     "(see Params.fetch). wind_theta is the direction the wind blows TOWARD (radians, "
+                     "(cos, sin) in world XZ, 0 = toward +X).")
                 .def("warp_toward", &Ocean::warpToward,
                      py::arg("world_x"), py::arg("world_z"), py::arg("coef_a") = 0.1f,
                      "Pack vertex density toward a world-space focus point (e.g. the camera). "

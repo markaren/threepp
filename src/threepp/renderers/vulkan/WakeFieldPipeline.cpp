@@ -1,5 +1,6 @@
 #include "threepp/renderers/vulkan/WakeFieldPipeline.hpp"
 
+#include "threepp/renderers/vulkan/EnvKnob.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
 #include "threepp/renderers/vulkan/shaders/wake_field.comp.spv.h"
@@ -182,12 +183,14 @@ namespace threepp::vulkan {
 
         // wake_field.comp. Bindings: 0, 1 = state sources, 2 = velocity source
         // (combined image samplers over the array images); 3 = state target,
-        // 4 = velocity target (storage images).
+        // 4 = velocity target (storage images); 5 = the ripples' slopes (where
+        // their waves break), or the 1x1 stand-in.
         {
-            std::array<VkDescriptorSetLayoutBinding, 5> bb{};
-            for (uint32_t i = 0; i < 5; ++i) {
+            std::array<VkDescriptorSetLayoutBinding, 6> bb{};
+            for (uint32_t i = 0; i < 6; ++i) {
                 bb[i].binding         = i;
-                bb[i].descriptorType  = i < 3 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                bb[i].descriptorType  = (i < 3 || i == 5) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                                          : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 bb[i].descriptorCount = 1;
                 bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
             }
@@ -244,7 +247,7 @@ namespace threepp::vulkan {
         const uint32_t ripSets = DisplacedMesh::kMaxWakePatches * kMaxOceans;
         std::array<VkDescriptorPoolSize, 2> ps{};
         ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps[0].descriptorCount = 3 * 3 * kMaxOceans;
+        ps[0].descriptorCount = 4 * 3 * kMaxOceans;
         ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         ps[1].descriptorCount = 2 * 3 * kMaxOceans + 3 * ripSets;
         VkDescriptorPoolCreateInfo dpci{};
@@ -389,6 +392,21 @@ namespace threepp::vulkan {
                 updateDescriptorSets(ctx_.device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
             }
         }
+        // The field's binding 5: the ripples' slopes, or the stand-in.
+        for (uint32_t m = 0; m < 3; ++m) {
+            VkDescriptorImageInfo ri{};
+            ri.sampler     = rippleSampler_;
+            ri.imageView   = st->slopeView != VK_NULL_HANDLE ? st->slopeView : dummyView_;
+            ri.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = st->ds[m];
+            w.dstBinding      = 5;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo      = &ri;
+            updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        }
         return st;
     }
 
@@ -521,6 +539,7 @@ namespace threepp::vulkan {
         // because the shade adds the patches' waves), how fast every patch's
         // waves have to die, and which patches hold any waves at all.
         uint32_t rippleMask = 0;
+        uint32_t heightMask = 0;// of those, the patches whose waves are taken to real space and back
         if (st.rippleRes > 0u) {
             std::array<float, DisplacedMesh::kMaxWakePatches> fastest{};
             std::array<bool, DisplacedMesh::kMaxWakePatches>  pushed{};
@@ -570,6 +589,26 @@ namespace threepp::vulkan {
                 // by then. The periodic sea brings back nothing that shows.
                 st.rippleSpeed[i] = std::max(fastest[i], st.rippleSpeed[i] * std::exp(-dt / 10.0f));
                 g.rippleDecay     = std::max(slowest, 1.5f * st.rippleSpeed[i] / g.rippleSize);
+                if (wf.rippleBreaking) {
+                    // Where its waves break (wake_field.comp, SETTLE). The
+                    // environment overrides are for judging the look without
+                    // a rebuild.
+                    static const auto e0 = env::number("THREEPP_WAKE_BREAK_SLOPE0");
+                    static const auto e1 = env::number("THREEPP_WAKE_BREAK_SLOPE1");
+                    static const auto ef = env::number("THREEPP_WAKE_BREAK_FOAM");
+                    static const auto ea = env::number("THREEPP_WAKE_BREAK_AIR");
+                    g.breakSlope0 = static_cast<float>(e0.value_or(wf.rippleBreakSlope[0]));
+                    g.breakSlope1 = std::max(static_cast<float>(e1.value_or(wf.rippleBreakSlope[1])), g.breakSlope0 + 1e-3f);
+                    g.breakFoam   = static_cast<float>(ef.value_or(wf.rippleBreakFoam));
+                    g.breakAir    = static_cast<float>(ea.value_or(wf.rippleBreakAir));
+                }
+                if (wf.rippleHeights) {
+                    // The absorbing layer at the window's edge takes up what
+                    // would come round (wake_ripple.comp, SPONGE): the waves
+                    // keep their own life, and the transverse ones survive.
+                    g.rippleDecay  = slowest;
+                    g.rippleHeight = 1.0f;
+                }
                 st.rippleQuiet[i] = pushed[i] ? 0.0f : st.rippleQuiet[i] + dt;
                 const bool on = pushed[i] || (st.rippleHeld[i] && st.rippleQuiet[i] * g.rippleDecay < 7.0f);
                 if (!on) {
@@ -579,6 +618,7 @@ namespace threepp::vulkan {
                 g.ripple         = st.rippleHeld[i] && g.live > 1.5f ? 2.0f : 1.0f;
                 st.rippleHeld[i] = true;
                 rippleMask |= 1u << i;
+                if (g.rippleHeight > 0.5f) heightMask |= 1u << i;
             }
         }
 
@@ -619,10 +659,11 @@ namespace threepp::vulkan {
             computeBarrier(cb);
         }
 
-        if (rippleMask != 0u) recordRipples(cb, st, rippleMask, pc);
+        if (rippleMask != 0u) recordRipples(cb, st, rippleMask, heightMask, pc);
     }
 
-    void WakeFieldPipeline::recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, PushConstants pc) {
+    void WakeFieldPipeline::recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, uint32_t heightMask,
+                                          PushConstants pc) {
         const uint32_t groups = (st.rippleRes + 7u) / 8u;
         auto dispatch = [&](uint32_t layer, uint32_t mode) {
             // (bound anew each time: the IFFT in between binds its own)
@@ -654,6 +695,26 @@ namespace threepp::vulkan {
             for (uint32_t i = 0; i < st.layers; ++i) {
                 if (rippleMask & (1u << i)) dispatch(i, 2u);
             }
+            heightMask &= rippleMask;
+            if (heightMask != 0u) {
+                // To real space and back: the height, and the absorbing
+                // layer, each transform again one batch for every patch.
+                computeBarrier(cb);
+                for (uint32_t i = 0; i < st.layers; ++i) {
+                    if (heightMask & (1u << i)) dispatch(i, 3u);// the free waves' spectrum
+                }
+                computeBarrier(cb);
+                st.ifft->recordApplyBatch(cb, work.data(), st.layers, st.scratch, heightMask);
+                for (uint32_t i = 0; i < st.layers; ++i) {
+                    // their height into the layer's alpha; the sponge; set up the forward transform
+                    if (heightMask & (1u << i)) dispatch(i, 4u);
+                }
+                computeBarrier(cb);
+                st.ifft->recordApplyBatch(cb, work.data(), st.layers, st.scratch, heightMask);
+                for (uint32_t i = 0; i < st.layers; ++i) {
+                    if (heightMask & (1u << i)) dispatch(i, 5u);// back to the spectrum
+                }
+            }
         } else {
             for (uint32_t i = 0; i < st.layers; ++i) {
                 if (!(rippleMask & (1u << i))) continue;
@@ -663,6 +724,16 @@ namespace threepp::vulkan {
                 computeBarrier(cb);
                 st.ifft->recordApply(cb, st.work[i], st.scratch);
                 dispatch(i, 2u);// the slopes, into the patch's layer
+                if (!(heightMask & (1u << i))) continue;
+                // To real space and back: the height, and the absorbing layer.
+                computeBarrier(cb);
+                dispatch(i, 3u);// the free waves' spectrum
+                computeBarrier(cb);
+                st.ifft->recordApply(cb, st.work[i], st.scratch);
+                dispatch(i, 4u);// their height into the layer's alpha; the sponge; set up the forward transform
+                computeBarrier(cb);
+                st.ifft->recordApply(cb, st.work[i], st.scratch);
+                dispatch(i, 5u);// back to the spectrum
             }
         }
 

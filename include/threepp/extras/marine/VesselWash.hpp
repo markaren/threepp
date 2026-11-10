@@ -23,7 +23,8 @@
 //                   is fast for her length. And her WAVES, where the wake
 //                   field has ripples (WakeField::rippleResolution): she bears
 //                   down on the water with her weight, laid out along her
-//                   hulls (Hull::strips), and the field's small linear sea
+//                   hulls (Hull::strips, or one smooth line a hull: Waves),
+//                   and the field's small linear sea
 //                   makes of that the waves a weight of that shape makes at
 //                   her speed. No wave is drawn: at rest she makes none, at
 //                   speed the fan has the angle and the wavelengths of that
@@ -82,6 +83,22 @@ namespace threepp::marine {
             float halfLength = 0.f;
         };
 
+        // How her weight makes her waves, where the field has ripples.
+        //   Strips  laid out in Hull::strips (footprintStrips(), or her own
+        //           sectional areas): kStrips sources a side, each its own
+        //           gaussian. The model of the twin's boats (usv_rig.py's Wash).
+        //   Line    ONE smooth line source along each hull: her weight spread
+        //           along her length as a trapezoid whose mean is her prismatic
+        //           coefficient (Hull::prismatic), so the load rises and falls
+        //           off smoothly at stem and stern, rounded by a gaussian as
+        //           wide as the hull (radius her half breadth); and, at her
+        //           stem, the entry head K U^2 / (2 g) (Hull::entryHead) of the
+        //           water she runs into. A Havelock pressure source with
+        //           tidewater WakeSim's entry head (D. Greenheck, MIT). Nothing
+        //           with a short ending is in it, so it throws no short waves a
+        //           hull of her size does not.
+        enum class Waves { Strips, Line };
+
         struct Hull {
             float length     = 0.f;// overall (m)
             // Her footprint at the water, as the ocean's HullExclusion has it:
@@ -101,8 +118,17 @@ namespace threepp::marine {
             float draft      = 0.f;
             // Her weight along her hulls. Empty = laid out from the footprint
             // (footprintStrips()); a vessel that has her sectional areas
-            // gives the real thing.
+            // gives the real thing. (Waves::Strips)
             std::vector<WeightStrip> strips;
+            Waves waves = Waves::Strips;
+            // Waves::Line: the mean of her sectional area curve over her
+            // length, as a share of its largest (C_p, 0.5..1). The trapezoid
+            // is flat over the middle (2 C_p - 1) of her length and falls to
+            // nothing at stem and stern.
+            float prismatic = 0.6f;
+            // Waves::Line: K in the entry head K U^2 / (2 g) at her stem (U her
+            // surge); 0 = none. 0.35 is tidewater WakeSim's.
+            float entryHead = 0.35f;
         };
 
         // One propulsor, this frame.
@@ -134,6 +160,10 @@ namespace threepp::marine {
 
         // Scales the air her propulsors take down (1 = as computed).
         float air = 1.f;
+        // The lane of turbulent water each hull drags astern. false = her
+        // hulls leave only their waves (with no propulsors handed in, her
+        // patch then holds no foam, air, turbulence or lane at all).
+        bool lanes = true;
         // The ocean cascades a propulsor's depth is read against
         // (DisplacedMesh::sampleHeight): swell and the mid band, as her
         // buoyancy has it.
@@ -199,6 +229,14 @@ namespace threepp::marine {
         // it a deep hull throws a fan of short steep waves no ship makes.
         [[nodiscard]] static std::vector<WeightStrip> footprintStrips(const Hull& hull);
 
+        // The cell (m) of a ripple window that holds the waves of a vessel of
+        // `length` (m) at `cruiseSpeed` (m/s): min(lambda_T / 24, length / 10),
+        // lambda_T = 2 pi U^2 / g the transverse wavelength at that speed, so
+        // her transverse waves have 24 cells each and her hull ten. Times the
+        // field's rippleResolution it is the window's side (the rippleSize to
+        // hand the constructor); fixed for her life, as the window is.
+        [[nodiscard]] static float rippleCell(float length, float cruiseSpeed);
+
     private:
         struct Point {
             float x = 0.f, z = 0.f;
@@ -216,7 +254,8 @@ namespace threepp::marine {
         std::unordered_map<std::string, Race> report_;
 
         void emit(const std::string& name, float x, float z, float vx, float vz, float radius, float foam,
-                  float aeration, float turbulence, float lane, float push = 0.f, float ax = 0.f, float az = 0.f);
+                  float aeration, float turbulence, float lane, float push = 0.f, float ax = 0.f, float az = 0.f,
+                  float taper = 0.f);
     };
 
 }// namespace threepp::marine

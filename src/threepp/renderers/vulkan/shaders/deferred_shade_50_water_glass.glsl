@@ -3,9 +3,18 @@
 
 // Term isolation for water-artefact triage (-DSCOUT_WATER=N):
 //   1 = reflection only, 2 = transmission only, 3 = Fresnel F as grey,
-//   4 = foam mask as grey, 5 = |N - up| amplified. 0 = normal shading.
+//   4 = foam mask as grey, 5 = |N - up| amplified, 6 = the reflection
+//   hit's distance class, 8 = how the reflection ray ended (see there).
+//   0 = normal shading. deferred_shade_40 is included first and sets the
+//   default, so a define given here alone does not take.
 #ifndef SCOUT_WATER
 #define SCOUT_WATER 0
+#endif
+// Crest foam triage (-DCREST_FOAM_SCOUT=N, kOceanCrestFoam frames only):
+//   1 = a 4 m checker on the rest coordinates q under the raw foam field F,
+//   2 = the foam cover as grey. 0 = normal shading.
+#ifndef CREST_FOAM_SCOUT
+#define CREST_FOAM_SCOUT 0
 #endif
 
 // Forward declarations — the underwater medium lives in deferred_shade_60, which
@@ -360,6 +369,12 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // Offset along the MACRO normal, not the tilted N: on a coarse water mesh
     // the shading normal can lean far enough from the triangle plane that a
     // fixed offset along it fails to clear the neighbouring facet.
+    // (Wave reflections, DisplacedMesh::Params::waveReflections, change what
+    // the pass-through does when the ray never comes out of the wave it
+    // entered: see traceRadiance's skip.)
+#if SCOUT_WATER == 8
+    gScoutKind = -1; gScoutWHits = 0;
+#endif
     gTraceSkipWater = true;
     const vec3 reflOrig = P + Nmacro * SHADOW_EPS;// this water's own reflection: pass through crests
 #ifdef THREEPP_NO_RAY_QUERY
@@ -820,6 +835,13 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     if (gTraceHitT < 0.0)      return vec3(0.0, 0.0, 1.0);
     if (gTraceHitT < 60.0)     return vec3(1.0, 0.0, 0.0);
     return vec3(0.0, 1.0, 0.0);
+#elif SCOUT_WATER == 8
+    // How the reflection ray ended (traceRadiance): blue escaped to the
+    // sky, green the face of a wave it went into; on something that is not
+    // water, red with no water crossed on the way, yellow after some.
+    if (gScoutKind == 0) return vec3(0.0, 0.0, 4.0);
+    if (gScoutKind == 1) return vec3(0.0, 4.0, 0.0);
+    return gScoutWHits == 0 ? vec3(4.0, 0.0, 0.0) : vec3(4.0, 4.0, 0.0);
 #elif SCOUT_WATER == 1
     return reflectColor;
 #elif SCOUT_WATER == 2
@@ -929,6 +951,132 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         }
     }
 
+    // ── CREST FOAM (DisplacedMesh::Params::crestFoam) ────────────────────────
+    // Compiled in only for a frame that has it on (spec constant 8). The foam
+    // is a field F on the water's REST coordinates q (foam_crest.comp: laid
+    // down where the surface folds, decaying on the parcels that took it), and
+    // a pixel's q is its position minus the displacement it was drawn with.
+    // min(F, 1) is the fraction of the water covered. What covers it is read
+    // off a photograph of sea foam (binding 92), laid on q too, so it rides
+    // and stretches with the water and never slides over it: a point is foam
+    // where photo > 1 - F. The photo is rank-equalised, so the covered
+    // fraction is F, and what goes first as F falls is what was thinnest in
+    // the real foam: holes open, then a lace, then threads.
+    // Both fetches are over the pixel's footprint on the water, a strip along
+    // the line of sight. Where the footprint has averaged the photo's
+    // contrast away, the step widens by exactly what was lost (the values
+    // under a pixel then span about that much around the fetched mean), so
+    // far foam tends to F itself, a covered fraction, with no speckle.
+    // Lit as foam is: a Lambertian reflector of albedo 0.55 where it is thick
+    // (Whitlock, Bartlett and Gurganus 1982), under water's own interface
+    // (F0 = 0.02); where it has only just closed it is a thin layer and lets
+    // some of the water through. From below it is the dull raft the
+    // accumulator's foam is.
+    if (kOceanCrestFoam != 0u && pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
+        const vec2  q        = P.xz - gCrestDisp;
+        const float distF    = length(P - gPrimaryOrigin);
+        const float pixWorld = (cam.camAux.x > 0.5 ? 1.0 : distF) * 2.0 * cam.projInverse[1][1]
+                             / max(float(pc.height), 1.0);// world m / pixel across the view
+        const float pixAlong = pixWorld / max(dot(Nmacro, V), 0.05);
+        const float vl       = length(V.xz);
+        const vec2  along    = vl > 1e-4 ? V.xz / vl : vec2(1.0, 0.0);
+        const vec2  gA       = along * pixAlong;
+        const vec2  gX       = vec2(-along.y, along.x) * pixWorld;
+        const float invTile  = 1.0 / pc.oceanFoamTileSize;
+        float       foamF;
+        if ((kOceanClimate & 2u) != 0u) {
+            // The wave climate: the texture keeps the foam this water would
+            // have with cascades 0 and 1 at 1, 2/3 and 1/3 of the sea
+            // (foam_crest.comp, OCEAN_CLIMATE_LEVELS); take it at the map's
+            // level here, cascade 1's (the waves the fold foam counts are
+            // mostly its), linearly between levels and to none at 0.
+            const vec4  lv = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile);
+            const float L  = clamp(oceanClimate(oceanClimateMap, q).y, 0.0, 1.0) * 3.0;
+            foamF = L >= 2.0 ? mix(lv.b, lv.r, L - 2.0) : L >= 1.0 ? mix(lv.a, lv.b, L - 1.0) : lv.a * L;
+        } else {
+            foamF = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile).r;
+        }
+        // What the vessels left on the water is the same stuff, so it is
+        // drawn the same way: the wake field's film (how much foam its flow
+        // has carried here) reads as a foam level. It stops just short of a
+        // closed sheet: a race is churned water, never a lid, and the last
+        // tenth of the photo's range stays open so it shows as foam with
+        // water in it rather than as a white shape. Its lit colour takes the
+        // field's albedo scale.
+        float cfAlbedo = kOceanFoamAlbedoWhitlock;
+        if (geoms[instIdx].foamAddress > 1ul) {
+            const float filmF = clamp((gWake.r - 0.05) / 0.35, 0.0, 0.9);
+            if (filmF > foamF) {
+                foamF    = filmF;
+                cfAlbedo *= gWakeAlbedo;
+            }
+        }
+#if CREST_FOAM_SCOUT == 1
+        // A 4 m checker on q under the raw F: the checker must ride the waves
+        // (squeezed on crests, stretched in troughs) and never slide.
+        return vec3(0.12 + 0.30 * mod(floor(q.x * 0.25) + floor(q.y * 0.25), 2.0)) +
+               vec3(1.0, 0.35, 0.05) * min(foamF, 2.0);
+#endif
+        if (foamF > 1.0 / 512.0) {
+            // The photo twice, at two sizes and angles; a slow selector on q
+            // keeps one or the other, so neither placement's period shows
+            // across a patch (their mean would not do: two foams averaged are
+            // neither). kTile is metres across one tile: the photo's holes
+            // are then a few decimetres to a metre, as they were.
+            const float kTileA = 6.0;
+            const float kTileB = 8.3;
+            const vec2  rB  = vec2(0.6216100, 0.7833269);// cos, sin of 0.9 rad
+            const vec2  qB  = vec2(rB.x * q.x - rB.y * q.y, rB.y * q.x + rB.x * q.y) + vec2(3.1, -1.7);
+            const vec2  aB  = vec2(rB.x * gA.x - rB.y * gA.y, rB.y * gA.x + rB.x * gA.y);
+            const vec2  xB  = vec2(rB.x * gX.x - rB.y * gX.y, rB.y * gX.x + rB.x * gX.y);
+            const float nA  = textureGrad(oceanCrestFoamPattern, q / kTileA, gA / kTileA, gX / kTileA).r;
+            const float nB  = textureGrad(oceanCrestFoamPattern, qB / kTileB, aB / kTileB, xB / kTileB).r;
+            const float sel = smoothstep(-0.3, 0.3, sin(dot(q, vec2(0.17, 0.09)) +
+                                                        1.7 * sin(dot(q, vec2(-0.07, 0.12)))));
+            const float n   = mix(nA, nB, sel);
+            // Contrast the footprint left in the photo: its structure runs
+            // from about an eighth to a fiftieth of the tile, and each scale
+            // keeps about 1 / sqrt(1 + (footprint / size)^2) along each axis.
+            float kept = 0.0;
+            {
+                const vec3 sizes = vec3(1.0 / 8.0, 1.0 / 20.0, 1.0 / 50.0) * mix(kTileA, kTileB, sel);
+                const vec3 kx = inversesqrt(1.0 + (pixWorld / sizes) * (pixWorld / sizes));
+                const vec3 ka = inversesqrt(1.0 + (pixAlong / sizes) * (pixAlong / sizes));
+                kept = dot(vec3(0.4, 0.35, 0.25), kx * ka);
+            }
+            // How far this point is inside the covered set, in the photo's own
+            // units. Half-width of the edge: what the average took, never less
+            // than a thin edge, which itself closes with F (no foam is no foam).
+            const float excess = n - (1.0 - foamF);
+            const float halfW  = max(0.5 * (1.0 - kept), min(0.04, foamF));
+            // Foam on open water is a layer of bubbles a few deep, not a
+            // lid: the water shows through it. LOOK constants (Lars,
+            // 2026-11-10: "foam should have opacity and not so white"): a
+            // third opaque where it is thinnest, three quarters where a
+            // crest has just broken.
+            const float layer  = mix(0.35, 0.75, clamp(foamF, 0.0, 1.0));
+            const float cover  = clamp(excess / (2.0 * halfW) + 0.5, 0.0, 1.0) *
+                                 layer * (below ? 0.12 : 1.0);
+#if CREST_FOAM_SCOUT == 2
+            return vec3(cover);
+#endif
+            if (cover > 0.0) {
+                const vec3 cfAmb = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
+                const vec3 cfLit = shadeDiffuseDirect(P, N, V, vec3(cfAlbedo), 1.0, 0.0,
+                                                      vec3(0.0), doShadows, cfAmb,
+                                                      vec3(0.0), 0.0,
+                                                      vec3(0.02),
+                                                      0.0, 1.3, 0.0, seed,
+                                                      /*addEmissive=*/true,
+                                                      /*cheapHit=*/false);
+                col = mix(col, cfLit, cover);
+            }
+        }
+#if CREST_FOAM_SCOUT == 2
+        return vec3(0.0);
+#endif
+    }
+
     // Foam: folded-surface coverage (foamAddress attribute + live world foam
     // texture) bleaches a diffuse whitewater layer over the glass. The world
     // accumulator decays exponentially, so COVERAGE IS FRESHNESS — the mask
@@ -939,6 +1087,34 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     //   residue     — a ridged filament web (the lace a collapsed whitecap
     //                 leaves behind) outlives the sheet, thinning to streaks
     // Matches closest_hit's foam shading.
+    // Breaking crests (DisplacedMesh::Params::breakingCrests): white water
+    // where the crest under this pixel is breaking NOW, from the surface's
+    // own local steepness (water_displace.comp), so it sits on the crest top,
+    // rides it and is gone when the crest relaxes: a step of half-width
+    // kOceanBreakingRamp on the threshold, so cover > 0.5 exactly where it is
+    // exceeded, and the steepness itself shapes it (largest on the crest,
+    // falling down both faces). No texture, no noise, no accumulator. Thick
+    // fresh foam is a Lambertian reflector of albedo 0.55, flat across the
+    // visible (Whitlock, Bartlett and Gurganus 1982), with the specular of
+    // water's own interface (n = 1.333, F0 = 0.02). From below the raft is
+    // the dull patch the accumulator's foam is.
+    if (gCrestEps > -1e29) {
+        const float crestCover = smoothstep(kOceanBreakingSteepness - kOceanBreakingRamp,
+                                            kOceanBreakingSteepness + kOceanBreakingRamp, gCrestEps) *
+                                 (below ? 0.12 : 1.0);
+        if (crestCover > 0.0) {
+            const vec3 crestAmb = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
+            const vec3 crestLit = shadeDiffuseDirect(P, N, V, vec3(kOceanFoamAlbedoWhitlock), 1.0, 0.0,
+                                                     vec3(0.0), doShadows, crestAmb,
+                                                     vec3(0.0), 0.0,
+                                                     vec3(0.02),
+                                                     0.0, 1.3, 0.0, seed,
+                                                     /*addEmissive=*/true,
+                                                     /*cheapHit=*/false);
+            col = mix(col, crestLit, crestCover);
+        }
+    }
+
     if (pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
         // Bicubic + 1.3 gain: the B-spline kernel approximates rather than
         // interpolates, attenuating an isolated single-texel whitecap to
@@ -1007,7 +1183,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // it and nothing is cut into it here: coverage is a soft step on the
     // density, thin film grey and wet, thick film white. Lit as the whitecaps
     // above are. From below it is the dull raft the whitecaps are too.
-    if (gWake.r > 4e-3) {
+    if (gWake.r > 4e-3 && kOceanCrestFoam == 0u) {// crest foam draws the film itself (above)
         const float cover = smoothstep(0.10, 0.45, gWake.r) * (below ? 0.12 : 1.0);
         const vec3  filmCol  = gWakeAlbedo * mix(vec3(0.66, 0.72, 0.75), vec3(0.97, 0.99, 1.00), smoothstep(0.15, 0.85, gWake.r));
         const vec3  filmDiff = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);

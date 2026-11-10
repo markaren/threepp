@@ -81,9 +81,11 @@ namespace threepp {
             // so grid cells stay square-ish (resolution · sizeZ / size).
             uint32_t resolutionZ = 0;
 
-            // Wind direction (radians, 0 = +X) and speed (m/s). Speed is the
-            // dominant "how big is the sea" lever (Phillips amplitude ∝ V⁴):
-            // ~8–10 = a moderate Beaufort 4–5 sea, ~20 = a gale.
+            // Wind direction and speed (m/s). windTheta is the direction the
+            // wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward
+            // +X); with measured spreading the waves run that way. Speed is
+            // the dominant "how big is the sea" lever (Phillips amplitude ∝
+            // V⁴): ~8–10 = a moderate Beaufort 4–5 sea, ~20 = a gale.
             float windTheta = 0.6f;
             float windSpeed = 10.0f;
 

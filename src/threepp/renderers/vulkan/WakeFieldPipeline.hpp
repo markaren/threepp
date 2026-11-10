@@ -34,7 +34,7 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
-    // Mirrors WakePatch in ocean_wake.glsl (scalar layout, 56 bytes).
+    // Mirrors WakePatch in ocean_wake.glsl (scalar layout, 72 bytes).
     struct WakePatchGpu {
         float originX;
         float originZ;
@@ -49,9 +49,16 @@ namespace threepp::vulkan {
         float rippleOriginX;
         float rippleOriginZ;
         float rippleSize;
-        float _pad;
+        float rippleHeight;// 1 = the ripple image's alpha holds the waves' height (water_displace adds it)
+        // WakeField::rippleBreaking: where its waves' slope passes breakSlope0
+        // they break, fully at breakSlope1 (0 = off), laying breakFoam film
+        // and breakAir bubbles in the field.
+        float breakSlope0;
+        float breakSlope1;
+        float breakFoam;
+        float breakAir;
     };
-    static_assert(sizeof(WakePatchGpu) == 56, "WakePatchGpu must match ocean_wake.glsl's WakePatch");
+    static_assert(sizeof(WakePatchGpu) == 72, "WakePatchGpu must match ocean_wake.glsl's WakePatch");
 
     // Mirrors WakeTable in ocean_wake.glsl up to (not including) its sources.
     struct WakeTableGpu {
@@ -73,10 +80,10 @@ namespace threepp::vulkan {
         float    albedo;
         WakePatchGpu patches[DisplacedMesh::kMaxWakePatches];
     };
-    static_assert(sizeof(WakeTableGpu) == 64 + 56 * DisplacedMesh::kMaxWakePatches,
+    static_assert(sizeof(WakeTableGpu) == 64 + 72 * DisplacedMesh::kMaxWakePatches,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
-    static_assert(sizeof(DisplacedMesh::WakeSource) == 64,
-                  "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 64-byte sources");
+    static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
+                  "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");
 
     class WakeFieldPipeline {
 
@@ -178,7 +185,7 @@ namespace threepp::vulkan {
         VkImageView           dummyView_      = VK_NULL_HANDLE;
 
         void createPipeline();
-        void recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, PushConstants pc);
+        void recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, uint32_t heightMask, PushConstants pc);
     };
 
 }// namespace threepp::vulkan

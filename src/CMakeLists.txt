@@ -1549,6 +1549,19 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dynamic_spectrum.comp"
         kDynamicSpectrumCompSpv
         _dynamic_spv_h)
+    # The chop normals' variant (DisplacedMesh::Params::chopNormals): the same
+    # source with its slope and displacement-gradient stores compiled in. The
+    # plain compile above stays the shader the feature-off path has always run.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dynamic_spectrum.comp"
+        kDynamicSpectrumChopCompSpv
+        _dynamic_chop_spv_h
+        VARIANT_SUFFIX chop
+        DEFINES OCEAN_CHOP=1)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ocean_chop_moments.comp"
+        kOceanChopMomentsCompSpv
+        _ocean_chop_moments_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_twiddle.comp"
         kIfftTwiddleCompSpv
@@ -1574,9 +1587,29 @@ if (THREEPP_WITH_VULKAN)
         kWaterDisplaceCompSpv
         _water_displace_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
+        kWaterDisplaceChopCompSpv
+        _water_displace_chop_spv_h
+        VARIANT_SUFFIX chop
+        DEFINES OCEAN_CHOP=1)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
         kFoamWorldCompSpv
         _foam_world_spv_h)
+    # Crest foam (DisplacedMesh::Params::crestFoam): the deposit-and-decay pass
+    # over the foam texture in the water's rest coordinates (water::CrestFoam).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_crest.comp"
+        kFoamCrestCompSpv
+        _foam_crest_spv_h)
+    # The wave climate's variant (DisplacedMesh::WaveClimate): the foam at three
+    # sea states, for an ocean that has a climate map when its crest foam is made.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_crest.comp"
+        kFoamCrestClimateCompSpv
+        _foam_crest_climate_spv_h
+        VARIANT_SUFFIX climate
+        DEFINES OCEAN_CLIMATE_LEVELS=1)
     # The ocean's wake field (DisplacedMesh::WakeField): what propellers, jets
     # and paddles leave on the water, in world-anchored patches. See
     # WakeFieldPipeline.{hpp,cpp} and shaders/ocean_wake.glsl.

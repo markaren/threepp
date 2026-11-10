@@ -46,6 +46,14 @@
 //      the baseline's: the dispersion, slope, crest and whitecap rows depend
 //      on it, so rerun with --chop at the baseline's value to split the
 //      branch's change from its change of default.
+//   The wave-model switches are read from the environment, as the engine
+//   reads them (THREEPP_OCEAN_HS_FIX, THREEPP_OCEAN_CWM,
+//   THREEPP_OCEAN_BOUND_WAVES, THREEPP_OCEAN_BREAKING_CRESTS = 1 / 0), so a
+//   sweep's child processes inherit them. Under THREEPP_OCEAN_BREAKING_CRESTS
+//   the whitecap row grades the breaking-crest mask (see section 5), not the
+//   accumulator. Under THREEPP_OCEAN_CREST_FOAM (with
+//   THREEPP_OCEAN_CHOP_NORMALS, which it needs) it grades the crest-foam
+//   texture itself, read back with VulkanRenderer::readOceanCrestFoam.
 //   5. MARGINAL means the estimators of that row fall on both sides of a
 //      limit; it is neither a PASS nor a FAIL (and not a FAIL under
 //      --strict). Two saved runs compare with no GPU: --compare a --against b.
@@ -255,6 +263,9 @@ namespace {
         double wakeSeconds = 0.0;  // 0: 0.8 S / U
         std::string wakeScalar = "auto";
         std::string dump;          // --dump prefix: the wake image and ridge, for a look
+        double wakeWeight = 0.0;   // N; 0: the box hull's (draft 0.4 B, block 0.5)
+        std::string wakeStrips;    // a file of "x z share radius half" lines (usv_rig.Wash.weight_strips)
+        float wakeDraft = 0.f;     // m, each source's draft (WakeSource::draft; 0 = none)
         bool foamDefault = false;  // --foam-default: measure the engine's foam interval
     };
 
@@ -595,6 +606,10 @@ namespace {
         // Snapshot derivative fields, world metres: dh/dx, dh/dz and the
         // horizontal displacement gradient (before choppiness).
         std::vector<cfloat> gradH, gradDx, gradDz;
+        // Breaking crests: the world-frame displacement gradient as the
+        // engine's stencil sees it (central differences at the mesh spacing,
+        // water_displace.comp), packed d/dx + i d/dz of Dx_world and Dz_world.
+        std::vector<cfloat> gradSx, gradSz;
         // Height variance per wavenumber bin, summed over snapshots (the
         // omnidirectional k-spectrum).
         std::vector<double> eSum;
@@ -626,6 +641,60 @@ namespace {
         fft2(*c.fft, out, true);
         const float inv = 1.f / float(size_t(n) * n);
         for (auto& v: out) v *= inv;
+    }
+
+    // The displacement gradient water_displace.comp's breaking-crest stencil
+    // measures: world-frame components of D (cascade 1's domain rotated back),
+    // differenced along the world axes at +-eps, i.e. each mode's i k_w
+    // replaced by i sin(k_w eps) / eps. sdx, sdz: the domain-frame spectra of
+    // the displacement before choppiness. Outputs packed d/dx + i d/dz.
+    void stencilGradients(const Cascade& c, const std::vector<cfloat>& sdx, const std::vector<cfloat>& sdz,
+                          double eps, std::vector<cfloat>& gx, std::vector<cfloat>& gz) {
+        const int n = c.n;
+        gx.assign(size_t(n) * n, cfloat(0.f, 0.f));
+        gz.assign(size_t(n) * n, cfloat(0.f, 0.f));
+        const double dk = 2.0 * kPi / c.tile;
+        const double cr = std::cos(c.rot), sr = std::sin(c.rot);
+        const cfloat i1(0.f, 1.f);
+        for (int mz = 0; mz < n; ++mz) {
+            for (int mx = 0; mx < n; ++mx) {
+                if (mx == n / 2 || mz == n / 2) continue;
+                const double kx = signedIndex(mx, n) * dk, kz = signedIndex(mz, n) * dk;
+                // World wavevector R^T k and world displacement R^T D.
+                const double kwx = cr * kx + sr * kz, kwz = -sr * kx + cr * kz;
+                const size_t m = size_t(mz) * n + mx;
+                const cfloat dxw = float(cr) * sdx[m] + float(sr) * sdz[m];
+                const cfloat dzw = float(-sr) * sdx[m] + float(cr) * sdz[m];
+                const float sx = float(std::sin(kwx * eps) / eps), sz = float(std::sin(kwz * eps) / eps);
+                gx[m] = i1 * sx * dxw - sz * dxw;
+                gz[m] = i1 * sx * dzw - sz * dzw;
+            }
+        }
+        fft2(*c.fft, gx, true);
+        fft2(*c.fft, gz, true);
+        const float inv = 1.f / float(size_t(n) * n);
+        for (auto& v: gx) v *= inv;
+        for (auto& v: gz) v *= inv;
+    }
+
+    // water_displace.comp's cwmLimit: the largest l <= lMax keeping
+    // det(I + l A) >= kCwmMinJacobian on [0, l].
+    double cwmLimit(double trA, double detA, double lMax) {
+        const double c = 1.0 - double(DisplacedMesh::kCwmMinJacobian);
+        double r = 1e30;
+        if (std::abs(detA) < 1e-8) {
+            if (trA < 0.0) r = -c / trA;
+        } else {
+            const double disc = trA * trA - 4.0 * detA * c;
+            if (disc >= 0.0) {
+                const double q = -0.5 * (trA + (trA >= 0.0 ? 1.0 : -1.0) * std::sqrt(disc));
+                const double r1 = q / detA;
+                const double r2 = q != 0.0 ? c / q : 1e30;
+                if (r1 > 0.0) r = std::min(r, r1);
+                if (r2 > 0.0) r = std::min(r, r2);
+            }
+        }
+        return std::min(lMax, r);
     }
 
     // Bilinear read of a periodic complex field at domain point (px, pz).
@@ -676,7 +745,15 @@ namespace {
 
         const auto& P = ocean->params;
         const double U = cfg.wind;
-        const double chop = P.choppiness;
+        // The choppiness the surface is drawn with: 1 under the Choppy Wave
+        // Model (DisplacedMesh::effectiveChoppiness).
+        const double chop = ocean->effectiveChoppiness();
+        const bool cwmOn = ocean->cwmOn();
+        // Crest sharpness: cascades 0+1 drawn at choppiness 1 + s under the limiter.
+        const double sharp = ocean->effectiveCrestSharpness();
+        const bool breakOn = ocean->breakingCrestsOn();
+        // The engine's crest stencil: the vertex grid's spacing.
+        const double meshEps = double(opt.size) / double(std::max(2u, opt.resolution) - 1u);
         const double waveScale = P.waveScale;
         const double theta = P.windTheta;
         const double tile0 = P.tileSize0;
@@ -701,6 +778,9 @@ namespace {
                     "frames=%d at %.1f Hz, dispersion grid %d^2 over %.1f m, foam at %.0f Hz\n",
                     U, double(cfg.fetch), chop, theta, P.tileSize0, P.tileSize1, P.tileSize2,
                     P.textureSize0, P.textureSize1, P.textureSize2, nFrames, cfg.hz, D, W, cfg.foamHz);
+        std::printf("wave model: hs-fix %s, cwm %d, bound waves %d, breaking crests %d, crest sharpness %.2f\n",
+                    std::getenv("THREEPP_OCEAN_HS_FIX") ? std::getenv("THREEPP_OCEAN_HS_FIX") : "params",
+                    int(cwmOn), int(ocean->boundWavesOn()), int(breakOn), sharp);
         std::fflush(stdout);
 
         auto renderAt = [&](double t) {
@@ -736,7 +816,14 @@ namespace {
         double lin[3][3] = {};// per cascade: <sx^2>, <sx sz>, <sz^2> in WORLD axes
         int linCount = 0;
         double geoSum[3] = {}, geoW = 0;// area-weighted <su^2>, <sc^2>, <su sc>
-        long long jSamples = 0, jNeg = 0, jNegC[3] = {}, jNeg01 = 0;
+        long long jSamples = 0, jNeg = 0, jNegC[3] = {}, jNeg01 = 0, jLimited = 0;
+        // Breaking crests: drawn area (weight J) with the stenciled steepness
+        // above the threshold, and a weighted histogram of the steepness for
+        // the calibration rows.
+        constexpr int kEpsBins = 400;
+        constexpr double kEpsBin = 0.0025;
+        std::vector<double> epsHist(kEpsBins + 1, 0.0);
+        double breakArea = 0, breakW = 0;
         double restVar[3] = {};
         double divCorr[3][3] = {};// per cascade: <h div D>, <h^2>, <(div D)^2>
         int staleFrames = 0;
@@ -921,6 +1008,7 @@ namespace {
                         }
                     spectralGradient(c, sdx, c.gradDx);
                     spectralGradient(c, sdz, c.gradDz);
+                    if (breakOn && c.index < 2) stencilGradients(c, sdx, sdz, meshEps, c.gradSx, c.gradSz);
                     // Crest sharpening test, free of any FFT sign convention:
                     // choppy displacement sharpens crests only if it converges
                     // there, i.e. corr(h, div D) < 0 (Tessendorf 2001, the
@@ -950,6 +1038,7 @@ namespace {
                     const double qx = uq(rng), qz = uq(rng);
                     double hx = 0, hz = 0, axx = 0, axz = 0, azx = 0, azz = 0;
                     double a01[4] = {};
+                    double s01[4] = {};// stenciled world-frame grad D, cascades 0+1
                     for (const auto& c: cas) {
                         if (c.n == 0 || c.gradH.empty()) continue;
                         const double cr = std::cos(c.rot), sr = std::sin(c.rot);
@@ -972,11 +1061,39 @@ namespace {
                         const double jc = (1 + chop * t00) * (1 + chop * t11) - chop * chop * t01 * t10;
                         if (jc < 0) ++jNegC[c.index];
                         if (c.index < 2) a01[0] += t00, a01[1] += t01, a01[2] += t10, a01[3] += t11;
+                        if (breakOn && c.index < 2 && !c.gradSx.empty()) {
+                            const cfloat sx = sampleBilinear(c.gradSx, c.n, c.tile, px, pz);
+                            const cfloat sz = sampleBilinear(c.gradSz, c.n, c.tile, px, pz);
+                            s01[0] += sx.real(), s01[1] += sx.imag(), s01[2] += sz.real(), s01[3] += sz.imag();
+                        }
                     }
-                    const double m00 = 1 + chop * axx, m01 = chop * axz;
-                    const double m10 = chop * azx, m11 = 1 + chop * azz;
+                    // The drawn choppiness: under the CWM the per-vertex
+                    // limiter's (water_displace.comp), from cascades 0+1.
+                    double lam = chop;
+                    if (cwmOn) {
+                        lam = cwmLimit(a01[0] + a01[3], a01[0] * a01[3] - a01[1] * a01[2], 1.0 + sharp);
+                        if (lam < 1.0 + sharp) ++jLimited;
+                    }
+                    // With sharpness the fine cascade keeps min(lam, 1) (water_displace.comp).
+                    const double lf = sharp > 0 ? std::min(lam, 1.0) : lam;
+                    const double m00 = sharp > 0 ? 1 + lam * a01[0] + lf * (axx - a01[0]) : 1 + lam * axx;
+                    const double m01 = sharp > 0 ? lam * a01[1] + lf * (axz - a01[1]) : lam * axz;
+                    const double m10 = sharp > 0 ? lam * a01[2] + lf * (azx - a01[2]) : lam * azx;
+                    const double m11 = sharp > 0 ? 1 + lam * a01[3] + lf * (azz - a01[3]) : 1 + lam * azz;
                     const double J = m00 * m11 - m01 * m10;
-                    const double J01 = (1 + chop * a01[0]) * (1 + chop * a01[3]) - chop * chop * a01[1] * a01[2];
+                    const double J01 = (1 + lam * a01[0]) * (1 + lam * a01[3]) - lam * lam * a01[1] * a01[2];
+                    if (breakOn && J > 0) {
+                        // water_displace.comp: eps = minus the most compressive
+                        // eigenvalue of the symmetric part of grad D.
+                        const double sxz = 0.5 * (s01[1] + s01[2]);
+                        const double mid = 0.5 * (s01[0] + s01[3]);
+                        const double rad = std::sqrt(0.25 * (s01[0] - s01[3]) * (s01[0] - s01[3]) + sxz * sxz);
+                        const double eps = -(mid - rad);
+                        breakW += J;
+                        if (eps > double(DisplacedMesh::kBreakingSteepness)) breakArea += J;
+                        const int b = std::clamp(int(eps / kEpsBin), 0, kEpsBins);
+                        epsHist[b] += J;
+                    }
                     ++jSamples;
                     if (J < 0) ++jNeg;
                     if (J01 < 0) ++jNeg01;
@@ -1002,6 +1119,12 @@ namespace {
         // (ten of its 2 s e-folding times), then one read a second.
         double foamArea = 0, foamAreaFar = 0, foamMean = 0, foamRaw = 0, foamCovHalf = 0;
         int foamReads = 0;
+        // Crest foam (THREEPP_OCEAN_CREST_FOAM): the foam texture over the
+        // water's rest coordinates. The shade draws min(F, 1) as the covered
+        // fraction (its foam photograph is rank-equalised), so the mean of that
+        // over the tile is the whitecap fraction, no mask to mirror.
+        double crestCover = 0, crestSheet = 0, crestRaw = 0, crestMax = 0;
+        int crestReads = 0;
         {
             const double fdt = 1.0 / cfg.foamHz;
             double tf = t0 + (nFrames - 1) * dt;
@@ -1036,6 +1159,21 @@ namespace {
                 foamArea += area / nf, foamAreaFar += areaFar / nf, foamMean += cov / nf;
                 foamRaw += raw / nf, foamCovHalf += half / nf;
                 ++foamReads;
+                std::vector<float> cf;
+                uint32_t cres = 0;
+                float ctile = 0.f;
+                if (renderer.readOceanCrestFoam(*ocean, cf, cres, ctile) && !cf.empty()) {
+                    double cover = 0, sheet = 0, sum = 0;
+                    for (const float f : cf) {
+                        cover += std::min(f, 1.f);
+                        if (f >= 1.f) sheet += 1;
+                        sum += f;
+                        crestMax = std::max(crestMax, double(f));
+                    }
+                    const double cn = double(cf.size());
+                    crestCover += cover / cn, crestSheet += sheet / cn, crestRaw += sum / cn;
+                    ++crestReads;
+                }
             }
         }
 
@@ -1458,6 +1596,18 @@ namespace {
                            "prologue_surface.glsl:213; view-dependent"});
             out.push_back({"mss displaced + shade base, total", gu + gc + baseShade, 0.8 * cmT, 1.2 * cmT,
                            fmt("%.4f", cmT), "+-20%", "Cox-Munk 1954; near water, no footprint floor"});
+            // The measured short-wave spectrum (THREEPP_OCEAN_SHORT_WAVE_SPECTRUM)
+            // banks what the finest cascade cannot draw of it into the shade's
+            // roughness (the chop moments' mean square slope): the renderer
+            // reports it with the fields.
+            double banked = 0;
+            for (const auto& f: ocean->heightFields) banked += f.bankedMss;
+            if (banked > 0) {
+                out.push_back({"  mss banked short-wave tail", banked, 1, 0, "", "",
+                               "Elfouhaily 1997; unresolved, to roughness"});
+                out.push_back({"mss displaced + banked tail, total", gu + gc + banked, 0.8 * cmT, 1.2 * cmT,
+                               fmt("%.4f", cmT), "+-20%", "Cox-Munk 1954; resolved + banked"});
+            }
         }
 
         // ── 4. Crests ────────────────────────────────────────────────────────
@@ -1478,6 +1628,9 @@ namespace {
         }
         const double jf = jSamples ? double(jNeg) / double(jSamples) : 0.0;
         out.push_back({"area with J < 0, all cascades", jf, 0.0, 0.001, "< 0.1%", "", "research_targets 1.3"});
+        if (cwmOn)
+            out.push_back({"  area where the CWM limiter binds", jSamples ? double(jLimited) / jSamples : 0.0, 1, 0,
+                           "", "", "choppiness < 1 + sharpness there (water_displace.comp cwmLimit)"});
         out.push_back({"  area with J < 0, cascades 0+1 (foam's)", jSamples ? double(jNeg01) / jSamples : 0.0, 1, 0,
                        "", "", "foam_world.comp sees these"});
         for (int c = 0; c < 3; ++c)
@@ -1504,13 +1657,55 @@ namespace {
         // where the shade's foam mask is above 0.5, the white a camera sees,
         // as a field photo is thresholded. The mean coverage the shade is
         // handed counts every faint decayed texel, so it is INFO only.
+        // Breaking crests (THREEPP_OCEAN_BREAKING_CRESTS): natural foam is
+        // the shade's step on the crest steepness water_displace.comp writes
+        // per vertex; its mask is > 0.5 exactly where the steepness exceeds
+        // kBreakingSteepness. Mirrored here at uniform rest points of the
+        // snapshots: the same steepness (cascades 0+1, choppiness 1, world-
+        // frame grad D differenced at the mesh spacing), weighted by the drawn
+        // area J. The accumulator then holds vessel foam only (none here).
+        if (breakOn && breakW > 0) {
+            const double wM = monahan(U), wC = callaghan(U);
+            const double lo = U > 3.7 ? std::min(wM, wC) : 0.0;
+            const double hi = U > 3.7 ? std::max(wM, wC) : 1e-4;
+            out.push_back({"whitecap area (shade mask > 0.5)", breakArea / breakW, lo, hi,
+                           fmt("%.2f", 100 * lo) + "-" + fmt("%.2f %%", 100 * hi), "between curves",
+                           fmt("Monahan 1980, Callaghan 2008; crest steepness > %.3f", DisplacedMesh::kBreakingSteepness)});
+            // Calibration: the threshold that would put the area on each curve.
+            auto epsFor = [&](double w) {
+                double acc = 0;
+                for (int b = kEpsBins; b >= 0; --b) {
+                    acc += epsHist[b];
+                    if (acc >= w * breakW) return (b + 1) * kEpsBin;
+                }
+                return 0.0;
+            };
+            out.push_back({"  crest steepness giving Monahan's area", epsFor(wM), 1, 0, "", "", "calibration"});
+            out.push_back({"  crest steepness giving Callaghan's area", epsFor(wC), 1, 0, "", "", "calibration"});
+        }
+        if (crestReads > 0) {
+            // Rest-space fractions: a parcel's share of the tile at rest. In
+            // the drawn sea fresh foam sits where the map is squeezed, so the
+            // world-space fraction is a little smaller.
+            const double wM = monahan(U), wC = callaghan(U);
+            const double lo = U > 3.7 ? std::min(wM, wC) : 0.0;
+            const double hi = U > 3.7 ? std::max(wM, wC) : 1e-4;
+            out.push_back({"crest foam cover (mean of min(F, 1))", crestCover / crestReads, lo, hi,
+                           fmt("%.2f", 100 * lo) + "-" + fmt("%.2f %%", 100 * hi), "between curves",
+                           "Monahan 1980, Callaghan 2008; foam_crest.comp"});
+            out.push_back({"  closed sheet (F >= 1)", crestSheet / crestReads, 1, 0, "", "",
+                           "the breaking front and what it just left"});
+            out.push_back({"  crest foam value mean (raw)", crestRaw / crestReads, 1, 0, "", "", ""});
+            out.push_back({"  crest foam value max", crestMax, 1, 0, "", "", "the deposit cap when crests break hard"});
+        }
         if (foamReads > 0) {
             const double wM = monahan(U), wC = callaghan(U);
             const double lo = U > 3.7 ? std::min(wM, wC) : 0.0;
             const double hi = U > 3.7 ? std::max(wM, wC) : 1e-4;
-            out.push_back({"whitecap area (shade mask > 0.5)", foamArea / foamReads, lo, hi,
-                           fmt("%.2f", 100 * lo) + "-" + fmt("%.2f %%", 100 * hi), "between curves",
-                           "Monahan 1980, Callaghan 2008"});
+            if (!breakOn)
+                out.push_back({"whitecap area (shade mask > 0.5)", foamArea / foamReads, lo, hi,
+                               fmt("%.2f", 100 * lo) + "-" + fmt("%.2f %%", 100 * hi), "between curves",
+                               "Monahan 1980, Callaghan 2008"});
             out.push_back({"  whitecap area, far (detail at its mean)", foamAreaFar / foamReads, 1, 0, "", "",
                            "the same mask, top mip"});
             out.push_back({"  coverage mean (shade's input)", foamMean / foamReads, 1, 0, "", "",
@@ -1522,7 +1717,7 @@ namespace {
             const char* iv = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
             out.push_back({"  foam interval in this segment (frames)", iv ? std::atof(iv) : -1.0, 1, 0, "", "",
                            "forced by this audit; the engine's own default is the 'engine defaults' case"});
-        } else {
+        } else if (!breakOn) {
             out.push_back({"whitecap area (shade mask > 0.5)", -1, 1, 0, "", "", "no foam readback"});
         }
 
@@ -1755,7 +1950,18 @@ namespace {
 
         // Weight of a box hull of draft 0.4 B and block coefficient 0.5 in
         // sea water. The metrics are geometric, so only its sign matters.
-        const double weight = 1025.0 * kG * L * B * 0.4 * B * 0.5;
+        const double weight = cfg.wakeWeight > 0 ? cfg.wakeWeight : 1025.0 * kG * L * B * 0.4 * B * 0.5;
+        // --wake-strips: the hull as usv_rig.Wash lays her weight out, one
+        // line source a strip (vessel frame: x ahead, z to starboard).
+        struct Strip { double x, z, share, r, half; };
+        std::vector<Strip> strips;
+        if (!cfg.wakeStrips.empty()) {
+            std::ifstream in(cfg.wakeStrips);
+            Strip st{};
+            while (in >> st.x >> st.z >> st.share >> st.r >> st.half) strips.push_back(st);
+            std::printf("wake: %zu strips from %s, weight %.0f N, draft %.2f m\n", strips.size(), cfg.wakeStrips.c_str(),
+                        weight, double(cfg.wakeDraft));
+        }
         const double hz = 20.0, dt = 1.0 / hz, t0 = 1.0;
         const double seconds = cfg.wakeSeconds > 0 ? cfg.wakeSeconds : 0.8 * S / U;
         const int frames = std::max(2, int(std::lround(seconds * hz)));
@@ -1768,14 +1974,28 @@ namespace {
             xPrev = x;
             x = U * f * dt;
             ocean->clearWakeSources();
-            DisplacedMesh::WakeSource src;
-            src.x0 = float(xPrev), src.z0 = float(zs);
-            src.x1 = float(x), src.z1 = float(zs);
-            src.radius = float(0.5 * B);
-            src.push = float(weight);
-            src.ax = float(0.5 * L), src.az = 0.f;
-            src.patch = 0;
-            ocean->addWakeSource(src);
+            if (strips.empty()) {
+                DisplacedMesh::WakeSource src;
+                src.x0 = float(xPrev), src.z0 = float(zs);
+                src.x1 = float(x), src.z1 = float(zs);
+                src.radius = float(0.5 * B);
+                src.push = float(weight);
+                src.ax = float(0.5 * L), src.az = 0.f;
+                src.patch = 0;
+                src.draft = cfg.wakeDraft;
+                ocean->addWakeSource(src);
+            }
+            for (const auto& st: strips) {
+                DisplacedMesh::WakeSource src;
+                src.x0 = float(xPrev + st.x), src.z0 = float(zs + st.z);
+                src.x1 = float(x + st.x), src.z1 = float(zs + st.z);
+                src.radius = float(st.r);
+                src.push = float(weight * st.share);
+                src.ax = float(st.half), src.az = 0.f;
+                src.patch = 0;
+                src.draft = cfg.wakeDraft;
+                ocean->addWakeSource(src);
+            }
             auto& p = ocean->wakePatches[0];
             p.centerX = float(x - 0.3 * S);
             p.centerZ = float(zs);
@@ -1952,6 +2172,9 @@ int main(int argc, char** argv) {
         else if (const char* s = val("--wake-seconds")) cfg.wakeSeconds = std::atof(s);
         else if (const char* s = val("--wake-scalar")) cfg.wakeScalar = s;
         else if (const char* s = val("--dump")) cfg.dump = s;
+        else if (const char* s = val("--wake-weight")) cfg.wakeWeight = std::atof(s);
+        else if (const char* s = val("--wake-strips")) cfg.wakeStrips = s;
+        else if (const char* s = val("--wake-draft")) cfg.wakeDraft = float(std::atof(s));
         else if (std::strcmp(argv[i], "--strict") == 0) cfg.strict = true;
         else if (std::strcmp(argv[i], "--foam-default") == 0) cfg.foamDefault = true, single = true;
         else {

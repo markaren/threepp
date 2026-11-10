@@ -204,6 +204,28 @@ layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
 vec4 gWake = vec4(0.0);
 // The field's own scale on what its film and bubbles turn back (WakeField::albedo).
 float gWakeAlbedo = 1.0;
+// Breaking crests (DisplacedMesh::Params::breakingCrests): this pixel's crest
+// steepness, interpolated from the per-vertex value water_displace.comp wrote
+// into the ocean's UVs; -1e30 when the ocean carries none (the switch is off).
+float gCrestEps = -1e30;
+// Crest foam (DisplacedMesh::Params::crestFoam; read only where kOceanCrestFoam
+// is set, stand-ins bound otherwise). oceanCrestFoam is the foam on the water's
+// REST coordinates (foam_crest.comp): R16F over one oceanFoamTileSize, REPEAT,
+// mipped by box averages, so a footprint fetch is the mean foam under a pixel.
+// oceanCrestFoamPattern is the photograph of sea foam it opens against (R8,
+// rank equalised: the fraction of it above a level is that level; mipped,
+// REPEAT).
+// gCrestDisp is this pixel's horizontal displacement, interpolated from what
+// water_displace.comp wrote into the ocean's UVs: worldPos.xz - gCrestDisp is
+// the rest point q both textures are addressed by.
+layout(set = 0, binding = 91) uniform sampler2D oceanCrestFoam;
+layout(set = 0, binding = 92) uniform sampler2D oceanCrestFoamPattern;
+vec2 gCrestDisp = vec2(0.0);
+// The wave climate (DisplacedMesh::WaveClimate; read only where kOceanClimate
+// is set, the foam dummy bound otherwise): the site's map of the cascades'
+// gains with its header row (ocean_climate.glsl), read at a pixel's rest point.
+layout(set = 0, binding = 93) uniform sampler2D oceanClimateMap;
+#include "ocean_climate.glsl"
 // Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
 // (designed for a 4 m world mapping), G = ridged lace/filament pattern
 // (12 m mapping). Replaces the per-pixel procedural noise octaves in the
@@ -315,6 +337,33 @@ layout(constant_id = 2) const uint kProbeGi   = 0u;
 // in the no-ray-query variant). Compile-time so a ray-traced frame runs the
 // kernel it always ran.
 layout(constant_id = 3) const uint kShadowMaps = 0u;
+// 1 = an ocean's chop normals are on this frame (DisplacedMesh::Params::
+// chopNormals) and binding 13 holds its slope-moment chain: their per-pixel
+// branch is compiled in. 0, every scene without them, drops it, so that
+// kernel is the one that ran before they existed.
+layout(constant_id = 7) const uint kOceanChop = 0u;
+// 1 = an ocean's crest foam is on this frame (DisplacedMesh::Params::
+// crestFoam): bindings 91 and 92 are live, the ocean's UVs carry its drawn
+// displacement, and the foam block that reads them is compiled in. 0 drops it.
+layout(constant_id = 8) const uint kOceanCrestFoam = 0u;
+// 1 = an ocean's wave reflections are on this frame (DisplacedMesh::Params::
+// waveReflections): the water's own mirror ray shades water it meets instead
+// of passing through it. 0 keeps the pass-through.
+layout(constant_id = 9) const uint kOceanWaveReflect = 0u;
+// 1 = an ocean's fine cascade is drawn without its tile's period this frame
+// (DisplacedMesh::Params::detile, with the chop normals): the per-pixel
+// slope is two placements of the cascade, summed. 0 = one placement.
+layout(constant_id = 10) const uint kOceanDetile = 0u;
+// 1 = an ocean's wave modulation is on this frame (DisplacedMesh::Params::
+// waveModulation, with the crest foam whose texture carries the long waves'
+// compression in .g): the fine cascade's per-pixel slope is steeper on the
+// long waves' crests. 0 = the slope as the cascade has it.
+layout(constant_id = 11) const uint kOceanWaveMod = 0u;
+// The wave climate this frame (DisplacedMesh::WaveClimate): bit 0 the fine
+// cascade's per-pixel slope is scaled by the map's .z (with the chop
+// normals), bit 1 the crest foam is read at the map's level (its texture
+// keeps the foam of the sea at 1, 2/3 and 1/3 in .r, .b, .a). 0 = no map.
+layout(constant_id = 12) const uint kOceanClimate = 0u;
 const bool kSM = kShadowMaps != 0u;
 bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
 // probe_common.glsl's own gate, made the same test here (its default is the UBO).
