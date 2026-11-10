@@ -137,6 +137,28 @@ namespace threepp_py {
                                "False): a field on the water's rest coordinates, so it rides the crest, trails "
                                "behind it and opens up as it thins, drawn from a foam photograph. Needs chop_normals. "
                                "THREEPP_OCEAN_CREST_FOAM=1/0 overrides it.")
+                .def_readwrite("short_waves", &DisplacedMesh::Params::shortWaves,
+                               "Short waves as geometry (default False): the middle cascade draws the waves a few "
+                               "metres long, with their chop, and the fine cascade keeps what is shorter. Read when "
+                               "the renderer first sees the ocean: set it before the first frame. "
+                               "THREEPP_OCEAN_SHORT_WAVES=1/0 overrides it.")
+                .def_readwrite("short_wave_spectrum", &DisplacedMesh::Params::shortWaveSpectrum,
+                               "The measured short-wave spectrum (default False, the Phillips tail alone): adds "
+                               "Elfouhaily et al.'s (1997) wind-dependent short waves, so the sea's slopes reach "
+                               "Cox and Munk's at the wind it is given. Needs chop_normals for the part no texel "
+                               "holds. Read when the renderer first sees the ocean: set it before the first frame. "
+                               "THREEPP_OCEAN_SHORT_WAVE_SPECTRUM=1/0 overrides it.")
+                .def_readwrite("detile", &DisplacedMesh::Params::detile,
+                               "Draw the fine cascade's per-pixel slope as two placements of it, summed, so its "
+                               "tile's period does not show from above (default False). Needs chop_normals. "
+                               "Live-tunable; THREEPP_OCEAN_DETILE=1/0 overrides it.")
+                .def_readwrite("wave_reflections", &DisplacedMesh::Params::waveReflections,
+                               "The water's mirror ray shades the wave it meets as water instead of passing "
+                               "through it to the seabed (default False): no dark slits along steep crests. "
+                               "Live-tunable; THREEPP_OCEAN_WAVE_REFLECTIONS=1/0 overrides it.")
+                .def_readwrite("fold_foam", &DisplacedMesh::Params::foldFoam,
+                               "With crest_foam: lay the foam where the drawn surface folds, measured on the "
+                               "waves longer than 3 m (default False). THREEPP_OCEAN_FOLD_FOAM=1/0 overrides it.")
                 .def_readwrite("measured_spreading", &DisplacedMesh::Params::measuredSpreading,
                                "True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with "
                                "long crests at the peak. False (default) = the old symmetric cos^2 (as much energy "
