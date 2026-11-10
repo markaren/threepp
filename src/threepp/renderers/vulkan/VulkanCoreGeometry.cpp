@@ -3429,6 +3429,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 st.appliedFetch     = dm.params.fetch;
                 st.appliedHsFix     = hsFix;
                 st.boundKmValid     = false;
+                st.shortWaveBankValid = false;
                 st.appliedMeasuredSpreading = dm.params.measuredSpreading;
                 st.appliedSwell[0] = dm.params.swellHeight;
                 st.appliedSwell[1] = dm.params.swellPeriod;
@@ -3451,6 +3452,15 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 for (uint32_t i = 0; i < 2; ++i)
                     st.boundKm[i] = (st.cascadeMask & (1u << i)) ? st.cascades[i].phillips->meanWavenumber() : 0.f;
                 st.boundKmValid = true;
+            }
+            // The measured short-wave spectrum: what the finest cascade cannot
+            // draw of it goes to the shade's roughness (the chop moments).
+            if (!st.shortWaveBankValid) {
+                st.shortWaveBankedMss = 0.f;
+                for (uint32_t i = 0; i < 3; ++i)
+                    if (st.cascadeMask & (1u << i))
+                        st.shortWaveBankedMss += st.cascades[i].phillips->unresolvedShortWaveMss();
+                st.shortWaveBankValid = true;
             }
 
             // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
@@ -3610,7 +3620,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 const auto& fc = st.cascades[st.chopFineIdx];
                 st.chopMoments->record(cb, dm.params.waveScale / fc.tileSize,
                                        dm.effectiveChoppiness() / fc.tileSize,
-                                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
+                                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage(),
+                                       st.shortWaveBankedMss);
             }
             // Short waves as geometry: the middle cascade's mipped copies for
             // this frame's displace (which binds them only with the chop set).
@@ -4095,6 +4106,7 @@ void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, Displa
                     cf.dim      = dim;
                     cf.tileSize = tileSizes[ci];
                     cf.boundKm  = (ci < 2 && dm.boundWavesOn() && st.boundKmValid) ? st.boundKm[ci] : 0.f;
+                    cf.bankedMss = (st.chopOn && uint32_t(ci) == st.chopFineIdx) ? st.shortWaveBankedMss : 0.f;
                 }
             }
         }
@@ -5230,6 +5242,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 ps.swellPeriod = dm.params.swellPeriod;
                 ps.swellTheta  = dm.params.swellTheta;
                 ps.swellSpread = dm.params.swellSpread;
+                ps.shortWaveSpectrum = dm.shortWaveSpectrumOn();
                 if (i == 0) {
                     ps.kMin = 0.f;
                     ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound

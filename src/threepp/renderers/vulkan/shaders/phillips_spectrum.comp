@@ -67,6 +67,10 @@ layout(push_constant) uniform Params {
     float swellPeriod; // Tp, s
     float swellTheta;  // direction the swell runs toward, rad, sample domain
     float swellSpread; // s of cos^(2s)(theta/2), >= 1 (the host clamps it)
+    // 1 = the measured short-wave spectrum (DisplacedMesh::Params::
+    // shortWaveSpectrum / THREEPP_OCEAN_SHORT_WAVE_SPECTRUM, see
+    // elfouhailyShortCurvature). 0 adds nothing.
+    uint  shortWave;
 } P;
 
 const float PI = 3.14159265358979;
@@ -133,6 +137,37 @@ float swellShape(vec2 k) {
     // texel would spread through the IFFT over the whole cascade).
     const float halfCos = max(sqrt(0.5 * (1.0 + c)), 1e-6);
     return sf * pow(halfCos, 2.0 * P.swellSpread) / (w * kl);
+}
+
+// The short-wave curvature spectrum of Elfouhaily, Chapron, Katsaros and
+// Vandemark (1997), "A unified directional spectrum for long and short
+// wind-driven waves", J. Geophys. Res. 102(C7), 15781-15796, eq. 40-44:
+//   B_h(k) = (alpha_m / 2) (c_m / c) F_m,
+//   F_m    = L_PM exp(-(k / k_m - 1)^2 / 4),  L_PM = exp(-5/4 (k_p / k)^2),
+//   c(k)   = sqrt(g / k (1 + (k / k_m)^2)),  k_m = 370 rad/m, c_m = 0.23 m/s,
+//   alpha_m = 0.01 (1 + ln(u* / c_m))    for u* <= c_m,
+//             0.01 (1 + 3 ln(u* / c_m))  for u* >  c_m,
+// B the curvature spectrum k^3 S(k) of the omnidirectional S. (Their F_m also
+// carries the peak enhancement J_p, 1 this far above the peak: left out.)
+// The friction velocity is the neutral log profile, u* = 0.4 U10 / ln(10 / z0),
+// with the wave-age dependent roughness length the paper takes from Donelan,
+// Dobson, Smith and Anderson (1993), z0 = 3.7e-5 (U10^2 / g) (U10 / c_p)^0.9.
+// alpha_m is held at 0 or above (it would turn negative below about 3 m/s).
+// Mirrored on the CPU in OceanFFT.cpp (elfouhailyShortCurvatureCpu).
+float elfouhailyShortCurvature(float k, float kp) {
+    const float g  = 9.81;
+    const float km = 370.0;
+    const float cm = 0.23;
+    const float U  = P.windSpeed;
+    const float omegaC = U * sqrt(kp / g);// inverse wave age U10 / c_p
+    const float z0 = 3.7e-5 * U * U / g * pow(omegaC, 0.9);
+    const float us = 0.4 * U / log(10.0 / z0);
+    const float lr = log(us / cm);
+    const float am = max(0.01 * (1.0 + (us <= cm ? lr : 3.0 * lr)), 0.0);
+    const float kr = k / km;
+    const float c  = sqrt(g / k * (1.0 + kr * kr));
+    const float pr = kp / k;
+    return 0.5 * am * (cm / c) * exp(-1.25 * pr * pr) * exp(-0.25 * (kr - 1.0) * (kr - 1.0));
 }
 
 float phillips2D(vec2 k) {
@@ -211,6 +246,19 @@ float phillips2D(vec2 k) {
     // physical constant is A = pi alpha = 0.02545: 2.545x the 0.01 above.
     // With the peak fix, var(eta) = alpha L^2 / (4 beta), Hs = 0.21 U^2 / g.
     if (P.hsFix != 0u) p *= 2.5446900;// pi * 8.1e-3 / 0.01
+    if (P.shortWave != 0u) {
+        // The measured short waves, on top of the long-wave spectrum above
+        // (the paper's B = B_l + B_h). In the chain's units a curvature B
+        // with the directional weight kw (which integrates to pi over the
+        // circle) is P = 2 pi B kw / k^4: the Pierson-Moskowitz tail above is
+        // B = alpha / 2 this way. Faded in over three octaves from twice the
+        // spectral peak, where B_h is a few percent of B_l, so the long waves
+        // and Hs keep their spectrum; the same short-wave taper as the band.
+        const float kp = 0.894 / L;// the spectrum's own peak (fetch included)
+        const float kn = sqrt(k2);
+        const float fade = smoothstep(log(2.0 * kp), log(16.0 * kp), log(kn));
+        p += 2.0 * PI * elfouhailyShortCurvature(kn, kp) * fade * kw * exp(-k2 * l * l) / k4;
+    }
     if (P.swellScale > 0.0) {
         // The swell carries the same short-wave taper as the band it is in.
         p += P.swellScale * swellShape(k) * exp(-k2 * l * l);

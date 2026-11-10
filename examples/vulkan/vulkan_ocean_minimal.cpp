@@ -42,6 +42,7 @@
 //                      a face cannot see the sky)
 //   --short-waves 0|1  Params::shortWaves, the 3 to 9 m waves as geometry
 //   --detile 0|1       Params::detile, the fine cascade without its period
+//   --short-spectrum 0|1  Params::shortWaveSpectrum, Elfouhaily et al. (1997)'s short waves
 //   --crests           the physical-crests set in one flag: hs-fix, cwm,
 //                      bound waves, breaking crests, chop normals and the
 //                      measured spreading all on (each flag above, given
@@ -97,7 +98,7 @@ int main(int argc, char** argv) {
     float fetch = -1.f, chop = -1.f, waveScale = -1.f, tile2 = -1.f, foam = -1.f;
     float theta = -1e9f;
     int hsFix = -1;
-    int cwm = -1, bound = -1, breaking = -1, crestFoam = -1, waveRefl = -1, shortWaves = -1, detile = -1;
+    int cwm = -1, bound = -1, breaking = -1, crestFoam = -1, waveRefl = -1, shortWaves = -1, detile = -1, shortSpectrum = -1;
     bool crests = false;
     bool pinnedClock = false;
     for (int i = 1; i < argc; ++i) {
@@ -116,6 +117,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--wave-refl") == 0 && i + 1 < argc) waveRefl = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--short-waves") == 0 && i + 1 < argc) shortWaves = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--detile") == 0 && i + 1 < argc) detile = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--short-spectrum") == 0 && i + 1 < argc) shortSpectrum = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--crests") == 0) crests = true;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
@@ -232,6 +234,7 @@ int main(int argc, char** argv) {
     if (waveRefl >= 0) ocean->params.waveReflections = waveRefl != 0;
     if (shortWaves >= 0) ocean->params.shortWaves = shortWaves != 0;
     if (detile >= 0) ocean->params.detile = detile != 0;
+    if (shortSpectrum >= 0) ocean->params.shortWaveSpectrum = shortSpectrum != 0;
     if (crestFoam >= 0) {
         ocean->params.crestFoam = crestFoam != 0;
         if (crestFoam != 0) ocean->params.chopNormals = true;

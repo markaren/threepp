@@ -1587,6 +1587,18 @@ namespace {
                            "prologue_surface.glsl:213; view-dependent"});
             out.push_back({"mss displaced + shade base, total", gu + gc + baseShade, 0.8 * cmT, 1.2 * cmT,
                            fmt("%.4f", cmT), "+-20%", "Cox-Munk 1954; near water, no footprint floor"});
+            // The measured short-wave spectrum (THREEPP_OCEAN_SHORT_WAVE_SPECTRUM)
+            // banks what the finest cascade cannot draw of it into the shade's
+            // roughness (the chop moments' mean square slope): the renderer
+            // reports it with the fields.
+            double banked = 0;
+            for (const auto& f: ocean->heightFields) banked += f.bankedMss;
+            if (banked > 0) {
+                out.push_back({"  mss banked short-wave tail", banked, 1, 0, "", "",
+                               "Elfouhaily 1997; unresolved, to roughness"});
+                out.push_back({"mss displaced + banked tail, total", gu + gc + banked, 0.8 * cmT, 1.2 * cmT,
+                               fmt("%.4f", cmT), "+-20%", "Cox-Munk 1954; resolved + banked"});
+            }
         }
 
         // ── 4. Crests ────────────────────────────────────────────────────────

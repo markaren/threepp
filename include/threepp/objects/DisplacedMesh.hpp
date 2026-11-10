@@ -179,6 +179,26 @@ namespace threepp {
             // samples of one spectrum, variance kept). Needs chopNormals.
             // THREEPP_OCEAN_DETILE = 1 / 0 forces it. Live-tunable.
             bool detile = false;
+
+            // The measured short-wave spectrum (default OFF, the historical
+            // Phillips tail alone). The k^-3 tail carries a constant slope
+            // variance per octave and no dependence on the wind, while the
+            // real short waves get steeper as the wind rises: at 16 m/s the
+            // drawn sea had a quarter of Cox and Munk's (1954) mean square
+            // slope. ON adds the short-wave curvature spectrum of Elfouhaily,
+            // Chapron, Katsaros and Vandemark (1997), "A unified directional
+            // spectrum for long and short wind-driven waves", J. Geophys. Res.
+            // 102(C7), eq. 40-44: B_h = (alpha_m / 2)(c_m / c) F_m, its
+            // saturation level alpha_m set by the friction velocity, its
+            // gravity-capillary peak at k_m = 370 rad/m, c_m = 0.23 m/s. It is
+            // faded in from twice to sixteen times the spectral peak's
+            // wavenumber, so the long waves and Hs keep their spectrum, and
+            // what lies beyond the fine cascade's roll-off and Nyquist (the
+            // capillary peak) is not dropped: its slope variance goes to the
+            // shade's roughness through the fine cascade's moment chain
+            // (needs chopNormals for that part). Read when the renderer first
+            // sees the mesh. THREEPP_OCEAN_SHORT_WAVE_SPECTRUM = 1 / 0 forces it.
+            bool shortWaveSpectrum = false;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -273,6 +293,7 @@ namespace threepp {
         [[nodiscard]] bool waveReflectionsOn() const;
         [[nodiscard]] bool shortWavesOn() const;
         [[nodiscard]] bool detileOn() const;
+        [[nodiscard]] bool shortWaveSpectrumOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under
         // the Choppy Wave Model, else params.choppiness.
         [[nodiscard]] float effectiveChoppiness() const;
@@ -628,6 +649,10 @@ namespace threepp {
             // The band's mean wavenumber (rad/m) the bound harmonic uses;
             // 0 = no bound harmonic on this cascade.
             float    boundKm  = 0.f;
+            // Params::shortWaveSpectrum, the finest cascade only: the slope
+            // variance (both axes) of the short-wave spectrum this grid does
+            // not hold, which the shade adds to its roughness. 0 otherwise.
+            float    bankedMss = 0.f;
         };
         mutable CascadeField heightFields[3];
 

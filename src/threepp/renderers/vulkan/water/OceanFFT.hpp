@@ -66,6 +66,9 @@ namespace threepp::water {
             float    swellPeriod = 12.0f; // peak period Tp, s
             float    swellTheta  = 0.0f;  // direction of travel, rad (sample domain)
             float    swellSpread = 50.0f; // s of cos^(2s)(theta/2); below 1 is taken as 1
+            // The measured short-wave spectrum (DisplacedMesh::Params::
+            // shortWaveSpectrum, see elfouhailyShortCurvature in the shader).
+            bool     shortWaveSpectrum = false;
         };
 
         // Push-constant block of phillips_spectrum.comp (std430, 56 bytes).
@@ -84,6 +87,7 @@ namespace threepp::water {
             float    swellPeriod;
             float    swellTheta;
             float    swellSpread;
+            uint32_t shortWave;
         };
 
         PhillipsSpectrum(vulkan::VulkanContext& ctx, const Settings& s);
@@ -126,6 +130,14 @@ namespace threepp::water {
         // (DisplacedMesh::Params::boundWaves). A CPU copy of the shader's
         // phillips2D (spreading and swell included), evaluated for the current settings. 0 for an empty band.
         float meanWavenumber() const;
+
+        // Params::shortWaveSpectrum: the slope variance (both axes, m^2/m^2)
+        // of the short-wave spectrum that this cascade's grid does not draw,
+        // what its roll-off exp(-(k l)^2) takes and everything past its
+        // Nyquist (the capillary peak), integrated over ln k on the CPU.
+        // Only for the open band (kMax == 0, the finest cascade): a lower
+        // band's cut tail is the next cascade's. 0 when the switch is off.
+        float unresolvedShortWaveMss() const;
 
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }
@@ -340,11 +352,13 @@ namespace threepp::water {
             uint32_t textureSize;
             float    slopeScale;// raw IFFT slope -> world slope (waveScale / tile)
             float    chopScale; // raw IFFT dD/dx -> world, times lambda (choppiness / tile)
+            float    bankedVar; // slope variance added to .a everywhere (shortWaveSpectrum); 0 = none
         };
 
         // After the cascade's IFFTs, same command buffer. Leaves every level
         // in GENERAL, visible to compute and ray-tracing sampled reads.
-        void record(VkCommandBuffer cb, float slopeScale, float chopScale, VkPipelineStageFlags readerStages);
+        void record(VkCommandBuffer cb, float slopeScale, float chopScale, VkPipelineStageFlags readerStages,
+                    float bankedVar = 0.f);
 
         VkImageView sampledView() const { return sampledView_; }
         VkSampler   sampler()     const { return sampler_; }

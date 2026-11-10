@@ -630,6 +630,11 @@ namespace threepp::vulkan::impl {
         // second-order harmonic, valid until the sea state changes.
         float boundKm[2]       = {0.f, 0.f};
         bool  boundKmValid     = false;
+        // Params::shortWaveSpectrum: the finest cascade's unresolved short-
+        // wave slope variance (PhillipsSpectrum::unresolvedShortWaveMss),
+        // banked into the chop moments; recomputed with the sea state.
+        float shortWaveBankedMss = 0.f;
+        bool  shortWaveBankValid = false;
         bool  crestUvTagged    = false;// the UV buffer holds breaking crests' (eps, -1) or crest foam's disp.xz
         bool  appliedMeasuredSpreading = false;
         float appliedSwell[4] = {0.f, 0.f, 0.f, 0.f};// height, period, theta, spread

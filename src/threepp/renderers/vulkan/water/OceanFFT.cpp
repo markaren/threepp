@@ -412,6 +412,7 @@ namespace threepp::water {
         p.swellPeriod     = settings_.swellPeriod;
         p.swellTheta      = settings_.swellTheta;
         p.swellSpread     = swellSpreadClamped(settings_.swellSpread);
+        p.shortWave       = settings_.shortWaveSpectrum ? 1u : 0u;
         vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(settings_.textureSize);
         vkCmdDispatch(cb, g, g, 1);
@@ -466,7 +467,63 @@ namespace threepp::water {
             const float ch = std::cosh(beta * theta);
             return 3.14159265358979f * 0.5f * beta / (ch * ch * std::tanh(beta * 3.14159265358979f));
         }
+
+        // CPU mirror of elfouhailyShortCurvature in phillips_spectrum.comp
+        // (double here); the equations and their sources are cited there.
+        double elfouhailyShortCurvatureCpu(double k, double kp, double U) {
+            constexpr double g = 9.81, km = 370.0, cm = 0.23;
+            const double omegaC = U * std::sqrt(kp / g);
+            const double z0 = 3.7e-5 * U * U / g * std::pow(omegaC, 0.9);
+            const double us = 0.4 * U / std::log(10.0 / z0);
+            const double lr = std::log(us / cm);
+            const double am = std::max(0.01 * (1.0 + (us <= cm ? lr : 3.0 * lr)), 0.0);
+            const double kr = k / km;
+            const double c  = std::sqrt(g / k * (1.0 + kr * kr));
+            const double pr = kp / k;
+            return 0.5 * am * (cm / c) * std::exp(-1.25 * pr * pr) * std::exp(-0.25 * (kr - 1.0) * (kr - 1.0));
+        }
+
+        // The fade the shader puts on it: smoothstep over ln k from 2 k_p to 16 k_p.
+        double shortWaveFadeCpu(double k, double kp) {
+            const double t = std::clamp((std::log(k) - std::log(2.0 * kp)) / std::log(8.0), 0.0, 1.0);
+            return t * t * (3.0 - 2.0 * t);
+        }
+
+        // The shader's peak length scale L (hs-fix and fetch included).
+        double spectrumLengthCpu(const PhillipsSpectrum::Settings& S) {
+            double L = double(S.windSpeed) * S.windSpeed / 9.81;
+            if (S.hsFix) L *= 1.1624764;
+            if (S.fetch > 0.f) {
+                const double Ffd = 1609.0 * S.windSpeed * S.windSpeed;
+                L *= std::pow(std::clamp(S.fetch / Ffd, 0.005, 1.0), 2.0 / 3.0);
+            }
+            return L;
+        }
     }// namespace
+
+    float PhillipsSpectrum::unresolvedShortWaveMss() const {
+        const Settings& S = settings_;
+        if (!S.shortWaveSpectrum || S.kMax > 0.f || !(S.windSpeed > 0.f) || !(S.tileSize > 0.f)) return 0.f;
+        // Slope variance of a curvature spectrum: mss = integral B(k) d ln k
+        // (both axes; the directional weight integrates out). What the grid
+        // draws of it is the roll-off exp(-(k l)^2) up to its Nyquist pi N /
+        // tile (the square grid reaches past that on its diagonals only);
+        // the rest is banked.
+        const double kp   = 0.894 / spectrumLengthCpu(S);
+        const double kNyq = 3.14159265358979 * double(S.textureSize) / double(S.tileSize);
+        const double l    = S.smallWaveCutoff;
+        const double lo   = std::log(std::max(double(S.kMin), 2.0 * kp));
+        const double hi   = std::log(370.0 * 30.0);// B_h is under 1e-20 of its peak by then
+        constexpr int n   = 4096;
+        double mss = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double lk = lo + (i + 0.5) * (hi - lo) / n;
+            const double k  = std::exp(lk);
+            const double drawn = k < kNyq ? std::exp(-k * k * l * l) : 0.0;
+            mss += elfouhailyShortCurvatureCpu(k, kp, S.windSpeed) * shortWaveFadeCpu(k, kp) * (1.0 - drawn);
+        }
+        return static_cast<float>(mss * (hi - lo) / n);
+    }
 
     float PhillipsSpectrum::swellSpreadClamped(float s) {
         // s < 1 widens cos^(2s)(theta/2) past anything measured for swell
@@ -564,6 +621,11 @@ namespace threepp::water {
                 p *= std::pow(gamma, std::exp(-0.5f * d * d));
             }
             if (S.hsFix) p *= 2.5446900f;
+            if (S.shortWaveSpectrum) {
+                const double kp = 0.894 / double(L);
+                p += float(2.0 * 3.14159265358979 * elfouhailyShortCurvatureCpu(kn, kp, S.windSpeed) *
+                           shortWaveFadeCpu(kn, kp)) * kw * std::exp(-k2 * l * l) / (k2 * k2);
+            }
             if (swell > 0.f)
                 p += float(swell * swellShapeCpu(kx, kz, S.swellPeriod, S.swellTheta,
                                                  swellSpreadClamped(S.swellSpread))) *
@@ -1292,7 +1354,7 @@ namespace threepp::water {
     }
 
     void ChopMoments::record(VkCommandBuffer cb, float slopeScale, float chopScale,
-                             VkPipelineStageFlags readerStages) {
+                             VkPipelineStageFlags readerStages, float bankedVar) {
         auto barrier = [&](uint32_t baseMip, uint32_t mipCount, VkImageLayout oldLayout,
                            VkAccessFlags src, VkAccessFlags dst,
                            VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
@@ -1329,6 +1391,7 @@ namespace threepp::water {
         p.textureSize = textureSize_;
         p.slopeScale  = slopeScale;
         p.chopScale   = chopScale;
+        p.bankedVar   = bankedVar;
         vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         const uint32_t g = groupCountFor(textureSize_);
         vkCmdDispatch(cb, g, g, 1);
