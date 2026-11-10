@@ -223,6 +223,16 @@ namespace threepp {
             // forces it. Live-tunable.
             bool waveModulation = false;
 
+            // Hull contact (default off): the sea meets a vessel's side
+            // instead of easing onto her waterline plane over a margin of up
+            // to 2 m around her footprint. The blend to the plane keeps to a
+            // narrow band (0.2 x her half beam, 0.15 to 0.6 m), so the waves
+            // and the wake field's own bow wave (WakeField::rippleHeights)
+            // stand at full height against her; inside the footprint the
+            // water is still her waterline plane, so none comes up through
+            // her. THREEPP_OCEAN_HULL_CONTACT = 1 / 0 forces it.
+            bool hullContact = false;
+
             // Crest sharpness (default 0, off). A LOOK CONTROL, not physics:
             // a sum of linear waves, even drawn as the Lagrangian sea of the
             // Choppy Wave Model, keeps rounded crests, and the sharp, short-
@@ -373,6 +383,7 @@ namespace threepp {
         [[nodiscard]] bool detileOn() const;
         [[nodiscard]] bool shortWaveSpectrumOn() const;
         [[nodiscard]] bool waveModulationOn() const;
+        [[nodiscard]] bool hullContactOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under
         // the Choppy Wave Model, else params.choppiness.
         [[nodiscard]] float effectiveChoppiness() const;

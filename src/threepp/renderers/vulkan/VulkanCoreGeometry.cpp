@@ -3844,7 +3844,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                                 ((st.chopOn && st.c1Mips) ? 32u : 0u) |
                                 // Wave modulation reads cascade 0's exact derivative field,
                                 // which only the OCEAN_CHOP variant binds.
-                                ((st.chopOn && dm.waveModulationOn()) ? 64u : 0u);
+                                ((st.chopOn && dm.waveModulationOn()) ? 64u : 0u) |
+                                // Hull contact: the narrow blend to each waterline plane.
+                                ((hullCount > 0u && dm.hullContactOn()) ? 128u : 0u);
             pc.uvOut          = (crestsOut || crestsClear || foamOut) ? st.blas->uv.address : 0ull;
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;

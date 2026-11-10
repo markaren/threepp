@@ -104,6 +104,11 @@ namespace threepp {
         return env < 0 ? params.waveModulation : env == 1;
     }
 
+    bool DisplacedMesh::hullContactOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_HULL_CONTACT");
+        return env < 0 ? params.hullContact : env == 1;
+    }
+
     float DisplacedMesh::effectiveChoppiness() const {
         return cwmOn() ? 1.f : params.choppiness;
     }

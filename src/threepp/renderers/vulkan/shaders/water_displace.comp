@@ -108,7 +108,8 @@ layout(push_constant, scalar) uniform Pc {
     uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests, bit 3 clear its tags,
                             // bit 4 crestFoam (the drawn displacement into the UVs),
                             // bit 5 cascade 1 is mipped: read it at the vertex spacing's level,
-                            // bit 6 waveModulation (OCEAN_CHOP only): cascade 1 rides cascade 0
+                            // bit 6 waveModulation (OCEAN_CHOP only): cascade 1 rides cascade 0,
+                            // bit 7 hullContact: the blend to a hull's waterline plane keeps to a narrow band
     float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
     float   boundKm1;
     float   crestSharpness; // DisplacedMesh::Params::crestSharpness (bit 0 only): cascades 0+1 at choppiness 1 + s
@@ -159,6 +160,22 @@ float wakeRippleHeight(vec2 xz, float spacing) {
         h += edge * a;
     }
     return h;
+}
+
+// Hull contact (waveModel bit 7): hullLocal's fade over a narrow band,
+// 0.2 x the half beam held to [0.15, 0.6] m, in place of oceanHullMargin's
+// 0.6 x up to 2 m. The footprint's plan form is hullLocal's (mirrored here so
+// the shade's copy of it is left as it is).
+float hullContactFade(OceanHull hu, vec2 p) {
+    const float dx = p.x - hu.centerX;
+    const float dz = p.y - hu.centerZ;
+    const float lX = hu.cosYaw * dx - hu.sinYaw * dz;
+    const float lZ = hu.sinYaw * dx + hu.cosYaw * dz;
+    const float u  = clamp(-lZ / hu.halfLength, -1.0, 1.0);
+    const float halfBeamAtLZ = u <= 0.0 ? hu.halfBeam * pow(max(1.0 - u * u, 0.0), 0.6)
+                                        : hu.halfBeam * (1.0 - 0.25 * u * u);
+    const float edgeDist = max(abs(lX) - halfBeamAtLZ, abs(lZ) - hu.halfLength);
+    return smoothstep(0.0, clamp(0.2 * hu.halfBeam, 0.15, 0.6), edgeDist);
 }
 
 // Bicubic B-spline single-channel fetch (4 bilinear taps, Sigg & Hadwiger).
@@ -453,7 +470,7 @@ void main() {
     float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
     float bGX = 0.0, bGZ = 0.0;// the bound harmonic's own gradient (chop normals)
     float wmLambda = pc.choppiness;
-    if (pc.waveModel != 0u) {
+    if ((pc.waveModel & 127u) != 0u) {
         wmC = sampleSmoothRaw(rest.xz).xyz;
         const vec4 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
         const vec4 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));
@@ -515,7 +532,9 @@ void main() {
     // surface; with one vessel the order is exactly the old one.
     for (uint k = 0u; k < pc.hullCount; ++k) {
         const OceanHull hu = hulls.h[k];
-        const vec3  hl     = hullLocal(hu, rest.xz);
+        vec3        hl     = hullLocal(hu, rest.xz);
+        // Hull contact: the band is narrow, so the sea stands against her side.
+        if ((pc.waveModel & 128u) != 0u) hl.z = hullContactFade(hu, rest.xz);
         const float planeY = hu.centerY
                            + tan(clamp(hu.pitch, -1.0, 1.0)) * hl.y
                            + tan(clamp(hu.roll,  -1.0, 1.0)) * hl.x;
@@ -681,7 +700,8 @@ void main() {
             spZ = 2.0 * pc.warpHalfRange * (a + 3.0 * (1.0 - a) * vn * vn) / float(pc.gridDimZ - 1u);
         }
         float fade = 1.0;
-        for (uint k = 0u; k < pc.hullCount; ++k) fade *= hullLocal(hulls.h[k], rest.xz).z;
+        for (uint k = 0u; k < pc.hullCount; ++k)
+            fade *= (pc.waveModel & 128u) != 0u ? hullContactFade(hulls.h[k], rest.xz) : hullLocal(hulls.h[k], rest.xz).z;
         if (fade > 0.0) disp.y += fade * wakeRippleHeight(rest.xz, max(spX, spZ) * float(max((pc.cascadeMask >> 8u) & 255u, 1u)));
     }
 

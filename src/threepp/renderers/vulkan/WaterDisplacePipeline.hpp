@@ -86,7 +86,8 @@ namespace threepp::vulkan {
             // nothing below.
             uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests,
                                           // bit 3 clear the crest tags breakingCrests left,
-                                          // bit 4 crestFoam: the drawn disp.xz into the UVs
+                                          // bit 4 crestFoam: the drawn disp.xz into the UVs,
+                                          // bit 7 hullContact: the narrow blend to each hull's plane
             float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
             float           boundKm1;     // 0 = none on that cascade
             float           crestSharpness;// DisplacedMesh::effectiveCrestSharpness (cwm only; 0 = off)
