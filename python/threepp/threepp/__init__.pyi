@@ -13010,9 +13010,9 @@ class VulkanRenderer:
         """
         World-Y of the water surface: murk applies below it, the air medium above it. 1e30 (default) = no waterline.
         """
-    def set_height_fog(self, density: typing.SupportsFloat | typing.SupportsIndex = 0.019999999552965164, base_y: typing.SupportsFloat | typing.SupportsIndex = 0.0, falloff: typing.SupportsFloat | typing.SupportsIndex = 80.0, noise_amount: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579) -> None:
+    def set_height_fog(self, density: typing.SupportsFloat | typing.SupportsIndex = 0.019999999552965164, base_y: typing.SupportsFloat | typing.SupportsIndex = 0.0, falloff: typing.SupportsFloat | typing.SupportsIndex = 80.0, noise_amount: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, top_noise: typing.SupportsFloat | typing.SupportsIndex = 0.0, top_noise_scale: typing.SupportsFloat | typing.SupportsIndex = 150.0, top_noise_speed: typing.SupportsFloat | typing.SupportsIndex = 4.0) -> None:
         """
-        Enable near-field heterogeneous height fog. density = sigma_t at base_y; base_y world-Y; falloff exponential height scale (m); noise_amount 0=smooth..1=fully noise-modulated.
+        Enable near-field heterogeneous height fog. density = sigma_t at base_y; base_y world-Y; falloff exponential height scale (m); noise_amount 0=smooth..1=fully noise-modulated (froxels only). top_noise > 0 displaces base_y by up to that many metres with a drifting 3D noise of top_noise_scale-metre features, in the surface fog and the sun's march at any distance; top_noise_speed is its in-place evolution in m/s. The field drifts with the cloud wind.
         """
     def set_instance_id(self, object: Object3D, instance_id: typing.SupportsInt | typing.SupportsIndex) -> None:
         """

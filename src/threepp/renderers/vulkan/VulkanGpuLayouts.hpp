@@ -179,8 +179,15 @@ namespace threepp::vulkan::impl {
         // Appended, so a shader block that stops at murkColor still lines up.
         float murkSigma[3];  // murk σ_t per channel; all three = murkDensity for the scalar murk
         float murkAmbientK;  // setUnderwaterAmbientFalloff; 0 = the ambient terms ignore depth
+        // The noise-displaced fog top (HeightFogSettings::topNoise), read by the
+        // deferred shade and the deferred filters: baseY shifts by
+        // hfTopNoise * n, n in [-1, 1] a noise of p * hfTopInvScale
+        // (heightFogDisplacedBaseY, height_fog.glsl).
+        float hfTopNoise;    // peak displacement (m); 0 = off
+        float hfTopInvScale; // 1 / feature size (1/m)
+        float hfTopOffset[3];// .xz wind drift, .y evolution phase, in noise-space units
     };
-    static_assert(sizeof(GpuFogUbo) == 92);
+    static_assert(sizeof(GpuFogUbo) == 112);
 
     // Volumetric cloud layer (VulkanRenderer::setClouds) + near-field
     // heterogeneous height fog (VulkanRenderer::setHeightFog). Both ride the

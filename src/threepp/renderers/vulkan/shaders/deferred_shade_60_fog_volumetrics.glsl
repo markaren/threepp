@@ -42,9 +42,14 @@ float fogPathLength(vec3 a, vec3 b) {
 // the same function: if the two differed, the GI/reflection recombine would
 // carry an extinction the shade never applied and glow through the murk.
 #include "height_fog.glsl"
+// The base height of a leg ending at p: clouds.hfBaseY, displaced by the fog-top
+// noise when HeightFogSettings::topNoise is set.
+float heightFogBaseYAt(vec3 p) {
+    return heightFogDisplacedBaseY(p, clouds.hfBaseY, fog.hfTopNoise, fog.hfTopInvScale, fog.hfTopOffset);
+}
 float heightFogOpticalDepth(vec3 a, vec3 b) {
     return heightFogLegOpticalDepth(a, b, clouds.hfDensity, clouds.hfFalloff,
-                                    clouds.hfBaseY, fog.waterSurfaceY);
+                                    heightFogBaseYAt(b), fog.waterSurfaceY);
 }
 // Surface fog in heterogeneous mode: CLOSED-FORM height-fog extinction over the
 // WHOLE camera→surface leg + the ambient/skylight in-scatter fade toward the haze.
@@ -1201,7 +1206,11 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         // Local height-fog σ (smooth analytic mean — the noise modulation is a
         // near-field froxel concern; the march wants the mean). Same profile as
         // heightFogOpticalDepth / mediumExtinction.
-        const float sigmaX = clouds.hfDensity * exp(-max(x.y - clouds.hfBaseY, 0.0) / H);
+        // With a displaced fog top the step's density and the camera → x leg
+        // below share the base height at x, so the layer the step scatters in
+        // is the one its transmittance was integrated through.
+        const float baseX  = heightFogBaseYAt(x);
+        const float sigmaX = clouds.hfDensity * exp(-max(x.y - baseX, 0.0) / H);
         if (sigmaX <= 1e-7) continue;
         // The air medium stops at the waterline (heightFogOpticalDepth is clipped
         // the same way, so trCam below already agrees): a submerged step scatters
@@ -1209,8 +1218,15 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         // the underwater view got the sun's aerial glow through the water column
         // at the air medium's full base density.
         if (fog.waterSurfaceY < 1e29 && x.y < fog.waterSurfaceY) continue;
-        const float trCam = exp(-heightFogOpticalDepth(ro, x));// closed-form camera → x over the WHOLE leg
-        if (trCam < 0.003) break;                              // remaining contribution negligible
+        const float trCam = exp(-heightFogLegOpticalDepth(ro, x, clouds.hfDensity, clouds.hfFalloff,
+                                                          baseX, fog.waterSurfaceY));// closed-form camera → x over the WHOLE leg
+        // Remaining contribution negligible. With a displaced top the base
+        // height differs per step, trCam is no longer monotone along the ray,
+        // and a later step under a lower top can still be visible.
+        if (trCam < 0.003) {
+            if (fog.hfTopNoise > 0.0) continue;
+            break;
+        }
         vec3 stepSum = vec3(0.0);
         for (uint i = 0u; i < lights.dirCount; ++i) {
             const vec3  L   = normalize(lights.dirLights[i].direction);

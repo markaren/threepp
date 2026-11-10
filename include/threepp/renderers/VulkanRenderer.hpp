@@ -2258,6 +2258,22 @@ namespace threepp {
             float baseY       = 0.0f;
             float falloff     = 80.0f;// exponential height scale (m)
             float noiseAmount = 0.6f; // 0 = smooth analytic, 1 = fully noise-modulated
+            // A noise-displaced fog top. noiseAmount above reaches the froxels
+            // only (the clustered-light glow inside 512 m); the surface
+            // extinction and the sun's march integrate the smooth profile. With
+            // topNoise > 0 those two shift baseY by up to ±topNoise metres from
+            // a filamentary 3D noise whose largest features are topNoiseScale
+            // metres (finer octaves ride on them), sampled at
+            // the far end of each leg (the surface point; each step of the sun
+            // march), at any distance. The field drifts with the cloud wind
+            // (CloudSettings::wind, {8, 0, 2} m/s while setClouds is unset) and
+            // changes in place at topNoiseSpeed m/s. The base height of a leg is
+            // the one at its far end, not an integral of the noise along it.
+            // Sky pixels, particles, splats and the path tracer keep the
+            // undisplaced baseY. 0 = off (default), and off costs nothing.
+            float topNoise      = 0.0f;  // peak displacement of baseY (m)
+            float topNoiseScale = 150.0f;// feature size (m)
+            float topNoiseSpeed = 4.0f;  // in-place evolution (m/s through the field)
         };
         void setHeightFog(const std::optional<HeightFogSettings>& settings);
         [[nodiscard]] std::optional<HeightFogSettings> heightFog() const;

@@ -276,6 +276,11 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  murkColor;
     vec3  murkSigma;     // σ_t per channel; all three equal murkDensity for the scalar murk
     float murkAmbientK;  // setUnderwaterAmbientFalloff; 0 = the ambient terms ignore depth
+    // The noise-displaced fog top (HeightFogSettings::topNoise); see
+    // heightFogDisplacedBaseY in height_fog.glsl.
+    float hfTopNoise;    // peak displacement of the base height (m); 0 = off
+    float hfTopInvScale; // 1 / feature size (1/m)
+    vec3  hfTopOffset;   // wind drift and evolution, in noise-space units
 } fog;
 
 // ── World-space irradiance probe grid (multi-bounce GI, on by default) ──────

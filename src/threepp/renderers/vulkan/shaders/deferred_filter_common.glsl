@@ -52,6 +52,12 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float murkDensity;   // murk σ_t (1/m; 0 = off); the clearest channel of murkSigma
     vec3  murkColor;     // murk tint (unused here — the recombine carries extinction only)
     vec3  murkSigma;     // murk σ_t per channel (all three = murkDensity for the scalar murk)
+    float murkAmbientK;  // unused here — declared to align the fields below
+    // The noise-displaced fog top (HeightFogSettings::topNoise); the shade pass
+    // reads the same three from this block.
+    float hfTopNoise;    // peak displacement of the base height (m); 0 = off
+    float hfTopInvScale; // 1 / feature size (1/m)
+    vec3  hfTopOffset;   // wind drift and evolution, in noise-space units
 } fog;
 
 layout(push_constant) uniform Pc {
@@ -98,12 +104,15 @@ vec3 camOriginAt(ivec2 q) {
 // waterline. The same function as the shade pass's heightFogOpticalDepth
 // (deferred_shade_60_fog_volumetrics.glsl): this extinction is what the
 // GI/reflection recombine multiplies its added radiance by, so it has to match
-// what the shade applied to the base. Ignores the noise modulation (a smooth
-// mean, exactly what a recombine extinction wants). Zero when height fog is off.
+// what the shade applied to the base, the fog-top displacement at b included.
+// Ignores the froxel noise modulation (a smooth mean, exactly what a recombine
+// extinction wants). Zero when height fog is off.
 #include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
+    const float baseY = heightFogDisplacedBaseY(b, fog.hfBaseY, fog.hfTopNoise,
+                                                fog.hfTopInvScale, fog.hfTopOffset);
     return heightFogLegOpticalDepth(a, b, fog.hfDensity, fog.hfFalloff,
-                                    fog.hfBaseY, fog.waterSurfaceY);
+                                    baseY, fog.waterSurfaceY);
 }
 
 // Fog transmittance over the camera→surface leg — the GI/reflection recombine

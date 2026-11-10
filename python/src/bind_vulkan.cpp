@@ -2606,19 +2606,29 @@ namespace threepp_py {
                 // The underwater murk is a SEPARATE medium (set_underwater_murk).
                 .def("set_height_fog",
                      [](PyVulkanRenderer& r, float density, float base_y,
-                        float falloff, float noise_amount) {
+                        float falloff, float noise_amount, float top_noise,
+                        float top_noise_scale, float top_noise_speed) {
                          VulkanRenderer::HeightFogSettings s;
-                         s.density     = density;
-                         s.baseY       = base_y;
-                         s.falloff     = falloff;
-                         s.noiseAmount = noise_amount;
+                         s.density       = density;
+                         s.baseY         = base_y;
+                         s.falloff       = falloff;
+                         s.noiseAmount   = noise_amount;
+                         s.topNoise      = top_noise;
+                         s.topNoiseScale = top_noise_scale;
+                         s.topNoiseSpeed = top_noise_speed;
                          r.native().setHeightFog(s);
                      },
                      py::arg("density") = 0.02f, py::arg("base_y") = 0.0f,
                      py::arg("falloff") = 80.0f, py::arg("noise_amount") = 0.6f,
+                     py::arg("top_noise") = 0.0f, py::arg("top_noise_scale") = 150.0f,
+                     py::arg("top_noise_speed") = 4.0f,
                      "Enable near-field heterogeneous height fog. density = sigma_t "
                      "at base_y; base_y world-Y; falloff exponential height scale (m); "
-                     "noise_amount 0=smooth..1=fully noise-modulated.")
+                     "noise_amount 0=smooth..1=fully noise-modulated (froxels only). "
+                     "top_noise > 0 displaces base_y by up to that many metres with a "
+                     "drifting 3D noise of top_noise_scale-metre features, in the "
+                     "surface fog and the sun's march at any distance; top_noise_speed "
+                     "is its in-place evolution in m/s. The field drifts with the cloud wind.")
                 .def("disable_height_fog", [](PyVulkanRenderer& r) { r.native().setHeightFog(std::nullopt); },
                      "Turn near-field height fog off (default).")
                 // Automatic exposure (eye adaptation). When enabled the renderer
