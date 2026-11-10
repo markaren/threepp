@@ -1238,14 +1238,15 @@ namespace threepp::vulkan {
     // on this frame << 46 (spec constant 6, set only then) | ocean crest foam
     // on this frame << 47 (spec constant 7, set only then) | ocean wave
     // reflections << 48 (spec constant 8, set only then) | ocean detile << 49
-    // (spec constant 9, set only then), built on first use
+    // (spec constant 9, set only then) | ocean wave modulation << 50 (spec
+    // constant 10, set only then), built on first use
     // (see createPipeline). With no knob set the key is the MSAA code and the
     // shadow mode alone, so an app holds one pipeline per G-buffer sample count
     // and shadow mode its views use, and one more for each set of ray-budget
     // knobs it turns on.
     VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget,
                                             bool rayRecon, bool oceanChop, bool oceanCrestFoam,
-                                            bool oceanWaveReflect, bool oceanDetile) {
+                                            bool oceanWaveReflect, bool oceanDetile, bool oceanWaveMod) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
@@ -1254,7 +1255,8 @@ namespace threepp::vulkan {
                              (oceanChop ? (1ull << 46u) : 0ull) |
                              (oceanCrestFoam ? (1ull << 47u) : 0ull) |
                              (oceanWaveReflect ? (1ull << 48u) : 0ull) |
-                             (oceanDetile ? (1ull << 49u) : 0ull);
+                             (oceanDetile ? (1ull << 49u) : 0ull) |
+                             (oceanWaveMod ? (1ull << 50u) : 0ull);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1264,7 +1266,7 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 10> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+        const std::array<uint32_t, 11> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
                                             static_cast<uint32_t>((key >> 40u) & 1u),
                                             static_cast<uint32_t>((key >> 41u) & kRayBudgetAll),
@@ -1272,17 +1274,18 @@ namespace threepp::vulkan {
                                             static_cast<uint32_t>((key >> 46u) & 1u),
                                             static_cast<uint32_t>((key >> 47u) & 1u),
                                             static_cast<uint32_t>((key >> 48u) & 1u),
-                                            static_cast<uint32_t>((key >> 49u) & 1u)};
-        std::array<VkSpecializationMapEntry, 10> entries{};
+                                            static_cast<uint32_t>((key >> 49u) & 1u),
+                                            static_cast<uint32_t>((key >> 50u) & 1u)};
+        std::array<VkSpecializationMapEntry, 11> entries{};
         // kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget, kRayRecon
         // always; kOceanChop (6), kOceanCrestFoam (7), kOceanWaveReflect (8) and
-        // kOceanDetile (9) are specialised only for a pipeline that has them on, so every other
+        // kOceanDetile (9) and kOceanWaveMod (10) are specialised only for a pipeline that has them on, so every other
         // one passes the six entries it always did (the constants keep their
         // default 0).
         uint32_t entryCount = 0;
         uint32_t dataWords  = 0;
-        for (uint32_t i = 0; i < 10; ++i) {
-            if (i >= 6u && !((key >> (40u + i)) & 1u)) continue;// 6 -> bit 46, ... 9 -> bit 49
+        for (uint32_t i = 0; i < 11; ++i) {
+            if (i >= 6u && !((key >> (40u + i)) & 1u)) continue;// 6 -> bit 46, ... 10 -> bit 50
             entries[entryCount].constantID = i;
             entries[entryCount].offset     = i * sizeof(uint32_t);
             entries[entryCount].size       = sizeof(uint32_t);
@@ -1382,7 +1385,7 @@ namespace threepp::vulkan {
         const ShadePush push = shadePush(p);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                           shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget, p.rayRecon, p.oceanChopNormals,
-                                        p.oceanCrestFoam, p.oceanWaveReflections, p.oceanDetile));
+                                        p.oceanCrestFoam, p.oceanWaveReflections, p.oceanDetile, p.oceanWaveMod));
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
     }

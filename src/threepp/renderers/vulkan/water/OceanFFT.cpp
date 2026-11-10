@@ -1553,15 +1553,16 @@ namespace threepp::water {
     //   CrestFoam
     // ─────────────────────────────────────────────────────────────────
 
-    static_assert(sizeof(CrestFoam::PushParams) == 56,
-                  "CrestFoam::PushParams must match foam_crest.comp's Pc layout (56 bytes)");
+    static_assert(sizeof(CrestFoam::PushParams) == 64,
+                  "CrestFoam::PushParams must match foam_crest.comp's Pc layout (64 bytes)");
 
     CrestFoam::CrestFoam(vulkan::VulkanContext& ctx, uint32_t resolution,
                          VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1)
         : ctx_(ctx), res_(resolution) {
         for (uint32_t n = res_; n > 1u; n >>= 1u) ++mipLevels_;
 
-        foam_.format = VK_FORMAT_R16_SFLOAT;
+        // .r the foam, .g the compression the wave modulation reads.
+        foam_.format = VK_FORMAT_R16G16_SFLOAT;
         foam_.width  = res_;
         foam_.height = res_;
         VkImageCreateInfo ici{};

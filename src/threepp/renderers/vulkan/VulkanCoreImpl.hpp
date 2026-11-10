@@ -1053,6 +1053,9 @@ namespace threepp {
         // DisplacedMesh::Params::detile on this frame, with the chop normals
         // (the shade's spec constant 9).
         bool        oceanDetile           = false;
+        // DisplacedMesh::Params::waveModulation on this frame, with the crest
+        // foam texture that carries its compression (the shade's spec constant 10).
+        bool        oceanWaveMod          = false;
         Image2D     crestFoamPatternImage{};
         // The wake field's state images (deferred shade binding 78): the live
         // ocean's, or WakeFieldPipeline's 1x1 dummy. The shade samples it only

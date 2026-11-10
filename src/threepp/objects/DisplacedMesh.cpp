@@ -99,6 +99,11 @@ namespace threepp {
         return env < 0 ? params.shortWaveSpectrum : env == 1;
     }
 
+    bool DisplacedMesh::waveModulationOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_WAVE_MODULATION");
+        return env < 0 ? params.waveModulation : env == 1;
+    }
+
     float DisplacedMesh::effectiveChoppiness() const {
         return cwmOn() ? 1.f : params.choppiness;
     }

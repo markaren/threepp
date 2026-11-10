@@ -416,7 +416,8 @@ namespace threepp::water {
     // Crest foam (DisplacedMesh::Params::crestFoam; built the first time a
     // mesh turns it on): the foam texture over the water's rest coordinates
     // and the pass that deposits into it where a crest breaks and decays the
-    // rest (foam_crest.comp says how and why). One R16F image, tileSize0
+    // rest (foam_crest.comp says how and why). One RG16F image (.r the foam, .g
+    // the compression of cascades 0 and 1 for Params::waveModulation), tileSize0
     // across, REPEAT, with a full mip chain rebuilt every frame by linear
     // blits, so the shade's footprint fetch over a pixel returns the covered
     // fraction of that footprint.
@@ -431,7 +432,7 @@ namespace threepp::water {
         CrestFoam(const CrestFoam&) = delete;
         CrestFoam& operator=(const CrestFoam&) = delete;
 
-        // foam_crest.comp's push block, field for field (56 bytes).
+        // foam_crest.comp's push block, field for field (64 bytes).
         struct PushParams {
             VkDeviceAddress hullAddr;
             uint32_t        res;
@@ -446,6 +447,8 @@ namespace threepp::water {
             float           maxFoam;
             float           centerX;
             float           centerZ;
+            uint32_t        model;// bit 0: Params::waveModulation
+            uint32_t        _pad1 = 0;
         };
 
         // After the cascades' IFFTs, same command buffer; fills p.res itself.

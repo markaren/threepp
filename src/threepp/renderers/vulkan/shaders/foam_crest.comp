@@ -51,11 +51,15 @@ layout(set = 0, binding = 0) uniform sampler2D jac0;   // (dDx/dx, dDz/dz), casc
 layout(set = 0, binding = 1) uniform sampler2D height0;// .g = dDx/dz
 layout(set = 0, binding = 2) uniform sampler2D jac1;   // the same, cascade 1 (rotated domain)
 layout(set = 0, binding = 3) uniform sampler2D height1;
-layout(set = 0, binding = 4, r16f) uniform image2D foam;// mip 0, read and written in place
+// mip 0, read and written in place: .r the foam; .g the compression of
+// cascades 0 and 1 at the texel, -div D (choppiness 1, waveScale), for the
+// shade's wave modulation (DisplacedMesh::Params::waveModulation; 0 with it
+// off). The shade's mips average both.
+layout(set = 0, binding = 4, rg16f) uniform image2D foam;
 
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
-// 56 bytes, mirrored field for field by water::CrestFoam::PushParams.
+// 64 bytes, mirrored field for field by water::CrestFoam::PushParams.
 layout(push_constant, scalar) uniform Pc {
     uint64_t hullAddr;  // OceanHull[hullCount], the buffer water_displace reads
     uint  res;          // texels per side
@@ -70,6 +74,8 @@ layout(push_constant, scalar) uniform Pc {
     float maxFoam;
     float centerX;      // where the mesh is centred in rest space (its warp
     float centerZ;      // centre): each texel stands for the copy of q nearest it
+    uint  model;        // bit 0 waveModulation: cascade 1 rides cascade 0 (water_displace.comp)
+    uint  _pad1;
 } pc;
 
 void main() {
@@ -85,6 +91,7 @@ void main() {
     const vec2 q  = c + d0 - pc.tileSize * floor(d0 / pc.tileSize + 0.5);
 
     float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+    float gain1 = 1.0;// waveModulation: cascade 1's amplitude factor, as water_displace.comp
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize;
         const vec2  uv = q * invTile;
@@ -92,16 +99,17 @@ void main() {
         jxx += jd.x;
         jzz += jd.y;
         jxz += sampleBicubicRG(height0, uv).g * invTile;
+        if ((pc.model & 1u) != 0u) gain1 = clamp(1.0 - (jd.x + jd.y) * pc.steepScale, 0.5, 1.5);
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         // Rotated sample domain d = R q: the displacement gradient comes back
         // as R^T J R (as in water_displace.comp).
         const float invTile = 1.0 / pc.tileSize1;
         const vec2  uv = oceanC1Domain(q) * invTile;
-        const vec2  jd = texture(jac1, uv).rg * invTile;
+        const vec2  jd = texture(jac1, uv).rg * (invTile * gain1);
         const float p  = jd.x;
         const float r  = jd.y;
-        const float o  = texture(height1, uv).g * invTile;
+        const float o  = texture(height1, uv).g * (invTile * gain1);
         const float cs = kOceanCascade1RotCos;
         const float sn = kOceanCascade1RotSin;
         jxx += cs * cs * p + 2.0 * cs * sn * o + sn * sn * r;
@@ -124,5 +132,6 @@ void main() {
     const float deposit = pc.maxFoam * clamp((eps - pc.threshold) * pc.invRamp, 0.0, 1.0) * hullFade;
     float f = max(imageLoad(foam, px).r * pc.decay, deposit);
     if (f < 1.0 / 1024.0) f = 0.0;// below anything the shade draws: a clean zero
-    imageStore(foam, px, vec4(f));
+    const float c01 = (pc.model & 1u) != 0u ? -(jxx + jzz) * pc.steepScale : 0.0;
+    imageStore(foam, px, vec4(f, c01, 0.0, 0.0));
 }

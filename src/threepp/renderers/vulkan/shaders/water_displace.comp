@@ -100,7 +100,8 @@ layout(push_constant, scalar) uniform Pc {
     // historical path below and reads nothing past here.
     uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests, bit 3 clear its tags,
                             // bit 4 crestFoam (the drawn displacement into the UVs),
-                            // bit 5 cascade 1 is mipped: read it at the vertex spacing's level
+                            // bit 5 cascade 1 is mipped: read it at the vertex spacing's level,
+                            // bit 6 waveModulation (OCEAN_CHOP only): cascade 1 rides cascade 0
     float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
     float   boundKm1;
     uint    _pad0;
@@ -151,15 +152,20 @@ float sampleBicubicR(sampler2D tex, vec2 uv) {
 // B-spline read; from level 1 the filter is the mip chain's and a trilinear
 // read is as smooth as the mesh can show.
 float gC1Lod = 0.0;
+// Wave modulation (DisplacedMesh::Params::waveModulation, waveModel bit 6):
+// the middle cascade's amplitude factor at this vertex (set in main), on
+// every field of it read here, so its height, displacement, slope and
+// displacement gradient describe one scaled wave train. 1 with the bit off.
+float gC1Gain = 1.0;
 vec2 c1RG(sampler2D tex, vec2 uv) {
-    if (gC1Lod <= 0.0) return sampleBicubicRG(tex, uv);
+    if (gC1Lod <= 0.0) return gC1Gain * sampleBicubicRG(tex, uv);
     const vec2 lo = textureLod(tex, uv, gC1Lod).rg;
-    return gC1Lod >= 1.0 ? lo : mix(sampleBicubicRG(tex, uv), lo, gC1Lod);
+    return gC1Gain * (gC1Lod >= 1.0 ? lo : mix(sampleBicubicRG(tex, uv), lo, gC1Lod));
 }
 float c1R(sampler2D tex, vec2 uv) {
-    if (gC1Lod <= 0.0) return sampleBicubicR(tex, uv);
+    if (gC1Lod <= 0.0) return gC1Gain * sampleBicubicR(tex, uv);
     const float lo = textureLod(tex, uv, gC1Lod).r;
-    return gC1Lod >= 1.0 ? lo : mix(sampleBicubicR(tex, uv), lo, gC1Lod);
+    return gC1Gain * (gC1Lod >= 1.0 ? lo : mix(sampleBicubicR(tex, uv), lo, gC1Lod));
 }
 
 // Smooth height for the normal stencil — cascades 0+1 ONLY. Cascade 2's
@@ -366,6 +372,26 @@ void main() {
         const float texel1 = pc.tileSize1 / float(textureSize(height1, 0).x);
         gC1Lod = max(log2(max(sx, sz) / texel1), 0.0);
     }
+
+#ifdef OCEAN_CHOP
+    // Wave modulation: short waves ride the long ones. Longuet-Higgins and
+    // Stewart (1960), J. Fluid Mech. 8(4): on a long wave of steepness A K a
+    // short wave's wavenumber and amplitude both grow by (1 + A K cos psi),
+    // to first order, from the long wave's orbital strain. The drawn map
+    // already squeezes the middle cascade on cascade 0's crests (its phase
+    // is in rest coordinates); its amplitude gets the factor here. A K cos psi
+    // is the compression -div D of cascade 0 at the rest point (choppiness 1,
+    // the height's scale: a k on one wave's crest, -a k in its trough), from
+    // the exact derivative field. Its mean is 0, so the cascade's variance and
+    // Hs keep theirs. The factor is first order in A K: held to [0.5, 1.5].
+    // The factor's own gradient is left out of the normal: against the short
+    // wave's slope it is of order (A K)(K / k), a few percent here.
+    if ((pc.waveModel & 64u) != 0u && (pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        const vec2  jd = sampleBicubicRG(jac0, rest.xz * invTile) * invTile;
+        gC1Gain = clamp(1.0 - (jd.x + jd.y) * pc.waveScale, 0.5, 1.5);
+    }
+#endif
 
     // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the
     // vertex grid's spacing (the historical normal stencil) gives the

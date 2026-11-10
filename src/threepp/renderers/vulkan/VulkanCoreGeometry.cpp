@@ -3840,7 +3840,10 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             st.crestUvTagged  = crestsOut || foamOut;
             pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u) | (crestsOut ? 4u : 0u) |
                                 (crestsClear ? 8u : 0u) | (foamOut ? 16u : 0u) |
-                                ((st.chopOn && st.c1Mips) ? 32u : 0u);
+                                ((st.chopOn && st.c1Mips) ? 32u : 0u) |
+                                // Wave modulation reads cascade 0's exact derivative field,
+                                // which only the OCEAN_CHOP variant binds.
+                                ((st.chopOn && dm.waveModulationOn()) ? 64u : 0u);
             pc.uvOut          = (crestsOut || crestsClear || foamOut) ? st.blas->uv.address : 0ull;
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
@@ -3944,6 +3947,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 // warp recentres the grid there), else its own origin.
                 cp.centerX     = warpActive ? dm.warp.centerX : 0.f;
                 cp.centerZ     = warpActive ? dm.warp.centerZ : 0.f;
+                cp.model       = dm.waveModulationOn() ? 1u : 0u;
                 st.crestFoam->record(cb, cp, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
             } else {
                 st.crestFoamPrevTimeSec = -1.0;
@@ -5757,7 +5761,12 @@ void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshSt
             }
             // The shade compiles its crest-foam branch in only for a frame
             // that has it on (spec constant 7).
-            if (oceanCrestFoamView == mine) oceanCrestFoam = st.crestFoamOn;
+            if (oceanCrestFoamView == mine) {
+                oceanCrestFoam = st.crestFoamOn;
+                // The wave modulation's per-pixel part reads the compression
+                // this texture carries in .g (the shade's spec constant 10).
+                oceanWaveMod = st.crestFoamOn && dm.waveModulationOn();
+            }
         }
 
 VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(GrassMesh& gm) {

@@ -119,6 +119,28 @@
             gKept    = (mom.gb + gD) * 0.70710678;
             slopeVar = max(0.5 * (mom.a + momD.a) - dot(gKept, gKept), 0.0);
         }
+        if (kOceanWaveMod != 0u && kOceanCrestFoam != 0u && pc.oceanFoamTileSize > 0.0) {
+            // ── WAVE MODULATION (DisplacedMesh::Params::waveModulation,
+            // spec constant 10) ─────────────────────────────────────────────
+            // Short waves ride the long ones (Longuet-Higgins and Stewart
+            // 1960): on a long wave's crest a short wave is both shorter and
+            // higher by (1 + A K cos psi), so steeper by its square. This
+            // cascade lives in the world, not on the water, so the long
+            // waves do not squeeze it: both factors go on its slope here.
+            // A K cos psi is the compression -div D of cascades 0 and 1 at
+            // the pixel's rest point q, which the crest foam pass keeps in
+            // its texture's .g (read over the same footprint strip); the
+            // factor is held to [0.5, 1.5] as in water_displace.comp. The
+            // slope spread the pixel cannot show scales with the slope.
+            const vec2  qW   = worldPos.xz - gCrestDisp;
+            const float invF = 1.0 / pc.oceanFoamTileSize;
+            const float c01  = textureGrad(oceanCrestFoam, qW * invF,
+                                           alongM * (pixAlong * invF),
+                                           vec2(-alongM.y, alongM.x) * (pixWorld * invF)).g;
+            const float a    = clamp(1.0 + c01, 0.5, 1.5);
+            gKept    *= a * a;
+            slopeVar *= a * a * a * a;
+        }
         // ── WAKE FIELD ────────────────────────────────────────────────────────
         // Where something has churned the water the short wind waves are gone
         // (turbulence under the surface breaks them up: the smooth lane a boat

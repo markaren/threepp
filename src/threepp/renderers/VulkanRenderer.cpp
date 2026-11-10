@@ -342,6 +342,7 @@ namespace threepp {
         shadeParams.oceanCrestFoam     = oceanCrestFoam;
         shadeParams.oceanWaveReflections = oceanWaveReflections;
         shadeParams.oceanDetile        = oceanDetile && oceanChopNormals;
+        shadeParams.oceanWaveMod       = oceanWaveMod && oceanCrestFoam && oceanChopNormals;
         shadeParams.denoise            = denoiseEnabled_;
         shadeParams.restirDI           = restirDIEnabled_;
         shadeParams.volFog             = deferredVolFog_;
@@ -1659,12 +1660,13 @@ namespace threepp {
         if (it == impl.displacedStates.end() || !it->second || !it->second->crestFoam) return false;
         const auto& cf = *it->second->crestFoam;
         const uint32_t res = cf.resolution();
-        const auto bytes = copyGeneralImageToHost(*ctx, cf.image(), res, res, 0u, 2u, "readOceanCrestFoam");
+        // RG16F: the foam in .r (.g is the wave modulation's compression).
+        const auto bytes = copyGeneralImageToHost(*ctx, cf.image(), res, res, 0u, 4u, "readOceanCrestFoam");
         const size_t texels = static_cast<size_t>(res) * res;
         out.resize(texels);
         for (size_t i = 0; i < texels; ++i) {
             uint16_t h;
-            std::memcpy(&h, bytes.data() + i * 2u, sizeof(h));
+            std::memcpy(&h, bytes.data() + i * 4u, sizeof(h));
             out[i] = halfBitsToFloat(h);
         }
         resolution = res;

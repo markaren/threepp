@@ -199,6 +199,29 @@ namespace threepp {
             // (needs chopNormals for that part). Read when the renderer first
             // sees the mesh. THREEPP_OCEAN_SHORT_WAVE_SPECTRUM = 1 / 0 forces it.
             bool shortWaveSpectrum = false;
+
+            // Wave modulation (default OFF, the cascades simply summed). A
+            // short wave riding a long one is squeezed on its crest and
+            // stretched in its trough, and works against the long wave's
+            // orbital strain: Longuet-Higgins and Stewart (1960), "Changes in
+            // the form of short gravity waves on long waves and tidal
+            // currents", J. Fluid Mech. 8(4), find its wavenumber AND its
+            // amplitude both grow by (1 + A K cos psi) to first order in the
+            // long wave's steepness A K, so its steepness grows by (1 + A K)^2
+            // on the crest and falls in the trough. The chop already shortens
+            // the waves on the crests (the Lagrangian map squeezes them); ON
+            // adds the amplitude: the middle cascade's height and horizontal
+            // displacement are scaled by 1 + c0, c0 = -div D of cascade 0 at
+            // the water's rest point (the exact derivative field, A K cos psi
+            // for one long wave), and the fine cascade's per-pixel slope
+            // (which lives in the world and is not squeezed) by (1 + c01)^2,
+            // c01 the same for cascades 0 and 1 together, read from the crest
+            // foam texture's second channel. The factor's mean is 1, so Hs is
+            // unchanged; it is held to [0.5, 1.5]. Needs chopNormals (and
+            // crestFoam for the per-pixel part); the crest foam sees the
+            // modulated middle cascade. THREEPP_OCEAN_WAVE_MODULATION = 1 / 0
+            // forces it. Live-tunable.
+            bool waveModulation = false;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -294,6 +317,7 @@ namespace threepp {
         [[nodiscard]] bool shortWavesOn() const;
         [[nodiscard]] bool detileOn() const;
         [[nodiscard]] bool shortWaveSpectrumOn() const;
+        [[nodiscard]] bool waveModulationOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under
         // the Choppy Wave Model, else params.choppiness.
         [[nodiscard]] float effectiveChoppiness() const;

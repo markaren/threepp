@@ -333,6 +333,11 @@ layout(constant_id = 8) const uint kOceanWaveReflect = 0u;
 // (DisplacedMesh::Params::detile, with the chop normals): the per-pixel
 // slope is two placements of the cascade, summed. 0 = one placement.
 layout(constant_id = 9) const uint kOceanDetile = 0u;
+// 1 = an ocean's wave modulation is on this frame (DisplacedMesh::Params::
+// waveModulation, with the crest foam whose texture carries the long waves'
+// compression in .g): the fine cascade's per-pixel slope is steeper on the
+// long waves' crests. 0 = the slope as the cascade has it.
+layout(constant_id = 10) const uint kOceanWaveMod = 0u;
 const bool kSM = kShadowMaps != 0u;
 bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
 // probe_common.glsl's own gate, made the same test here (its default is the UBO).

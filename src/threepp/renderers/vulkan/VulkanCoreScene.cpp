@@ -4348,6 +4348,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             oceanCrestFoamView    = oceanFoamDummy.view;
                             oceanCrestFoamSampler = oceanFoamDummy.sampler;
                             oceanCrestFoam        = false;
+                            oceanWaveMod          = false;
                         }
                         oceanWaveReflections = false;// the next ocean's sync sets it again
                         if (st->wake) {
