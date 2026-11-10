@@ -1023,6 +1023,15 @@ def hull_foam_parts(boat, setting=None):
     return set()
 
 
+def jet_wake_on(boat, setting=None):
+    """Whether a boat's waterjet race is drawn as a jet's churned water (Wash.JET_*) rather than as
+    a propeller race's: from the environment variable JET_WAKE (or `setting`), a comma-separated
+    list of boat names (her spec's name, e.g. mariner; "all" for every boat). Unset: no boat, and
+    every Wash leaves what it left before. Only races marked as a jet's change (Drive.thrusts)."""
+    names = [n.strip() for n in (os.environ.get("JET_WAKE", "") if setting is None else setting).split(",")]
+    return bool(boat) and (boat in names or "all" in names)
+
+
 class Wash:
     """What a boat leaves on the water behind her: a patch of the ocean's wake field that
     trails her, and her sources in it. Two kinds of producer, and neither knows the other:
@@ -1118,6 +1127,30 @@ class Wash:
     TR_EDDY_AIR = 0.40         # LOOK: the eddy's bubbles at their most
     TR_EDDY_FOAM = 0.14        # LOOK: and its film: lace, never a sheet
 
+    # ---- a waterjet's race (off unless JET_WAKE names her)
+    # A jet that leaves its nozzle at or just under the surface is a plunging jet: where it meets the
+    # water it takes air down once it is faster than about 1 m/s (the inception speed of air
+    # entrainment by a plunging jet, 0.8 to 1.1 m/s: Ervine, McKeogh and Elsawy, "Effect of
+    # turbulence intensity on the rate of air entrainment by plunging water jets", Proc. ICE 69(2),
+    # 1980; Chanson, "Air bubble entrainment in turbulent water jets discharging into the
+    # atmosphere", 1997). Most of that air is a bubble cloud UNDER the surface, which is what makes
+    # a jet boat's wake milky and pale turquoise; what comes up breaks the surface as a film that is
+    # dense only where the cloud is young (a whitecap's stage A, about a second) and lace after that
+    # (stage B, which clears over a few seconds: Monahan and Lu, "Acoustically relevant bubble
+    # assemblages and their dependence on meteorological parameters", IEEE J. Oceanic Eng. 15(4),
+    # 1990). So the race is given much air and a film well short of a closed layer, and the film is
+    # taken from the air the race has entrained rather than from its Froude number alone; the
+    # wake field's own decay (a thin film clears first) then thins it astern.
+    JET_VE = (0.8, 1.1)        # m/s: the race's speed over which a plunging jet starts to take air down
+    JET_V_FULL = 4.0           # m/s: race speed at which its entrainment is taken as saturated (assumed)
+    JET_AIR = 0.45             # LOOK: the bubble cloud at its densest (the shade lays 1 - exp(-1.8 a) of
+                               # it in place of the water: 0.45 is a little over half, so the sea still shows)
+    JET_FILM = 0.32            # LOOK: the film where the race boils up (the shade's foam level is
+                               # (r - 0.05) / 0.35: 0.32 is ~0.77 where it is laid, and a thin film clears
+                               # first, so a second astern it is lace and in three it is gone)
+    JET_WIDEN = 1.6            # LOOK: the churned water is wider than the race's own footprint (its
+                               # boil spreads sideways as it comes up), with the film over the middle
+
     def __init__(self, hull, drive, ocean, index, size=None, air=1.0, ripples=None):
         self.hull, self.drive, self.ocean = hull, drive, ocean
         self.patch = ocean.wake_patch(index) if hasattr(ocean, "wake_patch") else None
@@ -1135,6 +1168,7 @@ class Wash:
         self.bow, self.waterline, self.transom = ("bow" in parts), ("waterline" in parts), ("transom" in parts)
         self.lines = None                      # her lines at the design waterline (hull_lines(), once)
         self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
+        self.jet_wake = jet_wake_on(hull.boat) # JET_WAKE: her jet's race as a jet's churned water (JET_*)
 
     def hull_lines(self):
         """Her lines at the design waterline, from the Bonjean tables (starboard half), vessel frame:
@@ -1321,6 +1355,7 @@ class Wash:
             if t < 1e-3:
                 self.last.pop(name, None)
                 self.last.pop(name + "_disc", None)
+                self.last.pop(name + "_film", None)
                 continue
             line = -(h.R @ (np.asarray(force, float) / t))       # the race runs against the force (world)
             d = line[[0, 2]]
@@ -1330,11 +1365,13 @@ class Wash:
             if depth < -r0:                                      # out of the water: it draws air and makes no race
                 self.last.pop(name, None)
                 self.last.pop(name + "_disc", None)
+                self.last.pop(name + "_film", None)
                 continue
             w = race(t, -float(vb @ d), math.pi * r0 * r0, jet)
             if w < 0.02:
                 self.last.pop(name, None)
                 self.last.pop(name + "_disc", None)
+                self.last.pop(name + "_film", None)
                 continue
             cover = max(depth - r0, 0.0)                         # water over the top of the race where it starts
             run = cover / self.SPREAD                            # how far it runs before it has widened to the surface
@@ -1350,7 +1387,18 @@ class Wash:
             turb = self.TURBULENCE * ws
             rs *= 1.0 + 0.25 * min(math.sqrt(fr), 6.0)           # a hard race breaks the surface wider than it arrived
             widest = max(widest, rs)
-            self._put(name, p, d * ws, max(rs, 1.25 * texel), foam, aer, turb, min(turb / 0.05, 1.0))
+            if jet and self.jet_wake:                            # JET_*: a plunging jet's air, and a film taken from it
+                x = smoothstep(self.JET_VE[0], self.JET_VE[1], w) * min(w / self.JET_V_FULL, 1.0) * aer
+                aer = self.JET_AIR * x
+                foam = self.JET_FILM * x * x                     # the film comes up where the cloud is dense
+                widest = max(widest, self.JET_WIDEN * rs)
+                self._put(name + "_film", p, d * ws, max(rs, 1.25 * texel), foam, 0.0, 0.0, 0.0)
+                self._put(name, p, d * ws, max(self.JET_WIDEN * rs, 1.25 * texel), 0.0, aer, turb, min(turb / 0.05, 1.0))
+                if os.environ.get("JET_WAKE_DEBUG") and int(self.t / 2.0) != int((self.t - dt) / 2.0):
+                    print(f"[jetwake] {h.boat} t {self.t:.1f} u {u:.2f} race {w:.2f} cover {cover:.3f} fr {fr:.1f} "
+                          f"rs {rs:.3f} air {aer:.3f} film {foam:.3f}", flush=True)
+            else:
+                self._put(name, p, d * ws, max(rs, 1.25 * texel), foam, aer, turb, min(turb / 0.05, 1.0))
             if run > 2.0 * r0:                                   # over the disc: its air, through the water above it
                 self._put(name + "_disc", q[[0, 2]], d * (0.4 * w), max(1.3 * r0, 1.25 * texel), 0.0,
                           0.6 * aer * math.exp(-1.2 * cover), 0.0, 0.0)
