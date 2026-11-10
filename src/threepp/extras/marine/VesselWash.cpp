@@ -71,13 +71,18 @@ std::vector<VesselWash::WeightStrip> VesselWash::footprintStrips(const Hull& hul
     return out;
 }
 
+float VesselWash::rippleCell(float length, float cruiseSpeed) {
+    const float lambdaT = 2.f * math::PI * cruiseSpeed * cruiseSpeed / kG;
+    return std::min(lambdaT / 24.f, length / 10.f);
+}
+
 void VesselWash::clear() {
     ocean_.wakePatches.at(patch_).size = 0.f;
     last_.clear();
 }
 
 void VesselWash::emit(const std::string& name, float x, float z, float vx, float vz, float radius, float foam,
-                      float aeration, float turbulence, float lane, float push, float ax, float az) {
+                      float aeration, float turbulence, float lane, float push, float ax, float az, float taper) {
     DisplacedMesh::WakeSource s{};
     s.x0 = s.x1 = x;
     s.z0 = s.z1 = z;
@@ -99,6 +104,7 @@ void VesselWash::emit(const std::string& name, float x, float z, float vx, float
         s.push  = push;
         s.ax    = ax;
         s.az    = az;
+        s.taper = taper;
         s.patch = static_cast<int32_t>(patch_);
     }
     ocean_.addWakeSource(s);
@@ -215,7 +221,7 @@ void VesselWash::update(float dt, const Vector3& origin, const Vector3& forward,
     const float rh = std::max(hull_.halfBeam - zs, 0.1f);// a hull's half-breadth at the water
     patch.eddy = std::max(kEddy * std::max(widest, rh), 4.f * texel);
     const float froude = std::abs(u) / std::sqrt(kG * 2.f * hl);
-    const float lane   = smoothstep(0.15f, 0.6f, std::abs(u));
+    const float lane   = lanes ? smoothstep(0.15f, 0.6f, std::abs(u)) : 0.f;
     static const std::string kHullNames[2] = {"hull_0", "hull_1"};
     if (lane > 0.f) {
         const float dry = smoothstep(0.35f, 0.85f, froude);// a transom runs dry and white when she is fast for her length
@@ -232,7 +238,39 @@ void VesselWash::update(float dt, const Vector3& origin, const Vector3& forward,
     }
 
     // Her weight on the water, laid out along her hulls: what makes her waves.
-    if (ripples_) {
+    if (ripples_ && hull_.waves == Waves::Line) {
+        // One line a hull. The trapezoid is a box of half length a along her
+        // axis convolved with one of half length t (the source's taper, t / a):
+        // flat over |x| < a - t, nothing past a + t = her half length, its mean
+        // a / (a + t) = C_p. Its transform is sinc(k a) sinc(k t), so it ends
+        // without a step. The gaussian across it is her half breadth.
+        const int   hulls = zs > 0.f ? 2 : 1;
+        const float cp    = std::clamp(hull_.prismatic, 0.5f, 1.f);
+        const float a     = cp * hl;
+        const float t     = (1.f - cp) * hl;
+        const float push  = hull_.mass * kG / float(hulls);
+        // The entry head at the stem she leads with: K rho U^2 / 2 at the
+        // peak of a gaussian of her half breadth, centred half a half
+        // breadth aft of the stem.
+        // ASSUMED: where it sits and how wide (tidewater spreads the head
+        // over the hull's immersion at the entry).
+        constexpr float kRho = 1025.f;
+        const float entry = hull_.entryHead * 0.5f * kRho * u * u * math::PI * rh * rh;
+        const float xe    = hull_.centre + std::copysign(hl - 0.5f * rh, u);
+        static const std::string kLineNames[2]  = {"line_0", "line_1"};
+        static const std::string kEntryNames[2] = {"entry_0", "entry_1"};
+        for (int k = 0; k < hulls; ++k) {
+            const float z = hulls == 2 ? (k == 0 ? -zs : zs) : 0.f;
+            emit(kLineNames[k], origin.x + fx * hull_.centre + sx * z, origin.z + fz * hull_.centre + sz * z, 0.f,
+                 0.f, rh, 0.f, 0.f, 0.f, 0.f, push, fx * a, fz * a, a > 0.f ? t / a : 0.f);
+            if (entry > 0.f) {
+                emit(kEntryNames[k], origin.x + fx * xe + sx * z, origin.z + fz * xe + sz * z, 0.f, 0.f, rh, 0.f,
+                     0.f, 0.f, 0.f, entry);
+            } else {
+                last_.erase(kEntryNames[k]);
+            }
+        }
+    } else if (ripples_) {
         for (size_t k = 0; k < hull_.strips.size(); ++k) {
             const WeightStrip& s = hull_.strips[k];
             emit("weight_" + std::to_string(k), origin.x + fx * s.x + sx * s.z, origin.z + fz * s.x + sz * s.z, 0.f,

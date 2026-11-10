@@ -76,6 +76,8 @@ struct OceanHull {
     float roll;         // +starboard up (+localX)
     uint  trailFirst;   // this vessel's samples in the wake-trail buffer
     uint  trailCount;
+    uint  analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam; 0 = the wake field makes its waves
+    uint  _pad;
 };
 
 // A rest point in vessel `hu`'s frame, and how far outside its footprint it

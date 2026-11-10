@@ -10,8 +10,8 @@
 
 namespace threepp::vulkan {
 
-    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 120,
-                  "WaterDisplacePipeline::PushConstants must match water_displace.comp's Pc layout (120 bytes)");
+    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 128,
+                  "WaterDisplacePipeline::PushConstants must match water_displace.comp's Pc layout (128 bytes)");
 
     WaterDisplacePipeline::WaterDisplacePipeline(VulkanContext& ctx)
         : ctx_(ctx) {
@@ -32,11 +32,12 @@ namespace threepp::vulkan {
     }
 
     void WaterDisplacePipeline::createPipeline() {
-        // 6 combined-image-sampler bindings — three (height, displacement)
-        // cascade pairs.
-        std::array<VkDescriptorSetLayoutBinding, 6> bb{};
+        // 7 combined-image-sampler bindings — three (height, displacement)
+        // cascade pairs at 0-5, then the wake field's ripples (an array, a
+        // layer a patch) at kRippleBinding.
+        std::array<VkDescriptorSetLayoutBinding, 7> bb{};
         for (uint32_t i = 0; i < bb.size(); ++i) {
-            bb[i].binding         = i;
+            bb[i].binding         = i < 6u ? i : kRippleBinding;
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bb[i].descriptorCount = 1;
             bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -90,7 +91,7 @@ namespace threepp::vulkan {
         // destroyed; bump kMaxOceans if scenes ever exceed it.
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps.descriptorCount = 6 * kMaxOceans;
+        ps.descriptorCount = static_cast<uint32_t>(bb.size()) * kMaxOceans;// every binding of the layout, a set an ocean
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = kMaxOceans;
@@ -126,10 +127,11 @@ namespace threepp::vulkan {
 
     void WaterDisplacePipeline::createChopPipeline() {
         // The plain six bindings, then the chop normals' (slope, jacDiag)
-        // pairs of cascades 0 and 1 (water_displace.comp bindings 6-9).
-        std::array<VkDescriptorSetLayoutBinding, 10> bb{};
+        // pairs of cascades 0 and 1 (water_displace.comp bindings 6-9), then
+        // the wake field's ripples at kRippleBinding.
+        std::array<VkDescriptorSetLayoutBinding, 11> bb{};
         for (uint32_t i = 0; i < bb.size(); ++i) {
-            bb[i].binding         = i;
+            bb[i].binding         = i < 10u ? i : kRippleBinding;
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bb[i].descriptorCount = 1;
             bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -177,7 +179,7 @@ namespace threepp::vulkan {
 
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps.descriptorCount = 10 * kMaxOceans;
+        ps.descriptorCount = static_cast<uint32_t>(bb.size()) * kMaxOceans;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = kMaxOceans;

@@ -496,6 +496,11 @@ namespace threepp {
         struct VesselWake {
             float forwardSpeed = 0.f;   // m/s along +heading; 0 disables wake
             bool  enabled      = true;
+            // Its bow bump, its V-wedge and the V-wedge's ridge foam. false =
+            // a scene whose wake field makes her waves (VesselWash with
+            // ripples): the analytic ones would come on top of them. The
+            // stern foam trail stays either way.
+            bool  analyticWaves = true;
             std::vector<WakeSample> trail;
         };
         VesselWake wake;
@@ -613,6 +618,9 @@ namespace threepp {
         // the renderer first sees the mesh; the other knobs are live.
         static constexpr uint32_t kMaxWakePatches = 8;
         static constexpr uint32_t kMaxWakeSources = 256;
+        // THREEPP_WAKE_HEIGHTS from the environment, read once: "1" = true,
+        // anything else or unset = false.
+        static bool defaultRippleHeights();
         struct WakeField {
             uint32_t resolution = 0;              // texels a side per patch; 0 = off (latched)
             uint32_t patches    = kMaxWakePatches;// layers allocated (latched)
@@ -638,6 +646,17 @@ namespace threepp {
             float rippleLife      = 14.0f;// e-folding time (s) of a wave, where the patch's side allows it
             float rippleViscosity = 2e-4f;// m2/s: a wave of wavenumber k also dies at 2 nu k^2 (the shortest first)
             float rippleGain      = 1.0f; // on the slope the shade reads; 1 = what linear theory gives
+            // The ripples' HEIGHT is part of the ocean's geometry (water_displace
+            // adds it, so the ray-traced surface, lidar and radar see the waves
+            // the shade draws), and the waves that reach the edge of a ripple
+            // window are taken up by an absorbing layer there instead of every
+            // wave being made to die before it can wrap round the window, so a
+            // wake keeps its transverse waves. false = slopes only, every wave
+            // decaying at the window's crossing rate (the model before
+            // 2026-11). Off by default until it is judged: the environment's
+            // THREEPP_WAKE_HEIGHTS=1 (read once) or this field turns it on.
+            // Live.
+            bool  rippleHeights   = defaultRippleHeights();
             // Scales the light the film and the bubbles turn back (their albedo);
             // 1 = as the water shade has them. A scene whose camera opens wide
             // at night turns it down: under a moon, or the night sky's own light,
@@ -681,7 +700,11 @@ namespace threepp {
             // The patch whose ripples it forces; -1 = the first that holds it.
             // (The other quantities go into every patch the source lies in.)
             int32_t patch    = -1;
-            float _pad       = 0.f;
+            // The push's line ends gently: it is the line above (half length
+            // a) convolved with one of half length t = taper x a along it, a
+            // trapezoid, full where |s| < a - t and nothing past a + t.
+            // 0 = the line ends as a step, rounded only by the gaussian.
+            float taper      = 0.f;
         };
         std::vector<WakeSource> wakeSources;
 

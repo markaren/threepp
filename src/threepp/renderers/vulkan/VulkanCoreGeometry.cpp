@@ -3766,6 +3766,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 g.trailFirst   = hullCount * DisplacedMeshState::kMaxWakeSamples;
                 g.trailCount   = static_cast<uint32_t>(std::min<size_t>(
                         wk.trail.size(), DisplacedMeshState::kMaxWakeSamples));
+                g.analyticWaves = wk.analyticWaves ? 1u : 0u;
                 hullWakes[hullCount] = &wk;
                 ++hullCount;
             }
@@ -3848,6 +3849,21 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
             pc.crestSharpness = cwmOn ? dm.effectiveCrestSharpness() : 0.f;
+            // The wake field's ripple heights (WakeField::rippleHeights): its
+            // step goes first, so the geometry has this frame's waves, as the
+            // shade's slopes do.
+            const bool rippleHeights = st.wake && st.wake->rippleRes > 0u && dm.wakeField.rippleHeights;
+            if (rippleHeights) {
+                wakeField_->record(cb, *st.wake, dm, frameNowSec());
+                VkMemoryBarrier mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+                pc.wakeTableAddr = st.wake->tableAddress();
+                pc.cascadeMask   = st.cascadeMask | (std::min(st.rtStride, 255u) << 8u);
+            }
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.chopOn ? st.displaceChopDS : st.displaceDS, pc, st.chopOn);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
@@ -3987,8 +4003,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             }
             if (timeFoam) gpuTimings_->end(cb, vulkan::TP_OceanFoam, currentFrame);
 
-            // (4d) The wake field: carry, settle and feed every patch that is on.
-            if (st.wake) wakeField_->record(cb, *st.wake, dm, frameNowSec());
+            // (4d) The wake field: carry, settle and feed every patch that is on
+            // (already done above when the geometry takes its ripples' height).
+            if (st.wake && !rippleHeights) wakeField_->record(cb, *st.wake, dm, frameNowSec());
         }
 
 void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed) {
@@ -5153,10 +5170,12 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // grid costs 5.0 ms, a 512-cell grid's 0.36 ms — the cost is not
             // linear in the triangle count, the full grid sits past a cliff.
             std::vector<uint32_t> rtIndices;
+            uint32_t rtStride = 1;
             if (dm.rtProxyCells > 0u) {
                 const uint32_t cellsX = gridDimX - 1u, cellsZ = gridDimZ - 1u;
                 const uint32_t stride = (std::max(cellsX, cellsZ) + dm.rtProxyCells - 1u) / dm.rtProxyCells;
                 if (stride > 1u) {
+                    rtStride = stride;
                     auto lines = [stride](uint32_t n) {
                         std::vector<uint32_t> l;
                         for (uint32_t i = 0; i + 1u < n; i += stride) l.push_back(i);
@@ -5201,6 +5220,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->vertexCount = vertexCount;
             state->gridDimX = gridDimX;
             state->gridDimZ = gridDimZ;
+            state->rtStride = rtStride;
             state->planeSizeX = planeSizeX;
             state->planeSizeZ = planeSizeZ;
             state->liveCheck = dm.geometry();
@@ -5634,6 +5654,24 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 oceanWakeView = state->wake->stateView();
                 if (state->wake->rippleView() != VK_NULL_HANDLE) oceanRippleView = state->wake->rippleView();
             }
+            // The ripples whose height the geometry takes, or the 1x1
+            // stand-in (never read then): kRippleBinding of the displace set.
+            {
+                VkDescriptorImageInfo ri{};
+                ri.sampler     = wakeField_->rippleSampler();
+                ri.imageView   = state->wake && state->wake->rippleView() != VK_NULL_HANDLE
+                                         ? state->wake->rippleView()
+                                         : wakeField_->dummyView();
+                ri.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkWriteDescriptorSet rw{};
+                rw.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                rw.dstSet          = state->displaceDS;
+                rw.dstBinding      = vulkan::WaterDisplacePipeline::kRippleBinding;
+                rw.descriptorCount = 1;
+                rw.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                rw.pImageInfo      = &ri;
+                vulkan::updateDescriptorSets(ctx->device(), 1, &rw, 0, nullptr);
+            }
             // Chop normals, when the mesh starts with them on: built here so
             // the priming update below already runs them (the all-slots
             // rewrite that follows picks up the binding it moves).
@@ -5678,7 +5716,7 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                 // the slope + jacDiag of cascades 0 and 1 (bindings 6-9), a
                 // disabled cascade falling back to cascade 0 as in the plain set.
                 st.displaceChopDS = waterDisplace_->allocateChopDescriptorSet();
-                std::array<VkDescriptorImageInfo, 10> infos{};
+                std::array<VkDescriptorImageInfo, 11> infos{};
                 for (uint32_t i = 0; i < 3; ++i) {
                     const auto& c = st.cascades[(st.cascadeMask & (1u << i)) ? i : 0u];
                     infos[i * 2 + 0] = {waterDisplace_->sampler(), c.dyn->ht().view, VK_IMAGE_LAYOUT_GENERAL};
@@ -5689,11 +5727,17 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                     infos[6 + i * 2 + 0] = {waterDisplace_->sampler(), c.dyn->slope().view, VK_IMAGE_LAYOUT_GENERAL};
                     infos[6 + i * 2 + 1] = {waterDisplace_->sampler(), c.dyn->jacDiag().view, VK_IMAGE_LAYOUT_GENERAL};
                 }
-                std::array<VkWriteDescriptorSet, 10> ws{};
-                for (uint32_t i = 0; i < 10; ++i) {
+                // ... and the wake field's ripples at kRippleBinding, as in the
+                // plain set (the 1x1 stand-in when the ocean has none).
+                infos[10] = {wakeField_->rippleSampler(),
+                             st.wake && st.wake->rippleView() != VK_NULL_HANDLE ? st.wake->rippleView()
+                                                                                  : wakeField_->dummyView(),
+                             VK_IMAGE_LAYOUT_GENERAL};
+                std::array<VkWriteDescriptorSet, 11> ws{};
+                for (uint32_t i = 0; i < 11; ++i) {
                     ws[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                     ws[i].dstSet          = st.displaceChopDS;
-                    ws[i].dstBinding      = i;
+                    ws[i].dstBinding      = i < 10u ? i : vulkan::WaterDisplacePipeline::kRippleBinding;
                     ws[i].descriptorCount = 1;
                     ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     ws[i].pImageInfo      = &infos[i];

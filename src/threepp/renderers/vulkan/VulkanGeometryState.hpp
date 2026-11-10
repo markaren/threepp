@@ -711,7 +711,7 @@ namespace threepp::vulkan::impl {
         // reallocated; null handles until then.
         static constexpr uint32_t kMaxVessels     = 8;// = DisplacedMesh::kMaxVessels (asserted at the upload)
         static constexpr uint32_t kMaxWakeSamples = 64;// per vessel
-        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 48u;// vulkan::OceanHullGpu
+        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 56u;// vulkan::OceanHullGpu
         static constexpr VkDeviceSize kVesselTrailBytes = kMaxVessels * kMaxWakeSamples * 32u;
         Buffer    vesselBuffer[kFramesInFlight] = {};
 
@@ -731,6 +731,10 @@ namespace threepp::vulkan::impl {
         // The wake field (DisplacedMesh::WakeField), when the mesh had one
         // switched on as the renderer first saw it; null otherwise.
         std::unique_ptr<vulkan::WakeFieldPipeline::State> wake;
+        // Grid lines the ray-tracing proxy keeps one of (rtProxyCells; 1 =
+        // the full grid is traced): water_displace reads the wake field's
+        // ripple heights at the proxy's spacing.
+        uint32_t rtStride = 1;
         uint32_t foamRes      = 0;          // texels per side
         float    foamTileSize = 0.f;        // world extent (m) covered
         VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;

@@ -515,6 +515,7 @@ namespace threepp::vulkan {
         // because the shade adds the patches' waves), how fast every patch's
         // waves have to die, and which patches hold any waves at all.
         uint32_t rippleMask = 0;
+        uint32_t heightMask = 0;// of those, the patches whose waves are taken to real space and back
         if (st.rippleRes > 0u) {
             std::array<float, DisplacedMesh::kMaxWakePatches> fastest{};
             std::array<bool, DisplacedMesh::kMaxWakePatches>  pushed{};
@@ -564,6 +565,13 @@ namespace threepp::vulkan {
                 // by then. The periodic sea brings back nothing that shows.
                 st.rippleSpeed[i] = std::max(fastest[i], st.rippleSpeed[i] * std::exp(-dt / 10.0f));
                 g.rippleDecay     = std::max(slowest, 1.5f * st.rippleSpeed[i] / g.rippleSize);
+                if (wf.rippleHeights) {
+                    // The absorbing layer at the window's edge takes up what
+                    // would come round (wake_ripple.comp, SPONGE): the waves
+                    // keep their own life, and the transverse ones survive.
+                    g.rippleDecay  = slowest;
+                    g.rippleHeight = 1.0f;
+                }
                 st.rippleQuiet[i] = pushed[i] ? 0.0f : st.rippleQuiet[i] + dt;
                 const bool on = pushed[i] || (st.rippleHeld[i] && st.rippleQuiet[i] * g.rippleDecay < 7.0f);
                 if (!on) {
@@ -573,6 +581,7 @@ namespace threepp::vulkan {
                 g.ripple         = st.rippleHeld[i] && g.live > 1.5f ? 2.0f : 1.0f;
                 st.rippleHeld[i] = true;
                 rippleMask |= 1u << i;
+                if (g.rippleHeight > 0.5f) heightMask |= 1u << i;
             }
         }
 
@@ -613,10 +622,11 @@ namespace threepp::vulkan {
             computeBarrier(cb);
         }
 
-        if (rippleMask != 0u) recordRipples(cb, st, rippleMask, pc);
+        if (rippleMask != 0u) recordRipples(cb, st, rippleMask, heightMask, pc);
     }
 
-    void WakeFieldPipeline::recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, PushConstants pc) {
+    void WakeFieldPipeline::recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, uint32_t heightMask,
+                                          PushConstants pc) {
         const uint32_t groups = (st.rippleRes + 7u) / 8u;
         auto dispatch = [&](uint32_t layer, uint32_t mode) {
             // (bound anew each time: the IFFT in between binds its own)
@@ -636,6 +646,16 @@ namespace threepp::vulkan {
             computeBarrier(cb);
             st.ifft->recordApply(cb, st.work[i], st.scratch);
             dispatch(i, 2u);// the slopes, into the patch's layer
+            if (!(heightMask & (1u << i))) continue;
+            // To real space and back: the height, and the absorbing layer.
+            computeBarrier(cb);
+            dispatch(i, 3u);// the free waves' spectrum
+            computeBarrier(cb);
+            st.ifft->recordApply(cb, st.work[i], st.scratch);
+            dispatch(i, 4u);// their height into the layer's alpha; the sponge; set up the forward transform
+            computeBarrier(cb);
+            st.ifft->recordApply(cb, st.work[i], st.scratch);
+            dispatch(i, 5u);// back to the spectrum
         }
 
         // The mips, every layer at once: each a box of the one above, so the

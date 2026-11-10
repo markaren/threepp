@@ -28,6 +28,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
+#include "threepp/extras/marine/VesselWash.hpp"
 
 #include "capture_util.hpp"
 
@@ -673,7 +674,7 @@ int main(int argc, char** argv) {
 
     // --shot <name.png> [--frames N] [--pinned] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
     // [--chop <lambda>] [--chop-normals 0|1] [--spread 0|1] [--swell <Hs m>,<Tp s>]
-    // [--press <key>@<frame>[,<key>@<frame>...]]  (N, L or K, as if pressed then)
+    // [--press <key>@<frame>[,<key>@<frame>...]]  (N, L or K, as if pressed then) [--wake old|new]
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -690,6 +691,11 @@ int main(int argc, char** argv) {
     // --press N@60,N@120: the water switches' keys pressed at those capture
     // frames, so a headless run exercises the live toggle path.
     std::vector<std::pair<char, int>> shotPresses;
+    // --wake new: Gunnerus's waves come from the ocean's wake field (a
+    // marine::VesselWash and its ripples, whose height is geometry) instead
+    // of the analytic bow bump and V-wedge. Key K flips between the two while
+    // it runs, key H the ripples' height (WakeField::rippleHeights).
+    bool wakeNew = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -716,6 +722,7 @@ int main(int argc, char** argv) {
                 pos = comma + 1;
             }
         }
+        else if (std::strcmp(argv[i], "--wake") == 0 && i + 1 < argc) wakeNew = std::strcmp(argv[++i], "new") == 0;
     }
     const bool capturing = !shotPath.empty();
     // Shared capture machinery (capture_util.hpp): --cam/--look override the
@@ -795,6 +802,25 @@ int main(int argc, char** argv) {
         ocean->params.swellSpread = 50.f;
     }
     scene.add(ocean);
+    // The wake field exists only under --wake new (it is latched at the first
+    // render), so without it the sea is exactly the analytic-wake one.
+    const bool hasWakeField = wakeNew;
+    if (hasWakeField) {
+        // One patch, hers. It holds only her waves (her sources push and
+        // leave nothing else: no race, no lane), so the field's own grid
+        // carries nothing and is kept small.
+        ocean->wakeField.resolution       = 256;
+        ocean->wakeField.patches          = 1;
+        ocean->wakeField.rippleResolution = 512;
+        // Waves tens of metres long lose next to nothing to viscosity in
+        // minutes (the 2 nu k^2 term takes the short ones); the window's
+        // absorbing layer, not this, is what ends them.
+        ocean->wakeField.rippleLife = 120.f;
+        // The ripples' height in the geometry, for her (the engine's default
+        // is off); THREEPP_WAKE_HEIGHTS=0 keeps it off, key H flips it.
+        const char* heights = std::getenv("THREEPP_WAKE_HEIGHTS");
+        ocean->wakeField.rippleHeights = !(heights && std::strcmp(heights, "0") == 0);
+    }
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
     // Procedural Norwegian-coast station: skerry → lathe tower → glazed lantern.
@@ -1136,6 +1162,39 @@ int main(int argc, char** argv) {
     constexpr float kSpeedTrim   = 0.021f;// rad bow-up trim at full speed
     constexpr float kDraft       = 2.5f;  // m, grounding depth
 
+    // --wake new: her waves in the ocean's wake field, from ONE smooth line
+    // source along her hull (VesselWash::Waves::Line) and the entry head at
+    // her stem. ASSUMED displacement: block coefficient 0.55 x 28 x 9 x 2.5 m
+    // x 1025 kg/m3 = 355 t.
+    std::unique_ptr<marine::VesselWash> gunnerusWash;
+    if (hasWakeField) {
+        marine::VesselWash::Hull hull;
+        hull.length     = kBoatLength;
+        hull.halfLength = 0.5f * kBoatLength;
+        hull.halfBeam   = 0.5f * kBoatBeam;
+        hull.centre     = 0.f;
+        hull.mass       = 355000.f;
+        hull.draft      = kDraft;
+        // Her weight along her length: a trapezoid whose mean is her
+        // prismatic coefficient, 0.6 ASSUMED for her block coefficient of
+        // 0.55, so it rises from her stem and falls to her transom without a
+        // step (a load that stops abruptly at the transom throws a stern wave
+        // of metres). K = 0.35 in her stem's entry head K U^2 / (2 g) is
+        // tidewater WakeSim's; THREEPP_WAKE_ENTRY_K overrides it (0 = none).
+        hull.waves     = marine::VesselWash::Waves::Line;
+        hull.prismatic = 0.6f;
+        hull.entryHead = 0.35f;
+        if (const char* k = std::getenv("THREEPP_WAKE_ENTRY_K")) hull.entryHead = static_cast<float>(std::atof(k));
+        // Her window: cells of min(lambda_T / 24, L / 10) at her 6 m/s
+        // cruise (lambda_T = 2 pi U^2 / g = 23.1 m), 0.96 m, so 492 m at 512
+        // cells. She sits a fifth of it inside its leading edge; the
+        // absorbing layer and the display fade take the outer 8% and 10%.
+        const float window = marine::VesselWash::rippleCell(kBoatLength, 6.f) *
+                             static_cast<float>(ocean->wakeField.rippleResolution);
+        gunnerusWash = std::make_unique<marine::VesselWash>(*ocean, 0u, hull, window, window);
+        gunnerusWash->lanes = false;
+    }
+
     GLTFLoader gltfLoader;
     auto boat = loadAsync([&gltfLoader]() -> std::shared_ptr<Group> {
         auto gltf = gltfLoader.load(std::string(DATA_FOLDER) + "/models/gltf/Gunnerus.glb");
@@ -1400,7 +1459,29 @@ int main(int argc, char** argv) {
     float autoCamHold    = 5.0f;  // seconds per camera before switching
     float autoCamElapsed = 0.f;
 
+    // The wake A/B keys (see --wake): K = the wake field's waves or the
+    // analytic ones, H = the ripples' height in the geometry.
+    bool washRestart = false;// set by K back to new: one frame with her patch off, then a fresh sea
     KeyAdapter camKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        // (Without --wake new, K is the swell's key: see waterKeys.)
+        if (ev.key == Key::K && hasWakeField) {
+            {
+                wakeNew = !wakeNew;
+                // To old: her patch off now, so none of her ripples stay on
+                // top of the analytic wake; she is not updated while old.
+                // Back to new: see washRestart.
+                if (wakeNew) washRestart = true;
+                else gunnerusWash->clear();
+                std::printf("[wake] %s\n", wakeNew ? "new: the wake field's waves (VesselWash ripples)"
+                                                    : "old: the analytic bow bump + V-wedge");
+            }
+        }
+        if (ev.key == Key::H) {
+            ocean->wakeField.rippleHeights = !ocean->wakeField.rippleHeights;
+            std::printf("[wake] ripple heights %s\n", ocean->wakeField.rippleHeights
+                                                             ? "ON: in the geometry, absorbing window edge"
+                                                             : "OFF: slopes only, forced decay (the dev path)");
+        }
         if (ev.key == Key::C) {
             camMode = static_cast<CamMode>(
                     (static_cast<int>(camMode) + 1) % kCamModeCount);
@@ -1468,7 +1549,7 @@ int main(int argc, char** argv) {
     KeyAdapter waterKeys(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::N) pressWaterKey('N');
         else if (ev.key == Key::L) pressWaterKey('L');
-        else if (ev.key == Key::K) pressWaterKey('K');
+        else if (ev.key == Key::K && !hasWakeField) pressWaterKey('K');
     });
     canvas.addKeyListener(waterKeys);
 
@@ -2142,6 +2223,24 @@ int main(int argc, char** argv) {
         // kMaxWakeSamples (64) — that's ~36 m of path at the 6 m/s cruise,
         // enough curved history to bend the V-wake through the boat's turns.
         ocean->wake.forwardSpeed = bs.forwardSpeed;
+        // --wake new: the wake field makes her waves, so the analytic ones (bow
+        // bump, V-wedge and its ridge foam) are off; the stern foam trail stays.
+        ocean->wake.analyticWaves = !(hasWakeField && wakeNew);
+        if (hasWakeField) {
+            ocean->clearWakeSources();
+            if (wakeNew && washRestart) {
+                // One frame with her patch off, so the GPU starts her ripples
+                // from still water instead of carrying on the old ones.
+                gunnerusWash->clear();
+                washRestart = false;
+            } else if (wakeNew) {
+                // Her waves alone: no propulsors are handed in and her hull
+                // drags no lane, so her patch holds no foam, air or
+                // turbulence (the analytic stern trail and prop foam stay).
+                const Vector3 fwd{sinY, 0.f, cosY};
+                gunnerusWash->update(dt, Vector3(bs.position.x, bs.y, bs.position.z), fwd, fwd * bs.forwardSpeed);
+            }
+        }
         {
             constexpr float kEmitInterval     = 0.10f;     // 10 Hz cadence
             constexpr float kEmitDistance     = 1.0f;      // also emit on > 1 m travel
@@ -2616,6 +2715,8 @@ int main(int argc, char** argv) {
             std::printf("wrote %s\n", path.string().c_str());
             std::printf("boat at %.2f %.2f, heading (%.3f, %.3f)\n",
                         bs.position.x, bs.position.z, std::sin(bs.yaw), std::cos(bs.yaw));
+            std::printf("boat at %.2f %.2f %.2f, forward %.4f 0 %.4f, %.2f m/s\n", bs.position.x, bs.y,
+                        bs.position.z, std::sin(bs.yaw), std::cos(bs.yaw), bs.forwardSpeed);
             std::exit(0);
         }
 

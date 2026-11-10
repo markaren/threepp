@@ -30,7 +30,8 @@
 //
 //   0 TURN    a <- a e^(-i omega dt) + the step's forcing, in place; then
 //             what is not a weight's still dent decays. A source is a force W over a gaussian of its radius,
-//             drawn out to a line (its axis), that moved from p0 to p1 in the
+//             drawn out to a line (its axis; with a taper, a trapezoid
+//             along it, so the line ends gently), that moved from p0 to p1 in the
 //             step: the forcing is integrated over that move exactly,
 //                 -i c omega dt sinc(theta / 2) e^(-i (omega dt / 2 + k . pm))
 //             with c = W shape(k) / (rho g L^2), pm the midpoint and
@@ -44,18 +45,48 @@
 //   2 SLOPES  after the FFT: (slope x, slope z, their squares' sum) into the
 //             patch's layer of the image the water shade samples. The mips
 //             are made from it by the caller.
+//
+// With the patch's rippleHeight on (WakeField::rippleHeights), the step then
+// takes the waves to real space and back, which gives their HEIGHT and lets
+// an absorbing layer take up the waves at the window's edge:
+//
+//   3 SPACE   b(k) = a(k) + dent(k), the free waves, into the FFT's field.
+//             Its inverse FFT is eta + i v: eta the waves' height (the real
+//             part is the inverse of b's hermitian part, (b(k) + conj b(-k))
+//             / 2, which is the eta^ PACK uses), v a real field of the
+//             velocity potential's.
+//   4 SPONGE  after the FFT: eta into the fourth channel of the patch's
+//             layer (so slope and height come from the same spectrum), then
+//             both fields times the sponge, exp(-6 s^2 dt) with s rising from
+//             0 to 1 over the window's outer cells (the absorbing layer of
+//             tidewater's WakeSim, D. Greenheck, MIT: 22 cells, 6 / s). That
+//             can only take energy out: by Parseval the sum of |a|^2 over the
+//             wavenumbers, which is the waves' energy, is the sum of |eta + i
+//             v|^2 over the texels. Then conj(field) (-1)^(x+y) into the FFT's
+//             field, which the inverse FFT turns into the forward transform's
+//             conjugate: sum_x f e^(-i k.x) = (-1)^k conj(IFFT[conj(f)
+//             (-1)^x](k)), the IFFT here being sum_k F e^(i k.x) over k
+//             centred on 0, with its own (-1)^x sign pass.
+//   5 BACK    after the FFT: a = b' - dent, b' = that transform / N^2.
+//
+// The window is a whole period of the sea, so its leading and trailing edges
+// are the same line of texels: the layer lies astern of the vessel and ahead
+// of her at once, and what she leaves behind is gone before it could come
+// round to her bow. So no wave has to be made to die early, and the waves that
+// live longest, the transverse ones, are kept (the host drops the extra decay
+// it otherwise gives every wave).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0, rgba32f) uniform image2DArray ampImg;            // rg = a(k), ba = the still dent
 layout(set = 0, binding = 1, rg32f)   uniform image2D      workImg;           // the FFT's field
-layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray outImg;  // mip 0 of what the shade samples
+layout(set = 0, binding = 2, rgba16f) uniform image2DArray outImg;            // mip 0 of what the shade samples (a = height)
 
 // 24 bytes, mirrored by WakeFieldPipeline::PushConstants.
 layout(push_constant, scalar) uniform Pc {
     uint64_t tableAddr;
     uint     layer;
-    uint     mode;        // 0 turn, 1 pack, 2 slopes
+    uint     mode;        // 0 turn, 1 pack, 2 slopes, 3 space, 4 sponge, 5 back
     uint     sourceCount;
     uint     _pad;
 } pc;
@@ -74,6 +105,25 @@ void main() {
     if (pc.mode == 2u) {
         const vec2 s = clamp(imageLoad(workImg, id).rg, vec2(-4.0), vec2(4.0));
         imageStore(outImg, ivec3(id, li), vec4(s, dot(s, s), 0.0));
+        return;
+    }
+    // (-1)^(x + y): the centred spectrum's sign pattern
+    const float alt = 1.0 - 2.0 * float((id.x + id.y) & 1);
+    if (pc.mode == 4u) {
+        vec2 f = imageLoad(workImg, id).rg;
+        const vec4 o = imageLoad(outImg, ivec3(id, li));
+        imageStore(outImg, ivec3(id, li), vec4(o.rgb, clamp(f.x * tb.rippleGain, -16.0, 16.0)));
+        // Texel id lies at world id * L / N (modulo L); its place in the
+        // window, and how many texels it lies inside the window's nearest edge.
+        const vec2  u    = fract((vec2(id) * (p.rippleSize / float(N)) - vec2(p.rippleOriginX, p.rippleOriginZ)) / p.rippleSize);
+        const vec2  e    = min(u, 1.0 - u) * float(N);
+        // 22 cells (tidewater's), 8% of the window from 512 up, and never
+        // more than a tenth of it: a vessel a fifth inside the window's
+        // leading edge keeps her bow out of the layer at every resolution
+        const float band = min(max(22.0, 0.08 * float(N)), 0.1 * float(N));
+        const float sg   = 1.0 - smoothstep(0.0, band, min(e.x, e.y));
+        f *= exp(-6.0 * sg * sg * tb.dt);
+        imageStore(workImg, id, vec4(alt * vec2(f.x, -f.y), 0.0, 0.0));
         return;
     }
 
@@ -107,6 +157,11 @@ void main() {
             float shape = exp(-0.25 * kl * kl * r * r);
             const float ka = dot(k, sc.axis);
             if (abs(ka) > 1e-3) shape *= sin(ka) / ka;
+            // a line whose ends fall off gently: convolved with a second box
+            // along it, taper x as long (a trapezoid), whose transform is a
+            // second sinc
+            const float kt = ka * sc.taper;
+            if (abs(kt) > 1e-3) shape *= sin(kt) / kt;
             const float c = sc.push * shape / (RHO * G * L * L);
             if (abs(c) < 1e-12) continue;
             const float ps = -dot(k, sc.p1);
@@ -126,6 +181,19 @@ void main() {
             ? (a + dent) * exp(-dt * (p.rippleDecay + 2.0 * tb.rippleViscosity * kl * kl)) - dent
             : -dent;
         imageStore(ampImg, ivec3(id, li), vec4(a, dent));
+        return;
+    }
+
+    if (pc.mode == 3u) {
+        const vec4 A = imageLoad(ampImg, ivec3(id, li));
+        imageStore(workImg, id, vec4(dead ? vec2(0.0) : A.rg + A.ba, 0.0, 0.0));
+        return;
+    }
+    if (pc.mode == 5u) {
+        const vec4 A = imageLoad(ampImg, ivec3(id, li));
+        const vec2 t = imageLoad(workImg, id).rg;
+        const vec2 b = alt * vec2(t.x, -t.y) / (float(N) * float(N));
+        imageStore(ampImg, ivec3(id, li), dead ? vec4(0.0) : vec4(b - A.ba, A.ba));
         return;
     }
 
