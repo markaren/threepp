@@ -1023,6 +1023,14 @@ def hull_foam_parts(boat, setting=None):
     return set()
 
 
+def hull_waves_on(boat, setting=None):
+    """Whether a boat's weight is laid on the water at her draft rather than on its surface (Wash's
+    WAVES_DRAFT): from the environment variable HULL_WAVES (or `setting`), a comma-separated list of
+    boat names, or "all". Off by default: every Wash's waves as before."""
+    names = [n.strip() for n in (os.environ.get("HULL_WAVES", "") if setting is None else setting).split(",")]
+    return "all" in names or boat in names
+
+
 def jet_wake_on(boat, setting=None):
     """Whether a boat's waterjet race is drawn as a jet's churned water (Wash.JET_*) rather than as
     a propeller race's: from the environment variable JET_WAKE (or `setting`), a comma-separated
@@ -1169,6 +1177,7 @@ class Wash:
         self.lines = None                      # her lines at the design waterline (hull_lines(), once)
         self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
         self.jet_wake = jet_wake_on(hull.boat) # JET_WAKE: her jet's race as a jet's churned water (JET_*)
+        self.waves_draft = hull_waves_on(hull.boat)  # HULL_WAVES: her weight carried down to her draft
 
     def hull_lines(self):
         """Her lines at the design waterline, from the Bonjean tables (starboard half), vessel frame:
@@ -1310,14 +1319,21 @@ class Wash:
                 out.append((x, side * z, 0.5 * w / float(a[wet].sum()), r, 0.5 * h.dx * len(g)))
         return out
 
-    def _put(self, name, p, vel, radius, foam, aeration, turbulence, lane, push=0.0, axis=(0.0, 0.0)):
+    def strip_drafts(self):
+        """Her draft at each weight strip's station (design waterline less keel), for WAVES_DRAFT."""
+        h = self.hull
+        L = self.lines if self.lines is not None else self.hull_lines()
+        return [max(float(np.interp(x, L["x"], L["wl"] - L["keel"])), 0.0) for (x, z, share, r, half) in self.strips]
+
+    def _put(self, name, p, vel, radius, foam, aeration, turbulence, lane, push=0.0, axis=(0.0, 0.0), draft=0.0):
         x0, z0 = self.last.get(name, (p[0], p[1]))
         if math.hypot(p[0] - x0, p[1] - z0) > 0.5 * self.size:
             x0, z0 = p[0], p[1]                # she was moved, not sailed
         if push and self.ripples:
             self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
                                        float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0),
-                                       push=float(push), ax=float(axis[0]), az=float(axis[1]), patch=self.index)
+                                       push=float(push), ax=float(axis[0]), az=float(axis[1]), patch=self.index,
+                                       **({"draft": float(draft)} if draft > 0.0 else {}))
         else:
             self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
                                        float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0))
@@ -1450,8 +1466,12 @@ class Wash:
         if self.ripples:
             if self.strips is None:
                 self.strips = self.weight_strips()
+                # WAVES_DRAFT (HULL_WAVES): a hull carries her weight down to her draft, and a load at depth
+                # z makes waves of wavenumber k weaker by e^(-kz) (Havelock); spread over 0..T that is
+                # (1 - e^(-kT)) / kT, which the wake field applies to each strip's push at its own draft.
+                self.drafts = self.strip_drafts() if self.waves_draft else [0.0] * len(self.strips)
             wl = h.design["waterline_y_at_x0"]
             for k, (x, z, share, r, half) in enumerate(self.strips):
                 q = h.to_world([x, wl, z])
                 self._put(f"weight_{k}", q[[0, 2]], (0.0, 0.0), r, 0.0, 0.0, 0.0, 0.0,
-                          push=h.mass * self.G * share, axis=fwd * half)
+                          push=h.mass * self.G * share, axis=fwd * half, draft=self.drafts[k])

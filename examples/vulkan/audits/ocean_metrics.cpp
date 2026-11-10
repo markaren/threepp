@@ -263,6 +263,9 @@ namespace {
         double wakeSeconds = 0.0;  // 0: 0.8 S / U
         std::string wakeScalar = "auto";
         std::string dump;          // --dump prefix: the wake image and ridge, for a look
+        double wakeWeight = 0.0;   // N; 0: the box hull's (draft 0.4 B, block 0.5)
+        std::string wakeStrips;    // a file of "x z share radius half" lines (usv_rig.Wash.weight_strips)
+        float wakeDraft = 0.f;     // m, each source's draft (WakeSource::draft; 0 = none)
         bool foamDefault = false;  // --foam-default: measure the engine's foam interval
     };
 
@@ -1947,7 +1950,18 @@ namespace {
 
         // Weight of a box hull of draft 0.4 B and block coefficient 0.5 in
         // sea water. The metrics are geometric, so only its sign matters.
-        const double weight = 1025.0 * kG * L * B * 0.4 * B * 0.5;
+        const double weight = cfg.wakeWeight > 0 ? cfg.wakeWeight : 1025.0 * kG * L * B * 0.4 * B * 0.5;
+        // --wake-strips: the hull as usv_rig.Wash lays her weight out, one
+        // line source a strip (vessel frame: x ahead, z to starboard).
+        struct Strip { double x, z, share, r, half; };
+        std::vector<Strip> strips;
+        if (!cfg.wakeStrips.empty()) {
+            std::ifstream in(cfg.wakeStrips);
+            Strip st{};
+            while (in >> st.x >> st.z >> st.share >> st.r >> st.half) strips.push_back(st);
+            std::printf("wake: %zu strips from %s, weight %.0f N, draft %.2f m\n", strips.size(), cfg.wakeStrips.c_str(),
+                        weight, double(cfg.wakeDraft));
+        }
         const double hz = 20.0, dt = 1.0 / hz, t0 = 1.0;
         const double seconds = cfg.wakeSeconds > 0 ? cfg.wakeSeconds : 0.8 * S / U;
         const int frames = std::max(2, int(std::lround(seconds * hz)));
@@ -1960,14 +1974,28 @@ namespace {
             xPrev = x;
             x = U * f * dt;
             ocean->clearWakeSources();
-            DisplacedMesh::WakeSource src;
-            src.x0 = float(xPrev), src.z0 = float(zs);
-            src.x1 = float(x), src.z1 = float(zs);
-            src.radius = float(0.5 * B);
-            src.push = float(weight);
-            src.ax = float(0.5 * L), src.az = 0.f;
-            src.patch = 0;
-            ocean->addWakeSource(src);
+            if (strips.empty()) {
+                DisplacedMesh::WakeSource src;
+                src.x0 = float(xPrev), src.z0 = float(zs);
+                src.x1 = float(x), src.z1 = float(zs);
+                src.radius = float(0.5 * B);
+                src.push = float(weight);
+                src.ax = float(0.5 * L), src.az = 0.f;
+                src.patch = 0;
+                src.draft = cfg.wakeDraft;
+                ocean->addWakeSource(src);
+            }
+            for (const auto& st: strips) {
+                DisplacedMesh::WakeSource src;
+                src.x0 = float(xPrev + st.x), src.z0 = float(zs + st.z);
+                src.x1 = float(x + st.x), src.z1 = float(zs + st.z);
+                src.radius = float(st.r);
+                src.push = float(weight * st.share);
+                src.ax = float(st.half), src.az = 0.f;
+                src.patch = 0;
+                src.draft = cfg.wakeDraft;
+                ocean->addWakeSource(src);
+            }
             auto& p = ocean->wakePatches[0];
             p.centerX = float(x - 0.3 * S);
             p.centerZ = float(zs);
@@ -2144,6 +2172,9 @@ int main(int argc, char** argv) {
         else if (const char* s = val("--wake-seconds")) cfg.wakeSeconds = std::atof(s);
         else if (const char* s = val("--wake-scalar")) cfg.wakeScalar = s;
         else if (const char* s = val("--dump")) cfg.dump = s;
+        else if (const char* s = val("--wake-weight")) cfg.wakeWeight = std::atof(s);
+        else if (const char* s = val("--wake-strips")) cfg.wakeStrips = s;
+        else if (const char* s = val("--wake-draft")) cfg.wakeDraft = float(std::atof(s));
         else if (std::strcmp(argv[i], "--strict") == 0) cfg.strict = true;
         else if (std::strcmp(argv[i], "--foam-default") == 0) cfg.foamDefault = true, single = true;
         else {

@@ -32,7 +32,7 @@ struct WakePatch {
     float rippleHeight; // 1 = the ripples' fourth channel holds their height (m), which the geometry takes
 };
 
-// What makes a mark. 64 bytes (= DisplacedMesh::WakeSource).
+// What makes a mark. 68 bytes (= DisplacedMesh::WakeSource).
 struct WakeSource {
     vec2  p0;           // where the producer was at the last step (world xz)
     vec2  p1;           // where it is now
@@ -46,6 +46,7 @@ struct WakeSource {
     vec2  axis;         // the push is a line that reaches this far to either side of the point
     int   owner;        // the patch whose ripples it forces (the CPU has resolved a -1)
     float taper;        // the line convolved with one of taper x its half length (0 = none)
+    float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
 };
 
 // 64-byte header, then the patches, then the sources of this step.

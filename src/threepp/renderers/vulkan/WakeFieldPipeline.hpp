@@ -75,8 +75,8 @@ namespace threepp::vulkan {
     };
     static_assert(sizeof(WakeTableGpu) == 64 + 56 * DisplacedMesh::kMaxWakePatches,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
-    static_assert(sizeof(DisplacedMesh::WakeSource) == 64,
-                  "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 64-byte sources");
+    static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
+                  "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");
 
     class WakeFieldPipeline {
 

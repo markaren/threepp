@@ -457,7 +457,7 @@ namespace threepp_py {
                 .def("add_wake_source",
                      [](DisplacedMesh& o, float x, float z, float vx, float vz, float radius, float foam,
                         float aeration, float turbulence, float lane, const py::object& xPrev, const py::object& zPrev,
-                        float push, float ax, float az, int patch) {
+                        float push, float ax, float az, int patch, float taper, float draft) {
                          DisplacedMesh::WakeSource s{};
                          s.x1 = x;
                          s.z1 = z;
@@ -474,12 +474,15 @@ namespace threepp_py {
                          s.ax         = ax;
                          s.az         = az;
                          s.patch      = patch;
+                         s.taper      = taper;
+                         s.draft      = draft;
                          o.addWakeSource(s);
                      },
                      py::arg("x"), py::arg("z"), py::arg("vx") = 0.0f, py::arg("vz") = 0.0f, py::arg("radius") = 0.3f,
                      py::arg("foam") = 0.0f, py::arg("aeration") = 0.0f, py::arg("turbulence") = 0.0f,
                      py::arg("lane") = 0.0f, py::arg("x_prev") = py::none(), py::arg("z_prev") = py::none(),
                      py::arg("push") = 0.0f, py::arg("ax") = 0.0f, py::arg("az") = 0.0f, py::arg("patch") = -1,
+                     py::arg("taper") = 0.0f, py::arg("draft") = 0.0f,
                      "One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from "
                      "(x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time "
                      "step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a "
@@ -491,7 +494,10 @@ namespace threepp_py {
                      "reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along "
                      "its length; where it moves, the waves that keep up with it are the ones that grow, "
                      "which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that "
-                     "holds it); a source with a push and nothing else leaves only waves.")
+                     "holds it); a source with a push and nothing else leaves only waves. `taper` rounds the line's "
+                     "ends (a trapezoid, the line convolved with one of taper x its half length). `draft` (m) is "
+                     "how deep the load is carried: the push spread over 0..draft, which weakens its waves of "
+                     "wavenumber k by (1 - e^(-k draft)) / (k draft), as a hull's are (0 = a load on the surface).")
                 // CPU mirror of the GPU wave height — for buoyancy / placing floats.
                 // Valid after a Vulkan render() has filled the height fields.
                 .def("sample_height", &DisplacedMesh::sampleHeight,

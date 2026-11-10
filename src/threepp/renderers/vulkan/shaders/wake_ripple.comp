@@ -162,6 +162,10 @@ void main() {
             // second sinc
             const float kt = ka * sc.taper;
             if (abs(kt) > 1e-3) shape *= sin(kt) / kt;
+            // a load carried down to its draft (WakeSource::draft): spread
+            // evenly over 0..d, each depth's waves weakened by e^(-k z)
+            const float kd = kl * sc.draft;
+            if (kd > 1e-4) shape *= (1.0 - exp(-kd)) / kd;
             const float c = sc.push * shape / (RHO * G * L * L);
             if (abs(c) < 1e-12) continue;
             const float ps = -dot(k, sc.p1);

@@ -705,6 +705,13 @@ namespace threepp {
             // trapezoid, full where |s| < a - t and nothing past a + t.
             // 0 = the line ends as a step, rounded only by the gaussian.
             float taper      = 0.f;
+            // The push's depth: a hull carries her weight on the water down
+            // to her draft, not on its surface, and a load at depth z makes
+            // waves of wavenumber k weaker by e^(-kz) (Havelock). Taken as
+            // spread evenly over 0..draft, the push's waves are weakened by
+            // (1 - e^(-k draft)) / (k draft). 0 = a load on the surface (the
+            // waves of a pressure patch).
+            float draft      = 0.f;
         };
         std::vector<WakeSource> wakeSources;
 
