@@ -4337,11 +4337,19 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             oceanFineHeightSampler = oceanFineHeightDummy.sampler;
                             oceanFineTileSize      = 0.0f;
                             oceanChopNormals       = false;
+                            oceanDetile            = false;
                         }
                         if (st->foamImage.view == oceanFoamView) {
                             oceanFoamView     = oceanFoamDummy.view;
                             oceanFoamTileSize = 0.0f;
                         }
+                        // Crest foam's texture (binding 91), the same way.
+                        if (st->crestFoam && st->crestFoam->sampledView() == oceanCrestFoamView) {
+                            oceanCrestFoamView    = oceanFoamDummy.view;
+                            oceanCrestFoamSampler = oceanFoamDummy.sampler;
+                            oceanCrestFoam        = false;
+                        }
+                        oceanWaveReflections = false;// the next ocean's sync sets it again
                         if (st->wake) {
                             if (st->wake->stateView() == oceanWakeView) oceanWakeView = wakeField_->dummyView();
                             if (st->wake->rippleView() == oceanRippleView) oceanRippleView = wakeField_->dummyView();

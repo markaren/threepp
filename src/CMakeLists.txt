@@ -1592,6 +1592,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
         kFoamWorldCompSpv
         _foam_world_spv_h)
+    # Crest foam (DisplacedMesh::Params::crestFoam): the deposit-and-decay pass
+    # over the foam texture in the water's rest coordinates (water::CrestFoam).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_crest.comp"
+        kFoamCrestCompSpv
+        _foam_crest_spv_h)
     # The ocean's wake field (DisplacedMesh::WakeField): what propellers, jets
     # and paddles leave on the water, in world-anchored patches. See
     # WakeFieldPipeline.{hpp,cpp} and shaders/ocean_wake.glsl.

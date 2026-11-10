@@ -339,6 +339,9 @@ namespace threepp {
         shadeParams.oceanFineTileSize  = oceanFineTileSize;
         shadeParams.oceanChopNormals   = oceanChopNormals;
         shadeParams.oceanFoamTileSize  = oceanFoamTileSize;
+        shadeParams.oceanCrestFoam     = oceanCrestFoam;
+        shadeParams.oceanWaveReflections = oceanWaveReflections;
+        shadeParams.oceanDetile        = oceanDetile && oceanChopNormals;
         shadeParams.denoise            = denoiseEnabled_;
         shadeParams.restirDI           = restirDIEnabled_;
         shadeParams.volFog             = deferredVolFog_;
@@ -1644,6 +1647,28 @@ namespace threepp {
         std::memcpy(out.data(), bytes.data(), bytes.size());
         resolution = res;
         tileSize   = st.foamTileSize;
+        return true;
+    }
+
+    bool VulkanRenderer::readOceanCrestFoam(const DisplacedMesh& mesh, std::vector<float>& out,
+                                            uint32_t& resolution, float& tileSize) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx) return false;
+        const auto it = impl.displacedStates.find(&mesh);
+        if (it == impl.displacedStates.end() || !it->second || !it->second->crestFoam) return false;
+        const auto& cf = *it->second->crestFoam;
+        const uint32_t res = cf.resolution();
+        const auto bytes = copyGeneralImageToHost(*ctx, cf.image(), res, res, 0u, 2u, "readOceanCrestFoam");
+        const size_t texels = static_cast<size_t>(res) * res;
+        out.resize(texels);
+        for (size_t i = 0; i < texels; ++i) {
+            uint16_t h;
+            std::memcpy(&h, bytes.data() + i * 2u, sizeof(h));
+            out[i] = halfBitsToFloat(h);
+        }
+        resolution = res;
+        tileSize   = mesh.params.tileSize0;
         return true;
     }
 

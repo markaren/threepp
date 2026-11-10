@@ -601,6 +601,22 @@ namespace threepp::vulkan::impl {
         VkDescriptorSet displaceChopDS = VK_NULL_HANDLE;
         uint32_t chopFineIdx = 0;            // the finest enabled cascade (feeds chopMoments)
         bool     chopOn      = false;        // on this frame (resolved by syncOceanChop)
+        // Crest foam (DisplacedMesh::Params::crestFoam): the foam texture over
+        // the water's rest coordinates and its pass. Null until the mesh first
+        // turns the feature on with the chop normals on (it reads their
+        // derivative fields); resolved with them, by syncOceanChop.
+        std::unique_ptr<water::CrestFoam> crestFoam;
+        bool     crestFoamOn = false;        // on this frame
+        // DisplacedMesh::Params::shortWaves as the cascades were built: the
+        // 1 -> 2 hand-off wavelength (m), 0 = the historical split.
+        float    shortWaveHandoff = 0.f;
+        // Short waves as geometry: mipped copies of the middle cascade's
+        // height, displacement, slope and jacDiag (in that order), which the
+        // chop displace set binds in place of the cascade's own images so
+        // that every vertex reads them at its own spacing. Null without
+        // shortWaves or until the chop normals first come on.
+        std::unique_ptr<water::FieldMips> c1Mips;
+        double   crestFoamPrevTimeSec = -1.0;// its previous pass, for the decay step (-1 = none yet)
         // Wind + fetch actually baked into the cascades' h0 spectra. When
         // dm.params drifts from these, recordDisplacedDeform rewrites the
         // Phillips params and re-dispatches the (normally one-shot) h0
@@ -614,7 +630,7 @@ namespace threepp::vulkan::impl {
         // second-order harmonic, valid until the sea state changes.
         float boundKm[2]       = {0.f, 0.f};
         bool  boundKmValid     = false;
-        bool  crestUvTagged    = false;// breaking crests wrote (eps, -1) into the UV buffer
+        bool  crestUvTagged    = false;// the UV buffer holds breaking crests' (eps, -1) or crest foam's disp.xz
         bool  appliedMeasuredSpreading = false;
         float appliedSwell[4] = {0.f, 0.f, 0.f, 0.f};// height, period, theta, spread
         water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)

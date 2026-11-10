@@ -192,6 +192,19 @@ float gWakeAlbedo = 1.0;
 // steepness, interpolated from the per-vertex value water_displace.comp wrote
 // into the ocean's UVs; -1e30 when the ocean carries none (the switch is off).
 float gCrestEps = -1e30;
+// Crest foam (DisplacedMesh::Params::crestFoam; read only where kOceanCrestFoam
+// is set, stand-ins bound otherwise). oceanCrestFoam is the foam on the water's
+// REST coordinates (foam_crest.comp): R16F over one oceanFoamTileSize, REPEAT,
+// mipped by box averages, so a footprint fetch is the mean foam under a pixel.
+// oceanCrestFoamPattern is the photograph of sea foam it opens against (R8,
+// rank equalised: the fraction of it above a level is that level; mipped,
+// REPEAT).
+// gCrestDisp is this pixel's horizontal displacement, interpolated from what
+// water_displace.comp wrote into the ocean's UVs: worldPos.xz - gCrestDisp is
+// the rest point q both textures are addressed by.
+layout(set = 0, binding = 91) uniform sampler2D oceanCrestFoam;
+layout(set = 0, binding = 92) uniform sampler2D oceanCrestFoamPattern;
+vec2 gCrestDisp = vec2(0.0);
 // Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
 // (designed for a 4 m world mapping), G = ridged lace/filament pattern
 // (12 m mapping). Replaces the per-pixel procedural noise octaves in the
@@ -308,6 +321,18 @@ layout(constant_id = 3) const uint kShadowMaps = 0u;
 // branch is compiled in. 0, every scene without them, drops it, so that
 // kernel is the one that ran before they existed.
 layout(constant_id = 6) const uint kOceanChop = 0u;
+// 1 = an ocean's crest foam is on this frame (DisplacedMesh::Params::
+// crestFoam): bindings 91 and 92 are live, the ocean's UVs carry its drawn
+// displacement, and the foam block that reads them is compiled in. 0 drops it.
+layout(constant_id = 7) const uint kOceanCrestFoam = 0u;
+// 1 = an ocean's wave reflections are on this frame (DisplacedMesh::Params::
+// waveReflections): the water's own mirror ray shades water it meets instead
+// of passing through it. 0 keeps the pass-through.
+layout(constant_id = 8) const uint kOceanWaveReflect = 0u;
+// 1 = an ocean's fine cascade is drawn without its tile's period this frame
+// (DisplacedMesh::Params::detile, with the chop normals): the per-pixel
+// slope is two placements of the cascade, summed. 0 = one placement.
+layout(constant_id = 9) const uint kOceanDetile = 0u;
 const bool kSM = kShadowMaps != 0u;
 bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
 // probe_common.glsl's own gate, made the same test here (its default is the UBO).

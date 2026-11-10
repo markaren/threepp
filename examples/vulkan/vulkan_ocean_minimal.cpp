@@ -33,6 +33,15 @@
 //                      (THREEPP_OCEAN_BOUND_WAVES overrides it)
 //   --breaking 0|1     Params::breakingCrests, foam only on breaking crests
 //                      (THREEPP_OCEAN_BREAKING_CRESTS overrides it)
+//   --crest-foam 0|1   Params::crestFoam, foam laid down where a crest
+//                      breaks and kept on the water it was laid on; turns
+//                      the chop normals on with it, whose derivative
+//                      fields it reads (THREEPP_OCEAN_CREST_FOAM overrides it)
+//   --wave-refl 0|1    Params::waveReflections, the water's mirror ray
+//                      shades a wave it meets as water (no black spots where
+//                      a face cannot see the sky)
+//   --short-waves 0|1  Params::shortWaves, the 3 to 9 m waves as geometry
+//   --detile 0|1       Params::detile, the fine cascade without its period
 //   --crests           the physical-crests set in one flag: hs-fix, cwm,
 //                      bound waves, breaking crests, chop normals and the
 //                      measured spreading all on (each flag above, given
@@ -88,7 +97,7 @@ int main(int argc, char** argv) {
     float fetch = -1.f, chop = -1.f, waveScale = -1.f, tile2 = -1.f, foam = -1.f;
     float theta = -1e9f;
     int hsFix = -1;
-    int cwm = -1, bound = -1, breaking = -1;
+    int cwm = -1, bound = -1, breaking = -1, crestFoam = -1, waveRefl = -1, shortWaves = -1, detile = -1;
     bool crests = false;
     bool pinnedClock = false;
     for (int i = 1; i < argc; ++i) {
@@ -103,6 +112,10 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--cwm") == 0 && i + 1 < argc) cwm = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--bound") == 0 && i + 1 < argc) bound = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--breaking") == 0 && i + 1 < argc) breaking = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--crest-foam") == 0 && i + 1 < argc) crestFoam = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--wave-refl") == 0 && i + 1 < argc) waveRefl = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--short-waves") == 0 && i + 1 < argc) shortWaves = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--detile") == 0 && i + 1 < argc) detile = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--crests") == 0) crests = true;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
@@ -216,11 +229,18 @@ int main(int argc, char** argv) {
     if (cwm >= 0) ocean->params.cwm = cwm != 0;
     if (bound >= 0) ocean->params.boundWaves = bound != 0;
     if (breaking >= 0) ocean->params.breakingCrests = breaking != 0;
+    if (waveRefl >= 0) ocean->params.waveReflections = waveRefl != 0;
+    if (shortWaves >= 0) ocean->params.shortWaves = shortWaves != 0;
+    if (detile >= 0) ocean->params.detile = detile != 0;
+    if (crestFoam >= 0) {
+        ocean->params.crestFoam = crestFoam != 0;
+        if (crestFoam != 0) ocean->params.chopNormals = true;
+    }
     std::printf("wave model: hs-fix %d, cwm %d, bound waves %d, breaking crests %d, chop normals %d, "
-                "measured spreading %d (with environment overrides)\n",
+                "measured spreading %d, crest foam %d (with environment overrides)\n",
                 int(ocean->params.hsFix), int(ocean->cwmOn()), int(ocean->boundWavesOn()),
                 int(ocean->breakingCrestsOn()), int(ocean->params.chopNormals),
-                int(ocean->params.measuredSpreading));
+                int(ocean->params.measuredSpreading), int(ocean->crestFoamOn()));
     scene.add(ocean);
 
     // Live wind control — setWind() takes effect next frame; the sea morphs

@@ -202,6 +202,18 @@ namespace threepp {
                                          std::vector<float>& out,
                                          uint32_t& resolution, float& tileSize);
 
+        // ── Crest foam readback (TEST / AUDIT) ───────────────────────────
+        // Copy a DisplacedMesh's crest-foam texture (Params::crestFoam,
+        // foam_crest.comp; level 0) to the host: `out` is resolution^2 floats,
+        // row-major, over one `tileSize` of the water's REST coordinates (a
+        // texel is a water parcel, not a place). min(value, 1) is the covered
+        // fraction the shade draws there; above 1 the foam is a closed sheet.
+        // Drains the device, as readOceanFoam does. Returns false when the
+        // mesh has no crest foam (the switch never came on for it).
+        [[nodiscard]] bool readOceanCrestFoam(const DisplacedMesh& mesh,
+                                              std::vector<float>& out,
+                                              uint32_t& resolution, float& tileSize);
+
         // ── Wake ripple readback (TEST / AUDIT) ──────────────────────────
         // Copy one wake patch's ripple slopes (wake_ripple.comp, mip 0) to
         // the host: `out` holds resolution^2 texels of 4 floats (slope x,

@@ -28,7 +28,10 @@
     // steepness in R (water_displace.comp); a plane's own UVs are in [0, 1].
     if (geoms[id - 1u].foamAddress != 0ul) {
         const vec4 crestTap = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx) : texelFetch(gbufUvTex, px, 0);
-        if (crestTap.g < -0.5) gCrestEps = crestTap.r;
+        // Crest foam: the same channel holds the vertex's drawn horizontal
+        // displacement instead, and no tag (its z can be anything).
+        if (kOceanCrestFoam != 0u) gCrestDisp = crestTap.rg;
+        else if (crestTap.g < -0.5) gCrestEps = crestTap.r;
     }
 
     const vec3 V          = normalize(camPos - worldPos);
@@ -91,8 +94,31 @@
         const vec4  mom      = textureGrad(oceanFineHeight, uvW,
                                            alongM * (pixAlong * invTile),
                                            vec2(-alongM.y, alongM.x) * (pixWorld * invTile));
-        const float slopeVar = max(mom.a - dot(mom.gb, mom.gb), 0.0);
+        float slopeVar = max(mom.a - dot(mom.gb, mom.gb), 0.0);
         vec2 gKept = mom.gb;
+        if (kOceanDetile != 0u) {
+            // ── DETILE (DisplacedMesh::Params::detile, spec constant 9) ──────
+            // The fine cascade repeats every tile, a few metres: from a mast
+            // or a drone the same ripples come round again and again, a
+            // scale pattern. A second placement of the same cascade, turned
+            // 20 degrees, a little larger and shifted, is an independent
+            // sample of the same sea (its texels are far from the first's),
+            // and two independent fields summed over sqrt(2) have the
+            // variance and the spectrum of one, and no common period. Its
+            // slope comes back through the transpose of its rotation; the
+            // moments add: the mean slopes sum, the mean squares average.
+            const vec2  rD  = vec2(0.9393727, 0.3428978);// cos, sin of 0.35 rad
+            const float sD  = 0.77;
+            const vec2  uvD = vec2(rD.x * uvW.x - rD.y * uvW.y, rD.y * uvW.x + rD.x * uvW.y) * sD + vec2(0.37, 0.61);
+            const vec2  dA  = alongM * (pixAlong * invTile * sD);
+            const vec2  dX  = vec2(-alongM.y, alongM.x) * (pixWorld * invTile * sD);
+            const vec4  momD = textureGrad(oceanFineHeight, uvD,
+                                           vec2(rD.x * dA.x - rD.y * dA.y, rD.y * dA.x + rD.x * dA.y),
+                                           vec2(rD.x * dX.x - rD.y * dX.y, rD.y * dX.x + rD.x * dX.y));
+            const vec2  gD   = vec2(rD.x * momD.g + rD.y * momD.b, -rD.y * momD.g + rD.x * momD.b);
+            gKept    = (mom.gb + gD) * 0.70710678;
+            slopeVar = max(0.5 * (mom.a + momD.a) - dot(gKept, gKept), 0.0);
+        }
         // ── WAKE FIELD ────────────────────────────────────────────────────────
         // Where something has churned the water the short wind waves are gone
         // (turbulence under the surface breaks them up: the smooth lane a boat

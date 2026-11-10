@@ -1,0 +1,128 @@
+#version 460
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive                   : enable
+
+#include "ocean_cascade.glsl"// cascade-1 domain rotation, sampleBicubicRG, OceanHull, hullLocal
+
+// Crest foam (DisplacedMesh::Params::crestFoam, water::CrestFoam).
+//
+// The standard recipe for whitecaps on a spectral sea (Tessendorf 2001,
+// "Simulating Ocean Water", section 4.5): foam is made where the surface
+// folds, kept in a texture, and fades. Two things are this renderer's own.
+//
+// Where it is kept. The texture is laid over the water's REST coordinates: a
+// texel is a water parcel, named by the point q it sits at in still water.
+// The drawn sea is the Lagrangian map x = q + D(q, t), so a parcel keeps its q
+// for ever, and foam that stays on its water needs no transport at all:
+// nothing here reads a neighbour, and the texture is updated in place. (A
+// texture fixed in the world leaves the foam standing where the crest was
+// while the water moves on under it.) The shade finds a pixel's q as P.xz
+// minus the displacement water_displace wrote into the UV channel (waveModel
+// bit 4), and reads this texture there.
+//
+// What "folds" is. The Jacobian of the map falls toward zero where the
+// surface is being squeezed, and the squeeze is the most compressive
+// eigenvalue of grad D:
+//   eps = -(lambda_min of grad D), choppiness 1
+// (a k for one wave at its crest, where the Jacobian is 1 - eps). Where eps
+// passes the threshold the parcel takes foam, more the further past it:
+//   F = max(F * decay, max * clamp((eps - threshold) / ramp, 0, 1)).
+// Once the crest has moved on the parcel keeps what it has, decaying
+// (vulkan_shared.h has the constants and where they come from). min(F, 1) is
+// the share of the water the shade covers; above 1 the foam is a closed sheet
+// that takes that much longer to open.
+//
+// grad D comes from the exact derivative fields the chop normals already
+// compute (dynamic_spectrum.comp, OCEAN_CHOP): jac = (dDx/dx, dDz/dz) and
+// ht.g = dDx/dz = dDz/dx, raw inverse-FFT units (x 1 / tile). Cascades 0 and 1
+// only: they are the waves the mesh draws, so the foam lies on crests that
+// are there to be seen; the fine cascade's are under a texel of this texture.
+// Cascade 0's own texels are several metres, so it is read through the C1
+// B-spline (a bilinear read kinks at every texel edge and the threshold turns
+// the kinks into lines); cascade 1's are about a texel here, bilinear is
+// enough.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D jac0;   // (dDx/dx, dDz/dz), cascade 0
+layout(set = 0, binding = 1) uniform sampler2D height0;// .g = dDx/dz
+layout(set = 0, binding = 2) uniform sampler2D jac1;   // the same, cascade 1 (rotated domain)
+layout(set = 0, binding = 3) uniform sampler2D height1;
+layout(set = 0, binding = 4, r16f) uniform image2D foam;// mip 0, read and written in place
+
+layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
+
+// 56 bytes, mirrored field for field by water::CrestFoam::PushParams.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t hullAddr;  // OceanHull[hullCount], the buffer water_displace reads
+    uint  res;          // texels per side
+    float tileSize;     // rest-space extent of the texture (m) = cascade 0's tile
+    float tileSize1;    // cascade 1's tile
+    float steepScale;   // the surface's height scale (waveScale)
+    uint  cascadeMask;
+    uint  hullCount;
+    float decay;        // exp(-dt / tau)
+    float threshold;
+    float invRamp;
+    float maxFoam;
+    float centerX;      // where the mesh is centred in rest space (its warp
+    float centerZ;      // centre): each texel stands for the copy of q nearest it
+} pc;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.res) || px.y >= int(pc.res)) return;
+
+    // The texture repeats over the tile, cascade 1 (rotated, a tile of its
+    // own) does not: of the parcels a texel could stand for, take the one
+    // inside the tile-sized window centred on the mesh, so that across a mesh
+    // one tile wide every texel is one parcel and the seam lies on its edge.
+    const vec2 c  = vec2(pc.centerX, pc.centerZ);
+    const vec2 d0 = (vec2(px) + 0.5) / float(pc.res) * pc.tileSize - c;
+    const vec2 q  = c + d0 - pc.tileSize * floor(d0 / pc.tileSize + 0.5);
+
+    float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+    if ((pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize;
+        const vec2  uv = q * invTile;
+        const vec2  jd = sampleBicubicRG(jac0, uv) * invTile;
+        jxx += jd.x;
+        jzz += jd.y;
+        jxz += sampleBicubicRG(height0, uv).g * invTile;
+    }
+    if ((pc.cascadeMask & 2u) != 0u) {
+        // Rotated sample domain d = R q: the displacement gradient comes back
+        // as R^T J R (as in water_displace.comp).
+        const float invTile = 1.0 / pc.tileSize1;
+        const vec2  uv = oceanC1Domain(q) * invTile;
+        const vec2  jd = texture(jac1, uv).rg * invTile;
+        const float p  = jd.x;
+        const float r  = jd.y;
+        const float o  = texture(height1, uv).g * invTile;
+        const float cs = kOceanCascade1RotCos;
+        const float sn = kOceanCascade1RotSin;
+        jxx += cs * cs * p + 2.0 * cs * sn * o + sn * sn * r;
+        jzz += sn * sn * p - 2.0 * cs * sn * o + cs * cs * r;
+        jxz += cs * sn * (r - p) + (cs * cs - sn * sn) * o;
+    }
+    // grad D is symmetric (D is itself a gradient): its smaller eigenvalue.
+    const float mid = 0.5 * (jxx + jzz);
+    const float rad = sqrt(0.25 * (jxx - jzz) * (jxx - jzz) + jxz * jxz);
+    const float eps = -(mid - rad) * pc.steepScale;
+
+    // No whitecaps inside a hull's footprint: the sea is flattened onto the
+    // vessel's waterline there (water_displace.comp), nothing breaks.
+    float hullFade = 1.0;
+    if (pc.hullCount > 0u) {
+        OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
+        for (uint k = 0u; k < pc.hullCount; ++k) hullFade *= hullLocal(hulls.h[k], q).z;
+    }
+
+    const float deposit = pc.maxFoam * clamp((eps - pc.threshold) * pc.invRamp, 0.0, 1.0) * hullFade;
+    float f = max(imageLoad(foam, px).r * pc.decay, deposit);
+    if (f < 1.0 / 1024.0) f = 0.0;// below anything the shade draws: a clean zero
+    imageStore(foam, px, vec4(f));
+}

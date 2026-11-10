@@ -51,7 +51,9 @@
 //   THREEPP_OCEAN_BOUND_WAVES, THREEPP_OCEAN_BREAKING_CRESTS = 1 / 0), so a
 //   sweep's child processes inherit them. Under THREEPP_OCEAN_BREAKING_CRESTS
 //   the whitecap row grades the breaking-crest mask (see section 5), not the
-//   accumulator.
+//   accumulator. Under THREEPP_OCEAN_CREST_FOAM (with
+//   THREEPP_OCEAN_CHOP_NORMALS, which it needs) it grades the crest-foam
+//   texture itself, read back with VulkanRenderer::readOceanCrestFoam.
 //   5. MARGINAL means the estimators of that row fall on both sides of a
 //      limit; it is neither a PASS nor a FAIL (and not a FAIL under
 //      --strict). Two saved runs compare with no GPU: --compare a --against b.
@@ -1108,6 +1110,12 @@ namespace {
         // (ten of its 2 s e-folding times), then one read a second.
         double foamArea = 0, foamAreaFar = 0, foamMean = 0, foamRaw = 0, foamCovHalf = 0;
         int foamReads = 0;
+        // Crest foam (THREEPP_OCEAN_CREST_FOAM): the foam texture over the
+        // water's rest coordinates. The shade draws min(F, 1) as the covered
+        // fraction (its foam photograph is rank-equalised), so the mean of that
+        // over the tile is the whitecap fraction, no mask to mirror.
+        double crestCover = 0, crestSheet = 0, crestRaw = 0, crestMax = 0;
+        int crestReads = 0;
         {
             const double fdt = 1.0 / cfg.foamHz;
             double tf = t0 + (nFrames - 1) * dt;
@@ -1142,6 +1150,21 @@ namespace {
                 foamArea += area / nf, foamAreaFar += areaFar / nf, foamMean += cov / nf;
                 foamRaw += raw / nf, foamCovHalf += half / nf;
                 ++foamReads;
+                std::vector<float> cf;
+                uint32_t cres = 0;
+                float ctile = 0.f;
+                if (renderer.readOceanCrestFoam(*ocean, cf, cres, ctile) && !cf.empty()) {
+                    double cover = 0, sheet = 0, sum = 0;
+                    for (const float f : cf) {
+                        cover += std::min(f, 1.f);
+                        if (f >= 1.f) sheet += 1;
+                        sum += f;
+                        crestMax = std::max(crestMax, double(f));
+                    }
+                    const double cn = double(cf.size());
+                    crestCover += cover / cn, crestSheet += sheet / cn, crestRaw += sum / cn;
+                    ++crestReads;
+                }
             }
         }
 
@@ -1638,6 +1661,21 @@ namespace {
             };
             out.push_back({"  crest steepness giving Monahan's area", epsFor(wM), 1, 0, "", "", "calibration"});
             out.push_back({"  crest steepness giving Callaghan's area", epsFor(wC), 1, 0, "", "", "calibration"});
+        }
+        if (crestReads > 0) {
+            // Rest-space fractions: a parcel's share of the tile at rest. In
+            // the drawn sea fresh foam sits where the map is squeezed, so the
+            // world-space fraction is a little smaller.
+            const double wM = monahan(U), wC = callaghan(U);
+            const double lo = U > 3.7 ? std::min(wM, wC) : 0.0;
+            const double hi = U > 3.7 ? std::max(wM, wC) : 1e-4;
+            out.push_back({"crest foam cover (mean of min(F, 1))", crestCover / crestReads, lo, hi,
+                           fmt("%.2f", 100 * lo) + "-" + fmt("%.2f %%", 100 * hi), "between curves",
+                           "Monahan 1980, Callaghan 2008; foam_crest.comp"});
+            out.push_back({"  closed sheet (F >= 1)", crestSheet / crestReads, 1, 0, "", "",
+                           "the breaking front and what it just left"});
+            out.push_back({"  crest foam value mean (raw)", crestRaw / crestReads, 1, 0, "", "", ""});
+            out.push_back({"  crest foam value max", crestMax, 1, 0, "", "", "the deposit cap when crests break hard"});
         }
         if (foamReads > 0) {
             const double wM = monahan(U), wC = callaghan(U);

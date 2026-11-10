@@ -447,6 +447,7 @@ VulkanRenderer::Impl::~Impl() {
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);
+            destroyImage2D(ctx->allocator(), d, crestFoamPatternImage);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             et.mark("skinned, water, views, ubos, images");
             materialTextures.clear();

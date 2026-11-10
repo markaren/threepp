@@ -98,42 +98,17 @@ layout(push_constant, scalar) uniform Pc {
     uint    hullCount;      // active vessels; 0 = no hull exclusion, no wake
     // The wave-model switches (DisplacedMesh::Params). waveModel 0 runs the
     // historical path below and reads nothing past here.
-    uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests, bit 3 clear its tags
+    uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests, bit 3 clear its tags,
+                            // bit 4 crestFoam (the drawn displacement into the UVs),
+                            // bit 5 cascade 1 is mipped: read it at the vertex spacing's level
     float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
     float   boundKm1;
     uint    _pad0;
-    UvBuf   uvOut;          // breakingCrests: (crest steepness, -1) per vertex
+    UvBuf   uvOut;          // breakingCrests: (crest steepness, -1) per vertex; crestFoam: disp.xz
 } pc;
 
-// A rest point in vessel `hu`'s frame, and how far outside its footprint it
-// lies: (localX, localZ, fade). localX = beam axis (+starboard), localZ = length
-// axis (+bow, forward_world = (sinYaw, cosYaw)); fade 0 inside the hull, 1 once
-// past the margin (oceanHullMargin).
-vec3 hullLocal(OceanHull hu, vec2 p) {
-    const float dx = p.x - hu.centerX;
-    const float dz = p.y - hu.centerZ;
-    const float lX = hu.cosYaw * dx - hu.sinYaw * dz;
-    const float lZ = hu.sinYaw * dx + hu.cosYaw * dz;
-    // Hull plan-form half-width at this length fraction — matches
-    // the `hullHalfWidth` lambda the example uses for foam splats.
-    // Bow tapers sharply (≈ elliptical with exponent 0.6) so wave
-    // suppression follows the actual prow instead of the rectangular
-    // bbox corner; stern keeps ~75 % beam (transom-style aft form).
-    // Without this taper the ocean was flattened in the empty
-    // bow/stern wings of the bounding box, leaving visible flat
-    // patches outside the hull.
-    const float u = clamp(-lZ / hu.halfLength, -1.0, 1.0);
-    float halfBeamAtLZ;
-    if (u <= 0.0) {
-        halfBeamAtLZ = hu.halfBeam * pow(max(1.0 - u * u, 0.0), 0.6);
-    } else {
-        halfBeamAtLZ = hu.halfBeam * (1.0 - 0.25 * u * u);
-    }
-    const float edgeX    = abs(lX) - halfBeamAtLZ;
-    const float edgeZ    = abs(lZ) - hu.halfLength;
-    const float edgeDist = max(edgeX, edgeZ);
-    return vec3(lX, lZ, smoothstep(0.0, oceanHullMargin(hu.halfBeam), edgeDist));
-}
+// (hullLocal, a rest point in a vessel's frame with its footprint fade, is in
+// ocean_cascade.glsl: foam_crest.comp reads it too.)
 
 // Bicubic B-spline single-channel fetch (4 bilinear taps, Sigg & Hadwiger).
 // Used by the NORMAL stencil only: the derivative of a BILINEAR texture
@@ -166,6 +141,27 @@ float sampleBicubicR(sampler2D tex, vec2 uv) {
     return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
 }
 
+// Short waves as geometry (DisplacedMesh::Params::shortWaves, waveModel bit 5):
+// the middle cascade then holds waves a few metres long, which the mesh draws
+// near its dense centre and cannot hold where a warp has thinned it out; read
+// there at full resolution they alias into moire. With the bit set its four
+// fields are bound as mipped copies (water::FieldMips) and read at the level
+// whose texel is the vertex spacing at this vertex (gC1Lod, set in main): the
+// mesh carries what it can hold and nothing shorter. Level 0 keeps the C1
+// B-spline read; from level 1 the filter is the mip chain's and a trilinear
+// read is as smooth as the mesh can show.
+float gC1Lod = 0.0;
+vec2 c1RG(sampler2D tex, vec2 uv) {
+    if (gC1Lod <= 0.0) return sampleBicubicRG(tex, uv);
+    const vec2 lo = textureLod(tex, uv, gC1Lod).rg;
+    return gC1Lod >= 1.0 ? lo : mix(sampleBicubicRG(tex, uv), lo, gC1Lod);
+}
+float c1R(sampler2D tex, vec2 uv) {
+    if (gC1Lod <= 0.0) return sampleBicubicR(tex, uv);
+    const float lo = textureLod(tex, uv, gC1Lod).r;
+    return gC1Lod >= 1.0 ? lo : mix(sampleBicubicR(tex, uv), lo, gC1Lod);
+}
+
 // Smooth height for the normal stencil — cascades 0+1 ONLY. Cascade 2's
 // 8 m tile is far below what the mesh resolves: sampled at a metres-wide
 // stencil it only aliases into the vertex normals, and the deferred shading
@@ -179,7 +175,7 @@ float sampleHeightSmooth(vec2 worldXZ) {
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
-        h += sampleBicubicR(height1, oceanC1Domain(worldXZ) * invTile) * invTile;
+        h += c1R(height1, oceanC1Domain(worldXZ) * invTile) * invTile;
     }
     return h * pc.waveScale;
 }
@@ -219,8 +215,8 @@ vec3 sampleDisplacement(vec2 worldXZ) {
         // rotate it back into world before accumulating.
         const float invTile = 1.0 / pc.tileSize1;
         const vec2 uv = oceanC1Domain(worldXZ) * invTile;
-        d.y += sampleBicubicR(height1, uv) * invTile;
-        const vec2 dxz = oceanC1World(sampleBicubicRG(displace1, uv)) * invTile;
+        d.y += c1R(height1, uv) * invTile;
+        const vec2 dxz = oceanC1World(c1RG(displace1, uv)) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -275,8 +271,8 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
         const vec2 uv = oceanC1Domain(worldXZ) * invTile;
-        const vec2 dxz = oceanC1World(sampleBicubicRG(displace1, uv)) * invTile;
-        const float h  = sampleBicubicR(height1, uv) * invTile * pc.waveScale;
+        const vec2 dxz = oceanC1World(c1RG(displace1, uv)) * invTile;
+        const float h  = c1R(height1, uv) * invTile * pc.waveScale;
         d.y += h;
         if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm1);
         d.x += dxz.x;
@@ -353,6 +349,22 @@ void main() {
         rest = vec3((u - 0.5) * pc.planeSizeX,
                     0.0,
                     -(v - 0.5) * pc.planeSizeZ);
+    }
+
+    // The middle cascade's level for this vertex (see gC1Lod): the spacing of
+    // the grid here, the larger of its two axes, under the warp's cubic map.
+    if ((pc.waveModel & 32u) != 0u) {
+        float sx = pc.planeSizeX / float(pc.gridDimX - 1u);
+        float sz = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+        if (pc.warpHalfRange > 0.0) {
+            const float un = 2.0 * u - 1.0;
+            const float vn = 2.0 * v - 1.0;
+            const float a  = pc.warpCoefA;
+            sx = pc.warpHalfRange * (a + 3.0 * (1.0 - a) * un * un) * 2.0 / float(pc.gridDimX - 1u);
+            sz = pc.warpHalfRange * (a + 3.0 * (1.0 - a) * vn * vn) * 2.0 / float(pc.gridDimZ - 1u);
+        }
+        const float texel1 = pc.tileSize1 / float(textureSize(height1, 0).x);
+        gC1Lod = max(log2(max(sx, sz) / texel1), 0.0);
     }
 
     // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the
@@ -571,7 +583,14 @@ void main() {
     // shade's step on it puts foam on the crest top. Written per vertex at
     // the vertex's own displaced position (no inversion, no lag) into the UV
     // channel, tagged -1 in G; faded inside every hull footprint.
-    if ((pc.waveModel & 4u) != 0u) {
+    if ((pc.waveModel & 16u) != 0u) {
+        // Crest foam: the horizontal displacement this vertex was drawn
+        // with. Position and displacement both interpolate linearly over a
+        // triangle, so a pixel's P.xz minus this, interpolated, is its rest
+        // point q exactly: the coordinate the foam texture lives on
+        // (foam_crest.comp). Takes the channel the breaking-crest tag uses.
+        pc.uvOut.v[i] = disp.xz;
+    } else if ((pc.waveModel & 4u) != 0u) {
         const float sxz = 0.5 * (aXZ + aZX);
         const float mid = 0.5 * (aXX + aZZ);
         const float rad = sqrt(0.25 * (aXX - aZZ) * (aXX - aZZ) + sxz * sxz);
@@ -608,11 +627,11 @@ void main() {
             // R^T * Jd * R.
             const float invTile = 1.0 / pc.tileSize1;
             const vec2  uv = oceanC1Domain(rest.xz) * invTile;
-            sl += oceanC1World(sampleBicubicRG(slope1, uv)) * invTile;
-            const vec2  jd = sampleBicubicRG(jac1, uv) * invTile;
+            sl += oceanC1World(c1RG(slope1, uv)) * invTile;
+            const vec2  jd = c1RG(jac1, uv) * invTile;
             const float p  = jd.x;
             const float r  = jd.y;
-            const float q  = sampleBicubicRG(height1, uv).g * invTile;
+            const float q  = c1RG(height1, uv).g * invTile;
             const float c  = kOceanCascade1RotCos;
             const float sn = kOceanCascade1RotSin;
             jxx += c * c * p + 2.0 * c * sn * q + sn * sn * r;

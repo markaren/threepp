@@ -473,6 +473,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // branch's pass-through.
     const int cutoutCapN = REFL_MAX_STEPS;
     int cutoutPassed = 0;// transparent texels passed in the traversals so far
+    // Wave reflections (kOceanWaveReflect): the water this trace's ray is
+    // inside, after passing through its surface from the air (-1 = in air),
+    // and what that surface showed where the ray went in (see the skip).
+    int   diveId  = -1;
+    float diveT   = 0.0;
+    vec3  diveRad = vec3(0.0);
     for (; step < REFL_MAX_STEPS; ++step) {
         bool cutoutCapped = false;// this traversal's budget confirmed a transparent texel
         rayQueryEXT rq;
@@ -492,6 +498,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             rayQueryConfirmIntersectionEXT(rq);
         }
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+            if (diveId >= 0) {// dived into a wave and met nothing: the face it went in by
+                radiance += tput * diveRad;
+                if (gTraceHitT < 0.0) gTraceHitT = diveT;
+                break;
+            }
             if (b == 0 && !bent && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
             // A bounce off a SUBMERGED surface that escapes sees the sky through
             // the column over it (murkAmbient; b == 0 is the caller's own leg and
@@ -516,8 +527,45 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // crest and keep tracing; the offset scales with the hit distance so a
         // far grazing hit doesn't re-hit the same triangle from float error.
         if (gTraceSkipWater && geoms[hitId].foamAddress != 0ul) {
+            // Wave reflections (DisplacedMesh::Params::waveReflections, spec
+            // constant 8). The pass-through is right for a crest the ray
+            // clips: it goes in one side and out the other, and what it
+            // then sees is the sky it would have seen. It is wrong for a
+            // ray that goes into the face of the next wave and never comes
+            // out: that ray used to carry on to the seabed and bring back
+            // its unlit colour, a black slit along the crest wherever a
+            // face cannot see the sky past its neighbour. So where the ray
+            // goes in from the air (against the normal), keep what that
+            // face shows, as the rule below shades water met from the air
+            // but with no ray spent on it: its Fresnel share of the sky it
+            // mirrors and the rest the deep body colour. If the ray comes
+            // out again that is dropped and nothing has changed; if it
+            // meets something while inside, or nothing at all, that is
+            // what it sees.
+            if (kOceanWaveReflect != 0u) {
+                if (dot(d, hitN) < 0.0) {
+                    const float wNdV = max(dot(hitN, -d), 1e-4);
+                    const float wIor = max(hm.ior, 1.0);
+                    const float wF0n = (1.0 - wIor) / (1.0 + wIor);
+                    const float wF   = wF0n * wF0n + (1.0 - wF0n * wF0n) * pow(1.0 - wNdV, 5.0);
+                    vec3 wR = reflect(d, hitN);
+                    const float wUp = dot(wR, hitN);
+                    if (wUp < 0.02) wR = normalize(wR + hitN * (0.02 - wUp));// never below its own plane
+                    diveId  = hitId;
+                    diveT   = length(o + d * tHit - origin);
+                    diveRad = wF * sampleEnvLod(wR, max(curMissLod, max(0.12, hm.roughness) * maxLod)) * envInt +
+                              (1.0 - wF) * waterHitBody(hm, -d, maxLod);
+                } else {
+                    diveId = -1;
+                }
+            }
             o = o + d * (tHit + max(1e-3, tHit * 1e-4));
             continue;
+        }
+        if (diveId >= 0) {// met something under the surface of the wave it dived into
+            radiance += tput * diveRad;
+            if (gTraceHitT < 0.0) gTraceHitT = diveT;
+            break;
         }
 
         // The hit's textures are read over the pixel's footprint there. Every

@@ -131,6 +131,11 @@ namespace threepp_py {
                 .def_readwrite("breaking_crests", &DisplacedMesh::Params::breakingCrests,
                                "Natural foam only where the crest breaks now (default False), from the surface's "
                                "local steepness; vessel foam unchanged. THREEPP_OCEAN_BREAKING_CRESTS=1/0 overrides it.")
+                .def_readwrite("crest_foam", &DisplacedMesh::Params::crestFoam,
+                               "Foam laid down where a crest breaks and kept on the water it was laid on (default "
+                               "False): a field on the water's rest coordinates, so it rides the crest, trails "
+                               "behind it and opens up as it thins, drawn from a foam photograph. Needs chop_normals. "
+                               "THREEPP_OCEAN_CREST_FOAM=1/0 overrides it.")
                 .def_readwrite("measured_spreading", &DisplacedMesh::Params::measuredSpreading,
                                "True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with "
                                "long crests at the peak. False (default) = the old symmetric cos^2 (as much energy "

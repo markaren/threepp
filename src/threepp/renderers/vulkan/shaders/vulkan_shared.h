@@ -269,6 +269,31 @@ static_assert(((kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFl
 // (1982): about 0.55 for thick fresh foam, flat from 0.4 to 0.7 um.
 #define kOceanFoamAlbedoWhitlock 0.55f
 
+// Crest foam (DisplacedMesh::Params::crestFoam, foam_crest.comp). A texel of
+// the foam texture is a water parcel, named by its rest position q. Each frame
+//   F = max(F * exp(-dt / tau), max * clamp((eps - threshold) / ramp, 0, 1))
+// with eps the breaking-crest steepness above, here from the exact derivative
+// fields of cascades 0 and 1 (no stencil), times waveScale. The shade draws
+// min(F, 1) as the covered fraction.
+//  - threshold: where the surface starts to fold. A LOOK constant, set on
+//    the Norvasundet twin: at 0.21 a 10 m/s breeze over 1.5 km of fetch
+//    dotted the whole strait with caps that read from a drone (Lars,
+//    2026-11-10: not what that water does); at 0.33 it has none and the
+//    open sea at 16 m/s keeps a few. ocean_metrics' crest-foam row reports
+//    the covered fraction against Monahan and O'Muircheartaigh (1980); at
+//    this value it is below their curve.
+//  - ramp: how far past the threshold the deposit is full. Wide enough
+//    that a patch is thick where the wave is steepest and thin at its rim.
+//  - max: a deposit above 1 is foam thicker than one covering layer; it
+//    stays a closed sheet for tau * ln(max) before it starts to open.
+//  - tau: the e-folding time of the foam a breaker leaves. Field studies
+//    give a whitecap's foam area a few seconds (Callaghan, Deane, Stokes
+//    and Ward 2012, JGR 117); 2.5 s is inside that.
+#define kOceanCrestFoamThreshold 0.33f
+#define kOceanCrestFoamRamp      0.10f
+#define kOceanCrestFoamMax       1.5f
+#define kOceanCrestFoamTau       2.5f
+
 #ifdef __cplusplus
 
 #include <cstdint>

@@ -359,6 +359,14 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.oceanFineSampler = oceanFineHeightSampler;
             in.oceanFoamView    = oceanFoamView;
             in.oceanFoamSampler = oceanFoamSampler;
+            // Crest foam: the live ocean's texture or the foam dummy (both
+            // GENERAL), and the foam photograph once an ocean has had it uploaded,
+            // the foam detail tile standing in until then (both READ_ONLY).
+            in.oceanCrestFoamView    = oceanCrestFoamView;
+            in.oceanCrestFoamSampler = oceanCrestFoamSampler;
+            const bool crestPattern  = crestFoamPatternImage.view != VK_NULL_HANDLE;
+            in.crestFoamPatternView    = crestPattern ? crestFoamPatternImage.view : foamDetailImage.view;
+            in.crestFoamPatternSampler = crestPattern ? crestFoamPatternImage.sampler : foamDetailImage.sampler;
             in.oceanWakeView    = oceanWakeView;
             in.oceanWakeSampler = wakeField_->sampler();
             in.oceanRippleView    = oceanRippleView;

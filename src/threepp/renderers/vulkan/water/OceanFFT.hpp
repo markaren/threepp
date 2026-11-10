@@ -365,6 +365,101 @@ namespace threepp::water {
         VkPipeline            pipe_   = VK_NULL_HANDLE;
     };
 
+    // ─── FieldMips ─────────────────────────────────────────────────────
+    // Mipped copies of a cascade's spatial fields (RG32F, one per source),
+    // rebuilt every frame: level 0 is the field as the inverse FFT left it,
+    // level L its box average over 2^L x 2^L texels. For short waves as
+    // geometry (DisplacedMesh::Params::shortWaves): water_displace reads the
+    // middle cascade at the level whose texel matches the vertex spacing
+    // where the vertex is, so the mesh never carries a wave it cannot hold
+    // (the far, thin part of a warped mesh would alias it into moire).
+    class FieldMips {
+    public:
+        FieldMips(vulkan::VulkanContext& ctx, uint32_t size, std::vector<VkImage> sources);
+        ~FieldMips();
+
+        FieldMips(const FieldMips&) = delete;
+        FieldMips& operator=(const FieldMips&) = delete;
+
+        // After the cascade's IFFTs, same command buffer. Leaves every level
+        // in GENERAL, visible to compute sampled reads.
+        void record(VkCommandBuffer cb);
+
+        VkImageView view(size_t i) const { return views_[i]; }// all levels of copy i
+        VkSampler   sampler()      const { return sampler_; } // trilinear, repeat
+
+    private:
+        vulkan::VulkanContext& ctx_;
+        uint32_t size_;
+        uint32_t mipLevels_ = 1;
+        std::vector<VkImage>     sources_;
+        std::vector<OceanImage>  copies_;// .view unused
+        std::vector<VkImageView> views_;
+        VkSampler sampler_ = VK_NULL_HANDLE;
+    };
+
+    // ─── CrestFoam ─────────────────────────────────────────────────────
+    // Crest foam (DisplacedMesh::Params::crestFoam; built the first time a
+    // mesh turns it on): the foam texture over the water's rest coordinates
+    // and the pass that deposits into it where a crest breaks and decays the
+    // rest (foam_crest.comp says how and why). One R16F image, tileSize0
+    // across, REPEAT, with a full mip chain rebuilt every frame by linear
+    // blits, so the shade's footprint fetch over a pixel returns the covered
+    // fraction of that footprint.
+    class CrestFoam {
+    public:
+        // The views are cascade 0's and cascade 1's jacDiag and height images
+        // (a mesh without cascade 1 passes cascade 0's twice; the mask gates it).
+        CrestFoam(vulkan::VulkanContext& ctx, uint32_t resolution,
+                  VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1);
+        ~CrestFoam();
+
+        CrestFoam(const CrestFoam&) = delete;
+        CrestFoam& operator=(const CrestFoam&) = delete;
+
+        // foam_crest.comp's push block, field for field (56 bytes).
+        struct PushParams {
+            VkDeviceAddress hullAddr;
+            uint32_t        res;
+            float           tileSize;
+            float           tileSize1;
+            float           steepScale;
+            uint32_t        cascadeMask;
+            uint32_t        hullCount;
+            float           decay;
+            float           threshold;
+            float           invRamp;
+            float           maxFoam;
+            float           centerX;
+            float           centerZ;
+        };
+
+        // After the cascades' IFFTs, same command buffer; fills p.res itself.
+        // Leaves every level in GENERAL, visible to readerStages' sampled reads.
+        void record(VkCommandBuffer cb, PushParams p, VkPipelineStageFlags readerStages);
+
+        VkImageView sampledView() const { return sampledView_; }
+        VkSampler   sampler()     const { return sampler_; }
+        VkImage     image()       const { return foam_.image; }
+        uint32_t    resolution()  const { return res_; }
+
+    private:
+        vulkan::VulkanContext& ctx_;
+        uint32_t res_;
+        uint32_t mipLevels_ = 1;
+
+        OceanImage  foam_;                         // .view = mip 0 storage view
+        VkImageView sampledView_ = VK_NULL_HANDLE; // all levels
+        VkSampler   sampler_     = VK_NULL_HANDLE; // trilinear, repeat, anisotropic (the shade's)
+        VkSampler   fieldSampler_ = VK_NULL_HANDLE;// linear, repeat (the cascade fields)
+
+        VkDescriptorPool      pool_   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout dsl_    = VK_NULL_HANDLE;
+        VkDescriptorSet       ds_     = VK_NULL_HANDLE;
+        VkPipelineLayout      layout_ = VK_NULL_HANDLE;
+        VkPipeline            pipe_   = VK_NULL_HANDLE;
+    };
+
     // ─── OceanCascade ──────────────────────────────────────────────────
     // Aggregate. One Phillips + Dynamic + IFFT + spatial-domain outputs
     // for a single wavenumber band. The full WebTide setup uses three.

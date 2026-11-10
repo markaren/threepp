@@ -123,6 +123,62 @@ namespace threepp {
             // foam are unchanged. THREEPP_OCEAN_BREAKING_CRESTS = 1 / 0
             // forces it. Live-tunable.
             bool breakingCrests = false;
+
+            // Crest foam (default OFF). ON replaces the natural whitecaps
+            // with the standard recipe for a spectral sea, kept where the
+            // water is: foam is laid down where the surface folds (the
+            // breakingCrests measure, from the exact derivative fields of
+            // cascades 0 and 1, past kOceanCrestFoamThreshold), into a
+            // texture over the water's REST coordinates (the Lagrangian label
+            // q of x = q + D(q)), so it stays on the water it was laid on
+            // with nothing to carry it, rides the crest that makes it, and
+            // fades behind it in seconds, squeezed on crests and stretched in
+            // troughs by the water's own orbital motion. What the foam looks
+            // like is read off a photograph of sea foam laid on the same
+            // coordinates: holes open in it as it thins, then a lace, then
+            // threads. With a wake field, what the vessels leave on the
+            // water is drawn the same way. Needs chopNormals (the
+            // derivative fields are its) and takes the UV channel
+            // breakingCrests would use, so it wins when both are on. Works
+            // best with shortWaves: the waves that break are short.
+            // THREEPP_OCEAN_CREST_FOAM = 1 / 0 forces it. Live-tunable.
+            bool crestFoam = false;
+
+            // Wave reflections (default OFF, the historical mirror). The
+            // water's mirror ray passes THROUGH any other part of the water
+            // it meets and shades whatever lies beyond, usually the seabed:
+            // wherever a wave's face cannot see the sky past its neighbour,
+            // the reflection is the bottom's, a black spot or a dark slit
+            // along a crest, and more of them the steeper the sea. ON shades
+            // the wave the ray meets as water: its Fresnel share mirrors on
+            // to the sky above it, the rest is the deep body colour, the way
+            // every other ray in the renderer already sees water.
+            // THREEPP_OCEAN_WAVE_REFLECTIONS = 1 / 0 forces it. Live-tunable.
+            bool waveReflections = false;
+
+            // Short waves as geometry (default OFF, the historical bands).
+            // The middle cascade is the finest the mesh draws, and it has
+            // the texels for waves a few metres long, but the historical
+            // split hands everything shorter than the fine cascade's tile
+            // (9.3 m on the default ocean) to the fine cascade, which only
+            // tilts the shading: the sea has no steep short waves to see,
+            // and the 3 to 9 m waves are the fine tile's first few modes, a
+            // pattern that repeats every tile. ON moves the hand-off to
+            // kShortWaveHandoff of the middle tile (3 m on the default
+            // ocean): those waves become geometry, with their chop, and the
+            // fine cascade keeps what is shorter, down to six of its texels
+            // a wave (historically its roll-off sat near thirty, which left
+            // it a third of its slope variance). Read when the renderer
+            // first sees the mesh. THREEPP_OCEAN_SHORT_WAVES = 1 / 0 forces it.
+            bool shortWaves = false;
+
+            // Detile (default OFF). ON draws the fine cascade's per-pixel
+            // slope as two placements of it, turned, scaled and shifted
+            // against each other and summed, so its tile's period does not
+            // show from above. The same sea statistically (independent
+            // samples of one spectrum, variance kept). Needs chopNormals.
+            // THREEPP_OCEAN_DETILE = 1 / 0 forces it. Live-tunable.
+            bool detile = false;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -211,6 +267,12 @@ namespace threepp {
         [[nodiscard]] bool cwmOn() const;
         [[nodiscard]] bool boundWavesOn() const;
         [[nodiscard]] bool breakingCrestsOn() const;
+        // Crest foam as asked for; the renderer draws it only while the chop
+        // normals are on too (see Params::crestFoam).
+        [[nodiscard]] bool crestFoamOn() const;
+        [[nodiscard]] bool waveReflectionsOn() const;
+        [[nodiscard]] bool shortWavesOn() const;
+        [[nodiscard]] bool detileOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under
         // the Choppy Wave Model, else params.choppiness.
         [[nodiscard]] float effectiveChoppiness() const;
@@ -222,6 +284,10 @@ namespace threepp {
         // Mirrors kOceanBreakingSteepness (vulkan_shared.h), where its
         // calibration is written down.
         static constexpr float kBreakingSteepness = 0.15f;
+        // Params::shortWaves: the cascade 1 -> 2 hand-off wavelength as a
+        // fraction of the middle cascade's tile (3 m of 127 m), never under
+        // five of its texels.
+        static constexpr float kShortWaveHandoff = 3.0f / 127.0f;
 
         // Hull exclusion zone: suppresses wave displacement inside a
         // world-space oriented rectangle so the ocean doesn't clip through

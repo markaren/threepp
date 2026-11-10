@@ -74,6 +74,26 @@ namespace threepp {
         return env < 0 ? params.breakingCrests : env == 1;
     }
 
+    bool DisplacedMesh::crestFoamOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_CREST_FOAM");
+        return env < 0 ? params.crestFoam : env == 1;
+    }
+
+    bool DisplacedMesh::waveReflectionsOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_WAVE_REFLECTIONS");
+        return env < 0 ? params.waveReflections : env == 1;
+    }
+
+    bool DisplacedMesh::shortWavesOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_SHORT_WAVES");
+        return env < 0 ? params.shortWaves : env == 1;
+    }
+
+    bool DisplacedMesh::detileOn() const {
+        static const int env = envSwitch("THREEPP_OCEAN_DETILE");
+        return env < 0 ? params.detile : env == 1;
+    }
+
     float DisplacedMesh::effectiveChoppiness() const {
         return cwmOn() ? 1.f : params.choppiness;
     }

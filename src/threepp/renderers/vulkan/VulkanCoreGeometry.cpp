@@ -3612,6 +3612,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                                        dm.effectiveChoppiness() / fc.tileSize,
                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
             }
+            // Short waves as geometry: the middle cascade's mipped copies for
+            // this frame's displace (which binds them only with the chop set).
+            if (st.chopOn && st.c1Mips) st.c1Mips->record(cb);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFFT, currentFrame);
 
             // (3.5) Per-vertex motion: copy current vertex positions into
@@ -3814,14 +3817,20 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // breakingCrests writes each vertex's crest steepness into the UV
             // buffer (water has no texture to read UVs for); no UV buffer, no
             // crests.
-            const bool crestsOut = breakingOn && st.blas->uv.handle != VK_NULL_HANDLE;
+            // Crest foam takes the same channel for the displacement each
+            // vertex was drawn with (st.crestFoamOn already says the mesh has
+            // a UV buffer), and wins it: the two are not drawn together.
+            const bool foamOut   = st.crestFoamOn;
+            const bool crestsOut = breakingOn && !foamOut && st.blas->uv.handle != VK_NULL_HANDLE;
             // Switched off after it drew: one more pass writes an untagged UV
             // (G = 0) over every vertex, so the shade stops reading crests.
-            const bool crestsClear = !crestsOut && st.crestUvTagged && st.blas->uv.handle != VK_NULL_HANDLE;
-            st.crestUvTagged  = crestsOut;
+            const bool crestsClear = !crestsOut && !foamOut && st.crestUvTagged &&
+                                     st.blas->uv.handle != VK_NULL_HANDLE;
+            st.crestUvTagged  = crestsOut || foamOut;
             pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u) | (crestsOut ? 4u : 0u) |
-                                (crestsClear ? 8u : 0u);
-            pc.uvOut          = (crestsOut || crestsClear) ? st.blas->uv.address : 0ull;
+                                (crestsClear ? 8u : 0u) | (foamOut ? 16u : 0u) |
+                                ((st.chopOn && st.c1Mips) ? 32u : 0u);
+            pc.uvOut          = (crestsOut || crestsClear || foamOut) ? st.blas->uv.address : 0ull;
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
@@ -3838,6 +3847,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // off-interval frames: the accumulator keeps last dispatch's
             // content (reads need no barrier, layout stays GENERAL) and the
             // next dispatch's dt-aware decay covers the gap.
+            const bool timeFoam = timed && (runFoam || st.crestFoamOn);
+            if (timeFoam) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);
             if (runFoam) {
                 // Wall-clock foam persistence. The old fixed 0.992/frame tied
                 // the foam half-life to frame rate (≈1.4 s at 60 fps, half
@@ -3873,14 +3884,60 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 // Breaking crests draw the natural whitecaps in the shade from
                 // the current surface, so the accumulator keeps only the
                 // vessels' and splats' foam (unchanged).
-                fpc.natFoamScale   = breakingOn ? 0.f : std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
-                if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);
+                // Crest foam draws them from its own texture: the same.
+                fpc.natFoamScale   = (breakingOn || st.crestFoamOn) ? 0.f : std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
-                if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFoam, currentFrame);
                 // The deferred shade samples the foam image (binding 44) later
                 // this frame; the frame graph orders that read (the water pass
                 // declares the image).
             }
+
+            // (4c') Crest foam (DisplacedMesh::Params::crestFoam): deposit
+            // where a crest breaks, decay the rest, in the texture over the
+            // water's rest coordinates (foam_crest.comp). EVERY frame: a crest
+            // moves a texel in a frame or two, and a skipped frame would
+            // leave a gap in what it lays down. The constants are
+            // vulkan_shared.h's; the environment overrides are for
+            // calibrating them (ocean_metrics) without a rebuild.
+            if (st.crestFoamOn) {
+                static const float kThreshold = static_cast<float>(
+                        vulkan::env::number("THREEPP_OCEAN_CREST_FOAM_THRESHOLD").value_or(kOceanCrestFoamThreshold));
+                static const float kRamp = std::max(1e-4f, static_cast<float>(
+                        vulkan::env::number("THREEPP_OCEAN_CREST_FOAM_RAMP").value_or(kOceanCrestFoamRamp)));
+                static const float kMaxFoam = std::max(1.f, static_cast<float>(
+                        vulkan::env::number("THREEPP_OCEAN_CREST_FOAM_MAX").value_or(kOceanCrestFoamMax)));
+                static const float kTau = std::max(0.05f, static_cast<float>(
+                        vulkan::env::number("THREEPP_OCEAN_CREST_FOAM_TAU").value_or(kOceanCrestFoamTau)));
+                // The first pass after the switch came on carries nothing
+                // over (decay 0): whatever the texture held is from before.
+                const double nowSec = frameNowSec();
+                float decay = 0.f;
+                if (st.crestFoamPrevTimeSec >= 0.0) {
+                    const float dt = std::clamp(static_cast<float>(nowSec - st.crestFoamPrevTimeSec), 0.0f, 0.25f);
+                    decay = std::exp(-dt / kTau);
+                }
+                st.crestFoamPrevTimeSec = nowSec;
+
+                water::CrestFoam::PushParams cp{};
+                cp.hullAddr    = hullAddr;
+                cp.tileSize    = dm.params.tileSize0;
+                cp.tileSize1   = dm.params.tileSize1;
+                cp.steepScale  = dm.params.waveScale;
+                cp.cascadeMask = st.cascadeMask;
+                cp.hullCount   = hullCount;
+                cp.decay       = decay;
+                cp.threshold   = kThreshold;
+                cp.invRamp     = 1.f / kRamp;
+                cp.maxFoam     = kMaxFoam;
+                // Where the mesh sits in rest space: its warp centre (the
+                // warp recentres the grid there), else its own origin.
+                cp.centerX     = warpActive ? dm.warp.centerX : 0.f;
+                cp.centerZ     = warpActive ? dm.warp.centerZ : 0.f;
+                st.crestFoam->record(cb, cp, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | ctx->rtShaderStage());
+            } else {
+                st.crestFoamPrevTimeSec = -1.0;
+            }
+            if (timeFoam) gpuTimings_->end(cb, vulkan::TP_OceanFoam, currentFrame);
 
             // (4d) The wake field: carry, settle and feed every patch that is on.
             if (st.wake) wakeField_->record(cb, *st.wake, dm, frameNowSec());
@@ -5134,8 +5191,22 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             constexpr float kTwoPi = 6.28318530717958647692f;
             const float kHandoff01 = (tileSizes[0] > 0.f && tileSizes[1] > 0.f)
                     ? kTwoPi / tileSizes[1] : 0.f;
+            // Short waves as geometry (DisplacedMesh::Params::shortWaves): the
+            // cascade 1 -> 2 hand-off moves from the fine tile down to
+            // kShortWaveHandoff of the middle tile, never under five of the
+            // middle cascade's texels (below that the B-spline read loses
+            // most of the wave), so the middle cascade, the finest the mesh
+            // draws, carries the short steep waves. Its band edge then takes
+            // cascade 0's gentle taper: the strong one was against moire in
+            // 9 to 12 m waves on the far, thin mesh, and is what left the
+            // spectrum its hole.
+            const float kHandoff12Metres = (dm.shortWavesOn() && tileSizes[1] > 0.f && tileSizes[2] > 0.f)
+                    ? std::max(DisplacedMesh::kShortWaveHandoff * tileSizes[1],
+                               5.f * tileSizes[1] / float(textureSizes[1]))
+                    : 0.f;
+            state->shortWaveHandoff = kHandoff12Metres;
             const float kHandoff12 = (tileSizes[1] > 0.f && tileSizes[2] > 0.f)
-                    ? kTwoPi / tileSizes[2] : 0.f;
+                    ? kTwoPi / (kHandoff12Metres > 0.f ? kHandoff12Metres : tileSizes[2]) : 0.f;
             for (uint32_t i = 0; i < 3; ++i) {
                 if (!(tileSizes[i] > 0.f)) continue;
                 const uint32_t texSize = textureSizes[i];
@@ -5188,9 +5259,17 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 //    energy it left in cascade 1 aliased into a checkerboard
                 //    moiré at grazing distances where the (warp-thinned) mesh
                 //    spacing approaches those wavelengths' Nyquist.
+                // Short waves (Params::shortWaves), open band: the roll-off is
+                // exp(-(k l)^2), so l = 5 texels cuts at a wavelength of
+                // 2 pi l, about THIRTY texels: the fine cascade then holds
+                // barely a decade of the waves it has texels for, and its
+                // slope variance is a third of what its spectrum says. One
+                // texel puts the cut at six texels a wave, still above what
+                // the FFT can hold (two), and the per-pixel read filters
+                // over the footprint.
                 ps.smallWaveCutoff = (ps.kMax > 0.f)
-                        ? (i == 0 ? 0.05f : 0.12f) * (kTwoPi / ps.kMax)
-                        : 5.f * tileSizes[i] / float(texSize);
+                        ? (i == 0 || kHandoff12Metres > 0.f ? 0.05f : 0.12f) * (kTwoPi / ps.kMax)
+                        : (dm.shortWavesOn() ? 1.f : 5.f) * tileSizes[i] / float(texSize);
                 auto& c = state->cascades[i];
                 c.tileSize = tileSizes[i];
                 c.phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
@@ -5535,8 +5614,12 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                 // vertex grid's Nyquist (dynamic_spectrum.comp): the nominal
                 // spacing, the one the plain path's finite difference uses.
                 // The per-pixel cascade is not tapered, its mip chain filters.
-                const float spacing = std::max(st.planeSizeX / float(st.gridDimX - 1u),
-                                               st.planeSizeZ / float(st.gridDimZ - 1u));
+                // With the short waves as geometry the taper may not eat them:
+                // it then starts at their hand-off (a warped mesh is finer
+                // than nominal where it matters, near its centre).
+                float spacing = std::max(st.planeSizeX / float(st.gridDimX - 1u),
+                                         st.planeSizeZ / float(st.gridDimZ - 1u));
+                if (st.shortWaveHandoff > 0.f) spacing = std::min(spacing, st.shortWaveHandoff / 4.f);
                 for (uint32_t i = 0; i < 3; ++i) {
                     if (!(st.cascadeMask & (1u << i))) continue;
                     st.cascades[i].dyn->enableChop(i < 2u && i != st.chopFineIdx ? spacing : 0.f);
@@ -5565,6 +5648,21 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                     ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     ws[i].pImageInfo      = &infos[i];
                 }
+                // Short waves as geometry: the middle cascade's four fields
+                // through their mipped copies (water::FieldMips), so the
+                // displace reads them at each vertex's own spacing.
+                if (st.shortWaveHandoff > 0.f && (st.cascadeMask & 2u)) {
+                    auto& c1 = st.cascades[1];
+                    st.c1Mips = std::make_unique<water::FieldMips>(
+                            *ctx, c1.dyn->ht().width,
+                            std::vector<VkImage>{c1.dyn->ht().image, c1.dyn->displacement().image,
+                                                 c1.dyn->slope().image, c1.dyn->jacDiag().image});
+                    const VkSampler ms = st.c1Mips->sampler();
+                    infos[2] = {ms, st.c1Mips->view(0), VK_IMAGE_LAYOUT_GENERAL};
+                    infos[3] = {ms, st.c1Mips->view(1), VK_IMAGE_LAYOUT_GENERAL};
+                    infos[8] = {ms, st.c1Mips->view(2), VK_IMAGE_LAYOUT_GENERAL};
+                    infos[9] = {ms, st.c1Mips->view(3), VK_IMAGE_LAYOUT_GENERAL};
+                }
                 vulkan::updateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
 
                 auto& fc = st.cascades[st.chopFineIdx];
@@ -5573,6 +5671,9 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                         fc.dyn->slope().view, fc.dyn->jacDiag().view);
             }
             st.chopOn = st.chopMoments && dm.params.chopNormals;
+            syncOceanCrestFoam(dm, st);
+            // Scene-global like the shade's other ocean switches.
+            oceanWaveReflections = dm.waveReflectionsOn();
             if (!st.chopMoments) return;
 
             // The shade's fine-height binding (13) is scene-global: it belongs
@@ -5597,6 +5698,53 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
             // it on (spec constant 6): every other frame and every scene
             // without an ocean keeps the kernel it had.
             oceanChopNormals = st.chopOn;
+            oceanDetile      = st.chopOn && dm.detileOn();// the shade's spec constant 9
+        }
+
+void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshState& st) {
+            // Crest foam (DisplacedMesh::Params::crestFoam), resolved with the
+            // chop normals and on their terms: it reads the derivative fields
+            // they compute, so it is on only while they are, and the shade
+            // finds a pixel's rest point through the mesh's UV channel, so the
+            // mesh must have one. Nothing of it exists until a mesh first
+            // asks: then the mesh gets its foam texture and pass
+            // (water::CrestFoam) and the renderer uploads the foam photograph.
+            const bool want = dm.crestFoamOn() && st.chopOn && st.blas &&
+                              st.blas->uv.handle != VK_NULL_HANDLE;
+            if (want && !st.crestFoam) {
+                // About half a metre a texel (a breaking crest's foam front is
+                // a metre or two deep), capped at 2048: THREEPP_OCEAN_CREST_FOAM_RES
+                // moves the cap (power of two; 1024 costs a quarter).
+                static const uint32_t kResCap = static_cast<uint32_t>(
+                        std::clamp(vulkan::env::integer("THREEPP_OCEAN_CREST_FOAM_RES").value_or(2048), 256LL, 4096LL));
+                uint32_t res = 256u;
+                while (res < kResCap && float(res) * 0.5f < dm.params.tileSize0) res *= 2u;
+                auto& c0 = st.cascades[0];
+                auto& c1 = st.cascades[(st.cascadeMask & 2u) ? 1u : 0u];
+                st.crestFoam = std::make_unique<water::CrestFoam>(
+                        *ctx, res, c0.dyn->jacDiag().view, c0.dyn->ht().view,
+                        c1.dyn->jacDiag().view, c1.dyn->ht().view);
+                if (crestFoamPatternImage.view == VK_NULL_HANDLE) {
+                    createCrestFoamPattern_();
+                    deferredDescDirty_.fill(true);
+                }
+            }
+            st.crestFoamOn = want && st.crestFoam;
+            if (!st.crestFoam) return;
+
+            // The shade's binding 91 is scene-global, like the foam
+            // accumulator's: the first ocean with crest foam holds it.
+            const VkImageView mine = st.crestFoam->sampledView();
+            if (st.crestFoamOn && oceanCrestFoamView == oceanFoamDummy.view) {
+                oceanCrestFoamView    = mine;
+                oceanCrestFoamSampler = st.crestFoam->sampler();
+                // Each frame-in-flight slot rewrites its sets at the top of its
+                // own frame (see syncOceanChop).
+                deferredDescDirty_.fill(true);
+            }
+            // The shade compiles its crest-foam branch in only for a frame
+            // that has it on (spec constant 7).
+            if (oceanCrestFoamView == mine) oceanCrestFoam = st.crestFoamOn;
         }
 
 VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(GrassMesh& gm) {

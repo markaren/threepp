@@ -455,6 +455,40 @@ void VulkanRenderer::Impl::createFoamDetailImage_() {
                     "foamDetail (512x512 RG8 bubbles+lace, mipped)");
         }
 
+namespace {
+    // Crest foam's detail tile (deferred binding 92): what sea foam looks like
+    // from above, 512 x 512, one byte a texel, packed into little-endian
+    // 64-bit words (data/OceanFoamTile.inc). It is a photograph, not a
+    // generated pattern: "Ocean foam drone view" by Tommy Lisbin (Huntington
+    // Beach, 2017), dedicated to the public domain under CC0 1.0 (published
+    // on Unsplash before 5 June 2017; Wikimedia Commons,
+    // File:Ocean_foam_drone_view_(Unsplash).jpg). From it: the foam over
+    // open water, luminance with the large-scale light and water colour
+    // taken out and the local contrast normalised (foam density, not
+    // brightness), cross-faded over its own edges so it wraps, and equalised
+    // by rank, so the fraction of the tile above any level is that level:
+    // the shade draws foam where tile > 1 - F and the covered fraction is F.
+    constexpr uint32_t kOceanFoamTileRes = 512;
+    constexpr uint64_t kOceanFoamTileWords[] = {
+#include "threepp/renderers/vulkan/data/OceanFoamTile.inc"
+    };
+    static_assert(sizeof(kOceanFoamTileWords) == size_t{kOceanFoamTileRes} * kOceanFoamTileRes,
+                  "OceanFoamTile.inc holds kOceanFoamTileRes^2 bytes");
+}// namespace
+
+void VulkanRenderer::Impl::createCrestFoamPattern_() {
+            // LINEAR + size > 1: the full mip chain and a trilinear,
+            // anisotropic REPEAT sampler, as the foam detail tile gets.
+            crestFoamPatternImage = createSampledImage2D(
+                    /*w*/ kOceanFoamTileRes, /*h*/ kOceanFoamTileRes,
+                    VK_FORMAT_R8_UNORM,
+                    kOceanFoamTileWords, sizeof(kOceanFoamTileWords),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    "crestFoamPattern (512x512 R8 sea-foam photograph, mipped)");
+        }
+
 void VulkanRenderer::Impl::createOceanFineDummy_() {
             const float zero = 0.0f;
             oceanFineHeightDummy = createSampledImage2D(
@@ -524,6 +558,9 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
             oceanFoamView     = oceanFoamDummy.view;
             oceanFoamSampler  = oceanFoamDummy.sampler;
             oceanFoamTileSize = 0.0f;
+            // Crest foam's texture (deferred binding 91) starts on the same dummy.
+            oceanCrestFoamView    = oceanFoamDummy.view;
+            oceanCrestFoamSampler = oceanFoamDummy.sampler;
             // The wake field's stand-in (binding 78), same contract.
             {
                 VkCommandBuffer cb = beginOneShot();

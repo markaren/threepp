@@ -78,11 +78,12 @@ namespace threepp::vulkan {
             // waveModel 0 the shader runs the historical path and touches
             // nothing below.
             uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests,
-                                          // bit 3 clear the crest tags breakingCrests left
+                                          // bit 3 clear the crest tags breakingCrests left,
+                                          // bit 4 crestFoam: the drawn disp.xz into the UVs
             float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
             float           boundKm1;     // 0 = none on that cascade
             uint32_t        _pad0;
-            VkDeviceAddress uvOut;        // the mesh's UV buffer: breakingCrests writes (eps, -1) here
+            VkDeviceAddress uvOut;        // the mesh's UV buffer: breakingCrests writes (eps, -1) here, crestFoam disp.xz
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

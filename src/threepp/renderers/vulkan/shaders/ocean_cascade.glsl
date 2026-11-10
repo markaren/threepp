@@ -78,4 +78,34 @@ struct OceanHull {
     uint  trailCount;
 };
 
+// A rest point in vessel `hu`'s frame, and how far outside its footprint it
+// lies: (localX, localZ, fade). localX = beam axis (+starboard), localZ = length
+// axis (+bow, forward_world = (sinYaw, cosYaw)); fade 0 inside the hull, 1 once
+// past the margin (oceanHullMargin).
+vec3 hullLocal(OceanHull hu, vec2 p) {
+    const float dx = p.x - hu.centerX;
+    const float dz = p.y - hu.centerZ;
+    const float lX = hu.cosYaw * dx - hu.sinYaw * dz;
+    const float lZ = hu.sinYaw * dx + hu.cosYaw * dz;
+    // Hull plan-form half-width at this length fraction — matches
+    // the `hullHalfWidth` lambda the example uses for foam splats.
+    // Bow tapers sharply (≈ elliptical with exponent 0.6) so wave
+    // suppression follows the actual prow instead of the rectangular
+    // bbox corner; stern keeps ~75 % beam (transom-style aft form).
+    // Without this taper the ocean was flattened in the empty
+    // bow/stern wings of the bounding box, leaving visible flat
+    // patches outside the hull.
+    const float u = clamp(-lZ / hu.halfLength, -1.0, 1.0);
+    float halfBeamAtLZ;
+    if (u <= 0.0) {
+        halfBeamAtLZ = hu.halfBeam * pow(max(1.0 - u * u, 0.0), 0.6);
+    } else {
+        halfBeamAtLZ = hu.halfBeam * (1.0 - 0.25 * u * u);
+    }
+    const float edgeX    = abs(lX) - halfBeamAtLZ;
+    const float edgeZ    = abs(lZ) - hu.halfLength;
+    const float edgeDist = max(edgeX, edgeZ);
+    return vec3(lX, lZ, smoothstep(0.0, oceanHullMargin(hu.halfBeam), edgeDist));
+}
+
 #endif// THREEPP_OCEAN_CASCADE_GLSL

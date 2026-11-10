@@ -95,6 +95,13 @@ namespace threepp::vulkan {
             VkSampler          oceanFineSampler = VK_NULL_HANDLE;
             VkImageView        oceanFoamView    = VK_NULL_HANDLE;// world-space foam accumulator
             VkSampler          oceanFoamSampler = VK_NULL_HANDLE;
+            // Crest foam (bindings 91, 92): the foam texture over the water's
+            // rest coordinates (GENERAL) and the foam photograph
+            // (SHADER_READ_ONLY), or a stand-in for each in the same layout.
+            VkImageView        oceanCrestFoamView      = VK_NULL_HANDLE;
+            VkSampler          oceanCrestFoamSampler   = VK_NULL_HANDLE;
+            VkImageView        crestFoamPatternView    = VK_NULL_HANDLE;
+            VkSampler          crestFoamPatternSampler = VK_NULL_HANDLE;
             VkImageView        oceanWakeView    = VK_NULL_HANDLE;// wake-field state (2D array), or its 1x1 dummy
             VkSampler          oceanWakeSampler = VK_NULL_HANDLE;
             VkImageView        oceanRippleView    = VK_NULL_HANDLE;// its ripples' slopes (2D array, mipped), or the dummy
@@ -243,6 +250,9 @@ namespace threepp::vulkan {
             float oceanFineTileSize  = 0.f;
             bool  oceanChopNormals   = false;// chop normals on this frame: oceanFineHeight is a ChopMoments chain
             float oceanFoamTileSize  = 0.f;
+            bool  oceanCrestFoam     = false;// crest foam on this frame: bindings 91 and 92 are live
+            bool  oceanWaveReflections = false;// the water's mirror ray sees the column of a wave it dives into
+            bool  oceanDetile        = false;// the fine cascade per pixel as two placements
             bool denoise  = true;
             bool restirDI = false;
             bool volFog   = false;// volumetric spot-light beams
@@ -488,7 +498,7 @@ namespace threepp::vulkan {
         VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept for the lazy creates
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
         VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget, bool rayRecon,
-                                 bool oceanChop);
+                                 bool oceanChop, bool oceanCrestFoam, bool oceanWaveReflect, bool oceanDetile);
         VkPipeline createShadePipeline(uint64_t key);
         // What the pipeline-cache blob holds of the shade, kept in a text file
         // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"

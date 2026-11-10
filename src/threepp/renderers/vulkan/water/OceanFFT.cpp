@@ -14,6 +14,7 @@
 #include "threepp/renderers/vulkan/shaders/ifft_permute.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ocean_chop_moments.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/dynamic_spectrum.comp.chop.spv.h"
+#include "threepp/renderers/vulkan/shaders/foam_crest.comp.spv.h"
 
 #include "threepp/math/Rng.hpp"
 
@@ -1363,6 +1364,334 @@ namespace threepp::water {
         if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
         if (sampledView_ != VK_NULL_HANDLE) vkDestroyImageView(ctx_.device(), sampledView_, nullptr);
         destroyImage(ctx_, moments_);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //   FieldMips
+    // ─────────────────────────────────────────────────────────────────
+
+    FieldMips::FieldMips(vulkan::VulkanContext& ctx, uint32_t size, std::vector<VkImage> sources)
+        : ctx_(ctx), size_(size), sources_(std::move(sources)) {
+        for (uint32_t n = size_; n > 1u; n >>= 1u) ++mipLevels_;
+        copies_.resize(sources_.size());
+        views_.resize(sources_.size(), VK_NULL_HANDLE);
+        for (size_t i = 0; i < sources_.size(); ++i) {
+            auto& c  = copies_[i];
+            c.format = VK_FORMAT_R32G32_SFLOAT;
+            c.width  = size_;
+            c.height = size_;
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = c.format;
+            ici.extent        = {size_, size_, 1};
+            ici.mipLevels     = mipLevels_;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &c.image, &c.alloc, nullptr),
+                  "vmaCreateImage(fieldMips)");
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = c.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format   = c.format;
+            vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
+            check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &views_[i]), "vkCreateImageView(fieldMips)");
+            ctx_.setObjectName(c.image, "ocean.fieldMips (RG32F + mips)");
+        }
+        VkSamplerCreateInfo sci{};
+        sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter    = VK_FILTER_LINEAR;
+        sci.minFilter    = VK_FILTER_LINEAR;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.maxLod       = VK_LOD_CLAMP_NONE;
+        check(vkCreateSampler(ctx_.device(), &sci, nullptr, &sampler_), "vkCreateSampler(fieldMips)");
+    }
+
+    void FieldMips::record(VkCommandBuffer cb) {
+        auto barrier = [&](VkImage image, uint32_t baseMip, uint32_t mipCount, VkImageLayout oldLayout,
+                           VkAccessFlags src, VkAccessFlags dst,
+                           VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
+            VkImageMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout           = oldLayout;
+            b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcAccessMask       = src;
+            b.dstAccessMask       = dst;
+            b.image               = image;
+            b.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, mipCount, 0, 1};
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
+        };
+        for (size_t i = 0; i < sources_.size(); ++i) {
+            auto& c = copies_[i];
+            // The source: what the inverse FFT just wrote, to be copied from.
+            barrier(sources_[i], 0, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            if (c.currentLayout != VK_IMAGE_LAYOUT_GENERAL) {
+                barrier(c.image, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                c.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+            } else {
+                barrier(c.image, 0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT,
+                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT);
+            }
+            VkImageCopy region{};
+            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.extent         = {size_, size_, 1};
+            vkCmdCopyImage(cb, sources_[i], VK_IMAGE_LAYOUT_GENERAL, c.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+            barrier(c.image, 0, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            int32_t w = static_cast<int32_t>(size_);
+            for (uint32_t level = 1; level < mipLevels_; ++level) {
+                const int32_t nw = std::max(w >> 1, 1);
+                VkImageBlit blit{};
+                blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
+                blit.srcOffsets[1]  = {w, w, 1};
+                blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+                blit.dstOffsets[1]  = {nw, nw, 1};
+                vkCmdBlitImage(cb, c.image, VK_IMAGE_LAYOUT_GENERAL, c.image, VK_IMAGE_LAYOUT_GENERAL, 1, &blit,
+                               VK_FILTER_LINEAR);
+                barrier(c.image, level, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                        VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                w = nw;
+            }
+            barrier(c.image, 0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            // The source goes back to its compute readers (the crest foam pass, the moments).
+            barrier(sources_[i], 0, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        }
+    }
+
+    FieldMips::~FieldMips() {
+        if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
+        for (auto& v : views_)
+            if (v != VK_NULL_HANDLE) vkDestroyImageView(ctx_.device(), v, nullptr);
+        for (auto& c : copies_) destroyImage(ctx_, c);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //   CrestFoam
+    // ─────────────────────────────────────────────────────────────────
+
+    static_assert(sizeof(CrestFoam::PushParams) == 56,
+                  "CrestFoam::PushParams must match foam_crest.comp's Pc layout (56 bytes)");
+
+    CrestFoam::CrestFoam(vulkan::VulkanContext& ctx, uint32_t resolution,
+                         VkImageView jac0, VkImageView ht0, VkImageView jac1, VkImageView ht1)
+        : ctx_(ctx), res_(resolution) {
+        for (uint32_t n = res_; n > 1u; n >>= 1u) ++mipLevels_;
+
+        foam_.format = VK_FORMAT_R16_SFLOAT;
+        foam_.width  = res_;
+        foam_.height = res_;
+        VkImageCreateInfo ici{};
+        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = foam_.format;
+        ici.extent        = {res_, res_, 1};
+        ici.mipLevels     = mipLevels_;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &foam_.image, &foam_.alloc, nullptr),
+              "vmaCreateImage(crestFoam)");
+
+        VkImageViewCreateInfo vci{};
+        vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image    = foam_.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = foam_.format;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &foam_.view), "vkCreateImageView(crestFoam mip0)");
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &sampledView_), "vkCreateImageView(crestFoam chain)");
+        ctx_.setObjectName(foam_.image, "ocean.crestFoam (R16F + mips)");
+
+        // The shade's sampler: repeat (the texture tiles rest space as cascade
+        // 0 does), trilinear, anisotropic, for the same reason as the chop
+        // moments': a pixel's footprint on water seen low is a long strip.
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
+        VkSamplerCreateInfo sci{};
+        sci.sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter        = VK_FILTER_LINEAR;
+        sci.minFilter        = VK_FILTER_LINEAR;
+        sci.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeV     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeW     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.anisotropyEnable = VK_TRUE;
+        sci.maxAnisotropy    = std::min(16.0f, props.limits.maxSamplerAnisotropy);
+        sci.minLod           = 0.f;
+        sci.maxLod           = VK_LOD_CLAMP_NONE;
+        check(vkCreateSampler(ctx_.device(), &sci, nullptr, &sampler_), "vkCreateSampler(crestFoam)");
+        // The pass's sampler on the cascade fields (single level).
+        sci.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.anisotropyEnable = VK_FALSE;
+        sci.maxAnisotropy    = 1.0f;
+        check(vkCreateSampler(ctx_.device(), &sci, nullptr, &fieldSampler_), "vkCreateSampler(crestFoam fields)");
+
+        const std::array<VkDescriptorSetLayoutBinding, 5> bindings{
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// jac0
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// ht0
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// jac1
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},// ht1
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},         // foam mip 0
+        };
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
+        dlci.pBindings    = bindings.data();
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsl_), "vkCreateDescriptorSetLayout(crestFoam)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.size       = sizeof(PushParams);
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &dsl_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcr;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &layout_), "vkCreatePipelineLayout(crestFoam)");
+
+        VkShaderModule mod = makeShader(ctx_, kFoamCrestCompSpv, sizeof(kFoamCrestCompSpv));
+        pipe_ = makeComputePipeline(ctx_, mod, layout_);
+        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
+        const std::array<VkDescriptorPoolSize, 2> poolSizes{
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        };
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = 1;
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        dpci.pPoolSizes    = poolSizes.data();
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_), "vkCreateDescriptorPool(crestFoam)");
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = pool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &dsl_;
+        check(vkAllocateDescriptorSets(ctx_.device(), &dai, &ds_), "vkAllocateDescriptorSets(crestFoam)");
+
+        const std::array<VkImageView, 5> views{jac0, ht0, jac1, ht1, foam_.view};
+        std::array<VkDescriptorImageInfo, 5> infos{};
+        std::array<VkWriteDescriptorSet, 5> w{};
+        for (uint32_t i = 0; i < 5; ++i) {
+            infos[i].sampler     = i != 4u ? fieldSampler_ : VK_NULL_HANDLE;
+            infos[i].imageView   = views[i];
+            infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet          = ds_;
+            w[i].dstBinding      = i;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType  = i != 4u ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[i].pImageInfo      = &infos[i];
+        }
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+    }
+
+    void CrestFoam::record(VkCommandBuffer cb, PushParams p, VkPipelineStageFlags readerStages) {
+        auto barrier = [&](uint32_t baseMip, uint32_t mipCount, VkImageLayout oldLayout,
+                           VkAccessFlags src, VkAccessFlags dst,
+                           VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
+            VkImageMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout           = oldLayout;
+            b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcAccessMask       = src;
+            b.dstAccessMask       = dst;
+            b.image               = foam_.image;
+            b.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, mipCount, 0, 1};
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
+        };
+        // The pass reads the level it writes (last frame's foam), so level 0
+        // must hold something before the first dispatch: cleared once, no foam.
+        if (foam_.currentLayout != VK_IMAGE_LAYOUT_GENERAL) {
+            barrier(0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            const VkClearColorValue zero{};
+            const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
+            vkCmdClearColorImage(cb, foam_.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &all);
+            barrier(0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+            foam_.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+        } else {
+            // A guard against the previous frame's sampled reads.
+            barrier(0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                    readerStages,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+        }
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &ds_, 0, nullptr);
+        p.res = res_;
+        vkCmdPushConstants(cb, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+        const uint32_t g = groupCountFor(res_);
+        vkCmdDispatch(cb, g, g, 1);
+
+        // The chain by linear blits: level L is the box average of L-1, so a
+        // footprint fetch returns the mean foam under it. All in GENERAL.
+        barrier(0, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        int32_t w = static_cast<int32_t>(res_);
+        for (uint32_t level = 1; level < mipLevels_; ++level) {
+            const int32_t nw = std::max(w >> 1, 1);
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
+            blit.srcOffsets[1]  = {w, w, 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+            blit.dstOffsets[1]  = {nw, nw, 1};
+            vkCmdBlitImage(cb, foam_.image, VK_IMAGE_LAYOUT_GENERAL,
+                           foam_.image, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
+            barrier(level, 1, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            w = nw;
+        }
+        barrier(0, mipLevels_, VK_IMAGE_LAYOUT_GENERAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, readerStages);
+    }
+
+    CrestFoam::~CrestFoam() {
+        if (pipe_    != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipe_, nullptr);
+        if (layout_  != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layout_, nullptr);
+        if (dsl_     != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dsl_, nullptr);
+        if (pool_    != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
+        if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
+        if (fieldSampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), fieldSampler_, nullptr);
+        if (sampledView_ != VK_NULL_HANDLE) vkDestroyImageView(ctx_.device(), sampledView_, nullptr);
+        destroyImage(ctx_, foam_);
     }
 
 }// namespace threepp::water
