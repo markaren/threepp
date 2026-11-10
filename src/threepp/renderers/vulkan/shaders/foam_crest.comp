@@ -51,10 +51,7 @@ layout(set = 0, binding = 0) uniform sampler2D jac0;   // (dDx/dx, dDz/dz), casc
 layout(set = 0, binding = 1) uniform sampler2D height0;// .g = dDx/dz
 layout(set = 0, binding = 2) uniform sampler2D jac1;   // the same, cascade 1 (rotated domain)
 layout(set = 0, binding = 3) uniform sampler2D height1;
-// mip 0, read and written in place: .r the foam; .g the compression of
-// cascades 0 and 1 at the texel, -div D (choppiness 1, waveScale), for the
-// shade's wave modulation (DisplacedMesh::Params::waveModulation; 0 with it
-// off). The shade's mips average both.
+// mip 0, read and written in place: .r the foam (.g is unused, 0).
 #ifdef OCEAN_CLIMATE_LEVELS
 // The wave climate's variant (DisplacedMesh::WaveClimate, compiled with
 // OCEAN_CLIMATE_LEVELS=1 and run for an ocean that had a climate map when its
@@ -88,7 +85,7 @@ layout(push_constant, scalar) uniform Pc {
     float maxFoam;
     float centerX;      // where the mesh is centred in rest space (its warp
     float centerZ;      // centre): each texel stands for the copy of q nearest it
-    uint  model;        // bit 0 waveModulation: cascade 1 rides cascade 0 (water_displace.comp),
+    uint  model;        // bit 0 unused,
                         // bit 1 foldFoam: deposit on the drawn map's Jacobian, cascade 1 band-limited
                         // bit 2 crestLineFoam: the deposit runs along the crest (needs bit 1)
     float sharpness;    // foldFoam: DisplacedMesh::effectiveCrestSharpness (the drawn choppiness is 1 + s)
@@ -117,10 +114,9 @@ float cwmLimit(float trA, float detA, float lMax) {
 }
 
 // grad D of cascades 0 and 1 at the rest point q (choppiness 1; the caller
-// applies waveScale), and cascade 1's modulation gain.
-void gradD(vec2 q, out float jxx, out float jzz, out float jxz, out float gain1) {
+// applies waveScale).
+void gradD(vec2 q, out float jxx, out float jzz, out float jxz) {
     jxx = 0.0; jzz = 0.0; jxz = 0.0;
-    gain1 = 1.0;// waveModulation: cascade 1's amplitude factor, as water_displace.comp
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize;
         const vec2  uv = q * invTile;
@@ -128,7 +124,6 @@ void gradD(vec2 q, out float jxx, out float jzz, out float jxz, out float gain1)
         jxx += jd.x;
         jzz += jd.y;
         jxz += sampleBicubicRG(height0, uv).g * invTile;
-        if ((pc.model & 1u) != 0u) gain1 = clamp(1.0 - (jd.x + jd.y) * pc.steepScale, 0.5, 1.5);
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         // Rotated sample domain d = R q: the displacement gradient comes back
@@ -138,10 +133,10 @@ void gradD(vec2 q, out float jxx, out float jzz, out float jxz, out float gain1)
         // foldFoam reads it through its mip chain at c1Lod: only the waves
         // longer than the fold-foam length count (see below).
         const bool  band = (pc.model & 2u) != 0u;
-        const vec2  jd = (band ? textureLod(jac1, uv, pc.c1Lod).rg : texture(jac1, uv).rg) * (invTile * gain1);
+        const vec2  jd = (band ? textureLod(jac1, uv, pc.c1Lod).rg : texture(jac1, uv).rg) * invTile;
         const float p  = jd.x;
         const float r  = jd.y;
-        const float o  = (band ? textureLod(height1, uv, pc.c1Lod).g : texture(height1, uv).g) * (invTile * gain1);
+        const float o  = (band ? textureLod(height1, uv, pc.c1Lod).g : texture(height1, uv).g) * invTile;
         const float cs = kOceanCascade1RotCos;
         const float sn = kOceanCascade1RotSin;
         jxx += cs * cs * p + 2.0 * cs * sn * o + sn * sn * r;
@@ -153,8 +148,8 @@ void gradD(vec2 q, out float jxx, out float jzz, out float jxz, out float gain1)
 // The fold-foam measure at q (foldFoam): how far under pc.threshold the
 // drawn map's Jacobian falls there.
 float foldMeasure(vec2 q) {
-    float jxx, jzz, jxz, g1;
-    gradD(q, jxx, jzz, jxz, g1);
+    float jxx, jzz, jxz;
+    gradD(q, jxx, jzz, jxz);
     const float trA  = (jxx + jzz) * pc.steepScale;
     const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
     const float l    = cwmLimit(trA, detA, 1.0 + pc.sharpness);
@@ -180,8 +175,8 @@ vec2 crestDir(float jxx, float jzz, float jxz, out float aniso) {
 // foldMeasure, counted for a texel whose crest runs along t only where the
 // crest at q runs the same way and is one-sided (else -1e30).
 float crestMeasure(vec2 q, vec2 t) {
-    float jxx, jzz, jxz, g1;
-    gradD(q, jxx, jzz, jxz, g1);
+    float jxx, jzz, jxz;
+    gradD(q, jxx, jzz, jxz);
     float an;
     const vec2 ts = crestDir(jxx, jzz, jxz, an);
     if (an < 0.3 || abs(dot(ts, t)) < 0.94) return -1e30;
@@ -210,8 +205,8 @@ vec3 foldLevels(float trA, float detA) {
 // crestMeasure at the three levels (the crest's direction does not change
 // with a uniform scale of the waves, only how near it is to breaking).
 vec3 crestLevels(vec2 q, vec2 t) {
-    float jxx, jzz, jxz, g1;
-    gradD(q, jxx, jzz, jxz, g1);
+    float jxx, jzz, jxz;
+    gradD(q, jxx, jzz, jxz);
     float an;
     const vec2 ts = crestDir(jxx, jzz, jxz, an);
     if (an < 0.3 || abs(dot(ts, t)) < 0.94) return vec3(-1e30);
@@ -231,8 +226,8 @@ void main() {
     const vec2 d0 = (vec2(px) + 0.5) / float(pc.res) * pc.tileSize - c;
     const vec2 q  = c + d0 - pc.tileSize * floor(d0 / pc.tileSize + 0.5);
 
-    float jxx, jzz, jxz, gain1;
-    gradD(q, jxx, jzz, jxz, gain1);
+    float jxx, jzz, jxz;
+    gradD(q, jxx, jzz, jxz);
     // grad D is symmetric (D is itself a gradient): its smaller eigenvalue.
     const float mid = 0.5 * (jxx + jzz);
     const float rad = sqrt(0.25 * (jxx - jzz) * (jxx - jzz) + jxz * jxz);
@@ -317,12 +312,11 @@ void main() {
     const float deposit = pc.maxFoam * clamp(measure * pc.invRamp, 0.0, 1.0) * hullFade;
     float f = max(old.r * pc.decay, deposit);
     if (f < 1.0 / 1024.0) f = 0.0;// below anything the shade draws: a clean zero
-    const float c01 = (pc.model & 1u) != 0u ? -(jxx + jzz) * pc.steepScale : 0.0;
 #ifdef OCEAN_CLIMATE_LEVELS
     vec2 fl = max(old.ba * pc.decay, pc.maxFoam * clamp(lv.yz * pc.invRamp, 0.0, 1.0) * hullFade);
     fl = mix(fl, vec2(0.0), lessThan(fl, vec2(1.0 / 1024.0)));
-    imageStore(foam, px, vec4(f, c01, fl));
+    imageStore(foam, px, vec4(f, 0.0, fl));
 #else
-    imageStore(foam, px, vec4(f, c01, 0.0, 0.0));
+    imageStore(foam, px, vec4(f, 0.0, 0.0, 0.0));
 #endif
 }

@@ -1248,16 +1248,15 @@ namespace threepp::vulkan {
     // switches (bits 48-55 are free), each specialised
     // only for a pipeline that has it on: chop normals << 46 (spec constant
     // 7), crest foam << 47 (8), wave reflections << 56 (9), detile << 57
-    // (10), wave modulation << 58 (11) and the wave climate's two bits << 59
-    // (12), built on first use
+    // (10) and the wave climate's two bits << 59 (12; bit 58 is free), built
+    // on first use
     // (see createPipeline). With no knob set the key is the MSAA code and the
     // shadow mode alone, so an app holds one pipeline per G-buffer sample count
     // and shadow mode its views use, and one more for each set of ray-budget
     // knobs it turns on.
     VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget,
                                             bool rayRecon, bool oceanChop, bool oceanCrestFoam,
-                                            bool oceanWaveReflect, bool oceanDetile, bool oceanWaveMod,
-                                            uint32_t oceanClimate) {
+                                            bool oceanWaveReflect, bool oceanDetile, uint32_t oceanClimate) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
@@ -1267,7 +1266,6 @@ namespace threepp::vulkan {
                              (oceanCrestFoam ? (1ull << 47u) : 0ull) |
                              (oceanWaveReflect ? (1ull << 56u) : 0ull) |
                              (oceanDetile ? (1ull << 57u) : 0ull) |
-                             (oceanWaveMod ? (1ull << 58u) : 0ull) |
                              (static_cast<uint64_t>(oceanClimate & 3u) << 59u);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
@@ -1288,13 +1286,13 @@ namespace threepp::vulkan {
                                             static_cast<uint32_t>((key >> 47u) & 1u),
                                             static_cast<uint32_t>((key >> 56u) & 1u),
                                             static_cast<uint32_t>((key >> 57u) & 1u),
-                                            static_cast<uint32_t>((key >> 58u) & 1u),
+                                            0u,// spec constant 11 is retired
                                             static_cast<uint32_t>((key >> 59u) & 3u)};
         std::array<VkSpecializationMapEntry, 13> entries{};
         // kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget and
         // kRayRecon (0..5) always; kOceanChop (7), kOceanCrestFoam (8),
-        // kOceanWaveReflect (9), kOceanDetile (10), kOceanWaveMod (11) and
-        // kOceanClimate (12, two bits) are specialised only for a pipeline
+        // kOceanWaveReflect (9), kOceanDetile (10) and kOceanClimate (12, two
+        // bits) are specialised only for a pipeline
         // that has them on, so every other one passes the six entries it
         // always did (the constants keep their default 0).
         uint32_t entryCount = 0;
@@ -1400,8 +1398,7 @@ namespace threepp::vulkan {
         const ShadePush push = shadePush(p);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                           shadePipeline(push.flags, p.probeGi, p.shadowMaps, p.rayBudget, p.rayRecon, p.oceanChopNormals,
-                                        p.oceanCrestFoam, p.oceanWaveReflections, p.oceanDetile, p.oceanWaveMod,
-                                        p.oceanClimate));
+                                        p.oceanCrestFoam, p.oceanWaveReflections, p.oceanDetile, p.oceanClimate));
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
     }

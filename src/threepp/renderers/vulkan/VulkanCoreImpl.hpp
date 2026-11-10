@@ -1053,9 +1053,6 @@ namespace threepp {
         // DisplacedMesh::Params::detile on this frame, with the chop normals
         // (the shade's spec constant 10).
         bool        oceanDetile           = false;
-        // DisplacedMesh::Params::waveModulation on this frame, with the crest
-        // foam texture that carries its compression (the shade's spec constant 11).
-        bool        oceanWaveMod          = false;
         // The wave climate (DisplacedMesh::WaveClimate; deferred binding 93):
         // the live ocean's map, or the foam dummy, with the layout it is in.
         // oceanClimate: the shade's spec constant 12, bit 0 the map is on this

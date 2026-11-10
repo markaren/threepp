@@ -3910,9 +3910,6 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u) | (crestsOut ? 4u : 0u) |
                                 (crestsClear ? 8u : 0u) | (foamOut ? 16u : 0u) |
                                 ((st.chopOn && st.c1Mips) ? 32u : 0u) |
-                                // Wave modulation reads cascade 0's exact derivative field,
-                                // which only the OCEAN_CHOP variant binds.
-                                ((st.chopOn && dm.waveModulationOn()) ? 64u : 0u) |
                                 // Hull contact: the narrow blend to each waterline plane.
                                 ((hullCount > 0u && dm.hullContactOn()) ? 128u : 0u) |
                                 // The wave climate: its map at kClimateBinding scales the cascades.
@@ -4036,7 +4033,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 // warp recentres the grid there), else its own origin.
                 cp.centerX     = warpActive ? dm.warp.centerX : 0.f;
                 cp.centerZ     = warpActive ? dm.warp.centerZ : 0.f;
-                cp.model       = dm.waveModulationOn() ? 1u : 0u;
+                cp.model       = 0u;
                 if (dm.foldFoamOn()) {
                     // Fold foam: the J under which the drawn surface takes
                     // foam, its ramp, and the shortest wave that counts (m).
@@ -6010,12 +6007,7 @@ void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshSt
             }
             // The shade compiles its crest-foam branch in only for a frame
             // that has it on (spec constant 8).
-            if (oceanCrestFoamView == mine) {
-                oceanCrestFoam = st.crestFoamOn;
-                // The wave modulation's per-pixel part reads the compression
-                // this texture carries in .g (the shade's spec constant 11).
-                oceanWaveMod = st.crestFoamOn && dm.waveModulationOn();
-            }
+            if (oceanCrestFoamView == mine) oceanCrestFoam = st.crestFoamOn;
         }
 
 VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(GrassMesh& gm) {

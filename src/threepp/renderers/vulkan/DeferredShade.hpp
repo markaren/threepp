@@ -258,7 +258,6 @@ namespace threepp::vulkan {
             bool  oceanCrestFoam     = false;// crest foam on this frame: bindings 91 and 92 are live
             bool  oceanWaveReflections = false;// the water's mirror ray sees the column of a wave it dives into
             bool  oceanDetile        = false;// the fine cascade per pixel as two placements
-            bool  oceanWaveMod       = false;// the fine cascade's slope by the long waves' compression
             // The wave climate (spec constant 12): bit 0 the fine cascade's
             // per-pixel slope by the map (needs the chop normals), bit 1 the
             // crest foam's levels by it (needs the crest foam). 0 = none.
@@ -509,7 +508,7 @@ namespace threepp::vulkan {
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
         VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget, bool rayRecon,
                                  bool oceanChop, bool oceanCrestFoam, bool oceanWaveReflect, bool oceanDetile,
-                                 bool oceanWaveMod, uint32_t oceanClimate);
+                                 uint32_t oceanClimate);
         VkPipeline createShadePipeline(uint64_t key);
         // What the pipeline-cache blob holds of the shade, kept in a text file
         // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"

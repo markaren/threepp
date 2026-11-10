@@ -113,7 +113,7 @@ layout(push_constant, scalar) uniform Pc {
     uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests, bit 3 clear its tags,
                             // bit 4 crestFoam (the drawn displacement into the UVs),
                             // bit 5 cascade 1 is mipped: read it at the vertex spacing's level,
-                            // bit 6 waveModulation (OCEAN_CHOP only): cascade 1 rides cascade 0,
+                            // bit 6 unused,
                             // bit 7 hullContact: the blend to a hull's waterline plane keeps to a narrow band,
                             // bit 8 the wave climate: each cascade scaled by its channel of waveClimate
     float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
@@ -225,14 +225,9 @@ float sampleBicubicR(sampler2D tex, vec2 uv) {
 // B-spline read; from level 1 the filter is the mip chain's and a trilinear
 // read is as smooth as the mesh can show.
 float gC1Lod = 0.0;
-// Wave modulation (DisplacedMesh::Params::waveModulation, waveModel bit 6):
-// the middle cascade's amplitude factor at this vertex (set in main), on
-// every field of it read here, so its height, displacement, slope and
-// displacement gradient describe one scaled wave train. 1 with the bit off.
-float gC1Gain = 1.0;
-// The wave climate (DisplacedMesh::WaveClimate, waveModel bit 8): cascades 0
-// and 2's amplitude factors at this vertex's rest point (set in main; cascade
-// 1's goes into gC1Gain), on every field of their cascade read here, so a
+// The wave climate (DisplacedMesh::WaveClimate, waveModel bit 8): the
+// cascades' amplitude factors at this vertex's rest point (set in main),
+// on every field of their cascade read here, so a
 // cascade's height, displacement, slope and displacement gradient describe
 // one scaled wave train, and the bound harmonic, quadratic in them, scales
 // with the square. All of a vertex's stencil taps take the factor of its rest
@@ -240,6 +235,7 @@ float gC1Gain = 1.0;
 // waves' slope a ratio of a wavelength to that, is left out of the normal. 1
 // without a map, which multiplies every read by exactly 1.
 float gC0Gain = 1.0;
+float gC1Gain = 1.0;
 float gC2Gain = 1.0;
 float c0R(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicR(tex, uv); }
 vec2 c0RG(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicRG(tex, uv); }
@@ -460,36 +456,12 @@ void main() {
     }
 
     // The wave climate at the rest point (waveModel bit 8).
-    float climate1 = 1.0;
     if ((pc.waveModel & 256u) != 0u) {
         const vec4 cl = oceanClimate(waveClimate, rest.xz);
-        gC0Gain  = cl.x;
-        climate1 = cl.y;
-        gC2Gain  = cl.z;
+        gC0Gain = cl.x;
+        gC1Gain = cl.y;
+        gC2Gain = cl.z;
     }
-
-#ifdef OCEAN_CHOP
-    // Wave modulation: short waves ride the long ones. Longuet-Higgins and
-    // Stewart (1960), J. Fluid Mech. 8(4): on a long wave of steepness A K a
-    // short wave's wavenumber and amplitude both grow by (1 + A K cos psi),
-    // to first order, from the long wave's orbital strain. The drawn map
-    // already squeezes the middle cascade on cascade 0's crests (its phase
-    // is in rest coordinates); its amplitude gets the factor here. A K cos psi
-    // is the compression -div D of cascade 0 at the rest point (choppiness 1,
-    // the height's scale: a k on one wave's crest, -a k in its trough), from
-    // the exact derivative field. Its mean is 0, so the cascade's variance and
-    // Hs keep theirs. The factor is first order in A K: held to [0.5, 1.5].
-    // The factor's own gradient is left out of the normal: against the short
-    // wave's slope it is of order (A K)(K / k), a few percent here.
-    if ((pc.waveModel & 64u) != 0u && (pc.cascadeMask & 1u) != 0u) {
-        const float invTile = 1.0 / pc.tileSize0;
-        const vec2  jd = c0RG(jac0, rest.xz * invTile) * invTile;
-        gC1Gain = clamp(1.0 - (jd.x + jd.y) * pc.waveScale, 0.5, 1.5);
-    }
-#endif
-    // The climate's factor on cascade 1, on top of the modulation's (which
-    // rides the scaled cascade 0).
-    if ((pc.waveModel & 256u) != 0u) gC1Gain *= climate1;
 
     // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the
     // vertex grid's spacing (the historical normal stencil) gives the
@@ -501,7 +473,7 @@ void main() {
     float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
     float bGX = 0.0, bGZ = 0.0;// the bound harmonic's own gradient (chop normals)
     float wmLambda = pc.choppiness;
-    if ((pc.waveModel & 127u) != 0u) {
+    if ((pc.waveModel & 63u) != 0u) {
         wmC = sampleSmoothRaw(rest.xz).xyz;
         const vec4 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
         const vec4 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));

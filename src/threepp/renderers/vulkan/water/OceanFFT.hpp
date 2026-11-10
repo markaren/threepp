@@ -513,7 +513,7 @@ namespace threepp::water {
     // mesh turns it on): the foam texture over the water's rest coordinates
     // and the pass that deposits into it where a crest breaks and decays the
     // rest (foam_crest.comp says how and why). One RG16F image (.r the foam, .g
-    // the compression of cascades 0 and 1 for Params::waveModulation), tileSize0
+    // unused), tileSize0
     // across, REPEAT, with a full mip chain rebuilt every frame by linear
     // blits, so the shade's footprint fetch over a pixel returns the covered
     // fraction of that footprint.
@@ -550,7 +550,7 @@ namespace threepp::water {
             float           maxFoam;
             float           centerX;
             float           centerZ;
-            uint32_t        model;// bit 0: Params::waveModulation, bit 1: Params::foldFoam, bit 2: Params::crestLineFoam
+            uint32_t        model;// bit 0 unused, bit 1: Params::foldFoam, bit 2: Params::crestLineFoam
             float           sharpness = 0.f;// foldFoam: the drawn choppiness is 1 + this
             float           c1Lod     = 0.f;// foldFoam: cascade 1's mip level
             float           crestHalf = 0.f;// crestLineFoam: reach along the crest either way (m)

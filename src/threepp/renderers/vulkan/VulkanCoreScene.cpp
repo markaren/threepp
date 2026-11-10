@@ -4348,7 +4348,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             oceanCrestFoamView    = oceanFoamDummy.view;
                             oceanCrestFoamSampler = oceanFoamDummy.sampler;
                             oceanCrestFoam        = false;
-                            oceanWaveMod          = false;
                         }
                         // The wave climate's map (binding 93), the same way.
                         if (st->climateImage.view != VK_NULL_HANDLE) {

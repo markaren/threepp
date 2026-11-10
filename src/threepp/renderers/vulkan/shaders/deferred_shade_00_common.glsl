@@ -338,11 +338,6 @@ layout(constant_id = 9) const uint kOceanWaveReflect = 0u;
 // (DisplacedMesh::Params::detile, with the chop normals): the per-pixel
 // slope is two placements of the cascade, summed. 0 = one placement.
 layout(constant_id = 10) const uint kOceanDetile = 0u;
-// 1 = an ocean's wave modulation is on this frame (DisplacedMesh::Params::
-// waveModulation, with the crest foam whose texture carries the long waves'
-// compression in .g): the fine cascade's per-pixel slope is steeper on the
-// long waves' crests. 0 = the slope as the cascade has it.
-layout(constant_id = 11) const uint kOceanWaveMod = 0u;
 // The wave climate this frame (DisplacedMesh::WaveClimate): bit 0 the fine
 // cascade's per-pixel slope is scaled by the map's .z (with the chop
 // normals), bit 1 the crest foam is read at the map's level (its texture

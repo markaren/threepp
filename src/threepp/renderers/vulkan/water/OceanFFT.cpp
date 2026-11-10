@@ -1882,7 +1882,7 @@ namespace threepp::water {
         : ctx_(ctx), res_(resolution), climateLevels_(climateLevels) {
         for (uint32_t n = res_; n > 1u; n >>= 1u) ++mipLevels_;
 
-        // .r the foam, .g the compression the wave modulation reads.
+        // .r the foam, .g unused.
         // With the wave climate's levels, .b and .a their foam.
         foam_.format = climateLevels_ ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R16G16_SFLOAT;
         foam_.width  = res_;
