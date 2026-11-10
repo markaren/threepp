@@ -22,6 +22,7 @@
 #include "next/layer/asset-anchor.hh"
 #include "next/layer/prim-spec.hh"
 #include "next/lightusd-next.hh"
+#include "next/reader/usdz-reader.hh"
 #include "next/resolver/asset-resolver.hh"
 #include "next/schema/usd-shade.hh"
 #include "tydra/next/render-converter.hh"
@@ -582,6 +583,8 @@ namespace threepp {
             std::unordered_map<int, bool> udimMaterials;
             std::unordered_map<uint64_t, std::vector<BuiltMesh>> meshesByContent;
             std::unordered_map<std::string, std::shared_ptr<Texture>> sampledTextures;
+            // Packages (.usdz) opened to read texture entries, by file.
+            std::unordered_map<std::string, std::shared_ptr<lnext::USDZReader>> packages;
             std::unordered_set<int> prototypeNodes;
             std::unordered_map<std::string, std::shared_ptr<Object3D>> objectByPath;
             // Transmissive materials that bound a volume (thinWalledShader):
@@ -989,10 +992,38 @@ namespace threepp {
             if (isFile(path)) return texLoader.load(path, true);
             const std::string rel = resolveUDIM(authored, b.udimTile);
             if (isFile(b.baseDir / rel)) return texLoader.load(b.baseDir / rel, true);
-            // Package entries (.usdz) and anything else only LightUSD can read.
+            // A package entry (`pkg.usdz[0/tex.png]`): its bytes from the archive.
+            // LightUSD's own LoadTexture is metadata-only since 1.0.0 (it decodes
+            // only through a custom_texture_loader), so it no longer reads them.
+            std::string package, entry;
+            if (lnext::AssetResolver::IsPackagePath(path) &&
+                lnext::AssetResolver::ParsePackagePath(path, &package, &entry)) {
+                if (auto tex = loadPackageEntry(b, package, entry)) return tex;
+            }
+            // Anything else only LightUSD can read.
             tnext::TextureImage img;
             if (!b.converter.LoadTexture(path, &img) || !img.is_loaded()) return nullptr;
             return textureFromDecoded(img, authored);
+        }
+
+        std::shared_ptr<Texture> loadPackageEntry(Build& b, const std::string& package, std::string entry) {
+            auto& reader = b.packages[package];
+            if (!reader) {
+                reader = std::make_shared<lnext::USDZReader>();
+                if (!reader->OpenFile(package)) {
+                    std::cerr << "[USDLoader] Cannot open package '" << package << "': " << reader->Error() << "\n";
+                }
+            }
+            std::replace(entry.begin(), entry.end(), '\\', '/');
+            if (entry.rfind("./", 0) == 0) entry.erase(0, 2);
+            for (size_t i = 0; i < reader->NumEntries(); ++i) {
+                if (reader->EntryName(i) != entry) continue;
+                const uint8_t* data = reader->EntryData(i);
+                if (!data) return nullptr;
+                std::vector<unsigned char> bytes(data, data + reader->EntrySize(i));
+                return texLoader.loadFromMemory(package + "[" + entry + "]", bytes, true);
+            }
+            return nullptr;
         }
 
         std::shared_ptr<Texture> texture(Build& b, int32_t texId) {
