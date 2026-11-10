@@ -439,6 +439,14 @@ namespace threepp {
         return on;
     }
 
+    bool DisplacedMesh::defaultRippleBreaking() {
+        static const bool on = [] {
+            const char* v = std::getenv("THREEPP_WAKE_BREAKING");
+            return v && v[0] == '1' && v[1] == '\0';
+        }();
+        return on;
+    }
+
     float DisplacedMesh::sampleWakeHeight(float worldX, float worldZ) const {
         // Mirrors water_displace.comp wake formulas closely enough that
         // floaters (buoys, etc.) bob through the rendered wake. Keep

@@ -14,7 +14,7 @@
 #define OCEAN_WAKE_MAX_PATCHES 8
 
 // One patch: a square window of water, world-anchored, `res` texels a side.
-// 56 bytes.
+// 72 bytes.
 struct WakePatch {
     float originX;      // world min corner, snapped to whole texels
     float originZ;
@@ -30,6 +30,10 @@ struct WakePatch {
     float rippleOriginZ;
     float rippleSize;   // that window's side, and the period of its small sea (m)
     float rippleHeight; // 1 = the ripples' fourth channel holds their height (m), which the geometry takes
+    float breakSlope0;  // its waves break where their slope passes this (WakeField::rippleBreaking) ...
+    float breakSlope1;  // ... fully at this; 0 = they never do
+    float breakFoam;    // the film and the bubbles a fully broken crest lays in the field
+    float breakAir;
 };
 
 // What makes a mark. 68 bytes (= DisplacedMesh::WakeSource).

@@ -632,6 +632,8 @@ namespace threepp {
         // THREEPP_WAKE_HEIGHTS from the environment, read once: "1" = true,
         // anything else or unset = false.
         static bool defaultRippleHeights();
+        // THREEPP_WAKE_BREAKING, the same way, for WakeField::rippleBreaking.
+        static bool defaultRippleBreaking();
         struct WakeField {
             uint32_t resolution = 0;              // texels a side per patch; 0 = off (latched)
             uint32_t patches    = kMaxWakePatches;// layers allocated (latched)
@@ -668,6 +670,21 @@ namespace threepp {
             // THREEPP_WAKE_HEIGHTS=1 (read once) or this field turns it on.
             // Live.
             bool  rippleHeights   = defaultRippleHeights();
+            // The ripples' own waves BREAK where they are steep, and the
+            // broken water is foam and air in the field, which then carries,
+            // tears and thins it like any other: so a hull's bow wave is white
+            // on its crest where it is steep enough and nowhere else, and the
+            // white leaves her along the crest it broke on. A crest of slope
+            // |grad eta| starts to spill at rippleBreakSlope[0] and is fully
+            // broken at [1] (a Stokes wave's limit is about 0.44; ship bow
+            // waves are seen to break from about 0.3). Off by default until it
+            // is judged: THREEPP_WAKE_BREAKING=1 or this field turns it on.
+            // The amounts are LOOK constants, held under a closed film so the
+            // water shows through.
+            bool  rippleBreaking      = defaultRippleBreaking();
+            float rippleBreakSlope[2] = {0.25f, 0.45f};
+            float rippleBreakFoam     = 0.30f;
+            float rippleBreakAir      = 0.20f;
             // Scales the light the film and the bubbles turn back (their albedo);
             // 1 = as the water shade has them. A scene whose camera opens wide
             // at night turns it down: under a moon, or the night sky's own light,

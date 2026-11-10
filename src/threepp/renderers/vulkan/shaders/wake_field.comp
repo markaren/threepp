@@ -47,6 +47,7 @@ layout(set = 0, binding = 1) uniform sampler2DArray srcState1;
 layout(set = 0, binding = 2) uniform sampler2DArray srcVel;
 layout(set = 0, binding = 3, rgba16f) uniform writeonly image2DArray dstState;
 layout(set = 0, binding = 4, rg16f)   uniform writeonly image2DArray dstVel;
+layout(set = 0, binding = 5) uniform sampler2DArray rippleSlopes;// the ripples, as the last step left them (rippleBreaking)
 
 // 24 bytes, mirrored by WakeFieldPipeline::PushConstants.
 layout(push_constant, scalar) uniform Pc {
@@ -178,6 +179,29 @@ void main() {
     // speed, and turbulent water has lost its short waves.
     s.b = max(s.b, 0.25 * length(v));
     s.a = max(s.a, smoothstep(0.01, 0.12, s.b));
+
+    // Where the ripples' own waves break (WakeField::rippleBreaking): their
+    // slope, read at this texel from last step's ripples (the same sea the
+    // geometry and the shade draw), past breakSlope0. The broken crest is
+    // film and bubbles and some turbulence, laid in the field as a source's
+    // are, so the field carries it off the crest, tears and thins it.
+    if (p.breakSlope1 > 0.0 && p.ripple > 0.5 && tb.rippleRes > 0u) {
+        const vec2 uv = (x - vec2(p.rippleOriginX, p.rippleOriginZ)) / p.rippleSize;
+        if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) {
+            const vec2  e     = min(uv, 1.0 - uv);
+            const float edge  = smoothstep(0.0, 0.10, min(e.x, e.y));
+            const vec4  t     = textureLod(rippleSlopes, vec3(x / p.rippleSize + 0.5 / float(tb.rippleRes), layer), 0.0);
+            const float slope = length(t.rg) / max(tb.rippleGain, 1e-3);
+            const float b     = edge * smoothstep(p.breakSlope0, p.breakSlope1, slope);
+            if (b > 0.0) {
+                // in gulps, as a source's air: a spilling crest is not a ribbon
+                const float gulp = 0.5 + 0.5 * wkNoised(vec3(x / 0.6 + 3.7, 2.1 * tb.timeSec)).x;
+                s.r = max(s.r, p.breakFoam * b * smoothstep(0.25, 0.75, gulp));
+                s.g = max(s.g, p.breakAir * b);
+                s.b = max(s.b, 0.15 * b);
+            }
+        }
+    }
 
     for (uint k = 0u; k < pc.sourceCount; ++k) {
         const WakeSource sc = tb.sources[k];
