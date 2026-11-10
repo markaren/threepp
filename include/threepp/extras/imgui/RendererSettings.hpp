@@ -627,6 +627,12 @@ private:
                     ch |= ImGui::SliderFloat("Falloff (m)", &s.falloff, 1.f, 2000.f, "%.0f",
                                              ImGuiSliderFlags_Logarithmic);
                     ch |= ImGui::SliderFloat("Noise", &s.noiseAmount, 0.f, 1.f, "%.2f");
+                    ch |= ImGui::SliderFloat("Top noise (m)", &s.topNoise, 0.f, 100.f, "%.1f");
+                    if (s.topNoise > 0.f) {
+                        ch |= ImGui::SliderFloat("Top noise scale (m)", &s.topNoiseScale, 5.f, 2000.f, "%.0f",
+                                                 ImGuiSliderFlags_Logarithmic);
+                        ch |= ImGui::SliderFloat("Top noise speed (m/s)", &s.topNoiseSpeed, 0.f, 50.f, "%.1f");
+                    }
                     if (ch) vk_->setHeightFog(s);
                 } else {
                     ImGui::TextDisabled("(uniform profile — raise Fog density to shape it)");

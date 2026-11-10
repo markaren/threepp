@@ -3112,6 +3112,9 @@ namespace threepp {
             pimpl_->heightFogBaseY_       = settings->baseY;
             pimpl_->heightFogFalloff_     = std::max(settings->falloff, 1.f);
             pimpl_->heightFogNoiseAmount_ = std::clamp(settings->noiseAmount, 0.f, 1.f);
+            pimpl_->heightFogTopNoise_      = std::max(settings->topNoise, 0.f);
+            pimpl_->heightFogTopNoiseScale_ = std::max(settings->topNoiseScale, 1.f);
+            pimpl_->heightFogTopNoiseSpeed_ = settings->topNoiseSpeed;
         } else {
             pimpl_->heightFogEnabled_ = false;
         }
@@ -3124,6 +3127,9 @@ namespace threepp {
         s.baseY       = pimpl_->heightFogBaseY_;
         s.falloff     = pimpl_->heightFogFalloff_;
         s.noiseAmount = pimpl_->heightFogNoiseAmount_;
+        s.topNoise      = pimpl_->heightFogTopNoise_;
+        s.topNoiseScale = pimpl_->heightFogTopNoiseScale_;
+        s.topNoiseSpeed = pimpl_->heightFogTopNoiseSpeed_;
         return s;
     }
 

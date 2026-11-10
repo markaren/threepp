@@ -965,6 +965,9 @@ namespace threepp {
         float heightFogBaseY_      = 0.0f;
         float heightFogFalloff_    = 80.0f;
         float heightFogNoiseAmount_= 0.6f;
+        float heightFogTopNoise_      = 0.0f;
+        float heightFogTopNoiseScale_ = 150.0f;
+        float heightFogTopNoiseSpeed_ = 4.0f;
 
         // Environment equirect (HDR float) used by the primary miss
         // for backgrounds and by closest-hit for a single mirror-reflection
@@ -3342,6 +3345,15 @@ namespace threepp {
         // The app's or the headless clock, or negative on the wall clock.
         [[nodiscard]] double pinnedClockSec() const {
             return simTimeSec_ >= 0.0 ? simTimeSec_ : headlessClockSec_;
+        }
+        // The clock the cloud layer and the height fog animate on: the pinned
+        // clock when there is one (setSimTime starts at the app's clock,
+        // typically 0), else wall seconds since the first call, so the float
+        // stays small.
+        [[nodiscard]] float mediumClockSec() const {
+            if (pinnedClockSec() >= 0.0) return static_cast<float>(pinnedClockSec());
+            static const auto epoch = std::chrono::steady_clock::now();
+            return std::chrono::duration<float>(std::chrono::steady_clock::now() - epoch).count();
         }
 
         // (rasterMatTexValid_ — the binding-3 texture-table gate — lives on

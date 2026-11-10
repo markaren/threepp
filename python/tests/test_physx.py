@@ -291,3 +291,47 @@ def test_spherical_joint_twist_range_bounds_a_spin():
 
     assert twist_after_spin(False) > 1.5
     assert twist_after_spin(True) < 0.5
+
+
+def test_joint_between_articulation_links_closes_a_loop():
+    """tp.Joint takes ArticulationLinks: a ball joint between two links of one articulation closes a
+    four-bar loop (two bars hanging from a fixed base, a coupler hinged to the first) and holds it
+    closed while the loop swings; without the joint the coupler's free end leaves the second bar."""
+    def gap_after_swing(closed):
+        world = tp.PhysxWorld(gravity=tp.Vector3(4.0, -9.81, 0), fixed_timestep=1 / 240, max_substeps=16)
+        art = world.create_articulation(True, 32, True)
+        mat = tp.MeshStandardMaterial()
+
+        def bar(sx, sy, x, y):
+            m = tp.Mesh(tp.BoxGeometry(sx, sy, 0.05), mat)
+            m.position.set(x, y, 0)
+            m.update_matrix_world()
+            return m
+        base = art.add_link(bar(1.2, 0.1, 0.5, 0.05), None, 1000.0)
+        left = art.add_link(bar(0.05, 1.0, 0.0, -0.5), base, 500.0, [0, 0, 1], [0, 0, 0])
+        right = art.add_link(bar(0.05, 1.0, 1.0, -0.5), base, 500.0, [0, 0, 1], [1, 0, 0])
+        coupler = art.add_link(bar(1.0, 0.05, 0.5, -1.0), left, 500.0, [0, 0, 1], [0, -1, 0])
+        art.finalize()
+        j = None
+        if closed:
+            p = tp.Joint.Params()
+            p.type = tp.Joint.Type.SPHERICAL
+            j = tp.Joint(world, coupler, right, tp.Vector3(1, -1, 0), tp.Quaternion(), p)
+
+        def point(link, local):
+            v = tp.Vector3(*local)
+            v.apply_quaternion(link.quaternion)
+            p = link.position
+            return np.array([p.x + v.x, p.y + v.y, p.z + v.z])
+        worst, moved = 0.0, 0.0
+        for _ in range(120):                                  # 2 s
+            world.step(1 / 60)
+            worst = max(worst, float(np.linalg.norm(point(coupler, (0.5, 0, 0)) - point(right, (0, -0.5, 0)))))
+            moved = max(moved, abs(right.position.x - 1.0))
+        del j
+        return worst, moved
+
+    gap, moved = gap_after_swing(True)
+    assert moved > 0.1, "the loop should swing under the sideways gravity"
+    assert gap < 0.005, f"the ball joint should hold the loop closed (gap {gap * 1000:.1f} mm)"
+    assert gap_after_swing(False)[0] > 0.05, "without the joint the coupler leaves the second bar"

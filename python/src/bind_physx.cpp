@@ -832,8 +832,16 @@ namespace threepp_py {
                               const Joint::Params& params) {
                       // RigidBody keeps its actor private; unwrapping happens
                       // here, C++-side, exactly as PhysxWorld.remove does.
-                      auto* a = bodyA.is_none() ? nullptr : bodyA.cast<RigidBody*>()->raw();
-                      auto* b = bodyB.is_none() ? nullptr : bodyB.cast<RigidBody*>()->raw();
+                      // An ArticulationLink is a PxRigidActor too: a joint
+                      // between two links of one articulation closes a
+                      // kinematic loop the reduced-coordinate tree cannot hold.
+                      auto actor = [](const py::object& o) -> ::physx::PxRigidActor* {
+                          if (o.is_none()) return nullptr;
+                          if (py::isinstance<ArticulationLink>(o)) return o.cast<ArticulationLink*>()->raw();
+                          return o.cast<RigidBody*>()->raw();
+                      };
+                      auto* a = actor(bodyA);
+                      auto* b = actor(bodyB);
                       return std::make_unique<Joint>(world, a, b,
                                                      toPxTransform(position, rotation), params);
                   }),
@@ -842,7 +850,9 @@ namespace threepp_py {
                   py::arg("params") = Joint::Params{},
                   py::keep_alive<1, 2>(),// the world outlives the joint
                   "Create a joint in `world` between body_a and body_b (either may be None, "
-                  "meaning the world itself — not both). Default params are a fixed weld.")
+                  "meaning the world itself — not both). Each is a RigidBody or an "
+                  "ArticulationLink; a joint between two links of the same articulation closes "
+                  "a kinematic loop. Default params are a fixed weld.")
                 .def_property_readonly("type", &Joint::type)
                 .def_property_readonly("position", &Joint::position,
                                        "The joint coordinate: radians (revolute / a spherical's "

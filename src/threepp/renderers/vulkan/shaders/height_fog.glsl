@@ -93,4 +93,52 @@ float heightFogLegOpticalDepth(float yA, float yB, float len,
     return heightFogAirLegOpticalDepth(yA, yB, len, density, falloff, baseY);
 }
 
+// ── Noise-displaced fog top (HeightFogSettings::topNoise) ────────────────────
+// The base height a leg ending at world point p integrates with: baseY shifted
+// by amp * n, n in [-1, 1] a two-octave value noise of p * invScale + offset
+// (the host folds wind drift and evolution into offset). A caller passes the
+// result as the baseY of the functions above, so the leg keeps its closed form
+// and the top of the layer moves with the far end of the leg. The deferred
+// shade and the deferred filters call it with the same arguments, since the
+// recombine has to carry the extinction the shade applied.
+//
+// amp <= 0 returns baseY untouched. So does a sentinel end point (1e30 along
+// the ray on a sky leg), where the noise argument has no fractional part left.
+//
+// The noise is a triangle-wave noise (the "tri noise" family): four octaves of
+// folded triangle waves, each warped by a triangle-wave vector field of the
+// octave below. It has no lattice and no hash, so it costs a few dozen fract()
+// per sample, and the folding gives filaments where a value-noise fBm gives
+// rounded blobs. `phase` advances every octave in place (the evolution).
+// Range [0, ~0.57], mean about 0.29.
+float heightFogTri(float x) { return abs(fract(x) - 0.5); }
+vec3 heightFogTri3(vec3 p) {
+    return vec3(heightFogTri(p.z + heightFogTri(p.y)),
+                heightFogTri(p.z + heightFogTri(p.x)),
+                heightFogTri(p.y + heightFogTri(p.x)));
+}
+float heightFogTriNoise(vec3 p, float phase) {
+    float z = 1.4, sum = 0.0;
+    vec3 bp = p;
+    for (int i = 0; i < 4; ++i) {
+        p += heightFogTri3(bp * 2.0) + phase;
+        bp *= 1.8;
+        z  *= 1.5;
+        p  *= 1.2;
+        sum += heightFogTri(p.z + heightFogTri(p.x + heightFogTri(p.y))) / z;
+        bp += 0.14;
+    }
+    return sum;
+}
+float heightFogDisplacedBaseY(vec3 p, float baseY, float amp, float invScale, vec3 offset) {
+    if (amp <= 0.0) return baseY;
+    if (abs(p.x) + abs(p.y) + abs(p.z) > 1.0e6) return baseY;
+    // offset.xz is the wind drift; offset.y is the evolution phase.
+    const vec3  q = p * invScale + vec3(offset.x, 0.0, offset.z);
+    // Two fields an octave apart, the finer one evolving a little faster so
+    // the pattern changes shape as it drifts. Their sum has mean ~0.57.
+    const float n = heightFogTriNoise(q, offset.y) + heightFogTriNoise(q * 2.0, offset.y * 1.2);
+    return baseY + amp * clamp((n - 0.57) * 3.0, -1.0, 1.0);
+}
+
 #endif// THREEPP_HEIGHT_FOG_GLSL

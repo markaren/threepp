@@ -1766,6 +1766,21 @@ namespace threepp {
         ubo.hfBaseY   = mediumBaseYThisFrame_;
         ubo.hfFalloff = mediumFalloffThisFrame_;
 
+        // The noise-displaced fog top (HeightFogSettings::topNoise). The shaders
+        // sample the field at p * hfTopInvScale shifted by hfTopOffset.xz (the
+        // wind drift) with hfTopOffset.y as its evolution phase; both are
+        // resolved here, so neither the wind nor the clock has to be in this
+        // block. 0 amplitude = off.
+        if (mediumActiveThisFrame_ && heightFogEnabled_ && heightFogTopNoise_ > 0.0f) {
+            const float inv = 1.0f / heightFogTopNoiseScale_;
+            const float t   = mediumClockSec();
+            ubo.hfTopNoise     = heightFogTopNoise_;
+            ubo.hfTopInvScale  = inv;
+            ubo.hfTopOffset[0] = cloudWind_[0] * t * inv;
+            ubo.hfTopOffset[1] = heightFogTopNoiseSpeed_ * t * inv;// the noise's phase, not a Y scroll
+            ubo.hfTopOffset[2] = cloudWind_[2] * t * inv;
+        }
+
         // Underwater murk (setUnderwaterMurk) — a SEPARATE homogeneous medium
         // clipped to below waterSurfaceY, decoupled from the air fog above.
         ubo.waterSurfaceY = fogWaterSurfaceY_;
@@ -1908,16 +1923,7 @@ namespace threepp {
         ubo.bottomY     = cloudBottomY_;
         ubo.topY        = cloudTopY_;
         ubo.evolveSpeed = cloudEvolveSpeed_;
-        // Sim-time override first (setSimTime starts at whatever the app's
-        // clock says, typically 0 — small floats, no epoch needed). The wall
-        // fallback keeps the process-start epoch so the float stays small.
-        if (pinnedClockSec() >= 0.0) {
-            ubo.timeSec = static_cast<float>(pinnedClockSec());
-        } else {
-            static const auto cloudEpoch = std::chrono::steady_clock::now();
-            ubo.timeSec     = std::chrono::duration<float>(
-                                      std::chrono::steady_clock::now() - cloudEpoch).count();
-        }
+        ubo.timeSec     = mediumClockSec();
         // Heterogeneous near-field froxels run whenever an AIR medium exists this
         // frame — Phase 2: scene.fog alone is enough (the resolved medium below),
         // not only the explicit setHeightFog. The froxel medium is the height-fog
