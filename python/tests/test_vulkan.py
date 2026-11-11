@@ -751,11 +751,22 @@ def test_instance_colours_set_in_bulk_reach_the_gpu(vk_renderer):
             vk_renderer.render(scene, cam)
         return vk_renderer.read_pixels()[..., :3].astype(np.int16)
 
-    a = settle()
-    inst.set_colors(1.0 - first)                          # no instance_color_needs_update
-    b = settle()
-    inst.set_colors(first)
-    c = settle()
+    # The renderer's own TAA for this test: nothing moves when the tones are
+    # swapped, so an upscaler has no motion to tell it its history is stale,
+    # and DLSS (the default where the GPU has it) still carries up to 28/255
+    # of the swapped tones 24 frames on. This test is about the upload.
+    upscalers = {k: getattr(vk_renderer, k) for k in ("dlss_ray_reconstruction", "dlss", "fsr")}
+    for k in upscalers:
+        setattr(vk_renderer, k, False)
+    try:
+        a = settle()
+        inst.set_colors(1.0 - first)                      # no instance_color_needs_update
+        b = settle()
+        inst.set_colors(first)
+        c = settle()
+    finally:
+        for k, v in upscalers.items():
+            setattr(vk_renderer, k, v)
     changed = float(np.abs(a - b).mean())
     # The tones themselves: pixels whose 3x3 neighbourhood is flat in both
     # frames (the box edges still carry the temporal history of the swap).
