@@ -1,5 +1,6 @@
 
 add_subdirectory(architecture)
+add_subdirectory(cloth)
 add_subdirectory(core)
 add_subdirectory(curves)
 add_subdirectory(fauna)
