@@ -2250,12 +2250,36 @@ class DisplacedMesh(Mesh):
             ...
     class Params:
         @property
+        def bound_waves(self) -> bool:
+            """
+            Second-order bound harmonics (default False): sharper crests, flatter troughs (Longuet-Higgins 1963, Tayfun 1980). THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.
+            """
+        @bound_waves.setter
+        def bound_waves(self, arg0: bool) -> None:
+            ...
+        @property
+        def breaking_crests(self) -> bool:
+            """
+            Natural foam only where the crest breaks now (default False), from the surface's local steepness; vessel foam unchanged. THREEPP_OCEAN_BREAKING_CRESTS=1/0 overrides it.
+            """
+        @breaking_crests.setter
+        def breaking_crests(self, arg0: bool) -> None:
+            ...
+        @property
         def choppiness(self) -> float:
             """
             Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.
             """
         @choppiness.setter
         def choppiness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def cwm(self) -> bool:
+            """
+            Choppy Wave Model (default False): choppiness 1, the first-order Lagrangian surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter. THREEPP_OCEAN_CWM=1/0 overrides it. Live-tunable.
+            """
+        @cwm.setter
+        def cwm(self, arg0: bool) -> None:
             ...
         @property
         def fetch(self) -> float:
@@ -2272,6 +2296,54 @@ class DisplacedMesh(Mesh):
             """
         @foam_amount.setter
         def foam_amount(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def measured_spreading(self) -> bool:
+            """
+            True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with long crests at the peak. False (default) = the old symmetric cos^2 (as much energy upwind as downwind). Hs agrees within about 10% on the cascade grids. Live-tunable; THREEPP_OCEAN_SPREAD=1 makes True the default.
+            """
+        @measured_spreading.setter
+        def measured_spreading(self, arg0: bool) -> None:
+            ...
+        @property
+        def short_wave_spectrum(self) -> bool:
+            """
+            The measured short-wave spectrum (default False, the Phillips tail alone): adds Elfouhaily et al.'s (1997) wind-dependent short waves, so the sea's slopes reach Cox and Munk's at the wind it is given. Covers the part no texel holds. Read when the renderer first sees the ocean: set it before the first frame. THREEPP_OCEAN_SHORT_WAVE_SPECTRUM=1/0 overrides it.
+            """
+        @short_wave_spectrum.setter
+        def short_wave_spectrum(self, arg0: bool) -> None:
+            ...
+        @property
+        def swell_height(self) -> float:
+            """
+            Significant height (m) of an optional swell added to the wind sea; 0 = none. Drawn on cascade 0 only: its peak wavelength must lie between tile_size_1 and tile_size_0 / 2 (9.5-17.5 s on a 1 km ocean); outside that it is not drawn and the renderer warns once. Live-tunable.
+            """
+        @swell_height.setter
+        def swell_height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def swell_period(self) -> float:
+            """
+            Swell peak period Tp (s).
+            """
+        @swell_period.setter
+        def swell_period(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def swell_spread(self) -> float:
+            """
+            Swell spreading s of cos^(2s)(theta/2): ~25 nearby storm, ~75 far away; below 1 is taken as 1.
+            """
+        @swell_spread.setter
+        def swell_spread(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def swell_theta(self) -> float:
+            """
+            Direction the swell travels toward (radians, 0 = +X).
+            """
+        @swell_theta.setter
+        def swell_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def texture_size_0(self) -> int:
@@ -2322,6 +2394,14 @@ class DisplacedMesh(Mesh):
         def tile_size_2(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def wave_reflections(self) -> bool:
+            """
+            The water's mirror ray shades the wave it meets as water instead of passing through it to the seabed (default False): no dark slits along steep crests. Live-tunable; THREEPP_OCEAN_WAVE_REFLECTIONS=1/0 overrides it.
+            """
+        @wave_reflections.setter
+        def wave_reflections(self, arg0: bool) -> None:
+            ...
+        @property
         def wave_scale(self) -> float:
             """
             Global wave-height multiplier; 1.0 = physical.
@@ -2340,7 +2420,7 @@ class DisplacedMesh(Mesh):
         @property
         def wind_theta(self) -> float:
             """
-            Wind direction (radians, 0 = +X).
+            Direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X); with measured_spreading the waves run that way.
             """
         @wind_theta.setter
         def wind_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -2481,7 +2561,7 @@ class DisplacedMesh(Mesh):
         @property
         def ripple_heights(self) -> bool:
             """
-            The ripples' height is part of the ocean's geometry, and an absorbing layer at each window's edge takes up the waves that reach it instead of the forced decay. Off by default (THREEPP_WAKE_HEIGHTS=1 turns it on). Live.
+            The ripples' height is part of the ocean's geometry, and an absorbing layer at each window's edge takes up the waves that reach it instead of the forced decay. On by default (THREEPP_WAKE_HEIGHTS=0 turns it off). Live.
             """
         @ripple_heights.setter
         def ripple_heights(self, arg0: bool) -> None:
@@ -2658,7 +2738,7 @@ class DisplacedMesh(Mesh):
         """
         One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from (x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.
         
-        `push` is what forces the RIPPLES (wake_field.ripple_resolution): the force in N the producer bears down on the water with, a gaussian of `radius` drawn out to a line that reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along its length; where it moves, the waves that keep up with it are the ones that grow, which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that holds it); a source with a push and nothing else leaves only waves.
+        `push` is what forces the RIPPLES (wake_field.ripple_resolution): the force in N the producer bears down on the water with, a gaussian of `radius` drawn out to a line that reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along its length; where it moves, the waves that keep up with it are the ones that grow, which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that holds it); a source with a push and nothing else leaves only waves. `taper` rounds the line's ends (a trapezoid, the line convolved with one of taper x its half length). `draft` (m) is how deep the load is carried: the push spread over 0..draft, which weakens its waves of wavenumber k by (1 - e^(-k draft)) / (k draft), as a hull's are (0 = a load on the surface).
         """
     def age_wake(self, dt: typing.SupportsFloat | typing.SupportsIndex, max_age: typing.SupportsFloat | typing.SupportsIndex = 6.0, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> int:
         """
@@ -2672,6 +2752,10 @@ class DisplacedMesh(Mesh):
         """
     def clear_wake_sources(self) -> None:
         ...
+    def clear_wave_climate(self) -> None:
+        """
+        Drop the wave climate map: one sea everywhere again.
+        """
     def sample_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex, cascade_mask: typing.SupportsInt | typing.SupportsIndex = 7) -> float:
         """
         Combined wave height (m) at a world XZ. cascade_mask selects cascades (bit i = cascade i). Returns 0 until a Vulkan render() has run.
@@ -2679,6 +2763,10 @@ class DisplacedMesh(Mesh):
     def sample_wake_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex) -> float:
         """
         CPU mirror of the shader's wake height (bow bump + bow V-wedge + the trail-summed Kelvin V) at a world XZ, summed over every vessel. 0 with no active vessel or below the speed gate. Add to sample_height() to make a buoy bob through a passing wake. Another vessel's footprint does NOT fade a wake here, so a hull sampling under itself feels the wake it is crossing.
+        """
+    def set_wave_climate(self, map: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], origin_x: typing.SupportsFloat | typing.SupportsIndex, origin_z: typing.SupportsFloat | typing.SupportsIndex, size_x: typing.SupportsFloat | typing.SupportsIndex, size_z: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        The site's wave climate: an H x W x 4 float32 map over the rectangle [origin_x, origin_x + size_x] x [origin_z, origin_z + size_z] of the ocean's XZ, row j along z, column i along x, read bilinearly between texel centres and clamped at its edges. Channels 0, 1, 2 scale cascades 0, 1, 2 (height and horizontal displacement, per vertex and per pixel; the crest foam and sample_height follow); channel 3 is not read. 1 everywhere is the sea without a map. Set it before the first render for the crest foam to follow it.
         """
     def vessel(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.Vessel:
         """
@@ -2688,6 +2776,13 @@ class DisplacedMesh(Mesh):
         """
         Patch `index` (0..MAX_WAKE_PATCHES-1) of the wake field.
         """
+    def wave_climate_gain(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple[float, float, float]:
+        """
+        The wave climate's three cascade gains at a rest point (1, 1, 1 without a map).
+        """
+    @property
+    def has_wave_climate(self) -> bool:
+        ...
     @property
     def hull_exclusion(self) -> DisplacedMesh.HullExclusion:
         """
@@ -4543,7 +4638,7 @@ class ImagingSonar(Object3D, Sensor):
     @property
     def model(self) -> ImagingSonarModel:
         """
-        ImagingSonarModel; mutate in place (geometry: then rebuild()).
+        ImagingSonarModel; mutate in place. New fan geometry (fov, beams, beamwidths, taper, sampling, seed) is re-baked at the next ping.
         """
     @model.setter
     def model(self, arg0: ImagingSonarModel) -> None:
@@ -5164,7 +5259,7 @@ class Joint:
             ...
     def __init__(self, world: ..., body_a: typing.Any, body_b: typing.Any, position: Vector3, rotation: Quaternion = ..., params: Joint.Params = ...) -> None:
         """
-        Create a joint in `world` between body_a and body_b (either may be None, meaning the world itself — not both). Default params are a fixed weld.
+        Create a joint in `world` between body_a and body_b (either may be None, meaning the world itself — not both). Each is a RigidBody or an ArticulationLink; a joint between two links of the same articulation closes a kinematic loop. Default params are a fixed weld.
         """
     def break_wrench(self) -> tuple[Vector3, Vector3]:
         """
@@ -6104,7 +6199,7 @@ class MarineRadar(Object3D, Sensor):
     @property
     def model(self) -> MarineRadarModel:
         """
-        MarineRadarModel; mutate in place (geometry: then rebuild()).
+        MarineRadarModel; mutate in place. Geometry: a new range scale (range_bins, min_range, max_range) rebuilds at the next update(); the rest takes rebuild().
         """
     @model.setter
     def model(self, arg0: MarineRadarModel) -> None:
@@ -6205,13 +6300,17 @@ class MarineRadarModel:
         ...
     @property
     def max_range(self) -> float:
-        ...
+        """
+        (geometry) m; a new value rebuilds at the next update().
+        """
     @max_range.setter
     def max_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def min_range(self) -> float:
-        ...
+        """
+        (geometry) The blind zone, m; a new value rebuilds at the next update().
+        """
     @min_range.setter
     def min_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
@@ -6259,7 +6358,9 @@ class MarineRadarModel:
         ...
     @property
     def range_bins(self) -> int:
-        ...
+        """
+        (geometry) A new value rebuilds at the next update().
+        """
     @range_bins.setter
     def range_bins(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
@@ -7645,7 +7746,7 @@ class Object3D:
 class Ocean(DisplacedMesh):
     def __init__(self, size: typing.SupportsFloat | typing.SupportsIndex = 1000.0, resolution: typing.SupportsInt | typing.SupportsIndex = 512, wind_speed: typing.SupportsFloat | typing.SupportsIndex = 10.0, wind_theta: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, choppiness: typing.SupportsFloat | typing.SupportsIndex = 0.550000011920929, wave_scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, tile_size_1: typing.SupportsFloat | typing.SupportsIndex = -1.0, tile_size_2: typing.SupportsFloat | typing.SupportsIndex = -1.0, fft_size: typing.SupportsInt | typing.SupportsIndex = 1024, size_z: typing.SupportsFloat | typing.SupportsIndex = 0.0, resolution_z: typing.SupportsInt | typing.SupportsIndex = 0, look: str = 'auto', fetch: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
-        A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a rectangle (vertices only where the water is — the wave field is unaffected). resolution is the vertex grid along X; resolution_z=0 keeps cells square-ish. fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent (a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. look picks the water material: 'auto' = pond recipe under 100 m, ocean above; 'ocean'/'pond' pin it regardless of scale; 'fjord' is the glacial recipe whose turquoise comes from volume SCATTERING (Vulkan deferred only). fetch (m) = 0 is a fully developed sea (long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea (see Params.fetch).
+        A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a rectangle (vertices only where the water is — the wave field is unaffected). resolution is the vertex grid along X; resolution_z=0 keeps cells square-ish. fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent (a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. look picks the water material: 'auto' = pond recipe under 100 m, ocean above; 'ocean'/'pond' pin it regardless of scale; 'fjord' is the glacial recipe whose turquoise comes from volume SCATTERING (Vulkan deferred only). fetch (m) = 0 is a fully developed sea (long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea (see Params.fetch). wind_theta is the direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X).
         """
     def set_wind(self, speed: typing.SupportsFloat | typing.SupportsIndex, theta: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
@@ -13117,7 +13218,7 @@ class VulkanRenderer:
         """
     def read_depth(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.float32]:
         """
-        Depth as (H, W) float32: each pixel's PLANAR view-space depth, its distance along the camera's viewing axis in scene units, as a depth map has it (the convention OpenCV, posed-splat and world-model inputs expect), not the length of the pixel's ray: a wall facing the camera reads one value edge to edge. A point cloud follows from camera_intrinsics: X = (u - cx) * Z / fx, Y = (v - cy) * Z / fy, Z = depth. Background reads as the camera far plane. Full 32-bit precision (native D32 read).
+        Depth as (H, W) float32: each pixel's PLANAR view-space depth, its distance along the camera's viewing axis in scene units, as a depth map has it (the convention OpenCV, posed-splat and world-model inputs expect), not the length of the pixel's ray: a wall facing the camera reads one value edge to edge. An orthographic camera's depth is decoded as such (linear in the depth buffer). For a perspective camera a point cloud follows from camera_intrinsics: X = (u - cx) * Z / fx, Y = (v - cy) * Z / fy, Z = depth; that pinhole recipe does not apply to an orthographic camera. Background reads as the camera far plane. Full 32-bit precision (native D32 read).
         """
     def read_event_camera_visualisation(self) -> numpy.typing.NDArray[numpy.uint8]:
         """
