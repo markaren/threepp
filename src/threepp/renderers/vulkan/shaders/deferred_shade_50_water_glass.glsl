@@ -256,6 +256,28 @@ vec3  gRRSpecF     = vec3(0.0);
 float gRRSpecRough = 1.0;
 float gRRReflHitT  = -1.0;
 
+// The mean Schlick Fresnel of a surface's facets seen at cosine c, its slope
+// variance var (both axes) Gaussian, each facet weighted by its projected
+// area toward the eye (max(c', 0)): the slope along the line of sight tilts a
+// facet's cosine to (c + s sin) / sqrt(1 + s^2), the slope across it barely
+// does. Five-point Gauss-Hermite quadrature over the along slope; at var = 0
+// it is Schlick's own value.
+float waterFacetFresnelMean(float c, float var, float r0) {
+    const float sd = sqrt(max(var, 0.0));// sqrt(2) * the per-axis deviation sqrt(var / 2)
+    const float sn = sqrt(max(1.0 - c * c, 0.0));
+    const float x[5] = float[5](-2.02018287, -0.95857246, 0.0, 0.95857246, 2.02018287);
+    const float w[5] = float[5](0.01995324, 0.39361932, 0.94530872, 0.39361932, 0.01995324);
+    float num = 0.0, den = 0.0;
+    for (int i = 0; i < 5; ++i) {
+        const float s  = sd * x[i];
+        const float cp = clamp((c + s * sn) * inversesqrt(1.0 + s * s), 0.0, 1.0);
+        const float f  = r0 + (1.0 - r0) * pow(1.0 - cp, 5.0);
+        num += w[i] * f * cp;
+        den += w[i] * cp;
+    }
+    return den > 1e-6 ? num / den : r0 + (1.0 - r0) * pow(1.0 - c, 5.0);
+}
+
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
@@ -310,7 +332,17 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         cosAir = (sinAir2 < 1.0) ? sqrt(1.0 - sinAir2) : 0.0;
         F = (sinAir2 >= 1.0) ? 1.0 : r0 + (1.0 - r0) * pow(1.0 - cosAir, 5.0);
     } else {
-        F = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
+        // How much is reflected is the mean Fresnel of the facets the pixel
+        // cannot show, not the Fresnel of their mean: N has had those waves
+        // filtered out of it, and a flat surface seen at a glancing angle is
+        // nearly a mirror, where the facets of a rough sea that face the eye
+        // (more of them visible, at a steeper cosine) reflect far less (Cox
+        // and Munk 1954; Bruneton, Neyret and Holzschuch 2010). The variance
+        // is the one the glitter's lobe already takes, alpha^2 with
+        // alpha = effRough^2. Near water, where the drawn normal resolves the
+        // waves, it is next to nothing and F is the mirror's.
+        const float aF = pm.roughness * pm.roughness + slopeVarSq;
+        F = waterFacetFresnelMean(NdotV, aF * aF, r0);
     }
 
     // Effective specular roughness = base water roughness ⊕ the sub-pixel chop
