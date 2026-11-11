@@ -1942,6 +1942,11 @@ SHADOW = 0.0 if FLAT else cli_arg("--shadow", 0.72, float)
 # CONSTANT and deliberately not a function of --rps: the throttle's own
 # invariance is the thing being re-anchored, not the thing being overridden.
 OMG_OP = OM_G_FLOOR + (1.0 - OM_G_FLOOR) * (RPS_OP / RPS_REF)
+# The faint-parcel floor of the colour kernel (THE FLOOR, in shed), in units of
+# BRIGHT. Authored for the renderer's HDR sprite composite: 0.1 is where the
+# veil over the blades is gone at both the back and the side view while the
+# helix and the ropes are unchanged. 0 = every parcel carries its radiance.
+BUBBLE_FLOOR = cli_arg("--bubble-floor", 0.1, float)
 BRIGHT = cli_arg("--bright", 0.038, float) * (2_000_000 / N) * TWIN_BOOST \
     / (WAKE_SHARE * OMG_OP)
 # ── THE N CONTRACT: N BUYS SMOOTHNESS, NEVER BODY ───────────────────────────
@@ -2469,6 +2474,21 @@ def shed(out_pos: wp.array(dtype=wp.vec4),
     if is_sheet and not inflow:
         gain = gain * SHEET_GAIN
     c = c * (bright * gain)
+    # ── THE FLOOR: the faintest parcels carry no light ──────────────────────
+    # The renderer sums every sprite in linear HDR and tone-maps the sum once.
+    # A parcel far below the operating radiance used to be tone-mapped on its
+    # own, where the curve's toe all but erased it; summed, ten thousand of
+    # them climb out of the toe together and lay a grey veil over the dark
+    # blades (the inflow passing in front of the disc above all). So the
+    # faintest are not submitted as light: a soft knee, L^2 / (L^2 + F^2), in
+    # units of `bright` so it is N-invariant like everything else here. A
+    # parcel at the floor keeps half its radiance, one at a third of it a
+    # tenth, and the ropes and the helix, orders of magnitude above it, are
+    # untouched. The volume is not affected: alpha (its medium weight) is
+    # computed separately below.
+    lum_f = wp.max(c[0], wp.max(c[1], c[2]))
+    flo = BUBBLE_FLOOR * bright
+    c = c * (lum_f * lum_f / (lum_f * lum_f + flo * flo + 1.0e-30))
 
     # ── THE REFLECTION, AND IT IS THE LAST THING THAT HAPPENS ───────────────
     # Everything above ran in ONE screw's frame -- the port one, which is the
