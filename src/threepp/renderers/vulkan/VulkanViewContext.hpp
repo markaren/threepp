@@ -371,6 +371,10 @@ namespace threepp::vulkan::impl {
         // extent/target accessor keys off it so the primary path can be
         // read as untouched.
         bool     secondary = false;
+        // A fisheye side view (LensRig.hpp): a secondary whose picture is part
+        // of the PRIMARY's frame, so it takes the primary's display stage
+        // (sharpening, motion blur) where a measurement camera stays plain.
+        bool     lensRigFace = false;
         uint32_t id        = 0;// stable handle handed to the public API
         // addView / removeView are routinely called from inside the
         // animate callback, i.e. with a frame already open and its command

@@ -2002,9 +2002,13 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 // full-res history, reconstructing detail (no separate blit).
                 const float alpha = viewTaaOff() ? 1.0f : effAlpha;
                 // Sharpening and motion blur are display-stage choices of the
-                // primary; a secondary view is a plain temporal resolve.
-                const bool  sharpen = !secondary && sharpenStrength_ > 0.0f;
-                const float mblur   = secondary ? 0.f : motionBlurAmount_;
+                // primary; a secondary view is a plain temporal resolve,
+                // unless it is a fisheye side view, whose pixels are the
+                // primary's picture (without the sharpen its water read as a
+                // soft band beside the primary's).
+                const bool  displayStage = !secondary || view().lensRigFace;
+                const bool  sharpen      = displayStage && sharpenStrength_ > 0.0f;
+                const float mblur        = displayStage ? motionBlurAmount_ : 0.f;
                 auto taa = g.addPass("taa", [this, f, imageIndex, alpha, taaDtFrames, ext, ptExt, sharpen, mblur](VkCommandBuffer c) {
                     gpuTimings_->begin(c, TP_TAA, f);
                     view().taa_->recordResolve(c, f, imageIndex,
@@ -2228,12 +2232,12 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
             // HdrLayer) once a field has a billboard representation; until
             // they match this view's extent there is nothing to draw into.
             {
-                if (v.bbLayer_ && v.bbLayer_->extent().width == v.outExt.width &&
-                    v.bbLayer_->extent().height == v.outExt.height) {
+                if (v.bbLayer_ && v.bbLayer_->extent().width == v.renderExt.width &&
+                    v.bbLayer_->extent().height == v.renderExt.height) {
                     auto lp = g.addPass("fieldHdrLayer", [this](VkCommandBuffer c) {
                         ViewContext& vc = view();
-                        const VkViewport vp{0.f, 0.f, float(vc.outExt.width), float(vc.outExt.height), 0.f, 1.f};
-                        const VkRect2D   sc{{0, 0}, vc.outExt};
+                        const VkViewport vp{0.f, 0.f, float(vc.renderExt.width), float(vc.renderExt.height), 0.f, 1.f};
+                        const VkRect2D   sc{{0, 0}, vc.renderExt};
                         vc.bbLayer_->beginSprites(c, currentFrame, vc.rasterGbufs[currentFrame].depth.view,
                                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, vp, sc);
                         recordFieldBillboards(c, vc.bbLayer_->additivePipeline(), /*glowPass=*/false,
@@ -2275,6 +2279,8 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
                         vulkan::BillboardHdrLayer::CompositePC lpc{};
                         lpc.exposure    = currentExposure() / preExposure();// the layer is pre-exposed
                         lpc.toneMapMode = static_cast<uint32_t>(toneMapping_);
+                        // Layer pixels per target pixel (1 at native size).
+                        lpc.layerScale  = float(vc.renderExt.width) / float(vc.outExt.width);
                         const vulkan::OverlayGradeGpu grade = overlayGrade();
                         static_assert(sizeof(grade) == sizeof(lpc.grade));
                         std::memcpy(lpc.grade, &grade, sizeof(grade));
@@ -2635,7 +2641,10 @@ void VulkanRenderer::Impl::ensureFieldBillboardHdrLayer() {
                     v->bbLayer_ = std::make_unique<vulkan::BillboardHdrLayer>(
                             *ctx, cmdPool, kFramesInFlight, *bbLayerPipes_, /*secondaryView=*/true);
                 }
-                v->bbLayer_->ensureImages(v->outExt.width, v->outExt.height, /*ownDepth=*/false);
+                // At the view's RENDER extent: the sprites test against its
+                // G-buffer depth, which is that size (a fisheye side view
+                // renders below its output size and upsamples).
+                v->bbLayer_->ensureImages(v->renderExt.width, v->renderExt.height, /*ownDepth=*/false);
             }
         }
 

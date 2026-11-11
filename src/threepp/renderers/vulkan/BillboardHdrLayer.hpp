@@ -176,7 +176,9 @@ namespace threepp::vulkan {
             float    exposure;
             uint32_t toneMapMode;
             uint32_t part;
-            uint32_t _pad;
+            // Layer pixels per target pixel: 1 (or 0) when the layer is at the
+            // target's size, < 1 for a view that renders below its output size.
+            float    layerScale;
             uint8_t  grade[96];// vulkan::OverlayGradeGpu, opaque here
         };
         static_assert(sizeof(CompositePC) == 112, "CompositePC drifted from particlefield_hdr_layer.frag");

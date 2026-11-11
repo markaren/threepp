@@ -3000,6 +3000,9 @@ namespace threepp {
         std::array<std::unique_ptr<PerspectiveCamera>, vulkan::lensrig::kFaceCount> lensRigCams_{};
         std::array<uint32_t, vulkan::lensrig::kFaceCount>                         lensRigViews_{};
         std::array<VkExtent2D, vulkan::lensrig::kFaceCount>                       lensRigViewExt_{};
+        // ...and the extent it renders at: the primary's render scale of
+        // that size, upsampled by the view's own TAA resolve.
+        std::array<VkExtent2D, vulkan::lensrig::kFaceCount>                       lensRigViewRender_{};
         // The rig as the last frame's sensor pass resampled it (faceMask = the
         // faces whose views rendered that frame): the AOV readback composes
         // its labels from the same views, with the same ownership.
@@ -3449,8 +3452,9 @@ namespace threepp {
         // secondary reads its stored pair, which is fixed at addView time and
         // never tracks the window.
         //
-        // Secondaries are native-res by scope: renderExt == outExt, so their
-        // TAA resolve is a plain 1:1 temporal filter with no upsampling.
+        // Public addView views are native-res: renderExt == outExt, so their
+        // TAA resolve is a plain 1:1 temporal filter. The fisheye rig's side
+        // views render at the primary's render scale and upsample like it.
         VkExtent2D renderExtent() const {
             const ViewContext* v = viewPtr();
             if (v && v->secondary) return v->renderExt;
@@ -6844,7 +6848,12 @@ namespace threepp {
         // Views are NOT churned per frame. Adding one drains the device and
         // allocates; rendering an existing one costs a second pass over the
         // shared scene and nothing else.
-        uint32_t addViewImpl(Camera& camera, uint32_t width, uint32_t height);
+        // renderWidth/Height: where the view rasterizes and shades, when it
+        // is to be upsampled to width x height by its temporal resolve (the
+        // fisheye rig's side views follow the primary's render scale). 0 =
+        // native, as every public addView view is.
+        uint32_t addViewImpl(Camera& camera, uint32_t width, uint32_t height,
+                             uint32_t renderWidth = 0u, uint32_t renderHeight = 0u);
         bool     removeViewImpl(uint32_t handle);
         bool     setViewCameraImpl(uint32_t handle, Camera& camera);
         ViewContext* findView(uint32_t handle);

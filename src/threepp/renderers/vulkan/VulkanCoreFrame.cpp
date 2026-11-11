@@ -2088,9 +2088,11 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
 
             // This view's own post chain. TaaResolve gets imageCount = 1: its
             // "swapchain" is v.colorTarget, and recordResolve is always called
-            // with imageIndex 0. Native-res by scope, so in and out extents are
-            // equal and the resolve is a plain 1:1 temporal filter — no
-            // upsampling, and no FSR/DLSS (secondaries never take those paths).
+            // with imageIndex 0. In and out extents are
+            // equal for a public view (a plain 1:1 temporal filter); a fisheye
+            // side view renders smaller and this resolve upsamples it, as the
+            // primary's does without an upscaler. No FSR/DLSS: secondaries
+            // never take those paths.
             v.taa_ = std::make_unique<vulkan::TaaResolve>(*ctx, cmdPool, 1u, kFramesInFlight);
             v.taa_->setTransientPool(transientPool_.get(), v.id);
             v.taa_->createImages(v.renderExt.width, v.renderExt.height,
@@ -2188,13 +2190,18 @@ void VulkanRenderer::Impl::applyPendingViewChanges() {
             pendingViewChanges_ = false;
         }
 
-uint32_t VulkanRenderer::Impl::addViewImpl(Camera& camera, uint32_t width, uint32_t height) {
+uint32_t VulkanRenderer::Impl::addViewImpl(Camera& camera, uint32_t width, uint32_t height,
+                                           uint32_t renderWidth, uint32_t renderHeight) {
             if (width == 0u || height == 0u) return 0u;
+            if (renderWidth == 0u || renderHeight == 0u || renderWidth > width || renderHeight > height) {
+                renderWidth  = width;
+                renderHeight = height;
+            }
 
             auto v           = std::make_unique<ViewContext>();
             v->secondary     = true;
             v->id            = nextViewId_++;
-            v->renderExt     = {width, height};
+            v->renderExt     = {renderWidth, renderHeight};
             v->outExt        = {width, height};
             v->camera        = &camera;
             v->cameraUuid    = camera.uuid;
@@ -2293,13 +2300,29 @@ void VulkanRenderer::Impl::updateLensRig(Camera& camera) {
             for (int f = 0; f < lr::kFaceCount; ++f) {
                 const bool needed = (lensRigLayout_.faceMask & (1u << f)) != 0u;
                 const lr::FaceRect& r = lensRigLayout_.faces[f];
+                // The side views shade at the primary's render scale and their
+                // own TAA resolves upsample them to full size, so a fisheye
+                // frame's cost falls with setRenderScale as a pinhole's does.
+                // (DLSS / FSR are the primary's alone: one feature instance
+                // with its own guides, history and jitter stash.)
+                const VkExtent2D sw = ctx->swapchainExtent(), pr = primaryRenderExtent();
+                const float      sx = sw.width ? float(pr.width) / float(sw.width) : 1.f;
+                const float      sy = sw.height ? float(pr.height) / float(sw.height) : 1.f;
+                auto renderOf = [&](VkExtent2D out) {
+                    return VkExtent2D{std::max(8u, std::min(out.width, uint32_t(float(out.width) * sx + 0.5f))),
+                                      std::max(8u, std::min(out.height, uint32_t(float(out.height) * sy + 0.5f)))};
+                };
                 if (lensRigViews_[f] != 0u) {
                     // Keep a view whose size is still close enough: a field that
                     // creeps (a zoom) re-aims it every frame and only re-creates
-                    // it when it is too small, or more than a third too large.
+                    // it when it is too small, or more than a third too large,
+                    // or when the render scale moved.
                     const VkExtent2D have = lensRigViewExt_[f];
+                    const VkExtent2D want = renderOf(have);
                     const bool fits = needed && have.width >= r.width && have.height >= r.height &&
-                                      have.width * 3u <= r.width * 4u + 8u && have.height * 3u <= r.height * 4u + 8u;
+                                      have.width * 3u <= r.width * 4u + 8u && have.height * 3u <= r.height * 4u + 8u &&
+                                      want.width == lensRigViewRender_[f].width &&
+                                      want.height == lensRigViewRender_[f].height;
                     if (!fits) {
                         removeViewImpl(lensRigViews_[f]);
                         lensRigViews_[f] = 0u;
@@ -2310,8 +2333,11 @@ void VulkanRenderer::Impl::updateLensRig(Camera& camera) {
                 auto& cam = lensRigCams_[f];
                 if (!cam) cam = std::make_unique<PerspectiveCamera>();
                 if (lensRigViews_[f] == 0u) {
-                    lensRigViews_[f]   = addViewImpl(*cam, r.width, r.height);
-                    lensRigViewExt_[f] = {r.width, r.height};
+                    lensRigViewExt_[f]    = {r.width, r.height};
+                    lensRigViewRender_[f] = renderOf(lensRigViewExt_[f]);
+                    lensRigViews_[f]      = addViewImpl(*cam, r.width, r.height, lensRigViewRender_[f].width,
+                                                        lensRigViewRender_[f].height);
+                    if (ViewContext* nv = findView(lensRigViews_[f])) nv->lensRigFace = true;
                 }
 
                 // Pose: the camera's, turned onto the face's axis. The face's
