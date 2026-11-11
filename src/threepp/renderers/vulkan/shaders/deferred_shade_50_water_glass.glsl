@@ -1421,6 +1421,18 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
         }
 
         vec3 transmitColor;
+        // The ray to what is behind the glass, set by whichever of the two
+        // branches below wants one (a thin sheet always; solid glass unless it
+        // reflects totally at the front face) and traced once after them: each
+        // call site of traceRadiance is a whole inlined copy of it, and the
+        // copies are what the driver's compile time is made of.
+        bool  behindWanted = false;
+        vec3  behindOrig   = vec3(0.0);
+        vec3  behindDir    = vec3(0.0);
+        bool  behindAlong  = false;// thin sheet: the view ray, not bent
+        float inDist       = 0.0;  // solid glass: the distance inside it
+        vec3  overC        = vec3(0.0);
+        float overT        = 1.0;
         if (pm.thinWalled != 0) {
             // THIN-SHELL glass (glTF default, e.g. a watch crystal): a thin parallel
             // shell refracts on ENTRY then back on EXIT → NET ~zero bend (a tiny
@@ -1431,21 +1443,14 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             // "washed, detail-destroyed" look over e.g. a watch dial.
             // A ROUGH sheet scatters what it lets through (thinSheetTransmit): with
             // the facet sampled under RR the view through frosted glass is frosted.
-            const vec3 dT = thinSheetTransmit(V, N, Ns);// straight through when smooth
-            {
-                gSeenThroughHits   = true;// what the pane shows is lit as seen beside it
-                gTraceAlongView = true;// ...and by the lamps of its own cluster cell
-                const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
-                                                  /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false,// transmitted content: the pane's own rule (gSeenThroughHits)
-                                                  /*envInt=*/1.0);// transmitted, not IBL
-                gSeenThroughHits   = false;
-                gTraceAlongView = false;
-                vec3 tint = albedo;
-                if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
-                    tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
-                transmitColor = behind * tint;
-            }
+            // Traced below, by the call this branch shares with the solid one:
+            // straight through when smooth, what the pane shows lit as seen
+            // beside it (gSeenThroughHits) and by the lamps of its own cluster
+            // cell (gTraceAlongView).
+            behindWanted = true;
+            behindOrig   = P - N * SHADOW_EPS;
+            behindDir    = thinSheetTransmit(V, N, Ns);
+            behindAlong  = true;
         } else {
             // SOLID glass (closed mesh): full 2-interface refraction → the
             // inverted, magnified background a real glass ball shows. Beer-Lambert
@@ -1455,9 +1460,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
                 transmitColor = reflectColor;// TIR at the front face
             } else {
                 dIn = normalize(dIn);
-                vec3 exitP, exitN; float inDist; bool exitMiss, blockedInside;
-                vec3  overC = vec3(0.0);
-                float overT = 1.0;
+                vec3 exitP, exitN; bool exitMiss, blockedInside;
                 gGlassExitHeadOn = false;
                 traceGlassInterior(P, dIn, maxLod, doShadows, seed,
                                    exitP, exitN, inDist, exitMiss, blockedInside, overC, overT);
@@ -1489,13 +1492,26 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
                 }
                 // Lit where it stands, as behind a thin pane (gSeenThroughHits);
                 // not along the view (the ray is bent), so no cluster-cell lamps.
-                gSeenThroughHits = true;
-                const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed,
-                                                  /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false,// transmitted content: lit where it stands
-                                                  /*envInt=*/1.0);// transmitted, not IBL
-                gSeenThroughHits = false;
-                vec3 tint = albedo;
+                behindWanted = true;
+                behindOrig   = exitP + dOut * SHADOW_EPS;
+                behindDir    = dOut;
+            }
+        }
+        if (behindWanted) {
+            gSeenThroughHits = true;
+            if (behindAlong) gTraceAlongView = true;
+            const vec3 behind = traceRadiance(behindOrig, behindDir, doShadows, maxLod, missLod, seed,
+                                              /*cheapHits=*/false,// refracted content is sharp
+                                              /*probeHitFill=*/false,// transmitted content: lit where it stands (gSeenThroughHits)
+                                              /*envInt=*/1.0);// transmitted, not IBL
+            gSeenThroughHits = false;
+            if (behindAlong) gTraceAlongView = false;
+            vec3 tint = albedo;
+            if (pm.thinWalled != 0) {
+                if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
+                    tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
+                transmitColor = behind * tint;
+            } else {
                 if (pm.attenuationDistance > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
                 // Blend content composited inside the volume layers over the
