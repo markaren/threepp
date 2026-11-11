@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 // NOMINMAX/WIN32_LEAN_AND_MEAN keep <windows.h> (needed for the module-dir
 // lookup) from polluting the TU.
@@ -30,6 +32,15 @@ namespace threepp::vulkan {
     }
 
     namespace {
+
+        // NGX is initialised once per device and shut down once: Shutdown1
+        // releases every feature on the device, so with more than one
+        // DlssUpscaler (the primary and a fisheye's side views each own one)
+        // the first instance to go would have taken the others' features with
+        // it. Each instance holds a reference instead; the first acquire runs
+        // the Init, the last release the Shutdown1.
+        std::mutex                          gNgxMutex;
+        std::unordered_map<VkDevice, int>   gNgxRefs;
 
         // Stable project identity for NGX (NVSDK_NGX_ENGINE_TYPE_CUSTOM). Any
         // consistent UUID works for an unregistered application; NGX uses it to
@@ -180,12 +191,21 @@ namespace threepp::vulkan {
         fci.PathListInfo.Path   = modulePathPtrs_;
         fci.PathListInfo.Length = 1;
 
-        NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_Init_with_ProjectID(
-                kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kNgxEngineVersion,
-                modulePathW_.c_str(),// application data path (NGX logs)
-                ctx_.instance(), ctx_.physicalDevice(), ctx_.device(),
-                vkGetInstanceProcAddr, vkGetDeviceProcAddr,
-                &fci, NVSDK_NGX_Version_API);
+        NVSDK_NGX_Result r = NVSDK_NGX_Result_Success;
+        {
+            std::lock_guard<std::mutex> lock(gNgxMutex);
+            int& refs = gNgxRefs[ctx_.device()];
+            if (refs == 0) {
+                r = NVSDK_NGX_VULKAN_Init_with_ProjectID(
+                        kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kNgxEngineVersion,
+                        modulePathW_.c_str(),// application data path (NGX logs)
+                        ctx_.instance(), ctx_.physicalDevice(), ctx_.device(),
+                        vkGetInstanceProcAddr, vkGetDeviceProcAddr,
+                        &fci, NVSDK_NGX_Version_API);
+            }
+            if (NVSDK_NGX_SUCCEED(r)) ++refs;
+            else if (refs == 0) gNgxRefs.erase(ctx_.device());
+        }
         if (NVSDK_NGX_FAILED(r)) {
             std::fprintf(stderr,
                          "[threepp] DLSS: NGX init failed (0x%08x) - "
@@ -211,8 +231,7 @@ namespace threepp::vulkan {
             std::fprintf(stderr,
                          "[threepp] DLSS: not available on this GPU/driver - "
                          "falling back to FSR/TAA.\n");
-            NVSDK_NGX_VULKAN_Shutdown1(ctx_.device());
-            ngxInited_ = false;
+            releaseNgx();
             return false;
         }
 
@@ -221,8 +240,7 @@ namespace threepp::vulkan {
             std::fprintf(stderr, "[threepp] DLSS: parameter allocation failed (0x%08x).\n",
                          static_cast<unsigned>(r));
             params_ = nullptr;
-            NVSDK_NGX_VULKAN_Shutdown1(ctx_.device());
-            ngxInited_ = false;
+            releaseNgx();
             return false;
         }
         return true;
@@ -237,10 +255,18 @@ namespace threepp::vulkan {
             NVSDK_NGX_VULKAN_DestroyParameters(params_);
             params_ = nullptr;
         }
-        if (ngxInited_) {
-            NVSDK_NGX_VULKAN_Shutdown1(ctx_.device());
-            ngxInited_ = false;
-        }
+        releaseNgx();
+    }
+
+    void DlssUpscaler::releaseNgx() {
+        if (!ngxInited_) return;
+        ngxInited_ = false;
+        std::lock_guard<std::mutex> lock(gNgxMutex);
+        const auto it = gNgxRefs.find(ctx_.device());
+        if (it == gNgxRefs.end()) return;
+        if (--it->second > 0) return;
+        gNgxRefs.erase(it);
+        NVSDK_NGX_VULKAN_Shutdown1(ctx_.device());
     }
 
     int DlssUpscaler::qualityFor(uint32_t renderWidth, uint32_t displayWidth) {

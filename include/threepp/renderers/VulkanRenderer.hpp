@@ -1269,10 +1269,11 @@ namespace threepp {
         // internal addView views with their own temporal history: the frame
         // costs about (1 + their pixels / the output's) plain frames (139
         // degrees across 16:9: 1.7x extra pixels; 180 degrees: 2.5x). They
-        // render at setRenderScale like the primary, and their own TAA
-        // resolve (with the primary's sharpening and motion blur) upsamples
-        // them; DLSS / FSR stay the primary's alone, so with an upscaler on,
-        // the centre keeps a little more fine detail than the side views. Changing
+        // render at setRenderScale like the primary and are resolved like it:
+        // while the primary runs DLSS (and Ray Reconstruction) each side view
+        // runs its own DLSS features, otherwise its TAA resolve upsamples it;
+        // both with the primary's sharpening and motion blur. (FSR stays the
+        // primary's: under FSR the side views take the TAA.) Changing
         // the camera's intrinsics or the canvas size re-lays them out, and
         // re-creates a view only when it must grow or has shrunk by a third.
         // The AOV readback composes the same views pixel for pixel: Depth is

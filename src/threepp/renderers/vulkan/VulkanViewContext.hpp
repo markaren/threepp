@@ -22,6 +22,9 @@
 #include "ShadowMapPass.hpp"
 #include "PostComposite.hpp"
 #include "TaaResolve.hpp"
+#if defined(THREEPP_WITH_DLSS)
+#include "DlssUpscaler.hpp"
+#endif
 
 #include "threepp/cameras/Camera.hpp"
 
@@ -659,6 +662,20 @@ namespace threepp::vulkan::impl {
         // DoF. They read per-view images too, but no secondary view is
         // allowed to use them, so they stay single instances on Impl.
         std::unique_ptr<vulkan::TaaResolve>    taa_;
+        // A fisheye side view's own DLSS (lensRigFace only; the primary's is
+        // Impl::dlss_): its SR feature at this view's extents and, while the
+        // primary runs Ray Reconstruction, its own RR feature on this view's
+        // guides. Follows the primary's DLSS state (syncSideViewDlss), so the
+        // whole fisheye frame is resolved by one kind of upscaler.
+        struct SideDlss {
+#if defined(THREEPP_WITH_DLSS)
+            std::unique_ptr<vulkan::DlssUpscaler> up;
+#endif
+            bool     active      = false;
+            bool     resetNext   = true;
+            double   prevTimeSec = -1.0;
+            uint32_t healTries   = 0;
+        } dlss;
         std::unique_ptr<vulkan::BloomPass>     bloom_;
         std::unique_ptr<vulkan::PostComposite> post_;
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;

@@ -1722,13 +1722,17 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 // depth prepass) were laid down with the G-buffer, long before.
                 // The upscaler path is the primary's only (DLSS/FSR never run
                 // for a secondary view).
-                addFieldBillboardFrontPasses(g);
-                bbLayerInPost_ = billboardHdrLayerThisFrame_;
-                if (bbLayerInPost_) {
-                    view().post_->setSpriteLayer(f, billboardHdrLayerPass_->overView(f),
-                                                 billboardHdrLayerPass_->addView(f));
+                // (A fisheye side view on its own DLSS composites its own
+                // layer after its resolve, addSecondaryFieldBillboardPasses.)
+                if (!secondary) {
+                    addFieldBillboardFrontPasses(g);
+                    bbLayerInPost_ = billboardHdrLayerThisFrame_;
+                    if (bbLayerInPost_) {
+                        view().post_->setSpriteLayer(f, billboardHdrLayerPass_->overView(f),
+                                                     billboardHdrLayerPass_->addView(f));
+                    }
                 }
-                const bool sprites = bbLayerInPost_;
+                const bool sprites = !secondary && bbLayerInPost_;
                 auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity, sprites](VkCommandBuffer c) {
                     view().post_->recordDispatch(c, f, regionSwapExt_.width, regionSwapExt_.height,
                                                  static_cast<uint32_t>(toneMapping_),
@@ -1798,7 +1802,13 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
             // motion → upscaled linear HDR into TaaResolve's history WRITE slot
             // (display extent) → PostComposite adds bloom + tonemaps at display
             // res → recordPostFinalize (RCAS) → swapchain. See DlssUpscaler.{hpp,cpp}.
-            if (!secondary && !resolved && useDlss() && dlss_ && dlss_->valid() && !dlss_->failing() &&
+            // The view's own DLSS: the primary's, or a fisheye side view's
+            // (its pixels are the primary's picture, resolved alike).
+            vulkan::DlssUpscaler* viewDlss = !secondary ? dlss_.get()
+                                           : (viewTakesDlss() ? view().dlss.up.get() : nullptr);
+            bool&   viewDlssReset = !secondary ? dlssResetNext_ : view().dlss.resetNext;
+            double& viewDlssPrevT = !secondary ? dlssPrevTimeSec_ : view().dlss.prevTimeSec;
+            if (!resolved && useDlss() && viewDlss && viewDlss->valid() && !viewDlss->failing() &&
                 upscalerFullFrame) {
                 resolved = true;
                 addBloom();
@@ -1812,11 +1822,11 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 float dlssDtMs = 16.6f;
                 {
                     const double now = frameNowSec();
-                    if (dlssPrevTimeSec_ >= 0.0) {
-                        const double dt = now - dlssPrevTimeSec_;
+                    if (viewDlssPrevT >= 0.0) {
+                        const double dt = now - viewDlssPrevT;
                         if (dt > 0.0) dlssDtMs = static_cast<float>(dt * 1000.0);
                     }
-                    dlssPrevTimeSec_ = now;
+                    viewDlssPrevT = now;
                 }
 
                 vulkan::DlssUpscaler::DispatchInputs din{};
@@ -1846,7 +1856,7 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 din.motionScaleY = -0.5f * static_cast<float>(regionRenderExt_.height);
                 din.frameTimeDeltaMs = dlssDtMs;
                 din.preExposure  = preExp;
-                din.reset        = dlssResetNext_;
+                din.reset        = viewDlssReset;
                 // Bias-current-color mask from the G-buffer IDs flags (deformer/
                 // wind-animated surfaces — grass — favor the current frame; their
                 // shader displacement isn't in the motion vectors, so history
@@ -1869,12 +1879,12 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                     std::copy(prepOut().dlssWorldToView.begin(), prepOut().dlssWorldToView.end(), din.worldToView);
                     std::copy(prepOut().dlssViewToClip.begin(), prepOut().dlssViewToClip.end(), din.viewToClip);
                 }
-                dlssResetNext_ = false;
+                viewDlssReset = false;
 
-                auto pass = g.addPass("dlss", [this, din, f](VkCommandBuffer c) mutable {
+                auto pass = g.addPass("dlss", [this, din, f, viewDlss](VkCommandBuffer c) mutable {
                     din.cmd = c;
                     gpuTimings_->begin(c, TP_TAA, f);
-                    dlss_->recordDispatch(din);
+                    viewDlss->recordDispatch(din);
                     gpuTimings_->end(c, TP_TAA, f);
                 });
                 declareUpscaler(pass, history);

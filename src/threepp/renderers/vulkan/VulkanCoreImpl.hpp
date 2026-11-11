@@ -3018,6 +3018,22 @@ namespace threepp {
         // rig's), so addTailPasses only marks that this frame wants it.
         bool sensorStagePending_ = false;
         void addSensorPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
+        // The side views' own DLSS SR (+ RR) features, brought in line with
+        // the primary's at the top of each frame: created when the primary's
+        // DLSS runs, recreated on a size or preset change, released when it
+        // stops. Their RR guides follow the same way (ensureRrGuides).
+        void syncSideViewDlss();
+        // Does the CURRENT view feed its own DLSS this frame (the primary, or
+        // a side view whose feature is live)?
+        [[nodiscard]] bool viewTakesDlss() const {
+#if defined(THREEPP_WITH_DLSS)
+            if (!view().secondary) return true;
+            return view().lensRigFace && view().dlss.active && view().dlss.up && view().dlss.up->valid() &&
+                   !view().dlss.up->failing();
+#else
+            return !view().secondary;
+#endif
+        }
 
         // Pack this frame's lens + sensor state for the final SensorPass.
         // Intrinsics go over NORMALIZED (fx/W, fy/H, cx/W, cy/H) so the same

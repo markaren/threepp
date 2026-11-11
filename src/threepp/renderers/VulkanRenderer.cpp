@@ -46,8 +46,18 @@ namespace threepp {
     // frame reprojects from.
     bool VulkanRenderer::Impl::rrShadeActive() {
         const auto& g0 = view().rasterGbufs[0];
-        return !view().secondary && useDlssRayReconstruction() &&
-               g0.rrDiffuseAlbedo.width == regionRenderExt_.width &&
+        bool rr = false;
+        if (!view().secondary) {
+            rr = useDlssRayReconstruction();
+        } else {
+#if defined(THREEPP_WITH_DLSS)
+            // A fisheye side view, on its own RR feature.
+            const auto& s = view().dlss;
+            rr = viewTakesDlss() && useDlssRayReconstruction() && s.up->rayReconstructionValid() &&
+                 !s.up->rayReconstructionFailing();
+#endif
+        }
+        return rr && g0.rrDiffuseAlbedo.width == regionRenderExt_.width &&
                g0.rrDiffuseAlbedo.height == regionRenderExt_.height;
     }
 
