@@ -8,7 +8,9 @@
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 using namespace threepp;
 
@@ -118,6 +120,7 @@ TEST_CASE("An unpinned cloth falls at g", "[cloth]") {
     p.damping = 0.f;
     p.normalDrag = 0.f;
     p.tangentDrag = 0.f;
+    p.flapping = 0.f;
     Cloth c = makeSheet(p);
     const float y0 = c.positions()[0].y;
 
@@ -171,6 +174,70 @@ TEST_CASE("Wind carries a hanging cloth downwind, and still air does not", "[clo
     CHECK(std::abs(meanZ(still)) < 1e-4f);
     CHECK(meanZ(blown) > 0.1f);
     CHECK(maxStretch(blown) < 0.05f);
+}
+
+TEST_CASE("A flag streaming in the wind flaps at the flapping wave's rate", "[cloth]") {
+
+    // The sheet as a flag: hoist on the left edge, wind along the sheet.
+    Cloth::Params p;
+    p.gustiness = 0.f;// so the only periodic forcing is the flapping wave
+    Cloth c = makeSheet(p);
+    for (int j = 0; j <= kNy; ++j) c.pin(static_cast<size_t>(j * (kNx + 1)));
+    const float wind = 10.f;
+    c.setWind({wind, 0.f, 0.f});
+
+    for (int i = 0; i < 120; ++i) c.step(kDt);
+
+    // The fly's middle, across the sheet, over four seconds.
+    const size_t fly = static_cast<size_t>((kNy / 2) * (kNx + 1) + kNx);
+    std::vector<float> z;
+    for (int i = 0; i < 240; ++i) {
+        c.step(kDt);
+        z.push_back(c.positions()[fly].z);
+    }
+    REQUIRE(allFinite(c));
+
+    float mean = 0.f;
+    for (const float v : z) mean += v;
+    mean /= static_cast<float>(z.size());
+    float bestF = 0.f, bestP = 0.f, swing = 0.f;
+    for (const float v : z) swing = std::max(swing, std::abs(v - mean));
+    for (float f = 1.f; f <= 15.f; f += 0.125f) {
+        float re = 0.f, im = 0.f;
+        for (size_t i = 0; i < z.size(); ++i) {
+            const float ph = 6.2831853f * f * static_cast<float>(i) * kDt;
+            re += (z[i] - mean) * std::cos(ph);
+            im += (z[i] - mean) * std::sin(ph);
+        }
+        if (re * re + im * im > bestP) bestP = re * re + im * im, bestF = f;
+    }
+
+    // Cloth.hpp FLAPPING: crests at 0.6 U, wavelength 1.1 sqrt(area).
+    const float expected = 0.6f * wind / (1.1f * std::sqrt(kW * kH));
+    CHECK(bestF > 0.7f * expected);
+    CHECK(bestF < 1.3f * expected);
+    CHECK(swing > 0.02f);
+    CHECK(maxStretch(c) < 0.2f);
+}
+
+TEST_CASE("Without the flapping wave a flag in a steady wind settles", "[cloth]") {
+
+    Cloth::Params p;
+    p.gustiness = 0.f;
+    p.flapping = 0.f;
+    Cloth c = makeSheet(p);
+    for (int j = 0; j <= kNy; ++j) c.pin(static_cast<size_t>(j * (kNx + 1)));
+    c.setWind({10.f, 0.f, 0.f});
+    for (int i = 0; i < 360; ++i) c.step(kDt);
+
+    const size_t fly = static_cast<size_t>((kNy / 2) * (kNx + 1) + kNx);
+    float lo = 1e9f, hi = -1e9f;
+    for (int i = 0; i < 60; ++i) {
+        c.step(kDt);
+        lo = std::min(lo, c.positions()[fly].z);
+        hi = std::max(hi, c.positions()[fly].z);
+    }
+    CHECK(hi - lo < 0.02f);
 }
 
 TEST_CASE("A wind field replaces the built-in wind", "[cloth]") {

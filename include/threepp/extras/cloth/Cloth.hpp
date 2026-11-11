@@ -20,12 +20,49 @@
 // is in m/N, 0 = rigid; stiffness therefore does not depend on the substep
 // count or the frame rate.
 //
-// WIND is a pressure on each triangle along its normal, from the air's
-// velocity relative to the triangle: 0.5 * rho * Cd * A * (v . n) |v . n|,
-// plus a smaller drag along the triangle. A sheet edge-on to the wind feels
-// little; that is what lets a flag stream. `gustiness` adds a deterministic
-// variation of speed and direction that travels downwind across the cloth,
-// which is what keeps a flag from settling into one shape.
+// WIND acts on each triangle from the air's velocity v relative to it, split
+// across and along the sheet (n its normal, A its area, q = 0.5 * rho):
+//
+//   across: q * normalDrag * A * (v . n) |v . n|. The cross-flow law: the
+//           normal force of a plate in separated flow goes as the square of
+//           the velocity across it (Hoerner, Fluid-Dynamic Drag, ch. 3; G. I.
+//           Taylor 1952 split the forces on long flexible bodies the same
+//           way). normalDrag 1.2 is a square plate broadside on. A sheet
+//           edge-on to the wind feels little; that is what lets a flag stream.
+//   along:  q * tangentDrag * A * |v_t| v_t, skin friction. 0.015 counts both
+//           faces of a rough fabric: about twice a smooth flat plate's
+//           turbulent friction, Cf near 0.004 a side at Re 1e6.
+//
+// `gustiness` adds a deterministic variation of speed and direction that
+// travels downwind across the cloth, which keeps a flag from settling into
+// one shape.
+//
+// FLAPPING. A quasi-steady pressure on each triangle damps the waves a real
+// flag flies in; nothing in it feeds them. The solver adds them as a FORCING,
+// not as a flutter instability: a pressure across the sheet that travels
+// downstream as a wave,
+//
+//   q * flapping * |v_t|^2 * min(1, s / sqrt(area)) * sin(k s - omega t),
+//
+// with v_t the flow along the sheet and s the distance downstream from the
+// cloth's upstream edge. Its scales come from the flow and the cloth, not from
+// the scene: crests travel at 0.6 times the mean flow speed U, and the
+// wavelength is 1.1 times the square root of the cloth's area. Flags flap with
+// bending waves that run from root to tip at roughly the flow speed, with a
+// wavelength that scales with the flag (Raynaud & Mulleners, "On the wake and
+// flapping dynamics of different aspect ratio flags", arXiv 2602.06237); 0.6
+// leans toward the slower waves they find on low aspect ratio flags. A 1.1 x
+// 0.8 m flag then flaps at about 0.6 U per metre: 3 Hz in 5 m/s, 6 Hz in
+// 10 m/s, 9 Hz in 15 m/s (fL/U near 0.65, inside the 0.1 to 1 flags show).
+// The amplitude grows from nothing at the upstream edge over the cloth's own
+// size, and goes with the dynamic pressure of the flow ALONG the sheet, so a
+// cloth hanging across a light wind is barely driven and one streaming in a
+// fresh one is driven hard. `flapping` is the one calibrated number: that
+// fraction of the dynamic pressure, 0.3, set so the fly of a metre-long flag
+// swings a few tens of centimetres. What this is not: the flag does not choose
+// its own frequency or wavelength, there is no onset speed (real flag fabric
+// flutters in any wind that holds it out), and the cloth's wake and the
+// sheltering of one part by another are not modelled.
 //
 // SPACE: the solver works in whatever space the positions are given in.
 // ClothMesh uses the geometry's own space, so gravity, wind, pins and
@@ -46,6 +83,7 @@
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/constants.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
@@ -53,6 +91,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -80,10 +119,13 @@ namespace threepp {
             // Fraction of velocity lost per second to internal friction.
             float damping = 0.15f;
             // Air: density kg/m3, pressure coefficient across the sheet and
-            // drag coefficient along it.
+            // friction coefficient along it (see WIND).
             float airDensity = 1.2f;
             float normalDrag = 1.2f;
-            float tangentDrag = 0.05f;
+            float tangentDrag = 0.015f;
+            // Amplitude of the flapping pressure wave, as a fraction of the
+            // dynamic pressure of the flow along the sheet (see FLAPPING).
+            float flapping = 0.3f;
             // 0 = steady wind; 1 = speed varies by about +-50 % and direction
             // by about +-25 degrees, in waves that travel downwind.
             float gustiness = 0.35f;
@@ -121,6 +163,7 @@ namespace threepp {
             for (size_t t = 0; t + 2 < tris_.size(); t += 3) {
                 const unsigned int a = tris_[t], b = tris_[t + 1], c = tris_[t + 2];
                 const float area = 0.5f * Vector3().crossVectors(x_[b] - x_[a], x_[c] - x_[a]).length();
+                restArea_ += area;
                 const float m = params.arealDensity * area / 3.f;
                 mass_[a] += m;
                 mass_[b] += m;
@@ -238,13 +281,17 @@ namespace threepp {
 
             // The air is sampled once per step, at the particles: it changes
             // over metres and tenths of a second, the substeps over
-            // millimetres and milliseconds.
+            // millimetres and milliseconds. So is the flow that sets the
+            // flapping wave's rate.
             sampleAir();
+            sampleFlow();
 
             for (int s = 0; s < substeps; ++s) {
 
                 const float a = static_cast<float>(s + 1) / static_cast<float>(substeps);
 
+                flapPhase_ += flapOmega_ * h;
+                if (flapPhase_ > math::TWO_PI) flapPhase_ -= math::TWO_PI;
                 accumulateAir();
 
                 for (size_t i = 0; i < n; ++i) {
@@ -306,6 +353,20 @@ namespace threepp {
         std::function<Vector3(const Vector3&, float)> windField_;
         float time_ = 0.f;
 
+        // The flapping wave's speed as a fraction of the flow's, and its
+        // wavelength over the square root of the cloth's area (FLAPPING).
+        static constexpr float kWaveSpeed = 0.6f;
+        static constexpr float kWaveLength = 1.1f;
+
+        float restArea_ = 0.f;
+        // Per step: the mean flow over the cloth relative to it, and the
+        // cloth's upstream edge along it.
+        Vector3 flowDir_{1.f, 0.f, 0.f};
+        float flowSpeed_ = 0.f, flowEdge_ = 0.f;
+        // The flapping wave: phase (advanced per substep), rate, wavenumber
+        // and the inverse of the length its amplitude grows over.
+        float flapPhase_ = 0.f, flapOmega_ = 0.f, flapK_ = 0.f, flapGrow_ = 0.f;
+
         [[nodiscard]] float w(size_t i) const { return pinned_[i] ? 0.f : invMass_[i]; }
 
         void buildConstraints() {
@@ -360,6 +421,25 @@ namespace threepp {
             }
         }
 
+        // The mean air over the cloth relative to its particles, the cloth's
+        // upstream edge along it, and from them the flapping wave's rate.
+        void sampleFlow() {
+
+            Vector3 mean;
+            for (size_t i = 0; i < x_.size(); ++i) mean.add(air_[i]).sub(v_[i]);
+            if (!x_.empty()) mean.divideScalar(static_cast<float>(x_.size()));
+            flowSpeed_ = mean.length();
+            if (flowSpeed_ > 1e-4f) flowDir_.copy(mean).divideScalar(flowSpeed_);
+
+            flowEdge_ = std::numeric_limits<float>::max();
+            for (const Vector3& p : x_) flowEdge_ = std::min(flowEdge_, p.dot(flowDir_));
+
+            const float size = std::sqrt(std::max(restArea_, 1e-8f));
+            flapK_ = math::TWO_PI / (kWaveLength * size);
+            flapOmega_ = flapK_ * kWaveSpeed * flowSpeed_;
+            flapGrow_ = 1.f / size;
+        }
+
         void sampleAir() {
 
             if (windField_) {
@@ -407,10 +487,10 @@ namespace threepp {
         void accumulateAir() {
 
             std::fill(force_.begin(), force_.end(), Vector3{});
-            if (params.normalDrag <= 0.f && params.tangentDrag <= 0.f) return;
+            if (params.normalDrag <= 0.f && params.tangentDrag <= 0.f && params.flapping <= 0.f) return;
 
             const float q = 0.5f * params.airDensity;
-            Vector3 e1, e2, n, rel, tangential, f;
+            Vector3 e1, e2, n, rel, tangential, f, centre;
 
             for (size_t tri = 0; tri + 2 < tris_.size(); tri += 3) {
                 const unsigned int a = tris_[tri], b = tris_[tri + 1], c = tris_[tri + 2];
@@ -428,9 +508,15 @@ namespace threepp {
 
                 const float vn = rel.dot(n);
                 tangential.copy(rel).addScaledVector(n, -vn);
+                const float vt2 = tangential.lengthSq();
 
-                f.copy(n).multiplyScalar(q * params.normalDrag * area * vn * std::abs(vn));
-                f.addScaledVector(tangential, q * params.tangentDrag * area * tangential.length());
+                // The flapping wave (see FLAPPING).
+                centre.copy(x_[a]).add(x_[b]).add(x_[c]).divideScalar(3.f);
+                const float s = centre.dot(flowDir_) - flowEdge_;
+                const float flap = params.flapping * q * vt2 * std::min(1.f, s * flapGrow_) * std::sin(flapK_ * s - flapPhase_);
+
+                f.copy(n).multiplyScalar(area * (q * params.normalDrag * vn * std::abs(vn) + flap));
+                f.addScaledVector(tangential, q * params.tangentDrag * area * std::sqrt(vt2));
                 f.divideScalar(3.f);
 
                 force_[a].add(f);
