@@ -1040,14 +1040,6 @@ def jet_wake_on(boat, setting=None):
     return bool(boat) and (boat in names or "all" in names)
 
 
-def demihulls_on(boat, setting=None):
-    """Whether a catamaran's Wash takes her as the two hulls she is (Wash.demihulls): from the
-    environment variable DEMIHULLS (or `setting`), a comma-separated list of boat names, or "all".
-    Only a boat whose spec's hull names its demihull_z can be named. Unset: every Wash as before."""
-    names = [n.strip() for n in (os.environ.get("DEMIHULLS", "") if setting is None else setting).split(",")]
-    return bool(boat) and (boat in names or "all" in names)
-
-
 class Wash:
     """What a boat leaves on the water behind her: a patch of the ocean's wake field that
     trails her, and her sources in it. Two kinds of producer, and neither knows the other:
@@ -1084,13 +1076,12 @@ class Wash:
                        transom    the stern lane's air and foam from a Froude number on her
                                   transom's immersion: a dry transom white, a wet one its eddy's
                                   milky water
-      a catamaran     with DEMIHULLS naming her (demihulls_on()), her two hulls are two: a lane from
-                       each demihull's stern as wide as that demihull is at the water, and her bow
-                       wave broken off both sides of each demihull's bow, about its own centreline.
-                       Without it a drive that names no pontoon_z (a waterjet cat) gets ONE lane on
-                       her centreline as wide as her whole beam (under the tunnel), and the Bonjean
-                       breadth, which is a whole demihull's, is taken as a half-breadth about the
-                       boat's centreline, so the bow's broken water lands in the tunnel.
+      a catamaran      whose spec's hull names its demihull_z has her two hulls taken as two: a lane
+                       from each demihull's stern as wide as that demihull is at the water, and her
+                       bow wave broken off both sides of each demihull's bow, about its own
+                       centreline (the Bonjean breadth is a whole demihull's, so half of it is the
+                       half-breadth). A twin hull whose drive names pontoon_z instead (the Otters)
+                       has her lanes placed by that.
 
     hull, drive   the boat; the drive need not be the one that moves her (see Drive.thrusts),
                   and None is a hull with no propulsor (a kayak: her paddle is put() by the scene)
@@ -1193,9 +1184,8 @@ class Wash:
         self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
         self.jet_wake = jet_wake_on(hull.boat) # JET_WAKE: her jet's race as a jet's churned water (JET_*)
         self.waves_draft = hull_waves_on(hull.boat)  # HULL_WAVES: her weight carried down to her draft
-        # DEMIHULLS: a catamaran's lanes and bow foam per demihull; a boat whose spec names no demihull_z
-        # is no catamaran to Wash, whatever the switch says ("all" names her too)
-        self.demihulls = demihulls_on(hull.boat) and "demihull_z" in hull.spec["hull"]
+        # a catamaran (her spec's hull names demihull_z): her lanes and bow foam per demihull
+        self.demihulls = "demihull_z" in hull.spec["hull"]
         self.demihull_z = float(hull.spec["hull"]["demihull_z"]) if self.demihulls else 0.0
 
     def hull_lines(self):
@@ -1230,7 +1220,7 @@ class Wash:
         U = max(u, 0.0)
         fd = U / math.sqrt(self.G * L["draft_bow"])
         brk = smoothstep(self.BOW_FD[0], self.BOW_FD[1], fd)
-        # DEMIHULLS: the tables' breadth is a whole demihull's, so its half-breadth is half of it
+        # a catamaran: the tables' breadth is a whole demihull's, so its half-breadth is half of it
         half = 0.5 if self.demihulls else 1.0
         self.report["bow"] = {"F_D": fd, "breaking": brk,
                               "Z": 2.2 * U * U / self.G * half * L["tan_entry"] / (1.0 + fd)}
@@ -1249,7 +1239,7 @@ class Wash:
             i0 = int(min(max((y - h.h0) / h.dh, 0), nb - 1))
             i1 = int(min(max((y + min(1.5 * zb, 0.8) - h.h0) / h.dh, i0 + 1), nb))
             bx = float(np.interp(x, L["x"], L["b_all"][:, i0:i1].max(axis=1))) * half
-            # each side of the bow: about her centreline, or (DEMIHULLS) both sides of each demihull's
+            # each side of the bow: about her centreline, or (a catamaran) both sides of each demihull's
             # bow about its own, the inner one thrown into the tunnel
             zc = self.demihull_z
             sides = ((("s", 1.0, 1.0), ("p", -1.0, 1.0)) if zc <= 0.0 else
@@ -1454,7 +1444,7 @@ class Wash:
         hl, hb, xc = h.excl
         if (self.bow or self.waterline or self.transom or self.demihulls) and self.lines is None:
             self.lines = self.hull_lines()
-        if self.demihulls:                                       # DEMIHULLS: each demihull's own lane
+        if self.demihulls:                                       # a catamaran: each demihull's own lane
             zs, rh = self.demihull_z, 0.5 * float(self.lines["b"].max())
         else:
             zs = getattr(self.drive, "pontoon_z", 0.0)
