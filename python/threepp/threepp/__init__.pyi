@@ -9,7 +9,7 @@ import os
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cloth', 'ClothMesh', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AcousticMaterial:
     """
     Backscatter per unit area: Lambert mu cos^2 plus a Kirchhoff facet glint.
@@ -1306,6 +1306,252 @@ class Clock:
         ...
     @elapsed_time.setter
     def elapsed_time(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Cloth:
+    """
+    XPBD cloth on the CPU: particles, triangles, pins, sphere/capsule/plane colliders and wind as pressure on each triangle. Works in whatever space its positions are in: gravity, wind, pins and colliders are in that space. Single-threaded and order-fixed, so the same inputs and dt sequence give bit-identical positions. Usually reached through ClothMesh.cloth.
+    """
+    class Params:
+        def __init__(self) -> None:
+            ...
+        @property
+        def air_density(self) -> float:
+            """
+            kg/m3
+            """
+        @air_density.setter
+        def air_density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def areal_density(self) -> float:
+            """
+            Mass per area, kg/m2; flag polyester is about 0.1-0.15. Read at construction.
+            """
+        @areal_density.setter
+        def areal_density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def bend_compliance(self) -> float:
+            """
+            m/N; larger bends more easily.
+            """
+        @bend_compliance.setter
+        def bend_compliance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def collider_slip(self) -> float:
+            """
+            Tangential velocity kept on contact (1 = no friction).
+            """
+        @collider_slip.setter
+        def collider_slip(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def damping(self) -> float:
+            """
+            Fraction of velocity lost per second.
+            """
+        @damping.setter
+        def damping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def gravity(self) -> Vector3:
+            """
+            m/s2, in the solver's space
+            """
+        @gravity.setter
+        def gravity(self, arg0: Vector3) -> None:
+            ...
+        @property
+        def gustiness(self) -> float:
+            """
+            0 = steady wind; 1 = speed +-50 % and direction +-25 degrees, in waves that travel downwind. Applies to set_wind, not to a wind field.
+            """
+        @gustiness.setter
+        def gustiness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def max_step(self) -> float:
+            """
+            A step() longer than this (s) is clamped, so a hitch does not launch the cloth.
+            """
+        @max_step.setter
+        def max_step(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def normal_drag(self) -> float:
+            """
+            Pressure coefficient across the sheet.
+            """
+        @normal_drag.setter
+        def normal_drag(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def stretch_compliance(self) -> float:
+            """
+            m/N; 0 = inextensible as far as the substeps allow.
+            """
+        @stretch_compliance.setter
+        def stretch_compliance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def substeps(self) -> int:
+            """
+            Substeps per step(); each runs one pass over the constraints.
+            """
+        @substeps.setter
+        def substeps(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def tangent_drag(self) -> float:
+            """
+            Drag coefficient along the sheet.
+            """
+        @tangent_drag.setter
+        def tangent_drag(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def thickness(self) -> float:
+            """
+            m of padding on every collider.
+            """
+        @thickness.setter
+        def thickness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    def __init__(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], indices: typing.Annotated[numpy.typing.ArrayLike, numpy.int64], params: Cloth.Params = ...) -> None:
+        """
+        positions: (N, 3) float; indices: three per triangle, flat or (M, 3).
+        """
+    def add_capsule(self, a: Vector3, b: Vector3, radius: typing.SupportsFloat | typing.SupportsIndex) -> int:
+        """
+        Returns a handle for set_capsule (spheres and capsules share one list).
+        """
+    def add_plane(self, point: Vector3, normal: Vector3) -> int:
+        """
+        The cloth stays on the side normal points to. Returns a handle for set_plane.
+        """
+    def add_sphere(self, center: Vector3, radius: typing.SupportsFloat | typing.SupportsIndex) -> int:
+        """
+        Returns a handle for set_sphere.
+        """
+    def bend_constraint_count(self) -> int:
+        ...
+    def clear_colliders(self) -> None:
+        ...
+    def is_pinned(self, i: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        ...
+    def particle_count(self) -> int:
+        ...
+    @typing.overload
+    def pin(self, i: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Hold particle i where it is now.
+        """
+    @typing.overload
+    def pin(self, i: typing.SupportsInt | typing.SupportsIndex, target: Vector3) -> None:
+        """
+        Hold particle i at target; called each frame with a moving target, the particle is carried there over the next step's substeps.
+        """
+    def pin_many(self, indices: typing.Annotated[numpy.typing.ArrayLike, numpy.int64], targets: typing.Annotated[numpy.typing.ArrayLike, numpy.float32] | None = None) -> None:
+        """
+        pin(i) or pin(i, target) for many particles in one call: indices a flat integer array, targets None (hold where they are) or an (N, 3) array, one per index. Call it each frame with the targets of a moving hoist.
+        """
+    def set_capsule(self, handle: typing.SupportsInt | typing.SupportsIndex, a: Vector3, b: Vector3, radius: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_plane(self, handle: typing.SupportsInt | typing.SupportsIndex, point: Vector3, normal: Vector3) -> None:
+        ...
+    def set_sphere(self, handle: typing.SupportsInt | typing.SupportsIndex, center: Vector3, radius: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_wind(self, wind: Vector3) -> None:
+        """
+        Air velocity, m/s, in the solver's space. The air each triangle feels is this (with params.gustiness) minus the triangle's own velocity.
+        """
+    def set_wind_field(self, field: collections.abc.Callable[[Vector3, typing.SupportsFloat | typing.SupportsIndex], Vector3]) -> None:
+        """
+        Replace set_wind (and its gusts) by field(position: Vector3, time: float) -> Vector3, called once per particle per step(), from Python: fine for a few hundred particles, costly beyond. None goes back to set_wind.
+        """
+    def step(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Advance by dt seconds (clamped to params.max_step).
+        """
+    def stretch_constraint_count(self) -> int:
+        ...
+    def triangle_count(self) -> int:
+        ...
+    def unpin(self, i: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def unpin_many(self, indices: typing.Annotated[numpy.typing.ArrayLike, numpy.int64]) -> None:
+        ...
+    def wind(self) -> Vector3:
+        ...
+    @property
+    def indices(self) -> numpy.typing.NDArray[numpy.uint32]:
+        """
+        (M, 3) uint32 copy of the triangles' particle indices.
+        """
+    @property
+    def normals(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (N, 3) float32 copy of the area-weighted vertex normals, refreshed by step().
+        """
+    @property
+    def params(self) -> Cloth.Params:
+        """
+        Live parameters; areal_density only matters at construction.
+        """
+    @params.setter
+    def params(self, arg0: Cloth.Params) -> None:
+        ...
+    @property
+    def pinned(self) -> numpy.typing.NDArray[numpy.bool]:
+        """
+        (N,) bool: which particles are pinned.
+        """
+    @property
+    def positions(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (N, 3) float32 copy of the particle positions.
+        """
+    @property
+    def time(self) -> float:
+        """
+        Simulated seconds so far.
+        """
+    @property
+    def velocities(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (N, 3) float32 copy of the particle velocities, m/s.
+        """
+class ClothMesh:
+    """
+    A Cloth bound to a BufferGeometry: vertices that share a position become one particle, and update(dt) steps the cloth and writes positions and normals back. The cloth works in the geometry's own space, so keep the mesh unrotated and unscaled (or give gravity, wind, pins and colliders in its frame).
+    """
+    def __init__(self, geometry: BufferGeometry, params: Cloth.Params = ..., weld_distance: typing.SupportsFloat | typing.SupportsIndex = 9.999999747378752e-06) -> None:
+        ...
+    def particle_of(self, vertex: typing.SupportsInt | typing.SupportsIndex) -> int:
+        """
+        The particle a geometry vertex was welded into.
+        """
+    @typing.overload
+    def particles_where(self, predicate: collections.abc.Callable[[Vector3], bool]) -> numpy.typing.NDArray[numpy.int64]:
+        """
+        Indices (int64 array) of the particles whose present position satisfies predicate(Vector3) -> bool; called once per particle, so a set-up call, not a per-frame one.
+        """
+    @typing.overload
+    def particles_where(self, x_min: typing.SupportsFloat | typing.SupportsIndex = ..., x_max: typing.SupportsFloat | typing.SupportsIndex = ..., y_min: typing.SupportsFloat | typing.SupportsIndex = ..., y_max: typing.SupportsFloat | typing.SupportsIndex = ..., z_min: typing.SupportsFloat | typing.SupportsIndex = ..., z_max: typing.SupportsFloat | typing.SupportsIndex = ...) -> numpy.typing.NDArray[numpy.int64]:
+        """
+        Indices (int64 array) of the particles inside a box, bounds inclusive; for pinning an edge or a corner without knowing the vertex layout. For any other predicate, test cloth.positions with numpy.
+        """
+    def update(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Step the cloth by dt and write the geometry.
+        """
+    def write(self) -> None:
+        """
+        Write the cloth's positions and normals into the geometry without stepping.
+        """
+    @property
+    def cloth(self) -> Cloth:
         ...
 class Color:
     __hash__: typing.ClassVar[None] = None

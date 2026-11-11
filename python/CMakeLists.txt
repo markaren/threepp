@@ -35,6 +35,7 @@ pybind11_add_module(threepp_py
         src/bind_terrain.cpp
         src/bind_vegetation.cpp
         src/bind_fauna.cpp
+        src/bind_cloth.cpp
         src/bind_particles.cpp
         src/bind_splats.cpp
         src/bind_render.cpp
