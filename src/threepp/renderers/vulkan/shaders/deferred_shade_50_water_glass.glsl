@@ -1040,6 +1040,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         const vec2  gX       = vec2(-along.y, along.x) * pixWorld;
         const float invTile  = 1.0 / pc.oceanFoamTileSize;
         float       foamF;
+        float       foamFresh = 0.0;// foam_crest.comp's .g: 1 on a breaking crest, gone soon after
         if ((kOceanClimate & 2u) != 0u) {
             // The wave climate: the texture keeps the foam this water would
             // have with cascades 0 and 1 at 1, 2/3 and 1/3 of the sea
@@ -1049,9 +1050,13 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             const vec4  lv = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile);
             const float L  = clamp(oceanClimate(oceanClimateMap, q).y, 0.0, 1.0) * 3.0;
             foamF = L >= 2.0 ? mix(lv.b, lv.r, L - 2.0) : L >= 1.0 ? mix(lv.a, lv.b, L - 1.0) : lv.a * L;
+            foamFresh = lv.g * clamp(L / 3.0, 0.0, 1.0);
         } else {
-            foamF = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile).r;
+            const vec2 cf = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile).rg;
+            foamF     = cf.r;
+            foamFresh = cf.g;
         }
+        bool cfFilm = false;// the foam level is a vessel's film, drawn as it was
         // What the vessels left on the water is the same stuff, so it is
         // drawn the same way: the wake field's film (how much foam its flow
         // has carried here) reads as a foam level. It stops just short of a
@@ -1065,6 +1070,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             if (filmF > foamF) {
                 foamF    = filmF;
                 cfAlbedo *= gWakeAlbedo;
+                cfFilm   = true;
             }
         }
 #if CREST_FOAM_SCOUT == 1
@@ -1110,7 +1116,23 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // 2026-11-10: "foam should have opacity and not so white"): a
             // third opaque where it is thinnest, three quarters where a
             // crest has just broken.
-            const float layer  = mix(0.35, 0.75, clamp(foamF, 0.0, 1.0));
+            float layer = mix(0.35, 0.75, clamp(foamF, 0.0, 1.0));
+            // A crest's foam AGES. While the crest breaks it is a thick white
+            // mass of bubbles on the crest; the crest then runs on and leaves
+            // a patch on the water behind it that breaks up and clears, which
+            // is most of the foam on the sea at any moment. Drawn alike, the
+            // sea's white lay in the troughs. So the fresh part is nearly
+            // closed, and what is left behind stays white but SHRINKS (the
+            // photo's holes open as F falls, above) and goes TRANSPARENT with
+            // it, as F squared: gone well before F is. LOOK constants (Lars,
+            // 2026-11-11: "it needs to shrink and go transparent, not just
+            // grey out").
+            if (!cfFilm) {
+                const float fresh = clamp(foamFresh, 0.0, 1.0);
+                const float left  = clamp(foamF, 0.0, 1.0);
+                layer    = 0.95 * max(fresh, left * left);
+                cfAlbedo = 0.85;
+            }
             const float cover  = clamp(excess / (2.0 * halfW) + 0.5, 0.0, 1.0) *
                                  layer * (below ? 0.12 : 1.0);
 #if CREST_FOAM_SCOUT == 2

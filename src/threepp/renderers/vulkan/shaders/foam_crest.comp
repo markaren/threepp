@@ -51,7 +51,7 @@ layout(set = 0, binding = 0) uniform sampler2D jac0;   // (dDx/dx, dDz/dz), casc
 layout(set = 0, binding = 1) uniform sampler2D height0;// .g = dDx/dz
 layout(set = 0, binding = 2) uniform sampler2D jac1;   // the same, cascade 1 (rotated domain)
 layout(set = 0, binding = 3) uniform sampler2D height1;
-// mip 0, read and written in place: .r the foam (.g is unused, 0).
+// mip 0, read and written in place: .r the foam, .g how fresh it is.
 #ifdef OCEAN_CLIMATE_LEVELS
 // The wave climate's variant (DisplacedMesh::WaveClimate, compiled with
 // OCEAN_CLIMATE_LEVELS=1 and run for an ocean that had a climate map when its
@@ -312,11 +312,18 @@ void main() {
     const float deposit = pc.maxFoam * clamp(measure * pc.invRamp, 0.0, 1.0) * hullFade;
     float f = max(old.r * pc.decay, deposit);
     if (f < 1.0 / 1024.0) f = 0.0;// below anything the shade draws: a clean zero
+    // .g, how FRESH the foam is: 1 while the crest is breaking on this parcel,
+    // gone in a fifth of the foam's own life once it has passed. The crest
+    // moves on at its phase speed and the foam stays on the water, so most of
+    // what lies on the sea at any moment is behind a crest; the shade draws
+    // only the fresh part bright (see the crest foam in shadeWater).
+    float fresh = max(old.g * pow(pc.decay, 5.0), clamp(measure * pc.invRamp, 0.0, 1.0) * hullFade);
+    if (fresh < 1.0 / 1024.0) fresh = 0.0;
 #ifdef OCEAN_CLIMATE_LEVELS
     vec2 fl = max(old.ba * pc.decay, pc.maxFoam * clamp(lv.yz * pc.invRamp, 0.0, 1.0) * hullFade);
     fl = mix(fl, vec2(0.0), lessThan(fl, vec2(1.0 / 1024.0)));
-    imageStore(foam, px, vec4(f, 0.0, fl));
+    imageStore(foam, px, vec4(f, fresh, fl));
 #else
-    imageStore(foam, px, vec4(f, 0.0, 0.0, 0.0));
+    imageStore(foam, px, vec4(f, fresh, 0.0, 0.0));
 #endif
 }
