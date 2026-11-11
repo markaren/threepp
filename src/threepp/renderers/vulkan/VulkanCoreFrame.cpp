@@ -470,7 +470,10 @@ void VulkanRenderer::Impl::resetAccumulation() {
             // Ray Reconstruction takes the same camera cut (InReset). SR's
             // dispatch does not take it here today; giving it one changes the
             // SR frames that follow a reset, which is a look change of its own.
-            if (dlssRrEnabled_) dlssResetNext_ = true;
+            if (dlssRrEnabled_) {
+                dlssResetNext_ = true;
+                for (auto& v : views_) v->dlss.resetNext = true;// the fisheye side views' features
+            }
 #endif
             if (frameState_ != FrameState::Idle) {
                 pendingAccumulationReset_ = true;
@@ -1041,6 +1044,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                     pendingAccumulationReset_ = false;
                 }
             }
+            // The fisheye side views' DLSS features, after the views exist and
+            // the primary's DLSS state is settled for this frame.
+            syncSideViewDlss();
 
             uint32_t imageIndex = 0;
             // Third place the CPU can block on something that is not the CPU:
@@ -2088,9 +2094,11 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
 
             // This view's own post chain. TaaResolve gets imageCount = 1: its
             // "swapchain" is v.colorTarget, and recordResolve is always called
-            // with imageIndex 0. Native-res by scope, so in and out extents are
-            // equal and the resolve is a plain 1:1 temporal filter — no
-            // upsampling, and no FSR/DLSS (secondaries never take those paths).
+            // with imageIndex 0. In and out extents are
+            // equal for a public view (a plain 1:1 temporal filter); a fisheye
+            // side view renders smaller and this resolve upsamples it, as the
+            // primary's does without an upscaler. A fisheye side view also
+            // takes DLSS while the primary does (syncSideViewDlss); FSR never.
             v.taa_ = std::make_unique<vulkan::TaaResolve>(*ctx, cmdPool, 1u, kFramesInFlight);
             v.taa_->setTransientPool(transientPool_.get(), v.id);
             v.taa_->createImages(v.renderExt.width, v.renderExt.height,
@@ -2119,6 +2127,10 @@ void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
             // Passes first, while the device is alive — they own pipelines,
             // pools, samplers and images of their own.
             v.taa_.reset();
+#if defined(THREEPP_WITH_DLSS)
+            v.dlss.up.reset();
+#endif
+            v.dlss.active = false;
             v.post_.reset();
             v.bloom_.reset();
             v.deferredShade_.reset();
@@ -2188,13 +2200,18 @@ void VulkanRenderer::Impl::applyPendingViewChanges() {
             pendingViewChanges_ = false;
         }
 
-uint32_t VulkanRenderer::Impl::addViewImpl(Camera& camera, uint32_t width, uint32_t height) {
+uint32_t VulkanRenderer::Impl::addViewImpl(Camera& camera, uint32_t width, uint32_t height,
+                                           uint32_t renderWidth, uint32_t renderHeight) {
             if (width == 0u || height == 0u) return 0u;
+            if (renderWidth == 0u || renderHeight == 0u || renderWidth > width || renderHeight > height) {
+                renderWidth  = width;
+                renderHeight = height;
+            }
 
             auto v           = std::make_unique<ViewContext>();
             v->secondary     = true;
             v->id            = nextViewId_++;
-            v->renderExt     = {width, height};
+            v->renderExt     = {renderWidth, renderHeight};
             v->outExt        = {width, height};
             v->camera        = &camera;
             v->cameraUuid    = camera.uuid;
@@ -2238,6 +2255,91 @@ bool VulkanRenderer::Impl::setViewCameraImpl(uint32_t handle, Camera& camera) {
         }
 
 // ── The fisheye rig ─────────────────────────────────────────────────────────
+
+void VulkanRenderer::Impl::syncSideViewDlss() {
+#if defined(THREEPP_WITH_DLSS)
+            for (size_t i = 1; i < views_.size(); ++i) {
+                ViewContext& v = *views_[i];
+                if (!v.lensRigFace || v.pendingCreate || v.pendingDestroy || !v.taa_) continue;
+                ViewContext* saved = curView_;
+                curView_ = &v;
+                auto& s = v.dlss;
+                // Follow the primary: the side views upscale exactly when it does.
+                const bool want = useDlss() && dlss_ && dlssActive_;
+                if (!want) {
+                    if (s.up) {
+                        vkDeviceWaitIdle(ctx->device());
+                        s.up.reset();
+                        s.active = false;
+                        v.taa_->invalidateHistory();
+                    }
+                    if (ensureRrGuides()) rewriteDeferredDescriptors();// back to 1x1
+                    curView_ = saved;
+                    continue;
+                }
+                if (!s.up) s.up = std::make_unique<vulkan::DlssUpscaler>(*ctx, kFramesInFlight);
+                const VkExtent2D disp = v.outExt, render = v.renderExt;
+                bool create = !s.active || s.up->displayWidth() != disp.width ||
+                              s.up->displayHeight() != disp.height ||
+                              s.up->quality() != vulkan::DlssUpscaler::qualityFor(render.width, disp.width);
+                if (s.active && s.up->failing()) {
+                    // The primary's self-heal, for this feature: recreate a
+                    // few times, then fall back to the TAA for this view
+                    // (until the rig lays the view out anew).
+                    ++s.healTries;
+                    create = true;
+                }
+                if (s.healTries > 3) {
+                    s.active = false;
+                    create   = false;
+                }
+                if (create) {
+                    vkDeviceWaitIdle(ctx->device());
+                    VkCommandBuffer initCb = beginOneShot();
+                    s.active = s.up->create(initCb, disp.width, disp.height, render.width, render.height);
+                    endAndSubmitOneShot(initCb, "side view DLSS feature create");
+                    s.resetNext   = true;
+                    s.prevTimeSec = -1.0;
+                    v.taa_->invalidateHistory();
+                }
+                // Ray Reconstruction, as syncDlssRayReconstruction does for
+                // the primary: the feature at this view's render size, and
+                // its guides (render-sized while RR runs, 1x1 otherwise).
+                if (s.active) {
+                    if (s.up->rayReconstructionFailing()) {
+                        vkDeviceWaitIdle(ctx->device());
+                        s.up->giveUpRayReconstruction();
+                        s.resetNext = true;
+                        v.taa_->invalidateHistory();
+                    }
+                    const bool rrWanted = dlssRrWanted();
+                    const auto& g0      = v.rasterGbufs[0];
+                    const VkExtent2D guides = rrWanted ? render : VkExtent2D{1u, 1u};
+                    const bool guidesStale  = g0.rrDiffuseAlbedo.width != guides.width ||
+                                             g0.rrDiffuseAlbedo.height != guides.height;
+                    const bool featureStale = s.up->rayReconstructionNeedsSync(rrWanted, render.width, render.height);
+                    if (guidesStale || featureStale) {
+                        vkDeviceWaitIdle(ctx->device());
+                        if (guidesStale && ensureRrGuides()) rewriteDeferredDescriptors();
+                        if (featureStale) {
+                            if (rrWanted) {
+                                VkCommandBuffer initCb = beginOneShot();
+                                s.up->createRayReconstruction(initCb, render.width, render.height);
+                                endAndSubmitOneShot(initCb, "side view DLSS-RR feature create");
+                            } else {
+                                s.up->destroyRayReconstruction();
+                            }
+                            s.resetNext = true;
+                            v.taa_->invalidateHistory();
+                        }
+                    }
+                } else if (ensureRrGuides()) {
+                    rewriteDeferredDescriptors();
+                }
+                curView_ = saved;
+            }
+#endif
+        }
 
 VulkanRenderer::Impl::ViewContext* VulkanRenderer::Impl::lensRigFaceView(int face) {
             const uint32_t h = lensRigViews_[face];
@@ -2293,13 +2395,29 @@ void VulkanRenderer::Impl::updateLensRig(Camera& camera) {
             for (int f = 0; f < lr::kFaceCount; ++f) {
                 const bool needed = (lensRigLayout_.faceMask & (1u << f)) != 0u;
                 const lr::FaceRect& r = lensRigLayout_.faces[f];
+                // The side views shade at the primary's render scale and their
+                // own TAA resolves upsample them to full size, so a fisheye
+                // frame's cost falls with setRenderScale as a pinhole's does.
+                // While the primary runs DLSS each side view runs its own
+                // (syncSideViewDlss), at these extents.
+                const VkExtent2D sw = ctx->swapchainExtent(), pr = primaryRenderExtent();
+                const float      sx = sw.width ? float(pr.width) / float(sw.width) : 1.f;
+                const float      sy = sw.height ? float(pr.height) / float(sw.height) : 1.f;
+                auto renderOf = [&](VkExtent2D out) {
+                    return VkExtent2D{std::max(8u, std::min(out.width, uint32_t(float(out.width) * sx + 0.5f))),
+                                      std::max(8u, std::min(out.height, uint32_t(float(out.height) * sy + 0.5f)))};
+                };
                 if (lensRigViews_[f] != 0u) {
                     // Keep a view whose size is still close enough: a field that
                     // creeps (a zoom) re-aims it every frame and only re-creates
-                    // it when it is too small, or more than a third too large.
+                    // it when it is too small, or more than a third too large,
+                    // or when the render scale moved.
                     const VkExtent2D have = lensRigViewExt_[f];
+                    const VkExtent2D want = renderOf(have);
                     const bool fits = needed && have.width >= r.width && have.height >= r.height &&
-                                      have.width * 3u <= r.width * 4u + 8u && have.height * 3u <= r.height * 4u + 8u;
+                                      have.width * 3u <= r.width * 4u + 8u && have.height * 3u <= r.height * 4u + 8u &&
+                                      want.width == lensRigViewRender_[f].width &&
+                                      want.height == lensRigViewRender_[f].height;
                     if (!fits) {
                         removeViewImpl(lensRigViews_[f]);
                         lensRigViews_[f] = 0u;
@@ -2310,8 +2428,11 @@ void VulkanRenderer::Impl::updateLensRig(Camera& camera) {
                 auto& cam = lensRigCams_[f];
                 if (!cam) cam = std::make_unique<PerspectiveCamera>();
                 if (lensRigViews_[f] == 0u) {
-                    lensRigViews_[f]   = addViewImpl(*cam, r.width, r.height);
-                    lensRigViewExt_[f] = {r.width, r.height};
+                    lensRigViewExt_[f]    = {r.width, r.height};
+                    lensRigViewRender_[f] = renderOf(lensRigViewExt_[f]);
+                    lensRigViews_[f]      = addViewImpl(*cam, r.width, r.height, lensRigViewRender_[f].width,
+                                                        lensRigViewRender_[f].height);
+                    if (ViewContext* nv = findView(lensRigViews_[f])) nv->lensRigFace = true;
                 }
 
                 // Pose: the camera's, turned onto the face's axis. The face's

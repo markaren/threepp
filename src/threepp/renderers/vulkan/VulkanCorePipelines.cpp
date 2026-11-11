@@ -1065,7 +1065,7 @@ bool VulkanRenderer::Impl::ensureRrGuides() {
             // Render extent while this view feeds DLSS Ray Reconstruction, 1x1
             // otherwise: four full-size images no frame writes would be memory
             // for nothing, and the descriptors only need something bound.
-            const bool wanted = !view().secondary && dlssRrWanted();
+            const bool wanted = viewTakesDlss() && dlssRrWanted();
             const VkExtent2D ext = wanted ? renderExtent() : VkExtent2D{1u, 1u};
             auto& g0 = view().rasterGbufs[0];
             if (g0.rrDiffuseAlbedo.image != VK_NULL_HANDLE && g0.rrDiffuseAlbedo.width == ext.width &&

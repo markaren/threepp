@@ -260,8 +260,9 @@ namespace threepp::vulkan {
         std::wstring modulePathW_;
         const wchar_t* modulePathPtrs_[1] = {nullptr};
 
-        bool ensureNgx();// lazy NGX init + capability check
+        bool ensureNgx();// lazy NGX init (shared, reference-counted per device) + capability check
         void shutdownNgx();
+        void releaseNgx();// drop this instance's NGX reference; the last one shuts NGX down
 
         // ── Bias-mask generator (fsr_reactive.comp, shared with FSR) ─────────
         // R8 mask per frame-in-flight at DISPLAY (== maxRenderSize) extent; the

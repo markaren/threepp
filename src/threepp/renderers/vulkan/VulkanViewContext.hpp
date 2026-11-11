@@ -22,6 +22,9 @@
 #include "ShadowMapPass.hpp"
 #include "PostComposite.hpp"
 #include "TaaResolve.hpp"
+#if defined(THREEPP_WITH_DLSS)
+#include "DlssUpscaler.hpp"
+#endif
 
 #include "threepp/cameras/Camera.hpp"
 
@@ -371,6 +374,10 @@ namespace threepp::vulkan::impl {
         // extent/target accessor keys off it so the primary path can be
         // read as untouched.
         bool     secondary = false;
+        // A fisheye side view (LensRig.hpp): a secondary whose picture is part
+        // of the PRIMARY's frame, so it takes the primary's display stage
+        // (sharpening, motion blur) where a measurement camera stays plain.
+        bool     lensRigFace = false;
         uint32_t id        = 0;// stable handle handed to the public API
         // addView / removeView are routinely called from inside the
         // animate callback, i.e. with a frame already open and its command
@@ -655,6 +662,20 @@ namespace threepp::vulkan::impl {
         // DoF. They read per-view images too, but no secondary view is
         // allowed to use them, so they stay single instances on Impl.
         std::unique_ptr<vulkan::TaaResolve>    taa_;
+        // A fisheye side view's own DLSS (lensRigFace only; the primary's is
+        // Impl::dlss_): its SR feature at this view's extents and, while the
+        // primary runs Ray Reconstruction, its own RR feature on this view's
+        // guides. Follows the primary's DLSS state (syncSideViewDlss), so the
+        // whole fisheye frame is resolved by one kind of upscaler.
+        struct SideDlss {
+#if defined(THREEPP_WITH_DLSS)
+            std::unique_ptr<vulkan::DlssUpscaler> up;
+#endif
+            bool     active      = false;
+            bool     resetNext   = true;
+            double   prevTimeSec = -1.0;
+            uint32_t healTries   = 0;
+        } dlss;
         std::unique_ptr<vulkan::BloomPass>     bloom_;
         std::unique_ptr<vulkan::PostComposite> post_;
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;

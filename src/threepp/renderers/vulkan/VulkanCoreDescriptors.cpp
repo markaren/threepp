@@ -82,10 +82,16 @@ void VulkanRenderer::Impl::rewriteBloomDescriptors() {
                     hdrOutViews[f]  = view().post_->hdrOutView(f);
                     hdrOutImages[f] = view().post_->hdrOutImage(f);
                 }
-                const auto& swapViews  = ctx->swapchainImageViews();
-                const auto& swapImages = ctx->swapchainImages();
-                view().taa_->rewritePostFinalizeDescriptors(hdrOutViews.data(), hdrOutImages.data(),
-                                                     swapViews.data(), swapImages.data());
+                // A secondary view's "swapchain" is its one colour target
+                // (its TaaResolve was built with imageCount 1); the upscaler
+                // path reaches it only for a fisheye side view on its own DLSS.
+                const VkImageView targetView  = view().colorTarget.view;
+                const VkImage     targetImage = view().colorTarget.image;
+                const bool        own         = view().secondary;
+                view().taa_->rewritePostFinalizeDescriptors(
+                        hdrOutViews.data(), hdrOutImages.data(),
+                        own ? &targetView : ctx->swapchainImageViews().data(),
+                        own ? &targetImage : ctx->swapchainImages().data());
             }
 
             // DoF scratch + descriptors track the same lifetimes (sceneHdr /

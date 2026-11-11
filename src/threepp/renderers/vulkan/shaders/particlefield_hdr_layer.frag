@@ -39,7 +39,7 @@ layout(push_constant, scalar) uniform Pc {
     float exposure;    // currentExposure() / preExposure(): the layer is pre-exposed
     uint  toneMapMode; // threepp::ToneMapping
     uint  part;        // 0 = alpha-over layer, 1 = additive layer
-    uint  _pad;
+    float layerScale;  // layer pixels per target pixel; 0 or 1 = the same size
     OverlayGrade grade;// setOverlayColorGrade; zero flags = the plain odDisplay
 } pc;
 
@@ -55,8 +55,11 @@ vec3 display(vec3 hdr) {
 vec3 finite(vec3 v) { return clamp(mix(v, vec3(0.0), isnan(v)), 0.0, 65504.0); }
 
 void main() {
-    // The layers are at the display extent, pixel for pixel: a fetch, no filter.
-    const ivec2 p = ivec2(gl_FragCoord.xy);
+    // The layers are at the target's extent, pixel for pixel: a fetch, no
+    // filter. A view that renders below its output size (a fisheye side view)
+    // drew them at its render extent: the nearest layer pixel.
+    const float k = pc.layerScale > 0.0 ? pc.layerScale : 1.0;
+    const ivec2 p = min(ivec2(gl_FragCoord.xy * k), textureSize(overLayer, 0) - 1);
     if (pc.part == 0u) {
         const vec4 o = texelFetch(overLayer, p, 0);
         // No sprite here (or a NaN coverage): leave the frame exactly as it is.
