@@ -123,6 +123,11 @@ FREQ = 5.0               # curl wavelength well under the disk radius
 FLATTEN = 0.4            # disk-flattening pull toward the galactic plane
 R_MAX = 2.4              # soft containment radius
 V_HOT = 1.6              # speed for full white heat -- nova ejecta only
+# The rim's base colour. The Vulkan sprites are summed in linear HDR and
+# tone-mapped once, which desaturates a dense blue sum toward grey-white; this
+# deeper blue is authored for that composite and brings the violet filaments
+# back. The GL path keeps the colour it was tuned with.
+RIM_COLOR = wp.constant(wp.vec3(0.08, 0.10, 0.80) if VULKAN else wp.vec3(0.12, 0.20, 0.60))
 # Per-particle intensity. Additive sums clip at 1.0 and overlap grows with
 # the particle count, so exposure follows a 1/sqrt(N) law. The Vulkan base is
 # higher because a world-space sprite covers more pixels than a GL point.
@@ -229,7 +234,7 @@ def integrate(p: wp.vec3, v: wp.vec3, i: int, turb: wp.vec3,
     # pushes toward white heat -- so the nova ignites everything on its own
     w = 1.0 - wp.min(r, 1.0)
     warmth = w * w
-    base = wp.vec3(0.12, 0.20, 0.60) * (1.0 - warmth) + wp.vec3(1.0, 0.70, 0.30) * warmth
+    base = RIM_COLOR * (1.0 - warmth) + wp.vec3(1.0, 0.70, 0.30) * warmth
     h = wp.min(wp.length(v) / V_HOT, 1.0)
     c = (base * (1.0 - h) + wp.vec3(1.0, 0.85, 0.65) * h) * bright
     return p, v, c
@@ -586,7 +591,9 @@ else:
     field.density_repr.anisotropy = 0.0
 
     # The IMAGE half.
-    field.set_billboard_repr(tp.Color(1, 1, 1), tp.Color(1, 1, 1), 1.0, 1.0)
+    # Intensity authored for the HDR sprite composite: 0.5, half the 1.0 the old
+    # display-space add was tuned at (matched to it at the default shot).
+    field.set_billboard_repr(tp.Color(1, 1, 1), tp.Color(1, 1, 1), 0.5, 1.0)
     bb = field.billboard_repr
     bb.softness = 0.62
     bb.bright_jitter = 0.0        # the sim authors the colour; do not hash over it
