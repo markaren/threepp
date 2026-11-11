@@ -161,7 +161,11 @@ bed.position.y = -60.0
 scene.add(bed)
 
 SIZE = 2000.0
-ocean = tp.Ocean(size=SIZE, resolution=4096, wind_speed=WIND, fetch=FETCH)
+# 1024 vertices a side over 2 km, packed toward the vessel each step (warp_toward below): about
+# 0.3 m cells round her, metres at the horizon, where a wave is under a pixel anyway. A uniform
+# 0.5 m grid (4096 a side) draws the same picture four times slower, and the fisheye draws the
+# scene five times over: 118 ms a frame against 28 ms (RTX 5080, 1920x1080).
+ocean = tp.Ocean(size=SIZE, resolution=1024, wind_speed=WIND, fetch=FETCH)
 p = ocean.params
 p.hs_fix = p.short_waves = p.short_wave_spectrum = True
 p.crest_foam = p.chop_normals = p.fold_foam = p.wave_reflections = True
@@ -318,7 +322,7 @@ def step(dt=1.0 / 60.0):
     camera.look_at(tp.Vector3(*at.tolist()))
 
     renderer.sim_time = t
-    ocean.warp_toward(0.0, 0.0, 0.3)
+    ocean.warp_toward(0.0, 0.0, 0.15)
     renderer.render(scene, camera)
 
 
