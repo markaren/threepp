@@ -1184,9 +1184,11 @@ class Wash:
         self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
         self.jet_wake = jet_wake_on(hull.boat) # JET_WAKE: her jet's race as a jet's churned water (JET_*)
         self.waves_draft = hull_waves_on(hull.boat)  # HULL_WAVES: her weight carried down to her draft
-        # a catamaran (her spec's hull names demihull_z): her lanes and bow foam per demihull
-        self.demihulls = "demihull_z" in hull.spec["hull"]
-        self.demihull_z = float(hull.spec["hull"]["demihull_z"]) if self.demihulls else 0.0
+        # a catamaran (her spec's hull names demihull_z): her lanes and bow foam per demihull. A spec
+        # with no hull section at all (the Otters': their floats are `pontoons`) names none.
+        hull_spec = hull.spec.get("hull", {})
+        self.demihulls = "demihull_z" in hull_spec
+        self.demihull_z = float(hull_spec["demihull_z"]) if self.demihulls else 0.0
 
     def hull_lines(self):
         """Her lines at the design waterline, from the Bonjean tables (starboard half), vessel frame:
