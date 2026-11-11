@@ -85,7 +85,7 @@ namespace threepp {
             // waveScale against the OFF sea. The environment variable
             // THREEPP_OCEAN_HS_FIX = 1 / 0 forces it on / off for every
             // ocean. Live-tunable like windSpeed.
-            bool hsFix = false;
+            bool hsFix = true;
 
             // Choppy Wave Model switch (default OFF, the historical chop).
             // ON draws the surface as the first-order Lagrangian sea of
@@ -142,7 +142,7 @@ namespace threepp {
             // breakingCrests would use, so it wins when both are on. Works
             // best with shortWaves: the waves that break are short.
             // THREEPP_OCEAN_CREST_FOAM = 1 / 0 forces it. Live-tunable.
-            bool crestFoam = false;
+            bool crestFoam = true;
 
             // Wave reflections (default OFF, the historical mirror). The
             // water's mirror ray passes THROUGH any other part of the water
@@ -170,7 +170,7 @@ namespace threepp {
             // a wave (historically its roll-off sat near thirty, which left
             // it a third of its slope variance). Read when the renderer
             // first sees the mesh. THREEPP_OCEAN_SHORT_WAVES = 1 / 0 forces it.
-            bool shortWaves = false;
+            bool shortWaves = true;
 
             // The measured short-wave spectrum (default OFF, the historical
             // Phillips tail alone). The k^-3 tail carries a constant slope
@@ -242,7 +242,7 @@ namespace threepp {
             // Needs crestFoam. THREEPP_OCEAN_FOLD_FOAM = 1 / 0 forces it;
             // THREEPP_OCEAN_FOLD_FOAM_J / _RAMP / _LENGTH move the constants.
             // Read when the crest foam is first made.
-            bool foldFoam = false;
+            bool foldFoam = true;
 
             // Crest-line foam (default OFF: fold foam lands where the
             // measure peaks, and on a short-crested sum of linear waves its
@@ -255,7 +255,7 @@ namespace threepp {
             // grow across it. Needs foldFoam. THREEPP_OCEAN_CREST_LINE_FOAM
             // = 1 / 0 forces it; THREEPP_OCEAN_CREST_LINE_FOAM_REACH moves
             // the reach. Read when the crest foam is first made.
-            bool crestLineFoam = false;
+            bool crestLineFoam = true;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -301,12 +301,10 @@ namespace threepp {
             // wave-folding artefacts (white spike crests).
             float choppiness = 0.45f;
 
-            // Natural whitecap (Jacobian-fold) foam scale, live-tunable.
-            // 1 = full ocean whitewater, 0 = none. Wake trails and explicit
-            // foam disturbances are NOT scaled by this. The Tessendorf fold
-            // measure is scale-free, so without this a pond's cm-ripples foam
-            // like a gale — Ocean::create derives ~size/300 (capped at 1) so
-            // small water reads calm by default.
+            // How much of the sea's own whitecaps (the crest foam) is laid
+            // down, live-tunable: 1 = all of it, 0 = none. Wake trails and
+            // explicit foam disturbances are NOT scaled by this. Ocean::create
+            // derives ~size/300 (capped at 1), so small water stays calm.
             float foamAmount = 1.0f;
 
             // Chop normals: shade the surface the choppy displacement actually

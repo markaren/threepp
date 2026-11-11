@@ -13,21 +13,21 @@
 // ocean meshes: the mesh can re-tessellate however it likes and foam
 // stays where it was deposited.
 //
-// Coverage is the cascade-0 tile (typically 1000 m), REPEAT-sampled.
-// That matches the FFT's intrinsic periodicity — natural-foam crests
-// repeat with the FFT pattern, so wrapping at the tile boundary is
-// consistent with the wave field underneath. Texel size = tileSize /
-// res; at 2048² over 1000 m that's ≈0.49 m — fine enough to carry the
-// cascade-1 whitecap detail the fine Jacobian stencil extracts.
+// Coverage is the cascade-0 tile (typically 1000 m), REPEAT-sampled. Texel
+// size = tileSize / res; at 2048² over 1000 m that's ≈0.49 m.
 //
-// Per frame: decay last frame's foam, recompute the three instant
+// It holds what vessels and explicit disturbances leave. The sea's own
+// whitecaps are the crest foam's (foam_crest.comp): they ride the water,
+// where a texture fixed to the world left them standing behind the crest.
+//
+// Per frame: decay last frame's foam, recompute the two instant
 // sources at every texel, take the max, write to the current target.
 // Ping-pong via prevFoam (sampler) / currFoam (storage image) bindings.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// FFT cascades — needed to compute the Jacobian of the horizontal
-// displacement, which drives natural-wave whitewater foam.
+// FFT cascades: no longer read (the natural whitecaps that differenced them
+// are gone); the bindings stay declared for the descriptor layout.
 layout(set = 0, binding = 0) uniform sampler2D height0;
 layout(set = 0, binding = 1) uniform sampler2D displace0;
 layout(set = 0, binding = 2) uniform sampler2D height1;
@@ -67,7 +67,7 @@ struct WakeSample {
 layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
-// 72 bytes, mirrored field-for-field by FoamWorldPipeline::PushConstants. The
+// 68 bytes, mirrored field-for-field by FoamWorldPipeline::PushConstants. The
 // vessels are the same per-frame buffer water_displace.comp reads.
 layout(push_constant, scalar) uniform Pc {
     uint64_t disturbAddr;   // 0 = no disturbance buffer
@@ -83,7 +83,6 @@ layout(push_constant, scalar) uniform Pc {
     uint   cascadeMask;
     uint   disturbCount;
     float  decay;
-    float  natFoamScale;    // scales NATURAL Jacobian whitecaps; wake/splats unaffected
     uint   hullCount;       // active vessels; 0 = no vessel foam
 } pc;
 
@@ -107,71 +106,6 @@ vec2 toroidalDelta(vec2 a, vec2 b, float tileSize) {
     return d - tileSize * floor(d / tileSize + 0.5);
 }
 
-// Horizontal displacement only — the Jacobian and the inverse-map never
-// need the height channel, so skip those fetches entirely (the height
-// bindings stay declared for descriptor-layout compatibility). `mask`
-// selects which cascades contribute, ANDed with the host's cascadeMask.
-vec2 sampleDispXZ(vec2 worldXZ, uint mask) {
-    vec2 d = vec2(0.0);
-    if ((mask & pc.cascadeMask & 1u) != 0u) {
-        const float invTile = 1.0 / pc.tileSize0;
-        d += texture(displace0, worldXZ * invTile).rg * invTile;
-    }
-    if ((mask & pc.cascadeMask & 2u) != 0u) {
-        // Rotated domain + world back-rotation — must match water_displace.
-        const float invTile = 1.0 / pc.tileSize1;
-        d += oceanC1World(texture(displace1, oceanC1Domain(worldXZ) * invTile).rg) * invTile;
-    }
-    if ((mask & pc.cascadeMask & 4u) != 0u) {
-        const float invTile = 1.0 / pc.tileSize2;
-        d += texture(displace2, worldXZ * invTile).rg * invTile;
-    }
-    return d * pc.choppiness;
-}
-
-// Bicubic variant of sampleDispXZ — used ONLY inside the Jacobian stencil
-// (the inverse-map keeps the cheap bilinear path: kinks in the VALUE field
-// are second-order there and invisible). The Jacobian below DIFFERENTIATES
-// the displacement field; the derivative of a BILINEAR texture is only
-// piecewise-continuous (kinks at every texel boundary), and the steep foam
-// ramp amplifies those kinks into hard world-aligned ~1 m squares baked into
-// the foam accumulator (cascade-0 texel = tileSize0/res ≈ 0.98 m — exactly
-// the visible artifact). sampleBicubicRG (ocean_cascade.glsl) is a C1
-// B-spline, so the fold field carries no cell boundaries to bake in.
-vec2 sampleDispXZSmooth(vec2 worldXZ, uint mask) {
-    vec2 d = vec2(0.0);
-    if ((mask & pc.cascadeMask & 1u) != 0u) {
-        const float invTile = 1.0 / pc.tileSize0;
-        d += sampleBicubicRG(displace0, worldXZ * invTile) * invTile;
-    }
-    if ((mask & pc.cascadeMask & 2u) != 0u) {
-        // Rotated domain + world back-rotation — must match water_displace.
-        const float invTile = 1.0 / pc.tileSize1;
-        d += oceanC1World(sampleBicubicRG(displace1, oceanC1Domain(worldXZ) * invTile)) * invTile;
-    }
-    if ((mask & pc.cascadeMask & 4u) != 0u) {
-        const float invTile = 1.0 / pc.tileSize2;
-        d += sampleBicubicRG(displace2, worldXZ * invTile) * invTile;
-    }
-    return d * pc.choppiness;
-}
-
-// 1 − J of (x,z) → (x,z) + Dxz over the masked cascades, central-differenced
-// at stencil half-width `eps`. Positive = the surface is compressing/folding
-// (a breaking crest); the stencil width sets which wavelengths register.
-float jacobianFold(vec2 p, uint mask, float eps) {
-    const vec2 dL = sampleDispXZSmooth(p + vec2(-eps, 0.0), mask);
-    const vec2 dR = sampleDispXZSmooth(p + vec2( eps, 0.0), mask);
-    const vec2 dD = sampleDispXZSmooth(p + vec2(0.0, -eps), mask);
-    const vec2 dU = sampleDispXZSmooth(p + vec2(0.0,  eps), mask);
-    const float inv2e = 0.5 / eps;
-    const float dDxDx = (dR.x - dL.x) * inv2e;
-    const float dDxDz = (dU.x - dD.x) * inv2e;
-    const float dDzDx = (dR.y - dL.y) * inv2e;
-    const float dDzDz = (dU.y - dD.y) * inv2e;
-    return 1.0 - ((1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx);
-}
-
 void main() {
     const uvec2 px = gl_GlobalInvocationID.xy;
     if (px.x >= pc.foamRes || px.y >= pc.foamRes) return;
@@ -179,56 +113,6 @@ void main() {
     // World XZ this texel anchors. UV is [0,1)² mapped onto the foam tile.
     const vec2 uv      = (vec2(px) + 0.5) / float(pc.foamRes);
     const vec2 worldXZ = uv * pc.foamTileSize;
-
-    // ── Natural Jacobian foam ────────────────────────────────────────
-    // Foam must land where the crest is SEEN: shading samples this texture
-    // at the DISPLACED world XZ of the hit point, but the wave field is
-    // defined over reference (undisplaced) coordinates. Invert x = q + D(q)
-    // with two fixed-point iterations so the Jacobian is evaluated at the
-    // reference point whose displaced image is this texel — without this
-    // the foam sits off-crest by the full chop displacement.
-    vec2 q = worldXZ - sampleDispXZ(worldXZ, 0xFFu);
-    q      = worldXZ - sampleDispXZ(q, 0xFFu);
-
-    // Two-scale folding measure:
-    //   coarse — cascade 0 (1 km tile) at a ~2 m stencil: swell-crest foam.
-    //   fine   — cascade 1 (100 m tile) at a sub-metre stencil: the small
-    //            whitecaps that make a wind-blown sea read as alive. The old
-    //            single 3.9 m stencil over the summed field low-pass-filtered
-    //            these out entirely, which is why foam only ever appeared as
-    //            big soft swell blobs.
-    // Cascade 2 (8 m tile) is deliberately excluded: its Jacobian would stamp
-    // a visible 8 m repeating foam grid, and its wavelengths barely fold.
-    // First-order in the displacement gradients, fold terms add: the overlap
-    // (chop folding ON a breaking swell crest) saturates toward 1 — exactly
-    // where real whitewater is densest.
-    const float texel      = pc.foamTileSize / float(pc.foamRes);
-    // Coarse stencil at tileSize0/256 (≈4 m): folding is spectrally dominated
-    // by content near the cascade's Nyquist, so a texel-scale stencil measures
-    // a field of per-texel bumps. Combined with a steep ramp those deposited
-    // as saturated ~1 m squares aligned to the cascade-0 texel grid — the
-    // long-standing visible "foam texels" (≈1/30 of the 28 m vessel). The
-    // wide stencil measures swell-scale folding instead; sub-4 m whitecap
-    // detail belongs to cascade 1.
-    const float foldCoarse = jacobianFold(q, 1u, pc.tileSize0 / 256.0);
-    const float foldFine   = jacobianFold(q, 2u, max(pc.tileSize1 / 256.0, texel));
-    // GRADED ramps + soft-knee saturation (1 − e^−x). A near-binary threshold
-    // re-quantizes the band-limited fold field into hard texel-grid blobs no
-    // matter how smoothly it is sampled; graded deposits leave the shading
-    // lifecycle mask a real gradient to shape. Genuinely breaking crests
-    // (multi-texel folding, coarse+fine overlapping) still saturate toward 1.
-    // NOTE: the shading mask in deferred_shade.comp is
-    // calibrated to this curve (sheet solidifies from coverage ≈ 0.55) — they
-    // must be retuned TOGETHER or the ocean under/over-foams.
-    const float foamCoarse  = max(foldCoarse - 0.02, 0.0) / 0.12;
-    const float foamFine    = max(foldFine   - 0.03, 0.0) / 0.25;
-    // natFoamScale: the fold measure is scale-free (dimensionless displacement
-    // gradients), so a pond's cm-ripples "fold" as readily as ocean swell —
-    // but real short waves don't whitecap (surface tension damps them, which
-    // the model lacks). Ocean::create derives this from the tile scale so
-    // small water reads calm; it's also a live artistic knob (params.foamAmount).
-    const float foamInstant = pc.natFoamScale *
-            (1.0 - exp(-3.0 * (min(foamCoarse, 1.4) + 0.85 * min(foamFine, 1.0))));
 
     // ── Vessel wake foam ─────────────────────────────────────────────
     // Per vessel, iterates its historical pose trail and takes MAX over
@@ -387,7 +271,7 @@ void main() {
     disturbFoam *= splatKeep;
 
     // ── Combine + decay ──────────────────────────────────────────────
-    const float instantTotal = max(foamInstant, max(wakeFoam, disturbFoam));
+    const float instantTotal = max(wakeFoam, disturbFoam);
     const float prev         = imageLoad(foam, ivec2(px)).r;
     const float result       = max(instantTotal, prev * pc.decay);
 

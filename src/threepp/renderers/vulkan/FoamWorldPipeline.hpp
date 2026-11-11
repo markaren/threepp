@@ -27,8 +27,8 @@ namespace threepp::vulkan {
         // descriptor set here.
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match foam_world.comp's `Pc` struct (72 bytes total):
-        // 3 × VkDeviceAddress (24) + 12 × u32/float (48). The vessels are the
+        // Must match foam_world.comp's `Pc` struct (68 bytes of fields):
+        // 3 × VkDeviceAddress (24) + 11 × u32/float (44). The vessels are the
         // same per-frame buffer WaterDisplacePipeline reads
         // (OceanHullGpu[hullCount]).
         struct PushConstants {
@@ -45,7 +45,6 @@ namespace threepp::vulkan {
             uint32_t        cascadeMask;
             uint32_t        disturbCount;
             float           decay;
-            float           natFoamScale;  // scales NATURAL Jacobian whitecaps (wake/splats unaffected)
             uint32_t        hullCount;     // active vessels (0 = no vessel foam)
         };
 

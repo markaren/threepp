@@ -3981,11 +3981,6 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 fpc.wakeTrailAddr  = wakeTrailAddr;
                 fpc.hullAddr       = hullAddr;
                 fpc.hullCount      = hullCount;
-                // Breaking crests draw the natural whitecaps in the shade from
-                // the current surface, so the accumulator keeps only the
-                // vessels' and splats' foam (unchanged).
-                // Crest foam draws them from its own texture: the same.
-                fpc.natFoamScale   = (breakingOn || st.crestFoamOn) ? 0.f : std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
                 // The deferred shade samples the foam image (binding 44) later
                 // this frame; the frame graph orders that read (the water pass
@@ -4028,7 +4023,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 cp.decay       = decay;
                 cp.threshold   = kThreshold;
                 cp.invRamp     = 1.f / kRamp;
-                cp.maxFoam     = kMaxFoam;
+                cp.maxFoam     = kMaxFoam * std::clamp(dm.params.foamAmount, 0.0f, 1.0f);// Params::foamAmount: 0 = no whitecaps
                 // Where the mesh sits in rest space: its warp centre (the
                 // warp recentres the grid there), else its own origin.
                 cp.centerX     = warpActive ? dm.warp.centerX : 0.f;

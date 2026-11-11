@@ -32,7 +32,7 @@ namespace threepp {
     }// namespace
 
     bool defaultChopNormals() {
-        static const bool value = envSwitch("THREEPP_OCEAN_CHOP_NORMALS", false);
+        static const bool value = envSwitch("THREEPP_OCEAN_CHOP_NORMALS", true);
         return value;
     }
 
