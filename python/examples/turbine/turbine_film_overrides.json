@@ -1,0 +1,77 @@
+{
+ "note": "Laid over turbine_spec.json for the film scene (turbine_storm.py): build_turbine_blender.py --overrides turbine_film_overrides.json --out turbine_film.glb. The yellow shell reaches below the trough of a storm sea once the scene raises the turbine; the fittings are ASSUMED, fitted by eye to photographs of transition pieces; the shells get rings for the scene's per-vertex weathering.",
+ "transition_piece": {
+  "bottom_y": {
+   "value": -8.5
+  },
+  "shell_ring_spacing": 0.2,
+  "boat_landing": {
+   "y_range": [
+    -9.5,
+    9.5
+   ]
+  },
+  "ladder": {
+   "y_range": [
+    -9.0,
+    12.4
+   ]
+  },
+  "fittings": {
+   "j_tube_azimuths_deg": [
+    150.0,
+    165.0,
+    300.0
+   ],
+   "seam_y": [
+    -8.45,
+    1.5,
+    5.0,
+    8.6
+   ],
+   "ladder_rest_y": 4.6,
+   "cabinets": [
+    [
+     140.0,
+     2.6,
+     1.3,
+     2.3,
+     "door_grey"
+    ],
+    [
+     172.0,
+     1.3,
+     0.9,
+     1.7,
+     "flange_grey"
+    ],
+    [
+     295.0,
+     3.2,
+     1.7,
+     2.5,
+     "door_grey"
+    ],
+    [
+     262.0,
+     1.1,
+     1.1,
+     1.2,
+     "flange_grey"
+    ]
+   ],
+   "lamp_azimuths_deg": [
+    10.0,
+    70.0,
+    130.0,
+    190.0,
+    250.0,
+    310.0
+   ],
+   "stores_davit_azimuth_deg": 215.0
+  }
+ },
+ "tower": {
+  "shell_ring_spacing": 0.35
+ }
+}

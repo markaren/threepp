@@ -235,7 +235,11 @@ def build_tp(spec, part):
     y0, y1 = val(TPs["bottom_y"]), val(TPs["top_y"])
     py = val(TPs["platform_y"])
     Ro = val(TPs["platform_outer_radius"])
-    v, f = revolve([(R0 - 0.35, y0), (R0, y0), (R0, y1), (R0 - 0.35, y1)], 128)
+    # The shell is two rings unless the spec asks for more (shell_ring_spacing, m): a scene that
+    # colours it per vertex (run-off, grime: turbine_storm.py) needs rings to colour.
+    dy = TPs.get("shell_ring_spacing")
+    ys_ = [y0, y1] if not dy else [float(q) for q in np.linspace(y0, y1, int((y1 - y0) / dy) + 1)]
+    v, f = revolve([(R0 - 0.35, y0)] + [(R0, q) for q in ys_] + [(R0 - 0.35, y1)], 256 if dy else 128)
     part.add(v, f, "tp_yellow", Z_TO_Y())
     ring_y(part, R0 - 0.05, R0 + 0.12, y1 - 0.35, y1, "flange_grey", 128)
     # platform deck, its knee braces, railing
@@ -316,6 +320,45 @@ def build_tp(spec, part):
     v, f, M = box_between(tip - [0.15, 2.1, 0.15], tip - [-0.15, 1.8, -0.15])
     part.add(v, f, "paint_black", M)
 
+    # Optional fittings (transition_piece.fittings): more of what stands on and hangs off a real
+    # transition piece, for a scene that looks at it from close by. All of it ASSUMED, fitted by eye.
+    FT = TPs.get("fittings")
+    if FT:
+        for a_deg in FT.get("j_tube_azimuths_deg", []):          # cables come up the outside in steel tubes
+            a = math.radians(a_deg)
+            strut(part, pol(R0 + 0.50, a, y0 + 0.6), pol(R0 + 0.50, a, py - 0.3), 0.24, "galv_steel", 14)
+            for yk in np.arange(y0 + 2.0, py - 1.0, 3.2):
+                strut(part, pol(R0 - 0.05, a, yk), pol(R0 + 0.50, a, yk), 0.09, "tp_yellow", 8)
+        for yk in FT.get("seam_y", []):                          # the shell is rolled cans welded end to end
+            ring_y(part, R0 - 0.02, R0 + 0.045, yk, yk + 0.16, "tp_yellow", 128)
+        if "ladder_rest_y" in FT:                                # a rest platform up the ladder, with its rail
+            ry, aw = FT["ladder_rest_y"], 1.3 / R0
+            part.add(*arc_box(R0 - 0.02, R0 + 1.9, az - aw, az + aw, ry, ry + 0.12, 10), "grating")
+            for s in (-1.0, 1.0):
+                for rr in (R0 + 0.4, R0 + 1.85):
+                    strut(part, pol(rr, az + s * aw, ry + 0.1), pol(rr, az + s * aw, ry + 1.2), 0.03, "rail_yellow", 8)
+                strut(part, pol(R0 + 0.4, az + s * aw, ry + 1.2), pol(R0 + 1.85, az + s * aw, ry + 1.2), 0.03,
+                      "rail_yellow", 8)
+        Rm = 0.5 * (R0 + Ro)
+        for a_deg, w, d, h, mat in FT.get("cabinets", []):       # (azimuth, width, depth, height, material)
+            a = math.radians(a_deg)
+            hw_ = 0.5 * w / Rm
+            part.add(*arc_box(Rm - 0.5 * d, Rm + 0.5 * d, a - hw_, a + hw_, py, py + h, 6), mat)
+            part.add(*arc_box(Rm - 0.5 * d - 0.06, Rm + 0.5 * d + 0.06, a - hw_ - 0.01, a + hw_ + 0.01, py + h,
+                              py + h + 0.06, 6), "paint_black")
+        for a_deg in FT.get("lamp_azimuths_deg", []):            # lamp posts on the railing line
+            a = math.radians(a_deg)
+            strut(part, pol(Ro - 0.12, a, py), pol(Ro - 0.12, a, py + 3.2), 0.045, "galv_steel", 8)
+            strut(part, pol(Ro - 0.12, a, py + 3.2), pol(Ro - 0.75, a, py + 3.35), 0.035, "galv_steel", 8)
+            c = pol(Ro - 0.75, a, py + 3.3)
+            v, f, M = box_between(c - [0.22, 0.07, 0.22], c + [0.22, 0.07, 0.22])
+            part.add(v, f, "paint_black", M)
+        if "stores_davit_azimuth_deg" in FT:                     # a second, lighter davit for stores
+            a2 = math.radians(FT["stores_davit_azimuth_deg"])
+            b2 = pol(Ro - 1.0, a2, py)
+            strut(part, b2, b2 + [0.0, 3.2, 0.0], 0.14, "rail_yellow", 16)
+            strut(part, b2 + [0.0, 3.1, 0.0], b2 + [0.0, 3.1, 0.0] + radial(a2) * 2.4, 0.10, "rail_yellow", 12)
+
 
 # ---------------------------------------------------------------- tower
 def build_tower(spec, part):
@@ -323,7 +366,13 @@ def build_tower(spec, part):
     prof = val(TW["outer_diameter_profile"])
     ys = [p[0] for p in prof]
     rs = [0.5 * p[1] for p in prof]
-    v, f = revolve([(r, y) for (y, r) in zip(ys, rs)], 96)
+    dy = TW.get("shell_ring_spacing")              # as the transition piece's: rings for a scene to colour
+    if dy:
+        yd = np.unique(np.concatenate([np.array(ys), np.arange(ys[0], min(ys[-1], ys[0] + 70.0), dy),
+                                       np.arange(min(ys[-1], ys[0] + 70.0), ys[-1], 3.0)]))
+        v, f = revolve([(float(np.interp(q, ys, rs)), float(q)) for q in yd], 192)
+    else:
+        v, f = revolve([(r, y) for (y, r) in zip(ys, rs)], 96)
     part.add(v, f, "tower_grey", Z_TO_Y())
     for y in val(TW["flange_y"]):
         r = float(np.interp(y, ys, rs))
@@ -758,6 +807,8 @@ def main(argv):
     ap.add_argument("--spec", default="turbine_spec.json")
     ap.add_argument("--out", default="turbine.glb")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--overrides", default="",
+                    help="a JSON file laid over the spec, key by key (turbine_film_overrides.json)")
     a = ap.parse_args(argv)
 
     def path(p):
@@ -765,6 +816,15 @@ def main(argv):
     t0 = time.perf_counter()
     with open(path(a.spec), "r", encoding="utf-8") as fh:
         spec = json.load(fh)
+    if a.overrides:
+        def lay(dst, src):
+            for k, v_ in src.items():
+                if isinstance(v_, dict) and isinstance(dst.get(k), dict):
+                    lay(dst[k], v_)
+                else:
+                    dst[k] = v_
+        with open(path(a.overrides), "r", encoding="utf-8") as fh:
+            lay(spec, json.load(fh))
     P, heli = build_geometry(spec)
     used = set(m for p in P.values() for m in p.mats)
     missing = sorted(used - set(spec["materials"]))
