@@ -50,7 +50,6 @@ struct GLMaterials::Impl {
         auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
         auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
         // auto spriteMaterial = dynamic_cast<SpriteMaterial*>(material);
-        // TODO clearcoat
 
         auto aoMaterial = dynamic_cast<MaterialWithAoMap*>(material);
         auto lightMaterial = dynamic_cast<MaterialWithLightMap*>(material);
@@ -144,9 +143,8 @@ struct GLMaterials::Impl {
         // 7. metalnessMap map
         // 8. alphaMap map
         // 9. emissiveMap map
-        // 10. clearcoat map
-        // 11. clearcoat normal map
-        // 12. clearcoat roughnessMap map
+        // The clearcoat maps are not in this list: each has its own transform
+        // uniform, set in refreshUniformsPhysical.
 
 
         Texture* uvScaleMap = nullptr;
@@ -170,7 +168,6 @@ struct GLMaterials::Impl {
         } else if (emissiveMaterial && emissiveMaterial->emissiveMap) {
             uvScaleMap = emissiveMaterial->emissiveMap.get();
         }
-        // TODO clearcoat
 
         if (uvScaleMap) {
 
