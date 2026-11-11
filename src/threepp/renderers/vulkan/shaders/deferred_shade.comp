@@ -865,6 +865,17 @@ void main() {
     float reflHitT = -1.0;// reflected-content distance (see the trace below)
     float rrHitT   = 0.0;// the same for RR's guide: 0 untraced, kRRMissDist on an escape
     float rrGlassT = 0.0;// RR: the glass share of this pixel (its transmission), 0 off glass
+    // What the pixel is if it is transmissive (dispatch A only; dispatch B
+    // returns before the transmissive block below): an ADDITIVE blend
+    // (transmission > 1), a CLEAN ALPHA blend (0 < transmission <= 1, ior < 0.5)
+    // or REAL glass. Glass's reflection is traced at the opaque reflection's
+    // call below, so its first part runs there.
+    const bool additiveBlend = pm.transmission > 1.0;
+    const bool flatAlpha     = !additiveBlend && pm.transmission > 0.0 && isFlatAlphaBlend(pm.ior);
+    const bool realGlass     = !additiveBlend && !flatAlpha && pm.transmission > 0.0;
+    const bool glassRefl     = realGlass && pc.shadeMode != 1u;
+    TraceReq   behindReq     = TraceReq(false, vec3(0.0), vec3(0.0), 0.0, false);
+    GlassCtx   glassCtx;
     {// THE TRACED LOBE (coatTraced above): from here to the reflection's store,
      // these names are the traced lobe's, and its result is weighted by lobeScale.
      // Without a coat they are exactly the base's (lobeScale 1).
@@ -902,7 +913,24 @@ void main() {
         if (reflReproject(uv, N, roughness, length(worldPos - camPos), rUv, rCap))
             reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, rUv)).x >= 4.0;
     }
-    if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
+    // The reflection ray: the opaque surface's (below), or real glass's, which
+    // shadeGlassReflect draws. A pixel is at most one of the two (opaqueRefl
+    // needs transmission <= 0), so they share this one call site of
+    // traceRadiance: every call site is a whole inlined copy of it, and the
+    // copies are what the driver's compile time is made of. They differ in
+    // cheapHits (opaque true: the reflection channel's blur and temporal
+    // absorb them; glass false: it shows its hits sharp) and in the seed the
+    // ray draws from (the opaque ray its own reflSeed, glass the pixel's seed);
+    // gTraceDeferMiss, gReflStarvedFill and the emitter share are set for the
+    // opaque ray only and are at rest for glass, as they always were.
+    const bool opaqueReflTraced = reflBlend > 0.0 && opaqueRefl && !reflSkip;
+    uint  reflSeed   = 0u;
+    bool  reflMoving = false;
+    float missLod    = 0.0;
+    vec3  Rd         = vec3(0.0);
+    vec3  reflOrig   = vec3(0.0);
+    TraceReq glassReflReq = TraceReq(false, vec3(0.0), vec3(0.0), 0.0, false);
+    if (opaqueReflTraced) {
         // Emitter self-emission scale for the ray (the other half of the split):
         // (1−specNEET) for EVERYONE — near-mirror keeps the sharp BRDF-sampled
         // lamp image, rough hands the energy to the NEE above. Safe for
@@ -932,7 +960,7 @@ void main() {
         // threshold aligns with specNEET's upper edge so the handoff is exact).
         // kReflStochastic is defined in the specular prologue (deferred_shade_08);
         // the emitter NEE keys on it too.
-        uint reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
+        reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
         // MOTION proxy (mirrors reflReproject's mvLen: screen-space surface
         // motion OR camera world motion) — drives the miss-LOD floor and the
         // radiance clamp below. It USED to also swap the GGX sample for the
@@ -952,7 +980,7 @@ void main() {
         // bounds the bright-source speckle that the guard worried about.
         const vec2  reflMv     = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
         const float reflCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
-        const bool  reflMoving = max(length(reflMv), reflCamNdc) > 0.004;
+        reflMoving = max(length(reflMv), reflCamNdc) > 0.004;
         // Ray-miss env LOD: the roughness-blurred PMREM mip — FLOORED while
         // MOVING. On the moving path the deterministic mirror ray reads the env
         // near-sharp while the reflection history is collapsed (1-6 frames), so
@@ -971,10 +999,10 @@ void main() {
         // filled its history with the blurrier reflection, then crawled back
         // for hundreds of frames after the camera stopped (1/n accumulation).
         const float curvT   = smoothstep(0.0, 1e-4, specAaKernelSq);
-        const float missLod = max(roughness * maxLod,
-                                  reflMoving ? min(2.0, maxLod) * smoothstep(0.02, 0.10, roughness) * curvT
-                                             : 0.0);
-        vec3 Rd = (roughness < kReflStochastic)
+        missLod = max(roughness * maxLod,
+                      reflMoving ? min(2.0, maxLod) * smoothstep(0.02, 0.10, roughness) * curvT
+                                 : 0.0);
+        Rd = (roughness < kReflStochastic)
                       ? R : sampleGGXReflection(V, N, roughness, reflSeed);
         // BELOW-HORIZON guard: plain NDF sampling (no VNDF) reflects under the
         // surface for a good fraction of samples at grazing view / high roughness.
@@ -996,7 +1024,7 @@ void main() {
         const vec3 NgRefl = (probesOn || aoOn) ? Ng : depthGeometricNormal(px, msSampleIdx, ndc, id, worldPos, V, N);
         const float rdNg  = dot(Rd, NgRefl);
         if (rdNg < 0.05) Rd = normalize(Rd - (rdNg - 0.05) * NgRefl);
-        const vec3 reflOrig = worldPos + NgRefl * SHADOW_EPS;
+        reflOrig = worldPos + NgRefl * SHADOW_EPS;
         // A lobe sample that escapes takes the lobe's environment from 8
         // stratified directions, not its own one (envLobeGGX): the reflection
         // filter leaves env misses unblurred, so the single read stayed on
@@ -1005,12 +1033,29 @@ void main() {
         // Traced fill for a starved probe neighbourhood at the first hit: full
         // weight up to roughness 0.25, none from 0.35 (gReflStarvedFill).
         gReflStarvedFill = 1.0 - smoothstep(0.25, 0.35, roughness);
-        vec3 r = traceRadiance(reflOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
-                               /*cheapHits=*/true,// reflection channel: blur+temporal absorb
-                               /*probeHitFill=*/true,
-                               // THE reflection channel: this surface's own
-                               // environment, so its envMapIntensity applies.
-                               /*envInt=*/pm.envMapIntensity);
+    } else if (glassRefl) {
+        shadeGlassReflect(worldPos, N, V, pm, roughMat, maxLod, seed, glassCtx, glassReflReq);
+    }
+    vec3 r = vec3(0.0);
+    if (opaqueReflTraced || glassReflReq.want) {
+        uint s = opaqueReflTraced ? reflSeed : seed;
+        r = traceRadiance(opaqueReflTraced ? reflOrig : glassReflReq.orig,
+                          opaqueReflTraced ? Rd : glassReflReq.dir, shadowsOn, maxLod,
+                          opaqueReflTraced ? missLod : glassReflReq.missLod, s,
+                          /*cheapHits=*/opaqueReflTraced,
+                          /*probeHitFill=*/true,
+                          // This surface's own environment, so its envMapIntensity applies.
+                          /*envInt=*/pm.envMapIntensity);
+        if (opaqueReflTraced) reflSeed = s;
+        else seed = s;
+    }
+    if (glassReflReq.want) {
+        // Real glass, the rest of its first part: the splats in its mirror, its
+        // way through (the interior walk draws from the seed here, after the
+        // reflection, as it always did) and the behind trace it asks for.
+        shadeGlassBegin(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed, r, glassCtx, behindReq);
+    }
+    if (opaqueReflTraced) {
         gTraceDeferMiss  = false;
         gReflStarvedFill = 0.0;
         vec3 rEnv = vec3(0.0);// the escape's environment, kept apart for the moving clamp below
@@ -1157,19 +1202,14 @@ void main() {
         // most, so they share this one call site of traceRadiance: every call
         // site is a whole inlined copy of it, and the copies are what the
         // driver's compile time is made of. Nothing draws from the seed between
-        // shadeGlassBegin and the trace.
-        const bool additiveBlend = pm.transmission > 1.0;
-        const bool flatAlpha     = !additiveBlend && pm.transmission > 0.0 && isFlatAlphaBlend(pm.ior);
-        const bool realGlass     = !additiveBlend && !flatAlpha && pm.transmission > 0.0;
-        TraceReq   behindReq     = TraceReq(false, vec3(0.0), vec3(0.0), 0.0, false);
-        GlassCtx   glassCtx;
+        // shadeGlassBegin (above, at the reflection) and the trace.
         if (additiveBlend || flatAlpha) {
             // Straight into lit, unblurred: what is behind is lit where it stands
             // and by the lamps of its own cluster cell (gTraceAlongView).
             behindReq = TraceReq(true, worldPos - V * SHADOW_EPS, -V, 0.0, true);
-        } else if (realGlass) {
-            shadeGlassBegin(worldPos, N, V, pm, albedo, roughMat, shadowsOn, maxLod, seed, glassCtx, behindReq);
         }
+        // Real glass asked for its behind trace (behindReq) at its reflection,
+        // in the traced lobe's block above.
         vec3 behind = vec3(0.0);
         if (behindReq.want) {
             gSeenThroughHits = true;

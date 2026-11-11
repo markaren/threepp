@@ -1353,16 +1353,24 @@ const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO
 // factor alone frosted every such glass to the kGlassMaxRough cap, which the
 // reflection filter then blurred (GlassHurricaneCandleHolder: a clear pane with
 // frosted stripes read as one soft, milky shell).
-// shadeGlass in two halves around the trace of what is behind the glass, which
-// main() makes: the call it shares with the additive and flat-alpha blends (one
-// call site of traceRadiance for all three; each call site is a whole inlined
-// copy of it, and the copies are what the driver's compile time is made of).
-// shadeGlassBegin does everything up to the point where the glass knows whether
-// it wants that trace, and from where, in which direction and along the view or
-// not (the TraceReq); shadeGlassEnd takes what the trace returned and finishes.
-// GlassCtx carries what the second half needs of the first. kGlassSamples is 1,
+// shadeGlass in three parts around its two traces, both of which main() makes
+// at call sites it shares with other surfaces (each call site of traceRadiance
+// is a whole inlined copy of it, and the copies are what the driver's compile
+// time is made of): its reflection at the opaque surfaces' reflection call, and
+// what is behind it at the additive and flat-alpha blends' call.
+// shadeGlassReflect draws the facet and asks for the reflection ray (a
+// TraceReq); shadeGlassBegin takes the reflected radiance and does everything
+// up to the point where the glass knows whether it wants the trace behind it,
+// and from where, in which direction and along the view or not (a second
+// TraceReq); shadeGlassEnd takes what that trace returned and finishes.
+// GlassCtx carries what each part needs of the one before. kGlassSamples is 1,
 // and the split takes that one sample (the loop it ran in is gone).
 struct GlassCtx {
+    vec3  Ns;           // the facet the sample was drawn on
+    vec3  R;            // the reflection ray, from reflOrig
+    vec3  reflOrig;
+    float missLod;
+    float ior;
     vec3  reflectColor;
     vec3  F;
     vec3  transmitColor;// set here only on a total internal reflection at the front face
@@ -1383,8 +1391,8 @@ struct TraceReq {
     float missLod;
     bool  along;
 };
-void shadeGlassBegin(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matRough,
-                     bool doShadows, float maxLod, inout uint seed, out GlassCtx gc, out TraceReq req) {
+void shadeGlassReflect(vec3 P, vec3 N, vec3 V, MaterialDesc pm, float matRough, float maxLod,
+                       inout uint seed, out GlassCtx gc, out TraceReq reflReq) {
     const float ior     = max(pm.ior, 1.0);
     // Explicit square — same negative-base pow() rationale as shadeWater above.
     const float f0n     = (1.0 - ior) / (1.0 + ior);
@@ -1427,13 +1435,34 @@ void shadeGlassBegin(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float
     // Reflection (sky + scene) — multi-bounce / recursive.
     const vec3 R = reflect(-V, Ns);
     const vec3 reflOrig = P + N * SHADOW_EPS;
+    gc.Ns       = Ns;
+    gc.R        = R;
+    gc.reflOrig = reflOrig;
+    gc.missLod  = missLod;
+    gc.ior      = ior;
+    gc.F        = F;
+    gc.gr       = gr;
+    gc.r0       = r0;
+    // Traced by main() with cheapHits false (glass shows hits SHARP:
+    // deterministic shading), probeHitFill true and this surface's
+    // envMapIntensity, from the seed.
+    reflReq = TraceReq(true, reflOrig, R, missLod, false);
+}
+
+// reflected: what the reflection ray shadeGlassReflect asked for returned.
+void shadeGlassBegin(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, bool doShadows, float maxLod,
+                     inout uint seed, vec3 reflected, inout GlassCtx gc, out TraceReq req) {
+    const vec3  Ns       = gc.Ns;
+    const vec3  R        = gc.R;
+    const vec3  reflOrig = gc.reflOrig;
+    const float missLod  = gc.missLod;
+    const float ior      = gc.ior;
+    const vec3  F        = gc.F;
+    const float gr       = gc.gr;
     // NOT const: the splat-volume leg below composites into it. Same value,
     // same expression — the write is behind a uniform flag that is 0 on
     // every splat-free scene.
-    vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, missLod, seed,
-                                      /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
-                                      /*probeHitFill=*/true,
-                                      /*envInt=*/pm.envMapIntensity);
+    vec3 reflectColor = reflected;
     if (kRR) {
         gRRSpecF     = F;
         gRRSpecRough = gr;
@@ -1527,13 +1556,10 @@ void shadeGlassBegin(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float
         }
     }
     gc.reflectColor  = reflectColor;
-    gc.F             = F;
     gc.transmitColor = transmitColor;
     gc.inDist        = inDist;
     gc.overC         = overC;
     gc.overT         = overT;
-    gc.gr            = gr;
-    gc.r0            = r0;
     req.want    = behindWanted;
     req.orig    = behindOrig;
     req.dir     = behindDir;
