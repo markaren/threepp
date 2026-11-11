@@ -2497,6 +2497,21 @@ int main(int argc, char** argv) {
         motes->setDensityRepr(Vector3(0.f, 1.4f, 0.f), Vector3(1.4f, 1.1f, 1.4f),
                               /*sigmaPerParticle*/ 0.3f, /*resolution*/ 32u);
         scene.add(motes);
+        // The same field with its BILLBOARDS off: the R3 claim is about what
+        // the sprites draw, and the field's density volume (the fog march,
+        // lit by the dim sun) adds a little red of its own — ~234k summed R,
+        // the same before and after the HDR sprite layer.
+        motes->billboardRepr().enabled = false;
+        for (int i = 0; i < 20; ++i) frame();
+        double baseR = 0.0, baseB = 0.0;
+        {
+            const auto base = renderer.readRGBPixels();
+            for (std::size_t i = 0; i + 2 < base.size(); i += 3) {
+                baseR += base[i];
+                baseB += base[i + 2];
+            }
+        }
+        motes->billboardRepr().enabled = true;
         for (int i = 0; i < 20; ++i) frame();
 
         const auto tinted = renderer.readRGBPixels();
@@ -2511,9 +2526,19 @@ int main(int argc, char** argv) {
             sumR += tinted[i];
             sumB += tinted[i + 2];
         }
-        std::printf("[info] attributes: summed R %.0f, summed B %.0f "
-                    "(ramp is pure RED, attributes are pure BLUE)\n", sumR, sumB);
-        check(sumB > 1000.0 && sumB > 20.0 * sumR,
+        // Measured as what the BILLBOARDS add over the same frame without
+        // them. The ratio used to be taken on the whole frame, which only held
+        // while the sprites' blue was large against the volume's own red: the
+        // sprites are now summed in linear HDR and tone-mapped once, which
+        // compresses 40k overlapping motes far more than adding 40k tone-mapped
+        // values did (summed B 5.57M -> 3.10M), while the volume's red stayed
+        // 234k: 13x on the whole frame. The sprites add no red on either path,
+        // which is the claim.
+        const double addR = sumR - baseR, addB = sumB - baseB;
+        std::printf("[info] attributes: summed R %.0f, summed B %.0f (billboards off "
+                    "%.0f / %.0f; ramp is pure RED, attributes are pure BLUE)\n",
+                    sumR, sumB, baseR, baseB);
+        check(addB > 1000.0 && addB > 20.0 * std::max(addR, 0.0),
               "Config::attributes REPLACES the colorHot/colorCool ramp — the "
               "sprites are the simulation's blue, not the field's red");
 

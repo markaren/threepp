@@ -455,8 +455,9 @@ namespace threepp::vulkan {
         // the PT-era gbuf ping-pong sky source — the deferred sky test reads
         // the raster ids at @5) ; sampler3D @4 ; usampler2D @5 (raster ids) ;
         // HDR-mode-only combined sampler @6 (resolved HDR history) ;
-        // HDR-mode-only storage image @7 (hdrOut_).
-        VkDescriptorSetLayoutBinding bnd[7]{};
+        // HDR-mode-only storage image @7 (hdrOut_) ; HDR-mode-only combined
+        // samplers @8,9 (the billboard HDR layer).
+        VkDescriptorSetLayoutBinding bnd[9]{};
         bnd[0].binding = 0;
         bnd[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bnd[1].binding = 1;
@@ -471,10 +472,14 @@ namespace threepp::vulkan {
         bnd[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bnd[6].binding = 7;
         bnd[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bnd[7].binding = 8;
+        bnd[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bnd[8].binding = 9;
+        bnd[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         for (auto& b : bnd) { b.descriptorCount = 1; b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; }
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 7;
+        dlci.bindingCount = 9;
         dlci.pBindings = bnd;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(postComposite)");
@@ -515,7 +520,7 @@ namespace threepp::vulkan {
     void PostComposite::createDescriptorPool() {
         VkDescriptorPoolSize sizes[2]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = framesInFlight_ * 5;// 4 base + 1 HDR-mode scene
+        sizes[0].descriptorCount = framesInFlight_ * 7;// 4 base + 1 HDR-mode scene + 2 sprite layer
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = framesInFlight_ * 2;// 1 base (TAA input) + 1 HDR-mode output
 
@@ -536,6 +541,7 @@ namespace threepp::vulkan {
         sets_.resize(framesInFlight_);
         check(vkAllocateDescriptorSets(ctx_.device(), &ai, sets_.data()),
               "vkAllocateDescriptorSets(postComposite)");
+        spriteSerials_.assign(framesInFlight_, uint64_t{0});
     }
 
     void PostComposite::rewriteDescriptors(const DescriptorWriteInputs& in) {
@@ -572,7 +578,11 @@ namespace threepp::vulkan {
                                                                ? hdrOut_[f].view
                                                                : in.taaInputPerFrame[f]);
 
-            VkWriteDescriptorSet w[7]{};
+            // The sprite layer: a placeholder until setSpriteLayer names the
+            // real one — never read while recordDispatch's spriteLayer is off.
+            VkDescriptorImageInfo cSprite = cHdrScene;
+
+            VkWriteDescriptorSet w[9]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* info) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -589,8 +599,32 @@ namespace threepp::vulkan {
             setw(4, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cIds);
             setw(5, 6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cHdrScene);
             setw(6, 7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cHdrOut);
-            vulkan::updateDescriptorSets(ctx_.device(), 7, w, 0, nullptr);
+            setw(7, 8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cSprite);
+            setw(8, 9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cSprite);
+            vulkan::updateDescriptorSets(ctx_.device(), 9, w, 0, nullptr);
         }
+        std::fill(spriteSerials_.begin(), spriteSerials_.end(), uint64_t{0});
+    }
+
+    void PostComposite::setSpriteLayer(uint32_t frame, VkImageView overView, VkImageView addView) {
+        const uint64_t serial = vulkan::imageViewSerial(overView) ^ (vulkan::imageViewSerial(addView) << 32);
+        if (spriteSerials_[frame] == serial) return;
+        // NEAREST would state the intent (the shader texelFetches), but the
+        // fetch ignores the filter and this keeps the set to one sampler kind.
+        VkDescriptorImageInfo ii[2]{};
+        ii[0] = {sampler_, overView, VK_IMAGE_LAYOUT_GENERAL};
+        ii[1] = {sampler_, addView, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[2]{};
+        for (uint32_t n = 0; n < 2; ++n) {
+            w[n].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[n].dstSet          = sets_[frame];
+            w[n].dstBinding      = 8 + n;
+            w[n].descriptorCount = 1;
+            w[n].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[n].pImageInfo      = &ii[n];
+        }
+        vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+        spriteSerials_[frame] = serial;
     }
 
     void PostComposite::declare(rg::RenderGraph& graph, rg::PassBuilder& pass) const {
@@ -606,7 +640,7 @@ namespace threepp::vulkan {
                                        uint32_t preExposureBits,
                                        bool bgIsSolidColor, float effBloomIntensity,
                                        uint32_t srcWidth, uint32_t srcHeight,
-                                       bool hdrMode) {
+                                       bool hdrMode, bool spriteLayer) {
         if (srcWidth == 0)  srcWidth  = width;
         if (srcHeight == 0) srcHeight = height;
         // The render graph makes the inputs' writes visible (declared by the
@@ -619,7 +653,7 @@ namespace threepp::vulkan {
         std::memcpy(&intensityBits, &effBloomIntensity, sizeof(intensityBits));
         // bit 2 (4u) retired: was the PT-era gbuf sky-source select.
         const uint32_t postFlags = (wbActive_ ? 1u : 0u) | (lutActive_ ? 2u : 0u) |
-                                   (hdrMode ? 8u : 0u);
+                                   (hdrMode ? 8u : 0u) | (hdrMode && spriteLayer ? 16u : 0u);
 
         struct Pc {
             uint32_t u[8];

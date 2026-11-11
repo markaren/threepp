@@ -840,15 +840,18 @@ namespace threepp {
         void setStochasticTilingIntegerHash(bool enabled);
         [[nodiscard]] bool stochasticTilingIntegerHash() const;
 
-        // ParticleField billboards and their glow composite AFTER the post
-        // stack, so they take exposure and the tone map by hand; the white
-        // balance and the colour grade (setWhiteBalance, setColorGrade) never
-        // reached them, and under a strong grade a sprite reads flatter and
-        // greyer than the same colour on a surface. On: they get both, in the
-        // post stack's order, so a sprite lands where a graded surface colour
-        // would. Changes nothing without a white balance or grade; the legacy
-        // ParticleSystem and world sprites are not covered. OFF by default
-        // until the look is judged.
+        // Where ParticleField billboards or their glow are composited AFTER the
+        // post stack, they take exposure and the tone map by hand, and the white
+        // balance and the colour grade (setWhiteBalance, setColorGrade) do not
+        // reach them unless this is on; then they get both, in the post stack's
+        // order. That is the field glow on every path, and the billboards
+        // themselves on the built-in TAA path and on secondary views. On the
+        // DLSS/FSR path the billboards are blended into the scene before the
+        // post composite and always take its white balance and grade, so this
+        // switch does not apply to them there (over a solid-colour background,
+        // which the post stack shows ungraded, they stay ungraded too). Changes nothing without a white
+        // balance or grade; the legacy ParticleSystem and world sprites are not
+        // covered. OFF by default.
         void setOverlayColorGrade(bool enabled);
         [[nodiscard]] bool overlayColorGrade() const;
 
@@ -2030,6 +2033,11 @@ namespace threepp {
             float rtaoMs          = 0.f;
             // The half-res sun fog march (setFogMarchHalfRes); 0 while it is off.
             float fogMarchMs      = 0.f;
+            // The primary's ParticleField billboards drawn into the billboard
+            // HDR layer: the sprites' fill (plus the layer's depth copy and
+            // splat stamp when they run). 0 without field billboards. Their
+            // composite is inside the post composite (DLSS/FSR) or overlayMs.
+            float billboardLayerMs = 0.f;
             // World-space probe-GI update (probe_update.comp) plus its
             // prev-store snapshot copy. 0 unless probe GI is enabled. Recorded
             // once per frame for all views — the dispatch is primary-only — so

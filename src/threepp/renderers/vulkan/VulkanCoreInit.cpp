@@ -543,6 +543,7 @@ VulkanRenderer::Impl::~Impl() {
             if (overlayInjectPool_)           vkDestroyDescriptorPool(d, overlayInjectPool_, nullptr);
             // Splat depth stamp (created alongside the overlay pipelines).
             if (splatStampPipeline_)          vkDestroyPipeline(d, splatStampPipeline_, nullptr);
+            if (splatStampLayerPipeline_)     vkDestroyPipeline(d, splatStampLayerPipeline_, nullptr);
             if (splatStampPipelineLayout_)    vkDestroyPipelineLayout(d, splatStampPipelineLayout_, nullptr);
             if (splatStampSetLayout_)         vkDestroyDescriptorSetLayout(d, splatStampSetLayout_, nullptr);
             if (splatStampPool_)              vkDestroyDescriptorPool(d, splatStampPool_, nullptr);
@@ -556,17 +557,9 @@ VulkanRenderer::Impl::~Impl() {
             if (particlePipelineNormal_)    vkDestroyPipeline(d, particlePipelineNormal_, nullptr);
             if (particlePipelineAdditive_)  vkDestroyPipeline(d, particlePipelineAdditive_, nullptr);
             if (particlePipelineLayout_)    vkDestroyPipelineLayout(d, particlePipelineLayout_, nullptr);
-            // ParticleField billboards (F-D). The 1x sibling ALIASES the main
-            // pipeline unless overlay MSAA forced a second object — destroy it
-            // only when it is genuinely a second object.
-            if (fieldBillboardPipeline1xOwned_ && fieldBillboardPipeline1x_)
-                vkDestroyPipeline(d, fieldBillboardPipeline1x_, nullptr);
-            if (fieldBillboardPipeline_)    vkDestroyPipeline(d, fieldBillboardPipeline_, nullptr);
-            // 4c: the alpha-over pair, same aliasing rule.
-            if (fieldBillboardAlphaPipeline1xOwned_ && fieldBillboardAlphaPipeline1x_)
-                vkDestroyPipeline(d, fieldBillboardAlphaPipeline1x_, nullptr);
-            if (fieldBillboardAlphaPipeline_)
-                vkDestroyPipeline(d, fieldBillboardAlphaPipeline_, nullptr);
+            // ParticleField billboards (F-D): the glow leg's pipeline and the
+            // shared layout. The sprites' own pipelines are
+            // BillboardHdrLayerPipelines, released below with the layers.
             if (fieldBillboardGlowPipeline_) vkDestroyPipeline(d, fieldBillboardGlowPipeline_, nullptr);
             if (fieldBillboardPipelineLayout_)
                 vkDestroyPipelineLayout(d, fieldBillboardPipelineLayout_, nullptr);
@@ -578,6 +571,12 @@ VulkanRenderer::Impl::~Impl() {
             if (fieldGlowCompositeLayout_)
                 vkDestroyPipelineLayout(d, fieldGlowCompositeLayout_, nullptr);
             billboardGlow_.reset();
+            // The billboard HDR layers own their targets and pools (every
+            // view's, before the pipelines they draw with).
+            billboardHdrLayerPass_.reset();
+            for (auto& vp : views_)
+                if (vp) vp->bbLayer_.reset();
+            bbLayerPipes_.reset();
             billboardSoftDepth_.reset();// its pipelines, sets and per-view buffers
             et.mark("raster, overlay, particle pipelines");
             if (particleDescSetLayout_)     vkDestroyDescriptorSetLayout(d, particleDescSetLayout_, nullptr);
@@ -648,6 +647,7 @@ VulkanRenderer::Impl::~Impl() {
                 vp->bloom_.reset();
                 vp->deferredShade_.reset();
                 vp->shadowMaps_.reset();
+                vp->bbLayer_.reset();// already released with the layer pipelines; kept explicit
             }
             et.mark("upscalers, taa, post, bloom, shade");
         }

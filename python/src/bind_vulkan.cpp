@@ -1611,6 +1611,9 @@ namespace threepp_py {
                                            d["rtao_ms"] = t.rtaoMs;
                                            // The half-res sun fog march (fog_march_half_res); 0 when off.
                                            d["fog_march_ms"] = t.fogMarchMs;
+                                           // The primary's field billboards into the HDR sprite
+                                           // layer (their fill); 0 without field billboards.
+                                           d["billboard_layer_ms"] = t.billboardLayerMs;
                                            // The shadow-map pass (shadow_mode 'sm'); 0 otherwise.
                                            d["shadow_maps_ms"] = t.shadowMapsMs;
                                            d["instance_expand_ms"] = t.instanceExpandMs;
@@ -2060,10 +2063,14 @@ namespace threepp_py {
                 .def_property("overlay_color_grade",
                               [](PyVulkanRenderer& r) { return r.native().overlayColorGrade(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setOverlayColorGrade(v); },
-                              "ParticleField billboards and their glow take the white balance and colour grade "
-                              "(set_white_balance, set_color_grade) as the frame does, so a sprite lands where a "
-                              "graded surface colour would instead of flatter and greyer. Off by default; "
-                              "changes nothing without a white balance or grade.")
+                              "ParticleField sprites composited after the post stack take the white balance and "
+                              "colour grade (set_white_balance, set_color_grade) as the frame does, so a sprite "
+                              "lands where a graded surface colour would instead of flatter and greyer. That is "
+                              "the field glow always, and the billboards on the built-in TAA path and on "
+                              "secondary views. On the DLSS/FSR path the billboards are blended into the scene "
+                              "before the tone map and always graded with it (ungraded over a solid-colour "
+                              "background, like the background itself). "
+                              "Off by default; changes nothing without a white balance or grade.")
                 .def_property("overlay_depth_from_gbuffer",
                               [](PyVulkanRenderer& r) { return r.native().overlayDepthFromGbuffer(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setOverlayDepthFromGbuffer(v); },

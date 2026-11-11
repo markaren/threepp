@@ -160,8 +160,8 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Tra
 // fence has already been waited on, so nothing in flight can be reading it.
 // KEEP IN SYNC with BillboardViewGpu in ParticleFieldPass.hpp.
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BbView {
-    float exposure;     // currentExposure(), for the display transform
-    uint  toneMapMode;  // threepp::ToneMapping
+    float exposure;     // reserved (was the display transform; not filled)
+    uint  toneMapMode;  // reserved (was the display transform; not filled)
     uint  flags;        // bit0 = a fog medium is present, bit1 = LINEAR HDR out,
                         // bit2 = submerged sprites take refraction's flux factor
     float hfDensity;    // air-medium sigma_t at baseY
@@ -214,8 +214,8 @@ layout(push_constant, scalar) uniform Pc {
                          //     view-space position is three dot products and no
                          //     matrix-layout convention has to be agreed on
     uint64_t paramsAddr; //  8  -> this field's BbParams record
-    uint64_t viewAddr;   //  8  -> this view's BbView record (exposure,
-                         //     toneMapMode and the fog terms ride there —
+    uint64_t viewAddr;   //  8  -> this view's BbView record (the sun, the
+                         //     fog terms and the soft depth ride there —
                          //     the push block itself is full)
 } pc;                    // 128 B exactly — the guaranteed minimum push range
 
@@ -226,8 +226,8 @@ layout(location = 2) out vec2  vSoft; // x = softness, y = core-term weight
 // per-view record rather than the push block — the fragment stage would
 // otherwise have to dereference the same buffer_reference per FRAGMENT to read
 // two scalars that are constant over the whole draw.
-layout(location = 3) flat out float vExposure;
-layout(location = 4) flat out uint  vToneMap;
+// (Locations 3 and 4, the display transform, retired with the direct sprite
+// draw: every billboard is now written in linear radiance.)
 // F5: > 0 turns the sprite into an ANNULUS of this fractional width — a splash
 // ring. 0 is the ordinary soft disc and costs the fragment stage one compare.
 layout(location = 5) flat out float vRing;
@@ -762,11 +762,4 @@ void main() {
     // that cut the hard line compared.
     vSoftInv   = (P.softDistance > 0.0) ? 1.0 / P.softDistance : 0.0;
     vViewDepth = -vpos.z;
-    // The display transform. In the glow pass the fragment stage must NOT apply
-    // it: that target is linear HDR, which is the domain the bright pass and the
-    // 13-tap downsample are defined in. Signalled by a negative exposure rather
-    // than a fifth varying — the value is only ever used as an argument to
-    // odDisplay(), and no real exposure is negative.
-    vExposure = ((V.flags & kViewLinearOut) != 0u) ? -1.0 : V.exposure;
-    vToneMap  = V.toneMapMode;
 }

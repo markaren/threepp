@@ -40,6 +40,7 @@
 #include "AutoExposure.hpp"
 #include "GbufResolve.hpp"
 #include "BillboardGlowPass.hpp"
+#include "BillboardHdrLayer.hpp"
 #include "BillboardSoftDepth.hpp"
 #include "BloomPass.hpp"
 #include "PostComposite.hpp"
@@ -183,6 +184,7 @@ namespace threepp {
     using vulkan::TP_ShadowMaps;
     using vulkan::TP_Rtao;
     using vulkan::TP_FogMarch;
+    using vulkan::TP_BillboardLayer;
 
     namespace {
         // kFramesInFlight — and the long note on why it MUST stay EVEN —
@@ -1429,7 +1431,7 @@ namespace threepp {
         bool     overlayDepthFromGbuffer_ = false;    // setOverlayDepthFromGbuffer
         // This view's white balance and colour grade for the overlay passes
         // (OverlayGradeGpu), from its PostComposite; zero flags when the
-        // switch is off or the view grades nothing.
+        // overlay grade is off or the view grades nothing.
         vulkan::OverlayGradeGpu overlayGrade() const;
         // What a PostComposite applies (its white balance and grade) as that
         // block, whatever the overlay switch; the path trace's resolve too.
@@ -2387,6 +2389,8 @@ namespace threepp {
         VkDescriptorPool      splatStampPool_           = VK_NULL_HANDLE;
         VkPipelineLayout      splatStampPipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            splatStampPipeline_       = VK_NULL_HANDLE;
+        // The stamp into BillboardHdrLayer's own one-sample depth (no colour).
+        VkPipeline            splatStampLayerPipeline_  = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, kFramesInFlight> splatStampSets_{};
         std::array<uint64_t, kFramesInFlight>        splatStampSetSerials_{};// imageViewSerial
         // Sticky: set the first frame a scene holds BOTH splat clouds and
@@ -2483,18 +2487,10 @@ namespace threepp {
         // moved the marches into particlefield_transmit.comp, which is where
         // the image is bound now, so the exception closed again and the draw
         // side is back to one set.)
+        // The sprites themselves are drawn by BillboardHdrLayer's two
+        // pipelines (additive and alpha-over), which share this layout, and by
+        // the glow leg's pipeline below.
         VkPipelineLayout fieldBillboardPipelineLayout_ = VK_NULL_HANDLE;
-        // At overlaySampleBits() — the primary's overlay pass.
-        VkPipeline       fieldBillboardPipeline_       = VK_NULL_HANDLE;
-        // At 1 sample — a secondary view composites into its own colour target
-        // with no overlay MSAA. Aliases the above when overlaySamples() == 1,
-        // and is only a second object when it has to be.
-        VkPipeline       fieldBillboardPipeline1x_     = VK_NULL_HANDLE;
-        bool             fieldBillboardPipeline1xOwned_ = false;
-        // Alpha-over siblings: identical but for the blend state
-        // (premultiplied SRC_ALPHA-over instead of ONE/ONE) — blending is
-        // pipeline state, so they need their own objects. Created alongside
-        // the additive pair, bound per field by BillboardRepr::alphaOver.
         // The scene's one sun, snapshotted by updateLightsUbo for the
         // billboard slice — the brightest DirectionalLight in the lights UBO
         // (already the env-sun/scene-sun decision EnvSunPolicy made), plus the
@@ -2504,14 +2500,31 @@ namespace threepp {
         float            bbSunDirWorld_[3]  = {0.f, 1.f, 0.f};
         float            bbSunRadiance_[3]  = {0.f, 0.f, 0.f};
         float            bbAmbient_[3]      = {0.f, 0.f, 0.f};
-        VkPipeline       fieldBillboardAlphaPipeline_   = VK_NULL_HANDLE;
-        VkPipeline       fieldBillboardAlphaPipeline1x_ = VK_NULL_HANDLE;
-        bool             fieldBillboardAlphaPipeline1xOwned_ = false;
         // Billboard-only bloom chain. Created lazily on the first frame a
         // field asks for a glow — a scene with no sparks allocates no target,
         // compiles no pipeline and records no pass.
         std::unique_ptr<vulkan::BillboardGlowPass> billboardGlow_;
         bool billboardGlowReadyThisFrame_ = false;
+        // The primary's field billboards, summed in linear HDR and tone-mapped
+        // once (BillboardHdrLayer.hpp): the only way field billboards are
+        // drawn. Created on the first frame a field draws billboards; a scene
+        // without one has nothing of it. (A secondary view's own layer lives on
+        // its ViewContext.)
+        std::unique_ptr<vulkan::BillboardHdrLayer> billboardHdrLayerPass_;
+        // The pipelines every view's layer draws and composites with, built
+        // with the other field billboard pipelines (createFieldBillboardPipeline).
+        std::unique_ptr<vulkan::BillboardHdrLayerPipelines> bbLayerPipes_;
+        // The prepare window's answer (a field with a billboard
+        // representation, targets allocated), then the graph's (the overlay
+        // pass and its depth prepass run).
+        bool billboardHdrLayerReady_     = false;
+        bool billboardHdrLayerThisFrame_ = false;
+        // This frame: the front passes were added (addFieldBillboardFrontPasses),
+        // the soft-depth buffer they built, and whether the post composite
+        // (upscaler path) blends the layer rather than the overlay pass.
+        bool     bbFrontAdded_     = false;
+        bool     bbLayerInPost_    = false;
+        VkBuffer bbFrontSoftDepth_ = VK_NULL_HANDLE;
         // BillboardRepr::softDistance: the linear scene depth the soft fade
         // reads, one buffer per (view, frame in flight). Created on the first
         // frame a visible field asks for a soft edge; until then nothing of it
@@ -5720,12 +5733,27 @@ namespace threepp {
         // Called from the PREPARE window (never mid-recording), so the pipeline
         // compile lands where every other lazy creation in this renderer does.
         void ensureFieldBillboardGlow();
+        // The billboard HDR layer: create and size its targets, in the
+        // same PREPARE window, when the switch is on and a field draws quads.
+        void ensureFieldBillboardHdrLayer();
+        // Draw the fields into the layer's two linear targets, against the
+        // overlay pass's depth (or the layer's own copy of it, with the splat
+        // stamp, when `ownDepth`). Its own graph pass.
+        void recordFieldBillboardHdrLayer(VkCommandBuffer cb, bool ownDepth, bool stamp);
+        // The primary's transmittance prepass, soft depth and HDR layer, once
+        // per frame: ahead of the post composite on the upscaler path, at the
+        // head of the tail on the built-in TAA path.
+        void addFieldBillboardFrontPasses(vulkan::rg::RenderGraph& g);
 
         // Any visible ParticleField will draw billboards this frame. Cheap (a
         // handful of fields at most) and used by sceneHasOverlayContent(), so
         // the overlay depth prepass and the overlay pass itself run for a scene
         // whose ONLY overlay content is a field of embers.
         [[nodiscard]] bool sceneHasFieldBillboards() const;
+        // A visible field has an enabled billboard representation, live
+        // particles or not: what the billboard HDR layer's images are
+        // allocated for, so the first live particle does not pay for them.
+        [[nodiscard]] bool sceneHasFieldBillboardRepr() const;
 
         // The scene's SceneCensus for this render(): one walk on the first ask,
         // a per-type answer for each node, so a scene of plain meshes pays no
@@ -5768,7 +5796,7 @@ namespace threepp {
         // recordSplatStampDraw at the exempt/occluded boundary. Called while
         // the frame graph is built.
         bool splatStampPrepare();
-        void recordSplatStampDraw(VkCommandBuffer cb);
+        void recordSplatStampDraw(VkCommandBuffer cb, VkPipeline pipe = VK_NULL_HANDLE);
 
         // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
         // line-draw section). Keyed on raw BufferGeometry*; geomId in the

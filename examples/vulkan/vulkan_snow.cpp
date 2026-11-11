@@ -535,7 +535,9 @@ int main(int argc, char** argv) {
         // of the work, and it is doing it TWICE now that the quads are fogged
         // too — so the streak comes down again rather than fighting the murk
         // it is supposed to sit inside.
-        br.intensity = 0.070f;
+        // Authored for the HDR sprite composite (1.33x the 0.070 the old
+        // display-space add was tuned at, matched to it by eye and mean).
+        br.intensity = 0.093f;
     } else {
         auto flakeMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}
@@ -593,8 +595,11 @@ int main(int argc, char** argv) {
         // lit solid — and additive, because that is the only blend this slice
         // has (a normal-blend field billboard needs the deferred radix sort,
         // still deferred).
+        // Intensity authored for the HDR sprite composite: 6x the 0.30 the old
+        // display-space add was tuned at, because a faint flake added to this
+        // bright fog in linear HDR lands on the tone curve's shoulder.
         snow->setBillboardRepr(Color(0.88f, 0.91f, 0.97f), Color(0.80f, 0.84f, 0.92f),
-                               /*intensity*/ 0.30f, /*sizeScale*/ 1.00f);
+                               /*intensity*/ 1.80f, /*sizeScale*/ 1.00f);
         auto& br = snow->billboardRepr();
         br.lodNear     = kLodNear;
         br.lodFade     = kLodFar - kLodNear;

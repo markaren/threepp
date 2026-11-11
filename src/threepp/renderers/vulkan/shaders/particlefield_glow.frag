@@ -17,7 +17,7 @@
 // the glow-enabled fields are drawn a second time into a small offscreen HDR
 // target, the SHARED bloom_down/bloom_up shaders run on that target alone, and
 // this shader adds the result into the swapchain inside the same overlay
-// render-pass instance the sharp quads land in. Nothing moves; a second,
+// render-pass instance the field billboards always composited in. Nothing moves; a second,
 // cheaper pyramid arrives.
 //
 // ── WHY A SEPARATE TARGET RATHER THAN A BRIGHTER QUAD ───────────────────────
@@ -31,7 +31,7 @@
 // display transform when it renders there), so the bright pass and the 13-tap
 // downsample operate in the domain they are defined in. The tone map is applied
 // HERE, once, on the blurred result — the same place and the same curve the
-// sharp quads use, so the two halves of a spark land in one domain.
+// billboard HDR layer's display-space composite uses.
 
 #include "overlay_display.glsl"
 
@@ -58,7 +58,7 @@ void main() {
     const vec2 uv = gl_FragCoord.xy * pc.invDisplay;
     const vec3 hdr = texture(glowPyr, uv).rgb * pc.intensity;
     // Additive (ONE, ONE) with alpha masked out of the write, exactly as the
-    // sharp quads blend — so the order of the two draws inside the pass cannot
+    // additive sprites — so the order of the two draws inside the pass cannot
     // matter, and the sum is the same either way.
     outColor = vec4(pc.grade.flags == 0u ? odDisplay(hdr, pc.toneMapMode, pc.exposure)
                                          : odDisplayGraded(hdr, pc.toneMapMode, pc.exposure, pc.grade),

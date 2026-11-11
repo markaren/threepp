@@ -13509,7 +13509,7 @@ class VulkanRenderer:
     @property
     def overlay_color_grade(self) -> bool:
         """
-        ParticleField billboards and their glow take the white balance and colour grade (set_white_balance, set_color_grade) as the frame does, so a sprite lands where a graded surface colour would instead of flatter and greyer. Off by default; changes nothing without a white balance or grade.
+        ParticleField sprites composited after the post stack take the white balance and colour grade (set_white_balance, set_color_grade) as the frame does, so a sprite lands where a graded surface colour would instead of flatter and greyer. That is the field glow always, and the billboards on the built-in TAA path and on secondary views. On the DLSS/FSR path the billboards are blended into the scene before the tone map and always graded with it (ungraded over a solid-colour background, like the background itself). Off by default; changes nothing without a white balance or grade.
         """
     @overlay_color_grade.setter
     def overlay_color_grade(self, arg1: bool) -> None:

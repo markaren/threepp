@@ -166,6 +166,7 @@ namespace threepp::vulkan {
         lastTimings_.oceanFoamMs     = 0.f;
         lastTimings_.rtaoMs          = 0.f;
         lastTimings_.fogMarchMs      = 0.f;
+        lastTimings_.billboardLayerMs = 0.f;
         lastTimings_.probeGiMs       = 0.f;
         lastTimings_.shadowMapsMs    = 0.f;
         lastTimings_.oceanBlasMs     = 0.f;
@@ -246,6 +247,7 @@ namespace threepp::vulkan {
         lastTimings_.oceanFoamMs     = pairMs(TP_OceanFoam);
         lastTimings_.rtaoMs          = pairMs(TP_Rtao);
         lastTimings_.fogMarchMs      = pairMs(TP_FogMarch);
+        lastTimings_.billboardLayerMs = pairMs(TP_BillboardLayer);
         lastTimings_.probeGiMs       = pairMs(TP_ProbeGI);
         lastTimings_.shadowMapsMs    = pairMs(TP_ShadowMaps);
         lastTimings_.oceanBlasMs     = pairMs(TP_OceanBlas);
@@ -271,6 +273,7 @@ namespace threepp::vulkan {
                 lastTimings_.oceanFoamMs + lastTimings_.oceanBlasMs +
                 lastTimings_.tlasRefitMs + lastTimings_.dynGeomRefitMs +
                 lastTimings_.rtaoMs + lastTimings_.probeGiMs + lastTimings_.fogMarchMs +
+                lastTimings_.billboardLayerMs +
                 lastTimings_.shadowMapsMs +
                 pairMs(TP_SensorImage);
     }

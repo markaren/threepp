@@ -1463,14 +1463,17 @@ bool VulkanRenderer::Impl::splatStampPrepare() {
             return true;
 }
 
-void VulkanRenderer::Impl::recordSplatStampDraw(VkCommandBuffer cb) {
+void VulkanRenderer::Impl::recordSplatStampDraw(VkCommandBuffer cb, VkPipeline pipe) {
             // The stamp draw itself, recorded INSIDE the hybrid overlay pass —
             // after the overlays that kSplatUnoccludedOverlayLayer exempts,
             // before everything else — so "occluded by a cloud" is a position
             // in the pass's draw order rather than a property of the whole
             // pass. splatStampPrepare gated this frame and issued the
             // barriers; here is only the draw.
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, splatStampPipeline_);
+            // `pipe`: splatStampPipeline_ in the overlay pass, or its depth-only
+            // one-sample sibling in the billboard HDR layer's depth pass.
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipe != VK_NULL_HANDLE ? pipe : splatStampPipeline_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     splatStampPipelineLayout_, 0, 1,
                                     &splatStampSets_[currentFrame], 0, nullptr);
@@ -1708,14 +1711,33 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
             // hdrOut_; then hdrOut_ → swapchain (display-referred RCAS or copy).
             const auto addHdrPostAndFinalize = [&](rg::ImageHandle history) {
                 const auto hdrOut = g.importImage("post.hdrOut", view().post_->hdrOutImage(f), kColor, 1, kGeneral);
-                auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity](VkCommandBuffer c) {
+                // ── The billboard HDR layer, into the scene before the tone map.
+                // Consequence: the display sharpening (RCAS) in "finalize" below
+                // now runs over the sprites too, which it never did when they
+                // were drawn after it. Known, kept as built.
+                // The field billboards are drawn HERE, after the upscaler (so
+                // still outside the temporal domain) and before this composite,
+                // which blends them into the upscaled scene in linear HDR and
+                // tone-maps the two together. Their occluders (the overlay
+                // depth prepass) were laid down with the G-buffer, long before.
+                // The upscaler path is the primary's only (DLSS/FSR never run
+                // for a secondary view).
+                addFieldBillboardFrontPasses(g);
+                bbLayerInPost_ = billboardHdrLayerThisFrame_;
+                if (bbLayerInPost_) {
+                    view().post_->setSpriteLayer(f, billboardHdrLayerPass_->overView(f),
+                                                 billboardHdrLayerPass_->addView(f));
+                }
+                const bool sprites = bbLayerInPost_;
+                auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity, sprites](VkCommandBuffer c) {
                     view().post_->recordDispatch(c, f, regionSwapExt_.width, regionSwapExt_.height,
                                                  static_cast<uint32_t>(toneMapping_),
                                                  exposureBits, preExpBits_, envIsBgColor,
                                                  effBloomIntensity,
                                                  regionRenderExt_.width, regionRenderExt_.height,
-                                                 /*hdrMode=*/true);
+                                                 /*hdrMode=*/true, sprites);
                 });
+                if (sprites) billboardHdrLayerPass_->declareRead(g, post, f, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
                 post.use(history, rg::sampled(kGeneral))
                         .use(sceneHdr, rg::sampled(kGeneral))
                         .use(bloom0, rg::sampled(kGeneral))
@@ -2014,6 +2036,13 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
 // Any visible ParticleField draws quads this frame. Read by
 // sceneHasOverlayContent() so the overlay depth prepass runs (and unjitDepth is
 // therefore valid) for a scene whose only overlay content is a field.
+bool VulkanRenderer::Impl::sceneHasFieldBillboardRepr() const {
+            for (const auto& [field, entryIndex] : particleFields_) {
+                if (field && field->billboardRepr().enabled) return true;
+            }
+            return false;
+        }
+
 bool VulkanRenderer::Impl::sceneHasFieldBillboards() const {
             for (const auto& [field, entryIndex] : particleFields_) {
                 if (field && field->billboardRepr().enabled && field->liveCount() > 0u) return true;
@@ -2153,14 +2182,15 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
         }
 
 // ── A secondary view's field billboards, as graph passes ────────────────────
-// Same shader, same pipeline layout, 1-sample variant, this view's own camera,
-// drawn onto the view's colour target after its temporal resolve. Depth comes
+// The view's own billboard HDR layer: the fields with this view's camera into
+// the layer's linear targets, then the display-space composite onto the view's
+// colour target after its temporal resolve. Depth comes
 // from this view's G-buffer, which the G-buffer pass left in DEPTH_STENCIL_
 // READ_ONLY — it is the JITTERED depth rather than the primary's unjittered
 // prepass, which is a sub-pixel disagreement on a soft sprite and not worth a
 // second full-screen depth pass per view.
 void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) {
-            if (fieldBillboardPipeline1x_ == VK_NULL_HANDLE || !sceneHasFieldBillboards()) return;
+            if (fieldBillboardPipelineLayout_ == VK_NULL_HANDLE || !sceneHasFieldBillboards()) return;
             const uint32_t f = currentFrame;
             ViewContext& v   = view();
 
@@ -2184,71 +2214,79 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
             const Image2D& gbDepth  = v.rasterGbufs[f].depth;
             const VkBuffer softDepth = addFieldSoftDepthPass(g, gbDepth.image, gbDepth.view, false,
                                                              {v.rasterGbufs[f].width, v.rasterGbufs[f].height});
+            const rg::Access fragmentStorageRead{VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                                 VK_IMAGE_LAYOUT_UNDEFINED, false};
 
-            auto pass = g.addPass("fieldBillboards", [this](VkCommandBuffer c) {
-                const ViewContext& vc = view();
-                const VkExtent2D ext  = vc.outExt;
-                VkRenderingAttachmentInfo colorAtt{};
-                colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                colorAtt.imageView   = vc.colorTarget.view;
-                colorAtt.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
-                colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            // ── The billboard HDR layer, per view ───────────────────────────
+            // The primary's layer at this view's extent: the fields into the
+            // two linear targets against this view's G-buffer depth, then the
+            // display-space composite (the view's colour target is already
+            // tone-mapped by its temporal resolve) — the same two draws the
+            // primary's built-in TAA path makes in its overlay pass. The
+            // targets are made in the prepare window (ensureFieldBillboard-
+            // HdrLayer) once a field has a billboard representation; until
+            // they match this view's extent there is nothing to draw into.
+            {
+                if (v.bbLayer_ && v.bbLayer_->extent().width == v.outExt.width &&
+                    v.bbLayer_->extent().height == v.outExt.height) {
+                    auto lp = g.addPass("fieldHdrLayer", [this](VkCommandBuffer c) {
+                        ViewContext& vc = view();
+                        const VkViewport vp{0.f, 0.f, float(vc.outExt.width), float(vc.outExt.height), 0.f, 1.f};
+                        const VkRect2D   sc{{0, 0}, vc.outExt};
+                        vc.bbLayer_->beginSprites(c, currentFrame, vc.rasterGbufs[currentFrame].depth.view,
+                                                  VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, vp, sc);
+                        recordFieldBillboards(c, vc.bbLayer_->additivePipeline(), /*glowPass=*/false,
+                                              vc.bbLayer_->alphaOverPipeline());
+                        vkCmdEndRendering(c);
+                    });
+                    v.bbLayer_->declareSprites(g, lp, f, /*ownDepth=*/false);
+                    lp.use(g.importImage("gbuf.depth", v.rasterGbufs[f].depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, 1,
+                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL),
+                           rg::depthAttachment(VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, false));
+                    if (particleFieldPass_) {
+                        lp.use(g.importBuffer("particles.transmittance", particleFieldPass_->transmittanceBuffer(f)),
+                               rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                          VK_IMAGE_LAYOUT_UNDEFINED, false});
+                    }
+                    if (softDepth != VK_NULL_HANDLE)
+                        lp.use(g.importBuffer("billboard.softDepth", softDepth), fragmentStorageRead);
+                    useParticleFields(g, lp, true);
 
-                VkRenderingAttachmentInfo depthAtt{};
-                depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                depthAtt.imageView   = vc.rasterGbufs[currentFrame].depth.view;
-                depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
-                depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_NONE;
-
-                VkRenderingInfo ri{};
-                ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                ri.renderArea.offset    = {0, 0};
-                ri.renderArea.extent    = ext;
-                ri.layerCount           = 1;
-                ri.colorAttachmentCount = 1;
-                ri.pColorAttachments    = &colorAtt;
-                ri.pDepthAttachment     = &depthAtt;
-                vkCmdBeginRendering(c, &ri);
-                VkViewport vp{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
-                vkCmdSetViewport(c, 0, 1, &vp);
-                VkRect2D sc{{0, 0}, ext};
-                vkCmdSetScissor(c, 0, 1, &sc);
-                // F4: the SHARP quads only — a secondary view gets no billboard
-                // GLOW, and that is a decision rather than an omission. The
-                // glow chain is one half-extent target plus one pyramid sized to
-                // the primary's display, and giving every view its own would be
-                // N targets and N pyramids per frame for a LENS artefact. A
-                // CameraSensor therefore measures the spark's own radiance
-                // (which is the physical quantity) and not the bloom the display
-                // adds around it. If sensor/display parity on the halo ever
-                // matters, the fix is a per-view BillboardGlowPass instance, not
-                // a change here.
-                recordFieldBillboards(c, fieldBillboardPipeline1x_, /*glowPass=*/false,
-                                      fieldBillboardAlphaPipeline1x_);
-                vkCmdEndRendering(c);
-            });
-            // The colour target stays in GENERAL, attached as it is; after the
-            // graph, the view composite's copy and readViewRGBPixels' readback
-            // read it.
-            pass.use(g.importImage("view.color", v.colorTarget.image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
-                                   VK_IMAGE_LAYOUT_GENERAL),
-                     rg::colorAttachment(VK_IMAGE_LAYOUT_GENERAL));
-            pass.use(g.importImage("gbuf.depth", v.rasterGbufs[f].depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, 1,
-                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL),
-                     rg::depthAttachment(VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, false));
-            if (particleFieldPass_) {
-                pass.use(g.importBuffer("particles.transmittance", particleFieldPass_->transmittanceBuffer(f)),
-                         rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
+                    auto cp = g.addPass("fieldHdrComposite", [this](VkCommandBuffer c) {
+                        ViewContext& vc = view();
+                        VkRenderingAttachmentInfo colorAtt{};
+                        colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                        colorAtt.imageView   = vc.colorTarget.view;
+                        colorAtt.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                        colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                        VkRenderingInfo ri{};
+                        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                        ri.renderArea.extent    = vc.outExt;
+                        ri.layerCount           = 1;
+                        ri.colorAttachmentCount = 1;
+                        ri.pColorAttachments    = &colorAtt;
+                        vkCmdBeginRendering(c, &ri);
+                        const VkViewport vp{0.f, 0.f, float(vc.outExt.width), float(vc.outExt.height), 0.f, 1.f};
+                        vkCmdSetViewport(c, 0, 1, &vp);
+                        const VkRect2D sc{{0, 0}, vc.outExt};
+                        vkCmdSetScissor(c, 0, 1, &sc);
+                        vulkan::BillboardHdrLayer::CompositePC lpc{};
+                        lpc.exposure    = currentExposure() / preExposure();// the layer is pre-exposed
+                        lpc.toneMapMode = static_cast<uint32_t>(toneMapping_);
+                        const vulkan::OverlayGradeGpu grade = overlayGrade();
+                        static_assert(sizeof(grade) == sizeof(lpc.grade));
+                        std::memcpy(lpc.grade, &grade, sizeof(grade));
+                        vc.bbLayer_->recordComposite(c, currentFrame, lpc);
+                        vkCmdEndRendering(c);
+                    });
+                    cp.use(g.importImage("view.color", v.colorTarget.image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                         VK_IMAGE_LAYOUT_GENERAL),
+                           rg::colorAttachment(VK_IMAGE_LAYOUT_GENERAL));
+                    v.bbLayer_->declareRead(g, cp, f, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+                }
             }
-            if (softDepth != VK_NULL_HANDLE) {
-                pass.use(g.importBuffer("billboard.softDepth", softDepth),
-                         rg::Access{VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
-            }
-            useParticleFields(g, pass, true);
 }
 
 // ── R8/R9: the transmittance prepass, for the view about to draw ────────────
@@ -2345,12 +2383,10 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
             if (!particleFieldPass_) return 0;
 
             vulkan::BillboardViewGpu rec{};
-            rec.exposure    = currentExposure();
-            rec.toneMapMode = static_cast<uint32_t>(toneMapping_);
+            // exposure, toneMapMode and grade stay zero: the sprites are
+            // written in linear radiance and tone-mapped by the composites.
             rec.flags       = linearOut ? vulkan::kBbViewLinearOut : 0u;
-            // A linear-out record feeds the glow pyramid, whose composite
-            // grades the sum; only the display record grades the sprite.
-            if (!linearOut) rec.grade = overlayGrade();
+            rec.preExposure = preExposure();
 
             const bool medium = mediumActiveThisFrame_ || murkDensity_ > 0.f;
             if (medium) {
@@ -2567,6 +2603,161 @@ void VulkanRenderer::Impl::ensureFieldBillboardGlow() {
             const VkExtent2D ext = ctx->swapchainExtent();
             billboardGlowReadyThisFrame_ =
                     billboardGlow_->ensureImages(ext.width, ext.height);
+        }
+
+// ── The billboard HDR layer (BillboardHdrLayer.hpp) ─────────────────────────
+//
+// Lazy creation, in the PREPARE window, on the first frame a visible field
+// draws quads; a scene without one allocates and compiles nothing for it.
+void VulkanRenderer::Impl::ensureFieldBillboardHdrLayer() {
+            billboardHdrLayerReady_ = false;
+            if (!particleFieldPass_ || !bbLayerPipes_ || !sceneHasFieldBillboardRepr()) return;
+
+            // The primary. Its own one-sample depth only where the sprites
+            // cannot test against the overlay depth directly: a multisampled
+            // overlay, or a scene whose splat clouds stamp that depth (the
+            // latch splatStampPrepare follows).
+            if (!billboardHdrLayerPass_) {
+                billboardHdrLayerPass_ = std::make_unique<vulkan::BillboardHdrLayer>(
+                        *ctx, cmdPool, kFramesInFlight, *bbLayerPipes_, /*secondaryView=*/false);
+            }
+            const VkExtent2D ext = ctx->swapchainExtent();
+            billboardHdrLayerReady_ = billboardHdrLayerPass_->ensureImages(
+                    ext.width, ext.height, overlaySamples() > 1 || splatOverlayDepth_);
+
+            // Every secondary view: its own targets at its extent, never an own
+            // depth (it tests against its one-sample G-buffer depth and has no
+            // overlay pass or splat stamp).
+            for (std::size_t i = 1; i < views_.size(); ++i) {
+                ViewContext* v = views_[i].get();
+                if (!v) continue;
+                if (!v->bbLayer_) {
+                    v->bbLayer_ = std::make_unique<vulkan::BillboardHdrLayer>(
+                            *ctx, cmdPool, kFramesInFlight, *bbLayerPipes_, /*secondaryView=*/true);
+                }
+                v->bbLayer_->ensureImages(v->outExt.width, v->outExt.height, /*ownDepth=*/false);
+            }
+        }
+
+// The primary's fields, drawn exactly as the overlay pass used to draw them
+// (same loop, same per-view record, field order and, within a field, slot
+// order) into the layer's two linear targets.
+//
+// DEPTH. The sprites test against the overlay pass's own depth, from the
+// overlay depth prepass. At one sample and without a splat stamp it is attached
+// directly, read-only. Otherwise the layer's own one-sample depth is filled
+// first: a copy of the overlay's, then the splat stamp into that copy. Under a
+// multisampled overlay the copy keeps the FARTHEST sample of each pixel, so on
+// a silhouette pixel a bright field behind a thin occluder shows at full
+// strength where the old per-sample test gave it partial coverage. Known, kept
+// as built. The overlay pass stamps
+// its own buffer later, after the overlays the stamp exempts, so the clouds
+// must reach the sprites' depth here.
+void VulkanRenderer::Impl::recordFieldBillboardHdrLayer(VkCommandBuffer cb, bool ownDepth, bool stamp) {
+            if (!billboardHdrLayerPass_) return;
+            vulkan::BillboardHdrLayer& layer = *billboardHdrLayerPass_;
+            const bool  msaa         = overlaySamples() > 1;
+            VkImageView overlayDepth = msaa ? overlayMsDepth_.view
+                                            : view().rasterGbufs[currentFrame].unjitDepth.view;
+            if (ownDepth) {
+                layer.recordDepthCopy(cb, currentFrame, overlayDepth, msaa);
+                if (stamp) recordSplatStampDraw(cb, splatStampLayerPipeline_);
+                vkCmdEndRendering(cb);
+                vulkan::BillboardHdrLayer::depthWritten(cb);
+            }
+            // The overlay pass's pane (split-screen), which the sprites were
+            // always drawn under.
+            const VkViewport vp{float(regionDstX_), float(regionDstY_),
+                                float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
+            const VkRect2D   sc{{regionDstX_, regionDstY_}, regionSwapExt_};
+            layer.beginSprites(cb, currentFrame, ownDepth ? layer.ownDepthView(currentFrame) : overlayDepth,
+                               ownDepth ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                               vp, sc);
+            recordFieldBillboards(cb, layer.additivePipeline(), /*glowPass=*/false, layer.alphaOverPipeline());
+            vkCmdEndRendering(cb);
+        }
+
+// The primary's billboard passes that must run before anything consumes the
+// sprites: the transmittance prepass (shared with the glow leg), the soft-depth
+// buffer, and the layer itself. On the upscaler path they are added ahead of
+// the post composite, which blends the layer into the scene; on the built-in
+// TAA path at the head of the tail. Once per frame (bbFrontAdded_).
+void VulkanRenderer::Impl::addFieldBillboardFrontPasses(rg::RenderGraph& g) {
+            if (bbFrontAdded_) return;
+            bbFrontAdded_ = true;
+            const uint32_t f = currentFrame;
+            const rg::BufferHandle trans =
+                    particleFieldPass_ ? g.importBuffer("particles.transmittance",
+                                                        particleFieldPass_->transmittanceBuffer(f))
+                                       : rg::BufferHandle{};
+            const rg::Access vertexStorageRead{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                               VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                               VK_IMAGE_LAYOUT_UNDEFINED, false};
+            const rg::Access fragmentStorageRead{VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                                 VK_IMAGE_LAYOUT_UNDEFINED, false};
+
+            // ── R8: the transmittance prepass ───────────────────────────────
+            // Here rather than inside any billboard pass, because the layer and
+            // the glow leg draw the PRIMARY camera's quads (the glow leg is
+            // the layer's content a second time), so one dispatch serves both.
+            if (particleFieldPass_ && particleFieldPass_->transmittanceActive()) {
+                auto pass = g.addPass("fieldTransmittance", [this](VkCommandBuffer c) { recordFieldTransmittance(c); });
+                particleFieldPass_->declareTransmittance(g, pass, f);
+                useParticleFields(g, pass, false);
+            }
+
+            // ── BillboardRepr::softDistance: the occluders, in metres ───────
+            // From the overlay depth prepass, the buffer the sprites are
+            // depth-tested against, at the DISPLAY extent and unjittered, so
+            // the fade ends exactly where the hard line was at any render scale
+            // and behind any upscaler. No pass unless a field asks.
+            bbFrontSoftDepth_ = VK_NULL_HANDLE;
+            if (overlayDepthPrepassActive()) {
+                const Image2D& od = overlayDepthImage();
+                bbFrontSoftDepth_ = addFieldSoftDepthPass(g, od.image, od.view, overlaySamples() > 1, viewOutExtent());
+            }
+
+            // ── The layer ───────────────────────────────────────────────────
+            // Needs the overlay depth prepass (the sprites' occluders) and the
+            // overlay pass (the glow composite, and on the TAA path the layer's
+            // own composite).
+            billboardHdrLayerThisFrame_ = billboardHdrLayerReady_ && billboardHdrLayerPass_ &&
+                                          overlayDepthPrepassActive() && hybridOverlayActive();
+            if (!billboardHdrLayerThisFrame_) return;
+            // The own depth exists exactly when one of these needs it
+            // (ensureFieldBillboardHdrLayer); without it there is no layer
+            // this frame rather than a wrong occlusion.
+            const bool hasOwn   = billboardHdrLayerPass_->hasOwnDepth();
+            const bool stamp    = hasOwn && splatStampPrepare() && splatStampLayerPipeline_ != VK_NULL_HANDLE;
+            const bool ownDepth = stamp || overlaySamples() > 1;
+            if (ownDepth && !hasOwn) {
+                billboardHdrLayerThisFrame_ = false;
+                return;
+            }
+            auto lp = g.addPass("fieldHdrLayer", [this, ownDepth, stamp](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_BillboardLayer, currentFrame);
+                recordFieldBillboardHdrLayer(c, ownDepth, stamp);
+                gpuTimings_->end(c, TP_BillboardLayer, currentFrame);
+            });
+            billboardHdrLayerPass_->declareSprites(g, lp, f, ownDepth);
+            constexpr auto kDepthRO = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            const auto overlayDepthImg = g.importImage("overlay.depth", overlayDepthImage().image,
+                                                       VK_IMAGE_ASPECT_DEPTH_BIT, 1, VK_IMAGE_LAYOUT_UNDEFINED);
+            if (ownDepth) {
+                lp.use(overlayDepthImg, rg::sampled(kDepthRO, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT));
+            } else {
+                lp.use(overlayDepthImg, rg::depthAttachment(kDepthRO, false));
+            }
+            if (stamp) {
+                lp.use(g.importImage("splat.depthAov", view().rasterGbufs[f].splatDepth.image,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL),
+                       rg::storageRead(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT));
+            }
+            lp.use(trans, vertexStorageRead);
+            if (bbFrontSoftDepth_ != VK_NULL_HANDLE)
+                lp.use(g.importBuffer("billboard.softDepth", bbFrontSoftDepth_), fragmentStorageRead);
+            useParticleFields(g, lp, true);
         }
 
 void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex, bool stampActive) {
@@ -3445,20 +3636,31 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     THREEPP_CPUPROF_NAMED(profFieldBb, "frame.O4_fieldBillboards");
 
                     // ── ParticleField billboards ───────────────────────────
-                    // LAST in the pass, and outside the legacy block above so a
-                    // scene whose only overlay content is a field of embers
-                    // still gets them (sceneHasOverlayContent() knows about
-                    // fields for exactly that reason). They composite here — on
-                    // the swapchain, after TAA/DLSS/FSR — because a 3-px spark
-                    // crossing 20 px in a frame is precisely the content a
-                    // temporal filter mis-resolves, and because this is where
-                    // transparents already land.
-                    recordFieldBillboards(cb,
-                                          overlayMsaa ? fieldBillboardPipeline_
-                                                      : fieldBillboardPipeline1x_,
-                                          /*glowPass=*/false,
-                                          overlayMsaa ? fieldBillboardAlphaPipeline_
-                                                      : fieldBillboardAlphaPipeline1x_);
+                    // LAST in the pass: the billboard HDR layer, drawn just
+                    // before this pass (addFieldBillboardFrontPasses), is
+                    // composited here on the built-in TAA path by two
+                    // fullscreen draws, after TAA, so the sprites stay outside
+                    // the temporal filter and on top of everything else this
+                    // pass draws.
+                    //
+                    // On the DLSS/FSR path the layer was already blended into
+                    // the scene by the post composite, BEFORE this pass. So
+                    // there the sprites lie UNDER everything drawn here (lines,
+                    // wireframes, overlay meshes, legacy ParticleSystem
+                    // billboards, world sprites), where they used to be drawn
+                    // last, on top. Known, kept as built pending a decision.
+                    if (billboardHdrLayerThisFrame_ && bbLayerInPost_) {
+                        // Upscaler path: the post composite already blended the
+                        // layer into the scene in linear HDR, before the tone map.
+                    } else if (billboardHdrLayerThisFrame_ && billboardHdrLayerPass_) {
+                        vulkan::BillboardHdrLayer::CompositePC lpc{};
+                        lpc.exposure    = currentExposure() / preExposure();// the layer is pre-exposed
+                        lpc.toneMapMode = static_cast<uint32_t>(toneMapping_);
+                        const vulkan::OverlayGradeGpu grade = overlayGrade();
+                        static_assert(sizeof(grade) == sizeof(lpc.grade));
+                        std::memcpy(lpc.grade, &grade, sizeof(grade));
+                        billboardHdrLayerPass_->recordComposite(cb, currentFrame, lpc);
+                    }
 
                     // ── F4: the billboard glow ─────────────────────────────
                     // The sparks' own bloom pyramid, computed just before this
@@ -3467,7 +3669,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // the composite point for field billboards does not move,
                     // so they stay outside TAA/DLSS/FSR (F3 note 1) and gain a
                     // glow anyway. Additive, so its position relative to the
-                    // sharp quads above cannot change the sum.
+                    // sprite composite above cannot change the sum.
                     if (billboardGlowReadyThisFrame_ && billboardGlow_ &&
                         fieldGlowCompositePipeline_ != VK_NULL_HANDLE) {
                         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -3527,6 +3729,12 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
             constexpr auto kGeneral = VK_IMAGE_LAYOUT_GENERAL;
             constexpr auto kColorAtt = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             const auto swap = g.importImage("swapchain", ctx->swapchainImages()[imageIndex], kColor, 1, kGeneral);
+
+            // The transmittance prepass, the soft depth and the billboard HDR
+            // layer. Already added ahead of the post composite on the upscaler
+            // path; here, first in the tail, on the built-in TAA path.
+            addFieldBillboardFrontPasses(g);
+
             // The billboard vertex stage reads the transmittance prepass's output.
             const rg::BufferHandle trans =
                     particleFieldPass_ ? g.importBuffer("particles.transmittance",
@@ -3535,28 +3743,7 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
             const rg::Access vertexStorageRead{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
                                                VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                                VK_IMAGE_LAYOUT_UNDEFINED, false};
-
-            // ── R8: the transmittance prepass ───────────────────────────────
-            // FIRST, and here rather than inside either billboard pass, because
-            // both of them draw the PRIMARY camera's quads — the glow leg is the
-            // display leg's content a second time — so one dispatch serves both.
-            if (particleFieldPass_ && particleFieldPass_->transmittanceActive()) {
-                auto pass = g.addPass("fieldTransmittance", [this](VkCommandBuffer c) { recordFieldTransmittance(c); });
-                particleFieldPass_->declareTransmittance(g, pass, f);
-                useParticleFields(g, pass, false);
-            }
-
-            // ── BillboardRepr::softDistance: the occluders, in metres ───────
-            // From the overlay depth prepass — the buffer the sprites are
-            // depth-tested against, at the DISPLAY extent and unjittered — so
-            // the fade ends exactly where the hard line was at any render scale
-            // and behind any upscaler. Ahead of both billboard legs, which read
-            // it in their fragment stage. No pass unless a field asks.
-            VkBuffer softDepth = VK_NULL_HANDLE;
-            if (overlayDepthPrepassActive()) {
-                const Image2D& od = overlayDepthImage();
-                softDepth = addFieldSoftDepthPass(g, od.image, od.view, overlaySamples() > 1, viewOutExtent());
-            }
+            const VkBuffer softDepth = bbFrontSoftDepth_;
             const rg::Access fragmentStorageRead{VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                                                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                                  VK_IMAGE_LAYOUT_UNDEFINED, false};
@@ -3586,6 +3773,7 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                 // this only matters if the prepass pipeline is missing.
                 ensureOverlayMsaaImages(ctx->swapchainExtent());
                 const bool stamp = splatStampPrepare();
+
                 auto pass = g.addPass("overlay", [this, imageIndex, stamp](VkCommandBuffer c) {
                     recordHybridOverlay(c, imageIndex, stamp);
                 });
@@ -3638,6 +3826,11 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                     fieldGlowCompositePipeline_ != VK_NULL_HANDLE) {
                     billboardGlow_->declareComposite(g, pass, f);
                 }
+                // The billboard HDR layer, when this pass composites it (the
+                // built-in TAA path; the upscaler path blends it in the post
+                // composite instead).
+                if (billboardHdrLayerThisFrame_ && !bbLayerInPost_)
+                    billboardHdrLayerPass_->declareRead(g, pass, f, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
             }
 
             // ── Camera image formation: lens distortion + sensor noise ─────────
@@ -3686,6 +3879,13 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             // follow in the same graph, beginDeferredFrame). Each stage carries
             // its own full commentary; this function is the table of contents.
             updatePaneRegion();
+            // The billboard passes ahead of the consumers (addFieldBillboard-
+            // FrontPasses) are added once per frame, by whichever comes first:
+            // the upscaler path's post composite or the tail.
+            bbFrontAdded_                = false;
+            bbLayerInPost_               = false;
+            billboardHdrLayerThisFrame_  = false;
+            bbFrontSoftDepth_            = VK_NULL_HANDLE;
 
             // ── The shared billboard texture pool, reset ONCE for the frame ──
             // F3 note 4 is the cautionary tale and this is its second act. That

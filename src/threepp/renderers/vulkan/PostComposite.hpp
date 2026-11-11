@@ -142,7 +142,15 @@ namespace threepp::vulkan {
                             uint32_t preExposureBits,
                             bool bgIsSolidColor, float effBloomIntensity,
                             uint32_t srcWidth = 0, uint32_t srcHeight = 0,
-                            bool hdrMode = false);
+                            bool hdrMode = false, bool spriteLayer = false);
+
+        // HDR mode: the ParticleField billboard HDR layer this frame's
+        // dispatch blends into the scene before the tone map (bindings 8 and
+        // 9; recordDispatch's `spriteLayer`). Writes this frame slot's set only
+        // when the views changed (by serial), and only from the post-fence
+        // window of that slot, while the graph is built — the set cannot be in
+        // flight then.
+        void setSpriteLayer(uint32_t frame, VkImageView overView, VkImageView addView);
 
         // Render-graph declaration of recordDispatch. The caller imports and
         // declares the frame's inputs (sceneHdr, bloom level 0, ids, the
@@ -163,6 +171,10 @@ namespace threepp::vulkan {
         VkPipeline            pipe_       = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_   = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
+        // Which sprite-layer views each set's bindings 8/9 name: the serials of
+        // the alpha-over and additive views combined (see setSpriteLayer); 0 =
+        // the placeholder rewriteDescriptors writes.
+        std::vector<uint64_t> spriteSerials_;// [framesInFlight]
 
         // HDR-mode output scratch (display extent, bgra8 — matches the
         // swapchain channel order, same "no format qualifier" convention as

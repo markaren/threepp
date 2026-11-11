@@ -441,8 +441,10 @@ namespace {
         // faceted crystal (F4 note 5).
         mr.nearCull = 4.5f;
 
+        // Intensity authored for the HDR sprite composite (1.33x the 0.38 the
+        // old display-space add was tuned at, matched by eye on the night shot).
         snow->setBillboardRepr(Color(0.88f, 0.91f, 0.97f), Color(0.80f, 0.84f, 0.92f),
-                               /*intensity*/ 0.38f, /*sizeScale*/ 1.00f);
+                               /*intensity*/ 0.50f, /*sizeScale*/ 1.00f);
         auto& br        = snow->billboardRepr();
         br.lodNear      = 4.0f;
         br.lodFade      = 2.5f;

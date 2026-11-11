@@ -1219,6 +1219,10 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // recording so the one-off pipeline compile and image allocation
             // land in the prepare window like every other lazy resource.
             ensureFieldBillboardGlow();
+            // The billboard HDR layer's targets (BillboardHdrLayer), for the
+            // primary and every secondary view, once a visible field has a
+            // billboard representation; nothing for a scene without one.
+            ensureFieldBillboardHdrLayer();
             {
                 THREEPP_CPUPROF("frame.I3_uploadMovedBits");
                 uploadMeshMovedBits(currentFrame);
@@ -2107,6 +2111,7 @@ void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
             v.bloom_.reset();
             v.deferredShade_.reset();
             v.shadowMaps_.reset();
+            v.bbLayer_.reset();
 
             ViewContext* saved = curView_;
             curView_ = &v;

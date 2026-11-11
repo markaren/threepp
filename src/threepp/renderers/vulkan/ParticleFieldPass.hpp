@@ -401,7 +401,10 @@ namespace threepp::vulkan {
         float         murkSigma[3];  // 128
         float         _pad5;         // 140
         // The display grade (setOverlayColorGrade), read by the FRAGMENT
-        // stage at kBbViewGradeOffset; zero flags when the switch is off.
+        // stage at kBbViewGradeOffset when it applied a display transform.
+        // RESERVED since the sprites moved to the billboard HDR layer: no
+        // shader reads it (nor exposure / toneMapMode above), and
+        // pushBillboardViewRecord no longer fills them.
         OverlayGradeGpu grade;       // 144
         // BillboardRepr::softDistance: this view's linear scene depth
         // (BillboardSoftDepth), read by the FRAGMENT stage at kBbViewSoftOffset
@@ -414,7 +417,12 @@ namespace threepp::vulkan {
         std::uint32_t   softDepthWidth; // 248
         std::uint32_t   softDepthHeight;// 252
         float           softDepthScale; // 256
-        float           _pad6[3];       // 260
+        // The frame's pre-exposure (physical camera; 1.0 otherwise), read by
+        // the BB_HDR_LAYER fragment stage at kBbViewPreExposureOffset: the
+        // layer stores radiance pre-exposed, like sceneHdr, so 100k-lux light
+        // stays inside fp16.
+        float           preExposure;    // 260
+        float           _pad6[2];       // 264
     };                                  // 272
     static_assert(sizeof(BillboardViewGpu) == 272,
                   "BillboardViewGpu drifted from particlefield_billboard.vert / .frag");
@@ -422,6 +430,9 @@ namespace threepp::vulkan {
     static_assert(offsetof(BillboardViewGpu, grade) == kBbViewGradeOffset,
                   "the billboard fragment stage reads the grade at this offset");
     inline constexpr std::uint32_t kBbViewSoftOffset = 240u;
+    inline constexpr std::uint32_t kBbViewPreExposureOffset = 260u;
+    static_assert(offsetof(BillboardViewGpu, preExposure) == kBbViewPreExposureOffset,
+                  "the billboard HDR layer reads the pre-exposure at this offset");
     static_assert(offsetof(BillboardViewGpu, softDepthAddr) == kBbViewSoftOffset,
                   "the billboard fragment stage reads the soft depth at this offset");
     // Flag bits, mirrored in the shader.

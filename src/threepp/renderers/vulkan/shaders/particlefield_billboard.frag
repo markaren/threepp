@@ -20,26 +20,19 @@
 // between an EMBER and an ORB — a single smoothstep over the radius, drawn at
 // 30 px, is exactly the "large regular blob" this phase set out to replace.
 //
-// VALUE DOMAIN. This pass runs after the upscaler, onto a swapchain that
-// post_composite.comp already tone-mapped and sRGB-encoded, so the linear HDR
-// radiance the vertex stage computed has to go through the same curve before it
-// is blended. Blending is plain ADDITIVE (ONE, ONE) with the coverage folded
-// into the radiance here, so nothing is applied twice and the order the quads
-// arrive in cannot matter.
-
-#include "overlay_display.glsl"
+// VALUE DOMAIN: LINEAR radiance, always. Two builds of this file run. The
+// BB_HDR_LAYER variant draws every field into BillboardHdrLayer's two targets
+// (see below), whose sums are tone-mapped once, later. The plain build is the
+// GLOW leg (BillboardGlowPass), whose target feeds a bright pass and a 13-tap
+// downsample, both defined on linear radiance.
 
 layout(set = 0, binding = 0) uniform sampler2D tex;
 
 layout(location = 0) in vec2  vLocal;// [-1,1]^2 parametric square
 layout(location = 1) in vec4  vColor;// rgb = linear HDR radiance, a = alive
 layout(location = 2) in vec2  vSoft; // x = softness, y = core-term weight
-// F4: the display transform, flat from the vertex stage. A NEGATIVE exposure is
-// the glow pass's signal to emit LINEAR HDR instead — that target is the input
-// to a bright pass and a 13-tap downsample, both of which are defined on linear
-// radiance and would be meaningless on a tone-mapped, sRGB-encoded value.
-layout(location = 3) flat in float vExposure;
-layout(location = 4) flat in uint  vToneMap;
+// (Locations 3 and 4 carried the display transform until the sprites moved to
+// the billboard HDR layer; nothing writes them now.)
 // F5: > 0 draws an ANNULUS of this fractional width instead of the disc — the
 // splash ring. Flat, so the branch is uniform over every fragment of the quad.
 layout(location = 5) flat in float vRing;
@@ -67,20 +60,31 @@ layout(push_constant, scalar) uniform Pc {
 } pc;
 
 layout(location = 0) out vec4 outColor;
+#ifdef BB_HDR_LAYER
+// The billboard HDR layer (BillboardHdrLayer.hpp). This variant draws into two
+// rgba16f targets, LINEAR radiance pre-exposed like the scene:
+//   location 0, the alpha-over sprites: premultiplied radiance + coverage,
+//               blended (ONE, ONE_MINUS_SRC_ALPHA);
+//   location 1, the additive sprites' radiance, blended (ONE, ONE); an
+//               alpha-over sprite writes only its coverage here, which the
+//               pipeline blends (ZERO, ONE_MINUS_SRC_ALPHA) so it dims the
+//               additive light already behind it.
+// A composite in the overlay pass tone-maps each layer ONCE, so a hundred
+// overlapping sprites roll off through the curve instead of adding a hundred
+// tone-mapped values and clipping at 1.0.
+layout(location = 1) out vec4 outAdd;
 
-// The display grade of this view (setOverlayColorGrade): the tail of the BbView
-// record, at vulkan::kBbViewGradeOffset. Zero flags = the plain odDisplay.
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BbGrade {
-    OverlayGrade g;
-};
-const uint64_t kBbViewGradeOffset = 144ul;
-
-vec3 display(vec3 hdr) {
-    if (vExposure < 0.0) return hdr;// the glow pass's linear target
-    const OverlayGrade g = BbGrade(pc.viewAddr + kBbViewGradeOffset).g;
-    return g.flags == 0u ? odDisplay(hdr, vToneMap, vExposure)
-                         : odDisplayGraded(hdr, vToneMap, vExposure, g);
-}
+// The frame's pre-exposure (BbView record, vulkan::kBbViewPreExposureOffset).
+// The layer is stored PRE-EXPOSED, like sceneHdr: under a physical-units sun a
+// lit sprite's raw radiance is ~1e5, past fp16's 65504, and the sum of many
+// would be inf. Every composite reads the layer in this scale.
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer BbPreExposure { float v; };
+const uint64_t kBbViewPreExposureOffset = 260ul;
+float preExposure() { return BbPreExposure(pc.viewAddr + kBbViewPreExposureOffset).v; }
+// One sprite never writes past fp16's range on its own; a sum can still
+// saturate, which every composite treats as "very bright", never as inf.
+vec3 layerValue(vec3 v) { return min(v * preExposure(), vec3(60000.0)); }
+#endif
 
 // ── Soft particles (BillboardRepr::softDistance) ────────────────────────────
 // The tail of the BbView record, at vulkan::kBbViewSoftOffset: this view's
@@ -168,14 +172,20 @@ void main() {
         // this mode. A uniform branch: a field that did not ask never reads.
         if (vSoftInv > 0.0) cv *= softFade();
         if (cv <= 0.0) discard;
-        // PREMULTIPLIED. The pass composites onto a swapchain the post stack
-        // already tone-mapped and sRGB-encoded, so the alpha-over has to happen
-        // in THAT domain: tone-map the sprite's own linear radiance first, then
-        // premultiply by coverage. Doing it the other way (tone-map the blended
-        // result) is not available to a blend unit, and tone-mapping colour x
-        // coverage would darken a thin sprite's HUE as well as its opacity.
+        // PREMULTIPLIED, in linear radiance: the composite divides the
+        // coverage back out and tone-maps the mean colour once.
         const vec3 disp = vColor.rgb * tx.rgb;
-        outColor = vec4(display(disp) * cv, cv);
+#ifdef BB_HDR_LAYER
+        // The same radiance and coverage, premultiplied in LINEAR: the
+        // composite divides the coverage back out and tone-maps the
+        // coverage-weighted mean colour once.
+        outColor = vec4(layerValue(disp) * cv, cv);
+        outAdd   = vec4(0.0, 0.0, 0.0, cv);
+#else
+        // The glow leg draws every field additively (no alpha pipeline), so
+        // this branch is the layer's only; kept well-defined regardless.
+        outColor = vec4(disp * cv, cv);
+#endif
         return;
     }
 
@@ -184,8 +194,14 @@ void main() {
     if (a <= 0.0) discard;
 
     const vec3 hdr = vColor.rgb * tx.rgb * a;
-    // Alpha is masked out of the write (see the pipeline's colorWriteMask): the
-    // swapchain's alpha channel is not part of the composite and an additive
-    // pass has no business accumulating into it.
-    outColor = vec4(display(hdr), 0.0);
+    // Alpha is masked out of the write (see the pipelines' colorWriteMask): an
+    // additive target has no business accumulating coverage.
+#ifdef BB_HDR_LAYER
+    // Linear, summed by the blend; the pipeline masks location 0 out entirely
+    // for an additive sprite, so the alpha-over layer is left untouched.
+    outColor = vec4(0.0);
+    outAdd   = vec4(layerValue(hdr), 0.0);
+#else
+    outColor = vec4(hdr, 0.0);
+#endif
 }

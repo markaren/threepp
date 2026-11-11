@@ -59,6 +59,14 @@ layout(set = 0, binding = 5) uniform usampler2D rasterIdsTex;
 // (binding 7, storage, bgra8 display extent — PostComposite::hdrOut_).
 layout(set = 0, binding = 6) uniform sampler2D hdrSceneTex;
 layout(set = 0, binding = 7) uniform writeonly image2D hdrOutImg;
+// HDR-mode-only (bound to a harmless view otherwise): the ParticleField
+// billboard HDR layer (BillboardHdrLayer.hpp), at DISPLAY extent, LINEAR and
+// not pre-exposed. Read only when postFlags bit 4 is set.
+//   binding 8: the alpha-over sprites, premultiplied radiance + coverage;
+//   binding 9: the additive sprites' radiance, already dimmed by the
+//              alpha-over sprites drawn after them.
+layout(set = 0, binding = 8) uniform sampler2D spriteOverTex;
+layout(set = 0, binding = 9) uniform sampler2D spriteAddTex;
 
 layout(push_constant) uniform Pc {
     uint toneMapping;        // matches ToneMapping enum
@@ -69,7 +77,8 @@ layout(push_constant) uniform Pc {
     uint height;
     uint postFlags;          // bit 0 = white balance active, bit 1 = grade LUT active,
                              // bit 2 retired (was: PT-era gbuf sky source select),
-                             // bit 3 = HDR mode (FSR/DLSS upscaler path)
+                             // bit 3 = HDR mode (FSR/DLSS upscaler path),
+                             // bit 4 = billboard HDR layer bound (HDR mode only)
     uint preExposureBits;    // float-bits: exposure already baked into sceneHdr (1.0 = none)
     vec4 wbRow0;             // white-balance mat3 rows (linear sRGB → linear sRGB),
     vec4 wbRow1;             // Bradford CAT scene-illuminant → D65. .w unused.
@@ -119,6 +128,23 @@ void main() {
 
     const float exposure = uintBitsToFloat(pc.exposureBits);
     const float preExp   = uintBitsToFloat(pc.preExposureBits);
+
+    // ── The billboard HDR layer (HDR mode) ──────────────────────────────────
+    // ParticleField billboards drawn after the upscaler, outside the temporal
+    // domain, into two linear targets at this dispatch's extent. A branch on
+    // a push-constant bit, so a frame without sprites never fetches.
+    vec4 sprOver = vec4(0.0);
+    vec3 sprAdd  = vec3(0.0);
+    const bool sprites = hdr && (pc.postFlags & 16u) != 0u;
+    if (sprites) {
+        // The layer is pre-exposed like this scene. It is fp16 and blended, so
+        // a saturated sum can be inf and an alpha-over sprite over it NaN;
+        // neither may reach the tone map.
+        sprOver = texelFetch(spriteOverTex, px, 0);
+        sprAdd  = texelFetch(spriteAddTex, px, 0).rgb;
+        sprOver = clamp(mix(sprOver, vec4(0.0), isnan(sprOver)), 0.0, 65504.0);
+        sprAdd  = clamp(mix(sprAdd, vec3(0.0), isnan(sprAdd)), 0.0, 65504.0);
+    }
     // Solid-color background sky pixels skip tone mapping (so the flat bg
     // isn't ACES-desaturated) but are still sRGB-encoded — matches the old
     // finalize behaviour exactly. They skip white balance + grading too:
@@ -144,7 +170,37 @@ void main() {
         // Bypass pixels are stored at DISPLAY scale (the shade/resolve skips
         // the pre-exposure for solid-bg sky) — restore verbatim, no divide.
         outRgb = linearToSRGB(color);
+        // A solid background is shown untone-mapped, so a sprite over it
+        // cannot share its tone map. Fold the sprites in display space instead,
+        // as the built-in TAA path's overlay composite does: the alpha-over
+        // sprites as their mean colour, tone-mapped once and alpha-blended, the
+        // additive sum tone-mapped once and screen-blended. The layer is
+        // pre-exposed, hence exposure / preExp, as for the scene below. A sprite cloud
+        // that spans the horizon therefore shows a seam where the solid sky
+        // meets geometry: above it the display-space blend, below it the HDR
+        // blend. Left as is: a solid colour is a test background, and a
+        // tone-mapped sky (Sky, an environment) has no seam.
+        if (sprites) {
+            // The 8-bit target clamps a background brighter than white; blend
+            // onto the value it would show, or a thin sprite's edge over a
+            // blown-out sky keeps the channels that were above 1 and reads as
+            // a coloured fringe.
+            outRgb = clamp(outRgb, 0.0, 1.0);
+            const float a = min(sprOver.a, 1.0);
+            if (a > 0.0) {
+                const vec3 mean = sprOver.rgb / max(sprOver.a, 1e-6);
+                outRgb = linearToSRGB(toneMap(mean, pc.toneMapping, exposure / preExp)) * a + outRgb * (1.0 - a);
+            }
+            if (max(sprAdd.r, max(sprAdd.g, sprAdd.b)) > 0.0) {
+                const vec3 d = linearToSRGB(toneMap(sprAdd, pc.toneMapping, exposure / preExp));
+                outRgb = outRgb + d * (1.0 - outRgb);
+            }
+        }
     } else {
+        // The sprites join the scene in linear HDR, before the white balance
+        // and the tone curve, so the two roll off together:
+        // L = S * (1 - a_over) + over + add. Both are pre-exposed.
+        if (sprites) color = color * (1.0 - min(sprOver.a, 1.0)) + sprOver.rgb + sprAdd;
         // White balance in linear scene-referred space, before the tone curve.
         if ((pc.postFlags & 1u) != 0u)
             color = vec3(dot(pc.wbRow0.xyz, color),

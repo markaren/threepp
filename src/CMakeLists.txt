@@ -922,6 +922,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/GbufResolve.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/BillboardGlowPass.cpp"
+            "threepp/renderers/vulkan/BillboardHdrLayer.cpp"
             "threepp/renderers/vulkan/BillboardSoftDepth.cpp"
             "threepp/renderers/vulkan/PostComposite.cpp"
             "threepp/renderers/vulkan/DofPass.cpp"
@@ -1678,6 +1679,33 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.frag"
         kParticleFieldBillboardFragSpv
         _particlefield_billboard_frag_spv_h)
+    # The billboard HDR layer (BillboardHdrLayer): the field billboard
+    # fragment stage writing LINEAR radiance into two rgba16f targets (the
+    # alpha-over sprites and the additive ones), and the display-space
+    # composite that tone-maps each target once (built-in TAA path, secondary
+    # views; the DLSS/FSR path blends the layer in post_composite.comp).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.frag"
+        kParticleFieldBillboardLayerFragSpv
+        _particlefield_billboard_layer_frag_spv_h
+        VARIANT_SUFFIX layer
+        DEFINES BB_HDR_LAYER)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_hdr_layer.frag"
+        kParticleFieldHdrLayerFragSpv
+        _particlefield_hdr_layer_frag_spv_h)
+    # The layer's own one-sample depth, copied (and, from a multisampled
+    # overlay, reduced) from the overlay pass's depth.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_layer_depth.frag"
+        kBillboardLayerDepthFragSpv
+        _billboard_layer_depth_frag_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_layer_depth.frag"
+        kBillboardLayerDepthMsFragSpv
+        _billboard_layer_depth_ms_frag_spv_h
+        VARIANT_SUFFIX ms
+        DEFINES DEPTH_MS)
     # R8 of plans/particle-volumetric-sprites: the transmittance PREPASS. One
     # thread per slot marches the field's density volume toward the eye and
     # toward the sun and writes the pair packed into one uint, which the
@@ -1701,7 +1729,7 @@ if (THREEPP_WITH_VULKAN)
     # drawn a SECOND time into a small offscreen linear-HDR target, the shared
     # bloom_down/bloom_up pyramid runs on that target alone, and this fullscreen
     # pass adds the result into the swapchain inside the same overlay
-    # render-pass instance the sharp quads land in — so the billboards get a
+    # render-pass instance the billboards always composited in — so they get a
     # bloom without the composite point moving out of the post-upscaler slot
     # that keeps them clear of TAA/DLSS/FSR entirely.
     compile_vulkan_shader(threepp

@@ -127,7 +127,12 @@ namespace threepp::vulkan {
         TP_ShadowMaps     = 27,
         // The half-res sun fog march (fog_march.comp, setFogMarchHalfRes).
         TP_FogMarch       = 28,
-        TP_COUNT          = 29,
+        // The primary's ParticleField billboards into the billboard HDR layer
+        // (BillboardHdrLayer): the depth copy and splat stamp when they run,
+        // and the sprites' fill. Its composite is a fullscreen draw inside the
+        // post composite or the overlay pass and is counted there.
+        TP_BillboardLayer = 29,
+        TP_COUNT          = 30,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

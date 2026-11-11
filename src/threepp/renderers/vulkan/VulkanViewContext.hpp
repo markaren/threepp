@@ -15,6 +15,7 @@
 #include "VulkanGpuLayouts.hpp"// DrawInfoGpu (the prep scratch)
 #include "VulkanResources.hpp"
 #include "VulkanSceneTypes.hpp"// DrawGroup (indirect-skip cache)
+#include "BillboardHdrLayer.hpp"
 #include "BloomPass.hpp"
 #include "DeferredShade.hpp"
 #include "OcclusionCull.hpp"// CullMeta (the prep scratch)
@@ -657,6 +658,11 @@ namespace threepp::vulkan::impl {
         std::unique_ptr<vulkan::BloomPass>     bloom_;
         std::unique_ptr<vulkan::PostComposite> post_;
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;
+        // A SECONDARY view's ParticleField billboard HDR layer (the primary's
+        // lives on Impl, as billboardHdrLayerPass_): created on the first frame
+        // the view draws field billboards, sized to outExt, composited onto
+        // colorTarget in display space after the view's temporal resolve.
+        std::unique_ptr<vulkan::BillboardHdrLayer> bbLayer_;
         // What bindings 80-83 of deferredShade_'s set slot f name: 0 = the
         // dummies, else the generation of the view's shadow maps
         // (Impl::syncShadowDescriptors).

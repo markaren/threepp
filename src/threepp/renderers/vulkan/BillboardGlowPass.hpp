@@ -24,7 +24,7 @@
 //      SPIR-V, no new shader;
 //   3. the renderer's fullscreen composite draw (particlefield_glow.frag) adds
 //      level 0 into the swapchain INSIDE the overlay render-pass instance, next
-//      to the sharp quads. The composite point does not move.
+//      to the field billboards' own composite. The composite point does not move.
 //
 // ── WHY HALF EXTENT, AND WHY NO DEPTH ───────────────────────────────────────
 // A glow is by definition low-frequency; the pyramid's finest level is already
