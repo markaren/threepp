@@ -595,6 +595,85 @@ int main() {
             renderer.setLensOverscan(1.f);
         }
 
+        // ── Fisheye past 90 degrees, from the rig's side views ──────────────
+        // A fisheye frame is the primary pinhole plus side views for the field
+        // it cannot hold (LensRig.hpp). With a 100 degree vertical pinhole on
+        // this 1.5:1 canvas the equidistant fisheye reaches 102 degrees off
+        // axis at the left and right edges: a marker at 95 degrees exists only
+        // in a side view, and must land where the Kannala-Brandt model puts
+        // it, with its ids AOV label on top of it. One at 75 degrees (outside
+        // the primary's 61 degree frame, inside 90) must also carry the right
+        // depth: planar, along the camera's own axis.
+        std::printf("fisheye rig (side views beyond the pinhole's field):\n");
+        {
+            camera.fov = 100.f;
+            camera.updateProjectionMatrix();
+            const float fx = 0.5f * camera.projectionMatrix.elements[0] * kW;
+            LensDistortion fe;
+            fe.model = LensModel::Fisheye;
+            renderer.setLensDistortion(fe);
+            renderer.setObjectInstanceId(*marker, 77u);
+
+            for (const float thetaDeg : {95.f, -75.f}) {
+                const float th = std::abs(thetaDeg) * 3.14159265f / 180.f;
+                const float sgn = thetaDeg > 0.f ? 1.f : -1.f;
+                constexpr float kDist = 3.f;
+                marker->position.set(sgn * kDist * std::sin(th), 0.f, -kDist * std::cos(th));
+                settle();
+                float cx = 0, cy = 0;
+                const int n = markerCentroid(cx, cy);
+                // Equidistant (k = 0): the distorted radius IS theta, in fx units.
+                const float ex = kW * 0.5f + sgn * th * fx, ey = kH * 0.5f;
+                char what[160];
+                std::snprintf(what, sizeof what, "marker at %.0f deg off axis lands at (%.1f, %.1f), model (%.1f, %.1f)",
+                              std::abs(thetaDeg), cx, cy, ex, ey);
+                check(n > 0 && std::hypot(cx - ex, cy - ey) < 2.5f, what);
+
+                std::vector<VulkanRenderer::AOVReadback> aovs;
+                const bool got = renderer.readGBufferAOVs({VulkanRenderer::GBufferAOV::Ids,
+                                                           VulkanRenderer::GBufferAOV::Depth}, aovs);
+                const VulkanRenderer::AOVReadback* idsR   = nullptr;
+                const VulkanRenderer::AOVReadback* depthR = nullptr;
+                for (const auto& r : aovs) {
+                    if (r.aov == VulkanRenderer::GBufferAOV::Ids) idsR = &r;
+                    if (r.aov == VulkanRenderer::GBufferAOV::Depth) depthR = &r;
+                }
+                check(got && idsR && depthR && idsR->width == kW && idsR->height == kH,
+                      "fisheye ids + depth AOVs at the render extent");
+                if (!idsR || !depthR || idsR->width != kW || idsR->height != kH || n == 0) continue;
+                const auto* ids32 = reinterpret_cast<const uint32_t*>(idsR->data.data());
+                const auto* depth = reinterpret_cast<const float*>(depthR->data.data());
+                double sx = 0, sy = 0;
+                int    count = 0;
+                for (int i = 0; i < kW * kH; ++i) {
+                    if (ids32[static_cast<size_t>(i) * 4 + 1] != 77u) continue;
+                    sx += i % kW;
+                    sy += static_cast<double>(i / kW);
+                    ++count;
+                }
+                const float ix = count ? static_cast<float>(sx / count) : -1.f;
+                const float iy = count ? static_cast<float>(sy / count) : -1.f;
+                std::snprintf(what, sizeof what, "its instance id sits on it: ids centroid (%.1f, %.1f), %.2f px from colour",
+                              ix, iy, std::hypot(ix - cx, iy - cy));
+                check(count > 0 && std::hypot(ix - cx, iy - cy) < 2.f, what);
+                if (std::abs(thetaDeg) < 90.f && count > 0) {
+                    // At the silhouette's centre the ray meets the sphere's
+                    // front, 0.28 short of its centre; planar depth is that
+                    // range times cos(theta), not the range.
+                    const size_t c = static_cast<size_t>(std::lround(iy)) * kW + static_cast<size_t>(std::lround(ix));
+                    float z = 0.f;
+                    VulkanRenderer::decodeDepthAOV(&depth[c], 1, camera, &z);
+                    const float expect = (kDist - 0.28f) * std::cos(th);
+                    std::snprintf(what, sizeof what, "its depth is planar along the camera axis: %.3f, expected %.3f",
+                                  z, expect);
+                    check(std::abs(z - expect) < 0.05f, what);
+                }
+            }
+            camera.fov = 60.f;
+            camera.updateProjectionMatrix();
+            marker->position.set(1.35f, 0.95f, -3.f);
+        }
+
         renderer.setLensDistortion(LensDistortion{});
         scene.remove(*marker);
     }

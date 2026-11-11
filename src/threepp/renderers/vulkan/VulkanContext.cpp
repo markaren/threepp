@@ -237,8 +237,10 @@ namespace threepp::vulkan {
     bool processExiting() { return g_processExiting.load(); }
 
     VulkanContext::VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync,
-                                 bool preferHeadlessSurface, bool leaveDeviceAtExit)
-        : window_(window), vsync_(vsync), leaveDeviceAtExit_(leaveDeviceAtExit) {
+                                 bool preferHeadlessSurface, bool leaveDeviceAtExit,
+                                 VkExtent2D requestedExtent)
+        : window_(window), vsync_(vsync), leaveDeviceAtExit_(leaveDeviceAtExit),
+          requestedExtent_(requestedExtent) {
 
         // Surface mode. A headless canvas prefers VK_EXT_headless_surface: the
         // swapchain and frame loop run unmodified, but the surface has no
@@ -261,9 +263,14 @@ namespace threepp::vulkan {
             if (hasInstanceExtension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
                 headlessSurface_ = true;
             } else if (haveWindowSystem) {
+                // The window surface still picks the device and its queues;
+                // the frames go to images this context owns, at the size the
+                // canvas asked for (a window's size is the window system's to
+                // clamp, a 3840x2160 headless canvas got 3840x1181).
                 hiddenWindowFallback = true;
+                offscreen_           = true;
                 std::cerr << "[VulkanContext] VK_EXT_headless_surface not available; "
-                             "headless canvas falls back to a hidden-window surface.\n";
+                             "headless canvas renders into offscreen images.\n";
             } else {
                 throw std::runtime_error(
                         "[VulkanContext] headless mode needs VK_EXT_headless_surface, "
@@ -319,7 +326,11 @@ namespace threepp::vulkan {
         // says "0"; a real headless surface keeps the opt-in, since its
         // presents complete and the tenancy argument above still applies.
         presentSuppressed_ = false;
-        if (preferHeadlessSurface) {
+        if (offscreen_) {
+            // Offscreen images are not presentable: there is nothing to
+            // present, whatever the variable says.
+            presentSuppressed_ = true;
+        } else if (preferHeadlessSurface) {
             presentSuppressed_ = env::flag("THREEPP_VULKAN_SUPPRESS_PRESENT", hiddenWindowFallback);
             if (presentSuppressed_) {
                 std::cout << "[VulkanContext] presents suppressed (headless canvas): the frame "
@@ -1414,6 +1425,58 @@ namespace threepp::vulkan {
     }
 
     void VulkanContext::createSwapchain() {
+        if (offscreen_) {
+            // A headless canvas with no headless surface: one image per frame
+            // in flight, with the usages a swapchain image is given below plus
+            // TRANSFER_SRC, at the requested size. Nothing about it depends on
+            // the hidden window.
+            int ww = 0, wh = 0;
+            glfwGetFramebufferSize(window_, &ww, &wh);
+            const VkExtent2D extent{requestedExtent_.width ? requestedExtent_.width : static_cast<uint32_t>(ww),
+                                    requestedExtent_.height ? requestedExtent_.height : static_cast<uint32_t>(wh)};
+            VkImageFormatProperties ifp{};
+            const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            if (vkGetPhysicalDeviceImageFormatProperties(physicalDevice_, VK_FORMAT_B8G8R8A8_UNORM,
+                                                         VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usage, 0,
+                                                         &ifp) != VK_SUCCESS ||
+                extent.width > ifp.maxExtent.width || extent.height > ifp.maxExtent.height) {
+                throw std::runtime_error("[VulkanContext] headless canvas: " + std::to_string(extent.width) +
+                                         "x" + std::to_string(extent.height) +
+                                         " B8G8R8A8 storage images are not supported by this device");
+            }
+            swapchainFormat_      = VK_FORMAT_B8G8R8A8_UNORM;
+            swapchainExtent_      = extent;
+            swapchainTransferSrc_ = true;
+            swapchainImages_.assign(impl::kFramesInFlight, VK_NULL_HANDLE);
+            offscreenAllocs_.assign(impl::kFramesInFlight, VK_NULL_HANDLE);
+            for (uint32_t i = 0; i < impl::kFramesInFlight; ++i) {
+                VkImageCreateInfo ici{};
+                ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                ici.imageType     = VK_IMAGE_TYPE_2D;
+                ici.format        = swapchainFormat_;
+                ici.extent        = {extent.width, extent.height, 1};
+                ici.mipLevels     = 1;
+                ici.arrayLayers   = 1;
+                ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+                ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                ici.usage         = usage;
+                ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+                ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                VmaAllocationCreateInfo aci{};
+                aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                check(vmaCreateImage(allocator_, &ici, &aci, &swapchainImages_[i], &offscreenAllocs_[i], nullptr),
+                      "vmaCreateImage(offscreen frame)");
+                setObjectName(swapchainImages_[i], "offscreenFrame");
+            }
+            if (ww > 0 && wh > 0 && (static_cast<uint32_t>(ww) != extent.width ||
+                                     static_cast<uint32_t>(wh) != extent.height)) {
+                std::cout << "[VulkanContext] headless canvas renders " << extent.width << "x" << extent.height
+                          << " offscreen (its hidden window got " << ww << "x" << wh << ")\n";
+            }
+            return;
+        }
+
         VkSurfaceCapabilitiesKHR caps{};
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps);
 
@@ -1467,7 +1530,17 @@ namespace threepp::vulkan {
                   << "\n";
 
         VkExtent2D extent = caps.currentExtent;
-        if (extent.width == UINT32_MAX || headlessSurface_) {
+        if (headlessSurface_ && requestedExtent_.width > 0 && requestedExtent_.height > 0) {
+            // A headless surface has no window to define it: the canvas's own
+            // request does, as on the offscreen path.
+            extent.width  = std::clamp(requestedExtent_.width, caps.minImageExtent.width, caps.maxImageExtent.width);
+            extent.height = std::clamp(requestedExtent_.height, caps.minImageExtent.height, caps.maxImageExtent.height);
+            if (extent.width != requestedExtent_.width || extent.height != requestedExtent_.height) {
+                std::cerr << "[VulkanContext] headless surface clamps the requested " << requestedExtent_.width
+                          << "x" << requestedExtent_.height << " to " << extent.width << "x" << extent.height
+                          << "\n";
+            }
+        } else if (extent.width == UINT32_MAX || headlessSurface_) {
             // No window defines the extent, so the canvas window size does.
             // The special "application chooses" value covers most of this, but
             // a headless surface needs the override unconditionally: nothing
@@ -1564,6 +1637,12 @@ namespace threepp::vulkan {
             if (v != VK_NULL_HANDLE) vkDestroyImageView(device_, v, nullptr);
         }
         swapchainImageViews_.clear();
+        if (offscreen_) {
+            for (size_t i = 0; i < swapchainImages_.size() && i < offscreenAllocs_.size(); ++i) {
+                if (swapchainImages_[i] != VK_NULL_HANDLE) vmaDestroyImage(allocator_, swapchainImages_[i], offscreenAllocs_[i]);
+            }
+            offscreenAllocs_.clear();
+        }
         if (swapchain_ != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device_, swapchain_, nullptr);
             swapchain_ = VK_NULL_HANDLE;
@@ -1572,10 +1651,11 @@ namespace threepp::vulkan {
     }
 
     void VulkanContext::recreateSwapchain() {
-        // Spin while minimised.
+        // Spin while minimised (a window's frames only: an offscreen ring has
+        // no window to minimise).
         int w = 0, h = 0;
         glfwGetFramebufferSize(window_, &w, &h);
-        while (w == 0 || h == 0) {
+        while (!offscreen_ && (w == 0 || h == 0)) {
             glfwGetFramebufferSize(window_, &w, &h);
             glfwWaitEvents();
         }

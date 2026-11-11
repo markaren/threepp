@@ -25,7 +25,9 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                     /*enableRayTracing*/ true,
                     /*vsync*/ canvas.vsync(),
                     /*preferHeadlessSurface*/ canvas.headless(),
-                    /*leaveDeviceAtExit*/ canvas.fastExit());
+                    /*leaveDeviceAtExit*/ canvas.fastExit(),
+                    /*requestedExtent*/ VkExtent2D{static_cast<uint32_t>(std::max(canvas.size().width(), 1)),
+                                                  static_cast<uint32_t>(std::max(canvas.size().height(), 1))});
 
             // Pin `size` to the extent the surface actually granted. The
             // canvas's size is what was asked for; the swapchain's is what

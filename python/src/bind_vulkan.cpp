@@ -1943,6 +1943,10 @@ namespace threepp_py {
                      "(k1, k2, p1, p2, k3); 'fisheye' takes cv2.fisheye's (k1..k4). "
                      "Applied to BOTH the displayed image and the AOV readback, so "
                      "segmentation/depth labels stay aligned with the distorted pixels. "
+                     "'fisheye' renders the camera's own pinhole (sharp centre, the camera's "
+                     "fov sets the fisheye's focal length) plus up to four side views for the "
+                     "wider field, resampled per output ray: full resolution, past 90 degrees "
+                     "off axis, at roughly 1.7x (139 deg, 16:9) to 2.5x (180 deg) extra pixels. "
                      "Default 'none' (pinhole, zero cost).")
                 .def_property_readonly("lens_distortion",
                                        [](PyVulkanRenderer& r) {
@@ -1965,7 +1969,8 @@ namespace threepp_py {
                               "clamped, smeared border. Barrel distortion (k1 < 0) needs it; "
                               "1.15-1.3 covers typical wide lenses. Costs effective resolution "
                               "(the same pixels cover a wider field). camera_intrinsics still "
-                              "reports the OUTPUT camera. Default 1 (off).")
+                              "reports the OUTPUT camera. Ignored for 'fisheye', whose wider "
+                              "field comes from side views. Default 1 (off).")
                 // ── Image-sensor noise ────────────────────────────────────────
                 .def("set_sensor_noise",
                      [](PyVulkanRenderer& r, bool enabled, float full_well, float read_noise,

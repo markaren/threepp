@@ -135,6 +135,14 @@ void VulkanRenderer::Impl::createRenderFinishedSemaphores() {
         }
 
 VkResult VulkanRenderer::Impl::acquireOrReuseSwapchainImage(uint32_t& imageIndex) {
+            if (ctx->offscreen()) {
+                // A headless canvas's own image ring: image i is slot i's for
+                // good, and nothing is acquired, so there is no semaphore to
+                // wait on. The inFlight fence orders the slot's reuse of it.
+                imageIndex = currentFrame;
+                pinnedSwapImage_[currentFrame] = imageIndex;
+                return VK_SUCCESS;
+            }
             if (ctx->presentSuppressed() && pinnedSwapImage_[currentFrame] != UINT32_MAX) {
                 // This slot already owns an image and nothing ever took it back,
                 // so there is nothing to acquire and nothing to wait for: the
@@ -804,6 +812,10 @@ void VulkanRenderer::Impl::recreateSwapchainAndDescriptors() {
             // to see it happen (frame index, not wall time).
             std::fprintf(stderr, "[VulkanRenderer] swapchain recreated at frame %llu\n",
                          static_cast<unsigned long long>(frameSerial_));
+            // A headless canvas renders at the size it asks for (offscreen
+            // ring or headless surface), so tell the context what that is now.
+            ctx->setRequestedExtent({static_cast<uint32_t>(std::max(canvas.size().width(), 1)),
+                                     static_cast<uint32_t>(std::max(canvas.size().height(), 1))});
             ctx->recreateSwapchain();// device-idles internally
             // imageCount_ is pinned, not refreshed — see its declaration for why
             // (TaaResolve's set arrays were SIZED from it at construction, so the
@@ -2225,6 +2237,105 @@ bool VulkanRenderer::Impl::setViewCameraImpl(uint32_t handle, Camera& camera) {
             return true;
         }
 
+// ── The fisheye rig ─────────────────────────────────────────────────────────
+
+VulkanRenderer::Impl::ViewContext* VulkanRenderer::Impl::lensRigFaceView(int face) {
+            const uint32_t h = lensRigViews_[face];
+            if (h == 0u) return nullptr;
+            ViewContext* v = findView(h);
+            if (!v || v->pendingCreate || v->pendingDestroy || !v->taa_ || !v->deferredShade_ ||
+                v->colorTarget.image == VK_NULL_HANDLE || v->colorTarget.view == VK_NULL_HANDLE) {
+                return nullptr;
+            }
+            return v;
+        }
+
+void VulkanRenderer::Impl::updateLensRig(Camera& camera) {
+            namespace lr = vulkan::lensrig;
+            const auto& pm   = camera.projectionMatrix.elements;
+            const bool  want = lens_.model == LensModel::Fisheye && camera.is<PerspectiveCamera>() &&
+                              pm[11] != 0.f && ctx != nullptr;
+            const VkExtent2D ext = want ? ctx->swapchainExtent() : VkExtent2D{0, 0};
+            lensRigWanted_ = want && ext.width > 0 && ext.height > 0;
+            if (!lensRigWanted_) {
+                for (int f = 0; f < lr::kFaceCount; ++f) {
+                    if (lensRigViews_[f] != 0u) removeViewImpl(lensRigViews_[f]);
+                    lensRigViews_[f] = 0u;
+                }
+                return;
+            }
+
+            // The output camera's normalized intrinsics, as buildSensorParams
+            // derives them (no overscan: a fisheye never takes one).
+            const float normK[4] = {0.5f * pm[0], 0.5f * pm[5], 0.5f * (1.f - pm[8]), 0.5f * (1.f + pm[9])};
+            const bool  same     = lensRigLens_ == lens_ && lensRigExt_.width == ext.width &&
+                              lensRigExt_.height == ext.height && lensRigNormK_[0] == normK[0] &&
+                              lensRigNormK_[1] == normK[1] && lensRigNormK_[2] == normK[2] &&
+                              lensRigNormK_[3] == normK[3];
+            if (!same) {
+                lensRigLayout_ = lr::layout(lens_, normK, ext.width, ext.height);
+                lensRigLens_   = lens_;
+                lensRigExt_    = ext;
+                for (int i = 0; i < 4; ++i) lensRigNormK_[i] = normK[i];
+            }
+
+            // The camera's world pose as it stands now, parents included: the
+            // side views must look from exactly where the primary does this
+            // frame, or a camera riding a moving vessel tears at the seams.
+            camera.updateWorldMatrix(true, false);
+            // Near and far from the projection itself (2n/(r-l) etc. do not
+            // carry them): P10 = -(f+n)/(f-n), P14 = -2fn/(f-n).
+            const float nearP = pm[14] / (pm[10] - 1.f);
+            const float farP  = pm[14] / (pm[10] + 1.f);
+            lensRigNear_      = nearP;
+            lensRigFar_       = farP;
+
+            for (int f = 0; f < lr::kFaceCount; ++f) {
+                const bool needed = (lensRigLayout_.faceMask & (1u << f)) != 0u;
+                const lr::FaceRect& r = lensRigLayout_.faces[f];
+                if (lensRigViews_[f] != 0u) {
+                    // Keep a view whose size is still close enough: a field that
+                    // creeps (a zoom) re-aims it every frame and only re-creates
+                    // it when it is too small, or more than a third too large.
+                    const VkExtent2D have = lensRigViewExt_[f];
+                    const bool fits = needed && have.width >= r.width && have.height >= r.height &&
+                                      have.width * 3u <= r.width * 4u + 8u && have.height * 3u <= r.height * 4u + 8u;
+                    if (!fits) {
+                        removeViewImpl(lensRigViews_[f]);
+                        lensRigViews_[f] = 0u;
+                    }
+                }
+                if (!needed) continue;
+
+                auto& cam = lensRigCams_[f];
+                if (!cam) cam = std::make_unique<PerspectiveCamera>();
+                if (lensRigViews_[f] == 0u) {
+                    lensRigViews_[f]   = addViewImpl(*cam, r.width, r.height);
+                    lensRigViewExt_[f] = {r.width, r.height};
+                }
+
+                // Pose: the camera's, turned onto the face's axis. The face's
+                // image basis (x right, y down, z forward) maps to a camera
+                // frame (x right, y up, looking down -z) by flipping y and z.
+                const lr::Basis& b = lr::kBasis[f];
+                Matrix4 rot;
+                rot.makeBasis(Vector3(b.r[0], -b.r[1], -b.r[2]),
+                              Vector3(-b.dn[0], b.dn[1], b.dn[2]),
+                              Vector3(-b.f[0], b.f[1], b.f[2]));
+                Matrix4 world = *camera.matrixWorld;
+                world.multiply(rot);
+                world.decompose(cam->position, cam->quaternion, cam->scale);
+                cam->layers = camera.layers;// sees what the camera sees
+                cam->nearPlane = nearP;
+                cam->farPlane  = farP;
+                // The off-axis frustum the layout gave this face, in its own
+                // tan units (v grows downward, a camera's y upward).
+                cam->projectionMatrix.makePerspective(r.u0 * nearP, r.u1 * nearP, -r.v0 * nearP, -r.v1 * nearP,
+                                                      nearP, farP);
+                cam->projectionMatrixInverse.copy(cam->projectionMatrix).invert();
+            }
+        }
+
 // ── Multi-view: per-frame recording ─────────────────────────────────────────
 
 void VulkanRenderer::Impl::saveViewRecordState(ViewRecordState& s) {
@@ -2624,6 +2735,13 @@ void VulkanRenderer::Impl::addPostViewTailPasses(rg::RenderGraph& g, uint32_t im
             // the graph keeps whichever pass names it.
             (void) g.importImage("swapchain", ctx->swapchainImages()[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, 1,
                                  VK_IMAGE_LAYOUT_GENERAL);
+
+            // The primary's lens and sensor stage (when addTailPasses asked for
+            // it): first in the tail, so everything below sees the image the
+            // camera forms, as it did when this stage closed the primary's
+            // passes; after the secondary views, so a fisheye can resample the
+            // rig's side views this same frame.
+            addSensorPasses(g, imageIndex);
 
             // Scene-only swapchain capture. BEFORE the sprite + ImGui overlays
             // composite — sensor pipelines that consume the renderer's output

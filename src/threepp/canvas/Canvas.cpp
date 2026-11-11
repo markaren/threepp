@@ -669,6 +669,10 @@ struct Canvas::Impl {
 #endif
     }
 
+    [[nodiscard]] bool headlessVulkan() const {
+        return params_.headless_ && params_.graphicsApi_ == GraphicsAPI::Vulkan;
+    }
+
     [[nodiscard]] const WindowSize& getSize() const {
 
         return size_;
@@ -681,6 +685,13 @@ struct Canvas::Impl {
             return;
         }
 
+        if (headlessVulkan()) {
+            // A headless Vulkan canvas's size is the image it renders, not its
+            // hidden window's, which the window system may clamp to the
+            // desktop: the renderer sizes its offscreen frames from this.
+            size_ = {size.first, size.second};
+            for (const auto& listener : resizeListener) listener(size_);
+        }
         glfwSetWindowSize(window, size.first, size.second);
     }
 
@@ -876,6 +887,10 @@ struct Canvas::Impl {
 
     static void window_size_callback(GLFWwindow* w, int width, int height) {
         auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
+        // Headless Vulkan: the hidden window's size is whatever the platform
+        // granted it and says nothing about the image (setSize keeps that).
+        // A GL canvas draws into that window's framebuffer, so it follows it.
+        if (p->headlessVulkan()) return;
         p->size_ = {width, height};
         for (const auto& listener : p->resizeListener) {
             listener(p->size_);

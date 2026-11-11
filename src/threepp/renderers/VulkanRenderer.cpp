@@ -23,6 +23,8 @@
 
 #include "vulkan/VulkanCpuPhaseProf.hpp"
 
+#include "threepp/extras/DataUtils.hpp"
+
 // stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
 
@@ -665,6 +667,11 @@ namespace threepp {
             core()->advanceHeadlessClock();
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             core()->ensureSceneBuilt(scene, camera);
+            // The fisheye rig's side views (LensRig.hpp): created, re-aimed
+            // at this camera's pose this frame, or removed. Here, after the
+            // scene walk updated the world matrices, and only on the frame's
+            // primary render: a HUD or pane pass must not tear the rig down.
+            core()->updateLensRig(camera);
             // World-space Sprites (screenSpace == false) are drawn by the overlay
             // billboard pass, not the deferred/G-buffer path. Snapshot them each frame
             // with fresh world matrices (ensureSceneBuilt just ran
@@ -903,7 +910,7 @@ namespace threepp {
         // Transition swapchain image PRESENT_SRC → TRANSFER_SRC for the copy.
         VkImageMemoryBarrier toSrc{};
         toSrc.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toSrc.oldLayout                   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toSrc.oldLayout                   = ctx->presentLayout();
         toSrc.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         toSrc.srcAccessMask               = 0;
         toSrc.dstAccessMask               = VK_ACCESS_TRANSFER_READ_BIT;
@@ -928,7 +935,7 @@ namespace threepp {
         // Restore PRESENT_SRC layout so the next frame can present this slot.
         VkImageMemoryBarrier toPresent = toSrc;
         toPresent.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toPresent.newLayout            = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toPresent.newLayout            = ctx->presentLayout();
         toPresent.srcAccessMask        = VK_ACCESS_TRANSFER_READ_BIT;
         toPresent.dstAccessMask        = 0;
         vkCmdPipelineBarrier(cb,
@@ -1087,6 +1094,124 @@ namespace threepp {
         // the shader gets. Normalized rather than in pixels precisely because
         // the AOV is at the render extent while the display warp runs at the
         // display extent, and both must describe the same lens.
+        // The fisheye's AOVs, composed from the rig's views exactly as
+        // sensor_image.comp composes the colour (lensrig::owner decides which
+        // view a pixel reads, nearest texel there). Normal, Ids and Albedo are
+        // view-independent and are copied. The geometric ones are re-expressed
+        // in the PRIMARY camera's terms, so a label means the same thing
+        // wherever in the frame it came from:
+        //   Depth   reverse-Z NDC depth of the point along the CAMERA's axis
+        //           (the primary's planar depth). A point at or beyond 90
+        //           degrees off-axis has no such depth and reads 0 (far).
+        //   Motion  the point's move in the primary's NDC (GL convention, as
+        //           the G-buffer writes it), prevDepth as Depth; 0 where the
+        //           point is at or beyond 90 degrees in either frame.
+        //   SplatDepth  the primary's (a range, the same from every view);
+        //           0 in a side view's pixels, which draw no splats.
+        // `faces[f]` is face f's readback of the same AOV, or null.
+        void composeAovForRig(const LensDistortion& lens, const vulkan::lensrig::Frame& rig,
+                              VulkanRenderer::GBufferAOV aov, float nearP, float farP,
+                              VulkanRenderer::AOVReadback& prim,
+                              const std::array<const VulkanRenderer::AOVReadback*, vulkan::lensrig::kFaceCount>& faces) {
+            namespace lr = vulkan::lensrig;
+            using AOV = VulkanRenderer::GBufferAOV;
+            const uint32_t w = static_cast<uint32_t>(prim.width), h = static_cast<uint32_t>(prim.height);
+            const uint32_t bpp = static_cast<uint32_t>(prim.bytesPerPixel);
+            if (w == 0u || h == 0u || bpp == 0u) return;
+            const std::vector<uint8_t> src = prim.data;
+            const float* nk = rig.normK;
+            if (std::abs(nk[0]) < 1e-8f || std::abs(nk[1]) < 1e-8f) return;
+
+            // reverse-Z NDC depth <-> planar distance (decodeDepthAOV's map).
+            const float n = nearP, f = farP;
+            auto toDist = [&](float d) { return (n * f) / (n + d * (f - n)); };
+            auto toNdc  = [&](float z) { return n * (f - z) / (z * (f - n)); };
+            // A camera-image-coordinate direction -> the primary's GL NDC.
+            auto primNdc = [&](const float d[3], float& x, float& y) {
+                if (d[2] <= 1e-6f) return false;
+                x = 2.f * (d[0] / d[2] * nk[0] + nk[2]) - 1.f;
+                y = 1.f - 2.f * (d[1] / d[2] * nk[1] + nk[3]);
+                return true;
+            };
+            // A face's tan coordinates -> camera image coordinates (unnormalized).
+            auto faceToCam = [&](int face, float u, float v, float out[3]) {
+                const lr::Basis& b = lr::kBasis[face];
+                for (int i = 0; i < 3; ++i) out[i] = u * b.r[i] + v * b.dn[i] + b.f[i];
+            };
+
+            for (uint32_t y = 0; y < h; ++y) {
+                for (uint32_t x = 0; x < w; ++x) {
+                    const float u  = (static_cast<float>(x) + 0.5f) / static_cast<float>(w);
+                    const float v  = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
+                    float       d[3];
+                    lr::fisheyeDirection(lens, (u - nk[2]) / nk[0], (v - nk[3]) / nk[1], d);
+                    float       su = 0.f, sv = 0.f;
+                    const int   face = lr::owner(rig, d, su, sv);
+                    uint8_t*    dst  = prim.data.data() + (static_cast<size_t>(y) * w + x) * bpp;
+                    const VulkanRenderer::AOVReadback* fr = face >= 0 ? faces[face] : nullptr;
+                    if (face < 0 || !fr || fr->bytesPerPixel != static_cast<int>(bpp)) {
+                        if (face >= 0) {// a face this read could not get: nothing to say there
+                            std::memset(dst, 0, bpp);
+                            continue;
+                        }
+                        const int sx = std::clamp(static_cast<int>(std::floor(su * static_cast<float>(w))), 0,
+                                                  static_cast<int>(w) - 1);
+                        const int sy = std::clamp(static_cast<int>(std::floor(sv * static_cast<float>(h))), 0,
+                                                  static_cast<int>(h) - 1);
+                        std::memcpy(dst, src.data() + (static_cast<size_t>(sy) * w + sx) * bpp, bpp);
+                        continue;
+                    }
+                    const int fw = fr->width, fh = fr->height;
+                    const int sx = std::clamp(static_cast<int>(std::floor(su * static_cast<float>(fw))), 0, fw - 1);
+                    const int sy = std::clamp(static_cast<int>(std::floor(sv * static_cast<float>(fh))), 0, fh - 1);
+                    const uint8_t* fs = fr->data.data() + (static_cast<size_t>(sy) * fw + sx) * bpp;
+                    if (aov != AOV::Depth && aov != AOV::Motion) {
+                        std::memcpy(dst, fs, bpp);
+                        continue;
+                    }
+                    // The face texel's own ray, at its centre, in the face's tan units.
+                    const lr::FaceRect& r = rig.faces[face];
+                    const float ftu = r.u0 + (static_cast<float>(sx) + 0.5f) / static_cast<float>(fw) * (r.u1 - r.u0);
+                    const float ftv = r.v0 + (static_cast<float>(sy) + 0.5f) / static_cast<float>(fh) * (r.v1 - r.v0);
+                    float pc[3];
+                    faceToCam(face, ftu, ftv, pc);// the point at face depth 1, in camera coordinates
+                    if (aov == AOV::Depth) {
+                        float df;
+                        std::memcpy(&df, fs, 4);
+                        float out = 0.f;
+                        if (df > 0.f) {
+                            const float z = toDist(df) * pc[2];// planar along the camera's axis
+                            if (z > 1e-6f) out = toNdc(z);
+                        }
+                        std::memcpy(dst, &out, 4);
+                        continue;
+                    }
+                    // Motion: RGBA16F (prevNDC - currNDC in the face's GL NDC, prevDepth, 0).
+                    const auto* h16 = reinterpret_cast<const uint16_t*>(fs);
+                    const float mx = DataUtils::fromHalfFloat(h16[0]), my = DataUtils::fromHalfFloat(h16[1]), pd = DataUtils::fromHalfFloat(h16[2]);
+                    // The face texel in its GL NDC, and where the point was.
+                    const float cnx = 2.f * (static_cast<float>(sx) + 0.5f) / static_cast<float>(fw) - 1.f;
+                    const float cny = 1.f - 2.f * (static_cast<float>(sy) + 0.5f) / static_cast<float>(fh);
+                    const float pnx = cnx + mx, pny = cny + my;
+                    const float ptu = r.u0 + 0.5f * (pnx + 1.f) * (r.u1 - r.u0);
+                    const float ptv = r.v0 + 0.5f * (1.f - pny) * (r.v1 - r.v0);
+                    float pp[3];
+                    faceToCam(face, ptu, ptv, pp);// the camera turns with the rig: same rotation
+                    float cx0, cy0, px0, py0;
+                    uint16_t outH[4] = {0, 0, 0, 0};
+                    if (primNdc(pc, cx0, cy0) && primNdc(pp, px0, py0)) {
+                        outH[0] = DataUtils::toHalfFloat(px0 - cx0);
+                        outH[1] = DataUtils::toHalfFloat(py0 - cy0);
+                        if (pd > 0.f) {
+                            const float z = toDist(pd) * pp[2];
+                            if (z > 1e-6f) outH[2] = DataUtils::toHalfFloat(toNdc(z));
+                        }
+                    }
+                    std::memcpy(dst, outH, 8);
+                }
+            }
+        }
+
         void warpAovForLens(const LensDistortion& lens, const float normK[4], float overscan,
                             std::vector<uint8_t>& buf,
                             uint32_t w, uint32_t h, uint32_t bpp) {
@@ -1418,7 +1543,29 @@ namespace threepp {
         // not, once a lens is set (the RCAS stage warps it). Warp every AOV to
         // match, or the dataset ships distorted pixels with undistorted labels
         // — worse than shipping neither.
-        if (impl.lens_.active()) {
+        // Only the primary has a lens: a secondary view's AOVs are its own
+        // pinhole's, like its colour.
+        if (viewHandle == 0u && impl.lens_.active() && impl.lensRigLastActive_) {
+            // A fisheye frame: the rig's side views hold the labels for the
+            // directions the primary's frame does not. Read the same AOVs from
+            // each (a side view draws no splats, so not that one).
+            const auto rig = impl.lensRigLast_;
+            std::vector<GBufferAOV> faceAovs;
+            for (const auto& r : out)
+                if (r.aov != GBufferAOV::SplatDepth) faceAovs.push_back(r.aov);
+            std::array<std::vector<AOVReadback>, vulkan::lensrig::kFaceCount> faceRes;
+            for (int face = 0; face < vulkan::lensrig::kFaceCount; ++face) {
+                if ((rig.faceMask & (1u << face)) == 0u || faceAovs.empty()) continue;
+                if (!readViewGBufferAOVs(impl.lensRigViews_[face], faceAovs, faceRes[face])) faceRes[face].clear();
+            }
+            for (auto& r : out) {
+                std::array<const AOVReadback*, vulkan::lensrig::kFaceCount> faces{};
+                for (int face = 0; face < vulkan::lensrig::kFaceCount; ++face)
+                    for (const auto& fr : faceRes[face])
+                        if (fr.aov == r.aov) faces[face] = &fr;
+                composeAovForRig(impl.lens_, rig, r.aov, impl.lensRigNear_, impl.lensRigFar_, r, faces);
+            }
+        } else if (viewHandle == 0u && impl.lens_.active()) {
             const float normK[4] = {0.5f * impl.prepOut_.projP0, 0.5f * impl.prepOut_.projP5,
                                     0.5f * (1.f - impl.prepOut_.projP8), 0.5f * (1.f + impl.prepOut_.projP9)};
             for (auto& r : out) {

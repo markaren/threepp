@@ -1254,6 +1254,28 @@ namespace threepp {
         // (k1 > 0) gathers inward and is unaffected. setLensOverscan() below
         // renders the wider field that makes those corners real.
         //
+        // FISHEYE (LensModel::Fisheye) is assembled from several renders
+        // instead of warped out of one (src/threepp/renderers/vulkan/LensRig.hpp).
+        // The primary keeps the camera's own pinhole frustum, which has the
+        // fisheye's centre focal length, so the middle of the frame is as sharp
+        // as a plain render of that camera; up to four side views, looking
+        // along the camera's right, left, down and up axes, cover the rest,
+        // each cropped to the directions it owns and sized so it never has
+        // fewer samples than the output pixels that read it. The sensor pass
+        // resamples them (Catmull-Rom) per output ray, so the field is not
+        // bound to the pinhole's: past 90 degrees off axis works (to ~170).
+        // Configure it like the real lens: the camera's focal length (fov) is
+        // the fisheye's, and the k1..k4 are cv2.fisheye's. The side views are
+        // internal addView views with their own temporal history: the frame
+        // costs about (1 + their pixels / the output's) plain frames (139
+        // degrees across 16:9: 1.7x extra pixels; 180 degrees: 2.5x). Changing
+        // the camera's intrinsics or the canvas size re-lays them out, and
+        // re-creates a view only when it must grow or has shrunk by a third.
+        // The AOV readback composes the same views pixel for pixel: Depth is
+        // the planar depth along the camera's own axis (0 = far at or beyond
+        // 90 degrees, where there is none), Motion is in the primary's NDC.
+        // Not in the side views: overlay lines/wireframe, Gaussian splats.
+        //
         // OFF by default (LensModel::None) — zero cost, output unchanged.
         void setLensDistortion(const LensDistortion& distortion);
         [[nodiscard]] LensDistortion lensDistortion() const;
@@ -1266,7 +1288,9 @@ namespace threepp {
         // typical wide-lens coefficients. The cost is rendering a wider field
         // at the same resolution, so effective detail drops by roughly the
         // factor (a 1.25 overscan renders 1.25x the field into the same
-        // pixels). Only meaningful with a lens set; ignored otherwise.
+        // pixels). Only meaningful with a lens set; ignored otherwise, and
+        // ignored for a fisheye, whose wider field comes from the side views
+        // described above at full resolution.
         //
         // The widened frustum applies to EVERYTHING this frame — culling,
         // motion vectors and the G-buffer AOVs included — so colour and labels

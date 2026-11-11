@@ -31,10 +31,12 @@
 #ifndef THREEPP_VULKAN_SENSOR_PASS_HPP
 #define THREEPP_VULKAN_SENSOR_PASS_HPP
 
+#include "threepp/renderers/vulkan/LensRig.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -79,6 +81,14 @@ namespace threepp::vulkan {
             float    darkElectrons = 0.f;
             float    prnu          = 0.f;
             float    isoGain       = 1.f;
+
+            // The fisheye rig (LensRig.hpp): the frame's face layout, with
+            // faceMask holding only the faces whose views rendered this frame,
+            // and those views' colour targets (GENERAL layout) by face.
+            bool             rigActive = false;
+            lensrig::Frame   rig{};
+            VkImage          faceImages[lensrig::kFaceCount]{};
+            VkImageView      faceViews[lensrig::kFaceCount]{};
 
             [[nodiscard]] bool active() const { return distortActive || noiseActive; }
         };
@@ -127,6 +137,11 @@ namespace threepp::vulkan {
         // the swapchain image index varies per frame, so the destination write
         // is refreshed only when it actually changes.
         std::vector<uint64_t> boundDst_;// imageViewSerial of the swapchain view each set holds
+        // The fisheye rig's per-slot face bindings (imageViewSerial; 0 = the
+        // snapshot stands in) and its uniform block, host-mapped per slot.
+        std::vector<std::array<uint64_t, lensrig::kFaceCount>> boundFaces_;
+        std::vector<Buffer> rigUbo_;
+        std::vector<void*>  rigUboMapped_;
 
         void createPipeline();
         void createDescriptorPool();

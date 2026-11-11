@@ -13290,7 +13290,7 @@ class VulkanRenderer:
         """
     def set_lens_distortion(self, model: str = 'none', k1: typing.SupportsFloat | typing.SupportsIndex = 0.0, k2: typing.SupportsFloat | typing.SupportsIndex = 0.0, k3: typing.SupportsFloat | typing.SupportsIndex = 0.0, k4: typing.SupportsFloat | typing.SupportsIndex = 0.0, p1: typing.SupportsFloat | typing.SupportsIndex = 0.0, p2: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
-        OpenCV-compatible lens distortion. 'brown_conrady' takes cv2's (k1, k2, p1, p2, k3); 'fisheye' takes cv2.fisheye's (k1..k4). Applied to BOTH the displayed image and the AOV readback, so segmentation/depth labels stay aligned with the distorted pixels. Default 'none' (pinhole, zero cost).
+        OpenCV-compatible lens distortion. 'brown_conrady' takes cv2's (k1, k2, p1, p2, k3); 'fisheye' takes cv2.fisheye's (k1..k4). Applied to BOTH the displayed image and the AOV readback, so segmentation/depth labels stay aligned with the distorted pixels. 'fisheye' renders the camera's own pinhole (sharp centre, the camera's fov sets the fisheye's focal length) plus up to four side views for the wider field, resampled per output ray: full resolution, past 90 degrees off axis, at roughly 1.7x (139 deg, 16:9) to 2.5x (180 deg) extra pixels. Default 'none' (pinhole, zero cost).
         """
     def set_scissor(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
@@ -13715,7 +13715,7 @@ class VulkanRenderer:
     @property
     def lens_overscan(self) -> float:
         """
-        Render the scene with the frustum widened by this factor so the lens warp has real geometry for the output corners instead of a clamped, smeared border. Barrel distortion (k1 < 0) needs it; 1.15-1.3 covers typical wide lenses. Costs effective resolution (the same pixels cover a wider field). camera_intrinsics still reports the OUTPUT camera. Default 1 (off).
+        Render the scene with the frustum widened by this factor so the lens warp has real geometry for the output corners instead of a clamped, smeared border. Barrel distortion (k1 < 0) needs it; 1.15-1.3 covers typical wide lenses. Costs effective resolution (the same pixels cover a wider field). camera_intrinsics still reports the OUTPUT camera. Ignored for 'fisheye', whose wider field comes from side views. Default 1 (off).
         """
     @lens_overscan.setter
     def lens_overscan(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:

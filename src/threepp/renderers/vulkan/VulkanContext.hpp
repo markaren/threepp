@@ -32,8 +32,13 @@ namespace threepp::vulkan {
         // leaveDeviceAtExit: Canvas::Parameters::fastExit — the destructor skips
         // vkDestroyDevice and leaves device, surface and instance to process
         // exit (see ExitPolicy.hpp for why, and for the process-wide switch).
+        //
+        // requestedExtent: the size the canvas asked for. A headless canvas
+        // renders at exactly that size, whatever the window system would grant
+        // a window (see offscreen()).
         explicit VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync = true,
-                               bool preferHeadlessSurface = false, bool leaveDeviceAtExit = false);
+                               bool preferHeadlessSurface = false, bool leaveDeviceAtExit = false,
+                               VkExtent2D requestedExtent = {0, 0});
         ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
@@ -42,6 +47,8 @@ namespace threepp::vulkan {
         // Recreate swapchain and views (on resize / out-of-date).
         // Idle-waits on the device first; safe to call any time.
         void recreateSwapchain();
+        // The size a headless canvas asks for now (its next recreate uses it).
+        void setRequestedExtent(VkExtent2D extent) { requestedExtent_ = extent; }
 
         // Accessors --------------------------------------------------------
         VkInstance       instance() const { return instance_; }
@@ -140,6 +147,22 @@ namespace threepp::vulkan {
         // the constructor, and acquireOrReuseSwapchainImage (VulkanCoreFrame)
         // for what replaces the acquire/present cycle when it is on.
         bool presentSuppressed() const { return presentSuppressed_; }
+
+        // True for a headless canvas whose driver has no
+        // VK_EXT_headless_surface (Windows/NVIDIA): the "swapchain" is then a
+        // ring of ordinary images this context owns, one per frame in flight,
+        // at the size the canvas asked for. It used to be a real swapchain on
+        // a hidden window, whose size the window system clamps to the desktop
+        // (3840x2160 came back 3840x1181, silently). No surface image is ever
+        // acquired or presented: presentSuppressed() is always true, image i
+        // belongs to frame slot i.
+        bool offscreen() const { return offscreen_; }
+        // The layout a finished frame's image rests in between frames:
+        // PRESENT_SRC for a swapchain image, GENERAL for an offscreen one
+        // (PRESENT_SRC is only for presentable images).
+        VkImageLayout presentLayout() const {
+            return offscreen_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        }
 
         // VK_KHR_ray_query plus acceleration structures: inline rays from
         // compute for shadows, GI, reflections, refraction and fog. False on a
@@ -269,6 +292,9 @@ namespace threepp::vulkan {
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool headlessSurface_ = false;// VK_EXT_headless_surface instead of a window surface
         bool presentSuppressed_ = false;// opt-in headless mode: acquire once per slot, never present
+        bool offscreen_ = false;        // headless without VK_EXT_headless_surface: own image ring
+        VkExtent2D requestedExtent_{0, 0};// the canvas's requested size (headless sizing)
+        std::vector<VmaAllocation> offscreenAllocs_;// the offscreen ring's memory, by image
         bool rayTracingEnabled_ = false;
         bool rayQuerySupported_ = false;
         bool externalMemorySupported_ = false;

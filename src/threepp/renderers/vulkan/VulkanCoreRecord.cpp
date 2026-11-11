@@ -3834,7 +3834,22 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
             }
 
             // ── Camera image formation: lens distortion + sensor noise ─────────
-            // Deliberately LAST. The overlay pass above composites particle
+            // Deliberately LAST of the primary's picture, after the overlay
+            // pass above. Built in the record tail, after the secondary views
+            // (addSensorPasses): a fisheye resamples the rig's side views,
+            // which those passes render.
+            sensorStagePending_ = sensorPass_ && sensorStageActive();
+}
+
+void VulkanRenderer::Impl::addSensorPasses(rg::RenderGraph& g, uint32_t imageIndex) {
+            if (!sensorStagePending_) return;
+            sensorStagePending_ = false;
+            const uint32_t f      = currentFrame;
+            constexpr auto kColor = VK_IMAGE_ASPECT_COLOR_BIT;
+            const auto swap = g.importImage("swapchain", ctx->swapchainImages()[imageIndex], kColor, 1,
+                                            VK_IMAGE_LAYOUT_GENERAL);
+
+            // The overlay pass composites particle
             // billboards (chimney smoke and friends), lines and wireframe
             // straight onto the swapchain, so a warp applied any earlier bent
             // the scene but not them — overlays visibly slid off the geometry
@@ -3846,7 +3861,7 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
             // stays clean, which is right — a HUD is not in front of the lens.
             //
             // No-op (and no allocation) unless a lens or noise is configured.
-            if (sensorPass_ && sensorStageActive()) {
+            {
                 const VkExtent2D ext = viewOutExtent();
                 // Advances the noise frame counter: built once per frame, here.
                 const vulkan::SensorPass::Params params = buildSensorParams();
@@ -3861,17 +3876,28 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                      })
                             .use(swap, rg::transferSrc())
                             .use(snap, rg::transferDst());
-                    g.addPass("sensor", [this, ext, params](VkCommandBuffer c) {
+                    auto pass = g.addPass("sensor", [this, ext, params](VkCommandBuffer c) {
                          sensorPass_->recordApply(c, currentFrame, ext.width, ext.height, params);
                          gpuTimings_->end(c, TP_SensorImage, currentFrame);
-                     })
-                            .use(snap, rg::sampled())
-                            .use(swap, rg::storageWrite());
+                     });
+                    pass.use(snap, rg::sampled()).use(swap, rg::storageWrite());
+                    // The rig's side views, written by their own TAA resolves
+                    // earlier in this graph; they live in GENERAL for good.
+                    if (params.rigActive) {
+                        for (int face = 0; face < vulkan::lensrig::kFaceCount; ++face) {
+                            if ((params.rig.faceMask & (1u << face)) == 0u || !params.faceImages[face]) continue;
+                            pass.use(g.importImage("view.color", params.faceImages[face], kColor, 1,
+                                                   VK_IMAGE_LAYOUT_GENERAL),
+                                     rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
+                        }
+                    }
                 }
             }
 }
 
 void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t imageIndex) {
+
+            sensorStagePending_ = false;// set by addTailPasses, on the full-frame path only
 
             // The primary view, stage by stage: each stage adds its passes to
             // the frame graph, which records the barriers between them from
@@ -4392,7 +4418,7 @@ void VulkanRenderer::Impl::recordOverlayAndPresentTransition(VkCommandBuffer cb,
                 toPresent.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
                 toPresent.dstAccessMask = 0;
                 toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                toPresent.newLayout = ctx->presentLayout();
                 toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 toPresent.image = img;
@@ -4415,7 +4441,7 @@ void VulkanRenderer::Impl::recordOverlayAndPresentTransition(VkCommandBuffer cb,
                 toPresent.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
                 toPresent.dstAccessMask = 0;
                 toPresent.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                toPresent.newLayout = ctx->presentLayout();
                 toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 toPresent.image = img;
@@ -4583,7 +4609,26 @@ vulkan::SensorPass::Params VulkanRenderer::Impl::buildSensorParams() {
                 p.normK[2] = 0.5f * (1.f - prepOut().projP8);
                 p.normK[3] = 0.5f * (1.f + prepOut().projP9);
                 p.overscan = effectiveOverscan();
+
+                // A fisheye resamples the rig: the primary plus whichever side
+                // views rendered this frame (updateLensRig laid them out).
+                if (lens_.model == LensModel::Fisheye && lensRigWanted_) {
+                    p.rigActive = true;
+                    p.rig       = lensRigLayout_;
+                    for (int i = 0; i < 4; ++i) p.rig.normK[i] = p.normK[i];
+                    p.rig.faceMask = 0u;
+                    for (int face = 0; face < vulkan::lensrig::kFaceCount; ++face) {
+                        if ((lensRigLayout_.faceMask & (1u << face)) == 0u) continue;
+                        ViewContext* v = lensRigFaceView(face);
+                        if (!v) continue;
+                        p.rig.faceMask |= 1u << face;
+                        p.faceImages[face] = v->colorTarget.image;
+                        p.faceViews[face]  = v->colorTarget.view;
+                    }
+                }
             }
+            lensRigLastActive_ = p.rigActive;
+            lensRigLast_       = p.rig;
 
             if (p.noiseActive) {
                 p.frameSeed      = sensorNoise_.seed * 2654435761u + sensorNoiseFrame_;

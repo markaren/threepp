@@ -2971,9 +2971,50 @@ namespace threepp {
         }
         // Overscan only means anything with a lens: without one the warp is
         // identity and a widened frustum would just silently crop the view.
+        // A fisheye never overscans: its field beyond the pinhole's comes from
+        // the rig's side views instead (LensRig.hpp), so the primary keeps the
+        // camera's own frustum and its full resolution.
         [[nodiscard]] float effectiveOverscan() const {
-            return lens_.active() ? lensOverscan_ : 1.f;
+            return lens_.active() && lens_.model != LensModel::Fisheye ? lensOverscan_ : 1.f;
         }
+
+        // ── The fisheye rig (LensRig.hpp) ───────────────────────────────────
+        // A fisheye frame = the primary (the camera's own pinhole) plus up to
+        // four side views, addView views that look along the camera's right,
+        // left, down and up axes, resampled together in the sensor pass. The
+        // views are internal: created, re-aimed every frame and removed here.
+        //
+        // Called by render() for every perspective frame before it opens; a
+        // no-op (and the side views are removed) unless the lens is a fisheye.
+        void updateLensRig(Camera& camera);
+        // The layout render() last asked for, and what it was computed from
+        // (recomputed only when one of those changes: lens, intrinsics, size).
+        bool                   lensRigWanted_ = false;
+        vulkan::lensrig::Frame lensRigLayout_{};
+        LensDistortion         lensRigLens_{};
+        float                  lensRigNormK_[4]{};
+        VkExtent2D             lensRigExt_{0, 0};
+        // Per face: its camera (kept for the renderer's life: a removed view
+        // still names it until the frame boundary frees it), its view handle
+        // (0 = none) and the size that view was created at.
+        std::array<std::unique_ptr<PerspectiveCamera>, vulkan::lensrig::kFaceCount> lensRigCams_{};
+        std::array<uint32_t, vulkan::lensrig::kFaceCount>                         lensRigViews_{};
+        std::array<VkExtent2D, vulkan::lensrig::kFaceCount>                       lensRigViewExt_{};
+        // The rig as the last frame's sensor pass resampled it (faceMask = the
+        // faces whose views rendered that frame): the AOV readback composes
+        // its labels from the same views, with the same ownership.
+        vulkan::lensrig::Frame lensRigLast_{};
+        bool                   lensRigLastActive_ = false;
+        // The camera's clip planes that frame (every view shares them), for
+        // re-expressing a side view's depth along the camera's own axis.
+        float lensRigNear_ = 0.1f, lensRigFar_ = 1000.f;
+        // Is a face's view rendering this frame (resources exist, not going
+        // away)? Same predicate addSecondaryViewPasses uses to skip one.
+        [[nodiscard]] ViewContext* lensRigFaceView(int face);
+        // The sensor stage is built after the secondary views (it samples the
+        // rig's), so addTailPasses only marks that this frame wants it.
+        bool sensorStagePending_ = false;
+        void addSensorPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
 
         // Pack this frame's lens + sensor state for the final SensorPass.
         // Intrinsics go over NORMALIZED (fx/W, fy/H, cx/W, cy/H) so the same

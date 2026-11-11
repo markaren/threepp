@@ -37,8 +37,63 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D srcTex;         // snapshot of the finished frame
 layout(set = 0, binding = 1) uniform writeonly image2D dstImg; // swapchain (bgra8, no format)
 
+// The fisheye rig (LensRig.hpp): up to four side views, each a pinhole looking
+// along one of the camera's axes, for the directions the primary's frame does
+// not hold. A face that is not in faceMask is bound to the snapshot and never
+// read. Indexed with constants only (see sampleFace).
+layout(set = 0, binding = 2) uniform sampler2D faceTex[4];
+layout(set = 0, binding = 3) uniform RigUbo {
+    uvec4 info;       // x = faceMask
+    vec4  margin;     // xy = the primary's margin in uv
+    vec4  faceRect[4];// (u0, v0, 1/(u1-u0), 1/(v1-v0)) in the face's tan units
+} rig;
+
 #define SENSOR_FLAG_DISTORT 1u
 #define SENSOR_FLAG_NOISE   2u
+#define SENSOR_FLAG_RIG     4u
+
+// Must match lensrig::kBasis: each face's image x, image y (down) and forward,
+// in the camera's image coordinates.
+const vec3 kFaceR[4]  = vec3[4](vec3(0, 0, -1), vec3(0, 0, 1), vec3(1, 0, 0), vec3(1, 0, 0));
+const vec3 kFaceDn[4] = vec3[4](vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 0, -1), vec3(0, 0, 1));
+const vec3 kFaceF[4]  = vec3[4](vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0), vec3(0, -1, 0));
+
+// Catmull-Rom bicubic in 9 bilinear taps. The fisheye resamples a finished
+// picture at a scale near 1 and arbitrary sub-pixel phase, where a bilinear tap
+// is a half-pixel box blur at worst: Catmull-Rom keeps the edges a plain render
+// of the same camera has. Its negative lobes can overshoot; the caller clamps.
+vec3 sampleCatmullRom(sampler2D tex, vec2 uv) {
+    const vec2 size = vec2(textureSize(tex, 0));
+    const vec2 pos  = uv * size;
+    const vec2 t1   = floor(pos - 0.5) + 0.5;
+    const vec2 f    = pos - t1;
+    const vec2 w0   = f * (-0.5 + f * (1.0 - 0.5 * f));
+    const vec2 w1   = 1.0 + f * f * (-2.5 + 1.5 * f);
+    const vec2 w2   = f * (0.5 + f * (2.0 - 1.5 * f));
+    const vec2 w3   = f * f * (-0.5 + 0.5 * f);
+    const vec2 w12  = w1 + w2;
+    const vec2 p0   = (t1 - 1.0) / size;
+    const vec2 p3   = (t1 + 2.0) / size;
+    const vec2 p12  = (t1 + w2 / w12) / size;
+    vec3 r = vec3(0.0);
+    r += textureLod(tex, vec2(p0.x, p0.y), 0.0).rgb * (w0.x * w0.y);
+    r += textureLod(tex, vec2(p12.x, p0.y), 0.0).rgb * (w12.x * w0.y);
+    r += textureLod(tex, vec2(p3.x, p0.y), 0.0).rgb * (w3.x * w0.y);
+    r += textureLod(tex, vec2(p0.x, p12.y), 0.0).rgb * (w0.x * w12.y);
+    r += textureLod(tex, vec2(p12.x, p12.y), 0.0).rgb * (w12.x * w12.y);
+    r += textureLod(tex, vec2(p3.x, p12.y), 0.0).rgb * (w3.x * w12.y);
+    r += textureLod(tex, vec2(p0.x, p3.y), 0.0).rgb * (w0.x * w3.y);
+    r += textureLod(tex, vec2(p12.x, p3.y), 0.0).rgb * (w12.x * w3.y);
+    r += textureLod(tex, vec2(p3.x, p3.y), 0.0).rgb * (w3.x * w3.y);
+    return r;
+}
+
+vec3 sampleFace(int f, vec2 uv) {
+    if (f == 0) return sampleCatmullRom(faceTex[0], uv);
+    if (f == 1) return sampleCatmullRom(faceTex[1], uv);
+    if (f == 2) return sampleCatmullRom(faceTex[2], uv);
+    return sampleCatmullRom(faceTex[3], uv);
+}
 
 layout(push_constant) uniform Pc {
     uint  width;
@@ -55,6 +110,7 @@ layout(push_constant) uniform Pc {
     // distortion can gather real geometry into the corners instead of
     // clamped edge texels. 1.0 = no overscan. The ideal sample position is
     // mapped back into the overscanned source about the principal point.
+    // Always 1 for a fisheye (SENSOR_FLAG_RIG), which reads side views.
     float overscan;
 
     uint  frameSeed;
@@ -73,6 +129,45 @@ void main() {
     const vec2 uv    = (vec2(px) + 0.5) * texel;
 
     vec2 srcUv = uv;
+    if ((pc.flags & SENSOR_FLAG_RIG) != 0u) {
+        // Fisheye: the pixel's ray, then the view that holds it — the
+        // primary while the ray lands inside its frame, else the side face
+        // whose side of the primary frustum it leaves through. Twin of
+        // lensrig::owner.
+        const vec2 pd = (uv - pc.normK.zw) / pc.normK.xy;
+        const vec3 d  = fisheyeDirection(pc.radial, pd);
+        const vec2 fxy = pc.normK.xy, cxy = pc.normK.zw;
+        if (d.z > 1e-6) {
+            srcUv = d.xy / d.z * fxy + cxy;
+        }
+        const bool inPrimary = d.z > 1e-6 && all(greaterThanEqual(srcUv, rig.margin.xy)) &&
+                               all(lessThanEqual(srcUv, vec2(1.0) - rig.margin.xy));
+        vec3 res;
+        if (inPrimary) {
+            res = sampleCatmullRom(srcTex, srcUv);
+        } else {
+            const float tanX = d.x > 0.0 ? (1.0 - cxy.x) / fxy.x : cxy.x / fxy.x;
+            const float tanY = d.y > 0.0 ? (1.0 - cxy.y) / fxy.y : cxy.y / fxy.y;
+            const int   f    = abs(d.x) * tanY >= abs(d.y) * tanX ? (d.x > 0.0 ? 0 : 1) : (d.y > 0.0 ? 2 : 3);
+            if ((rig.info.x & (1u << uint(f))) != 0u) {
+                const float dz = max(dot(d, kFaceF[f]), 1e-6);
+                const vec2  t  = vec2(dot(d, kFaceR[f]), dot(d, kFaceDn[f])) / dz;
+                const vec4  r  = rig.faceRect[f];
+                res = sampleFace(f, (t - r.xy) * r.zw);
+            } else {
+                // No face there this frame (its first frame, before its view
+                // exists): the primary's nearest edge.
+                if (d.z <= 1e-6) srcUv = vec2(d.x > 0.0 ? 1.0 : 0.0, d.y > 0.0 ? 1.0 : 0.0);
+                res = textureLod(srcTex, clamp(srcUv, vec2(0.0), vec2(1.0)), 0.0).rgb;
+            }
+        }
+        if ((pc.flags & SENSOR_FLAG_NOISE) != 0u) {
+            res = applySensorNoise(res, uvec2(px), pc.frameSeed, pc.fullWell, pc.readNoise,
+                                   pc.darkElectrons, pc.prnu, pc.isoGain);
+        }
+        imageStore(dstImg, px, vec4(clamp(res, 0.0, 1.0), 1.0));
+        return;
+    }
     if ((pc.flags & SENSOR_FLAG_DISTORT) != 0u) {
         // sensor pixel -> normalized distorted -> normalized ideal -> uv
         const vec2 pd = (uv - pc.normK.zw) / pc.normK.xy;

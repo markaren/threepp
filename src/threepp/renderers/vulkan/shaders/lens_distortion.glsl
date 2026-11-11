@@ -84,4 +84,29 @@ vec2 lensUndistort(int model, vec4 radial, vec2 tangential, vec2 pd) {
     return pd;
 }
 
+// Fisheye pixel (normalized, distorted) -> unit ray direction in image
+// coordinates (x right, y down, z forward). Twin of lensrig::fisheyeDirection
+// (src/threepp/renderers/vulkan/LensRig.hpp): the same Newton inversion as
+// lensUndistort, returned as a direction so it is not bound to theta < 90
+// degrees. Theta is capped at LENS_RIG_MAX_THETA (170 degrees) as there.
+#define LENS_RIG_MAX_THETA 2.96706
+
+vec3 fisheyeDirection(vec4 radial, vec2 pd) {
+    float rd = length(pd);
+    if (rd < 1e-8) return vec3(0.0, 0.0, 1.0);
+    float th = rd;
+    for (int i = 0; i < LENS_INVERSE_ITERATIONS; ++i) {
+        float t2   = th * th;
+        float poly = 1.0 + t2 * (radial.x + t2 * (radial.y + t2 * (radial.z + t2 * radial.w)));
+        float f    = th * poly - rd;
+        if (abs(f) <= 1e-7 * rd) break;// converged (3-4 steps)
+        float df   = 1.0 + t2 * (3.0 * radial.x + t2 * (5.0 * radial.y +
+                                 t2 * (7.0 * radial.z + t2 * 9.0 * radial.w)));
+        if (abs(df) < 1e-6) break;
+        th -= f / df;
+    }
+    th = clamp(th, 0.0, LENS_RIG_MAX_THETA);
+    return vec3(pd * (sin(th) / rd), cos(th));
+}
+
 #endif// LENS_DISTORTION_GLSL

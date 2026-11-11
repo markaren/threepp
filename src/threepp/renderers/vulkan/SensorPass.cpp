@@ -36,6 +36,15 @@ namespace threepp::vulkan {
 
         constexpr uint32_t kFlagDistort = 1u;
         constexpr uint32_t kFlagNoise   = 2u;
+        constexpr uint32_t kFlagRig     = 4u;
+
+        // Mirror of sensor_image.comp's RigUbo (std140).
+        struct RigUboData {
+            uint32_t info[4];       // x = faceMask
+            float    margin[4];     // xy = the primary's margin in uv
+            float    faceRect[4][4];// (u0, v0, 1/(u1-u0), 1/(v1-v0))
+        };
+        static_assert(sizeof(RigUboData) == 96, "must match sensor_image.comp's RigUbo");
 
     }// namespace
 
@@ -43,8 +52,30 @@ namespace threepp::vulkan {
         : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
         snapshot_.resize(framesInFlight_);
         boundDst_.assign(framesInFlight_, 0);
+        boundFaces_.assign(framesInFlight_, {});
         createPipeline();
         createDescriptorPool();
+        rigUbo_.resize(framesInFlight_);
+        rigUboMapped_.assign(framesInFlight_, nullptr);
+        for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            rigUbo_[f] = createBuffer(ctx_.allocator(), ctx_.device(), sizeof(RigUboData),
+                                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                              VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            VmaAllocationInfo info{};
+            vmaGetAllocationInfo(ctx_.allocator(), rigUbo_[f].alloc, &info);
+            rigUboMapped_[f] = info.pMappedData;
+            std::memset(rigUboMapped_[f], 0, sizeof(RigUboData));
+            VkDescriptorBufferInfo bi{rigUbo_[f].handle, 0, sizeof(RigUboData)};
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = sets_[f];
+            w.dstBinding      = 3;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w.pBufferInfo     = &bi;
+            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        }
     }
 
     SensorPass::~SensorPass() {
@@ -55,6 +86,7 @@ namespace threepp::vulkan {
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)    vkDestroySampler(d, sampler_, nullptr);
         destroySnapshots();
+        for (auto& b : rigUbo_) destroyBuffer(ctx_.allocator(), b);
     }
 
     void SensorPass::destroySnapshots() {
@@ -62,6 +94,7 @@ namespace threepp::vulkan {
         for (auto& img : snapshot_) destroyImage2D(ctx_.allocator(), d, img);
         width_ = height_ = 0;
         boundDst_.assign(framesInFlight_, 0);
+        boundFaces_.assign(framesInFlight_, {});
     }
 
     void SensorPass::createPipeline() {
@@ -81,7 +114,7 @@ namespace threepp::vulkan {
         check(vkCreateSampler(ctx_.device(), &sci, nullptr, &sampler_),
               "vkCreateSampler(sensorPass)");
 
-        VkDescriptorSetLayoutBinding b[2]{};
+        VkDescriptorSetLayoutBinding b[4]{};
         b[0].binding         = 0;
         b[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[0].descriptorCount = 1;
@@ -90,9 +123,18 @@ namespace threepp::vulkan {
         b[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         b[1].descriptorCount = 1;
         b[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        // The fisheye rig's side views and its layout block.
+        b[2].binding         = 2;
+        b[2].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[2].descriptorCount = lensrig::kFaceCount;
+        b[2].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[3].binding         = 3;
+        b[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b[3].descriptorCount = 1;
+        b[3].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 2;
+        dlci.bindingCount = 4;
         dlci.pBindings    = b;
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(sensorPass)");
@@ -133,15 +175,17 @@ namespace threepp::vulkan {
     }
 
     void SensorPass::createDescriptorPool() {
-        VkDescriptorPoolSize sizes[2]{};
+        VkDescriptorPoolSize sizes[3]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = framesInFlight_;
+        sizes[0].descriptorCount = framesInFlight_ * (1u + lensrig::kFaceCount);
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = framesInFlight_;
+        sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        sizes[2].descriptorCount = framesInFlight_;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = framesInFlight_;
-        dpci.poolSizeCount = 2;
+        dpci.poolSizeCount = 3;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(sensorPass)");
@@ -219,6 +263,15 @@ namespace threepp::vulkan {
             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo      = &srcI;
             vulkan::updateDescriptorSets(d, 1, &w, 0, nullptr);
+            // Every face slot starts on the snapshot: a valid image the shader
+            // never reads while its faceMask bit is clear.
+            VkDescriptorImageInfo faceI[lensrig::kFaceCount];
+            for (auto& fi : faceI) fi = srcI;
+            w.dstBinding      = 2;
+            w.descriptorCount = lensrig::kFaceCount;
+            w.pImageInfo      = faceI;
+            vulkan::updateDescriptorSets(d, 1, &w, 0, nullptr);
+            boundFaces_[f].fill(0);
         }
     }
 
@@ -252,6 +305,40 @@ namespace threepp::vulkan {
             vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
             boundDst_[frame] = swapSerial;
         }
+
+        // The fisheye rig: its side views by face (each slot's previous use
+        // has retired, as above), and this frame's layout block.
+        RigUboData ubo{};
+        if (p.rigActive) {
+            ubo.info[0]   = p.rig.faceMask;
+            ubo.margin[0] = p.rig.marginU;
+            ubo.margin[1] = p.rig.marginV;
+            for (int f = 0; f < lensrig::kFaceCount; ++f) {
+                const auto& r = p.rig.faces[f];
+                ubo.faceRect[f][0] = r.u0;
+                ubo.faceRect[f][1] = r.v0;
+                ubo.faceRect[f][2] = r.u1 > r.u0 ? 1.f / (r.u1 - r.u0) : 0.f;
+                ubo.faceRect[f][3] = r.v1 > r.v0 ? 1.f / (r.v1 - r.v0) : 0.f;
+                const bool     live   = (p.rig.faceMask & (1u << f)) != 0u && p.faceViews[f] != VK_NULL_HANDLE;
+                const uint64_t serial = live ? imageViewSerial(p.faceViews[f]) : 0u;
+                if (boundFaces_[frame][f] == serial) continue;
+                VkDescriptorImageInfo fi{};
+                fi.sampler     = sampler_;
+                fi.imageView   = live ? p.faceViews[f] : snapshot_[frame].view;
+                fi.imageLayout = live ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = sets_[frame];
+                w.dstBinding      = 2;
+                w.dstArrayElement = static_cast<uint32_t>(f);
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w.pImageInfo      = &fi;
+                vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+                boundFaces_[frame][f] = serial;
+            }
+        }
+        std::memcpy(rigUboMapped_[frame], &ubo, sizeof(ubo));
         return true;
     }
 
@@ -274,7 +361,8 @@ namespace threepp::vulkan {
         SensorPush pc{};
         pc.width     = width;
         pc.height    = height;
-        pc.flags     = (p.distortActive ? kFlagDistort : 0u) | (p.noiseActive ? kFlagNoise : 0u);
+        pc.flags     = (p.distortActive ? kFlagDistort : 0u) | (p.noiseActive ? kFlagNoise : 0u) |
+                       (p.rigActive ? kFlagRig : 0u);
         pc.lensModel = p.lensModel;
         std::memcpy(pc.normK, p.normK, sizeof(pc.normK));
         std::memcpy(pc.radial, p.radial, sizeof(pc.radial));
