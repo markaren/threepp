@@ -350,7 +350,7 @@ namespace threepp_py {
                 .def_readwrite("ripple_heights", &DisplacedMesh::WakeField::rippleHeights,
                                "The ripples' height is part of the ocean's geometry, and an absorbing layer at "
                                "each window's edge takes up the waves that reach it instead of the forced decay. "
-                               "Off by default (THREEPP_WAKE_HEIGHTS=1 turns it on). Live.")
+                               "On by default (THREEPP_WAKE_HEIGHTS=0 turns it off). Live.")
                 .def_readwrite("albedo", &DisplacedMesh::WakeField::albedo,
                                "Scales the light the film and the bubbles turn back; 1 = as the water shade "
                                "has them (the default). Read every frame. A scene whose camera opens wide at "

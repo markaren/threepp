@@ -598,8 +598,8 @@ namespace threepp {
         // the renderer first sees the mesh; the other knobs are live.
         static constexpr uint32_t kMaxWakePatches = 8;
         static constexpr uint32_t kMaxWakeSources = 256;
-        // THREEPP_WAKE_HEIGHTS from the environment, read once: "1" = true,
-        // anything else or unset = false.
+        // THREEPP_WAKE_HEIGHTS from the environment, read once: "0" = false,
+        // anything else or unset = true.
         static bool defaultRippleHeights();
         // THREEPP_WAKE_BREAKING, the same way, for WakeField::rippleBreaking.
         static bool defaultRippleBreaking();
@@ -635,9 +635,11 @@ namespace threepp {
             // wave being made to die before it can wrap round the window, so a
             // wake keeps its transverse waves. false = slopes only, every wave
             // decaying at the window's crossing rate (the model before
-            // 2026-11). Off by default until it is judged: the environment's
-            // THREEPP_WAKE_HEIGHTS=1 (read once) or this field turns it on.
-            // Live.
+            // 2026-11). That decay leaves about a fifth of a wave to come
+            // back in at the opposite edge, so a fast vessel meets her own
+            // wake ahead of her and on both sides. On by default; the
+            // environment's THREEPP_WAKE_HEIGHTS=0 (read once) or this field
+            // turns it off. Live.
             bool  rippleHeights   = defaultRippleHeights();
             // The ripples' own waves BREAK where they are steep, and the
             // broken water is foam and air in the field, which then carries,

@@ -816,8 +816,8 @@ int main(int argc, char** argv) {
         // minutes (the 2 nu k^2 term takes the short ones); the window's
         // absorbing layer, not this, is what ends them.
         ocean->wakeField.rippleLife = 120.f;
-        // The ripples' height in the geometry, for her (the engine's default
-        // is off); THREEPP_WAKE_HEIGHTS=0 keeps it off, key H flips it.
+        // The ripples' height in the geometry, as the engine has it by
+        // default; THREEPP_WAKE_HEIGHTS=0 keeps it off, key H flips it.
         const char* heights = std::getenv("THREEPP_WAKE_HEIGHTS");
         ocean->wakeField.rippleHeights = !(heights && std::strcmp(heights, "0") == 0);
     }
