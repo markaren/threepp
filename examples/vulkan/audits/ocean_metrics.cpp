@@ -47,12 +47,12 @@
 //      on it, so rerun with --chop at the baseline's value to split the
 //      branch's change from its change of default.
 //   The wave-model switches are read from the environment, as the engine
-//   reads them (THREEPP_OCEAN_HS_FIX, THREEPP_OCEAN_CWM,
+//   reads them (THREEPP_OCEAN_CWM,
 //   THREEPP_OCEAN_BOUND_WAVES, THREEPP_OCEAN_BREAKING_CRESTS = 1 / 0), so a
 //   sweep's child processes inherit them. Under THREEPP_OCEAN_BREAKING_CRESTS
 //   the whitecap row grades the breaking-crest mask (see section 5), not the
-//   accumulator. Under THREEPP_OCEAN_CREST_FOAM (with
-//   THREEPP_OCEAN_CHOP_NORMALS, which it needs) it grades the crest-foam
+//   accumulator. Under the crest foam (with
+//   the chop normals, which it needs) it grades the crest-foam
 //   texture itself, read back with VulkanRenderer::readOceanCrestFoam.
 //   5. MARGINAL means the estimators of that row fall on both sides of a
 //      limit; it is neither a PASS nor a FAIL (and not a FAIL under
@@ -778,8 +778,7 @@ namespace {
                     "frames=%d at %.1f Hz, dispersion grid %d^2 over %.1f m, foam at %.0f Hz\n",
                     U, double(cfg.fetch), chop, theta, P.tileSize0, P.tileSize1, P.tileSize2,
                     P.textureSize0, P.textureSize1, P.textureSize2, nFrames, cfg.hz, D, W, cfg.foamHz);
-        std::printf("wave model: hs-fix %s, cwm %d, bound waves %d, breaking crests %d, crest sharpness %.2f\n",
-                    std::getenv("THREEPP_OCEAN_HS_FIX") ? std::getenv("THREEPP_OCEAN_HS_FIX") : "params",
+        std::printf("wave model: cwm %d, bound waves %d, breaking crests %d, crest sharpness %.2f\n",
                     int(cwmOn), int(ocean->boundWavesOn()), int(breakOn), sharp);
         std::fflush(stdout);
 
@@ -1119,7 +1118,7 @@ namespace {
         // (ten of its 2 s e-folding times), then one read a second.
         double foamArea = 0, foamAreaFar = 0, foamMean = 0, foamRaw = 0, foamCovHalf = 0;
         int foamReads = 0;
-        // Crest foam (THREEPP_OCEAN_CREST_FOAM): the foam texture over the
+        // Crest foam: the foam texture over the
         // water's rest coordinates. The shade draws min(F, 1) as the covered
         // fraction (its foam photograph is rank-equalised), so the mean of that
         // over the tile is the whitecap fraction, no mask to mirror.

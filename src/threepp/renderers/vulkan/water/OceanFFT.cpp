@@ -410,7 +410,6 @@ namespace threepp::water {
         p.kMin            = settings_.kMin;
         p.kMax            = settings_.kMax;
         p.fetch           = settings_.fetch;
-        p.hsFix           = settings_.hsFix ? 1u : 0u;
         p.spread          = settings_.spread;
         p.swellScale      = swellScale(settings_);
         p.swellPeriod     = settings_.swellPeriod;
@@ -424,12 +423,10 @@ namespace threepp::water {
         cmdShaderRWBarrier(cb, h0_.image);
     }
 
-    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix,
-                                          uint32_t spread) {
+    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch, uint32_t spread) {
         settings_.windTheta = windTheta;
         settings_.windSpeed = windSpeed;
         settings_.fetch     = fetch;
-        settings_.hsFix     = hsFix;
         settings_.spread    = spread;
     }
 
@@ -496,7 +493,7 @@ namespace threepp::water {
         // The shader's peak length scale L (hs-fix and fetch included).
         double spectrumLengthCpu(const PhillipsSpectrum::Settings& S) {
             double L = double(S.windSpeed) * S.windSpeed / 9.81;
-            if (S.hsFix) L *= 1.1624764;
+            L *= 1.1624764;
             if (S.fetch > 0.f) {
                 const double Ffd = 1609.0 * S.windSpeed * S.windSpeed;
                 L *= std::pow(std::clamp(S.fetch / Ffd, 0.005, 1.0), 2.0 / 3.0);
@@ -596,7 +593,7 @@ namespace threepp::water {
             const float k2 = kx * kx + kz * kz;
             if (std::sqrt(k2) < 1e-4f) return 0.f;
             float L = S.windSpeed * S.windSpeed / g;
-            if (S.hsFix) L *= 1.1624764f;
+            L *= 1.1624764f;
             float Aeff = 0.01f;
             float gamma = 1.f;
             if (S.fetch > 0.f) {
@@ -624,7 +621,7 @@ namespace threepp::water {
                 const float d = (w - wp) / (sg * wp);
                 p *= std::pow(gamma, std::exp(-0.5f * d * d));
             }
-            if (S.hsFix) p *= 2.5446900f;
+            p *= 2.5446900f;
             if (S.shortWaveSpectrum) {
                 const double kp = 0.894 / double(L);
                 p += float(2.0 * 3.14159265358979 * elfouhailyShortCurvatureCpu(kn, kp, S.windSpeed) *

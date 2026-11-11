@@ -34,11 +34,6 @@ namespace threepp {
     // once per process).
     bool defaultMeasuredSpreading();
 
-    // Default of DisplacedMesh::Params::chopNormals: false unless the
-    // environment sets THREEPP_OCEAN_CHOP_NORMALS to 1, on or true; 0 is off
-    // (read once per process).
-    bool defaultChopNormals();
-
     class DisplacedMesh : public Mesh {
 
     public:
@@ -74,18 +69,14 @@ namespace threepp {
             // tunable like windSpeed: the renderer regenerates the spectra.
             float fetch = 0.0f;
 
-            // Hs calibration switch (default OFF, the historical sea). The
-            // plain spectrum's constant (A = 0.01, set by eye) and Phillips
-            // peak exponent give a significant wave height of only ~0.52x
-            // Pierson-Moskowitz (Hs ~ 0.0115 U^2 against 0.021-0.025 U^2;
-            // ~0.55x JONSWAP at a finite fetch). ON uses Pierson and
-            // Moskowitz's own alpha = 8.1e-3 and beta = 0.74: Hs x1.85 at
-            // every wind and fetch, the peak at 1.16x the wavelength (Tp
-            // x1.08, onto PM's and Hasselmann's). Every scene tuned its
-            // waveScale against the OFF sea. The environment variable
-            // THREEPP_OCEAN_HS_FIX = 1 / 0 forces it on / off for every
-            // ocean. Live-tunable like windSpeed.
-            bool hsFix = true;
+            // What every ocean is, with no switch (each was one once): the
+            // spectrum at Pierson and Moskowitz's own constants, so the
+            // significant height is 0.21 U^2 / g; normals of the surface the
+            // choppy displacement draws, the finest cascade's slope from its
+            // moment chain; the 3 to 9 m waves as geometry; and whitecaps
+            // that are crest foam: laid where the drawn surface nears a fold,
+            // along the crest, kept on the water it was laid on and aged
+            // there (foam_crest.comp; foamAmount scales it).
 
             // Choppy Wave Model switch (default OFF, the historical chop).
             // ON draws the surface as the first-order Lagrangian sea of
@@ -124,26 +115,6 @@ namespace threepp {
             // forces it. Live-tunable.
             bool breakingCrests = false;
 
-            // Crest foam (default OFF). ON replaces the natural whitecaps
-            // with the standard recipe for a spectral sea, kept where the
-            // water is: foam is laid down where the surface folds (the
-            // breakingCrests measure, from the exact derivative fields of
-            // cascades 0 and 1, past kOceanCrestFoamThreshold), into a
-            // texture over the water's REST coordinates (the Lagrangian label
-            // q of x = q + D(q)), so it stays on the water it was laid on
-            // with nothing to carry it, rides the crest that makes it, and
-            // fades behind it in seconds, squeezed on crests and stretched in
-            // troughs by the water's own orbital motion. What the foam looks
-            // like is read off a photograph of sea foam laid on the same
-            // coordinates: holes open in it as it thins, then a lace, then
-            // threads. With a wake field, what the vessels leave on the
-            // water is drawn the same way. Needs chopNormals (the
-            // derivative fields are its) and takes the UV channel
-            // breakingCrests would use, so it wins when both are on. Works
-            // best with shortWaves: the waves that break are short.
-            // THREEPP_OCEAN_CREST_FOAM = 1 / 0 forces it. Live-tunable.
-            bool crestFoam = true;
-
             // Wave reflections (default OFF, the historical mirror). The
             // water's mirror ray passes THROUGH any other part of the water
             // it meets and shades whatever lies beyond, usually the seabed:
@@ -155,22 +126,6 @@ namespace threepp {
             // every other ray in the renderer already sees water.
             // THREEPP_OCEAN_WAVE_REFLECTIONS = 1 / 0 forces it. Live-tunable.
             bool waveReflections = false;
-
-            // Short waves as geometry (default OFF, the historical bands).
-            // The middle cascade is the finest the mesh draws, and it has
-            // the texels for waves a few metres long, but the historical
-            // split hands everything shorter than the fine cascade's tile
-            // (9.3 m on the default ocean) to the fine cascade, which only
-            // tilts the shading: the sea has no steep short waves to see,
-            // and the 3 to 9 m waves are the fine tile's first few modes, a
-            // pattern that repeats every tile. ON moves the hand-off to
-            // kShortWaveHandoff of the middle tile (3 m on the default
-            // ocean): those waves become geometry, with their chop, and the
-            // fine cascade keeps what is shorter, down to six of its texels
-            // a wave (historically its roll-off sat near thirty, which left
-            // it a third of its slope variance). Read when the renderer
-            // first sees the mesh. THREEPP_OCEAN_SHORT_WAVES = 1 / 0 forces it.
-            bool shortWaves = true;
 
             // The measured short-wave spectrum (default OFF, the historical
             // Phillips tail alone). The k^-3 tail carries a constant slope
@@ -222,40 +177,6 @@ namespace threepp {
             // Live-tunable.
             float crestSharpness = 0.f;
 
-            // Fold foam (default OFF: the crest foam deposits on the crest
-            // steepness eps of cascades 0 and 1 against a fixed threshold).
-            // That threshold does not carry between setups: eps is dominated
-            // by the shortest waves in those cascades, and where cascade 1
-            // ends depends on its tile (3 m on a 127 m tile, 1.1 m on the
-            // Norvasundet twin's 47 m one), so one value dotted the twin's
-            // strait at 10 m/s and left the open sea at 16 m/s bare. ON
-            // changes two things in foam_crest.comp. The waves that count are
-            // the same in metres everywhere: cascade 1 is read through its
-            // mipped copies (needs shortWaves) at the level that keeps the
-            // waves longer than kFoldFoamLength. And the measure is the drawn
-            // surface's own: the Jacobian J = det(I + l A) of the map the
-            // mesh draws, l the choppiness the CWM limiter allows (1 + crest
-            // sharpness, less where it binds), so foam forms where the drawn
-            // crest is about to fold, the more the closer J comes to the
-            // limiter's floor (kCwmMinJacobian): the deposit starts under
-            // kFoldFoamJacobian and is full kFoldFoamRamp below it.
-            // Needs crestFoam. THREEPP_OCEAN_FOLD_FOAM = 1 / 0 forces it;
-            // THREEPP_OCEAN_FOLD_FOAM_J / _RAMP / _LENGTH move the constants.
-            // Read when the crest foam is first made.
-            bool foldFoam = true;
-
-            // Crest-line foam (default OFF: fold foam lands where the
-            // measure peaks, and on a short-crested sum of linear waves its
-            // peaks are blobs a few metres across, not caps along a crest).
-            // ON, foam_crest.comp takes the largest fold measure met along
-            // the local crest line (perpendicular to the most compressive
-            // direction of grad D) within kCrestLineFoamReach times the
-            // fold-foam length either way, so a cap runs along its crest as
-            // far as the crest nearly breaks over that length and does not
-            // grow across it. Needs foldFoam. THREEPP_OCEAN_CREST_LINE_FOAM
-            // = 1 / 0 forces it; THREEPP_OCEAN_CREST_LINE_FOAM_REACH moves
-            // the reach. Read when the crest foam is first made.
-            bool crestLineFoam = true;
             // Directional spreading of the wave energy. true = the measured
             // distribution of Donelan, Hamilton & Hui (1985) with Banner's
             // (1990) short-wave form: near the spectral peak the energy
@@ -307,22 +228,6 @@ namespace threepp {
             // derives ~size/300 (capped at 1), so small water stays calm.
             float foamAmount = 1.0f;
 
-            // Chop normals: shade the surface the choppy displacement actually
-            // draws. Exact slope and displacement-gradient fields (more inverse
-            // FFTs of the same spectrum) give the vertex normal as the cross
-            // product of the displaced surface's tangents, and the fine
-            // cascade's per-pixel slope comes from a mip chain of slope moments
-            // (mean tilts the normal, the variance a pixel cannot hold goes to
-            // roughness), read as two placements of the cascade, turned,
-            // scaled and shifted against each other and summed, so its tile's
-            // period does not show from above. Near a fold the chop correction fades back to the
-            // rest slope and its remainder goes to roughness. false = the
-            // height-only finite-difference normals, the renderer's original
-            // path bit for bit: the feature's images, pipelines and shade
-            // branch are built only the first time a mesh turns it on.
-            // Live-tunable. THREEPP_OCEAN_CHOP_NORMALS=1 makes true the default.
-            bool chopNormals = defaultChopNormals();
-
             // FFT texture resolution per cascade (must be power of two).
             // Band-passed cascades need only enough texels to resolve their
             // own wavelength band (~10 samples per shortest wavelength) — the
@@ -344,11 +249,7 @@ namespace threepp {
         [[nodiscard]] bool cwmOn() const;
         [[nodiscard]] bool boundWavesOn() const;
         [[nodiscard]] bool breakingCrestsOn() const;
-        // Crest foam as asked for; the renderer draws it only while the chop
-        // normals are on too (see Params::crestFoam).
-        [[nodiscard]] bool crestFoamOn() const;
         [[nodiscard]] bool waveReflectionsOn() const;
-        [[nodiscard]] bool shortWavesOn() const;
         [[nodiscard]] bool shortWaveSpectrumOn() const;
         [[nodiscard]] bool hullContactOn() const;
         // The horizontal-displacement scale the surface is drawn with: 1 under
@@ -358,23 +259,18 @@ namespace threepp {
         // field, held to [0, 4]; 0 without the Choppy Wave Model (whose
         // limiter it needs).
         [[nodiscard]] float effectiveCrestSharpness() const;
-        [[nodiscard]] bool foldFoamOn() const;
-        [[nodiscard]] bool crestLineFoamOn() const;
-        // Params::foldFoam's look constants (see there; env overrides).
-        // 0.78 puts Monahan and O'Muircheartaigh's (1980) whitecap cover
-        // (4.4 %) on the open sea at 16 m/s and none on the Norvasundet
-        // strait at 10 m/s, crest sharpness 0; at sharpness 1 the same holds
-        // near 0.53 (ocean_metrics' crest-foam row; the twin from the drone).
-        static constexpr float kFoldFoamJacobian = 0.78f;
+        // The crest foam's look constants (THREEPP_OCEAN_FOLD_FOAM_J / _RAMP /
+        // _LENGTH and THREEPP_OCEAN_CREST_LINE_FOAM_REACH move them). Foam
+        // starts where the drawn map's Jacobian falls under kFoldFoamJacobian
+        // and is full kFoldFoamRamp below it; only waves longer than
+        // kFoldFoamLength count; a cap reaches kCrestLineFoamReach of that
+        // length along its crest, either way. 0.76 puts 4.7 % cover on the
+        // open sea at 16 m/s and none at 10 m/s over 1.5 km of fetch, crest
+        // sharpness 0 (ocean_metrics).
+        static constexpr float kFoldFoamJacobian = 0.76f;
         static constexpr float kFoldFoamRamp     = 0.2f;
         static constexpr float kFoldFoamLength   = 3.0f;// metres
-        // Params::crestLineFoam's reach along a crest, either way, in units
-        // of kFoldFoamLength (the shortest wave the fold foam counts).
         static constexpr float kCrestLineFoamReach = 1.0f;
-        // ... and the J it starts under (replaces kFoldFoamJacobian while it
-        // is on): 0.76 puts 4.7 % cover on the open sea at 16 m/s and none
-        // at 10 m/s over 1.5 km of fetch, crest sharpness 0 (ocean_metrics).
-        static constexpr float kCrestLineFoamJacobian = 0.76f;
 
         // The CWM limiter's floor on the Jacobian of the drawn map.
         static constexpr float kCwmMinJacobian = 0.1f;
@@ -383,7 +279,7 @@ namespace threepp {
         // Mirrors kOceanBreakingSteepness (vulkan_shared.h), where its
         // calibration is written down.
         static constexpr float kBreakingSteepness = 0.15f;
-        // Params::shortWaves: the cascade 1 -> 2 hand-off wavelength as a
+        // The short waves are geometry: the cascade 1 -> 2 hand-off wavelength as a
         // fraction of the middle cascade's tile (3 m of 127 m), never under
         // five of its texels.
         static constexpr float kShortWaveHandoff = 3.0f / 127.0f;

@@ -62,7 +62,6 @@ namespace threepp::water {
             float    kMin = 0.0f;
             float    kMax = 0.0f;     // 0 = no upper bound
             float    fetch = 0.0f;    // m of upwind open water; 0 = fully developed (plain Phillips)
-            bool     hsFix = false;   // Pierson-Moskowitz constants (DisplacedMesh::Params::hsFix)
             uint32_t spread = 0;      // 0 = symmetric cos^2, 1 = Donelan-Banner sech^2 (see the shader)
             // Optional swell system (see swellShape in the shader). Height 0 = none.
             float    swellHeight = 0.0f;  // significant height, m
@@ -84,7 +83,6 @@ namespace threepp::water {
             float    kMin;
             float    kMax;
             float    fetch;
-            uint32_t hsFix;
             uint32_t spread;
             float    swellScale;
             float    swellPeriod;
@@ -110,7 +108,7 @@ namespace threepp::water {
         // sea state morphs smoothly. The params are push constants recorded
         // into the command buffer, so a frame in flight never sees the
         // change meant for the next one.
-        void updateSeaState(float windTheta, float windSpeed, float fetch, bool hsFix, uint32_t spread);
+        void updateSeaState(float windTheta, float windSpeed, float fetch, uint32_t spread);
 
         // Live swell change; the next recordCompute regenerates h0 with it.
         void updateSwell(float height, float period, float theta, float spread);
@@ -550,10 +548,9 @@ namespace threepp::water {
             float           maxFoam;
             float           centerX;
             float           centerZ;
-            uint32_t        model;// bit 0 unused, bit 1: Params::foldFoam, bit 2: Params::crestLineFoam
-            float           sharpness = 0.f;// foldFoam: the drawn choppiness is 1 + this
-            float           c1Lod     = 0.f;// foldFoam: cascade 1's mip level
-            float           crestHalf = 0.f;// crestLineFoam: reach along the crest either way (m)
+            float           sharpness = 0.f;// the drawn choppiness is 1 + this
+            float           c1Lod     = 0.f;// cascade 1's mip level
+            float           crestHalf = 0.f;// reach along the crest either way (m)
         };
 
         // After the cascades' IFFTs, same command buffer; fills p.res itself.

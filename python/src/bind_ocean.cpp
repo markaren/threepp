@@ -118,10 +118,6 @@ namespace threepp_py {
                                "peak ~8 V^2/g). Finite = JONSWAP young sea: shorter, steeper waves with more "
                                "energy at the 10-40 m scale and less swell; 20e3-40e3 reads as a coastal sea. "
                                "Live-tunable; saturates at ~1600 V^2.")
-                .def_readwrite("hs_fix", &DisplacedMesh::Params::hsFix,
-                               "Pierson-Moskowitz-calibrated spectrum (default False, the historical sea): "
-                               "significant wave height x1.85 at every wind and fetch, peak wavelength x1.16. "
-                               "THREEPP_OCEAN_HS_FIX=1/0 overrides it. Live-tunable.")
                 .def_readwrite("cwm", &DisplacedMesh::Params::cwm,
                                "Choppy Wave Model (default False): choppiness 1, the first-order Lagrangian "
                                "surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter. "
@@ -132,29 +128,16 @@ namespace threepp_py {
                 .def_readwrite("breaking_crests", &DisplacedMesh::Params::breakingCrests,
                                "Natural foam only where the crest breaks now (default False), from the surface's "
                                "local steepness; vessel foam unchanged. THREEPP_OCEAN_BREAKING_CRESTS=1/0 overrides it.")
-                .def_readwrite("crest_foam", &DisplacedMesh::Params::crestFoam,
-                               "Foam laid down where a crest breaks and kept on the water it was laid on (default "
-                               "False): a field on the water's rest coordinates, so it rides the crest, trails "
-                               "behind it and opens up as it thins, drawn from a foam photograph. Needs chop_normals. "
-                               "THREEPP_OCEAN_CREST_FOAM=1/0 overrides it.")
-                .def_readwrite("short_waves", &DisplacedMesh::Params::shortWaves,
-                               "Short waves as geometry (default False): the middle cascade draws the waves a few "
-                               "metres long, with their chop, and the fine cascade keeps what is shorter. Read when "
-                               "the renderer first sees the ocean: set it before the first frame. "
-                               "THREEPP_OCEAN_SHORT_WAVES=1/0 overrides it.")
                 .def_readwrite("short_wave_spectrum", &DisplacedMesh::Params::shortWaveSpectrum,
                                "The measured short-wave spectrum (default False, the Phillips tail alone): adds "
                                "Elfouhaily et al.'s (1997) wind-dependent short waves, so the sea's slopes reach "
-                               "Cox and Munk's at the wind it is given. Needs chop_normals for the part no texel "
+                               "Cox and Munk's at the wind it is given. Covers the part no texel "
                                "holds. Read when the renderer first sees the ocean: set it before the first frame. "
                                "THREEPP_OCEAN_SHORT_WAVE_SPECTRUM=1/0 overrides it.")
                 .def_readwrite("wave_reflections", &DisplacedMesh::Params::waveReflections,
                                "The water's mirror ray shades the wave it meets as water instead of passing "
                                "through it to the seabed (default False): no dark slits along steep crests. "
                                "Live-tunable; THREEPP_OCEAN_WAVE_REFLECTIONS=1/0 overrides it.")
-                .def_readwrite("fold_foam", &DisplacedMesh::Params::foldFoam,
-                               "With crest_foam: lay the foam where the drawn surface folds, measured on the "
-                               "waves longer than 3 m (default False). THREEPP_OCEAN_FOLD_FOAM=1/0 overrides it.")
                 .def_readwrite("measured_spreading", &DisplacedMesh::Params::measuredSpreading,
                                "True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with "
                                "long crests at the peak. False (default) = the old symmetric cos^2 (as much energy "
@@ -176,12 +159,6 @@ namespace threepp_py {
                 .def_readwrite("foam_amount", &DisplacedMesh::Params::foamAmount,
                                "Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; "
                                "wake/disturbance foam unaffected). Ocean auto-derives ~size/300.")
-                .def_readwrite("chop_normals", &DisplacedMesh::Params::chopNormals,
-                               "Shade the surface the choppy displacement draws: exact slope and displacement-gradient "
-                               "fields give the vertex normal, the fine cascade's slope moments the per-pixel one (what a "
-                               "pixel cannot hold goes to roughness), read as two placements of the cascade so its "
-                               "tile's period does not show. False (default) = the height-only normals. "
-                               "Live-tunable; THREEPP_OCEAN_CHOP_NORMALS=1 makes True the default.")
                 .def_readwrite("texture_size_0", &DisplacedMesh::Params::textureSize0, "Cascade-0 FFT resolution (power of two).")
                 .def_readwrite("texture_size_1", &DisplacedMesh::Params::textureSize1, "Cascade-1 FFT resolution (power of two).")
                 .def_readwrite("texture_size_2", &DisplacedMesh::Params::textureSize2, "Cascade-2 FFT resolution (power of two).");

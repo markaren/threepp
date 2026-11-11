@@ -25,11 +25,9 @@
 //
 // What "folds" is. The Jacobian of the map falls toward zero where the
 // surface is being squeezed, and the squeeze is the most compressive
-// eigenvalue of grad D:
-//   eps = -(lambda_min of grad D), choppiness 1
-// (a k for one wave at its crest, where the Jacobian is 1 - eps). Where eps
-// passes the threshold the parcel takes foam, more the further past it:
-//   F = max(F * decay, max * clamp((eps - threshold) / ramp, 0, 1)).
+// eigenvalue of grad D. Where the drawn map's Jacobian J falls under the
+// threshold the parcel takes foam, more the further under it:
+//   F = max(F * decay, max * clamp((threshold - J) / ramp, 0, 1)).
 // Once the crest has moved on the parcel keeps what it has, decaying
 // (vulkan_shared.h has the constants and where they come from). min(F, 1) is
 // the share of the water the shade covers; above 1 the foam is a closed sheet
@@ -85,12 +83,9 @@ layout(push_constant, scalar) uniform Pc {
     float maxFoam;
     float centerX;      // where the mesh is centred in rest space (its warp
     float centerZ;      // centre): each texel stands for the copy of q nearest it
-    uint  model;        // bit 0 unused,
-                        // bit 1 foldFoam: deposit on the drawn map's Jacobian, cascade 1 band-limited
-                        // bit 2 crestLineFoam: the deposit runs along the crest (needs bit 1)
-    float sharpness;    // foldFoam: DisplacedMesh::effectiveCrestSharpness (the drawn choppiness is 1 + s)
-    float c1Lod;        // foldFoam: the mip level cascade 1 is read at (its fields are mipped then)
-    float crestHalf;    // crestLineFoam: how far along the crest a cap reaches either way (m)
+    float sharpness;    // DisplacedMesh::effectiveCrestSharpness (the drawn choppiness is 1 + s)
+    float c1Lod;        // the mip level cascade 1 is read at (its fields are mipped then)
+    float crestHalf;    // how far along the crest a cap reaches either way (m)
 } pc;
 
 // The Choppy Wave Model's limiter, as water_displace.comp's cwmLimit: the
@@ -130,13 +125,12 @@ void gradD(vec2 q, out float jxx, out float jzz, out float jxz) {
         // as R^T J R (as in water_displace.comp).
         const float invTile = 1.0 / pc.tileSize1;
         const vec2  uv = oceanC1Domain(q) * invTile;
-        // foldFoam reads it through its mip chain at c1Lod: only the waves
-        // longer than the fold-foam length count (see below).
-        const bool  band = (pc.model & 2u) != 0u;
-        const vec2  jd = (band ? textureLod(jac1, uv, pc.c1Lod).rg : texture(jac1, uv).rg) * invTile;
+        // Read through its mip chain at c1Lod: only the waves longer than the
+        // fold-foam length count (see below).
+        const vec2  jd = textureLod(jac1, uv, pc.c1Lod).rg * invTile;
         const float p  = jd.x;
         const float r  = jd.y;
-        const float o  = (band ? textureLod(height1, uv, pc.c1Lod).g : texture(height1, uv).g) * invTile;
+        const float o  = textureLod(height1, uv, pc.c1Lod).g * invTile;
         const float cs = kOceanCascade1RotCos;
         const float sn = kOceanCascade1RotSin;
         jxx += cs * cs * p + 2.0 * cs * sn * o + sn * sn * r;
@@ -229,9 +223,6 @@ void main() {
     float jxx, jzz, jxz;
     gradD(q, jxx, jzz, jxz);
     // grad D is symmetric (D is itself a gradient): its smaller eigenvalue.
-    const float mid = 0.5 * (jxx + jzz);
-    const float rad = sqrt(0.25 * (jxx - jzz) * (jxx - jzz) + jxz * jxz);
-    const float eps = -(mid - rad) * pc.steepScale;
 
     // No whitecaps inside a hull's footprint: the sea is flattened onto the
     // vessel's waterline there (water_displace.comp), nothing breaks.
@@ -241,7 +232,7 @@ void main() {
         for (uint k = 0u; k < pc.hullCount; ++k) hullFade *= hullLocal(hulls.h[k], q).z;
     }
 
-    // Fold foam (DisplacedMesh::Params::foldFoam): the measure is the drawn
+    // The measure is the drawn
     // map's own Jacobian, J = det(I + l A) with l the choppiness the CWM
     // limiter draws cascades 0 and 1 with (1 + crest sharpness, or less where
     // it binds), so foam forms where the drawn surface is about to fold,
@@ -249,14 +240,14 @@ void main() {
     // J under which it starts. A is band-limited: cascade 1 is read at the mip
     // level whose texel is half the fold-foam length, so the waves that count
     // are the same in metres whatever the cascades' tiles and hand-offs are.
-    float measure = eps - pc.threshold;
-    if ((pc.model & 2u) != 0u) {
+    float measure;
+    {
         const float trA  = (jxx + jzz) * pc.steepScale;
         const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
         const float l    = cwmLimit(trA, detA, 1.0 + pc.sharpness);
         measure = pc.threshold - (1.0 + l * trA + l * l * detA);
-        if ((pc.model & 4u) != 0u) {
-            // Crest-line foam (DisplacedMesh::Params::crestLineFoam). A
+        {
+            // Along the crest. A
             // breaking crest is a line, the wave's crest, and it breaks
             // along a length of it; the measure above, on a short-crested
             // sum of linear waves, peaks in blobs. The crest runs across
@@ -285,12 +276,12 @@ void main() {
     }
 #ifdef OCEAN_CLIMATE_LEVELS
     // The levels below 1, as the measure above (.r keeps exactly its own).
-    vec3 lv = (eps - pc.threshold / kLevels) * kLevels;// L eps - threshold
-    if ((pc.model & 2u) != 0u) {
+    vec3 lv;
+    {
         const float trA = (jxx + jzz) * pc.steepScale;
         const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
         lv = foldLevels(trA, detA);
-        if ((pc.model & 4u) != 0u) {
+        {
             float an;
             const vec2 t = crestDir(jxx, jzz, jxz, an);
             if (an >= 0.3) {

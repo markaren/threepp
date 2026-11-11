@@ -53,11 +53,6 @@ layout(push_constant) uniform Params {
     float kMin;
     float kMax;
     float fetch;
-    // 1 = the Hs-calibrated spectrum (DisplacedMesh::Params::hsFix /
-    // THREEPP_OCEAN_HS_FIX): Pierson-Moskowitz's own constants instead of
-    // the eye-calibrated A = 0.01 and the Phillips peak exponent. 0 runs
-    // exactly the arithmetic of the plain spectrum below.
-    uint  hsFix;
     uint  spread;// 0 = symmetric cos^2 (historical), 1 = Donelan-Banner sech^2
     // Optional swell system, added on top of the wind sea (cascade 0 only;
     // swellScale = 0 elsewhere and when there is no swell). swellScale is
@@ -189,7 +184,7 @@ float phillips2D(vec2 k) {
     // a peak 1.078x too high in frequency and 0.74x the variance. L / sqrt(beta)
     // turns one into the other, and the JONSWAP branch below then puts the
     // peak exactly on Hasselmann's omega_p = 22 (g^2 / (U F))^(1/3).
-    if (P.hsFix != 0u) L *= 1.1624764;// 1 / sqrt(0.74)
+    L *= 1.1624764;// 1 / sqrt(0.74)
     float Aeff  = A;
     float gamma = 1.0;
     if (P.fetch > 0.0) {
@@ -245,7 +240,7 @@ float phillips2D(vec2 k) {
     // (alpha / 2) k^-3 exp(-beta / (kL)^2) with alpha = 8.1e-3, so the
     // physical constant is A = pi alpha = 0.02545: 2.545x the 0.01 above.
     // With the peak fix, var(eta) = alpha L^2 / (4 beta), Hs = 0.21 U^2 / g.
-    if (P.hsFix != 0u) p *= 2.5446900;// pi * 8.1e-3 / 0.01
+    p *= 2.5446900;// pi * 8.1e-3 / 0.01
     if (P.shortWave != 0u) {
         // The measured short waves, on top of the long-wave spectrum above
         // (the paper's B = B_l + B_h). In the chain's units a curvature B

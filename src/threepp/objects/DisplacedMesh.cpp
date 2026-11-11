@@ -31,11 +31,6 @@ namespace threepp {
         }
     }// namespace
 
-    bool defaultChopNormals() {
-        static const bool value = envSwitch("THREEPP_OCEAN_CHOP_NORMALS", true);
-        return value;
-    }
-
     bool defaultMeasuredSpreading() {
         static const bool value = envSwitch("THREEPP_OCEAN_SPREAD", false);
         return value;
@@ -75,19 +70,9 @@ namespace threepp {
         return env < 0 ? params.breakingCrests : env == 1;
     }
 
-    bool DisplacedMesh::crestFoamOn() const {
-        static const int env = envSwitch("THREEPP_OCEAN_CREST_FOAM");
-        return env < 0 ? params.crestFoam : env == 1;
-    }
-
     bool DisplacedMesh::waveReflectionsOn() const {
         static const int env = envSwitch("THREEPP_OCEAN_WAVE_REFLECTIONS");
         return env < 0 ? params.waveReflections : env == 1;
-    }
-
-    bool DisplacedMesh::shortWavesOn() const {
-        static const int env = envSwitch("THREEPP_OCEAN_SHORT_WAVES");
-        return env < 0 ? params.shortWaves : env == 1;
     }
 
     bool DisplacedMesh::shortWaveSpectrumOn() const {
@@ -102,16 +87,6 @@ namespace threepp {
 
     float DisplacedMesh::effectiveChoppiness() const {
         return cwmOn() ? 1.f : params.choppiness;
-    }
-
-    bool DisplacedMesh::foldFoamOn() const {
-        static const int env = envSwitch("THREEPP_OCEAN_FOLD_FOAM");
-        return env < 0 ? params.foldFoam : env == 1;
-    }
-
-    bool DisplacedMesh::crestLineFoamOn() const {
-        static const int env = envSwitch("THREEPP_OCEAN_CREST_LINE_FOAM");
-        return foldFoamOn() && (env < 0 ? params.crestLineFoam : env == 1);
     }
 
     float DisplacedMesh::effectiveCrestSharpness() const {

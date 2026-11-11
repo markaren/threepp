@@ -17,8 +17,8 @@ to pinch into crests, and at twice the height it does; do not read wave heights 
 (Ocean.set_wave_climate, patches a few hundred metres across): one strength everywhere shows the
 wave tiles' repeat as rows of caps toward the horizon.
 
-The foam. Crest foam along the crest (THREEPP_OCEAN_CREST_LINE_FOAM), started where the drawn
-surface is well pinched (THREEPP_OCEAN_FOLD_FOAM_J), set here before the renderer reads them. At
+The foam. The ocean's own crest foam, here started where the drawn surface is well pinched
+(THREEPP_OCEAN_FOLD_FOAM_J, set before the renderer reads it). At
 the hull and round the pile the scene lays foam into the ocean's wake field itself: where the water
 rises or falls fast against the hull, and where the sea runs past the pile.
 
@@ -54,7 +54,6 @@ if not (SHOT or FILM):
     sys.exit(__doc__)
 
 # The crest foam's look constants are read once, when the foam is first made.
-os.environ.setdefault("THREEPP_OCEAN_CREST_LINE_FOAM", "1")
 os.environ.setdefault("THREEPP_OCEAN_CREST_FOAM_MAX", "1.0")
 if STORM:
     os.environ.setdefault("THREEPP_OCEAN_FOLD_FOAM_J", "0.55")
@@ -167,8 +166,7 @@ SIZE = 2000.0
 # scene five times over: 118 ms a frame against 28 ms (RTX 5080, 1920x1080).
 ocean = tp.Ocean(size=SIZE, resolution=1024, wind_speed=WIND, fetch=FETCH)
 p = ocean.params
-p.hs_fix = p.short_waves = p.short_wave_spectrum = True
-p.crest_foam = p.chop_normals = p.fold_foam = p.wave_reflections = True
+p.short_wave_spectrum = p.wave_reflections = True
 p.swell_height, p.swell_period, p.swell_theta = SWELL, 11.0, p.wind_theta
 p.wave_scale, p.choppiness = WAVE_SCALE, CHOP
 ocean.wake_field.resolution, ocean.wake_field.patches = 1024, 2

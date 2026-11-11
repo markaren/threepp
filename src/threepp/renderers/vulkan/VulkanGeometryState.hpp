@@ -632,7 +632,6 @@ namespace threepp::vulkan::impl {
         float appliedWindSpeed = 0.f;
         float appliedWindTheta = 0.f;
         float appliedFetch     = 0.f;
-        bool  appliedHsFix     = false;// the Hs calibration (Params::hsFix / THREEPP_OCEAN_HS_FIX)
         // Bound waves: cascades 0 and 1's mean wavenumbers (rad/m) for the
         // second-order harmonic, valid until the sea state changes.
         float boundKm[2]       = {0.f, 0.f};

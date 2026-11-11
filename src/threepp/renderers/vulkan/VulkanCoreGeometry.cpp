@@ -117,18 +117,6 @@ namespace {
         return s;
     }
 
-    // The ocean spectrum's Hs calibration (DisplacedMesh::Params::hsFix).
-    // THREEPP_OCEAN_HS_FIX = 1 / 0 forces it on / off for every ocean; unset,
-    // the mesh's own field decides. Read once.
-    bool oceanHsFix(const threepp::DisplacedMesh::Params& p) {
-        static const int env = [] {
-            const char* e = std::getenv("THREEPP_OCEAN_HS_FIX");
-            if (!e || !*e) return -1;
-            return (e[0] == '0') ? 0 : 1;
-        }();
-        return env < 0 ? p.hsFix : env == 1;
-    }
-
 }// namespace
 
 namespace threepp {
@@ -3398,11 +3386,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // so the sea MORPHS into the new state over a few swell periods
             // instead of popping. (Mapped-UBO rewrite mid-flight follows the
             // same convention as DynamicSpectrum's per-frame time update.)
-            const bool hsFix = oceanHsFix(dm.params);
             if (dm.params.windSpeed != st.appliedWindSpeed ||
                 dm.params.windTheta != st.appliedWindTheta ||
                 dm.params.fetch     != st.appliedFetch ||
-                hsFix               != st.appliedHsFix ||
                 dm.params.measuredSpreading != st.appliedMeasuredSpreading ||
                 dm.params.swellHeight != st.appliedSwell[0] ||
                 dm.params.swellPeriod != st.appliedSwell[1] ||
@@ -3415,7 +3401,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     const float theta = dm.params.windTheta +
                             (i == 1 ? kOceanCascade1RotTheta : 0.f);
                     st.cascades[i].phillips->updateSeaState(theta, dm.params.windSpeed,
-                                                            dm.params.fetch, hsFix,
+                                                            dm.params.fetch,
                                                             dm.params.measuredSpreading ? 1u : 0u);
                     // The swell lives on cascade 0 only (its finest k sampling).
                     st.cascades[i].phillips->updateSwell(i == 0 ? dm.params.swellHeight : 0.f,
@@ -3427,7 +3413,6 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 st.appliedWindSpeed = dm.params.windSpeed;
                 st.appliedWindTheta = dm.params.windTheta;
                 st.appliedFetch     = dm.params.fetch;
-                st.appliedHsFix     = hsFix;
                 st.boundKmValid     = false;
                 st.shortWaveBankValid = false;
                 st.appliedMeasuredSpreading = dm.params.measuredSpreading;
@@ -3995,10 +3980,6 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // vulkan_shared.h's; the environment overrides are for
             // calibrating them (ocean_metrics) without a rebuild.
             if (st.crestFoamOn) {
-                static const float kThreshold = static_cast<float>(
-                        vulkan::env::number("THREEPP_OCEAN_CREST_FOAM_THRESHOLD").value_or(kOceanCrestFoamThreshold));
-                static const float kRamp = std::max(1e-4f, static_cast<float>(
-                        vulkan::env::number("THREEPP_OCEAN_CREST_FOAM_RAMP").value_or(kOceanCrestFoamRamp)));
                 static const float kMaxFoam = std::max(1.f, static_cast<float>(
                         vulkan::env::number("THREEPP_OCEAN_CREST_FOAM_MAX").value_or(kOceanCrestFoamMax)));
                 static const float kTau = std::max(0.05f, static_cast<float>(
@@ -4021,27 +4002,23 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 cp.cascadeMask = st.cascadeMask;
                 cp.hullCount   = hullCount;
                 cp.decay       = decay;
-                cp.threshold   = kThreshold;
-                cp.invRamp     = 1.f / kRamp;
                 cp.maxFoam     = kMaxFoam * std::clamp(dm.params.foamAmount, 0.0f, 1.0f);// Params::foamAmount: 0 = no whitecaps
                 // Where the mesh sits in rest space: its warp centre (the
                 // warp recentres the grid there), else its own origin.
                 cp.centerX     = warpActive ? dm.warp.centerX : 0.f;
                 cp.centerZ     = warpActive ? dm.warp.centerZ : 0.f;
-                cp.model       = 0u;
-                if (dm.foldFoamOn()) {
+                {
                     // Fold foam: the J under which the drawn surface takes
                     // foam, its ramp, and the shortest wave that counts (m).
                     // Crest-line foam spreads each cap along its crest, so
                     // the same cover needs a lower J (its own constant).
                     static const auto kEnvJ = vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_J");
                     const float kFoldJ = static_cast<float>(kEnvJ.value_or(
-                            dm.crestLineFoamOn() ? DisplacedMesh::kCrestLineFoamJacobian : DisplacedMesh::kFoldFoamJacobian));
+                            DisplacedMesh::kFoldFoamJacobian));
                     static const float kFoldRamp = std::max(1e-4f, static_cast<float>(
                             vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_RAMP").value_or(DisplacedMesh::kFoldFoamRamp)));
                     static const float kFoldLength = std::max(0.f, static_cast<float>(
                             vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_LENGTH").value_or(DisplacedMesh::kFoldFoamLength)));
-                    cp.model    |= 2u;
                     cp.threshold = kFoldJ;
                     cp.invRamp   = 1.f / kFoldRamp;
                     cp.sharpness = dm.effectiveCrestSharpness();
@@ -4052,12 +4029,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                         const float texel1 = dm.params.tileSize1 / float(st.cascades[1].dyn->ht().width);
                         cp.c1Lod = std::max(0.f, std::log2(kFoldLength / (2.f * texel1)));
                     }
-                    if (dm.crestLineFoamOn()) {
+                    {
                         // Crest-line foam: a cap reaches along its crest by
                         // a multiple of the band's shortest wavelength.
                         static const float kReach = std::max(0.f, static_cast<float>(
                                 vulkan::env::number("THREEPP_OCEAN_CREST_LINE_FOAM_REACH").value_or(DisplacedMesh::kCrestLineFoamReach)));
-                        cp.model    |= 4u;
                         cp.crestHalf = kReach * kFoldLength;
                     }
                 }
@@ -5333,7 +5309,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // cascade 0's gentle taper: the strong one was against moire in
             // 9 to 12 m waves on the far, thin mesh, and is what left the
             // spectrum its hole.
-            const float kHandoff12Metres = (dm.shortWavesOn() && tileSizes[1] > 0.f && tileSizes[2] > 0.f)
+            const float kHandoff12Metres = (tileSizes[1] > 0.f && tileSizes[2] > 0.f)
                     ? std::max(DisplacedMesh::kShortWaveHandoff * tileSizes[1],
                                5.f * tileSizes[1] / float(textureSizes[1]))
                     : 0.f;
@@ -5355,7 +5331,6 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                                  (i == 1 ? kOceanCascade1RotTheta : 0.f);
                 ps.windSpeed   = dm.params.windSpeed;
                 ps.fetch       = dm.params.fetch;
-                ps.hsFix       = oceanHsFix(dm.params);
                 ps.spread      = dm.params.measuredSpreading ? 1u : 0u;
                 // Swell on cascade 0 only: its 1 km-scale k spacing is the only
                 // one fine enough for a peak this narrow.
@@ -5403,7 +5378,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 // over the footprint.
                 ps.smallWaveCutoff = (ps.kMax > 0.f)
                         ? (i == 0 || kHandoff12Metres > 0.f ? 0.05f : 0.12f) * (kTwoPi / ps.kMax)
-                        : (dm.shortWavesOn() ? 1.f : 5.f) * tileSizes[i] / float(texSize);
+                        : tileSizes[i] / float(texSize);
                 auto& c = state->cascades[i];
                 c.tileSize = tileSizes[i];
                 c.phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
@@ -5416,7 +5391,6 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->appliedWindSpeed = dm.params.windSpeed;
             state->appliedWindTheta = dm.params.windTheta;
             state->appliedFetch     = dm.params.fetch;
-            state->appliedHsFix     = oceanHsFix(dm.params);
             state->appliedMeasuredSpreading = dm.params.measuredSpreading;
             state->appliedSwell[0] = dm.params.swellHeight;
             state->appliedSwell[1] = dm.params.swellPeriod;
@@ -5776,7 +5750,7 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
             // images, SPIR-V, layouts and the shade kernel without the
             // branch. Turned off again, the mesh goes back to all of those;
             // what was built stays for the next toggle.
-            if (dm.params.chopNormals && !st.chopMoments) {
+            if (!st.chopMoments) {
                 // The vertex normal's derivative fields are tapered to the
                 // vertex grid's Nyquist (dynamic_spectrum.comp): the nominal
                 // spacing, the one the plain path's finite difference uses.
@@ -5851,7 +5825,7 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                         *ctx, fc.dyn->ht().width, fc.dyn->ht().view,
                         fc.dyn->slope().view, fc.dyn->jacDiag().view);
             }
-            st.chopOn = st.chopMoments && dm.params.chopNormals;
+            st.chopOn = st.chopMoments != nullptr;
             syncOceanCrestFoam(dm, st);
             // Scene-global like the shade's other ocean switches.
             oceanWaveReflections = dm.waveReflectionsOn();
@@ -5956,7 +5930,7 @@ void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshSt
             // mesh must have one. Nothing of it exists until a mesh first
             // asks: then the mesh gets its foam texture and pass
             // (water::CrestFoam) and the renderer uploads the foam photograph.
-            const bool want = dm.crestFoamOn() && st.chopOn && st.blas &&
+            const bool want = st.chopOn && st.blas &&
                               st.blas->uv.handle != VK_NULL_HANDLE;
             if (want && !st.crestFoam) {
                 // About half a metre a texel (a breaking crest's foam front is
@@ -5972,7 +5946,7 @@ void VulkanRenderer::Impl::syncOceanCrestFoam(DisplacedMesh& dm, DisplacedMeshSt
                 // copies the short waves keep of it (water::FieldMips: ht,
                 // displacement, slope, jacDiag). Decided when the texture is
                 // made; without the copies it reads level 0 as before.
-                const bool c1Band = dm.foldFoamOn() && st.c1Mips && (st.cascadeMask & 2u);
+                const bool c1Band = st.c1Mips && (st.cascadeMask & 2u);
                 st.crestFoamC1Band = c1Band;
                 st.crestFoam = std::make_unique<water::CrestFoam>(
                         *ctx, res, c0.dyn->jacDiag().view, c0.dyn->ht().view,

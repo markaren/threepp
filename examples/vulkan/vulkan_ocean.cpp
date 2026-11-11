@@ -685,7 +685,6 @@ int main(int argc, char** argv) {
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     bool pinnedClock = false;// --pinned: fixed 1/60 s steps on a pinned renderer clock (replayable captures)
     float chopOverride = -1.f;// --chop <lambda>: the ocean's choppiness for this run (look A/Bs)
-    int   chopNormalsArg = -1;// --chop-normals 0|1: Params::chopNormals for this run
     int   spreadArg = -1;     // --spread 0|1: Params::measuredSpreading for this run
     float swellHs = 0.f, swellTp = 12.f;// --swell Hs,Tp: a swell 45 deg off the wind, as K adds
     // --press N@60,N@120: the water switches' keys pressed at those capture
@@ -707,7 +706,6 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--chop") == 0 && i + 1 < argc) chopOverride = static_cast<float>(std::atof(argv[++i]));
-        else if (std::strcmp(argv[i], "--chop-normals") == 0 && i + 1 < argc) chopNormalsArg = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--spread") == 0 && i + 1 < argc) spreadArg = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--swell") == 0 && i + 1 < argc) std::sscanf(argv[++i], "%f,%f", &swellHs, &swellTp);
         else if (std::strcmp(argv[i], "--press") == 0 && i + 1 < argc) {
@@ -793,7 +791,6 @@ int main(int argc, char** argv) {
     oceanOpts.windSpeed  = shotClose ? 3.5f : 10.0f;
     auto ocean = Ocean::create(oceanOpts);
     if (chopOverride >= 0.f) ocean->params.choppiness = chopOverride;
-    if (chopNormalsArg >= 0) ocean->params.chopNormals = chopNormalsArg != 0;
     if (spreadArg >= 0) ocean->params.measuredSpreading = spreadArg != 0;
     if (swellHs > 0.f) {
         ocean->params.swellHeight = swellHs;
@@ -1508,15 +1505,12 @@ int main(int argc, char** argv) {
     // The water look switches, each a live A/B of one change, all off by
     // default (Lars judges each in motion). Their keys are free in this demo:
     // W A S D and the arrows steer, C cycles the camera, F12 saves a frame.
-    //   N  chop normals (DisplacedMesh::Params::chopNormals; the first press
-    //      builds the feature's images and pipelines, and the shade compiles
-    //      its chop variant, which can take minutes on a cold pipeline cache)
     //   L  measured directional spreading (Params::measuredSpreading): waves
     //      run downwind in long crests instead of the symmetric cos^2
     //   K  a swell under the wind sea: 1 m significant height, 12 s period
     //      (225 m crests), 45 degrees off the wind, s = 50
-    // THREEPP_OCEAN_CHOP_NORMALS=1 and THREEPP_OCEAN_SPREAD=1 start with them
-    // on. Every toggle prints all three states.
+    // THREEPP_OCEAN_SPREAD=1 starts with the spreading on. Every toggle prints
+    // both states.
     auto printWaterSwitches = [&] {
         const auto& p = ocean->params;
         char swell[64];
@@ -1524,17 +1518,14 @@ int main(int argc, char** argv) {
             std::snprintf(swell, sizeof(swell), "%.2f m, %.1f s", double(p.swellHeight), double(p.swellPeriod));
         else
             std::snprintf(swell, sizeof(swell), "off");
-        std::printf("[vulkan_ocean] water: chop normals %s (N), spreading %s (L), swell %s (K)\n",
-                    p.chopNormals ? "ON" : "OFF",
+        std::printf("[vulkan_ocean] water: spreading %s (L), swell %s (K)\n",
                     p.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2", swell);
         std::fflush(stdout);
     };
     printWaterSwitches();
     auto pressWaterKey = [&](char key) {
         auto& p = ocean->params;
-        if (key == 'N') {
-            p.chopNormals = !p.chopNormals;
-        } else if (key == 'L') {
+        if (key == 'L') {
             p.measuredSpreading = !p.measuredSpreading;
         } else if (key == 'K') {
             p.swellHeight = p.swellHeight > 0.f ? 0.f : 1.0f;
@@ -1750,7 +1741,6 @@ int main(int argc, char** argv) {
         if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f")) {
             ocean->params.choppiness = choppiness;
         }
-        ImGui::Checkbox("Chop normals (N)", &ocean->params.chopNormals);
         ImGui::Checkbox("Measured spreading (L)", &ocean->params.measuredSpreading);
         ImGui::SliderFloat("Swell Hs (K)", &ocean->params.swellHeight, 0.f, 3.f, "%.2f m");
         // 9.5-17.5 s: the band cascade 0 carries on this 1 km ocean (its
