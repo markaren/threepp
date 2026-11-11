@@ -419,79 +419,140 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     return (v > 0.0 && !cheapHit) ? v * glassTransmittance(orig, L, 1e30) : v;
 }
 float sunShadowVisOpaque(vec3 orig, vec3 L, float tanR, bool cheapHit) {
-    if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
-    // Under DLSS Ray Reconstruction (kRR) every caller's sun is the cheapHit
-    // one: a single jittered ray, animated with the frame, at every pixel.
-    // RR integrates it over frames; the static patterns and the 3 + 13 (or 5
-    // + 16) ray tiers exist to look settled without a denoiser.
-    cheapHit = cheapHit || kRR;
-    const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-    const vec3 t  = normalize(cross(up, L));
-    const vec3 b  = cross(L, t);
-    // setSunSoftDistance (the lights UBO's sunSoftDistance, 0 = off): past it
-    // from the eye a probe that disagrees returns its own mean, and the
-    // denoiser smooths the coarse penumbra instead of 13 or 16 more rays.
-    const vec3 eyeToOrig = orig - gPrimaryOrigin;
-    const bool coarse = (kRayBudget & kRayBudgetSoftSun) != 0u && lights.sunSoftDistance > 0.0 &&
-                        dot(eyeToOrig, eyeToOrig) > lights.sunSoftDistance * lights.sunSoftDistance;
-    if (gSunFixedPattern && !cheapHit) {
-        const uint rayCatWas = rayCatSet(kRayCatSoftSun);
-        const float c = shadowVis(orig, L, 1e30);
-        if (coarse) {
-            const float m = (c + shadowVis(orig, normalize(L + t * tanR), 1e30) +
-                             shadowVis(orig, normalize(L - t * tanR), 1e30) +
-                             shadowVis(orig, normalize(L + b * tanR), 1e30) +
-                             shadowVis(orig, normalize(L - b * tanR), 1e30)) * 0.2;
-            rayCatSet(rayCatWas);
-            return m;
+    // ONE call site of shadowVis, in a loop over this estimate's rays: each call
+    // site is a whole inlined copy of the shadow test, and this function, with
+    // its sixteen sites, is inlined into every lit hit and primary there is; the
+    // copies are what the driver's compile time is made of. Every ray is
+    // shadowVis(orig, <direction>, 1e30), so nothing turns from a literal into
+    // a runtime value in it. The rays are the ones the four estimates below
+    // cast, in the same order, each direction by its own expression as before,
+    // and each estimate stops where it stopped (the fixed pattern's probes stop
+    // casting at the first that disagrees); shadowVis returns exactly 0 or 1,
+    // so every sum is exact. The ray categories bracket the same rays.
+    //   hard sun (tanR <= 0): the one ray along L;
+    //   cheapHit (incl. under kRR): one jittered ray;
+    //   fixed pattern (gSunFixedPattern, not cheapHit): the centre, four probes
+    //     (all four, averaged with the centre, when coarse), then sixteen;
+    //   turned: the centre and two rim rays, then thirteen (none when coarse).
+    const int kSunHard = 0, kSunCheap = 1, kSunFixed = 2, kSunTurned = 3;
+    int   mode = kSunHard;
+    vec3  t = vec3(0.0), b = vec3(0.0), d = vec3(0.0), rim = vec3(0.0);
+    bool  coarse = false;
+    float rot = 0.0, bnRad = 0.0;
+    uint  rayCatWas = 0u;
+    if (tanR > 0.0) {
+        // Under DLSS Ray Reconstruction (kRR) every caller's sun is the cheapHit
+        // one: a single jittered ray, animated with the frame, at every pixel.
+        // RR integrates it over frames; the static patterns and the 3 + 13 (or 5
+        // + 16) ray tiers exist to look settled without a denoiser.
+        cheapHit = cheapHit || kRR;
+        const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        t = normalize(cross(up, L));
+        b = cross(L, t);
+        // setSunSoftDistance (the lights UBO's sunSoftDistance, 0 = off): past it
+        // from the eye a probe that disagrees returns its own mean, and the
+        // denoiser smooths the coarse penumbra instead of 13 or 16 more rays.
+        const vec3 eyeToOrig = orig - gPrimaryOrigin;
+        coarse = (kRayBudget & kRayBudgetSoftSun) != 0u && lights.sunSoftDistance > 0.0 &&
+                 dot(eyeToOrig, eyeToOrig) > lights.sunSoftDistance * lights.sunSoftDistance;
+        if (gSunFixedPattern && !cheapHit) {
+            mode      = kSunFixed;
+            rayCatWas = rayCatSet(kRayCatSoftSun);
+        } else {
+            const uvec2 px = uvec2(gl_GlobalInvocationID.xy);
+            const uint  fr = cheapHit ? pc.frame : 0u;// static at primaries, animated at cheapHit
+            const float bnRot = blueNoiseDef(px, fr, 0u);
+            bnRad = blueNoiseDef(px, fr, 1u);
+            rot   = TWO_PI * bnRot;
+            if (cheapHit) {
+                mode = kSunCheap;
+                d    = t * cos(rot) + b * sin(rot);
+            } else {
+                mode      = kSunTurned;
+                rayCatWas = rayCatSet(kRayCatSoftSun);
+                rim       = t * cos(rot) + b * sin(rot);
+            }
         }
-        if (c == shadowVis(orig, normalize(L + t * tanR), 1e30) &&
-            c == shadowVis(orig, normalize(L - t * tanR), 1e30) &&
-            c == shadowVis(orig, normalize(L + b * tanR), 1e30) &&
-            c == shadowVis(orig, normalize(L - b * tanR), 1e30)) {
-            rayCatSet(rayCatWas);
-            return c;// binary 0/1 (TerminateOnFirstHit) -> exact
-        }
-        float sum = 0.0;
-        for (int i = 0; i < 16; ++i) {
-            const float a = (float(i) + 0.5) * 2.39996323;
-            const float r = sqrt((float(i) + 0.5) / 16.0) * tanR;
-            sum += shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * r), 1e30);
-        }
-        rayCatSet(rayCatWas);
-        return sum * (1.0 / 16.0);
-    }
-    const uvec2 px = uvec2(gl_GlobalInvocationID.xy);
-    const uint  fr = cheapHit ? pc.frame : 0u;// static at primaries, animated at cheapHit
-    const float bnRot = blueNoiseDef(px, fr, 0u);
-    const float bnRad = blueNoiseDef(px, fr, 1u);
-    const float rot   = TWO_PI * bnRot;
-    if (cheapHit) {
-        const vec3 d = t * cos(rot) + b * sin(rot);
-        return shadowVis(orig, normalize(L + d * (sqrt(bnRad) * tanR)), 1e30);
-    }
-    const uint  rayCatWas = rayCatSet(kRayCatSoftSun);
-    const vec3  rim = t * cos(rot) + b * sin(rot);
-    const float v0  = shadowVis(orig, L, 1e30);
-    const float v1  = shadowVis(orig, normalize(L + rim * (0.9 * tanR)), 1e30);
-    const float v2  = shadowVis(orig, normalize(L - rim * (0.9 * tanR)), 1e30);
-    if (v0 == v1 && v1 == v2) {
-        rayCatSet(rayCatWas);
-        return v0;// binary 0/1 (TerminateOnFirstHit) → exact
-    }
-    float sum = v0 + v1 + v2;
-    if (coarse) {
-        rayCatSet(rayCatWas);
-        return sum * (1.0 / 3.0);
     }
     const float GA = 2.39996323;
-    for (int i = 0; i < 13; ++i) {
-        const float a = rot + (float(i) + 1.0) * GA;
-        const float r = sqrt((float(i) + bnRad) / 13.0) * tanR;
-        sum += shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * r), 1e30);
+    float c = 0.0, v1 = 0.0, sum = 0.0;
+    for (int k = 0; k < 21; ++k) {
+        vec3 dir;
+        if (mode == kSunCheap) {
+            dir = normalize(L + d * (sqrt(bnRad) * tanR));
+        } else if (k == 0) {
+            dir = L;// the hard sun's ray, and the centre of both patterns
+        } else if (mode == kSunFixed) {
+            if (k == 1) dir = normalize(L + t * tanR);
+            else if (k == 2) dir = normalize(L - t * tanR);
+            else if (k == 3) dir = normalize(L + b * tanR);
+            else if (k == 4) dir = normalize(L - b * tanR);
+            else {
+                const int   i = k - 5;
+                const float a = (float(i) + 0.5) * 2.39996323;
+                const float r = sqrt((float(i) + 0.5) / 16.0) * tanR;
+                dir = normalize(L + (t * cos(a) + b * sin(a)) * r);
+            }
+        } else {
+            if (k == 1) dir = normalize(L + rim * (0.9 * tanR));
+            else if (k == 2) dir = normalize(L - rim * (0.9 * tanR));
+            else {
+                const int   i = k - 3;
+                const float a = rot + (float(i) + 1.0) * GA;
+                const float r = sqrt((float(i) + bnRad) / 13.0) * tanR;
+                dir = normalize(L + (t * cos(a) + b * sin(a)) * r);
+            }
+        }
+        const float v = shadowVis(orig, dir, 1e30);
+        if (mode == kSunHard || mode == kSunCheap) return v;
+        if (mode == kSunFixed) {
+            if (k == 0) {
+                c = v;
+            } else if (coarse) {
+                sum = (k == 1) ? c + v : sum + v;
+                if (k == 4) {
+                    rayCatSet(rayCatWas);
+                    return sum * 0.2;
+                }
+            } else if (k <= 4) {
+                if (c != v) {
+                    k = 4;// the remaining probes are not cast: on to the sixteen
+                } else if (k == 4) {
+                    rayCatSet(rayCatWas);
+                    return c;// binary 0/1 (TerminateOnFirstHit) -> exact
+                }
+            } else {
+                sum += v;
+                if (k == 20) {
+                    rayCatSet(rayCatWas);
+                    return sum * (1.0 / 16.0);
+                }
+            }
+        } else {
+            if (k == 0) {
+                c = v;// v0
+            } else if (k == 1) {
+                v1 = v;
+            } else if (k == 2) {
+                if (c == v1 && v1 == v) {
+                    rayCatSet(rayCatWas);
+                    return c;// binary 0/1 (TerminateOnFirstHit) → exact
+                }
+                sum = c + v1 + v;
+                if (coarse) {
+                    rayCatSet(rayCatWas);
+                    return sum * (1.0 / 3.0);
+                }
+            } else {
+                sum += v;
+                if (k == 15) {
+                    rayCatSet(rayCatWas);
+                    return sum * (1.0 / 16.0);
+                }
+            }
+        }
     }
-    rayCatSet(rayCatWas);
-    return sum * (1.0 / 16.0);
+    return sum;// not reached: every estimate returns inside the loop
 }
 
 // Cell record base for this pixel (count at [base], indices after). viewDist
