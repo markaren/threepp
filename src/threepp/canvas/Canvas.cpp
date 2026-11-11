@@ -1276,7 +1276,10 @@ WindowSize monitor::monitorSize(int monitor) {
 
 std::pair<float, float> monitor::contentScale(int monitor) {
 #ifdef __EMSCRIPTEN__
-    return {1, 1};//TODO
+    // 1, not window.devicePixelRatio: the canvas is created without
+    // GLFW_SCALE_TO_MONITOR, so Emscripten's GLFW keeps the framebuffer in CSS
+    // pixels and the browser does the scaling to device pixels.
+    return {1, 1};
 #else
     initGLfw(/*headless*/ false);
 
