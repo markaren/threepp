@@ -712,7 +712,9 @@ int main(int argc, char** argv) {
         // instead of a 1.7 cm streak — so at the drop's own intensity it is
         // invisible. This is the splash's brightness, and it is the drops that
         // then look faint beside it, which is the right way round.
-        br.intensity       = 0.30f;
+        // Authored for the HDR sprite composite: 0.40, 1.33x the 0.30 the
+        // old display-space add was tuned at (matched to it by eye and mean).
+        br.intensity       = 0.40f;
         br.splashRingWidth = 0.28f;
         // The near fade would eat the rings closest to the camera, which are
         // the ones worth looking at; a ring is not a 1/d streak and does not
