@@ -1193,7 +1193,9 @@ class Wash:
         self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
         self.jet_wake = jet_wake_on(hull.boat) # JET_WAKE: her jet's race as a jet's churned water (JET_*)
         self.waves_draft = hull_waves_on(hull.boat)  # HULL_WAVES: her weight carried down to her draft
-        self.demihulls = demihulls_on(hull.boat)     # DEMIHULLS: a catamaran's lanes and bow foam per demihull
+        # DEMIHULLS: a catamaran's lanes and bow foam per demihull; a boat whose spec names no demihull_z
+        # is no catamaran to Wash, whatever the switch says ("all" names her too)
+        self.demihulls = demihulls_on(hull.boat) and "demihull_z" in hull.spec["hull"]
         self.demihull_z = float(hull.spec["hull"]["demihull_z"]) if self.demihulls else 0.0
 
     def hull_lines(self):
