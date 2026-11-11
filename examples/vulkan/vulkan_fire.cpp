@@ -637,6 +637,12 @@ int main(int argc, char** argv) {
     // Recorded as an open issue in plans/particle-atmosphere.md rather than
     // worked around in the march.
     auto snow = makeSnow(fp.wind);
+    // The snow's billboard intensity is authored for the HDR sprite composite
+    // per time of day: a faint flake added to the bright day sky lands on the
+    // tone curve's shoulder, so day needs more than night to read the same as
+    // the old display-space add did (0.38 there, in both modes).
+    const auto snowFor = [](bool d) { return d ? 2.50f : 0.50f; };
+    snow->billboardRepr().intensity = snowFor(day);
 
     auto fire = FireEffect::create(fp);
     // Above the log bed, not on the ground plane: the flame's hottest, brightest
@@ -690,6 +696,7 @@ int main(int argc, char** argv) {
             } else if (evt.key == Key::D) {
                 day = !day;
                 applyTimeOfDay(day, renderer, scene, *sun, *ambient);
+                snow->billboardRepr().intensity = snowFor(day);
             } else if (evt.key == Key::S) {
                 // The field is already there — this only moves liveCount, so
                 // no structural rebuild and no TAA clear (R-6).
