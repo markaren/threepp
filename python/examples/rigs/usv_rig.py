@@ -1040,6 +1040,14 @@ def jet_wake_on(boat, setting=None):
     return bool(boat) and (boat in names or "all" in names)
 
 
+def demihulls_on(boat, setting=None):
+    """Whether a catamaran's Wash takes her as the two hulls she is (Wash.demihulls): from the
+    environment variable DEMIHULLS (or `setting`), a comma-separated list of boat names, or "all".
+    Only a boat whose spec's hull names its demihull_z can be named. Unset: every Wash as before."""
+    names = [n.strip() for n in (os.environ.get("DEMIHULLS", "") if setting is None else setting).split(",")]
+    return bool(boat) and (boat in names or "all" in names)
+
+
 class Wash:
     """What a boat leaves on the water behind her: a patch of the ocean's wake field that
     trails her, and her sources in it. Two kinds of producer, and neither knows the other:
@@ -1076,6 +1084,13 @@ class Wash:
                        transom    the stern lane's air and foam from a Froude number on her
                                   transom's immersion: a dry transom white, a wet one its eddy's
                                   milky water
+      a catamaran     with DEMIHULLS naming her (demihulls_on()), her two hulls are two: a lane from
+                       each demihull's stern as wide as that demihull is at the water, and her bow
+                       wave broken off both sides of each demihull's bow, about its own centreline.
+                       Without it a drive that names no pontoon_z (a waterjet cat) gets ONE lane on
+                       her centreline as wide as her whole beam (under the tunnel), and the Bonjean
+                       breadth, which is a whole demihull's, is taken as a half-breadth about the
+                       boat's centreline, so the bow's broken water lands in the tunnel.
 
     hull, drive   the boat; the drive need not be the one that moves her (see Drive.thrusts),
                   and None is a hull with no propulsor (a kayak: her paddle is put() by the scene)
@@ -1178,6 +1193,8 @@ class Wash:
         self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
         self.jet_wake = jet_wake_on(hull.boat) # JET_WAKE: her jet's race as a jet's churned water (JET_*)
         self.waves_draft = hull_waves_on(hull.boat)  # HULL_WAVES: her weight carried down to her draft
+        self.demihulls = demihulls_on(hull.boat)     # DEMIHULLS: a catamaran's lanes and bow foam per demihull
+        self.demihull_z = float(hull.spec["hull"]["demihull_z"]) if self.demihulls else 0.0
 
     def hull_lines(self):
         """Her lines at the design waterline, from the Bonjean tables (starboard half), vessel frame:
@@ -1211,8 +1228,10 @@ class Wash:
         U = max(u, 0.0)
         fd = U / math.sqrt(self.G * L["draft_bow"])
         brk = smoothstep(self.BOW_FD[0], self.BOW_FD[1], fd)
+        # DEMIHULLS: the tables' breadth is a whole demihull's, so its half-breadth is half of it
+        half = 0.5 if self.demihulls else 1.0
         self.report["bow"] = {"F_D": fd, "breaking": brk,
-                              "Z": 2.2 * U * U / self.G * L["tan_entry"] / (1.0 + fd)}
+                              "Z": 2.2 * U * U / self.G * half * L["tan_entry"] / (1.0 + fd)}
         if brk <= 1e-3:
             for n in [n for n in self.last if n.startswith("bow_")]:
                 del self.last[n]
@@ -1227,9 +1246,15 @@ class Wash:
             # lands as far out as she is wide that high (seen from above, not under her flare)
             i0 = int(min(max((y - h.h0) / h.dh, 0), nb - 1))
             i1 = int(min(max((y + min(1.5 * zb, 0.8) - h.h0) / h.dh, i0 + 1), nb))
-            bx = float(np.interp(x, L["x"], L["b_all"][:, i0:i1].max(axis=1)))
-            for s, side in (("s", 1.0), ("p", -1.0)):
-                q = h.to_world([x, y, side * (bx + 0.6 * r)])   # on the water beside her, not under her
+            bx = float(np.interp(x, L["x"], L["b_all"][:, i0:i1].max(axis=1))) * half
+            # each side of the bow: about her centreline, or (DEMIHULLS) both sides of each demihull's
+            # bow about its own, the inner one thrown into the tunnel
+            zc = self.demihull_z
+            sides = ((("s", 1.0, 1.0), ("p", -1.0, 1.0)) if zc <= 0.0 else
+                     (("so", 1.0, 1.0), ("si", 1.0, -1.0), ("pi", -1.0, -1.0), ("po", -1.0, 1.0)))
+            for s, hull_side, face in sides:
+                side = hull_side * face
+                q = h.to_world([x, y, hull_side * zc + side * (bx + 0.6 * r)])   # on the water beside her, not under her
                 out = h.R @ np.array([0.0, 0.0, side])
                 v = out[[0, 2]] / max(float(np.linalg.norm(out[[0, 2]])), 1e-9) * (self.KELVIN_TAN * U)
                 self._put(f"bow_{s}{k}", q[[0, 2]], v, r, self.BOW_FOAM * brk * share, self.BOW_AIR * brk * share,
@@ -1425,13 +1450,16 @@ class Wash:
 
         # her hulls: the water she drags, a lane from each stern
         hl, hb, xc = h.excl
-        zs = getattr(self.drive, "pontoon_z", 0.0)
-        rh = max(hb - zs, 0.1)                                   # a hull's half-breadth at the water
+        if (self.bow or self.waterline or self.transom or self.demihulls) and self.lines is None:
+            self.lines = self.hull_lines()
+        if self.demihulls:                                       # DEMIHULLS: each demihull's own lane
+            zs, rh = self.demihull_z, 0.5 * float(self.lines["b"].max())
+        else:
+            zs = getattr(self.drive, "pontoon_z", 0.0)
+            rh = max(hb - zs, 0.1)                               # a hull's half-breadth at the water
         self.patch.eddy = float(max(self.EDDY * max(widest, rh), 4.0 * texel))
         fn = abs(u) / math.sqrt(self.G * 2.0 * hl)
         lane = smoothstep(0.15, 0.6, abs(u))
-        if (self.bow or self.waterline or self.transom) and self.lines is None:
-            self.lines = self.hull_lines()
         if lane > 0.0:
             air = smoothstep(0.35, 0.85, fn)                     # a transom runs dry and white when she is fast for her length
             foam = smoothstep(0.45, 1.05, fn) * air
