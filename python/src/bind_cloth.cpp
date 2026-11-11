@@ -112,7 +112,10 @@ namespace threepp_py {
                 .def_readwrite("damping", &Cloth::Params::damping, "Fraction of velocity lost per second.")
                 .def_readwrite("air_density", &Cloth::Params::airDensity, "kg/m3")
                 .def_readwrite("normal_drag", &Cloth::Params::normalDrag, "Pressure coefficient across the sheet.")
-                .def_readwrite("tangent_drag", &Cloth::Params::tangentDrag, "Drag coefficient along the sheet.")
+                .def_readwrite("tangent_drag", &Cloth::Params::tangentDrag, "Friction coefficient along the sheet.")
+                .def_readwrite("flapping", &Cloth::Params::flapping,
+                               "Amplitude of the flapping pressure wave, as a fraction of the dynamic pressure "
+                               "of the flow along the sheet.")
                 .def_readwrite("gustiness", &Cloth::Params::gustiness,
                                "0 = steady wind; 1 = speed +-50 % and direction +-25 degrees, in waves that "
                                "travel downwind. Applies to set_wind, not to a wind field.")

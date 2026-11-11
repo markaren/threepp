@@ -65,7 +65,7 @@ CLOTH
 Flag polyester, from the solver's guidance: 0.12 kg/m2, inextensible (stretch compliance 0) and
 soft in bending. A 1.1 x 0.8 m flag on a 16 x 12 grid (7 cm cells, 221 particles, about the
 solver example's density) at 32 substeps, which hold its longest edge within about 8 % of its
-rest length; a step costs about half a millisecond of one CPU core.
+rest length (about 19 % when it flaps hardest); a step costs 0.6-0.9 ms of one CPU core.
 """
 import time
 
@@ -75,8 +75,8 @@ import numpy as np
 # constraint pass per substep, so the stretch it leaves concentrates where the whole flag hangs
 # on the pinned hoist, worst at the top corner. Measured on a 1.1 x 0.8 m flag at 30 frames a
 # second, 16 x 12 cells, longest edge over rest: 1.31 at the solver's default 12 substeps,
-# 1.10 at 24, 1.06-1.08 at 32 (3 and 12 m/s); a 22 x 16 grid needs about twice the substeps for
-# the same stretch.
+# 1.10 at 24, 1.06-1.08 at 32 in 3 and 12 m/s; with the solver's flapping wave, 1.09-1.19 at 32
+# from 3 m/s to 15 m/s. A 22 x 16 grid needs about twice the substeps for the same stretch.
 AREAL_DENSITY = 0.12
 BEND_COMPLIANCE = 0.5
 SUBSTEPS = 32

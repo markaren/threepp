@@ -1355,6 +1355,14 @@ class Cloth:
         def damping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def flapping(self) -> float:
+            """
+            Amplitude of the flapping pressure wave, as a fraction of the dynamic pressure of the flow along the sheet.
+            """
+        @flapping.setter
+        def flapping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def gravity(self) -> Vector3:
             """
             m/s2, in the solver's space
@@ -1405,7 +1413,7 @@ class Cloth:
         @property
         def tangent_drag(self) -> float:
             """
-            Drag coefficient along the sheet.
+            Friction coefficient along the sheet.
             """
         @tangent_drag.setter
         def tangent_drag(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
