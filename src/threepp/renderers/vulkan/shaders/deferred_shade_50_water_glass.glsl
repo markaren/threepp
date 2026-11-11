@@ -1353,8 +1353,38 @@ const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO
 // factor alone frosted every such glass to the kGlassMaxRough cap, which the
 // reflection filter then blurred (GlassHurricaneCandleHolder: a clear pane with
 // frosted stripes read as one soft, milky shell).
-vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matRough,
-                bool doShadows, float maxLod, inout uint seed) {
+// shadeGlass in two halves around the trace of what is behind the glass, which
+// main() makes: the call it shares with the additive and flat-alpha blends (one
+// call site of traceRadiance for all three; each call site is a whole inlined
+// copy of it, and the copies are what the driver's compile time is made of).
+// shadeGlassBegin does everything up to the point where the glass knows whether
+// it wants that trace, and from where, in which direction and along the view or
+// not (the TraceReq); shadeGlassEnd takes what the trace returned and finishes.
+// GlassCtx carries what the second half needs of the first. kGlassSamples is 1,
+// and the split takes that one sample (the loop it ran in is gone).
+struct GlassCtx {
+    vec3  reflectColor;
+    vec3  F;
+    vec3  transmitColor;// set here only on a total internal reflection at the front face
+    float inDist;       // solid glass: the distance inside it
+    vec3  overC;        // solid glass: blend content composited inside the volume
+    float overT;
+    float gr;
+    float r0;
+};
+// A trace of what is behind a transmissive surface (deferred_shade.comp makes it):
+// from orig along dir, the env miss at missLod, with gTraceAlongView set around it
+// when `along` (the ray is the view ray, not bent). gSeenThroughHits is set for
+// every such trace.
+struct TraceReq {
+    bool  want;
+    vec3  orig;
+    vec3  dir;
+    float missLod;
+    bool  along;
+};
+void shadeGlassBegin(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matRough,
+                     bool doShadows, float maxLod, inout uint seed, out GlassCtx gc, out TraceReq req) {
     const float ior     = max(pm.ior, 1.0);
     // Explicit square — same negative-base pow() rationale as shadeWater above.
     const float f0n     = (1.0 - ior) / (1.0 + ior);
@@ -1377,160 +1407,178 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
     const float missLod = max(kRR ? 0.0 : gr, 0.10) * maxLod;
 
 
-    vec3 sum = vec3(0.0);
-    for (int s = 0; s < kGlassSamples; ++s) {
-        // Under DLSS Ray Reconstruction one random facet per pixel and frame (the
-        // seed moves with the frame there): RR integrates the frosted lobe. Else
-        // the one deterministic sample and the reflection filter's blur.
-        // The facet is drawn at the material's own roughness (the ior ramp, no
-        // kGlassFrost floor: that floor is for the filter and the glass marker),
-        // and only for glass rougher than 0.05, the path tracer's threshold for a
-        // thin sheet's scatter. Below it the mirror normal, as without RR: the
-        // twin's Volvo windows (0.03) went soft at a distance and smeared under
-        // RR, which reprojects what the glass shows as a reflection would be.
-        const float lobeRough = matRough * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
-        vec3 Ns = (kRR && lobeRough > 0.05) ? ggxHalfVector(N, lobeRough, seed)
-                                            : ggxHalfVectorFib(N, gr, s, kGlassSamples);
-        if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
-        const float NdotV = max(dot(Ns, V), 1e-4);
-        const vec3  F     = glassFresnel(r0, NdotV, pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
+    const int s = 0;// the one sample (kGlassSamples is 1)
+    // Under DLSS Ray Reconstruction one random facet per pixel and frame (the
+    // seed moves with the frame there): RR integrates the frosted lobe. Else
+    // the one deterministic sample and the reflection filter's blur.
+    // The facet is drawn at the material's own roughness (the ior ramp, no
+    // kGlassFrost floor: that floor is for the filter and the glass marker),
+    // and only for glass rougher than 0.05, the path tracer's threshold for a
+    // thin sheet's scatter. Below it the mirror normal, as without RR: the
+    // twin's Volvo windows (0.03) went soft at a distance and smeared under
+    // RR, which reprojects what the glass shows as a reflection would be.
+    const float lobeRough = matRough * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
+    vec3 Ns = (kRR && lobeRough > 0.05) ? ggxHalfVector(N, lobeRough, seed)
+                                        : ggxHalfVectorFib(N, gr, s, kGlassSamples);
+    if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
+    const float NdotV = max(dot(Ns, V), 1e-4);
+    const vec3  F     = glassFresnel(r0, NdotV, pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
 
-        // Reflection (sky + scene) — multi-bounce / recursive.
-        const vec3 R = reflect(-V, Ns);
-        const vec3 reflOrig = P + N * SHADOW_EPS;
-        // NOT const: the splat-volume leg below composites into it. Same value,
-        // same expression — the write is behind a uniform flag that is 0 on
-        // every splat-free scene.
-        vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, missLod, seed,
-                                          /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
-                                          /*probeHitFill=*/true,
-                                          /*envInt=*/pm.envMapIntensity);
-        if (kRR) {
-            gRRSpecF     = F;
-            gRRSpecRough = gr;
-            gRRReflHitT  = gTraceHitT;
-        }
-        // Splats in the mirror, the glass leg — the shadeWater block's twin, on
-        // this path's own origin/direction and bounded by its own traced hit
-        // distance. See that block for the argument; flags bit 12 is the same
-        // single uniform gate, primary view only.
-        if (flagOn(4096u)) {
-            vec3 svEmis;
-            const float svT = svLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
-            reflectColor = reflectColor * svT + svEmis;
-        }
-
-        vec3 transmitColor;
-        // The ray to what is behind the glass, set by whichever of the two
-        // branches below wants one (a thin sheet always; solid glass unless it
-        // reflects totally at the front face) and traced once after them: each
-        // call site of traceRadiance is a whole inlined copy of it, and the
-        // copies are what the driver's compile time is made of.
-        bool  behindWanted = false;
-        vec3  behindOrig   = vec3(0.0);
-        vec3  behindDir    = vec3(0.0);
-        bool  behindAlong  = false;// thin sheet: the view ray, not bent
-        float inDist       = 0.0;  // solid glass: the distance inside it
-        vec3  overC        = vec3(0.0);
-        float overT        = 1.0;
-        if (pm.thinWalled != 0) {
-            // THIN-SHELL glass (glTF default, e.g. a watch crystal): a thin parallel
-            // shell refracts on ENTRY then back on EXIT → NET ~zero bend (a tiny
-            // parallel offset). So pass the view ray ~STRAIGHT through and read the
-            // surface directly behind — undistorted, full detail. A single refract()
-            // (the old code) bends by the full first-interface angle → it shifts/
-            // warps the face beneath and lets rays escape to the sky = a blue
-            // "washed, detail-destroyed" look over e.g. a watch dial.
-            // A ROUGH sheet scatters what it lets through (thinSheetTransmit): with
-            // the facet sampled under RR the view through frosted glass is frosted.
-            // Traced below, by the call this branch shares with the solid one:
-            // straight through when smooth, what the pane shows lit as seen
-            // beside it (gSeenThroughHits) and by the lamps of its own cluster
-            // cell (gTraceAlongView).
-            behindWanted = true;
-            behindOrig   = P - N * SHADOW_EPS;
-            behindDir    = thinSheetTransmit(V, N, Ns);
-            behindAlong  = true;
-        } else {
-            // SOLID glass (closed mesh): full 2-interface refraction → the
-            // inverted, magnified background a real glass ball shows. Beer-Lambert
-            // over the ACTUAL in-glass distance → deeper tint through the centre.
-            vec3 dIn = refract(-V, Ns, 1.0 / ior);
-            if (dot(dIn, dIn) < 1e-6) {
-                transmitColor = reflectColor;// TIR at the front face
-            } else {
-                dIn = normalize(dIn);
-                vec3 exitP, exitN; bool exitMiss, blockedInside;
-                gGlassExitHeadOn = false;
-                traceGlassInterior(P, dIn, maxLod, doShadows, seed,
-                                   exitP, exitN, inDist, exitMiss, blockedInside, overC, overT);
-                vec3 dOut;
-                if (exitMiss) {
-                    dOut = dIn; inDist = 0.0;// open/odd geometry — straight through
-                } else if (blockedInside || gGlassExitHeadOn) {
-                    // Opaque content inside the volume: stop the refraction at
-                    // it. Back the origin off so the behind-ray re-hits the
-                    // blocker and traceRadiance shades it (with its own
-                    // cutout/blend handling) — no exit bend through a surface
-                    // the ray never actually leaves.
-                    //
-                    // The same for a surface met HEAD-ON inside the glass: it
-                    // is not this glass's way out but the surface of something
-                    // inside it, a liquid in a vessel. It was bent as glass to
-                    // air with this glass's ior, where the ray crosses into the
-                    // liquid: at a slant that is a total internal reflection,
-                    // and a glass teapot's tea showed the reflected glass instead
-                    // of the tea. traceRadiance crosses it by its own rules.
-                    dOut  = dIn;
-                    exitP = exitP - dIn * (4.0 * SHADOW_EPS);
-                } else {
-                    vec3 nb = exitN;
-                    if (dot(nb, dIn) < 0.0) nb = -nb;           // orient outward
-                    vec3 o = refract(dIn, -nb, ior);            // glass→air
-                    dOut = (dot(o, o) < 1e-6) ? reflect(dIn, nb)// TIR → internal reflect
-                                              : normalize(o);
-                }
-                // Lit where it stands, as behind a thin pane (gSeenThroughHits);
-                // not along the view (the ray is bent), so no cluster-cell lamps.
-                behindWanted = true;
-                behindOrig   = exitP + dOut * SHADOW_EPS;
-                behindDir    = dOut;
-            }
-        }
-        if (behindWanted) {
-            gSeenThroughHits = true;
-            if (behindAlong) gTraceAlongView = true;
-            const vec3 behind = traceRadiance(behindOrig, behindDir, doShadows, maxLod, missLod, seed,
-                                              /*cheapHits=*/false,// refracted content is sharp
-                                              /*probeHitFill=*/false,// transmitted content: lit where it stands (gSeenThroughHits)
-                                              /*envInt=*/1.0);// transmitted, not IBL
-            gSeenThroughHits = false;
-            if (behindAlong) gTraceAlongView = false;
-            vec3 tint = albedo;
-            if (pm.thinWalled != 0) {
-                if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
-                    tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
-                transmitColor = behind * tint;
-            } else {
-                if (pm.attenuationDistance > 0.0)
-                    tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
-                // Blend content composited inside the volume layers over the
-                // (remaining) behind term; the glass tint applies to both —
-                // an embedded symbol is seen through the front surface, so it
-                // should physically pick up the glass colour.
-                transmitColor = (overC + overT * behind) * tint;
-            }
-        }
-        // Firefly-clamp the glass env contribution — the HDR sun reflected/
-        // refracted through curved glass otherwise scatters into bright STATIC
-        // speckle. 6.0 (was 2.5): with the lobe capped near-mirror the scatter
-        // is coherent, and the old cap flattened every highlight — glass needs
-        // its bright glints or it reads dull.
-        vec3 contrib = mix(transmitColor, reflectColor, F);
-        const float cl = max(max(contrib.r, contrib.g), contrib.b);
-        if (cl > 6.0) contrib *= 6.0 / cl;
-        sum += contrib;
+    // Reflection (sky + scene) — multi-bounce / recursive.
+    const vec3 R = reflect(-V, Ns);
+    const vec3 reflOrig = P + N * SHADOW_EPS;
+    // NOT const: the splat-volume leg below composites into it. Same value,
+    // same expression — the write is behind a uniform flag that is 0 on
+    // every splat-free scene.
+    vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, missLod, seed,
+                                      /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
+                                      /*probeHitFill=*/true,
+                                      /*envInt=*/pm.envMapIntensity);
+    if (kRR) {
+        gRRSpecF     = F;
+        gRRSpecRough = gr;
+        gRRReflHitT  = gTraceHitT;
     }
+    // Splats in the mirror, the glass leg — the shadeWater block's twin, on
+    // this path's own origin/direction and bounded by its own traced hit
+    // distance. See that block for the argument; flags bit 12 is the same
+    // single uniform gate, primary view only.
+    if (flagOn(4096u)) {
+        vec3 svEmis;
+        const float svT = svLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
+        reflectColor = reflectColor * svT + svEmis;
+    }
+
+    vec3 transmitColor = vec3(0.0);
+    // The ray to what is behind the glass, set by whichever of the two
+    // branches below wants one (a thin sheet always; solid glass unless it
+    // reflects totally at the front face) and traced once after them: each
+    // call site of traceRadiance is a whole inlined copy of it, and the
+    // copies are what the driver's compile time is made of.
+    bool  behindWanted = false;
+    vec3  behindOrig   = vec3(0.0);
+    vec3  behindDir    = vec3(0.0);
+    bool  behindAlong  = false;// thin sheet: the view ray, not bent
+    float inDist       = 0.0;  // solid glass: the distance inside it
+    vec3  overC        = vec3(0.0);
+    float overT        = 1.0;
+    if (pm.thinWalled != 0) {
+        // THIN-SHELL glass (glTF default, e.g. a watch crystal): a thin parallel
+        // shell refracts on ENTRY then back on EXIT → NET ~zero bend (a tiny
+        // parallel offset). So pass the view ray ~STRAIGHT through and read the
+        // surface directly behind — undistorted, full detail. A single refract()
+        // (the old code) bends by the full first-interface angle → it shifts/
+        // warps the face beneath and lets rays escape to the sky = a blue
+        // "washed, detail-destroyed" look over e.g. a watch dial.
+        // A ROUGH sheet scatters what it lets through (thinSheetTransmit): with
+        // the facet sampled under RR the view through frosted glass is frosted.
+        // Traced below, by the call this branch shares with the solid one:
+        // straight through when smooth, what the pane shows lit as seen
+        // beside it (gSeenThroughHits) and by the lamps of its own cluster
+        // cell (gTraceAlongView).
+        behindWanted = true;
+        behindOrig   = P - N * SHADOW_EPS;
+        behindDir    = thinSheetTransmit(V, N, Ns);
+        behindAlong  = true;
+    } else {
+        // SOLID glass (closed mesh): full 2-interface refraction → the
+        // inverted, magnified background a real glass ball shows. Beer-Lambert
+        // over the ACTUAL in-glass distance → deeper tint through the centre.
+        vec3 dIn = refract(-V, Ns, 1.0 / ior);
+        if (dot(dIn, dIn) < 1e-6) {
+            transmitColor = reflectColor;// TIR at the front face
+        } else {
+            dIn = normalize(dIn);
+            vec3 exitP, exitN; bool exitMiss, blockedInside;
+            gGlassExitHeadOn = false;
+            traceGlassInterior(P, dIn, maxLod, doShadows, seed,
+                               exitP, exitN, inDist, exitMiss, blockedInside, overC, overT);
+            vec3 dOut;
+            if (exitMiss) {
+                dOut = dIn; inDist = 0.0;// open/odd geometry — straight through
+            } else if (blockedInside || gGlassExitHeadOn) {
+                // Opaque content inside the volume: stop the refraction at
+                // it. Back the origin off so the behind-ray re-hits the
+                // blocker and traceRadiance shades it (with its own
+                // cutout/blend handling) — no exit bend through a surface
+                // the ray never actually leaves.
+                //
+                // The same for a surface met HEAD-ON inside the glass: it
+                // is not this glass's way out but the surface of something
+                // inside it, a liquid in a vessel. It was bent as glass to
+                // air with this glass's ior, where the ray crosses into the
+                // liquid: at a slant that is a total internal reflection,
+                // and a glass teapot's tea showed the reflected glass instead
+                // of the tea. traceRadiance crosses it by its own rules.
+                dOut  = dIn;
+                exitP = exitP - dIn * (4.0 * SHADOW_EPS);
+            } else {
+                vec3 nb = exitN;
+                if (dot(nb, dIn) < 0.0) nb = -nb;           // orient outward
+                vec3 o = refract(dIn, -nb, ior);            // glass→air
+                dOut = (dot(o, o) < 1e-6) ? reflect(dIn, nb)// TIR → internal reflect
+                                          : normalize(o);
+            }
+            // Lit where it stands, as behind a thin pane (gSeenThroughHits);
+            // not along the view (the ray is bent), so no cluster-cell lamps.
+            behindWanted = true;
+            behindOrig   = exitP + dOut * SHADOW_EPS;
+            behindDir    = dOut;
+        }
+    }
+    gc.reflectColor  = reflectColor;
+    gc.F             = F;
+    gc.transmitColor = transmitColor;
+    gc.inDist        = inDist;
+    gc.overC         = overC;
+    gc.overT         = overT;
+    gc.gr            = gr;
+    gc.r0            = r0;
+    req.want    = behindWanted;
+    req.orig    = behindOrig;
+    req.dir     = behindDir;
+    req.missLod = missLod;
+    req.along   = behindAlong;
+}
+
+// traced: main() made the trace shadeGlassBegin asked for (req.want), and
+// `behind` is what it returned.
+vec3 shadeGlassEnd(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, bool doShadows,
+                   GlassCtx gc, bool traced, vec3 behind) {
+    const float gr            = gc.gr;
+    const float r0            = gc.r0;
+    const vec3  F             = gc.F;
+    const vec3  reflectColor  = gc.reflectColor;
+    const float inDist        = gc.inDist;
+    const vec3  overC         = gc.overC;
+    const float overT         = gc.overT;
+    vec3        transmitColor = gc.transmitColor;
+    vec3 sum = vec3(0.0);
+    if (traced) {
+        vec3 tint = albedo;
+        if (pm.thinWalled != 0) {
+            if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
+                tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
+            transmitColor = behind * tint;
+        } else {
+            if (pm.attenuationDistance > 0.0)
+                tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
+            // Blend content composited inside the volume layers over the
+            // (remaining) behind term; the glass tint applies to both —
+            // an embedded symbol is seen through the front surface, so it
+            // should physically pick up the glass colour.
+            transmitColor = (overC + overT * behind) * tint;
+        }
+    }
+    // Firefly-clamp the glass env contribution — the HDR sun reflected/
+    // refracted through curved glass otherwise scatters into bright STATIC
+    // speckle. 6.0 (was 2.5): with the lobe capped near-mirror the scatter
+    // is coherent, and the old cap flattened every highlight — glass needs
+    // its bright glints or it reads dull.
+    vec3 contrib = mix(transmitColor, reflectColor, F);
+    const float cl = max(max(contrib.r, contrib.g), contrib.b);
+    if (cl > 6.0) contrib *= 6.0 / cl;
+    sum += contrib;
 
     // Direct-light glint. The recombine scales the opaque base by
     // (1 − transmission), which erases its analytic specular entirely for

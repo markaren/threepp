@@ -1146,25 +1146,42 @@ void main() {
     // the whole pixel.
     if (pc.shadeMode == 1u && pm.transmission > 0.0) return;
     if (pc.shadeMode != 1u) {
-        // ADDITIVE blend (muzzle flashes, sparks, energy glows; transmission > 1)
-        // and CLEAN ALPHA blend (transparent, opacity < 1; host sets ior = 0,
-        // transmission = 1 - opacity) both look straight through at the scene
-        // behind, which the opaque G-buffer already overwrote: one re-traced
-        // straight (-V) ray recovers it, the same ray for either, so the two
-        // share this one call site (every call site of traceRadiance is a full
-        // inlined copy, and the copies are what the driver's compile time is
-        // made of). A pixel is at most one of the two.
+        // ADDITIVE blend (muzzle flashes, sparks, energy glows; transmission > 1),
+        // CLEAN ALPHA blend (transparent, opacity < 1; host sets ior = 0,
+        // transmission = 1 - opacity) and REAL glass (any other transmission) all
+        // look at the scene behind the surface, which the opaque G-buffer already
+        // overwrote, and each traces at most one ray for it: the blends the
+        // straight -V ray, glass the ray shadeGlassBegin asks for (straight
+        // through a thin sheet, the exit ray of solid glass, none on a total
+        // internal reflection at the front face). A pixel is one of the three at
+        // most, so they share this one call site of traceRadiance: every call
+        // site is a whole inlined copy of it, and the copies are what the
+        // driver's compile time is made of. Nothing draws from the seed between
+        // shadeGlassBegin and the trace.
         const bool additiveBlend = pm.transmission > 1.0;
         const bool flatAlpha     = !additiveBlend && pm.transmission > 0.0 && isFlatAlphaBlend(pm.ior);
+        const bool realGlass     = !additiveBlend && !flatAlpha && pm.transmission > 0.0;
+        TraceReq   behindReq     = TraceReq(false, vec3(0.0), vec3(0.0), 0.0, false);
+        GlassCtx   glassCtx;
         if (additiveBlend || flatAlpha) {
-            gSeenThroughHits = true;// what is behind is lit where it stands...
-            gTraceAlongView  = true;// ...and by the lamps of its own cluster cell
-            const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
-                                                 /*cheapHits=*/false,// straight into lit, unblurred
-                                                 /*probeHitFill=*/false,// content behind a blend surface
-                                                 /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
+            // Straight into lit, unblurred: what is behind is lit where it stands
+            // and by the lamps of its own cluster cell (gTraceAlongView).
+            behindReq = TraceReq(true, worldPos - V * SHADOW_EPS, -V, 0.0, true);
+        } else if (realGlass) {
+            shadeGlassBegin(worldPos, N, V, pm, albedo, roughMat, shadowsOn, maxLod, seed, glassCtx, behindReq);
+        }
+        vec3 behind = vec3(0.0);
+        if (behindReq.want) {
+            gSeenThroughHits = true;
+            if (behindReq.along) gTraceAlongView = true;
+            behind = traceRadiance(behindReq.orig, behindReq.dir, shadowsOn, maxLod, behindReq.missLod, seed,
+                                   /*cheapHits=*/false,// transmitted content is sharp
+                                   /*probeHitFill=*/false,// transmitted content: lit where it stands (gSeenThroughHits)
+                                   /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
             gSeenThroughHits = false;
-            gTraceAlongView  = false;
+            if (behindReq.along) gTraceAlongView = false;
+        }
+        if (additiveBlend || flatAlpha) {
             if (additiveBlend) {
                 // The surface GLOWS over the scene behind: dst = behind + src*strength.
                 // Host encodes strength = transmission-1 (transmission>1 is the
@@ -1178,7 +1195,7 @@ void main() {
                 const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
                 lit = mix(behind, lit, opacity);
             }
-        } else if (pm.transmission > 0.0) {
+        } else if (realGlass) {
             // REAL glass (any real ior, 1.0 included). ONE sharp Fresnel reflect+refract
             // sample (no ghost copies); the reflection denoise blurs it by the glass
             // roughness (the frost) + recombines — same channel as opaque reflections.
@@ -1190,7 +1207,7 @@ void main() {
                                          * hitTex(pm.transmissionTexIndex, pm.uvTransformTransmission,
                                                   primUv, vec3(1.0)).r,
                                          0.0, 1.0);
-            const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, roughMat, shadowsOn, maxLod, seed);
+            const vec3  glassCol = shadeGlassEnd(worldPos, N, V, pm, albedo, shadowsOn, glassCtx, behindReq.want, behind);
             if (kRR) {
                 // The glass's reflection ray, not its last (transmission) trace.
                 rrHitT   = gRRReflHitT > 0.0 ? gRRReflHitT : kRRMissDist;
