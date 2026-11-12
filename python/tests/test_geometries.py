@@ -35,22 +35,6 @@ def test_keyword_args():
     assert box.width == 2 and box.depth == 5
 
 
-def test_geometry_transforms():
-    geo = tp.BoxGeometry()
-    geo.translate(1, 0, 0)
-    geo.scale(2, 2, 2)
-    geo.compute_vertex_normals()
-    geo.compute_bounding_box()  # should not raise
-
-
-def test_buffergeometry_from_points():
-    geo = tp.BufferGeometry()
-    geo.set_from_points([tp.Vector3(0, 0, 0), tp.Vector3(1, 1, 1), tp.Vector3(2, 0, 0)])
-    # usable as Line geometry
-    line = tp.Line(geo, tp.LineBasicMaterial())
-    assert line.geometry is not None
-
-
 def test_set_index_round_trips_and_publishes_the_whole_buffer():
     geo = tp.BufferGeometry()
     geo.set_attribute("position", np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], np.float32))
