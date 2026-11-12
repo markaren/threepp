@@ -75,6 +75,11 @@ namespace threepp::vulkan {
         // for are core in Vulkan 1.3 (the renderer's instance version).
         static std::vector<const char*> requiredDeviceExtensions();
 
+        // NGX is up and reports DLSS for this GPU and driver: what create()
+        // needs, without creating anything. Waits for the Init the
+        // constructor started; records nothing, so any time is fine.
+        [[nodiscard]] bool available() { return ensureNgx(); }
+
         // (Re)create the DLSS feature for the given display (swapchain) extent.
         // Idempotent — releases any existing feature first. NGX itself is
         // initialised lazily on the first call (needs the live device).

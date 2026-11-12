@@ -2741,16 +2741,30 @@ namespace threepp {
         // creates and releases its NGX feature to follow (syncDlssRayReconstruction).
         bool   dlssRrEnabled_ = true;
 #endif
-        // The DLSS feature is not created by the constructor: NGX's init runs
-        // on its own thread from there (DlssUpscaler::ngxInit_) and the
-        // feature, the FSR context that stands in when DLSS cannot run, and
-        // the HDR plumbing either needs are made by resolveUpscalers() the
-        // first time anything asks: the first render(), a render-extent
-        // reallocation, or one of the public upscaler getters and setters.
-        // Until then dlssActive_ and fsrActive_ are both false and no frame
-        // has been recorded. Defined in VulkanCoreFrame.cpp.
-        bool   upscalersPending_ = false;
+        // The upscalers are made when a frame first needs them, not by the
+        // constructor. NGX's init runs on its own thread from there
+        // (DlssUpscaler::ngxInit_); resolveUpscalers(), at the start of every
+        // frame, creates the DLSS feature the first time DLSS is enabled
+        // (dlssPending_ until then), the FSR context the first time FSR is the
+        // upscaler to use, and the HDR plumbing either needs. So an
+        // application that turns DLSS off before its first frame never waits
+        // for NGX, and one that turns it on later gets the feature at the
+        // next frame. Defined in VulkanCoreFrame.cpp.
+        bool   dlssPending_ = false;
         void   resolveUpscalers();
+        // DLSS can run: the feature exists, or it has not been asked for yet
+        // and NGX reports it (the public getters' answer; waits for NGX's
+        // init, creates nothing).
+        [[nodiscard]] bool dlssAvailableOrPending();
+        [[nodiscard]] bool dlssRrAvailableOrPending();// the same for Ray Reconstruction
+        // A windowed canvas stays hidden until its first frame has been
+        // presented (see the constructor of VulkanRenderer); once.
+        bool   windowRevealed_ = false;
+        void   revealWindow() {
+            if (windowRevealed_) return;
+            windowRevealed_ = true;
+            canvas.showWindow();// a headless canvas stays hidden
+        }
         // An external upscaler (FSR/DLSS) compiled in AND created (available).
         // Gates the HDR-mode plumbing both reuse — hdrOut_ stays allocated
         // regardless of the runtime toggles, so setFsr/setDlss never need a
@@ -2831,17 +2845,9 @@ namespace threepp {
             dlssResetNext_ = true;
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// path hand-off re-primes whichever runs next
-            // FSR was skipped at init while DLSS held the upscaler slot. If DLSS
-            // is being turned off, create the FSR context now so the frame hands
-            // off to FSR rather than plain TAA. dlssActive_ is still true here, so
-            // fsrActiveForHdrPlumbing() was already satisfied and hdrOut_ is
-            // allocated — no descriptor rewrite is needed.
-            if (!enabled && fsrEnabled_ && !fsr_) {
-                fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
-                fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
-                                          ctx->swapchainExtent().height);
-                fsrResetNext_ = true;
-            }
+            // The FSR context this hands the frame to, if there is none yet,
+            // is made at the start of the next frame (resolveUpscalers), with
+            // the HDR output it writes through.
 #endif
 #else
             (void) enabled;

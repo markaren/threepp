@@ -713,7 +713,7 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // growing unbounded if the app spams resizes). Safe: device idle.
             flushRetireQueue();
             // A setRenderScale or a resize before the first frame: the funnel
-            // below follows the upscalers, so they exist first.
+            // below follows the upscalers, so the ones in use exist first.
             resolveUpscalers();
             // Every image a frame-interop export copies from at this view is
             // about to be freed and rebuilt — a resize, setRenderScale,
@@ -770,7 +770,7 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // which takes no subrect smaller than the display, so a renderScale
             // set after init failed to evaluate on every frame until the
             // self-heal in renderFrame recreated it (spot_slam, 2026-10-18).
-            if (dlss_) {
+            if (dlss_ && !dlssPending_) {
                 const VkExtent2D disp = ctx->swapchainExtent();
                 if (!dlssActive_ || dlss_->displayWidth() != disp.width ||
                     dlss_->displayHeight() != disp.height ||
@@ -1804,6 +1804,8 @@ void VulkanRenderer::Impl::endFrame() {
                 } else if (pr != VK_SUCCESS) {
                     check(pr, "vkQueuePresentKHR");
                 }
+                // The first frame is in the swapchain: the window has pixels.
+                revealWindow();
             }
 
             // Cap to keep `subIdx = sampleIndex * spp + s` (deferred_shade.comp)
@@ -1837,22 +1839,53 @@ void VulkanRenderer::Impl::endFrame() {
             frameState_   = FrameState::Idle;
         }
 
+bool VulkanRenderer::Impl::dlssAvailableOrPending() {
+#if defined(THREEPP_WITH_DLSS)
+            if (dlssPending_) return dlss_ && dlss_->available();
+            return dlssActive_;
+#else
+            return false;
+#endif
+        }
+
+bool VulkanRenderer::Impl::dlssRrAvailableOrPending() {
+#if defined(THREEPP_WITH_DLSS)
+            return dlssAvailableOrPending() && dlss_ && dlss_->rayReconstructionAvailable();
+#else
+            return false;
+#endif
+        }
+
 void VulkanRenderer::Impl::resolveUpscalers() {
-            if (!upscalersPending_) return;
-            upscalersPending_ = false;
+            // Only between frames: what is made here is wired into descriptor
+            // sets an open frame has bound.
+            if (frameState_ != FrameState::Idle) return;
+            bool wantDlss = false;
+            bool wantFsr  = false;
+#if defined(THREEPP_WITH_DLSS)
+            wantDlss = dlssPending_ && dlssEnabled_;
+#endif
+#if defined(THREEPP_WITH_FSR)
+            // FSR is the upscaler to use and has no context yet: DLSS is off,
+            // could not be created, or (below) has just failed to be.
+            wantFsr = !fsr_ && fsrEnabled_ && !wantDlss && !useDlss();
+#endif
+            if (!wantDlss && !wantFsr) return;
+
+            // Nothing is in flight before the first frame; a setDlss(true) or
+            // setFsr(true) made later gets here with frames still on the GPU.
+            vkDeviceWaitIdle(ctx->device());
             // The primary's: a reallocation of a secondary view can be what
             // gets here first.
             ViewContext* const saved = curView_;
             curView_ = views_[0].get();
 #if defined(THREEPP_WITH_DLSS)
-            // DLSS feature at the display extent. Created BEFORE FSR because DLSS
-            // OUTRANKS it (useFsr() requires !useDlss()): an FSR context built
-            // alongside an active DLSS feature could never dispatch, so it is
-            // skipped below (~60 MB committed). NGX feature creation records
-            // GPU init work: one-shot submit+wait. On NGX failure (non-RTX GPU
-            // / old driver) dlssActive_ stays false and the FSR/TAA fallback
-            // runs.
-            {
+            if (wantDlss) {
+                // DLSS feature at the display extent. NGX feature creation
+                // records GPU init work: one-shot submit+wait. On NGX failure
+                // (non-RTX GPU / old driver) dlssActive_ stays false and the
+                // FSR/TAA fallback runs.
+                dlssPending_ = false;
                 VkCommandBuffer initCb = beginOneShot();
                 dlssActive_ = dlss_->create(initCb,
                                             ctx->swapchainExtent().width,
@@ -1860,15 +1893,21 @@ void VulkanRenderer::Impl::resolveUpscalers() {
                                             renderExtent().width,
                                             renderExtent().height);
                 endAndSubmitOneShot(initCb, "DLSS feature create");
+                dlssResetNext_ = true;
+                vulkan::startupMark("dlss feature");
+#if defined(THREEPP_WITH_FSR)
+                wantFsr = !fsr_ && fsrEnabled_ && !useDlss();
+#endif
             }
-            dlssResetNext_ = true;
-            vulkan::startupMark("dlss feature");
 #endif
 #if defined(THREEPP_WITH_FSR)
-            // FSR upscaler context at the display (swapchain) extent, unless
-            // DLSS claimed the upscaler slot; if DLSS is disabled at runtime,
-            // setDlss(false) creates the FSR context on demand.
-            if (!dlssAvailable() && !fsr_) {
+            if (wantFsr) {
+                // FSR upscaler context at the display (swapchain) extent. FSR
+                // stores the display extent at create time but takes the
+                // render extent per dispatch. An FSR context beside a running
+                // DLSS feature could never dispatch (useFsr() requires
+                // !useDlss()), which is why it is made only here (~60 MB
+                // committed).
                 fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
                 fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
                                           ctx->swapchainExtent().height);
@@ -1876,9 +1915,12 @@ void VulkanRenderer::Impl::resolveUpscalers() {
                 vulkan::startupMark("fsr");
             }
 #endif
-            // The constructor wired the post chain with no upscaler: give it
-            // the HDR output either one writes through.
+            // The post chain was wired with no upscaler: give it the HDR
+            // output either one writes through (allocated once, see
+            // rewriteBloomDescriptors).
             if (fsrActiveForHdrPlumbing()) rewriteBloomDescriptors();
+            if (view().taa_) view().taa_->invalidateHistory();
+            markMaterialSamplerDirty();// the jitter gate follows the upscaler in use
             curView_ = saved;
         }
 

@@ -49,9 +49,10 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // it is most of the renderer's start-up time), and it needs
             // nothing but the device. The feature itself, and the choice
             // between DLSS and FSR that follows from whether it could be
-            // created, wait for the first frame (resolveUpscalers).
+            // created, wait for the first frame that wants them
+            // (resolveUpscalers).
             dlss_ = std::make_unique<vulkan::DlssUpscaler>(*ctx, kFramesInFlight);
-            upscalersPending_ = true;
+            dlssPending_ = true;
             vulkan::startupMark("dlss upscaler, ngx init started");
 #endif
 

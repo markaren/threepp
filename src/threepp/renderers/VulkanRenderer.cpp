@@ -514,29 +514,26 @@ namespace threepp {
             if (!pimpl_) return;
             pimpl_->endFrame();
             pimpl_->frameEndedByReadback_ = false;
+            // An iteration of the canvas loop that rendered nothing: the
+            // loop is running all the same, so the window is not kept back.
+            pimpl_->revealWindow();
         });
 
         // The window was created hidden (Canvas::initWindow, Vulkan branch) so
-        // the seconds of device and pipeline setup do not stand in the taskbar
-        // as a blank, unresponsive frame that the user clicks away from — the
-        // click that used to leave the first real frame surfacing in the
-        // background. Push one empty-scene frame through the normal path so the
-        // window's first appearance carries real pixels (and the heaviest
-        // pipelines are warm), then reveal it; GLFW_FOCUS_ON_SHOW takes the
-        // foreground at that moment. A warmup failure is not fatal here: the
-        // window is revealed regardless, and whatever is wrong will report from
-        // the first real frame in the usual place.
-        if (!canvas.headless()) {
-            try {
-                Scene warmup;
-                PerspectiveCamera camera;
-                render(warmup, camera);
-                pimpl_->endFrame();
-            } catch (...) {
-                // fall through to the reveal
-            }
-            canvas.showWindow();
-        }
+        // the device and pipeline setup does not stand in the taskbar as a
+        // blank, unresponsive frame that the user clicks away from: the click
+        // that used to leave the first real frame surfacing in the background.
+        // It is revealed when the first frame has been presented (endFrame),
+        // so its first appearance carries the application's own pixels, and
+        // GLFW_FOCUS_ON_SHOW takes the foreground at that moment.
+        //
+        // The constructor used to push an empty-scene frame through here and
+        // reveal the window itself. That frame goes through DLSS like any
+        // other, so it waited out NGX's init (see DlssUpscaler::ngxInit_)
+        // inside the constructor, with the application's scene still to
+        // build after it; and an application that turns DLSS off right after
+        // constructing the renderer had the DLSS and Ray Reconstruction
+        // features created for that one frame.
     }
 
     VulkanRenderer::~VulkanRenderer() = default;
@@ -548,8 +545,8 @@ namespace threepp {
         // none of the census's nodes any more.
         core()->sceneCensus_.root = nullptr;
 
-        // The first render(): the upscaler the frame goes through exists
-        // before the scene build reads which one it is.
+        // The upscaler this frame goes through exists before the scene build
+        // reads which one it is (it is made at the first frame that wants it).
         core()->resolveUpscalers();
 
         // A readback already finished this canvas iteration's frame (see
@@ -2171,7 +2168,6 @@ namespace threepp {
     }
 
     void VulkanRenderer::setFsr(bool enabled) {
-        core()->resolveUpscalers();
         core()->setFsr(enabled);
     }
 
@@ -2190,33 +2186,27 @@ namespace threepp {
     }
 
     void VulkanRenderer::setDlss(bool enabled) {
-        core()->resolveUpscalers();
         core()->setDlss(enabled);
     }
 
     bool VulkanRenderer::dlss() const {
-        core()->resolveUpscalers();
-        return core()->useDlss();
+        return core()->dlssEnabled_ && core()->dlssAvailableOrPending();
     }
 
     bool VulkanRenderer::dlssAvailable() const {
-        core()->resolveUpscalers();
-        return core()->dlssAvailable();
+        return core()->dlssAvailableOrPending();
     }
 
     void VulkanRenderer::setDlssRayReconstruction(bool enabled) {
-        core()->resolveUpscalers();
         core()->setDlssRayReconstruction(enabled);
     }
 
     bool VulkanRenderer::dlssRayReconstruction() const {
-        core()->resolveUpscalers();
         return core()->useDlssRayReconstruction();
     }
 
     bool VulkanRenderer::dlssRayReconstructionAvailable() const {
-        core()->resolveUpscalers();
-        return core()->dlssRayReconstructionAvailable();
+        return core()->dlssRrAvailableOrPending();
     }
 
     void VulkanRenderer::setTextureAnisotropy(float aniso) {
