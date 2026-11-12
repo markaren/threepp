@@ -1,11 +1,13 @@
 
 #include "threepp/renderers/vulkan/DlssUpscaler.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
+#include "threepp/renderers/vulkan/StartupTiming.hpp"
 #include "threepp/renderers/vulkan/shaders/fsr_reactive.comp.spv.h"// shared bias-mask generator
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <mutex>
 #include <unordered_map>
 
@@ -147,10 +149,20 @@ namespace threepp::vulkan {
         reactive_.resize(framesInFlight_);
         reactiveSets_.resize(framesInFlight_);
         createReactivePipeline();
+        // See ngxInit_. The path members are written here, before the thread
+        // exists, and only read after that.
+        modulePathW_       = moduleDirW();
+        modulePathPtrs_[0] = modulePathW_.c_str();
+        ngxInit_ = std::async(std::launch::async, [this] { return acquireNgx(); });
     }
 
     DlssUpscaler::~DlssUpscaler() {
         destroy();
+        // An Init nothing waited for (no frame was rendered) still holds its
+        // reference on NGX once it lands.
+        if (ngxInit_.valid() && NVSDK_NGX_SUCCEED(static_cast<NVSDK_NGX_Result>(ngxInit_.get()))) {
+            ngxInited_ = true;
+        }
         shutdownNgx();
         VkDevice d = ctx_.device();
         if (reactivePipe_)       vkDestroyPipeline(d, reactivePipe_, nullptr);
@@ -174,6 +186,44 @@ namespace threepp::vulkan {
         return out;// pointers into the NGX lib's static tables — stable
     }
 
+    int DlssUpscaler::acquireNgx() {
+        NVSDK_NGX_FeatureCommonInfo fci{};
+        fci.PathListInfo.Path   = modulePathPtrs_;
+        fci.PathListInfo.Length = 1;
+        // THREEPP_DLSS_LOG=1: NGX's own verbose log on stdout, each line with
+        // the time since the previous one (where a slow NGX init goes).
+        if (env::flag("THREEPP_DLSS_LOG")) {
+            fci.LoggingInfo.LoggingCallback = [](const char* message, NVSDK_NGX_Logging_Level,
+                                                 NVSDK_NGX_Feature) {
+                static auto last = std::chrono::steady_clock::now();
+                const auto now = std::chrono::steady_clock::now();
+                std::printf("[ngx +%.1f ms] %s", std::chrono::duration<double, std::milli>(now - last).count(),
+                            message);
+                last = now;
+            };
+            fci.LoggingInfo.MinimumLoggingLevel      = NVSDK_NGX_LOGGING_LEVEL_VERBOSE;
+            fci.LoggingInfo.DisableOtherLoggingSinks = true;
+        }
+
+        // The lock is held across the Init: a second DlssUpscaler on the same
+        // device (a fisheye's side view) waits here for the first one's Init
+        // and then only takes a reference.
+        NVSDK_NGX_Result r = NVSDK_NGX_Result_Success;
+        std::lock_guard<std::mutex> lock(gNgxMutex);
+        int& refs = gNgxRefs[ctx_.device()];
+        if (refs == 0) {
+            r = NVSDK_NGX_VULKAN_Init_with_ProjectID(
+                    kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kNgxEngineVersion,
+                    modulePathW_.c_str(),// application data path (NGX logs)
+                    ctx_.instance(), ctx_.physicalDevice(), ctx_.device(),
+                    vkGetInstanceProcAddr, vkGetDeviceProcAddr,
+                    &fci, NVSDK_NGX_Version_API);
+        }
+        if (NVSDK_NGX_SUCCEED(r)) ++refs;
+        else if (refs == 0) gNgxRefs.erase(ctx_.device());
+        return static_cast<int>(r);
+    }
+
     bool DlssUpscaler::ensureNgx() {
         // ngxInited_ tracks "NGX is initialised and owes us a Shutdown1", so it is
         // set only AFTER a successful Init and cleared by whoever shuts down. It
@@ -185,38 +235,21 @@ namespace threepp::vulkan {
         if (ngxTried_) return params_ != nullptr;
         ngxTried_ = true;
 
-        modulePathW_       = moduleDirW();
-        modulePathPtrs_[0] = modulePathW_.c_str();
-        NVSDK_NGX_FeatureCommonInfo fci{};
-        fci.PathListInfo.Path   = modulePathPtrs_;
-        fci.PathListInfo.Length = 1;
-
-        NVSDK_NGX_Result r = NVSDK_NGX_Result_Success;
-        {
-            std::lock_guard<std::mutex> lock(gNgxMutex);
-            int& refs = gNgxRefs[ctx_.device()];
-            if (refs == 0) {
-                r = NVSDK_NGX_VULKAN_Init_with_ProjectID(
-                        kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kNgxEngineVersion,
-                        modulePathW_.c_str(),// application data path (NGX logs)
-                        ctx_.instance(), ctx_.physicalDevice(), ctx_.device(),
-                        vkGetInstanceProcAddr, vkGetDeviceProcAddr,
-                        &fci, NVSDK_NGX_Version_API);
-            }
-            if (NVSDK_NGX_SUCCEED(r)) ++refs;
-            else if (refs == 0) gNgxRefs.erase(ctx_.device());
-        }
-        if (NVSDK_NGX_FAILED(r)) {
+        startupMark("dlss: begin");
+        // The Init the constructor started (see ngxInit_): wait for it here.
+        const auto r0 = static_cast<NVSDK_NGX_Result>(ngxInit_.get());
+        startupMark("dlss: wait for ngx init");
+        if (NVSDK_NGX_FAILED(r0)) {
             std::fprintf(stderr,
                          "[threepp] DLSS: NGX init failed (0x%08x) - "
-                         "falling back to FSR/TAA.\n", static_cast<unsigned>(r));
+                         "falling back to FSR/TAA.\n", static_cast<unsigned>(r0));
             return false;// nothing to shut down
         }
         ngxInited_ = true;
 
         // Capability check: driver present + DLSS supported on this GPU.
         NVSDK_NGX_Parameter* caps = nullptr;
-        r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&caps);
+        NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&caps);
         // The same map says whether Ray Reconstruction can run: the driver
         // supports it and NGX found nvngx_dlssd.dll on the search path.
         int available = 0;
@@ -227,6 +260,7 @@ namespace threepp::vulkan {
             NVSDK_NGX_VULKAN_DestroyParameters(caps);
         }
         rrAvailable_ = available && rrAvailable;
+        startupMark("dlss: capabilities");
         if (!available) {
             std::fprintf(stderr,
                          "[threepp] DLSS: not available on this GPU/driver - "
@@ -315,6 +349,7 @@ namespace threepp::vulkan {
 
         const NVSDK_NGX_Result r = NGX_VULKAN_CREATE_DLSS_EXT1(
                 ctx_.device(), initCb, 1u, 1u, &feature_, params_, &cp);
+        startupMark("dlss: create feature");
         if (NVSDK_NGX_FAILED(r) || !feature_) {
             std::fprintf(stderr,
                          "[threepp] DLSS: feature creation failed (0x%08x) - "
@@ -329,6 +364,7 @@ namespace threepp::vulkan {
         // Bias-mask scratch at the DISPLAY (== maxRenderSize) extent — the
         // compute writes only the render sub-region each frame.
         createReactiveImages(displayWidth, displayHeight);
+        startupMark("dlss: reactive images");
         std::fprintf(stderr, "[threepp] DLSS upscaler active (%ux%u display, quality mode %d).\n",
                      displayWidth, displayHeight, static_cast<int>(quality));
         return true;

@@ -46,6 +46,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -260,7 +261,19 @@ namespace threepp::vulkan {
         std::wstring modulePathW_;
         const wchar_t* modulePathPtrs_[1] = {nullptr};
 
-        bool ensureNgx();// lazy NGX init (shared, reference-counted per device) + capability check
+        // NGX's runtime init (NVSDK_NGX_VULKAN_Init) is the renderer's longest
+        // start-up step by far: 2.2 s on an RTX 5080 with driver 621.14, all
+        // of it inside NVIDIA's libraries (an NvAPI session, a signature check
+        // and a load per feature DLL, a CUDA load), against 0.4 s for the rest
+        // of the renderer. It needs the device and nothing else, and nothing
+        // needs it before the first DLSS feature is created, so the
+        // constructor starts it on a thread of its own and ensureNgx() takes
+        // the result: whatever the application does between constructing the
+        // renderer and its first frame (loading models, building the scene)
+        // runs alongside it. The value is the Init call's result.
+        std::future<int> ngxInit_;
+        int  acquireNgx();// the shared, reference-counted Init (any thread)
+        bool ensureNgx(); // waits for the Init, then the capability check
         void shutdownNgx();
         void releaseNgx();// drop this instance's NGX reference; the last one shuts NGX down
 

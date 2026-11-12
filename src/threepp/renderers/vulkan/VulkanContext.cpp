@@ -6,6 +6,7 @@
 // frame loop to keep one acquired image per in-flight slot (see createSwapchain).
 #include "VulkanImplCommon.hpp"
 #include "EnvKnob.hpp"
+#include "StartupTiming.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -361,7 +362,9 @@ namespace threepp::vulkan {
         }
         rayTracingEnabled_ = enableRayTracing;
 
+        startupMark("context: begin");
         createInstance(enableValidation);
+        startupMark("context: instance");
         if (enableValidation) {
             createDebugMessenger();
             gValidationActive.store(true);
@@ -383,12 +386,18 @@ namespace threepp::vulkan {
                          "validation layer is not active — nothing is being checked.\n";
         }
         createSurface();
+        startupMark("context: surface");
         pickPhysicalDevice();
+        startupMark("context: pick device");
         createLogicalDevice();
+        startupMark("context: logical device");
         createPipelineCache();
+        startupMark("context: pipeline cache");
         createAllocator();
+        startupMark("context: allocator");
         createSwapchain();
         createSwapchainImageViews();
+        startupMark("context: swapchain");
     }
 
     VulkanContext::~VulkanContext() {

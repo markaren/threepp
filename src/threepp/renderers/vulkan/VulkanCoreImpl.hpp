@@ -2741,6 +2741,16 @@ namespace threepp {
         // creates and releases its NGX feature to follow (syncDlssRayReconstruction).
         bool   dlssRrEnabled_ = true;
 #endif
+        // The DLSS feature is not created by the constructor: NGX's init runs
+        // on its own thread from there (DlssUpscaler::ngxInit_) and the
+        // feature, the FSR context that stands in when DLSS cannot run, and
+        // the HDR plumbing either needs are made by resolveUpscalers() the
+        // first time anything asks: the first render(), a render-extent
+        // reallocation, or one of the public upscaler getters and setters.
+        // Until then dlssActive_ and fsrActive_ are both false and no frame
+        // has been recorded. Defined in VulkanCoreFrame.cpp.
+        bool   upscalersPending_ = false;
+        void   resolveUpscalers();
         // An external upscaler (FSR/DLSS) compiled in AND created (available).
         // Gates the HDR-mode plumbing both reuse — hdrOut_ stays allocated
         // regardless of the runtime toggles, so setFsr/setDlss never need a

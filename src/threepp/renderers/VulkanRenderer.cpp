@@ -548,6 +548,10 @@ namespace threepp {
         // none of the census's nodes any more.
         core()->sceneCensus_.root = nullptr;
 
+        // The first render(): the upscaler the frame goes through exists
+        // before the scene build reads which one it is.
+        core()->resolveUpscalers();
+
         // A readback already finished this canvas iteration's frame (see
         // readRGBPixels). An ortho HUD pass or a split-screen pane only ever
         // extends an open frame; from Idle it would open one of its own, the
@@ -2167,14 +2171,17 @@ namespace threepp {
     }
 
     void VulkanRenderer::setFsr(bool enabled) {
+        core()->resolveUpscalers();
         core()->setFsr(enabled);
     }
 
     bool VulkanRenderer::fsr() const {
+        core()->resolveUpscalers();
         return core()->useFsr();
     }
 
     bool VulkanRenderer::fsrAvailable() const {
+        core()->resolveUpscalers();
         return core()->fsrAvailable();
     }
 
@@ -2183,26 +2190,32 @@ namespace threepp {
     }
 
     void VulkanRenderer::setDlss(bool enabled) {
+        core()->resolveUpscalers();
         core()->setDlss(enabled);
     }
 
     bool VulkanRenderer::dlss() const {
+        core()->resolveUpscalers();
         return core()->useDlss();
     }
 
     bool VulkanRenderer::dlssAvailable() const {
+        core()->resolveUpscalers();
         return core()->dlssAvailable();
     }
 
     void VulkanRenderer::setDlssRayReconstruction(bool enabled) {
+        core()->resolveUpscalers();
         core()->setDlssRayReconstruction(enabled);
     }
 
     bool VulkanRenderer::dlssRayReconstruction() const {
+        core()->resolveUpscalers();
         return core()->useDlssRayReconstruction();
     }
 
     bool VulkanRenderer::dlssRayReconstructionAvailable() const {
+        core()->resolveUpscalers();
         return core()->dlssRayReconstructionAvailable();
     }
 

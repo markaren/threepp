@@ -1,6 +1,7 @@
 #include "CpuPar.hpp"
 #include "DescriptorShadow.hpp"
 #include "VulkanCoreImpl.hpp"
+#include "StartupTiming.hpp"
 
 #include "VulkanCpuPhaseProf.hpp"
 
@@ -711,6 +712,9 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // known-idle point is the natural place, and it keeps the queue from
             // growing unbounded if the app spams resizes). Safe: device idle.
             flushRetireQueue();
+            // A setRenderScale or a resize before the first frame: the funnel
+            // below follows the upscalers, so they exist first.
+            resolveUpscalers();
             // Every image a frame-interop export copies from at this view is
             // about to be freed and rebuilt — a resize, setRenderScale,
             // setGbufferMsaa, a setSplatDepthAov toggle all funnel here. The
@@ -1833,6 +1837,51 @@ void VulkanRenderer::Impl::endFrame() {
             frameState_   = FrameState::Idle;
         }
 
+void VulkanRenderer::Impl::resolveUpscalers() {
+            if (!upscalersPending_) return;
+            upscalersPending_ = false;
+            // The primary's: a reallocation of a secondary view can be what
+            // gets here first.
+            ViewContext* const saved = curView_;
+            curView_ = views_[0].get();
+#if defined(THREEPP_WITH_DLSS)
+            // DLSS feature at the display extent. Created BEFORE FSR because DLSS
+            // OUTRANKS it (useFsr() requires !useDlss()): an FSR context built
+            // alongside an active DLSS feature could never dispatch, so it is
+            // skipped below (~60 MB committed). NGX feature creation records
+            // GPU init work: one-shot submit+wait. On NGX failure (non-RTX GPU
+            // / old driver) dlssActive_ stays false and the FSR/TAA fallback
+            // runs.
+            {
+                VkCommandBuffer initCb = beginOneShot();
+                dlssActive_ = dlss_->create(initCb,
+                                            ctx->swapchainExtent().width,
+                                            ctx->swapchainExtent().height,
+                                            renderExtent().width,
+                                            renderExtent().height);
+                endAndSubmitOneShot(initCb, "DLSS feature create");
+            }
+            dlssResetNext_ = true;
+            vulkan::startupMark("dlss feature");
+#endif
+#if defined(THREEPP_WITH_FSR)
+            // FSR upscaler context at the display (swapchain) extent, unless
+            // DLSS claimed the upscaler slot; if DLSS is disabled at runtime,
+            // setDlss(false) creates the FSR context on demand.
+            if (!dlssAvailable() && !fsr_) {
+                fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
+                fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
+                                          ctx->swapchainExtent().height);
+                fsrResetNext_ = true;
+                vulkan::startupMark("fsr");
+            }
+#endif
+            // The constructor wired the post chain with no upscaler: give it
+            // the HDR output either one writes through.
+            if (fsrActiveForHdrPlumbing()) rewriteBloomDescriptors();
+            curView_ = saved;
+        }
+
 void VulkanRenderer::Impl::syncDlssRayReconstruction() {
 #if defined(THREEPP_WITH_DLSS)
             if (!dlss_ || !dlssActive_) return;
@@ -1899,6 +1948,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
             const bool isOrtho = camera.is<OrthographicCamera>() && !orthoSceneRender(camera);
 
             if (frameState_ == FrameState::Idle) {
+                resolveUpscalers();
                 if (isOrtho) {
                     if (!beginFrameOrthoOnly()) return;
                     frameState_ = FrameState::RecordingOrthoOnly;

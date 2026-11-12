@@ -9,6 +9,7 @@
 // lists can be read against each other.
 
 #include "VulkanCoreImpl.hpp"
+#include "StartupTiming.hpp"
 
 namespace threepp {
 
@@ -19,6 +20,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // unconditionally — every createXxx below allocates into it.
             views_.push_back(std::make_unique<ViewContext>());
             curView_ = views_[0].get();
+            vulkan::startupMark("begin");
 
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
@@ -28,6 +30,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                     /*leaveDeviceAtExit*/ canvas.fastExit(),
                     /*requestedExtent*/ VkExtent2D{static_cast<uint32_t>(std::max(canvas.size().width(), 1)),
                                                   static_cast<uint32_t>(std::max(canvas.size().height(), 1))});
+            vulkan::startupMark("context");
 
             // Pin `size` to the extent the surface actually granted. The
             // canvas's size is what was asked for; the swapchain's is what
@@ -39,6 +42,18 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             if (const VkExtent2D ext = ctx->swapchainExtent(); ext.width > 0 && ext.height > 0) {
                 size = WindowSize{static_cast<int>(ext.width), static_cast<int>(ext.height)};
             }
+
+#if defined(THREEPP_WITH_DLSS)
+            // DLSS, first of all: constructing the upscaler starts NGX's
+            // runtime init on a thread of its own (see DlssUpscaler::ngxInit_:
+            // it is most of the renderer's start-up time), and it needs
+            // nothing but the device. The feature itself, and the choice
+            // between DLSS and FSR that follows from whether it could be
+            // created, wait for the first frame (resolveUpscalers).
+            dlss_ = std::make_unique<vulkan::DlssUpscaler>(*ctx, kFramesInFlight);
+            upscalersPending_ = true;
+            vulkan::startupMark("dlss upscaler, ngx init started");
+#endif
 
             // THREEPP_VK_NO_ALIAS=1: every image gets its own allocation, as
             // before the pools existed. For bisecting an aliasing suspect, and
@@ -63,34 +78,49 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // The scene-dependent AS build runs lazily on the first render()
             // call. Everything below is scene-independent and safe at ctor time.
             createCommandResources();
+            vulkan::startupMark("command resources");
             createCameraUbos();
             createLightsUbos();
             createFogUbos();
             createCloudUbos();
+            vulkan::startupMark("ubos");
             // EnvPrefilter owns the PMREM compute pipeline + descriptor pool.
             // Construct before createDefaultEnvImage so the env upload path is
             // ready if scene.environment is set before the first render().
             envPrefilter_ = std::make_unique<vulkan::EnvPrefilter>(*ctx, cmdPool);
+            vulkan::startupMark("env prefilter");
             // The Sky's bake mips with that same pipeline (its image comes
             // lazily, with the first Sky).
             skyBake_ = std::make_unique<vulkan::SkyBake>(*ctx, *envPrefilter_);
+            vulkan::startupMark("sky bake");
             createDefaultEnvImage();
+            vulkan::startupMark("default env image");
             createTextureSampler();
             createDefaultMaterialTexture();
+            vulkan::startupMark("sampler, default texture");
             // Allocates the ReSTIR DI reservoir ping-pong images the deferred
             // shade's NEE consumes.
             createReservoirImages();
+            vulkan::startupMark("reservoir images");
             skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
+            vulkan::startupMark("skinning");
             tetSkinning_ = std::make_unique<vulkan::TetSkinningPipeline>(*ctx);
+            vulkan::startupMark("tet skinning");
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
+            vulkan::startupMark("water displace");
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
+            vulkan::startupMark("foam world");
             wakeField_     = std::make_unique<vulkan::WakeFieldPipeline>(*ctx);
+            vulkan::startupMark("wake field");
             grassWind_     = std::make_unique<vulkan::GrassWindPipeline>(*ctx);
+            vulkan::startupMark("grass wind");
             // Hybrid raster G-buffer infrastructure. Costs a few hundred MB
             // at 1080p for six attachments × kFramesInFlight.
             ensureHybridResources();
+            vulkan::startupMark("hybrid resources");
             // Zero the reservoirs and every history, now that the slots exist.
             clearGbufImages();
+            vulkan::startupMark("clear gbuf images");
             // TAA pipeline + images. The deferred shade's descriptor binding 1
             // (shade output target) always points at the TAA input view.
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
@@ -106,46 +136,20 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                 view().taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
-#if defined(THREEPP_WITH_DLSS)
-            // DLSS feature at the display extent. Created BEFORE FSR because DLSS
-            // OUTRANKS it (useFsr() requires !useDlss()): an FSR context built
-            // alongside an active DLSS feature could never dispatch, so we skip it
-            // below and save its context (~60 MB committed here). NGX feature
-            // creation records GPU init work — one-shot submit+wait. On NGX
-            // failure (non-RTX GPU / old driver) dlssActive_ stays false and the
-            // FSR/TAA fallback runs.
-            dlss_ = std::make_unique<vulkan::DlssUpscaler>(*ctx, kFramesInFlight);
-            {
-                VkCommandBuffer initCb = beginOneShot();
-                dlssActive_ = dlss_->create(initCb,
-                                            ctx->swapchainExtent().width,
-                                            ctx->swapchainExtent().height,
-                                            renderExtent().width,
-                                            renderExtent().height);
-                endAndSubmitOneShot(initCb, "DLSS feature create");
-            }
-            dlssResetNext_ = true;
-#endif
-#if defined(THREEPP_WITH_FSR)
+            vulkan::startupMark("taa");
+#if !defined(THREEPP_WITH_DLSS) && defined(THREEPP_WITH_FSR)
             // FSR upscaler context at the display (swapchain) extent. FSR stores
             // the display extent at create time but takes the render extent per
             // dispatch, so a renderScale change needs no recreation — only a
             // swapchain/display resize does (handled in reallocateRenderExtentResources).
             // On success FSR replaces the TAA resolve; on failure the TAA path
-            // runs unchanged. Skipped entirely when DLSS already claimed the
-            // upscaler slot (it could never dispatch); if DLSS is disabled at
-            // runtime, setDlss(false) creates the FSR context on demand.
-            bool dlssClaimedUpscaler = false;
-#if defined(THREEPP_WITH_DLSS)
-            dlssClaimedUpscaler = dlssActive_;
+            // runs unchanged.
+            fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
+            fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
+                                      ctx->swapchainExtent().height);
+            fsrResetNext_ = true;
 #endif
-            if (!dlssClaimedUpscaler) {
-                fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
-                fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
-                                          ctx->swapchainExtent().height);
-                fsrResetNext_ = true;
-            }
-#endif
+            vulkan::startupMark("upscalers");
             // HDR bloom pyramid. sceneHdr lives at the deferred render
             // extent (it is the shared set's binding 1 target); the bloom
             // pyramid levels are half that and below.
@@ -153,19 +157,24 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             view().bloom_->setTransientPool(transientPool_.get(), view().id);
             view().bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
+            vulkan::startupMark("bloom");
             // Exposure/WB/tone-map/grade/sRGB composite → TAA input.
             view().post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
+            vulkan::startupMark("post composite");
             // Thin-lens DoF (images/descriptors fitted in rewriteBloomDescriptors).
             dof_ = std::make_unique<vulkan::DofPass>(*ctx, cmdPool, kFramesInFlight);
             dof_->setTransientPool(transientPool_.get(), 0);
+            vulkan::startupMark("dof");
             // Gaussian splats (images/descriptors fitted in rewriteBloomDescriptors,
             // like DoF; buffers only appear once a scene actually has a cloud).
             splat_ = std::make_unique<vulkan::SplatPass>(*ctx, cmdPool, kFramesInFlight);
+            vulkan::startupMark("splat");
             // Lens distortion + sensor noise, applied to the FINISHED frame at
             // the very end of recording (after the overlay pass — see
             // SensorPass.hpp). Allocates nothing until a lens or noise is set.
             sensorPass_ = std::make_unique<vulkan::SensorPass>(*ctx, cmdPool, kFramesInFlight);
             sensorPass_->setTransientPool(transientPool_.get(), 0);
+            vulkan::startupMark("sensor pass");
             // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
@@ -173,23 +182,28 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // Without ray query it runs its no-ray-query shader variants, where
             // every traced ray misses.
             view().deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+            vulkan::startupMark("deferred shade");
             // Probe grid backs the deferred set's bindings 36/37 (dummy-
             // free: real buffers from construction, sampling gated by the
             // grid UBO's enable flag until setProbeGI(true)). Without ray
             // query it holds the buffers only: its update traces, so the
             // probes stay off.
             probeGI_ = std::make_unique<vulkan::ProbeGI>(*ctx, kFramesInFlight);
+            vulkan::startupMark("probe gi");
             if (!ctx->rayQuerySupported()) probeGIEnabled_ = false;
             // The path-trace feature over the same scene state (no pipeline
             // without ray query; pathTraceBegin then throws).
             pathTracer_ = std::make_unique<vulkan::PathTracer>(*ctx, kFramesInFlight);
+            vulkan::startupMark("path tracer");
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
             createFoamDetailImage_();// must run before descriptor writes (binding 45 + deferred 34)
+            vulkan::startupMark("noise, ocean dummies, foam detail");
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
             rewriteDeferredDescriptors();// raster-first deferred shade inputs
+            vulkan::startupMark("descriptor rewrites");
             gpuTimings_ = std::make_unique<vulkan::GpuTimings>(*ctx, kFramesInFlight);
             // The frame graph times every pass it records through it
             // (FrameTimings::passes). gpuTimings_ outlives frameGraph_'s use.
@@ -218,6 +232,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                     // are re-uploaded and evicted mid-record while the previous
                     // frames-in-flight may still be drawing from them.
                     [this](Buffer&& b) { retire(std::move(b)); });
+            vulkan::startupMark("timings, overlay pass");
 
             // Optional one-shot fixed-footprint dump. Everything constructed above
             // is scene-independent, so this is the renderer's baseline cost — the
