@@ -301,7 +301,35 @@ namespace threepp_py {
                 .def_readwrite("terrain_band_rough_strength", &MeshStandardMaterial::terrainBandRoughStrength,
                                "0..1 strength of the bands' roughness modulation.")
                 .def_readwrite("terrain_height_blend", &MeshStandardMaterial::terrainHeightBlend,
-                               "How sharply coverage turns to the band standing tallest (0 = a plain cross-fade).");
+                               "How sharply coverage turns to the band standing tallest (0 = a plain cross-fade).")
+                // The ground's far tint: what the ground carries where its plants
+                // are no longer drawn (a carpet of grass or heath that ends at a
+                // streaming radius hands over to ground of its own colour).
+                .def(
+                        "set_terrain_band_far_tint",
+                        [](MeshStandardMaterial& m, int band, float r, float g, float b) {
+                            if (band < 0 || band >= MeshStandardMaterial::kTerrainBands)
+                                throw py::index_error("set_terrain_band_far_tint: band must be 0..3");
+                            m.terrainBandFarTint[static_cast<size_t>(band)] = Color(r, g, b);
+                        },
+                        py::arg("band"), py::arg("r"), py::arg("g"), py::arg("b"),
+                        "The linear rgb multiply band 0..3's share of the ground's albedo takes far from the eye: the "
+                        "colour that band's vegetation gives the ground from a distance, over the ground's own. "
+                        "(1, 1, 1) leaves the band as it is. Read with terrain_far_start and terrain_far_end.")
+                .def(
+                        "terrain_band_far_tint",
+                        [](const MeshStandardMaterial& m, int band) {
+                            if (band < 0 || band >= MeshStandardMaterial::kTerrainBands)
+                                throw py::index_error("terrain_band_far_tint: band must be 0..3");
+                            const Color& c = m.terrainBandFarTint[static_cast<size_t>(band)];
+                            return py::make_tuple(c.r, c.g, c.b);
+                        },
+                        py::arg("band"), "Band 0..3's far tint as (r, g, b).")
+                .def_readwrite("terrain_far_start", &MeshStandardMaterial::terrainFarStart,
+                               "Metres from the camera where the bands' far tints begin.")
+                .def_readwrite("terrain_far_end", &MeshStandardMaterial::terrainFarEnd,
+                               "Metres from the camera where the far tints are in full. At or under terrain_far_start "
+                               "(the default, 0 and 0) there is no far tint.");
 
         // ---- MeshPhysicalMaterial -------------------------------------------
         // Extends Standard with the transmissive / clearcoat / attenuation set —

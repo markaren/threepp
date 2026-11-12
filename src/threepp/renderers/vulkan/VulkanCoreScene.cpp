@@ -5851,6 +5851,9 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 d.terrainBandRepeat[bi] = 1.f;
                 d.terrainBandRough[bi] = 0.9f;
             }
+            std::fill(std::begin(d.terrainBandFarTint), std::end(d.terrainBandFarTint), 1.f);
+            d.terrainFarStart = 0.f;
+            d.terrainFarInvRange = 0.f;// no far tint
             d.translucency = 0.f;             // off by default; deferred sun/ambient translucency term is skipped when 0
             d.translucencyColor[0] = d.translucencyColor[1] = d.translucencyColor[2] = 1.0f;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
@@ -6036,6 +6039,17 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 for (int bi = 0; bi < 4; ++bi) {
                     d.terrainBandRepeat[bi] = tm->terrainBandRepeat[static_cast<size_t>(bi)];
                     d.terrainBandRough[bi]  = tm->terrainBandRoughness[static_cast<size_t>(bi)];
+                }
+                // The far tint: an end at or before the start is off.
+                if (const float farStart = std::max(tm->terrainFarStart, 0.f); tm->terrainFarEnd > farStart) {
+                    for (int bi = 0; bi < 4; ++bi) {
+                        const Color& c = tm->terrainBandFarTint[static_cast<size_t>(bi)];
+                        d.terrainBandFarTint[bi * 3 + 0] = std::max(c.r, 0.f);
+                        d.terrainBandFarTint[bi * 3 + 1] = std::max(c.g, 0.f);
+                        d.terrainBandFarTint[bi * 3 + 2] = std::max(c.b, 0.f);
+                    }
+                    d.terrainFarStart    = farStart;
+                    d.terrainFarInvRange = 1.f / (tm->terrainFarEnd - farStart);
                 }
             }
             if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {

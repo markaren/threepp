@@ -730,6 +730,8 @@ namespace threepp::vulkan::impl {
         uint32_t downwash[4];     // .xy = this frame's DownwashGpu address (lo, hi),
                                   // .z = its source count; all 0 = no downwash
                                   // (gbuffer.frag's rings, MeshStandardMaterial::ripples)
+        float eye[4];             // .xyz = the camera's world position (gbuffer.frag: the
+                                  // ground's far tint goes by the distance from it)
     };
 
 }// namespace threepp::vulkan::impl

@@ -242,6 +242,20 @@ namespace threepp {
         float terrainBandRoughStrength = 0.6f;// 0..1 roughness modulation strength
         float terrainHeightBlend = 6.f;     // height-blend sharpness (0 = plain linear)
 
+        // What the ground carries where its plants are no longer drawn. Past
+        // terrainFarStart metres from the eye each band's share of the albedo
+        // is multiplied toward that band's terrainBandFarTint (linear rgb),
+        // in full from terrainFarEnd on. The tint is the colour the band's
+        // vegetation gives the ground seen from a distance (a meadow's grass,
+        // a forest floor's heath), so a carpet of plants that ends at a
+        // streaming radius hands over to ground of its own colour instead of
+        // to the bare soil under it, and near the eye the ground between the
+        // plants keeps its own. The distance is from the camera of the view
+        // being drawn. terrainFarEnd <= terrainFarStart (the default) = off.
+        std::array<Color, kTerrainBands> terrainBandFarTint{};// Color() is white
+        float terrainFarStart = 0.f;
+        float terrainFarEnd = 0.f;
+
         [[nodiscard]] bool terrainMapsActive() const {
             return terrainWeightMap != nullptr &&
                    (terrainBandAlbedo[0] || terrainBandNormalRough[0]);

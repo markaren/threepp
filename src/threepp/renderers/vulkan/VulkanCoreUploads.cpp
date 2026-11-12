@@ -1077,6 +1077,11 @@ namespace threepp {
         ubo.downwash[1] = static_cast<uint32_t>(downwashAddr_ >> 32);
         ubo.downwash[2] = downwashAddr_ != 0 ? downwashCount_ : 0u;
         ubo.downwash[3] = 0u;
+        // The eye, for what goes by the distance from it (the ground's far tint).
+        ubo.eye[0] = camera.matrixWorld->elements[12];
+        ubo.eye[1] = camera.matrixWorld->elements[13];
+        ubo.eye[2] = camera.matrixWorld->elements[14];
+        ubo.eye[3] = 1.f;
 
         uploadHostVisible(ctx->allocator(), view().rasterCameraUbos[frame], &ubo, sizeof(ubo));
 

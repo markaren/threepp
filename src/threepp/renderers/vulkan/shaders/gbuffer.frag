@@ -748,6 +748,13 @@ void main() {
             N = normalize(mix(N, normalize(nn), coverage));
             terrainRoughReplace = mix(m.roughness, rBase, coverage);
         }
+        // The far tint: past terrainFarStart from this view's eye the ground
+        // takes the colour its plants give it from a distance, where they are
+        // no longer drawn (MaterialWithTerrainMaps::terrainBandFarTint).
+        if (m.terrainFarInvRange > 0.0) {
+            albedoSample *= terrainFarTint(m.terrainBandFarTint, m.terrainFarStart, m.terrainFarInvRange,
+                                           w4, distance(vWorldPos, cam.eye.xyz));
+        }
     }
     // Per-vertex color (material.vertexColors): vColor is white when the mesh
     // has no "color" attribute, so this multiply is a no-op then. Linear working

@@ -404,12 +404,21 @@ namespace threepp::vulkan_pt {
         // bit-for-bit. Read by the deferred WATER body only.
         float scatterColor[3];
         float scatterDistance;
+        // The ground's far tint (MaterialWithTerrainMaps::terrainBandFarTint,
+        // terrainFarStart / terrainFarEnd): rgb per band, the multiply that
+        // band's share of the albedo takes with distance from the eye, from
+        // terrainFarStart metres on, in full at start + 1 / terrainFarInvRange.
+        // terrainFarInvRange 0 = off (the terrainFarTint function below
+        // returns 1). gbuffer.frag and the path tracer's surface.
+        float terrainBandFarTint[12];
+        float terrainFarStart;
+        float terrainFarInvRange;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 624,
+    static_assert(sizeof(MaterialDesc) == 680,
                   "MaterialDesc size changed - update the GLSL mirror in this file too.");
 }
 
@@ -482,7 +491,23 @@ struct MaterialDesc {
     vec4  terrainBandRough;     // base roughness per band
     vec3  scatterColor;         // single-scattering albedo weight per channel
     float scatterDistance;      // mean free path (m), 1/sigma_s; 0 = no in-scatter
+    vec3  terrainBandFarTint[4];// per band: the albedo multiply the ground takes far from the eye
+    float terrainFarStart;      // metres from the eye where the tint begins
+    float terrainFarInvRange;   // 1 / (end - start); 0 = no far tint
 };
+
+// The ground's far tint: the multiply on a terrain material's albedo `dist`
+// metres from the eye, where its band weights are w4. Each band's share goes
+// to its own tint and the share no band covers (roads: weights baked to
+// zero) keeps the macro colour; smoothstep over the range. 1 when off.
+vec3 terrainFarTint(vec3 tint[4], float start, float invRange, vec4 w4, float dist) {
+    const float t = clamp((dist - start) * invRange, 0.0, 1.0);
+    if (t <= 0.0) return vec3(1.0);
+    const float sum  = w4.x + w4.y + w4.z + w4.w;
+    const vec3  full = (w4.x * tint[0] + w4.y * tint[1] + w4.z * tint[2] + w4.w * tint[3]
+                        + vec3(max(1.0 - sum, 0.0))) / max(sum, 1.0);
+    return mix(vec3(1.0), full, t * t * (3.0 - 2.0 * t));
+}
 
 #endif  // __cplusplus
 

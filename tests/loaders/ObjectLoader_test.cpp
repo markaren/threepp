@@ -1069,6 +1069,10 @@ TEST_CASE("Terrain splat material survives the round-trip") {
     material->terrainBandNormalScale = 1.25f;
     material->terrainBandRoughStrength = 0.35f;
     material->terrainHeightBlend = 9.f;
+    material->terrainBandFarTint[0] = Color(0.42f, 0.72f, 1.f);
+    material->terrainBandFarTint[3] = Color(0.5f, 0.6f, 0.7f);
+    material->terrainFarStart = 40.f;
+    material->terrainFarEnd = 110.f;
     REQUIRE(material->terrainMapsActive());
 
     auto mesh = Mesh::create(makeDataGeometry(), material);
@@ -1099,6 +1103,12 @@ TEST_CASE("Terrain splat material survives the round-trip") {
     CHECK_THAT(parsedMaterial->terrainBandNormalScale, WithinAbs(1.25f, 1e-5));
     CHECK_THAT(parsedMaterial->terrainBandRoughStrength, WithinAbs(0.35f, 1e-5));
     CHECK_THAT(parsedMaterial->terrainHeightBlend, WithinAbs(9.f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandFarTint[0].r, WithinAbs(0.42f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandFarTint[0].g, WithinAbs(0.72f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainBandFarTint[1].r, WithinAbs(1.f, 1e-5));// an unset band stays white
+    CHECK_THAT(parsedMaterial->terrainBandFarTint[3].b, WithinAbs(0.7f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainFarStart, WithinAbs(40.f, 1e-5));
+    CHECK_THAT(parsedMaterial->terrainFarEnd, WithinAbs(110.f, 1e-5));
 
     CHECK(parsedMaterial->terrainMapsActive());
 }

@@ -786,6 +786,15 @@ namespace {
             data["threeppTerrainBandNormalScale"] = m->terrainBandNormalScale;
             data["threeppTerrainBandRoughStrength"] = m->terrainBandRoughStrength;
             data["threeppTerrainHeightBlend"] = m->terrainHeightBlend;
+            json farTint = json::array();
+            for (const auto& c : m->terrainBandFarTint) {
+                farTint.push_back(c.r);
+                farTint.push_back(c.g);
+                farTint.push_back(c.b);
+            }
+            data["threeppTerrainBandFarTint"] = farTint;
+            data["threeppTerrainFarStart"] = m->terrainFarStart;
+            data["threeppTerrainFarEnd"] = m->terrainFarEnd;
         }
         if (auto* m = dynamic_cast<MaterialWithTranslucency*>(&material)) {
             data["threeppTranslucency"] = m->translucency;

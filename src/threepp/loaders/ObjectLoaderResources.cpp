@@ -464,6 +464,18 @@ namespace {
             getFloat("threeppTerrainBandNormalScale", m->terrainBandNormalScale);
             getFloat("threeppTerrainBandRoughStrength", m->terrainBandRoughStrength);
             getFloat("threeppTerrainHeightBlend", m->terrainHeightBlend);
+            if (j.contains("threeppTerrainBandFarTint") && j["threeppTerrainBandFarTint"].is_array()) {
+                const auto& arr = j["threeppTerrainBandFarTint"];// r, g, b per band
+                for (size_t i = 0; i < m->terrainBandFarTint.size() && 3 * i + 2 < arr.size(); i++) {
+                    if (!arr[3 * i].is_number() || !arr[3 * i + 1].is_number() || !arr[3 * i + 2].is_number()) continue;
+                    auto& c = m->terrainBandFarTint[i];
+                    c.r = arr[3 * i].get<float>();
+                    c.g = arr[3 * i + 1].get<float>();
+                    c.b = arr[3 * i + 2].get<float>();
+                }
+            }
+            getFloat("threeppTerrainFarStart", m->terrainFarStart);
+            getFloat("threeppTerrainFarEnd", m->terrainFarEnd);
         }
         if (auto* m = dynamic_cast<MaterialWithTranslucency*>(&material)) {
             getFloat("threeppTranslucency", m->translucency);

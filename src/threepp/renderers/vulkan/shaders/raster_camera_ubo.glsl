@@ -1,7 +1,7 @@
 // The raster-side camera block: what the G-buffer vertex and fragment
 // stages, the overlay depth pass, the particle-field G-buffer pass and the
 // occlusion cull read. Mirrors RasterCameraData in VulkanViewContext.hpp,
-// filled by uploadRasterCameraUbo: three mat4, then two vec4; std140, 224
+// filled by uploadRasterCameraUbo: three mat4, then four vec4; std140, 256
 // bytes. This is the ONE declaration (until 2026-10-10 six shaders carried
 // their own copies).
 //
@@ -40,6 +40,8 @@ layout(set = RASTER_CAM_SET, binding = RASTER_CAM_BINDING) uniform RasterCameraU
                           // (alpha-hash decorrelation).
     uvec4 downwash;       // .xy = this frame's DownwashGpu address (lo, hi), .z = its
                           // source count; all 0 = no downwash (gbuffer.frag)
+    vec4 eye;             // .xyz = the camera's world position (gbuffer.frag: the
+                          // ground's far tint goes by the distance from it)
 } RASTER_CAM_NAME;
 
 #endif// RASTER_CAMERA_UBO_GLSL

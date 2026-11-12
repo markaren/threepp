@@ -321,6 +321,13 @@ PtSurface ptSurface(const MaterialDesc m, const PtHit h, vec3 P, vec3 N, vec3 Ng
                 terrainRough = mix(m.roughness, rBase, coverage);
             }
         }
+        // The far tint, by the hit's distance from the view's eye whatever
+        // bounce found it: the plants it stands in for are placed round the
+        // eye, so a mirror shows the same ground the camera does.
+        if (m.terrainFarInvRange > 0.0) {
+            albedoSample *= terrainFarTint(m.terrainBandFarTint, m.terrainFarStart, m.terrainFarInvRange,
+                                           w4, distance(P, cam.viewInverse[3].xyz));
+        }
     }
 
     s.albedo = m.albedo * albedoSample * h.vcol;
