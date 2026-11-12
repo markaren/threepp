@@ -60,6 +60,7 @@ namespace threepp {
                           Fjord };
 
         struct Options {
+            bool cdlod = false;
             // Mesh extent in metres along local X. The LARGER of size/sizeZ
             // doubles as the cascade-0 FFT tile, i.e. the wavelength of the
             // largest swell.
@@ -76,6 +77,11 @@ namespace threepp {
             // the FFT size — the wave field stays at the FFT resolutions
             // regardless, so the mesh can be coarser than the spectrum.
             uint32_t resolution = 512;
+
+            // Far-field skirt rings round the grid out to `skirtReach` metres
+            // (see DisplacedMesh::Skirt). 0 = the water ends at the mesh's edge.
+            uint32_t skirtRings = 0;
+            float skirtReach = 60000.f;
 
             // Vertex rows along local Z. 0 (default) = derive from resolution
             // so grid cells stay square-ish (resolution · sizeZ / size).

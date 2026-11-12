@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "OceanExtended.hpp"
 #include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/math/Rng.hpp"
@@ -521,6 +522,8 @@ void VulkanRenderer::Impl::createOceanFineDummy_() {
                 endAndSubmitOneShot(cb);
             }
             oceanFineHeightView    = oceanFineHeightDummy.view;
+            oceanDisplace0View     = oceanFineHeightDummy.view;
+            oceanDisplace2View     = oceanFineHeightDummy.view;
             oceanFineHeightSampler = oceanFineHeightDummy.sampler;
             oceanFineTileSize      = 0.0f;
         }
@@ -680,6 +683,21 @@ bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
             envImage = envPrefilter_->buildPmrem(
                     w, h, src.data(), 4u * w * h * sizeof(float),
                     envSunExtractionWanted(), &envSun_);
+            retire(std::move(sunBackgroundImage));
+            // the extended ocean: the disc-free sun background, not uploaded with the master switch off
+            if (vulkan::oceanExtended() && sc && sc->background.isTexture() && sc->background.texture() != tex) {
+                const auto& bg = sc->background.texture();
+                const auto& bi = bg->image();
+                if (bg->type == Type::Float && bi.width() == w && bi.height() == h) {
+                    const auto& bp = bi.data<float>();
+                    // Explicit marker from the built-in sky, not arbitrary HDR.
+                    if (bp.size() == src.size() && bp[3] == 2.f)
+                        sunBackgroundImage = createSampledImage2D(
+                            w, h, VK_FORMAT_R32G32B32A32_SFLOAT, bp.data(), bp.size() * sizeof(float),
+                            VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, "sunBackground (disc-free)");
+                }
+            }
             envIsDefault = false;
             envTextureIdUploaded = tex->id;
             return true;

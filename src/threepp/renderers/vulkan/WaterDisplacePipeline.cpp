@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/WaterDisplacePipeline.hpp"
+#include "threepp/renderers/vulkan/OceanExtended.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
@@ -6,12 +7,16 @@
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.chop.spv.h"
 
+#include "threepp/renderers/vulkan/shaders/water_displace_cdlod.comp.spv.h"
 #include <array>
+#include <cstddef>
+#include "threepp/renderers/vulkan/shaders/water_displace_cdlod.comp.chop.spv.h"
 
 namespace threepp::vulkan {
 
-    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 128,
-                  "WaterDisplacePipeline::PushConstants must match water_displace.comp's Pc layout (128 bytes)");
+    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 160,
+                  "WaterDisplacePipeline host parameters must contain a 128-byte Pc and 32-byte surface tail");
+    static_assert(offsetof(WaterDisplacePipeline::PushConstants, skirtRings) == WaterDisplacePipeline::kPushConstantBytes);
 
     WaterDisplacePipeline::WaterDisplacePipeline(VulkanContext& ctx)
         : ctx_(ctx) {
@@ -20,6 +25,8 @@ namespace threepp::vulkan {
 
     WaterDisplacePipeline::~WaterDisplacePipeline() {
         VkDevice d = ctx_.device();
+        if (lodChopPipeline_) vkDestroyPipeline(d, lodChopPipeline_, nullptr);
+        if (lodPipeline_) vkDestroyPipeline(d, lodPipeline_, nullptr);
         if (pipeline_)       vkDestroyPipeline(d, pipeline_, nullptr);
         if (pipelineLayout_) vkDestroyPipelineLayout(d, pipelineLayout_, nullptr);
         if (dsLayout_)       vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
@@ -53,7 +60,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pcr{};
         pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pcr.offset     = 0;
-        pcr.size       = sizeof(PushConstants);
+        pcr.size       = kPushConstantBytes;
 
         VkPipelineLayoutCreateInfo plci{};
         plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -77,6 +84,8 @@ namespace threepp::vulkan {
         stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
         stage.module = mod;
         stage.pName  = "main";
+        const OceanSpec oceanSpec;// ocean_extended.glsl: none with the extended ocean off
+        stage.pSpecializationInfo = oceanSpec.info();
 
         VkComputePipelineCreateInfo cpci{};
         cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -86,6 +95,7 @@ namespace threepp::vulkan {
                                        1, &cpci, nullptr, &pipeline_),
               "vkCreateComputePipelines(displace)");
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
 
         // Pool sized for up to kMaxOceans DisplacedMesh instances at once.
         // No FREE_DESCRIPTOR_SET_BIT: sets are released when the pool is
@@ -148,7 +158,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pcr{};
         pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pcr.offset     = 0;
-        pcr.size       = sizeof(PushConstants);
+        pcr.size       = kPushConstantBytes;
         VkPipelineLayoutCreateInfo plci{};
         plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount         = 1;
@@ -170,6 +180,8 @@ namespace threepp::vulkan {
         stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
         stage.module = mod;
         stage.pName  = "main";
+        const OceanSpec oceanSpec;// ocean_extended.glsl: none with the extended ocean off
+        stage.pSpecializationInfo = oceanSpec.info();
         VkComputePipelineCreateInfo cpci{};
         cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cpci.stage  = stage;
@@ -210,11 +222,30 @@ namespace threepp::vulkan {
                                                bool chop) {
         chop = chop && chopPipeline_ != VK_NULL_HANDLE;
         const VkPipelineLayout layout = chop ? chopPipelineLayout_ : pipelineLayout_;
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, chop ? chopPipeline_ : pipeline_);
+        VkPipeline& lod = chop ? lodChopPipeline_ : lodPipeline_;
+        if (pc.lodPatches && lod == VK_NULL_HANDLE) {
+            VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            smci.codeSize = chop ? sizeof(kWaterDisplaceCdlodChopCompSpv) : sizeof(kWaterDisplaceCdlodCompSpv);
+            smci.pCode = chop ? kWaterDisplaceCdlodChopCompSpv : kWaterDisplaceCdlodCompSpv;
+            VkShaderModule mod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod), "vkCreateShaderModule(cdlod)");
+            VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            cpci.layout = layout;
+            cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            cpci.stage.module = mod;
+            cpci.stage.pName = "main";
+            const OceanSpec oceanSpec;
+            cpci.stage.pSpecializationInfo = oceanSpec.info();
+            const VkResult result = vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &cpci, nullptr, &lod);
+            vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+            check(result, "vkCreateComputePipelines(cdlod)");
+        }
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pc.lodPatches ? lod : (chop ? chopPipeline_ : pipeline_));
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 layout, 0, 1, &ds, 0, nullptr);
         vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT,
-                           0, sizeof(pc), &pc);
+                           0, kPushConstantBytes, &pc);
         const uint32_t groups = (pc.vertexCount + 63u) / 64u;
         vkCmdDispatch(cb, groups, 1, 1);
     }

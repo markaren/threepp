@@ -88,7 +88,7 @@ uint instanceMask(uint s, uint e) {
     const bool proxy = from > 0.0 && entryBeyond(e, spans[s].center, spans[s].radius, from);
     if (proxy && group != kRayMaskNoShadow) return group;
     if (!lodFadeCasts(lodFades[e])) return 0u;
-    if (group == kRayMaskOpaque &&
+    if ((group & kRayMaskOpaque) != 0u &&// the extended ocean: opaque groups also carry kRayMaskSea / kRayMaskLand
         ((dist > 0.0 && entryBeyond(e, spans[s].center, spans[s].radius, dist)) || (from > 0.0 && !proxy)))
         return kRayMaskNoShadow;
     return group;

@@ -50,28 +50,60 @@
     // Removed sub-pixel FFT-chop slope variance, banked into the water roughness
     // below (declared out here so it survives the block's scope).
     float fineKernelSq = 0.0;
+    float waterBankedMss = 0.0;
     // MACRO surface normal — the gbuffer normal BEFORE the fine-cascade tilt
     // (and before any stochastic jitter). shadeWater clamps its reflection ray
     // against this plane; see the self-hit note there. Orientation-agnostic,
     // so a rotated (Z-up) ocean works without a world-up assumption.
     vec3 Nmacro = N;
-    // foamAddress gate: the same ocean marker the water branch in main() uses.
-    // oceanFineTileSize is scene-GLOBAL, so without it every glass surface in an
-    // ocean scene had its normal flipped and tilted by wave slope sampled at its
-    // own worldPos.xz (the lantern glazing wobbled at ocean-wave frequency). A
-    // DisplacedMesh that is not water (an opaque displaced surface) has no
-    // transmission and keeps its own normal.
+    // foamAddress gate — same ocean marker the water branch below uses, for the
+    // same reason its comment gives: glTF transmission glass is almost always
+    // thin-walled too (no KHR_volume → thinWalled), and oceanFineTileSize is
+    // scene-GLOBAL, so without it every thin-walled glass surface in an ocean
+    // scene had its normal flipped and tilted by wave slope sampled at its own
+    // worldPos.xz (the lantern glazing wobbled at ocean-wave frequency).
     if (pm.transmission > 0.0 && pc.oceanFineTileSize > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
-        // The FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
-        // into the water) → NdotV≈0 → Fresnel pinned at ~1 → the ocean read as a
-        // flat, dull sky reflection with NO depth gradient. Water is
-        // always viewed from above, so face the camera. Done BEFORE the fine-cascade
-        // perturbation so the chop tilt is added in the correct (up) frame.
-        if (dot(N, V) < 0.0) N = -N;
+        // Signed half floats retain the tiny slopes lost by biased [0,1]
+        // encoding. Only the underwater path consumes these extra components;
+        // above-water defaults retain their existing bit-exact normal path.
+        // Water shades only dispatch A's dominant sample; dispatch B skips it.
+        // (THREEPP_OCEAN_WATER_GBUFFER_NORMAL, kWaterGbufN: off, the G-buffer holds upstream's packing and
+        // the normal stays the decoded G-buffer normal)
+        if (kOceanExt && kWaterGbufN && camUnderwater()) {
+            const vec2 xz = vec2(texelFetch(gbufMotionTex, px, 0).w,
+                                 texelFetch(gbufUvTex, px, 0).w);
+            N = normalize(vec3(xz.x, (N.y < 0.0 ? -1.0 : 1.0) *
+                               sqrt(max(0.0, 1.0 - dot(xz, xz))), xz.y));
+        }
+        // The G-buffer preserves the water mesh's outward normal. Orient the
+        // interface toward its incident medium before adding the fine slope.
+        // Preserve the physical interface side. A view-facing flip can leave
+        // a downward normal on visible grazing crests, producing black polygon
+        // sheets when the fine-wave tilt and horizon clamp use that wrong side.
+        if (kOceanExt) {
+            if (camUnderwater()) N = -N;
+            // A rough sea's long waves are what shows: their slope gains with the sea state (carried in the fraction of sheenColor.b), the short ripples give way
+            gSeaRelief = 1.0 + 3.0 * fract(pm.sheenColor.b * 256.0);
+            N = normalize(N * vec3(gSeaRelief, 1.0, gSeaRelief));
+        } else {
+            // upstream: the FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
+            // into the water) -> NdotV~0 -> Fresnel pinned at ~1. Water is always viewed from
+            // above, so face the camera, before the fine-cascade perturbation.
+            if (dot(N, V) < 0.0) N = -N;
+        }
         Nmacro = N;// post-flip, pre-tilt: the surface's own plane
+        gFoamXZ = worldPos.xz;
+        if (kOceanExt && pc.oceanFoamTileSize > 0.0) {   // as foam_world.comp's sampleDispXZ; 1.0: the application's Ocean::Options::choppiness
+            const float inv0 = 1.0 / pc.oceanFoamTileSize;
+            for (int it = 0; it < 2; ++it)
+                gFoamXZ = worldPos.xz - 1.0 * ((it == 0 ? textureLod(oceanDisplace0, gFoamXZ * inv0, 0.0).rg : disp0Smooth(gFoamXZ * inv0)) * inv0 + textureLod(oceanDisplace2, gFoamXZ / pc.oceanFineTileSize, 0.0).rg / pc.oceanFineTileSize);
+        }
       if (kOceanChop != 0u) {
         // ── CHOP NORMALS (DisplacedMesh::Params::chopNormals, water::ChopMoments)
         // Compiled in only for a frame that has them on (spec constant 7).
+        // The one fine-cascade normal while it is on: the extended ocean's stencil path (the else branch: tile wander,
+        // THREEPP_OCEAN_FINE_NORMAL_AGREE, the physical tangents, the band and rain reads, the skirt's banked slope) does not
+        // run, so the fine slope tilts N once. The CDLOD mesh's own normal leaves cascade 2 out for the same reason.
         // oceanFineHeight is the fine cascade's moment chain here:
         // (h, mean slope x, mean slope z, mean squared slope) of the DISPLACED
         // surface, from exact derivatives (no stencil) with the chop's
@@ -140,13 +172,42 @@
         // leaves across a ruffled sea), and while the churn lasts the surface
         // has a quick, fine ruffle of its own, the boil. So the lane scales the
         // fine cascade's slope down and the turbulence adds its own slope.
+        const vec2 naturalKept = gKept;
         float wakeCalm    = 1.0;
         float wakeBoilVar = 0.0;// slope variance of the boil that went under a pixel
         if (geoms[id - 1u].foamAddress > 1ul) {
             gWakeAlbedo = WakeTable(geoms[id - 1u].foamAddress).albedo;
-            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz,
+            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, kOceanExt ? gFoamXZ : worldPos.xz,
                                     clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
-            wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
+          if (kOceanExt) {
+            // Foam and aeration read a little off to the side, by slow noise: a source's rounded outline does not survive it
+#ifdef THREEPP_OCEAN_UNIFORM_CURRENT
+            const vec2 fwXZ = gFoamXZ - vec2(currentX,currentZ)*pc.timeSec + 0.06 * pc.timeSec * vec2(0.6, -0.8);
+#else
+            const vec2 fwXZ = gFoamXZ + 0.06 * pc.timeSec * vec2(0.6, -0.8);
+#endif
+            // (a cap keeps to the wave that made it; the warp is the wash's)
+            const float fwK = smoothstep(0.04, 0.15, gWake.g);
+            const vec2 fw = fwK * 3.0 * vec2(fbm4(fwXZ * 0.5) - 0.47, fbm4(fwXZ * 0.5 + vec2(37.0, 11.0)) - 0.47)
+                          + fwK * 1.4 * vec2(fbm4(fwXZ * 1.6 + vec2(5.0, 71.0)) - 0.47, fbm4(fwXZ * 1.6 + vec2(53.0, 29.0)) - 0.47);
+            gWake.rg = oceanWakeSample(geoms[id - 1u].foamAddress, gFoamXZ + fw,
+                                       clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld)).rg;
+            // the wash's foam drifts off downwind and thins: the film is the larger of here and a little
+            // upwind (2.5 and 5 m, weaker), so a source's patch trails a soft tail along the wind instead of ending at a
+            // hard outline (the round, opaque blobs round the TP base and her stern)
+            if ((pc.oceanOptions & 1024u) == 0u && (gWake.r > 2e-3 || gWake.g > 2e-3)) {
+                const vec2 wvS = pm.sheenColor.rg * 2.0 - 1.0;
+                if (length(wvS) > 0.1) {
+                    const vec2 wdS = normalize(wvS);
+                    const float fp = clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld);
+                    const float r1 = oceanWakeSample(geoms[id - 1u].foamAddress, gFoamXZ + fw - 2.5 * wdS, fp).r;
+                    const float r2 = oceanWakeSample(geoms[id - 1u].foamAddress, gFoamXZ + fw - 5.0 * wdS, fp).r;
+                    gWake.r = max(gWake.r, max(0.7 * r1, 0.45 * r2));
+                }
+            }
+          }
+            // (0.9, upstream's, left a glassy sheet where a wash had passed)
+            wakeCalm = kOceanExt ? 1.0 - 0.55 * clamp(gWake.a, 0.0, 1.0) : 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
             gKept *= wakeCalm;
             if (gWake.b > 2e-3) {
                 // Slope of the boil, by the turbulent speed (m/s), capped. Two
@@ -154,7 +215,7 @@
                 // hold is not dropped: its variance goes to the roughness, so
                 // from far off churned water is the matt strip it is and not
                 // a mirror with nothing on it.
-                const float amp = min(1.1 * gWake.b, 0.24);
+                const float amp = kOceanExt ? min(0.3 * gWake.b, 0.08) : min(1.1 * gWake.b, 0.24);
                 const float k1  = 1.0 - smoothstep(0.10, 0.35, pixAlong);
                 const float k2  = 1.0 - smoothstep(0.035, 0.12, pixAlong);
                 const vec2  b1  = oceanWakeNoised(vec3(worldPos.xz * 3.1, pc.timeSec * 1.7)).yz;
@@ -177,7 +238,12 @@
                 wakeBoilVar += rp.z;
             }
         }
-        N = normalize(N + vec3(-gKept.x, 0.0, -gKept.y));
+        if (kOceanExt) {
+            const float waterSide = camUnderwater() ? -1.0 : 1.0;
+            N = normalize(N + waterSide * vec3(-gKept.x, 0.0, -gKept.y));
+        } else {
+            N = normalize(N + vec3(-gKept.x, 0.0, -gKept.y));
+        }
         // The slope variance the pixel cannot hold widens the lobe. For a
         // microfacet surface the total slope variance (both axes) is alpha^2
         // (Walter et al. 2007, "Microfacet Models for Refraction through Rough
@@ -190,6 +256,7 @@
         // variance (the same both-axes measure) goes in beside them.
         const float r2   = pm.roughness * pm.roughness;
         const float vTot = slopeVar * wakeCalm * wakeCalm + wakeBoilVar;
+        waterBankedMss = vTot;
         fineKernelSq = sqrt(r2 * r2 + vTot) - r2;
         // The footprint floor for the coarse mesh's own sub-pixel normals
         // (cascades 0+1 in the vertex normal), as on the other path.
@@ -198,8 +265,36 @@
       } else {
         const float invTile = 1.0 / pc.oceanFineTileSize;
         const float eps     = pc.oceanFineTileSize / 32.0;
+        gFoamXZ = worldPos.xz;
+        if (kOceanExt && pc.oceanFoamTileSize > 0.0) {   // as foam_world.comp's sampleDispXZ; 1.0: the application's Ocean::Options::choppiness
+            const float inv0 = 1.0 / pc.oceanFoamTileSize;
+            for (int it = 0; it < 2; ++it)
+                gFoamXZ = worldPos.xz - 1.0 * ((it == 0 ? textureLod(oceanDisplace0, gFoamXZ * inv0, 0.0).rg : disp0Smooth(gFoamXZ * inv0)) * inv0 + textureLod(oceanDisplace2, gFoamXZ * invTile, 0.0).rg * invTile);
+        }
         const float depsUV  = eps * invTile;
-        const vec2  uvW     = worldPos.xz * invTile;
+        vec2 normalRest = worldPos.xz;
+        if (kOceanExt && pc.oceanFoamTileSize > 0.0) {
+            const float inv0 = 1.0 / pc.oceanFoamTileSize;
+            // (bilinear to converge, the B-spline for the last two: the rest position C1 across the swell's texels)
+            for (int it=0; it<6; ++it) normalRest = worldPos.xz - (it < 4 ? textureLod(oceanDisplace0, normalRest*inv0,0).rg : disp0Smooth(normalRest*inv0))*inv0 - textureLod(oceanDisplace2, normalRest*invTile,0).rg*invTile;
+        }
+        // (sines, not value noise: value noise's slope is zero along its lattice lines, which showed as straight seams)
+        vec2 tileWander = vec2(0.0);
+        if (kOceanExt) for (int iw = 0; iw < 4; ++iw) {
+            const float aw = 2.399963 * float(iw) + 0.7, kw = 0.021 * pow(1.83, float(iw));
+            const vec2  dw = vec2(cos(aw), sin(aw));
+            tileWander += vec2(sin(kw * dot(dw, normalRest) + 0.004 * pc.timeSec + 1.3 * float(iw)), cos(kw * dot(vec2(-dw.y, dw.x), normalRest) - 0.003 * pc.timeSec + 2.1 * float(iw))) * (3.2 / pow(1.6, float(iw)));
+        }
+        // THREEPP_OCEAN_FINE_NORMAL_AGREE (oceanOptions2 bit 30, on by default): where the mesh carries the fine cascade as geometry (its weight is 1 to
+        // a 1 m footprint, 64 m from the camera or the contact square, and gone at 4 m), the fine normal is read
+        // where the mesh read the height. The wander (there to hide the fine tile's repeat) puts it up to some metres
+        // off: a wave's far side shaded on another wave's near side, which no crest hides: hard-edged black shapes
+        // from a low camera. Within 64 m the fine normals now repeat with the tile, as the mesh's fine waves did.
+        if (kOceanExt && (pc.oceanOptions2 & 1073741824u) != 0u) {
+            const vec2 offW = abs(worldPos.xz - vec2(pc.oceanSkirtX, pc.oceanSkirtZ));
+            tileWander *= smoothstep(64.0, 256.0, min(max(offW.x, offW.y), max(0.0, max(abs(worldPos.x), abs(worldPos.z)) - 128.0)));
+        }
+        const vec2  uvW     = kOceanExt ? (normalRest + tileWander) * invTile : worldPos.xz * invTile;
         const float hL = textureLod(oceanFineHeight, uvW + vec2(-depsUV, 0.0), 0.0).r * invTile;
         const float hR = textureLod(oceanFineHeight, uvW + vec2( depsUV, 0.0), 0.0).r * invTile;
         const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -depsUV), 0.0).r * invTile;
@@ -275,22 +370,125 @@
             const vec2 mean = along * ((hF - hB) * invTile / len) + across * (dAcross * invTile / (8.0 * eps));
             const float keep = 1.0 - smoothstep(0.25 * pc.oceanFineTileSize, 0.5 * pc.oceanFineTileSize, pixAlong);
             // eased in over one stencil so the two estimates meet without a seam
-            gMean = mix(grad, mean * keep, smoothstep(eps, 2.0 * eps, pixAlong));
+            gMean = mix(grad, mean * keep, smoothstep(eps, (kOceanExt ? 7.0 : 2.0) * eps, pixAlong));// ocean loop: over a long range: at 2 eps this was a ring of brightness round the camera
         }
         vec2 gKept = (1.0 - subPix) * gMean;
+        // THREEPP_OCEAN_RAIN: rain on the sea. It damps the short waves (Tsimplis & Thorpe 1989; Le Mehaute & Khangaonkar
+        // 1990: the falling drops' momentum and the turbulence they stir take energy from waves of centimetres to decimetres,
+        // markedly from ~10 mm/h), and every drop leaves a ring of capillary ripples that runs out at ~0.3 m/s and dies in
+        // a fraction of a second. The rings are drawn only where a pixel resolves them (a few cm); past that their slope
+        // goes into the roughness (below).
+        float rainRingFade = 0.0;
+        if (kOceanExt && pc.rainRate > 0.0) {
+            gKept *= 1.0 / (1.0 + pc.rainRate / 12.0);
+            rainRingFade = 1.0 - smoothstep(0.015, 0.06, pixWorld);
+            if (rainRingFade > 0.0) gKept += rainRingFade * rainRings(worldPos.xz, pc.timeSec, pc.rainRate);
+        }
+        // ── SHORT WAVES ───────────────────────────────────────────────────────
+        // The stencil above spans 2·eps = tile/16 (1.3 m on a 21 m tile), so it holds
+        // nothing shorter than about 2.6 m: the near sea read as smooth cloth under
+        // blurred wisps of reflected sky, though the height field carries waves down
+        // to its 4 cm texels. Two detail bands put them back, each the difference
+        // between a narrower stencil and the next wider one, so they add up to the
+        // narrowest slope. A band stays on the normal while the pixel's long footprint
+        // is shorter than its stencil and goes to the roughness after that, as the
+        // long-wave slope does below.
+        float bandVarSq = 0.0;
+        if (kOceanExt) {
+            const float texelM = pc.oceanFineTileSize / float(textureSize(oceanFineHeight, 0).x);
+            vec2 gWide = grad;
+            float eB = 0.16;
+            for (int b = 0; b < 2; ++b, eB *= 0.33) {
+                const float e = max(eB, 1.5 * texelM);
+                if (e >= eps) continue;
+                const float du = e * invTile;
+                const vec2 g = vec2(textureLod(oceanFineHeight, uvW + vec2(du, 0.0), 0.0).r - textureLod(oceanFineHeight, uvW - vec2(du, 0.0), 0.0).r,
+                                    textureLod(oceanFineHeight, uvW + vec2(0.0, du), 0.0).r - textureLod(oceanFineHeight, uvW - vec2(0.0, du), 0.0).r)
+                               * invTile / (2.0 * e);
+                const vec2 d = g - gWide;
+                gWide = g;
+                // Over a long range: a band's fade is a ring round the camera, and in the reflection
+                // a step in brightness (tilted facets see higher, darker sky than the plane does).
+                const float keep = 1.0 - smoothstep(0.7 * e, 7.0 * e, pixAlong);
+                gKept += keep * (1.0 - subPix) * d;
+                bandVarSq += (1.0 - keep * keep) * min(dot(d, d), 0.02);
+            }
+        }
+        // The tile's ripples repeat every 21 m and its short waves can line up as fish scales close to: a
+        // second, turned read of the same tile at another scale breaks them. Fades as the short bands do.
+        if (kOceanExt) {
+            // Accepted tile-hiding hack: this rotated, scaled second read is
+            // NOT an independent physical wave spectrum. Retained for Stage B review.
+            const float ca = 0.8253, sa = 0.5646, sc = 1.618 * invTile, du = 0.11 * sc;
+            // (and it drifts over the first, so short waves cross: a sea's waves don't all share one speed)
+            const vec2  p2 = vec2(ca * worldPos.x - sa * worldPos.z, sa * worldPos.x + ca * worldPos.z) * sc + vec2(0.37, 0.71) + vec2(-0.9, 0.6) * invTile * pc.timeSec;
+            const vec2  g2 = vec2(textureLod(oceanFineHeight, p2 + vec2(du, 0.0), 0.0).r - textureLod(oceanFineHeight, p2 - vec2(du, 0.0), 0.0).r,
+                                  textureLod(oceanFineHeight, p2 + vec2(0.0, du), 0.0).r - textureLod(oceanFineHeight, p2 - vec2(0.0, du), 0.0).r)
+                            * invTile / (2.0 * 0.11);
+            const float keep2 = 1.0 - smoothstep(0.11, 0.6, pixAlong);
+            gKept += 0.35 * keep2 * (1.0 - subPix) * vec2(ca * g2.x + sa * g2.y, -sa * g2.x + ca * g2.y);
+        }
+        if (kOceanExt) {
+            // Accepted tile-hiding hack, like the read above: not an independent spectrum. Longer repeat (34 m), other angle, wandering offset of a few metres.
+            const float ca3 = 0.3090, sa3 = 0.9511, sc3 = 0.618 * invTile, du3 = 0.16 * sc3;
+            const float tW = pc.timeSec;
+            const vec2  walk = vec2(sin(0.13 * tW) + 0.5 * sin(0.31 * tW + 1.0) + 0.25 * sin(0.71 * tW + 4.0), sin(0.17 * tW + 2.0) + 0.5 * sin(0.37 * tW) + 0.25 * sin(0.83 * tW + 1.5));
+            const vec2  warp = 0.12 * vec2(sin(0.031 * dot(worldPos.xz, vec2(0.8, 0.6)) + 0.021 * tW) + sin(0.057 * dot(worldPos.xz, vec2(-0.3, 0.95)) - 0.013 * tW), sin(0.029 * dot(worldPos.xz, vec2(0.5, -0.87)) - 0.017 * tW) + sin(0.061 * dot(worldPos.xz, vec2(0.99, 0.1)) + 0.023 * tW));
+            const vec2  p3 = vec2(ca3 * worldPos.x - sa3 * worldPos.z, sa3 * worldPos.x + ca3 * worldPos.z) * sc3 + vec2(0.13, 0.59) + (3.0 * walk + 14.0 * warp) * invTile;
+            const vec2  g3 = vec2(textureLod(oceanFineHeight, p3 + vec2(du3, 0.0), 0.0).r - textureLod(oceanFineHeight, p3 - vec2(du3, 0.0), 0.0).r,
+                                  textureLod(oceanFineHeight, p3 + vec2(0.0, du3), 0.0).r - textureLod(oceanFineHeight, p3 - vec2(0.0, du3), 0.0).r)
+                            * invTile / (2.0 * 0.16);
+            const float keep3 = 1.0 - smoothstep(0.3, 1.5, pixAlong);
+            const float amp3 = 0.7 * keep3 * (1.0 - subPix) * clamp(0.5 + 2.0 * warp.x, 0.2, 1.0);
+            gKept = (gKept + amp3 * vec2(ca3 * g3.x + sa3 * g3.y, -sa3 * g3.x + ca3 * g3.y)) / sqrt(1.0 + amp3 * amp3);
+        }
+        // (what the ripples give up below goes to the roughness, not away: LEAN-style, so the water stays matt, not glass)
+        const vec2 gK0 = gKept;
+        // Wave groups: the local chop comes and goes, travelling at about a group's speed
+        // (no gain or group modulation on the slope: the waves are what the spectrum gives)
+        if (kOceanExt) bandVarSq += 0.5 * min(max(dot(gK0, gK0) - dot(gKept, gKept), 0.0), 0.04);
         // ── WAKE FIELD ────────────────────────────────────────────────────────
         // Where something has churned the water the short wind waves are gone
         // (turbulence under the surface breaks them up: the smooth lane a boat
         // leaves across a ruffled sea), and while the churn lasts the surface
         // has a quick, fine ruffle of its own, the boil. So the lane scales the
         // fine cascade's slope down and the turbulence adds its own slope.
+        const vec2 naturalKept = gKept;
         float wakeCalm    = 1.0;
         float wakeBoilVar = 0.0;// slope variance of the boil that went under a pixel
         if (geoms[id - 1u].foamAddress > 1ul) {
             gWakeAlbedo = WakeTable(geoms[id - 1u].foamAddress).albedo;
-            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz,
+            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, kOceanExt ? gFoamXZ : worldPos.xz,
                                     clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
-            wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
+          if (kOceanExt) {
+            // Foam and aeration read a little off to the side, by slow noise: a source's rounded outline does not survive it
+#ifdef THREEPP_OCEAN_UNIFORM_CURRENT
+            const vec2 fwXZ = gFoamXZ - vec2(currentX,currentZ)*pc.timeSec + 0.06 * pc.timeSec * vec2(0.6, -0.8);
+#else
+            const vec2 fwXZ = gFoamXZ + 0.06 * pc.timeSec * vec2(0.6, -0.8);
+#endif
+            // (a cap keeps to the wave that made it; the warp is the wash's)
+            const float fwK = smoothstep(0.04, 0.15, gWake.g);
+            const vec2 fw = fwK * 3.0 * vec2(fbm4(fwXZ * 0.5) - 0.47, fbm4(fwXZ * 0.5 + vec2(37.0, 11.0)) - 0.47)
+                          + fwK * 1.4 * vec2(fbm4(fwXZ * 1.6 + vec2(5.0, 71.0)) - 0.47, fbm4(fwXZ * 1.6 + vec2(53.0, 29.0)) - 0.47);
+            gWake.rg = oceanWakeSample(geoms[id - 1u].foamAddress, gFoamXZ + fw,
+                                       clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld)).rg;
+            // the wash's foam drifts off downwind and thins: the film is the larger of here and a little
+            // upwind (2.5 and 5 m, weaker), so a source's patch trails a soft tail along the wind instead of ending at a
+            // hard outline (the round, opaque blobs round the TP base and her stern)
+            if ((pc.oceanOptions & 1024u) == 0u && (gWake.r > 2e-3 || gWake.g > 2e-3)) {
+                const vec2 wvS = pm.sheenColor.rg * 2.0 - 1.0;
+                if (length(wvS) > 0.1) {
+                    const vec2 wdS = normalize(wvS);
+                    const float fp = clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld);
+                    const float r1 = oceanWakeSample(geoms[id - 1u].foamAddress, gFoamXZ + fw - 2.5 * wdS, fp).r;
+                    const float r2 = oceanWakeSample(geoms[id - 1u].foamAddress, gFoamXZ + fw - 5.0 * wdS, fp).r;
+                    gWake.r = max(gWake.r, max(0.7 * r1, 0.45 * r2));
+                }
+            }
+          }
+            // (0.9, upstream's, left a glassy sheet where a wash had passed)
+            wakeCalm = kOceanExt ? 1.0 - 0.55 * clamp(gWake.a, 0.0, 1.0) : 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
             gKept *= wakeCalm;
             if (gWake.b > 2e-3) {
                 // Slope of the boil, by the turbulent speed (m/s), capped. Two
@@ -298,7 +496,7 @@
                 // hold is not dropped: its variance goes to the roughness, so
                 // from far off churned water is the matt strip it is and not
                 // a mirror with nothing on it.
-                const float amp = min(1.1 * gWake.b, 0.24);
+                const float amp = kOceanExt ? min(0.3 * gWake.b, 0.08) : min(1.1 * gWake.b, 0.24);
                 const float k1  = 1.0 - smoothstep(0.10, 0.35, pixAlong);
                 const float k2  = 1.0 - smoothstep(0.035, 0.12, pixAlong);
                 const vec2  b1  = oceanWakeNoised(vec3(worldPos.xz * 3.1, pc.timeSec * 1.7)).yz;
@@ -327,14 +525,114 @@
         // a glassy sheen and a 10 m hull looked like a bath toy on the swell.
         // The speckle that factor presumably guarded against is handled by
         // the footprint fade + roughness banking below.
-        N = normalize(N + vec3(-gKept.x, 0.0, -gKept.y));
+      if (!kOceanExt) {
+        N = normalize(N + vec3(-gKept.x, 0.0, -gKept.y));// upstream
+      } else {
+        // Physics: cross the full displaced tangents, retaining shear as well as squeeze.
+        // The raster normal already includes coarse horizontal displacement.
+        const float eMap = max(eps, pc.oceanFineTileSize / float(textureSize(oceanDisplace2, 0).x));
+        const vec2 qMap = normalRest;
+        const vec2 fx = invTile / (2.0 * eMap) * (textureLod(oceanDisplace2, (qMap + vec2(eMap,0)) * invTile, 0).rg - textureLod(oceanDisplace2, (qMap - vec2(eMap,0)) * invTile, 0).rg);
+        const vec2 fz = invTile / (2.0 * eMap) * (textureLod(oceanDisplace2, (qMap + vec2(0,eMap)) * invTile, 0).rg - textureLod(oceanDisplace2, (qMap - vec2(0,eMap)) * invTile, 0).rg);
+        const float keepMap = (1.0 - subPix) * (1.0 - smoothstep(eps, 7.0 * eps, pixAlong));
+        mat2 coarseMap = mat2(1.0);
+        if (pc.oceanFoamTileSize > 0.0) {
+            const float inv0 = 1.0 / pc.oceanFoamTileSize;
+            const float e0 = pc.oceanFoamTileSize / float(textureSize(oceanDisplace0,0).x);
+            // (differenced from the B-spline: a smooth Jacobian, not a piecewise-linear one with creases on the texel grid)
+            const vec2 cx = inv0/(2.0*e0)*(disp0Smooth((qMap+vec2(e0,0))*inv0)-disp0Smooth((qMap-vec2(e0,0))*inv0));
+            const vec2 cz = inv0/(2.0*e0)*(disp0Smooth((qMap+vec2(0,e0))*inv0)-disp0Smooth((qMap-vec2(0,e0))*inv0));
+            coarseMap += mat2(cx,cz);
+        }
+        const mat2 fullMap = coarseMap + keepMap * mat2(fx, fz);
+        // The ratio is orientation-invariant. Clamping a downward normal's
+        // negative Y to +epsilon turned tiny underside slopes into near-vertical
+        // facets, opening false Snell windows with quantized patch boundaries.
+        const float slopeNy = camUnderwater() ? min(N.y, -0.0001) : max(N.y, 0.0001);
+        const vec2 slopeMap = transpose(coarseMap) * (-N.xz / slopeNy) + naturalKept * wakeCalm;
+        vec3 areaN = cross(vec3(fullMap[1].x, slopeMap.y, fullMap[1].y), vec3(fullMap[0].x, slopeMap.x, fullMap[0].y));
+        vec3 waveN = dot(areaN, areaN) > 1e-12 ? normalize(areaN) : N;
+        // THREEPP_OCEAN_NORMAL_NO_FLIP (oceanOptions2 bit 22, on by default; =0 rolls back): over the water a normal that
+        // leans away from the eye is not negated. Negating it gave a normal pointing DOWN into the water (opposite
+        // to the surface's own) on the far side of every short wave a low camera looks along: a patch that the
+        // reflection optics could only fill flat from the macro normal, with a thin black line where the two
+        // normals cancelled. It now stays what it is, and the optics take the facet as seen edge-on
+        // (waterVisibleNormal).
+        if (dot(waveN, V) < 0.0 && (camUnderwater() || (pc.oceanOptions2 & 4194304u) == 0u)) waveN = -waveN;
+        vec3 detailN = vec3(-(gKept - naturalKept * wakeCalm).x, 0.0, -(gKept - naturalKept * wakeCalm).y);
+        if (camUnderwater() && dot(waveN, areaN) < 0.0) detailN = -detailN;
+        N = normalize(waveN + detailN);
+      }
         // σ_slope² ≈ 2·roughness²; move the faded-out tilt's variance into roughness
         // so shadeWater's glint + reflection lobe broaden as the chop leaves N: all of
         // the slope where even pixWorld is sub-pixel, and what the strip's mean took.
-        fineKernelSq = 2.0 * (dot(grad, grad) * subPix
-                              + (1.0 - subPix) * max(dot(grad, grad) - dot(gMean, gMean), 0.0));
+        fineKernelSq = kOceanExt ? 2.0 * (dot(grad, grad) * subPix
+                                          + (1.0 - subPix) * max(dot(grad, grad) - dot(gMean, gMean), 0.0)
+                                          + bandVarSq)
+                                 : 2.0 * (dot(grad, grad) * subPix
+                                          + (1.0 - subPix) * max(dot(grad, grad) - dot(gMean, gMean), 0.0));
         // the lane took those waves away, banked or not; the boil's own go in
         fineKernelSq = fineKernelSq * wakeCalm * wakeCalm + 2.0 * wakeBoilVar;
+        // The ocean's far-field skirt lays the long waves flat as its rings widen
+        // (water_displace.comp); bank the slope they took (times the relief their
+        // normals are drawn with) so the glitter and the sky's reflection carry on
+        // across the fade. 0 on the inner grid.
+        // the rain's rings where they are under a pixel: their mean square slope (a few 1e-3 at moderate rain)
+        if (kOceanExt && pc.rainRate > 0.0) fineKernelSq += 2.0 * 0.0012 * sqrt(pc.rainRate) * (1.0 - rainRingFade);
+        if (kOceanExt && pc.oceanSkirtD1 > pc.oceanSkirtD0) {
+            const vec2  off = abs(worldPos.xz - vec2(pc.oceanSkirtX, pc.oceanSkirtZ));
+            const float amp = 1.0 - smoothstep(pc.oceanSkirtD0, pc.oceanSkirtD1, max(off.x, off.y));
+            #ifdef THREEPP_CDLOD
+            // Same continuous footprint as displacement; E[s^2] comes from
+            // averaging the unfiltered slope moments, never squaring a mean.
+            float d=min(max(off.x,off.y),max(0.0,max(abs(worldPos.x),abs(worldPos.z))-128.0));
+            float footprint=d<=2048.0?max(0.5,d/64.0):(d<10000.0?32.0*pow(d/2048.0,log(2.0)/log(10000.0/2048.0)):d/156.25);
+            float altitude=camPos.y-(pm.sheenRoughness*100.0-50.0);
+            if(altitude>80.0){
+                float cameraD=max(off.x,off.y),lo=0.5,prev=0.0;
+                float cameraFoot=footprint;
+                float a=smoothstep(80.0,180.0,altitude);
+                for(float s=0.5;s<=1024.0;s*=2.0){
+                    float r=(s>=64.0?156.25:64.0)*s;
+                    r=s<2.0?r*(1.0-a)+(s>=1.0?32.0*a:0.0):r+a*min(128.0*s,768.0);
+                    if(cameraD<=r){cameraFoot=prev>0.0?lo*pow(max(cameraD,prev)/prev,log(s/lo)/log(r/prev)):lo*pow(s/lo,clamp(cameraD/max(1e-6,r),0.0,1.0));break;}lo=s;prev=r;
+                }
+                float contactD=max(0.0,max(abs(worldPos.x),abs(worldPos.z))-128.0);
+                float contactFoot=contactD<=2048.0?max(0.5,contactD/64.0):(contactD<10000.0?32.0*pow(contactD/2048.0,log(2.0)/log(10000.0/2048.0)):contactD/156.25);
+                footprint=min(cameraFoot,contactFoot);
+            }
+            float level=max(0.0,log2(footprint*float(textureSize(oceanDisplace0,0).x)/pc.oceanFoamTileSize));
+            if(level>0.0) {
+            float l=floor(level);vec2 uv=normalRest/pc.oceanFoamTileSize;
+            // The inherited fine-wave sampler clamps LOD to zero. Explicit
+            // texelFetch preserves that sampler for every existing consumer
+            // while the new moment channel reads the actual pyramid levels.
+            float moments[2];
+            for(int j=0;j<2;++j){
+                int mip=min(int(l)+j,textureQueryLevels(oceanDisplace0)-1);
+                ivec2 n=textureSize(oceanDisplace0,mip);
+                vec2 st=uv*vec2(n)-0.5,f=fract(st);ivec2 q=ivec2(floor(st));
+                q=(q%n+n)%n;
+                float a=texelFetch(oceanDisplace0,q,mip).b;
+                float b=texelFetch(oceanDisplace0,(q+ivec2(1,0))%n,mip).b;
+                float c=texelFetch(oceanDisplace0,(q+ivec2(0,1))%n,mip).b;
+                float e=texelFetch(oceanDisplace0,(q+ivec2(1,1))%n,mip).b;
+                moments[j]=mix(mix(a,b,f.x),mix(c,e,f.x),f.y);
+            }
+            float mss=mix(moments[0],moments[1],fract(level));
+            float retained=dot(Nmacro.xz,Nmacro.xz)/max(Nmacro.y*Nmacro.y,0.01)/(gSeaRelief*gSeaRelief);
+            float bank=max(0.0,mss-retained);
+            // At mip zero the original reconstruction is still fully resolved.
+            fineKernelSq+=2.0*gSeaRelief*gSeaRelief*bank*smoothstep(0.0,1.0,level);
+            }
+#else
+            fineKernelSq += 2.0 * pc.oceanSkirtMss * gSeaRelief * gSeaRelief * (1.0 - amp * amp);
+#endif
+        }
+        // The same removed slope energy must reach the sky/Fresnel integral,
+        // not only the glint lobe. Capture it before the artistic footprint
+        // roughness floor: fineKernelSq above is twice the physical MSS.
+        waterBankedMss = 0.5 * fineKernelSq;
         // FOOTPRINT FLOOR. The fine-cascade slope alone is tiny for a calm sea
         // (Phillips amplitude ∝ windSpeed⁴ → a 4 m/s coastal sea has a millimetric
         // fine cascade), so banking only IT leaves effRough ≈ the base 0.03 and the

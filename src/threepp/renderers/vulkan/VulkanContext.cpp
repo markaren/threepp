@@ -271,11 +271,12 @@ namespace threepp::vulkan {
                 offscreen_           = true;
                 std::cerr << "[VulkanContext] VK_EXT_headless_surface not available; "
                              "headless canvas renders into offscreen images.\n";
-            } else {
+            } else if (!env::flag("THREEPP_VULKAN_NO_SURFACE")) {
                 throw std::runtime_error(
                         "[VulkanContext] headless mode needs VK_EXT_headless_surface, "
                         "which this Vulkan driver does not expose, and no window system "
-                        "is available to create a window surface instead");
+                        "is available to create a window surface instead "
+                        "(THREEPP_VULKAN_NO_SURFACE=1 renders offscreen without one)");
             }
         }
 
@@ -594,7 +595,17 @@ namespace threepp::vulkan {
         // scene in ~1 s against it. The blob is the backstop for when the
         // driver cache has lost an entry, and it is worth keeping only for
         // the shaders this build still has.
-        constexpr size_t kPipelineCacheCapBytes = size_t{64} << 20;
+        // Capture suites can exercise more live variants than the historical
+        // 64 MiB cap. Keep the default unchanged; bound the opt-in disk budget.
+        const size_t kPipelineCacheCapBytes = [] {
+            if (const char* value = std::getenv("THREEPP_VK_PIPELINE_CACHE_MB")) {
+                char* end = nullptr;
+                const auto mb = std::strtoul(value, &end, 10);
+                if (end != value && *end == '\0' && mb >= 16 && mb <= 1024)
+                    return size_t(mb) << 20;
+            }
+            return size_t{64} << 20;
+        }();
         const bool compact = usable && initial.size() > kPipelineCacheCapBytes;
         if (compact) usable = false;
 
@@ -777,6 +788,12 @@ namespace threepp::vulkan {
     }
 
     void VulkanContext::createSurface() {
+        if (env::flag("THREEPP_VULKAN_NO_SURFACE")) {
+            headlessSurface_ = true;
+            surface_ = VK_NULL_HANDLE;
+            std::cerr << "[VulkanContext] surface: none (THREEPP_VULKAN_NO_SURFACE)\n";
+            return;
+        }
         if (headlessSurface_) {
             // Loaded via vkGetInstanceProcAddr — extension entry points are
             // not exported by every loader.
@@ -951,7 +968,7 @@ namespace threepp::vulkan {
                 queueFamilies_.compute = i;
             }
             VkBool32 presentSupport = VK_FALSE;
-            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice_, i, surface_, &presentSupport);
+            if (surface_ != VK_NULL_HANDLE) vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice_, i, surface_, &presentSupport);
             if (presentSupport && queueFamilies_.present == UINT32_MAX) {
                 queueFamilies_.present = i;
             }
@@ -1425,6 +1442,20 @@ namespace threepp::vulkan {
     }
 
     void VulkanContext::createSwapchain() {
+        if (!offscreen_ && headlessSurface_) {
+            // A headless canvas also renders into the offscreen ring below
+            // when it has no surface at all (THREEPP_VULKAN_NO_SURFACE), when
+            // its headless surface offers no formats (NVIDIA's reports none),
+            // or on request (THREEPP_VULKAN_OFFSCREEN=1).
+            uint32_t fmtN = 0;
+            if (surface_ != VK_NULL_HANDLE) vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface_, &fmtN, nullptr);
+            if (surface_ == VK_NULL_HANDLE || fmtN == 0 || env::flag("THREEPP_VULKAN_OFFSCREEN")) {
+                std::cerr << "[VulkanContext] headless canvas renders into offscreen images (" << fmtN
+                          << " surface formats)\n";
+                offscreen_         = true;
+                presentSuppressed_ = true;
+            }
+        }
         if (offscreen_) {
             // A headless canvas with no headless surface: one image per frame
             // in flight, with the usages a swapchain image is given below plus

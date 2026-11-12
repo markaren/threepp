@@ -1,6 +1,7 @@
 #include "VulkanCoreImpl.hpp"
 
 #include "VulkanCpuPhaseProf.hpp"
+#include "OceanExtended.hpp"
 
 #include "threepp/lights/HemisphereLight.hpp"
 
@@ -1136,7 +1137,7 @@ namespace threepp {
         // per-read from the upscale ratio (jitterPhaseCount_) and applied as
         // a modulo, so the sequence length tracks renderScale instead of a
         // fixed 16. uint32 wrap is harmless — the modulo re-bases each frame.
-        view().haltonFrame_ = view().haltonFrame_ + 1u;
+        if (!inspectFrozen_) view().haltonFrame_ = view().haltonFrame_ + 1u;
 
         // Refresh the per-frame descriptor set. Bindings 0-2 and 5 (UBO,
         // motionMat, the material table, the GeometryDescs) are tiny, and the
@@ -1272,12 +1273,25 @@ namespace threepp {
         clusterCollect.reserve(16);
         std::vector<Light*> clusterSrc;// each record's light (the shadow-map lamp slots)
         clusterSrc.reserve(16);
-        const auto clusterCullRadius = [](const GpuClusterLight& r) {
+        // An unbounded light (range 0) reaches as far as its falloff stays
+        // visible. By default (THREEPP_VK_LIGHT_CULL_EXPOSURE=0 restores the
+        // absolute 0.005) "visible" is in the displayed picture, so the cut-off
+        // radiance is divided by the frame's exposure: a work light seen at a
+        // night exposure (x40-150) is still bright where an absolute 0.005
+        // had already culled it (a 20 klm flood stopped at 6.5 m, the landing
+        // it lights at 9 m got nothing). 1e-4 displayed is under one 8-bit
+        // step of sRGB, so the cell boundary leaves no visible edge.
+        // Unbounded lights are culled under the displayed (exposure-scaled) floor;
+        // THREEPP_VK_LIGHT_CULL_EXPOSURE=0 culls them under an absolute 0.005 as before.
+        const bool cullExposure = vulkan::oceanFeature("THREEPP_VK_LIGHT_CULL_EXPOSURE", true);
+        const float cullRadiance = cullExposure ? 1e-4f / std::max(currentExposure(), 1e-3f) : 0.005f;
+        const auto clusterCullRadius = [cullExposure, cullRadiance](const GpuClusterLight& r) {
             if (r.range > 0.f) return r.range;
             const float L = std::max({r.color[0], r.color[1], r.color[2]});
             if (L <= 0.f) return 0.f;
             const float d = std::max(r.decay, 0.25f);
-            return std::min(std::pow(L / 0.005f, 1.f / d), 500.f);
+            if (!cullExposure) return std::min(std::pow(L / 0.005f, 1.f / d), 500.f);// upstream's, verbatim
+            return std::min(std::pow(L / cullRadiance, 1.f / d), 500.f);
         };
 
         // Physical light units (setPhysicalLightUnits): point/spot
@@ -1525,6 +1539,10 @@ namespace threepp {
         ubo.bgIntensity  = envKnobs_.bgIntensity;
         ubo.bgBlurriness = envKnobs_.bgBlurriness;
         ubo.envKnobFlags = (envKnobs_.envRotActive ? 1u : 0u) | (envKnobs_.bgRotActive ? 2u : 0u);
+        // the extended ocean's water knobs (scene userData), none with the master switch off
+        if (vulkan::oceanExtended())
+            ubo.envKnobFlags |= (envKnobs_.waterClearDayGrade ? 4u : 0u) | (envKnobs_.waterDiffuseSky ? 8u : 0u) |
+                                (envKnobs_.waterBodyFix ? 16u : 0u) | (envKnobs_.waterDebug << 8u);
 
         // ── 4c: the billboard slice's copy of the sun ───────────────────────
         // ParticleFieldPass has no descriptor set by design, so a `lit`
@@ -1752,6 +1770,11 @@ namespace threepp {
         mediumBaseYThisFrame_   = heightFogEnabled_ ? heightFogBaseY_   : 0.0f;
         mediumFalloffThisFrame_ = heightFogEnabled_ ? heightFogFalloff_ : kUniformFogFalloff;
         mediumNoiseThisFrame_   = heightFogEnabled_ ? heightFogNoiseAmount_ : 0.0f;
+        // keepSceneFog: scene.fog's density stays on as a uniform haze UNDER the explicit layer (a marine
+        // mist over a hazy sky) instead of being overridden by it
+        // the extended ocean: 0 with the master switch off; every reader adds exactly 0.0 then (airLegOpticalDepth,
+        // heightFogDensity), so this data gate is upstream's medium to the bit.
+        mediumFloorThisFrame_   = (vulkan::oceanExtended() && hfExplicitDensity && heightFogKeepSceneFog_ && fogPresent) ? sigma : 0.0f;
         // Air-fog tint (= scene.fog colour when present, else white — mirrors the
         // shade pass's medAlbedo). The overlay particle draw fades smoke toward
         // this; ubo.color already holds it for the fogPresent case.
@@ -1765,6 +1788,7 @@ namespace threepp {
         ubo.hfDensity = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.0f;
         ubo.hfBaseY   = mediumBaseYThisFrame_;
         ubo.hfFalloff = mediumFalloffThisFrame_;
+        ubo.hfFloor   = mediumActiveThisFrame_ ? mediumFloorThisFrame_ : 0.0f;
 
         // The noise-displaced fog top (HeightFogSettings::topNoise). The shaders
         // sample the field at p * hfTopInvScale shifted by hfTopOffset.xz (the
@@ -1956,6 +1980,7 @@ namespace threepp {
         ubo.hfBaseY       = mediumBaseYThisFrame_;
         ubo.hfFalloff     = mediumFalloffThisFrame_;
         ubo.hfNoiseAmount = mediumNoiseThisFrame_;
+        ubo.hfFloor       = mediumActiveThisFrame_ ? mediumFloorThisFrame_ : 0.0f;
         // Cloud shadow map is generated + sampled only when clouds are on (it's
         // the cloud's own transmittance projected to the ground).
         ubo.shadowActive  = cloudsEnabled_ ? 1.0f : 0.0f;

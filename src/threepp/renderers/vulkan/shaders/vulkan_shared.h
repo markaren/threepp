@@ -12,6 +12,13 @@
 #ifndef THREEPP_VULKAN_SHARED_H
 #define THREEPP_VULKAN_SHARED_H
 
+// oceanOptions2 bit 10, default on; shared by host and shader.
+#define THREEPP_OCEAN_OPT2_BAND_FOOTPRINT_FADE 1024u
+// oceanOptions2 bit 7: THREEPP_OCEAN_RESIDUE_FILAMENTS.
+#define THREEPP_OCEAN_OPT2_RESIDUE_FILAMENTS 128u
+// oceanOptions2 bit 15: THREEPP_OCEAN_WATER_BUBBLES (opt-in).
+#define THREEPP_OCEAN_OPT2_WATER_BUBBLES 32768u
+
 // Bindless material-texture array size. Must match descriptor pool size and
 // `albedoMaps[kMaxMaterialTextures]` in every shader. Bumping requires a
 // clean rebuild so every translation unit picks up the new size.
@@ -77,6 +84,12 @@
 #define kRayMaskNoShadow   0x04u
 #define kRayMaskSensorOnly 0x08u
 #define kRayMaskAll        0x07u
+// opaque instances also carry one of two group bits, so a ray can leave the sea out: every existing ray mask
+// (0x01, kRayMaskAll) still meets the same instances. The water's own reflection rays skip the sea anyway (they used to
+// meet it and step past each crest, gTraceSkipWater), and that traversal of the ocean's BLAS was most of their cost.
+#define kRayMaskSea        0x10u   // the displaced ocean, with kRayMaskOpaque
+#define kRayMaskLand       0x20u   // every other opaque instance, with kRayMaskOpaque
+#define kRayMaskAllButSea  (kRayMaskLand | kRayMaskAlpha | kRayMaskNoShadow)
 
 // Per-instance flag word — packed host-side (VulkanCoreIndirect.cpp) into
 // DrawInfo.flags, carried through gbuffer.vert into the gbuffer IDs
@@ -201,7 +214,8 @@
 // shadow_depth.frag, event_shade.comp, the deferred filters) and so declare
 // the buffer as a plain uint array rather than pull in the 64-bit addresses.
 // VulkanCoreImpl.hpp pins these numbers to the host struct.
-#define kGeomDescWords         18u// sizeof(GeometryDesc) / 4
+#define kGeomDescWords         20u// sizeof(GeometryDesc) / 4 (the extended ocean: + reflectionClass, _padClass)
+#define kGeomDescClassWord     18u// offsetof(GeometryDesc, reflectionClass) / 4
 #define kGeomDescColorWord     12u// offsetof(GeometryDesc, instanceColor) / 4, three floats
 #define kGeomDescFlagsWord     15u// offsetof(GeometryDesc, flags) / 4
 
@@ -287,6 +301,7 @@ static_assert(((kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFl
 #ifdef __cplusplus
 
 #include <cstdint>
+#include <cstddef>
 
 namespace threepp::vulkan_pt {
 
@@ -404,12 +419,17 @@ namespace threepp::vulkan_pt {
         // bit-for-bit. Read by the deferred WATER body only.
         float scatterColor[3];
         float scatterDistance;
+        // DisplacedMesh spectrum metadata (m), 0 = unavailable.
+        // Appended (the base's _padTerrain slot is upstream's aoMapIntensity now);
+        // three pad words keep the record a multiple of 16 bytes.
+        float oceanPeakWavelength;
+        float _padOcean0, _padOcean1, _padOcean2;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 624,
+    static_assert(sizeof(MaterialDesc) == 640,
                   "MaterialDesc size changed - update the GLSL mirror in this file too.");
 }
 
@@ -482,6 +502,8 @@ struct MaterialDesc {
     vec4  terrainBandRough;     // base roughness per band
     vec3  scatterColor;         // single-scattering albedo weight per channel
     float scatterDistance;      // mean free path (m), 1/sigma_s; 0 = no in-scatter
+    float oceanPeakWavelength;  // the extended ocean: DisplacedMesh spectrum metadata (m); 0 = unavailable
+    float _padOcean0, _padOcean1, _padOcean2;
 };
 
 #endif  // __cplusplus
@@ -535,10 +557,22 @@ namespace threepp::vulkan {
         uint32_t clusterLightCount;// # lights in the cluster buffer (0 = none)
         uint32_t shadeMode;        // 0 = dispatch A; 1 = MSAA per-sample dispatch B
         uint32_t preExpBits;       // float-bits pre-exposure baked into sceneHdr stores
+        float oceanSkirtX;         // the ocean skirt (DisplacedMesh::Skirt): centre XZ,
+        float oceanSkirtZ;
+        float oceanSkirtD0;        // the Chebyshev distances its displacement fades over
+        float oceanSkirtD1;        // (0, 0 = no skirt)
+        float oceanSkirtMss;       // the long waves' mean square slope, banked as it fades
+        float rainRate;            // rain on the water (mm/h; 0 = none)
+        uint32_t oceanOptions; // opt-ins, separate from the full flags word
+        uint32_t inspectMode, inspectSolo;
+        uint32_t oceanOptions2; // offset 116; bit 0 = THREEPP_OCEAN_REFL_PATH_VIS, bit 1 = THREEPP_OCEAN_REFL_HORIZON_VIS
+        uint64_t inspectAddress;
     };
-    static_assert(sizeof(ShadePush) == 80,
+    static_assert(offsetof(ShadePush, inspectMode) == 108 && offsetof(ShadePush, inspectAddress) == 120);
+    static_assert(offsetof(ShadePush, oceanOptions2) == 116);
+    static_assert(sizeof(ShadePush) == 128,
                   "ShadePush size changed - update the GLSL mirror in this file "
-                  "and the 80-byte push range in DeferredShade::createPipeline.");
+                  "and the push range in DeferredShade::createPipeline.");
 }
 
 #else  // GLSL
@@ -564,6 +598,18 @@ struct ShadePush {
     uint  clusterLightCount;
     uint  shadeMode;
     uint  preExpBits;
+    float oceanSkirtX;
+    float oceanSkirtZ;
+    float oceanSkirtD0;
+    float oceanSkirtD1;
+    float oceanSkirtMss;
+    float rainRate;
+    uint oceanOptions;
+    uint inspectMode, inspectSolo;
+    uint oceanOptions2;
+#ifdef THREEPP_OCEAN_INSPECT
+    uint64_t inspectAddress;
+#endif
 };
 // Every consumer declares:
 //   layout(push_constant) uniform Pc { ShadePush pc; };

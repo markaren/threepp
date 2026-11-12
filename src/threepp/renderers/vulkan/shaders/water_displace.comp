@@ -84,7 +84,8 @@ struct WakeSample {
 layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
-// 112 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants.
+// 128 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants up to
+// kPushConstantBytes (the host struct's 32-byte surface tail goes by buffer, below).
 // The vessels live in a per-frame buffer (hullAddr), not here: one hull alone
 // used to fill this block to the 128-byte maximum.
 layout(push_constant, scalar) uniform Pc {
@@ -123,6 +124,47 @@ layout(push_constant, scalar) uniform Pc {
     uint64_t wakeTableAddr; // the wake field's table; 0 = no ripple heights (then cascadeMask's
                             // bits 8-15 hold the ray-tracing proxy's stride, grid lines it keeps one of)
 } pc;
+
+// the far-field skirt (DisplacedMesh::Skirt) and CDLOD words do
+// not fit upstream's 128-byte push block; the host writes them as a 32-byte
+// prefix of the vessel buffer (WaterDisplacePipeline::PushConstants past
+// kPushConstantBytes, VulkanCoreGeometry.cpp), so they sit at pc.hullAddr - 32.
+// hullAddr 0 = no prefix: every word reads 0 (no skirt, no CDLOD).
+// Skirt: rings round the grid, each skirtGrowth times wider than the last; the
+// displacement fades out between the spacings skirtFade0 and skirtFade1 (m);
+// skirtInvTwoR = 1 / (2 R_earth).
+struct SurfaceTail {
+    uint     skirtRings;
+    float    skirtGrowth;
+    float    skirtFade0;
+    float    skirtFade1;
+    float    skirtInvTwoR;
+    uint     skirtPad;
+    uint64_t lodPatches;
+};
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer SurfaceTailBuf { SurfaceTail t; };
+SurfaceTail gTail;
+void loadSurfaceTail() {
+    if (pc.hullAddr != 0ul) gTail = SurfaceTailBuf(pc.hullAddr - 32ul).t;
+    else gTail = SurfaceTail(0u, 0.0, 0.0, 0.0, 0.0, 0u, 0ul);
+}
+
+// One axis of a skirt vertex: the warp-normalised coordinate w (|w| > 1, the
+// inner grid spans [-1, 1]) of grid index `idx` (the inner grid's 0 .. n-1;
+// the skirt's rings lie outside), and the spacing there in the same units.
+// Ring 1 continues the inner edge's spacing; each ring is skirtGrowth times wider.
+float skirtAxis(int idx, uint n, float a, out float spacing) {
+    const float s0 = (a + 3.0 * (1.0 - a)) * 2.0 / float(n - 1u);
+    if (idx >= 0 && idx <= int(n) - 1) {
+        const float un = 2.0 * float(idx) / float(n - 1u) - 1.0;
+        spacing = (a + 3.0 * (1.0 - a) * un * un) * 2.0 / float(n - 1u);
+        return a * un + (1.0 - a) * un * un * un;
+    }
+    const float k = float(idx < 0 ? -idx : idx - (int(n) - 1));
+    const float q = gTail.skirtGrowth, qk = pow(q, k);
+    spacing = s0 * qk;
+    return (idx < 0 ? -1.0 : 1.0) * (1.0 + s0 * (qk - 1.0) / max(q - 1.0, 1e-6));
+}
 
 // (hullLocal, a rest point in a vessel's frame with its footprint fade, is in
 // ocean_cascade.glsl: foam_crest.comp reads it too.)
@@ -184,16 +226,33 @@ float hullContactFade(OceanHull hu, vec2 p) {
     return smoothstep(0.0, clamp(0.2 * hu.halfBeam, 0.15, 0.6), edgeDist);
 }
 
-// Bicubic B-spline single-channel fetch (4 bilinear taps, Sigg & Hadwiger).
-// Used by the NORMAL stencil only: the derivative of a BILINEAR texture
-// kinks at every texel boundary (cascade-0 texel ≈ the vertex spacing),
-// which scattered near-random error into adjacent per-vertex normals —
-// Gouraud interpolation then exposed every ~2 m quad edge as a crease,
-// reading as hard-edged "glass tiles" under grazing sky reflection. The
-// B-spline kernel is C1, so the height gradient is smooth across texels.
-// Its RG twin, sampleBicubicRG, is in ocean_cascade.glsl (foam_world reads
-// it too).
-float sampleBicubicR(sampler2D tex, vec2 uv) {
+// Interpolating Catmull-Rom reconstruction of FFT SAMPLES (not spline
+// coefficients). An unprefiltered B-spline attenuates a mode even exactly
+// at its sample locations: (2+cos(k*dx))/3. At 14 m on the 2.93 m
+// cascade this was 0.751 before the derivative stencil/mesh interpolation.
+// Catmull-Rom is a C1 cubic approximation to band-limited reconstruction.
+// Combine its two positive central weights into one hardware-linear tap;
+// keep the negative outer weights separate: 3x3, not 4x4 texture taps.
+vec4 sampleInterpolatingCubic(sampler2D tex, vec2 uv) {
+    const vec2 res=vec2(textureSize(tex,0));
+    const vec2 st=uv*res-0.5, i=floor(st), f=st-i;
+    const vec2 f2=f*f, f3=f2*f;
+    const vec2 w0=-0.5*f+f2-0.5*f3;
+    const vec2 w1=1.0-2.5*f2+1.5*f3;
+    const vec2 w2=0.5*f+2.0*f2-1.5*f3;
+    const vec2 w3=-0.5*f2+0.5*f3;
+    const vec2 wm=w1+w2;
+    const vec2 c0=(i-0.5)/res;
+    const vec2 cm=(i+0.5+w2/wm)/res;
+    const vec2 c3=(i+2.5)/res;
+    vec4 value=vec4(0.0);
+    value+=w0.y*(w0.x*textureLod(tex,vec2(c0.x,c0.y),0.0)+wm.x*textureLod(tex,vec2(cm.x,c0.y),0.0)+w3.x*textureLod(tex,vec2(c3.x,c0.y),0.0));
+    value+=wm.y*(w0.x*textureLod(tex,vec2(c0.x,cm.y),0.0)+wm.x*textureLod(tex,vec2(cm.x,cm.y),0.0)+w3.x*textureLod(tex,vec2(c3.x,cm.y),0.0));
+    value+=w3.y*(w0.x*textureLod(tex,vec2(c0.x,c3.y),0.0)+wm.x*textureLod(tex,vec2(cm.x,c3.y),0.0)+w3.x*textureLod(tex,vec2(c3.x,c3.y),0.0));
+    return value;
+}
+// upstream's bicubic B-spline single-channel fetch (4 bilinear taps, Sigg & Hadwiger), kOceanExt off
+float sampleBicubicRUpstream(sampler2D tex, vec2 uv) {
     const vec2 res = vec2(textureSize(tex, 0));
     const vec2 st  = uv * res - 0.5;
     const vec2 i   = floor(st);
@@ -213,6 +272,13 @@ float sampleBicubicR(sampler2D tex, vec2 uv) {
     const float t01 = texture(tex, vec2(c0.x, c1.y)).r;
     const float t11 = texture(tex, vec2(c1.x, c1.y)).r;
     return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+float sampleBicubicR(sampler2D tex, vec2 uv) {
+    return kOceanExt ? sampleInterpolatingCubic(tex,uv).r : sampleBicubicRUpstream(tex, uv);
+}
+// (upstream: the B-spline sampleBicubicRG of ocean_cascade.glsl)
+vec2 sampleWaterCubicRG(sampler2D tex, vec2 uv) {
+    return kOceanExt ? sampleInterpolatingCubic(tex,uv).rg : sampleBicubicRG(tex, uv);
 }
 
 // Short waves as geometry (DisplacedMesh::Params::shortWaves, waveModel bit 5):
@@ -238,11 +304,11 @@ float gC0Gain = 1.0;
 float gC1Gain = 1.0;
 float gC2Gain = 1.0;
 float c0R(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicR(tex, uv); }
-vec2 c0RG(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicRG(tex, uv); }
+vec2 c0RG(sampler2D tex, vec2 uv) { return gC0Gain * sampleWaterCubicRG(tex, uv); }
 vec2 c1RG(sampler2D tex, vec2 uv) {
-    if (gC1Lod <= 0.0) return gC1Gain * sampleBicubicRG(tex, uv);
+    if (gC1Lod <= 0.0) return gC1Gain * sampleWaterCubicRG(tex, uv);
     const vec2 lo = textureLod(tex, uv, gC1Lod).rg;
-    return gC1Gain * (gC1Lod >= 1.0 ? lo : mix(sampleBicubicRG(tex, uv), lo, gC1Lod));
+    return gC1Gain * (gC1Lod >= 1.0 ? lo : mix(sampleWaterCubicRG(tex, uv), lo, gC1Lod));
 }
 float c1R(sampler2D tex, vec2 uv) {
     if (gC1Lod <= 0.0) return gC1Gain * sampleBicubicR(tex, uv);
@@ -263,12 +329,12 @@ float sampleHeightSmooth(vec2 worldXZ) {
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
-        h += c1R(height1, oceanC1Domain(worldXZ) * invTile) * invTile;
+        h += c1R(height1, oceanC1Domain(height1, worldXZ, pc.tileSize1) * invTile) * invTile;
     }
     return h * pc.waveScale;
 }
 
-vec3 sampleDisplacement(vec2 worldXZ) {
+vec3 sampleDisplacement(vec2 worldXZ, uint mask) {
     // Per-cascade amplitude normalization: divide by the cascade's tile size.
     // Tessendorf's Phillips spectrum produces unnormalized IFFT output whose
     // amplitude grows with the spatial scale; dividing by tileSize gives a
@@ -285,11 +351,11 @@ vec3 sampleDisplacement(vec2 worldXZ) {
     // (0.98 m / 0.20 m), so the mesh faithfully tessellated those kinks into
     // real geometry: under a mirror-sky reflection every cascade-0 texel read
     // as a hard-edged ~1 m world-aligned tile ("the texels are visible").
-    // The B-spline kernel is C1, so there are no creases to tessellate.
+    // The interpolating Catmull-Rom kernel is C1, avoiding creases without the unprefiltered B-spline attenuation.
     // Cascade 2 stays bilinear: its 1.6 cm texels are far below the finest
     // vertex spacing, so the mesh never resolves them.
     vec3 d = vec3(0.0);
-    if ((pc.cascadeMask & 1u) != 0u) {
+    if ((pc.cascadeMask & mask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
         const vec2 uv = worldXZ * invTile;
         d.y += c0R(height0, uv) * invTile;
@@ -297,18 +363,18 @@ vec3 sampleDisplacement(vec2 worldXZ) {
         d.x += dxz.x;
         d.z += dxz.y;
     }
-    if ((pc.cascadeMask & 2u) != 0u) {
+    if ((pc.cascadeMask & mask & 2u) != 0u) {
         // Cascade 1 samples a ROTATED domain (repeat-lattice break — see
         // ocean_cascade.glsl); its displacement is a domain-space vector, so
         // rotate it back into world before accumulating.
         const float invTile = 1.0 / pc.tileSize1;
-        const vec2 uv = oceanC1Domain(worldXZ) * invTile;
+        const vec2 uv = oceanC1Domain(height1, worldXZ, pc.tileSize1) * invTile;
         d.y += c1R(height1, uv) * invTile;
-        const vec2 dxz = oceanC1World(c1RG(displace1, uv)) * invTile;
+        const vec2 dxz = oceanC1World(height1, c1RG(displace1, uv)) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
-    if ((pc.cascadeMask & 4u) != 0u) {
+    if ((pc.cascadeMask & mask & 4u) != 0u) {
         const float invTile = 1.0 / pc.tileSize2;
         const vec2 uv = worldXZ * invTile;
         d.y += gC2Gain * texture(height2,   uv).r * invTile;
@@ -316,6 +382,10 @@ vec3 sampleDisplacement(vec2 worldXZ) {
         d.x += dxz.x;
         d.z += dxz.y;
     }
+    // Linear diffraction is an Eulerian heightfield. All horizontal particle
+    // displacement must vanish next to the rigid wall, including the fine
+    // cascade: otherwise a short-wave fold can still form a polygon sheet.
+    if ((pc.cascadeMask & 2u) != 0u) d.xz *= 1.0-oceanContactEulerian(height1,worldXZ,pc.tileSize1);
     return vec3(d.x * pc.choppiness,
                 d.y * pc.waveScale,
                 d.z * pc.choppiness);
@@ -358,8 +428,8 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
-        const vec2 uv = oceanC1Domain(worldXZ) * invTile;
-        const vec2 dxz = oceanC1World(c1RG(displace1, uv)) * invTile;
+        const vec2 uv = oceanC1Domain(height1, worldXZ, pc.tileSize1) * invTile;
+        const vec2 dxz = oceanC1World(height1, c1RG(displace1, uv)) * invTile;
         const float h  = c1R(height1, uv) * invTile * pc.waveScale;
         d.y += h;
         if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm1);
@@ -367,6 +437,7 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
         d.z += dxz.y;
     }
     d.y += d.w;
+    if ((pc.cascadeMask & 2u) != 0u) d.xz *= 1.0 - oceanContactEulerian(height1, worldXZ, pc.tileSize1);
     return d;
 }
 
@@ -376,7 +447,8 @@ vec3 sampleFineRaw(vec2 worldXZ) {
     if ((pc.cascadeMask & 4u) == 0u) return vec3(0.0);
     const float invTile = 1.0 / pc.tileSize2;
     const vec2 uv = worldXZ * invTile;
-    const vec2 dxz = gC2Gain * texture(displace2, uv).rg * invTile;
+    vec2 dxz = gC2Gain * texture(displace2, uv).rg * invTile;
+    if ((pc.cascadeMask & 2u) != 0u) dxz *= 1.0 - oceanContactEulerian(height1, worldXZ, pc.tileSize1);
     return vec3(dxz.x, gC2Gain * texture(height2, uv).r * invTile * pc.waveScale, dxz.y);
 }
 
@@ -403,7 +475,105 @@ float cwmLimit(float trA, float detA, float lMax) {
     return min(lMax, r);
 }
 
-void main() {
+vec3 sampleDisplacement(vec2 worldXZ) { return sampleDisplacement(worldXZ, 7u); }
+
+// Height-only counterpart of sampleDisplacement, for the reflected incident
+// field. Same cascade domains, reconstruction and normalization; no horizontal
+// texture fetches, hull plane, wake or recursive radiation at the mirror point.
+float radiationIncidentHeight(vec2 p, uint mask) {
+    float h = 0.0;
+    if ((pc.cascadeMask & mask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        h += c0R(height0, p * invTile) * invTile;
+    }
+    if ((pc.cascadeMask & mask & 2u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize1;
+        h += c1R(height1, oceanC1Domain(height1, p, pc.tileSize1) * invTile) * invTile;
+    }
+    if ((pc.cascadeMask & mask & 4u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize2;
+        h += gC2Gain * texture(height2, p * invTile).r * invTile;
+    }
+    return h * pc.waveScale;
+}
+
+// Called only behind radEnabled. Deliberately duplicate the footprint math:
+// hullLocal and every pre-existing arithmetic statement stay textually intact.
+float hullRadiationHeight(OceanHull hu, vec2 p, uint mask) {
+    if (hu.halfBeam <= 0.0 || hu.radBand <= 0.0) return 0.0;
+    const vec3 hl = hullLocal(hu, p);
+    if (hl.z <= 0.0) return 0.0;
+    const float u = clamp(-hl.y / hu.halfLength, -1.0, 1.0);
+    float halfBeamAtLZ;
+    if (u <= 0.0) {
+        halfBeamAtLZ = hu.halfBeam * pow(max(1.0 - u * u, 0.0), 0.6);
+    } else {
+        halfBeamAtLZ = hu.halfBeam * (1.0 - 0.25 * u * u);
+    }
+    const float edgeX = abs(hl.x) - halfBeamAtLZ;
+    const float edgeZ = abs(hl.y) - hu.halfLength;
+    const float d = max(edgeX, edgeZ); // exactly hullLocal's edge distance
+    if (d >= 3.0 * hu.radBand) return 0.0;
+
+    // Nearest side in the exclusion's max-edge metric, with coordinates
+    // clamped onto its tapered outline (not a Euclidean closest-point solve).
+    const vec2 q = vec2(clamp(hl.x, -halfBeamAtLZ, halfBeamAtLZ),
+                        clamp(hl.y, -hu.halfLength, hu.halfLength));
+    const float side = hl.x < 0.0 ? -1.0 : 1.0;
+    vec2 normalLocal;
+    if (edgeZ >= edgeX || (q.y > 0.0 && halfBeamAtLZ < 1e-4)) {
+        normalLocal = vec2(0.0, q.y < 0.0 ? -1.0 : 1.0);
+    } else {
+        // Outward normal of x=+/-width(z), including the tapered bow/stern.
+        const float widthSlope = u <= 0.0
+            ? 1.2 * hu.halfBeam * u / hu.halfLength * pow(max(1.0 - u * u, 1e-6), -0.4)
+            : 0.5 * hu.halfBeam * u / hu.halfLength;
+        normalLocal = normalize(vec2(side, -widthSlope));
+    }
+    const vec2 zSide = vec2(hu.radHeaveRe, hu.radHeaveIm)
+                    + q.x * vec2(hu.radRollRe, hu.radRollIm)
+                    + q.y * vec2(hu.radPitchRe, hu.radPitchIm);
+    const float phase = hu.radPhase - hu.radK * d;
+    const float envelope = exp(-d / hu.radBand) / sqrt(1.0 + d / hu.halfBeam);
+    float eta = hu.radAbar * (zSide.x * cos(phase) - zSide.y * sin(phase));
+
+    // refDir is propagation, not a meteorological FROM bearing: the outward
+    // weather-side normal opposes it. Smooth to exactly zero at grazing/lee.
+    const vec2 normalWorld = vec2(hu.cosYaw * normalLocal.x + hu.sinYaw * normalLocal.y,
+                                 -hu.sinYaw * normalLocal.x + hu.cosYaw * normalLocal.y);
+    const float weather = smoothstep(0.0, 0.35, -dot(normalWorld, vec2(hu.refDirX, hu.refDirZ)));
+    if (weather > 0.0 && hu.refR > 0.0) {
+        // Local tangent-line reflection at the clamped waterline point.
+        const vec2 mirrorLocal = hl.xy - 2.0 * dot(hl.xy - q, normalLocal) * normalLocal;
+        const vec2 mirrorWorld = vec2(hu.centerX + hu.cosYaw * mirrorLocal.x + hu.sinYaw * mirrorLocal.y,
+                                      hu.centerZ - hu.sinYaw * mirrorLocal.x + hu.cosYaw * mirrorLocal.y);
+        eta += hu.refR * weather * radiationIncidentHeight(mirrorWorld, mask);
+    }
+    return hl.z * envelope * eta;
+}
+
+float sampleHullRadiation(vec2 p, uint mask) {
+    OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
+    float height = 0.0;
+    for (uint k = 0u; k < pc.hullCount; ++k) {
+        const OceanHull hu = hulls.h[k];
+        if (hu.radEnabled > 0.0) {
+            float otherFade = 1.0;
+            for (uint j = 0u; j < pc.hullCount; ++j) {
+                if (j != k) otherFade *= hullLocal(hulls.h[j], p).z;
+            }
+            if (otherFade > 0.0) height += otherFade * hullRadiationHeight(hu, p, mask);
+        }
+    }
+    return height;
+}
+
+// the base renderer's main, verbatim but for its name (f2343291), run with the
+// the extended ocean master switch off (kOceanExt): no skirt, no CDLOD tail, no
+// radiation band, upstream's normal stencils. The helpers it calls take
+// upstream's paths under the same constant (sampleBicubicR, sampleWaterCubicRG,
+// oceanC1Local in ocean_cascade.glsl).
+void mainUpstream() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= pc.vertexCount) return;
 
@@ -828,6 +998,497 @@ void main() {
     pc.normOut.v[i * 3u + 1u] = n.y;
     pc.normOut.v[i * 3u + 2u] = n.z;
 #endif
+
+    // Foam used to be computed per-vertex right here (Jacobian + wake
+    // formulas + disturbance splats + persistence decay) and written to a
+    // per-vertex foam buffer via pc.foamAddr. Foam now lives in a world-
+    // space texture built by foam_world.comp, pinned to world XZ regardless
+    // of mesh layout, so both the buffer and the foamAddr push-constant are
+    // gone, and so is the wake-foam math that fed it. foam_world.comp owns
+    // the wake foam and the disturbance splats.
+}
+
+void main() {
+    if (!kOceanExt) { mainUpstream(); return; }
+    loadSurfaceTail();
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.vertexCount) return;
+
+    // Rest position from grid index. PlaneGeometry::create(planeSizeX,
+    // planeSizeZ, gridDimX-1, gridDimZ-1) followed by rotateX(-π/2) places
+    // vertices on the XZ plane, row-major with X fastest: x ∈ ±planeSizeX/2,
+    // z ∈ ±planeSizeZ/2 (a rectangle; squares are the gridDimX == gridDimZ
+    // special case). After rotateX, vertex i's z is FLIPPED relative to the
+    // unrotated plane; we mirror that here so the FFT texture aligns with
+    // mesh world space.
+    // With a skirt the inner grid is offset by skirtRings on each side; its
+    // (u, v) and so its vertices are exactly those of the grid without one.
+    const uint ring = gTail.skirtRings;
+    const uint nX = pc.gridDimX - 2u * ring, nZ = pc.gridDimZ - 2u * ring;
+    const int  ixi = int(i % pc.gridDimX) - int(ring), izi = int(i / pc.gridDimX) - int(ring);
+    const float u = float(ixi) / float(nX - 1u);
+    const float v = float(izi) / float(nZ - 1u);
+    const bool inSkirt = ring > 0u && (ixi < 0 || izi < 0 || ixi > int(nX) - 1 || izi > int(nZ) - 1);
+
+    // Rest position. Uniform grid by default; when the host sets a non-zero
+    // warpHalfRange the (u,v) ∈ [-1,1]² coordinates are remapped through a
+    // cubic blend (`a·t + (1-a)·t³`) so vertex density packs toward the warp
+    // centre. Topology stays fixed — only the per-vertex world position the
+    // FFT/wake formulas evaluate at moves. Pair with the world-space foam
+    // texture so foam doesn't drag with vertex indices.
+    vec3 rest;
+    float skirtSpacing = 0.0;   // m: the skirt's local vertex spacing (the larger axis)
+    vec2  skirtCentre = vec2(0.0), skirtHalf = vec2(0.0);
+    if (inSkirt) {
+        const bool  warped = pc.warpHalfRange > 0.0;
+        const float a = warped ? pc.warpCoefA : 1.0;
+        skirtCentre = warped ? vec2(pc.warpCenterX, pc.warpCenterZ) : vec2(0.0);
+        skirtHalf = warped ? vec2(pc.warpHalfRange)
+                           : 0.5 * vec2(pc.planeSizeX * float(nX - 1u) / float(pc.gridDimX - 1u),
+                                        pc.planeSizeZ * float(nZ - 1u) / float(pc.gridDimZ - 1u));
+        float sx, sz;
+        const float wu = skirtAxis(ixi, nX, a, sx), wv = skirtAxis(izi, nZ, a, sz);
+        rest = vec3(skirtCentre.x + wu * skirtHalf.x, 0.0, skirtCentre.y - wv * skirtHalf.y);
+        skirtSpacing = max(sx * skirtHalf.x, sz * skirtHalf.y);
+    } else if (pc.warpHalfRange > 0.0) {
+        const float un = 2.0 * u - 1.0;
+        const float vn = 2.0 * v - 1.0;
+        const float a  = pc.warpCoefA;
+        const float wu = a * un + (1.0 - a) * un * un * un;
+        const float wv = a * vn + (1.0 - a) * vn * vn * vn;
+        rest = vec3(pc.warpCenterX + wu * pc.warpHalfRange,
+                    0.0,
+                    pc.warpCenterZ - wv * pc.warpHalfRange);
+    } else {
+        rest = vec3((u - 0.5) * pc.planeSizeX,
+                    0.0,
+                    -(v - 0.5) * pc.planeSizeZ);
+    }
+
+    // The middle cascade's level for this vertex (see gC1Lod): the spacing of
+    // the grid here, the larger of its two axes, under the warp's cubic map.
+    if ((pc.waveModel & 32u) != 0u) {
+        float sx = pc.planeSizeX / float(pc.gridDimX - 1u);
+        float sz = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+        if (pc.warpHalfRange > 0.0) {
+            const float un = 2.0 * u - 1.0;
+            const float vn = 2.0 * v - 1.0;
+            const float a  = pc.warpCoefA;
+            sx = pc.warpHalfRange * (a + 3.0 * (1.0 - a) * un * un) * 2.0 / float(pc.gridDimX - 1u);
+            sz = pc.warpHalfRange * (a + 3.0 * (1.0 - a) * vn * vn) * 2.0 / float(pc.gridDimZ - 1u);
+        }
+        if (inSkirt) sx = sz = skirtSpacing;
+        const float texel1 = pc.tileSize1 / float(textureSize(height1, 0).x);
+        gC1Lod = max(log2(max(sx, sz) / texel1), 0.0);
+    }
+
+    // The wave climate at the rest point (waveModel bit 8).
+    if ((pc.waveModel & 256u) != 0u) {
+        const vec4 cl = oceanClimate(waveClimate, rest.xz);
+        gC0Gain = cl.x;
+        gC1Gain = cl.y;
+        gC2Gain = cl.z;
+    }
+
+    // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the
+    // vertex grid's spacing (the historical normal stencil) gives the
+    // displacement gradient A (choppiness 1), the height gradient, the CWM
+    // limiter and the crest steepness.
+    const float wmEpsX = pc.planeSizeX / float(pc.gridDimX - 1u);
+    const float wmEpsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+    vec3  wmC = vec3(0.0);
+    float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
+    float bGX = 0.0, bGZ = 0.0;// the bound harmonic's own gradient (chop normals)
+    float wmLambda = pc.choppiness;
+    if ((pc.waveModel & 63u) != 0u) {
+        wmC = sampleSmoothRaw(rest.xz).xyz;
+        const vec4 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
+        const vec4 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));
+        const vec4 tD = sampleSmoothRaw(rest.xz + vec2(0.0, -wmEpsZ));
+        const vec4 tU = sampleSmoothRaw(rest.xz + vec2(0.0,  wmEpsZ));
+        const float ix = 0.5 / wmEpsX, iz = 0.5 / wmEpsZ;
+        aXX = (tR.x - tL.x) * ix;// d Dx / dx
+        aXZ = (tU.x - tD.x) * iz;// d Dx / dz
+        aZX = (tR.z - tL.z) * ix;// d Dz / dx
+        aZZ = (tU.z - tD.z) * iz;// d Dz / dz
+        hGX = (tR.y - tL.y) * ix;
+        hGZ = (tU.y - tD.y) * iz;
+        bGX = (tR.w - tL.w) * ix;
+        bGZ = (tU.w - tD.w) * iz;
+        // Choppy Wave Model (Nouguier, Guerin and Chapron 2009): the
+        // first-order Lagrangian surface is x = q + D(q), choppiness 1,
+        // limited per vertex so the drawn map never folds. Crest sharpness
+        // (a look control, DisplacedMesh::Params::crestSharpness) raises the
+        // choppiness cascades 0 and 1 are drawn with to 1 + s under the same
+        // limiter: where J would pass under the floor the vertex takes the
+        // largest choppiness that keeps it there, so the crest becomes a
+        // ridge and never loops. A is cascades 0+1 only, so that is the
+        // drawn map the limit holds for; the fine cascade keeps choppiness
+        // min(l, 1). Everything below that describes the drawn surface (the
+        // vertex normal, the UV channel's displacement) reads wmLambda.
+        if ((pc.waveModel & 1u) != 0u)
+            wmLambda = cwmLimit(aXX + aZZ, aXX * aZZ - aXZ * aZX, 1.0 + pc.crestSharpness);
+    }
+
+    vec3 disp;
+    if ((pc.waveModel & 3u) != 0u) {
+        const vec3 f = sampleFineRaw(rest.xz);
+        if (pc.crestSharpness > 0.0) {
+            const float lf = min(wmLambda, 1.0);
+            disp = vec3(wmLambda * wmC.x + lf * f.x, wmC.y + f.y, wmLambda * wmC.z + lf * f.z);
+        } else {
+            disp = vec3(wmLambda * (wmC.x + f.x), wmC.y + f.y, wmLambda * (wmC.z + f.z));
+        }
+    } else {
+        disp = sampleDisplacement(rest.xz);
+    }
+    // The skirt carries the waves while its spacing resolves them, then lies flat
+    // (the deferred shade banks their slope into the roughness over the same range).
+    const float skirtAmp = inSkirt ? 1.0 - smoothstep(gTail.skirtFade0, gTail.skirtFade1, skirtSpacing) : 1.0;
+    disp *= skirtAmp;
+
+    OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
+    float hullFadeAll = 1.0;// product of every footprint's fade (crest foam)
+
+    // === Hull exclusion: every vessel's footprint ===
+    // Suppress displacement inside a vessel's footprint so the ocean mesh
+    // doesn't clip through the deck. Smooth fade over the margin outside the
+    // hull edge keeps the transition invisible.
+    //
+    // The target inside the footprint is the vessel's OWN WATERLINE PLANE,
+    // not the ocean rest plane: a hull that heaves and pitches with the sea
+    // has to carry its waterline with it, or a boat sitting on a 2 m crest
+    // gets a 2 m hole punched in the water around her. `centerY` is the
+    // world height of the hull's design waterline at the exclusion centre and
+    // pitch/roll tilt it in the vessel-local frame (hullLocal). With all
+    // three at their defaults this is bit-for-bit the old `disp *= hullFade`.
+    // All footprints go first, so the wakes below all see the finished
+    // surface; with one vessel the order is exactly the old one.
+    for (uint k = 0u; k < (inSkirt ? 0u : pc.hullCount); ++k) {
+        const OceanHull hu = hulls.h[k];
+        vec3        hl     = hullLocal(hu, rest.xz);
+        // Hull contact: the band is narrow, so the sea stands against her side.
+        if ((pc.waveModel & 128u) != 0u) hl.z = hullContactFade(hu, rest.xz);
+        const float planeY = hu.centerY
+                           + tan(clamp(hu.pitch, -1.0, 1.0)) * hl.y
+                           + tan(clamp(hu.roll,  -1.0, 1.0)) * hl.x;
+        disp.y  = mix(planeY, disp.y, hl.z);
+        disp.x *= hl.z;
+        disp.z *= hl.z;
+        hullFadeAll *= hl.z;
+    }
+
+    // === Vessel wakes ===
+    // Analytical wake from each vessel's pose + forward speed:
+    //   B. Bow bump (positive height bulge centred at the prow)
+    //   C/D. Bow V-wedge (two ridges of pushed-aside water along the hull
+    //      sides, forming a V whose vertex is at the bow), traced along the
+    //      vessel's own trail
+    // (The foam trail and ridge foam live in foam_world.comp.)
+    //
+    // All effects are gated by a smoothstep on |forwardSpeed| so the wake
+    // fades to nothing below ~0.5 m/s — avoids the v²-wavelength blow-up
+    // at v=0 and makes anchored vessels (forwardSpeed=0) wake-free without
+    // a separate branch.
+    //
+    // The bow bump and the current-pose V-wedge extend INTO the hull
+    // rectangle near the prow and along the sides; they get multiplied by
+    // the vessel's own `hullFade` so they fall to zero inside the hull and
+    // don't clip through the deck. Every OTHER vessel's footprint fades the
+    // whole wake (`otherFade`), so a ship's V-wedge does not lift the water
+    // through a smaller boat's deck. With one vessel otherFade is exactly 1.
+    //
+    // Normal finite-diff taps below do NOT re-sample the wake — its
+    // contribution to shading normals is small at long wavelengths and
+    // re-sampling would 4× the wake math per vertex.
+    for (uint k = 0u; k < (inSkirt ? 0u : pc.hullCount); ++k) {
+        const OceanHull hu = hulls.h[k];
+        const vec3  hl         = hullLocal(hu, rest.xz);
+        const float wakeLocalX = hl.x;
+        const float wakeLocalZ = hl.y;
+        float otherFade = 1.0;
+        for (uint j = 0u; j < pc.hullCount; ++j) {
+            if (j != k) otherFade *= hullLocal(hulls.h[j], rest.xz).z;
+        }
+        const float hullFade = hl.z * otherFade;
+
+        // A vessel whose waves the wake field makes has neither the bump
+        // nor the V-wedge (VesselWake::analyticWaves).
+        if (hu.analyticWaves == 0u) continue;
+        const float wakeSpeed = abs(hu.forwardSpeed);
+        const float wakeGate  = smoothstep(0.5, 1.5, wakeSpeed);
+        if (wakeGate > 0.0) {
+            const float lX = wakeLocalX;
+            const float lZ = wakeLocalZ;
+
+            // --- B. Bow bump: gaussian centred at the bow (lZ = +halfLength) ---
+            // Amplitude scales with v² (Bernoulli-flavoured), clamped to keep
+            // tall-wave visuals stable. Multiplied by hullFade so the bump
+            // disappears inside the prow and doesn't poke through the deck.
+            const float distFromBow = lZ - hu.halfLength;            // 0 at bow, +ve ahead
+            const float bowR        = 1.5;
+            const float bowG        = exp(-(distFromBow * distFromBow) / (bowR * bowR));
+            const float bowL        = exp(-(lX * lX) / (hu.halfBeam * hu.halfBeam));
+            const float wakeSpeedSq = hu.forwardSpeed * hu.forwardSpeed;
+            const float bowAmp      = clamp(0.012 * wakeSpeedSq, 0.0, 0.4);
+            disp.y += hullFade * wakeGate * bowAmp * bowG * bowL;
+        }
+
+        // --- Historical V-wedge — two sloped ridges diverging from the
+        // bow at ~20° half-angle, traced along the boat's past path.
+        //
+        // For each snapshot of the boat's pose in its trail slice,
+        // compute that sample's V-wedge ridge value at this vertex and
+        // take MAX across all samples. MAX (not sum) is the right
+        // combiner here because the ridges are PHYSICAL CRESTS — the
+        // boundary lines of the V-wake — not interfering wave trains.
+        // Summing per-sample cosines was what produced the fountain-
+        // shaped pillars: 60 samples × cos(...) of different phases
+        // stack constructively into ~√60·amp peaks.
+        //
+        // With MAX along the curved path, each ridge crest is the
+        // envelope of the V-wedges contributed by samples whose bow
+        // pose places this vertex on their boundary line. The result
+        // is two SLOPED RIDGES bending with the boat's turn, fading
+        // backward as the trail ages out.
+        float vWedgeTrail = 0.0;
+        if (hu.trailCount > 0u) {
+            WakeTrailBuf wt = WakeTrailBuf(pc.wakeTrailAddr);
+            for (uint si = 0u; si < hu.trailCount; ++si) {
+                const WakeSample s = wt.s[hu.trailFirst + si];
+                const float sSpeed = abs(s.speed);
+                const float sGate  = smoothstep(0.5, 1.5, sSpeed);
+                if (sGate <= 0.0) continue;
+                const float dx = rest.x - s.worldX;
+                const float dz = rest.z - s.worldZ;
+                const float sLX = s.cosYaw * dx - s.sinYaw * dz;
+                const float sLZ = s.sinYaw * dx + s.cosYaw * dz;
+                const float sDistAft = hu.halfLength - sLZ;
+                if (sDistAft <= 0.0 || sDistAft > hu.halfLength * 6.0) continue;
+                // Per-sample hullFade — same silhouette taper as the
+                // current-pose hull exclusion above, but anchored to THIS
+                // sample's pose. Suppresses V-wedge ridges inside the
+                // sample's hull footprint so the wake doesn't lift water
+                // under the boat as the boat (or any historical past
+                // position of it) coincides with this vertex.
+                const float uHull = clamp(-sLZ / hu.halfLength, -1.0, 1.0);
+                float sHalfBeamAtLZ;
+                if (uHull <= 0.0) {
+                    sHalfBeamAtLZ = hu.halfBeam *
+                                    pow(max(1.0 - uHull * uHull, 0.0), 0.6);
+                } else {
+                    sHalfBeamAtLZ = hu.halfBeam * (1.0 - 0.25 * uHull * uHull);
+                }
+                const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
+                const float sHullEdgeZ = abs(sLZ) - hu.halfLength;
+                const float sHullFade  = smoothstep(0.0, oceanHullMargin(hu.halfBeam),
+                                                    max(sHullEdgeX, sHullEdgeZ));
+                if (sHullFade <= 0.0) continue;
+                const float tanAV     = 0.36;
+                const float expectedX = tanAV * sDistAft;
+                const float dRidge    = abs(abs(sLX) - expectedX);
+                const float sigmaR    = 0.6 + 0.05 * sDistAft;
+                const float ridge     = exp(-(dRidge * dRidge) / (sigmaR * sigmaR));
+                const float alongDec  = exp(-sDistAft / (hu.halfLength * 4.0));
+                const float ageFade   = exp(-s.age / 5.0);
+                const float vAmp      = clamp(0.016 * sSpeed * sSpeed +
+                                              0.06 * sSpeed, 0.0, 1.0);
+                vWedgeTrail = max(vWedgeTrail,
+                                  sGate * vAmp * ridge * alongDec * ageFade * sHullFade);
+            }
+            disp.y += vWedgeTrail * otherFade;
+        } else {
+            // Fallback: no historical trail — emit a single V-wedge from
+            // the current pose. Bow-anchored ridges, same shape as the
+            // trail-summed historical path.
+            const float distAft = hu.halfLength - wakeLocalZ;
+            if (wakeGate > 0.0 && distAft > 0.0 && distAft < hu.halfLength * 6.0) {
+                const float tanAV     = 0.36;
+                const float expectedX = tanAV * distAft;
+                const float dRidge    = abs(abs(wakeLocalX) - expectedX);
+                const float sigmaR    = 0.6 + 0.05 * distAft;
+                const float ridge     = exp(-(dRidge * dRidge) / (sigmaR * sigmaR));
+                const float alongDec  = exp(-distAft / (hu.halfLength * 4.0));
+                const float vAmp      = clamp(0.016 * wakeSpeed * wakeSpeed +
+                                              0.06 * wakeSpeed, 0.0, 1.0);
+                // hullFade is this vessel's current-pose silhouette (times
+                // the other footprints) — same suppression-inside-hull
+                // behaviour as the trail path.
+                disp.y += hullFade * wakeGate * vAmp * ridge * alongDec;
+            }
+        }
+    }
+
+    // === The wake field's waves ===
+    // Their height (wakeRippleHeight), gone inside every footprint as the
+    // analytic wake is. The mesh's spacing here is the warp's derivative,
+    // times the ray-tracing proxy's stride.
+    if (pc.wakeTableAddr != 0ul) {
+        float spX = pc.planeSizeX / float(pc.gridDimX - 1u);
+        float spZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+        if (pc.warpHalfRange > 0.0) {
+            const float un = 2.0 * u - 1.0;
+            const float vn = 2.0 * v - 1.0;
+            const float a  = pc.warpCoefA;
+            spX = 2.0 * pc.warpHalfRange * (a + 3.0 * (1.0 - a) * un * un) / float(pc.gridDimX - 1u);
+            spZ = 2.0 * pc.warpHalfRange * (a + 3.0 * (1.0 - a) * vn * vn) / float(pc.gridDimZ - 1u);
+        }
+        float fade = 1.0;
+        for (uint k = 0u; k < pc.hullCount; ++k)
+            fade *= (pc.waveModel & 128u) != 0u ? hullContactFade(hulls.h[k], rest.xz) : hullLocal(hulls.h[k], rest.xz).z;
+        if (fade > 0.0) disp.y += fade * wakeRippleHeight(rest.xz, max(spX, spZ) * float(max((pc.cascadeMask >> 8u) & 255u, 1u)));
+    }
+
+    // Opt-in radiation; preserve the historical arithmetic when disabled.
+    bool radiationEnabled = false;
+    for (uint k = 0u; k < pc.hullCount; ++k) {
+        if (hulls.h[k].radEnabled > 0.0) radiationEnabled = true;
+    }
+    if (radiationEnabled && !inSkirt) disp.y += sampleHullRadiation(rest.xz, 7u);
+
+    vec3 outPos = rest + disp;
+    if (inSkirt && gTail.skirtInvTwoR > 0.0) {   // the Earth's curvature, from the inner grid's edge out (0 there)
+        const vec2  off = abs(rest.xz - skirtCentre) - skirtHalf;
+        const float b   = max(max(off.x, off.y), 0.0), h = max(skirtHalf.x, skirtHalf.y);
+        outPos.y -= b * (b + 2.0 * h) * gTail.skirtInvTwoR;
+    }
+
+    // Breaking crests: the local steepness of the choppiness-1 Lagrangian
+    // map, eps = minus the most compressive eigenvalue of A's symmetric part.
+    // For one wave a cos(k x) at its crest A = -a k, so eps = a k (and
+    // J = 1 - eps): it peaks on the crest and falls down both faces, so the
+    // shade's step on it puts foam on the crest top. Written per vertex at
+    // the vertex's own displaced position (no inversion, no lag) into the UV
+    // channel, tagged -1 in G; faded inside every hull footprint.
+    if ((pc.waveModel & 16u) != 0u) {
+        // Crest foam: the horizontal displacement this vertex was drawn
+        // with. Position and displacement both interpolate linearly over a
+        // triangle, so a pixel's P.xz minus this, interpolated, is its rest
+        // point q exactly: the coordinate the foam texture lives on
+        // (foam_crest.comp). Takes the channel the breaking-crest tag uses.
+        pc.uvOut.v[i] = disp.xz;
+    } else if ((pc.waveModel & 4u) != 0u) {
+        const float sxz = 0.5 * (aXZ + aZX);
+        const float mid = 0.5 * (aXX + aZZ);
+        const float rad = sqrt(0.25 * (aXX - aZZ) * (aXX - aZZ) + sxz * sxz);
+        const float eps = -(mid - rad);
+        pc.uvOut.v[i] = vec2(eps * hullFadeAll, -1.0);
+    } else if ((pc.waveModel & 8u) != 0u) {
+        // Switched off: an untagged UV (the water material samples none).
+        pc.uvOut.v[i] = vec2(0.0);
+    }
+
+    // The normal stencil follows the finite contact patch and skirt spacing.
+    float epsX = pc.planeSizeX / float(pc.gridDimX - 1u);
+    float epsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+    if ((pc.cascadeMask & 2u) != 0u && oceanC1Local(height1)) {
+        const vec2 centre=vec2(texelFetch(height1,ivec2(1,0),0).g,texelFetch(height1,ivec2(2,0),0).g);
+        // Resolve the contact patch derivative at its texel spacing; retain the
+        // existing far-field stencil outside the patch.
+        const float blend=1.0-smoothstep(0.1*pc.tileSize1,0.4*pc.tileSize1,length(rest.xz-centre));
+        const float step=pc.tileSize1/float(textureSize(height1,0).x);
+        epsX=mix(epsX,min(epsX,step),blend);
+        epsZ=mix(epsZ,min(epsZ,step),blend);
+    }
+    if (inSkirt) epsX = epsZ = max(epsX, 0.5 * skirtSpacing);
+    vec3 n;
+    vec3 tx, tz; // full finite-difference tangents, also used by radiation
+#ifdef OCEAN_CHOP
+    if (!inSkirt && !((pc.cascadeMask & 2u) != 0u && oceanC1Local(height1))) {
+        // Chop normals: the normal of the surface this vertex actually sits
+        // on, from exact derivatives at the REST point (no stencil), the
+        // horizontal chop included: oceanChopSlope (ocean_chop_normal.glsl)
+        // crosses the two tangents of P = rest + (l*Dx, h, l*Dz). The fields
+        // are B-spline filtered like the displacement above, so normal and
+        // geometry describe one surface. Cascades 0+1 as before; cascade 2 is
+        // added per pixel by the deferred shade.
+        vec2  sl  = vec2(0.0);
+        float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+        if ((pc.cascadeMask & 1u) != 0u) {
+            const float invTile = 1.0 / pc.tileSize0;
+            const vec2  uv = rest.xz * invTile;
+            sl += c0RG(slope0, uv) * invTile;
+            const vec2 jd = c0RG(jac0, uv) * invTile;
+            jxx += jd.x;
+            jzz += jd.y;
+            jxz += c0RG(height0, uv).g * invTile;
+        }
+        if ((pc.cascadeMask & 2u) != 0u) {
+            // Rotated sample domain d = R*x: a gradient comes back as
+            // R^T*g (oceanC1World) and the displacement gradient as
+            // R^T * Jd * R.
+            const float invTile = 1.0 / pc.tileSize1;
+            const vec2  uv = oceanC1Domain(height1, rest.xz, pc.tileSize1) * invTile;
+            sl += oceanC1World(height1, c1RG(slope1, uv)) * invTile;
+            const vec2  jd = c1RG(jac1, uv) * invTile;
+            const float p  = jd.x;
+            const float r  = jd.y;
+            const float q  = c1RG(height1, uv).g * invTile;
+            const float c  = kOceanCascade1RotCos;
+            const float sn = kOceanCascade1RotSin;
+            jxx += c * c * p + 2.0 * c * sn * q + sn * sn * r;
+            jzz += sn * sn * p - 2.0 * c * sn * q + c * c * r;
+            jxz += c * sn * (r - p) + (c * c - sn * sn) * q;
+        }
+        // Near a fold the chop correction fades back to the rest slope
+        // (ocean_chop_normal.glsl); a vertex has no roughness to bank the
+        // difference in, the per-pixel moments do. Under the wave-model
+        // switches the choppiness is the drawn one (the CWM limiter's) and
+        // the slope carries the bound harmonic's (stencil, cascades 0+1);
+        // with them off these are pc.choppiness and zero.
+        const vec2 sd = oceanChopSlope(sl * pc.waveScale + vec2(bGX, bGZ),
+                                       jxx * wmLambda, jzz * wmLambda, jxz * wmLambda).xy;
+        n = normalize(vec3(-sd.x, 1.0, -sd.y));
+        tx = vec3(1.0, sd.x, 0.0) * (2.0 * epsX);
+        tz = vec3(0.0, sd.y, 1.0) * (2.0 * epsZ);
+    } else
+#endif
+    if (!inSkirt && (pc.waveModel & 1u) != 0u) {
+        // Upstream CWM: the limited map's own tangents, including bound waves.
+        tx = vec3(1.0 + wmLambda * aXX, hGX, wmLambda * aZX) * (2.0 * epsX);
+        tz = vec3(wmLambda * aXZ, hGZ, 1.0 + wmLambda * aZZ) * (2.0 * epsZ);
+        n = normalize(cross(tz, tx));
+    } else if (!inSkirt && (pc.waveModel & 2u) != 0u) {
+        tx = vec3(1.0, hGX, 0.0) * (2.0 * epsX);
+        tz = vec3(0.0, hGZ, 1.0) * (2.0 * epsZ);
+        n = normalize(vec3(-hGX, 1.0, -hGZ));
+    } else {
+        const vec3 dL = sampleDisplacement(rest.xz - vec2(epsX, 0.0), 3u);
+        const vec3 dR = sampleDisplacement(rest.xz + vec2(epsX, 0.0), 3u);
+        const vec3 dD = sampleDisplacement(rest.xz - vec2(0.0, epsZ), 3u);
+        const vec3 dU = sampleDisplacement(rest.xz + vec2(0.0, epsZ), 3u);
+        tx = vec3(2.0 * epsX, 0.0, 0.0) + skirtAmp * (dR - dL);
+        tz = vec3(0.0, 0.0, 2.0 * epsZ) + skirtAmp * (dU - dD);
+        const vec3 areaN = cross(tz, tx);
+        n = dot(areaN, areaN) > 1e-12 ? normalize(areaN) : vec3(0.0, 1.0, 0.0);
+    
+    }
+
+    pc.posOut.v[i * 3u + 0u] = outPos.x;
+    pc.posOut.v[i * 3u + 1u] = outPos.y;
+    pc.posOut.v[i * 3u + 2u] = outPos.z;
+    pc.normOut.v[i * 3u + 0u] = n.x;
+    pc.normOut.v[i * 3u + 1u] = n.y;
+    pc.normOut.v[i * 3u + 2u] = n.z;
+
+    if (radiationEnabled) {
+        // The original normal calculation/stores above are unchanged. Add the
+        // band's full faded slope to their XYZ tangents, then overwrite only
+        // on the enabled path. Include every reflected cascade here: deferred
+        // fine normals know only the unreflected field, not this new band.
+        vec3 radiationTx = tx;
+        vec3 radiationTz = tz;
+        radiationTx.y += sampleHullRadiation(rest.xz + vec2(epsX, 0.0), 7u)
+                       - sampleHullRadiation(rest.xz - vec2(epsX, 0.0), 7u);
+        radiationTz.y += sampleHullRadiation(rest.xz + vec2(0.0, epsZ), 7u)
+                       - sampleHullRadiation(rest.xz - vec2(0.0, epsZ), 7u);
+        const vec3 radiationAreaN = cross(radiationTz, radiationTx);
+        const vec3 radiationN = dot(radiationAreaN, radiationAreaN) > 1e-12
+            ? normalize(radiationAreaN) : vec3(0.0, 1.0, 0.0);
+        pc.normOut.v[i * 3u + 0u] = radiationN.x;
+        pc.normOut.v[i * 3u + 1u] = radiationN.y;
+        pc.normOut.v[i * 3u + 2u] = radiationN.z;
+    }
 
     // Foam used to be computed per-vertex right here (Jacobian + wake
     // formulas + disturbance splats + persistence decay) and written to a

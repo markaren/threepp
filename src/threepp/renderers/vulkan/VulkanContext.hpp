@@ -149,7 +149,10 @@ namespace threepp::vulkan {
         bool presentSuppressed() const { return presentSuppressed_; }
 
         // True for a headless canvas whose driver has no
-        // VK_EXT_headless_surface (Windows/NVIDIA): the "swapchain" is then a
+        // VK_EXT_headless_surface (Windows/NVIDIA), whose headless surface
+        // offers no formats (NVIDIA's on Linux), that has no surface at all
+        // (THREEPP_VULKAN_NO_SURFACE=1), or that asks for it
+        // (THREEPP_VULKAN_OFFSCREEN=1): the "swapchain" is then a
         // ring of ordinary images this context owns, one per frame in flight,
         // at the size the canvas asked for. It used to be a real swapchain on
         // a hidden window, whose size the window system clamps to the desktop

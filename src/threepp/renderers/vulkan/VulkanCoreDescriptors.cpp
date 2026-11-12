@@ -310,6 +310,8 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.lightsUbo        = lightBufs.data();
             in.envView          = envImage.view;
             in.envSampler       = envImage.sampler;
+            in.sunBackgroundView = sunBackgroundImage.view ? sunBackgroundImage.view : envImage.view;
+            in.sunBackgroundSampler = sunBackgroundImage.view ? sunBackgroundImage.sampler : envImage.sampler;
             in.gbufNormal       = normalViews.data();
             in.gbufDepth        = depthViews.data();
             in.gbufIds          = idsViews.data();
@@ -361,8 +363,14 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // handles the RT set binds at 32 + 44. ensureDisplacedState sets them
             // BEFORE the scene-build descriptor rewrite that calls us, so the
             // deferred set always picks up the current ocean state.
+            for (int i = 0; i < 3; ++i) {
+                in.inspectHeight[i] = inspectHeight_[i] ? inspectHeight_[i] : oceanFineHeightDummy.view;
+                in.inspectDisplace[i] = inspectDisplace_[i] ? inspectDisplace_[i] : oceanFineHeightDummy.view;
+            }
             in.oceanFineView    = oceanFineHeightView;
             in.oceanFineSampler = oceanFineHeightSampler;
+            in.oceanDisplace0View = oceanDisplace0View;
+            in.oceanDisplace2View = oceanDisplace2View;
             in.oceanFoamView    = oceanFoamView;
             in.oceanFoamSampler = oceanFoamSampler;
             // Crest foam: the live ocean's texture or the foam dummy (both

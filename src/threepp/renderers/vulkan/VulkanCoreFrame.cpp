@@ -1048,6 +1048,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // the primary's DLSS state is settled for this frame.
             syncSideViewDlss();
 
+            frameIsSensor_ = sensorFrame_;
             uint32_t imageIndex = 0;
             // Third place the CPU can block on something that is not the CPU:
             // with only kFramesInFlight swapchain images this waits for the
@@ -1055,8 +1056,11 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // cannot be read as CPU work — or as fence-wait back-pressure.
             // (Free after the first frame per slot on a suppressed-present
             // swapchain — there is no presentation engine in that picture.)
-            VkResult acq;
-            {
+            VkResult acq = VK_SUCCESS;
+            if (frameIsSensor_) {
+                // A sensor frame touches no swapchain image (see sensorFrame_).
+                imageIndex = frameImageIndex_;
+            } else {
                 THREEPP_CPUPROF("frame.0c_acquire");
                 acq = acquireOrReuseSwapchainImage(imageIndex);
             }
@@ -1389,7 +1393,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 const bool gbufOnlyFrame = rasterGbufPipeline != VK_NULL_HANDLE &&
                                            (hybridDebugView_ != HybridDebugView::Off ||
                                             (eventsOnlyMode_ && eventCamEnabled_));
-                asyncFrame_ = asyncPilot_ && !gbufOnlyFrame;
+                asyncFrame_ = asyncPilot_ && !gbufOnlyFrame && !frameIsSensor_;
                 if (asyncFrame_) {
                     VkCommandBufferBeginInfo bi{};
                     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1451,6 +1455,17 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             {
                 THREEPP_CPUPROF("frame.J9_secondaryViews");
                 anySecondary = addSecondaryViewPasses(g);
+                // the sensor chains with an operation queued (setViewSensorChain), after every view
+                for (size_t i = 1; i < views_.size(); ++i) {
+                    ViewContext& v = *views_[i];
+                    if (!v.chain || !v.chain->pending() || v.pendingCreate || v.pendingDestroy) continue;
+                    if (v.colorTarget.image == VK_NULL_HANDLE) continue;
+                    v.chain->addPass(g, currentFrame, [this, &v](uint32_t h) {
+                        ViewContext* s = h == 0u ? &v : findView(h);
+                        if (!s || s->colorTarget.image == VK_NULL_HANDLE) s = &v;
+                        return vulkan::SensorChain::Src{s->colorTarget.image, s->colorTarget.view};
+                    });
+                }
             }
 
             // The record tail after the views: scene capture, frame interop,
@@ -1460,7 +1475,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // screen-space sprite overlay): individually these are early-outs
             // on a scene that uses none of them, and the point of the key is
             // that the books close, not that each is attributable.
-            {
+            if (!frameIsSensor_) {
                 THREEPP_CPUPROF("frame.4_recordTail");
                 if (anySecondary) addViewEnterPass(g, 0);
                 addPostViewTailPasses(g, imageIndex);
@@ -1505,6 +1520,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // no user code beyond setting the flag on the sprite.
             // recordOrthoOverlay short-circuits when no eligible sprites
             // are found, so the typical no-sprite case pays nothing.
+            if (frameIsSensor_) return true;   // no overlay: nothing of the window is drawn
             const VkExtent2D extPT = ctx->swapchainExtent();
             if (!screenSpaceCam_) {
                 screenSpaceCam_ = OrthographicCamera::create(
@@ -1642,7 +1658,7 @@ void VulkanRenderer::Impl::endFrame() {
             // reconciling one frame.
             {
                 THREEPP_CPUPROF("frame.K1_endRecord");
-                recordOverlayAndPresentTransition(cb, imageIndex);
+                if (!frameIsSensor_) recordOverlayAndPresentTransition(cb, imageIndex);
                 recordRayCountCopy(cb);
                 // Closes the whole-command-buffer GPU bracket opened in
                 // GpuTimings::beginFrame; must be the last recorded command.
@@ -1692,10 +1708,10 @@ void VulkanRenderer::Impl::endFrame() {
             //    (VUID-vkQueueSubmit2-semaphore-03868). Drop the signal instead.
             // The inFlight fence is unchanged and remains what orders the slot's
             // reuse of the image and of every per-frame buffer.
-            const bool suppressPresent = ctx->presentSuppressed();
+            const bool suppressPresent = ctx->presentSuppressed() || frameIsSensor_;
             VkSubmitInfo2 submit{};
             submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-            submit.waitSemaphoreInfoCount = acquireSemPending_[currentFrame] ? 1u : 0u;
+            submit.waitSemaphoreInfoCount = acquireSemPending_[currentFrame] && !frameIsSensor_ ? 1u : 0u;
             submit.pWaitSemaphoreInfos = &waitInfo;
             submit.commandBufferInfoCount = 1;
             submit.pCommandBufferInfos = &cbInfo;
@@ -1763,7 +1779,9 @@ void VulkanRenderer::Impl::endFrame() {
                 check(vkQueueSubmit2(ctx->graphicsQueue(), 1, &submit, inFlight[currentFrame]),
                       "vkQueueSubmit2");
             }
-            acquireSemPending_[currentFrame] = false;// consumed by the submit above
+            // consumed by the submit above; a sensor frame leaves an unconsumed
+            // acquire for the slot's next display frame (it acquired nothing)
+            if (!frameIsSensor_) acquireSemPending_[currentFrame] = false;
 
             if (suppressPresent) {
                 // Nothing to present to. The image stays app-owned in PRESENT_SRC
@@ -1809,7 +1827,7 @@ void VulkanRenderer::Impl::endFrame() {
             // causing the per-pixel FC=4096 running mean to slowly absorb the
             // single deterministic sample — image visibly resets from converged
             // toward biased noise. 16M ≈ 75 hours at 60 fps, no longer reachable.
-            if (sampleIndex < (1u << 24)) ++sampleIndex;
+            if (!inspectFrozen_ && sampleIndex < (1u << 24)) ++sampleIndex;
 
             // Advance serial + slot together, only on a SUBMITTED frame. A
             // failed acquire returns before endFrame(), so serial never runs
@@ -2126,6 +2144,7 @@ void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
             invalidateFrameInterop(v.id, "removing the view");
             // Passes first, while the device is alive — they own pipelines,
             // pools, samplers and images of their own.
+            v.chain.reset();
             v.taa_.reset();
 #if defined(THREEPP_WITH_DLSS)
             v.dlss.up.reset();
@@ -2522,6 +2541,9 @@ bool VulkanRenderer::Impl::addSecondaryViewPasses(rg::RenderGraph& g) {
                 // at the next frame boundary, so don't spend a frame on it.
                 if (v.pendingCreate || v.pendingDestroy) continue;
                 if (!v.camera || !v.taa_ || !v.deferredShade_) continue;
+                if (!v.enabled) continue;
+                // A sensor-mode view carries nothing from frame to frame.
+                if (v.sensorMode) v.shadeHistoryStale = true;
 
                 curView_ = &v;
                 Camera& cam = *v.camera;

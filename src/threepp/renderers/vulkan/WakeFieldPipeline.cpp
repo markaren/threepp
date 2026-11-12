@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/WakeFieldPipeline.hpp"
+#include "threepp/renderers/vulkan/OceanExtended.hpp"
 
 #include "threepp/renderers/vulkan/EnvKnob.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
@@ -142,6 +143,8 @@ namespace threepp::vulkan {
             stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = mod;
             stage.pName  = "main";
+            const OceanSpec oceanSpec;// ocean_extended.glsl (ocean_wake.glsl): none with the extended ocean off
+            stage.pSpecializationInfo = oceanSpec.info();
 
             VkComputePipelineCreateInfo cpci{};
             cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -499,6 +502,19 @@ namespace threepp::vulkan {
         tb.rippleViscosity = std::max(wf.rippleViscosity, 0.0f);
         tb.rippleGain      = wf.rippleGain;
         tb.albedo          = std::max(wf.albedo, 0.0f);
+        tb.driftX          = wf.driftX;
+        tb.driftZ          = wf.driftZ;
+
+        // Carry the same moving footprints used by water displacement. These
+        // are read only by the natural live-cap gate, never by wake evolution.
+        // Values, rather than pointers into rotating frame buffers, keep held
+        // shot frames valid when the wake table does not advance in time.
+        for (uint32_t v = 0; v < DisplacedMesh::kMaxVessels; ++v) {
+            const auto& h = dm.vesselHull(v);
+            if (h.halfLength > 0.f && h.halfBeam > 0.f)
+                tb.foamHulls[tb.foamHullCount++] = {h.centerX, h.centerZ, h.halfLength,
+                                                   h.halfBeam, h.sinYaw, h.cosYaw};
+        }
 
         uint32_t liveMask = 0;
         for (uint32_t i = 0; i < st.layers; ++i) {

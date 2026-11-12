@@ -42,6 +42,7 @@ void main() {
     const ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
     const ivec2 hsize = ivec2((pc.width + 1u) / 2u, (pc.height + 1u) / 2u);
     if (hp.x >= hsize.x || hp.y >= hsize.y) return;
+    cloudInitPixel();
     const ivec2 fmax = ivec2(int(pc.width) - 1, int(pc.height) - 1);
 
     // The block's nearest surface.
@@ -62,6 +63,7 @@ void main() {
     gPrimaryDir    = camRayDir(ndc);
     gPixelCoord    = fp;
     gNearPointY    = camNearPoint(ndc).y;
+    initNearSurfaceY(ndc);
 
     // The leg the shade marches for this pixel: to the surface, or 2000 m of sky.
     const bool sky = texelFetch(gbufIdsTex, fp, 0).x == 0u;

@@ -2,6 +2,7 @@
 // public surface and architecture overview.
 
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
+#include "threepp/renderers/vulkan/OceanExtended.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"// flushHostWrites
@@ -180,6 +181,9 @@ namespace threepp::water {
             stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = mod;
             stage.pName  = "main";
+            // ocean_extended.glsl (foam_crest's ocean_cascade.glsl): none with the extended ocean master switch off
+            const vulkan::OceanSpec oceanSpec;
+            stage.pSpecializationInfo = oceanSpec.info();
 
             VkComputePipelineCreateInfo cpci{};
             cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;

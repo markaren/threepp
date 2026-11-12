@@ -1,4 +1,11 @@
 #version 460
+// Both render features are part of every standard permutation.
+#define THREEPP_OCEAN_REFL_LOBE_EXPERIMENT
+#define THREEPP_OCEAN_WATER_BODY_EXPLORATION
+#ifdef THREEPP_OCEAN_INSPECT
+#define THREEPP_OCEAN_REFL_HITS_DIAG
+#endif
+
 #extension GL_EXT_scalar_block_layout : require
 #ifndef THREEPP_NO_RAY_QUERY
 #extension GL_EXT_ray_query : require
@@ -6,6 +13,7 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_control_flow_attributes : require
 // Divergent bindless indexing: albedoMaps[] indices come from per-hit / per-ray
 // material data, so neighbouring invocations index DIFFERENT descriptors.
 // Without nonuniformEXT that is spec-UB — the compiler may assume the index is
@@ -126,6 +134,7 @@ void main() {
         // Waterline band, if this pixel's port point sits within a centimetre of
         // the surface (no-op otherwise — see applyMeniscus). Last, so it grades
         // the finished pixel: it is water on the GLASS, in front of everything.
+        if (kOceanExt && ((lights.envKnobFlags >> 8u) & 31u) != 0u) sky *= 0.125;
         imageStore(outImage, px, vec4(applyMeniscus(sky, uintBitsToFloat(pc.preExpBits)), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
@@ -135,6 +144,12 @@ void main() {
         // leave sky pixels uncleared"), a normal facing the eye, fully rough,
         // at infinity.
         storeRRGuides(px, vec3(0.5), vec3(0.5), -dirWS, 1.0, kRRMissDist);
+
+#ifdef THREEPP_OCEAN_INSPECT
+    if (pc.inspectMode != 0u) {
+        inspectNonWater(px);
+    }
+#endif
         return;
     }
 
@@ -186,6 +201,12 @@ void main() {
         // Unlit: the colour is the material's own, so it is its diffuse
         // albedo (RR then sees a pixel lit by exactly 1); nothing specular.
         storeRRGuides(px, albedo, vec3(0.0), normalize(nTap.xyz * 2.0 - 1.0), 1.0, 0.0);
+
+#ifdef THREEPP_OCEAN_INSPECT
+    if (pc.inspectMode != 0u) {
+        inspectNonWater(px);
+    }
+#endif
         return;
     }
 
@@ -213,8 +234,22 @@ void main() {
         // Its point and spot lights are this pixel's cluster cell: the slice by
         // view-space -z, as the opaque path's (matches cluster_build's AABB axis).
         vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
-                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq, Nmacro,
+                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq, waterBankedMss, Nmacro,
                                px, max(-(viewH.z / viewH.w), 0.0));
+#ifdef THREEPP_OCEAN_WATER_BODY_EXPLORATION
+        const uint waterAov = (lights.envKnobFlags >> 8u) & 31u;
+        if (kOceanExt && ((waterAov != 0u && waterAov != 15u) || (pm.specularIntensity < 0.0 && pm.iridescence < 0.0))) {
+#else
+        if (kOceanExt && (((lights.envKnobFlags >> 8u) & 31u) != 0u || (pm.specularIntensity < 0.0 && pm.iridescence < 0.0))) {
+#endif
+            imageStore(outImage, px, vec4(wcol * uintBitsToFloat(pc.preExpBits), 1.0));
+            imageStore(indirectImage, px, vec4(0.0));
+            imageStore(reflectImage, px, vec4(0.0));
+            imageStore(shadowVisImage, px, vec4(0.0));
+            imageStore(directUImage, px, vec4(0.0));
+            imageStore(demodColorImage, px, vec4(0.0));
+            return;
+        }
         // Coverage weighting as in the main path — water-dominant edge pixels
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
@@ -240,6 +275,12 @@ void main() {
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)
               + fogDirPrimary(camPos, -V, length(worldPos - camPos), px)
               + murkSunScatter(camPos, -V, length(worldPos - camPos), px);// shafts under the surface
+        // diagnostic (water material iridescence < 0: THREEPP_OCEAN_DIAG_ELEV): the surface's elevation over the mean level,
+        // (y + 8 m) / 16 m in red, for the crest-affinity measure
+        if (kOceanExt && pm.iridescence < -0.5) wcol = vec3(clamp((worldPos.y - (pm.sheenRoughness * 100.0 - 50.0) + 8.0) / 16.0, 0.0, 1.0), 0.0, 0.0) / uintBitsToFloat(pc.preExpBits);
+#ifdef THREEPP_OCEAN_WATER_BODY_EXPLORATION
+        if (kOceanExt && waterAov == 15u) wcol *= 0.125;
+#endif
         imageStore(outImage, px, vec4(applyMeniscus(wcol * uintBitsToFloat(pc.preExpBits),
                                                     uintBitsToFloat(pc.preExpBits)), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
@@ -254,6 +295,12 @@ void main() {
         // before its refraction rays run).
         storeRRGuides(px, vec3(0.0), gRRSpecF, N, gRRSpecRough,
                       gRRReflHitT > 0.0 ? gRRReflHitT : kRRMissDist);
+
+#ifdef THREEPP_OCEAN_INSPECT
+    if (pc.inspectMode != 0u) {
+        inspectWater(px, worldPos, pm.sheenRoughness * 100.0 - 50.0, waterBankedMss, fineKernelSq);
+    }
+#endif
         return;
     }
 
@@ -430,6 +477,9 @@ void main() {
     // smooth tap, never skipped; with AO off there is no gather to skip.
     if (!aoOn || (probesOn && !(demodIndirect && probeGatherW > 0.0 && probeFarW < 1.0))) giSkip = false;
     vec3 diffInd;
+#ifdef THREEPP_LOCAL_GI_VARIANT
+    vec3 giFactors = vec3(0.0);
+#endif
     if (pc.shadeMode == 1u) {
         // Dispatch B: cheap deterministic fill only — no RT gather, no
         // ReSTIR (both own dispatch-A-exclusive temporal state: the GI
@@ -454,7 +504,44 @@ void main() {
             const vec3 bFill = probeIrradianceConf(worldPos, N, Ng, bConf) * (1.0 / PI);
             diffInd = mix(diffInd, bFill, smoothstep(0.0, 0.25, bConf));
         }
-    } else if (giSkip) {
+    }
+#ifdef THREEPP_LOCAL_GI_VARIANT
+    else if ((pc.oceanOptions2 & (1u << 4u)) != 0u) {// THREEPP_SKY_REFERENCE (the extended ocean: was flags bit 15)
+        // Independent, frameless zero-bounce sky reference. No probes, no
+        // distance-limited AO approximation and no hit-fill heuristic.
+        const vec3 up = abs(N.y) < 0.99 ? vec3(0,1,0) : vec3(1,0,0);
+        const vec3 T = normalize(cross(up, N));
+        const vec3 B = cross(N, T);
+        vec3 skyE = vec3(0); float open = 0.0;
+        const int samples = 1024;
+        for (int s = 0; s < samples; ++s) {
+            const float u = (float(s) + 0.5) / float(samples);
+            const float phi = TWO_PI * radicalInverse2(uint(s));
+            const vec3 dir = T * (sqrt(u)*cos(phi)) + B * (sqrt(u)*sin(phi)) + N * sqrt(1.0-u);
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque,
+                                  worldPos + N * SHADOW_EPS, 1e-3, dir, 1e4);
+            while (rayQueryProceedEXT(rq)) {}
+            if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+                skyE += sampleEnvLod(dir, maxLod) * pm.envMapIntensity;
+                open += 1.0;
+            }
+        }
+        diffInd = (skyE + (lights.ambient + hemiAmbient(N)) * open) / float(samples);
+        giSkip = false;
+    } else if ((pc.oceanOptions2 & (1u << 2u)) != 0u && aoOn) {// THREEPP_LOCAL_GI (was flags bit 14)
+        // Resolve first-segment visibility at the actual surface. A scene-wide
+        // DDGI lattice can supply bounce radiance at hits, but its confidence
+        // is not evidence that nearby geometry leaves the primary sky open.
+        float openness;
+        gGiMovFrac = 0.0;
+        diffInd = gatherEnv(worldPos, N, Ng, px, pc.frame, shadowsOn, true, 8,
+                            pm.envMapIntensity, openness)
+                + (lights.ambient + hemiAmbient(N)) * openness;
+        giSkip = false;
+    }
+#endif
+    else if (giSkip) {
         diffInd = vec3(0.0);// unused — the accumulation below carries history
         // ReSTIR reservoirs PING-PONG (read prev fif, write curr): a skipped
         // pixel must still pass its reservoir through, or next frame's read
@@ -526,6 +613,9 @@ void main() {
         // probeE / probeConf: the tap taken before the checkerboard decision.
         const float conf   = probeConf;
         const vec3  probeT = probeE * gtaoMultiBounce(rtAoNear, albedo);
+#ifdef THREEPP_LOCAL_GI_VARIANT
+        giFactors = vec3(conf, dot(probeE, vec3(0.2126,0.7152,0.0722)), 1.0 - smoothstep(0.25,0.5,conf));
+#endif
         vec3 fillE;
         if (demodIndirect) {
             fillE = probeT;
@@ -1361,6 +1451,12 @@ void main() {
     // the GI-recombine-albedo approximation noted in the MSAA plan: complex
     // pixels' indirect lighting is entirely the dominant sample's — a static
     // bias at edges, not fixed in this pass.
+
+#ifdef THREEPP_OCEAN_INSPECT
+    if (pc.inspectMode != 0u) {
+        inspectNonWater(px);
+    }
+#endif
     if (pc.shadeMode == 1u) return;
 
     // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion
@@ -1885,4 +1981,12 @@ void main() {
                       mix((lobeF0 * lobeAb.x + lobeAb.y) * lobeScale, gRRSpecF, rrGlassT),
                       N, rrGlassT > 0.5 ? gRRSpecRough : lobeRough, rrHitT);
     }
+#ifdef THREEPP_LOCAL_GI_VARIANT
+    // Audit-only packed factors, read through the existing raw-buffer hook.
+    if ((pc.oceanOptions2 & (1u << 6u)) != 0u) {// THREEPP_GI_FACTORS (was flags bit 28)
+        imageStore(directUImage, px, vec4(giFactors, 1.0));
+        imageStore(reflectImage, px, vec4(rtAo, rtSkyVis,
+                   dot(hemiAmbient(N), vec3(0.2126,0.7152,0.0722)), 1.0));
+    }
+#endif
 }

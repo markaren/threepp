@@ -35,15 +35,18 @@
 #include <vector>
 
 namespace threepp {
+    class DisplacedMesh;
 
     class DisplacedMesh;
     class Downwash;
     class Mesh;
     class ParticleField;
+    class DisplacedMesh;
 
     class VulkanRenderer: public Renderer {
 
     public:
+        void writeMeshAudit(const DisplacedMesh& dm, const std::string& prefix);
         explicit VulkanRenderer(Canvas& canvas);
 
         ~VulkanRenderer() override;
@@ -102,6 +105,10 @@ namespace threepp {
         // a HUD pass BEFORE the readback, a later one is skipped with a one-time
         // hint. For a copy of the scene without overlays use readSceneRGBPixels().
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
+        // Opt-in sea-query audit, after readRGBPixels has submitted the frame.
+        // Each record: rest x,z; actual GPU mesh x,y,z. Local ocean coordinates.
+        // Synchronizes GPU/host; empty unless THREEPP_OCEAN_SEA_QUERY_AUDIT is exactly 1.
+        [[nodiscard]] std::vector<std::array<float,5>> readSeaQueryVertices(const DisplacedMesh& mesh);
 
         // Save that same image to disk (.png/.jpg/.jpeg/.bmp), creating parent
         // dirs as needed. Wraps readRGBPixels(); call after render().
@@ -469,6 +476,26 @@ namespace threepp {
         // stamps their measurements (see extras/sensors/Sensor.hpp).
         void setSimTime(double seconds);
 
+        // Opt-in ocean diagnostics. No simulation/physics consumer reads this state.
+        struct OceanInspectSample {
+            uint64_t hullAddress = 0, wakeTrailAddress = 0;
+            float tile[3] = {}, waveScale = 1, choppiness = 1, seaY = 0;
+            uint32_t cascadeMask = 0, hullCount = 0;
+            float coarseFold = 0, fineFold = 0, foamTile = 0;
+            uint32_t foamRes = 0;
+            int32_t pixelX = -1, pixelY = -1;
+            uint32_t valid = 0, renderWidth = 0, renderHeight = 0;
+            float worldX = 0, worldZ = 0, height = 0, slope = 0, jacobian = 1;
+            float restX = 0, restZ = 0, foam = 0, banked = 0, fineKernel = 0;
+            float wake[4] = {}, radiation = 0, value = 0;
+            float coarseJ = 1, fineJ = 1, coarseThreshold = 1, fineThreshold = 1;
+            int32_t displayX = -1, displayY = -1;
+        };
+        void setOceanInspect(uint32_t field, uint32_t solo = 0, int x = -1, int y = -1);
+        [[nodiscard]] bool readOceanInspect(OceanInspectSample& sample);
+        void setOceanInspectFrozen(bool frozen);
+
+
         // Hard restart of every temporal accumulator, on every live view: the
         // TAA history, the reprojection validity of the deferred shade's
         // per-frame histories (GI, shadow, reflections, volumetric fog) and the
@@ -493,6 +520,16 @@ namespace threepp {
         // The TAA input is frame-local scratch whose memory later passes
         // reuse, so by the time a frame completes it holds their data; run
         // with THREEPP_VK_NO_ALIAS=1 to read the image itself.
+        // (readOceanFoam: upstream's declaration above, same contract.)
+        // THREEPP_OCEAN_FOAM_DIAGNOSTICS: RGBA32F from the last positive-dt update;
+        // accumulator, added foam, non-feedback forcing/s, coarse/fine event bits.
+        bool readOceanFoamDiagnostics(const DisplacedMesh& mesh, std::vector<float>& out, uint32_t& res,
+                                      float& tileSize, float& time, float& dt);
+
+        // Rain falling on the water (mm/h; 0 = none): the deferred shade damps the short waves and draws the drops'
+        // ring ripples where a pixel resolves them, their slope banked as roughness where it does not.
+        void setRainRate(float mmPerHour);
+
         bool readTaaDebugImages(std::vector<uint8_t>& input, int& inW, int& inH,
                                 std::vector<uint8_t>& history, int& histW, int& histH);
 
@@ -787,6 +824,13 @@ namespace threepp {
         // requires it ON. While DLSS runs, ON brings in DLSS Ray
         // Reconstruction in place of the filters (setDlssRayReconstruction).
         void setDenoise(bool enabled);
+        // The denoiser's SVGF history feedback: the spatially filtered GI and shadow ratio written back as the
+        // next frame's temporal history, so a freshly disoccluded region converges in a few frames under motion
+        // (default on). Off, each history is the raw temporal accumulation alone. A renderer that converges every
+        // instant over many frames at a fixed time (offline shots: N settle frames per frame) gains nothing from
+        // it and loses stability: re-injecting a neighbourhood mean every frame made a small bright moving
+        // object's shading walk by several percent from instant to instant (denoise_antilag).
+        void setDenoiseFeedback(bool enabled);
         [[nodiscard]] bool denoise() const;
 
         // Per-NEE-sample firefly clamp used by the deferred highlight suppress.
@@ -1751,6 +1795,109 @@ namespace threepp {
         bool setViewTaa(uint32_t handle, bool enabled);
         [[nodiscard]] bool viewTaa(uint32_t handle) const;
 
+        // ── Sensor frames: secondary views rendered NOW ──────────────────
+        // A secondary view is otherwise drawn by the next render() and read
+        // after it, one frame late, and only when the app renders at all (a
+        // batch loop that never draws the display draws no views either).
+        // renderSensorViews renders the ENABLED secondary views of `scene` at
+        // the state the scene and the views' cameras are in now, submits, and
+        // waits for the GPU: readViewRGBPixels then returns this instant. The
+        // frame runs the world-space work every view shares (instances,
+        // deformers, the TLAS, the probe-GI update) and no primary view: no
+        // swapchain image is acquired, written or presented, so it may sit
+        // between display frames of a window without touching it. `camera`
+        // only stands in for the primary's per-frame camera state (culling
+        // and the like); pass the display camera. An open display frame is
+        // submitted first.
+        void renderSensorViews(Object3D& scene, Camera& camera, bool wait = true);
+        // Wait for every submitted frame (renderSensorViews with wait = false leaves its frame in
+        // flight, so the CPU can go on while the GPU renders; the results are read after this).
+        void waitSensorFrames();
+        // A sensor frame at the same frame time (setSimTime) as the last scene build, of the same
+        // scene, skips the build: sub-renders that move only their cameras pay for no scene walk,
+        // no BLAS/TLAS input or draw-list rebuild. On by default; false rebuilds every frame (for a
+        // caller that moves objects without advancing the clock).
+        void setSensorSceneHold(bool hold);
+        // Whether a secondary view renders (in render() and renderSensorViews).
+        // A disabled view keeps its resources and its last picture. Default on.
+        bool setViewEnabled(uint32_t handle, bool enabled);
+        // A measurement camera without temporal state: setViewTaa(false), every
+        // temporal path of the shade restarted each frame, ReSTIR DI's reuse
+        // off and the shade's stochastic seed held, so a static scene renders
+        // the same picture every frame (an event camera fires on motion only).
+        bool setViewSensorMode(uint32_t handle, bool enabled);
+        // A sensor-mode view's shading: the SVGF denoise on (the default) or off. With no history it is a
+        // spatial filter over a held pattern; off, the stochastic terms (soft shadows, GI) show their 1-spp
+        // pattern, fixed while the scene stands, at a third less GPU time per frame.
+        bool setViewSensorShading(uint32_t handle, bool denoise);
+
+        // ── A camera's image chain on a sensor view, on the GPU ──────────
+        // What a camera makes of its view's picture, run after the view's
+        // passes in the same frame: a colour camera's lens remap, motion blur
+        // (the picture accumulated over sub-pose renders in linear light) and
+        // CMOS sensor; or an event camera's pixels (ESIM with per-pixel
+        // thresholds, photoreceptor bandwidth, readout jitter, refractory
+        // period, background activity and hot pixels). Queue an operation,
+        // renderSensorViews (it may run with no view enabled: a chain-only
+        // frame), then read the result.
+        struct SensorChainSetup {
+            bool     events = false;     // an event camera (else a colour camera)
+            uint32_t baseW = 0, baseH = 0;// the camera's render, unsupersampled
+            uint32_t ss = 1;              // the view: baseW*ss x baseH*ss
+            uint32_t outW = 0, outH = 0;  // the sensor's image
+            // per output pixel: the base pixel at the bilinear footprint's
+            // top-left (row-major, -1 = outside the render) and its fractions
+            std::vector<int32_t> tapIndex;
+            std::vector<float>   tapFx, tapFy;
+            // events: per output pixel, the contrast threshold (log luma) and
+            // the hot-pixel rate (Hz, 0 = a normal pixel)
+            std::vector<float> threshold, hotRate;
+        };
+        struct SensorRgbOp {
+            bool     accumulate = false, clear = false;// add this frame's picture (into a cleared sum)
+            float    invGain = 1.f;                     // linear picture x this
+            bool     finish = false;                    // then the sensor, on the sum / n
+            float    nInv = 1.f;
+            float    k = 1.f;   // electrons per linear unit
+            float    g = 1.f;   // output per electron
+            float    fullWell = 1e4f, readNoise = 0.f;
+            uint32_t seed = 0;
+            bool     exportLinear = false;// also hand back the linear sum
+        };
+        struct SensorEventOp {
+            bool     first = false;// latch the pixels' references, no events
+            float    dt = 0.f;     // since the render before (s)
+            uint32_t seed = 0;
+            float    minLuma = 0.005f;
+            uint32_t maxEvents = 5;// signal events per pixel per render
+            float    refractory = 0.f;
+            bool     background = false;
+            float    baHz = 0.f, baDark = 0.f;
+            bool     bandwidth = false;
+            float    tauDay = 1e-4f, tauMax = 5e-3f, illumRef = 0.18f, illumGain = 1.f, jitter = 0.f;
+            float    vizDecay = 0.8f;
+            bool     writePane = false;
+        };
+        struct SensorEvent {
+            uint16_t x, y;
+            float    t;// s after the render before; may exceed dt (a delayed event)
+            int8_t   polarity;
+            bool     signal;
+            uint16_t op;// which of the queued operations (renders) since the last read it came from
+        };
+        bool setViewSensorChain(uint32_t handle, const SensorChainSetup& setup);
+        // `srcView`: the view whose picture the operation reads (0: the chain's own view). Several
+        // operations in one frame run in order, each on its view's render: a batch of sub-poses (up to 32).
+        bool queueSensorRgb(uint32_t handle, const SensorRgbOp& op, uint32_t srcView = 0);
+        bool queueSensorEvents(uint32_t handle, const SensorEventOp& op, uint32_t srcView = 0);
+        bool readSensorRgb(uint32_t handle, std::vector<unsigned char>& rgb8, double& linearSum,
+                           std::vector<float>* linearSumImage = nullptr);
+        // The events of every operation since the last read (several sensor frames' worth: `op` counts the
+        // operations in queue order from the read before), then the list restarts.
+        bool readSensorEvents(uint32_t handle, std::vector<SensorEvent>& out, bool& overflow);
+        bool readSensorEventPane(uint32_t handle, std::vector<unsigned char>& rgba8);
+        bool readSensorTauHistogram(uint32_t handle, std::array<uint32_t, 40>& hist);
+
         // Per-view permission to rasterize SplatClouds. OFF by default, for
         // every view: the splat pass was primary-only until this existed, and
         // the reason was cost, not correctness. The radix sort scales with
@@ -2323,6 +2470,10 @@ namespace threepp {
             float topNoise      = 0.0f;  // peak displacement of baseY (m)
             float topNoiseScale = 150.0f;// feature size (m)
             float topNoiseSpeed = 4.0f;  // in-place evolution (m/s through the field)
+            // true: scene.fog's density stays on as a UNIFORM haze under this layer (sigma =
+            // haze + layer), instead of the layer's density overriding it. A marine mist or spray
+            // layer over the day's haze. Needs density > 0 and a scene.fog.
+            bool  keepSceneFog = false;
         };
         void setHeightFog(const std::optional<HeightFogSettings>& settings);
         [[nodiscard]] std::optional<HeightFogSettings> heightFog() const;

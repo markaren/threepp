@@ -78,6 +78,8 @@ layout(push_constant) uniform Pc { ShadePush pc; };
 const float PI = 3.14159265358979;
 
 #include "cloud_density.glsl"
+layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;// the baked cloud maps (cloud_shadow.comp)
+#include "cloud_map.glsl"// cloudSunTFrom: the sun light from the maps
 
 vec3 sampleEnvLod(vec3 dir, float lod) {
     // scene.environmentRotation (world -> env) and environmentIntensity.
@@ -98,15 +100,37 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
 // whatever stale history lives at that garbage UV (the chase-cam ghost trails).
 vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax, out float outMeanDepth) {
     outMeanDepth = -1.0;
-    if (abs(rd.y) < 1e-4) return vec4(0.0, 0.0, 0.0, 1.0);// grazing: no robust slab
-    const float tA = (clouds.bottomY - ro.y) / rd.y;
-    const float tB = (clouds.topY - ro.y) / rd.y;
-    float t0 = max(min(tA, tB), 0.0);
-    float t1 = max(tA, tB);
-    t1 = min(t1, min(tSceneMax, 42000.0));// far cap + scene-depth clip
+    // The deck is a SPHERICAL shell: over the curved earth a ray from under the deck climbs
+    // relative to the surface by t^2 / 2R, so even a horizontal ray reaches the base (about 100 km out for
+    // an 800 m base) and the clouds run down to the horizon under their aerial perspective, instead of
+    // stopping above a cloudless band where a flat slab's intersection passed the far cap.
+    const float R = 6.371e6;
+    float t0, t1;
+    if (!kOceanExt) {// upstream: the flat slab
+        if (abs(rd.y) < 1e-4) return vec4(0.0, 0.0, 0.0, 1.0);// grazing: no robust slab
+        const float tA = (clouds.bottomY - ro.y) / rd.y;
+        const float tB = (clouds.topY - ro.y) / rd.y;
+        t0 = max(min(tA, tB), 0.0);
+        t1 = max(tA, tB);
+        t1 = min(t1, min(tSceneMax, 42000.0));// far cap + scene-depth clip
+    } else if (ro.y < clouds.bottomY) {
+        const float dA = rd.y * rd.y + 2.0 * (clouds.bottomY - ro.y) / R;
+        const float dB = rd.y * rd.y + 2.0 * (clouds.topY - ro.y) / R;
+        t0 = R * (-rd.y + sqrt(dA));
+        t1 = R * (-rd.y + sqrt(dB));
+    } else {
+        if (abs(rd.y) < 1e-4) return vec4(0.0, 0.0, 0.0, 1.0);// grazing: no robust slab
+        const float tA = (clouds.bottomY - ro.y) / rd.y;
+        const float tB = (clouds.topY - ro.y) / rd.y;
+        t0 = max(min(tA, tB), 0.0);
+        t1 = max(tA, tB);
+    }
+    if (kOceanExt) t1 = min(t1, min(tSceneMax, 160000.0));// far cap + scene-depth clip
     if (t1 <= t0) return vec4(0.0, 0.0, 0.0, 1.0);
 
-    const int   STEPS = 48;
+    // Steps by the path through the deck (a vertical crossing needs few, a grazing one many), bounded so a
+    // sky-filled camera or drone frame stays within its budget; the jitter and the history do the rest
+    const int   STEPS = kOceanExt ? clamp(int((t1 - t0) / 80.0), 8, 20) : 48;
     const float dt    = (t1 - t0) / float(STEPS);
     const float jit   = fract(texelFetch(blueNoiseTex, px & 63, 0).r + float(pc.frame) * 0.6180339887);
 
@@ -123,31 +147,42 @@ vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax, out f
     float depthSum = 0.0, wSum = 0.0;
     const float time      = clouds.timeSec;
     const float sigmaMul  = 0.05;
-    const float lightStep = 90.0;
+    const float lightStep = 90.0;// upstream's sun taps
 
     for (int i = 0; i < STEPS; ++i) {
         const float t = t0 + (float(i) + jit) * dt;
-        const vec3  p = ro + rd * t;
+        vec3 p = ro + rd * t;
+        if (kOceanExt) p.y += t * t / (2.0 * R);// height above the curved surface
         const float dens = cloudDensity(p, time);
         if (dens > 0.001) {
             const float sigma = dens * sigmaMul;
-            float sunDepth = 0.0;
-            for (int j = 0; j < 5; ++j) {
-                const vec3 lp = p + sunDir * (float(j) + 0.5) * lightStep;
-                sunDepth += cloudDensity(lp, time);
-                // Density is non-negative, so this partial sum is a lower bound
-                // on the sun optical depth and the taps we skip could only
-                // darken sunT further. The cut sits at 12 and not at the usual
-                // 8 because what gets dropped is not exp(-τ) but
-                // sunCol · exp(-τ) · phase, and phase peaks near 22.8 in the
-                // forward-scatter lobe: at 8 that gain lifts the residual back
-                // to a percent of a step's radiance, visible as a flat wash on
-                // the sun-facing side of a thick core that swims as the cloud
-                // churns. At 12 it is ~1e-4 of sunCol, against the ambient term
-                // added on the next line that is orders larger.
-                if (sunDepth * sigmaMul * lightStep > 12.0) break;
+            // The sun's light over the next 440 m toward the sun: one density tap for the first
+            // 220 m, which carries the cloud's own lit-and-shaded detail, and the baked maps' share for the
+            // next 220 m (cloud_map.glsl). Was two density taps, two thirds of the march's noise.
+            float sunT;
+            if (kOceanExt) {
+                sunT = exp(-cloudDensity(p + sunDir * 110.0, time) * sigmaMul * 220.0)
+                     * cloudSunTFrom(p + sunDir * 220.0, sunDir, 220.0);
+            } else {
+                // upstream: five density taps toward the sun
+                float sunDepth = 0.0;
+                for (int j = 0; j < 5; ++j) {
+                    const vec3 lp = p + sunDir * (float(j) + 0.5) * lightStep;
+                    sunDepth += cloudDensity(lp, time);
+                    // Density is non-negative, so this partial sum is a lower bound
+                    // on the sun optical depth and the taps we skip could only
+                    // darken sunT further. The cut sits at 12 and not at the usual
+                    // 8 because what gets dropped is not exp(-τ) but
+                    // sunCol · exp(-τ) · phase, and phase peaks near 22.8 in the
+                    // forward-scatter lobe: at 8 that gain lifts the residual back
+                    // to a percent of a step's radiance, visible as a flat wash on
+                    // the sun-facing side of a thick core that swims as the cloud
+                    // churns. At 12 it is ~1e-4 of sunCol, against the ambient term
+                    // added on the next line that is orders larger.
+                    if (sunDepth * sigmaMul * lightStep > 12.0) break;
+                }
+                sunT = exp(-sunDepth * sigmaMul * lightStep);
             }
-            const float sunT   = exp(-sunDepth * sigmaMul * lightStep);
             const float powder = 1.0 - exp(-dens * 3.2);
             const vec3  sunLit = sunCol * (sunT * phase * mix(1.0, powder, 0.6));
             const vec3  amb    = mix(ambBot, ambTop, clamp((p.y - clouds.bottomY) /

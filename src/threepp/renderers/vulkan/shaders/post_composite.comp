@@ -220,4 +220,12 @@ void main() {
     }
     if (hdr) imageStore(hdrOutImg, px, vec4(outRgb, 1.0));
     else     imageStore(outImage,  px, vec4(outRgb, 1.0));
+#ifdef THREEPP_OCEAN_INSPECT
+    if ((pc.postFlags & 16u) != 0u) {
+        const ivec2 samplePx = min(ivec2(uv * vec2(textureSize(sceneHdrTex, 0))), textureSize(sceneHdrTex, 0)-1);
+        const vec4 field = vec4(texelFetch(sceneHdrTex, samplePx, 0).rgb, 1.0);
+        if (hdr) imageStore(hdrOutImg, px, field);
+        else imageStore(outImage, px, field);
+    }
+#endif
 }

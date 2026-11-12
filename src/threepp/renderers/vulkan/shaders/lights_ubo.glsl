@@ -42,6 +42,9 @@ layout(set = 0, binding = LIGHTS_UBO_BINDING, scalar) uniform LightsUbo {
     // knobs (GpuLightsUbo tail, VulkanGpuLayouts.hpp; SceneEnvKnobs.hpp).
     // Rotations are world -> env mat3 columns; envKnobFlags bit 0 / bit 1 =
     // env / background rotation active (identity skipped: defaults exact).
+    // Bit 2 = clear-day water chroma compensation (sky and other surfaces unchanged).
+    // Bit 3 = diffuse sky without a compact sun image; integrate F and L together on water.
+    // Bits 8..11 = opt-in water radiometry AOV; zero leaves production shading unchanged.
     vec3       envRotC0;
     vec3       envRotC1;
     vec3       envRotC2;

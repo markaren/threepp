@@ -25,6 +25,7 @@
 #if defined(THREEPP_WITH_DLSS)
 #include "DlssUpscaler.hpp"
 #endif
+#include "SensorChain.hpp"
 
 #include "threepp/cameras/Camera.hpp"
 
@@ -72,7 +73,7 @@ namespace threepp::vulkan::impl {
         Image2D       froxelLut;    // rgba16f 3D — front-to-back-integrated volumetric LUT; STORAGE (integrate) + SAMPLED (shade, trilinear)
         Image2D       cloudColor;   // rgba16f HALF-res — cloud march result (rgb=in-scatter, a=transmittance); STORAGE (march) + SAMPLED (shade upsample + prev-fif reproject), ping-ponged
         Image2D       cloudAux;     // rg16f HALF-res — cloud mean-depth (.r) + temporal histLen (.g); STORAGE (march) + SAMPLED (prev-fif history), ping-ponged
-        Image2D       cloudShadow;  // r8 512² (FIXED) — top-down cloud transmittance over an 8 km camera-centred square; STORAGE (shadow pass) + SAMPLED (surface/froxel/water sun); regenerated per frame
+        Image2D       cloudShadow;  // r8 512x1024 (FIXED) — top-down cloud sun transmittance over a 16 km camera-centred square, over the deck column map of 160 km (cloud_map.glsl); STORAGE (shadow pass) + SAMPLED (surface/froxel/water sun); regenerated per frame
         Image2D       rtao;         // rgba16f HALF-res — RT ambient occlusion (rgb=bentN*0.5+0.5, a=ao); STORAGE (rtao pass) + SAMPLED (shade upsample + prev-fif reproject), ping-ponged
         Image2D       fogHalf;      // rgba16f HALF-res, the sun fog march (setFogMarchHalfRes): rgb in-scatter, a = leg length; STORAGE (fog_march) + SAMPLED (shade upsample + prev-fif history), ping-ponged
         Image2D       rtaoAux;      // rgba16f HALF-res — RTAO temporal aux (.r=histLen, .g=E[ao^2], .b=near-field ao, .a=skyVis); STORAGE (rtao pass) + SAMPLED (prev-fif history), ping-ponged
@@ -449,6 +450,22 @@ namespace threepp::vulkan::impl {
         // is active, because DLSS and FSR reconstruct from the jitter
         // (Impl::viewTaaOff).
         bool    taaEnabled = true;
+        // Rendered at all this frame (VulkanRenderer::setViewEnabled)? A
+        // disabled view keeps every resource and its last picture, and costs
+        // nothing per frame: a rig that renders its cameras at different
+        // instants (a blur's sub-poses, an event camera's sub-renders) turns
+        // each on for its own sensor frame.
+        bool    enabled = true;
+        // A measurement camera with no temporal state (setViewSensorMode):
+        // TAA off (see taaEnabled), every temporal path of the shade started
+        // fresh each frame, ReSTIR DI's reuse off, and the shade's stochastic
+        // seed held, so a static scene renders the same picture every frame
+        // and an image differs from the last only where the scene moved.
+        bool    sensorMode = false;
+        bool    sensorDenoise = true;   // a sensor-mode view's SVGF denoise (setViewSensorShading)
+        // The camera's image chain on this view (setViewSensorChain): lens,
+        // blur and sensor, or an event camera's pixels, run after its passes.
+        std::unique_ptr<vulkan::SensorChain> chain;
         // May this view rasterize SplatClouds (VulkanRenderer::setViewSplats)?
         // Off by default because the splat sort scales with splat count rather
         // than view size, so a second view is a second full sort — an RGB

@@ -176,7 +176,9 @@ void VesselWash::update(float dt, const Vector3& origin, const Vector3& forward,
             dz /= n;
         }
         const float r0    = p.radius;
-        const float depth = ocean_.sampleHeight(p.position.x, p.position.z, heightMask) - p.position.y;
+        // sampleHeight is the surface in the ocean mesh's frame; the mesh sits at its position.y (a scene's
+        // sea level), so the water over a propulsor is that plus the height, less where the propulsor is (world)
+        const float depth = ocean_.position.y + ocean_.sampleHeight(p.position.x, p.position.z, heightMask) - p.position.y;
         if (depth < -r0) {// out of the water: it draws air and makes no race
             silent();
             continue;

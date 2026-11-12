@@ -3,6 +3,7 @@
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
 #include "threepp/renderers/vulkan/shaders/post_composite.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/post_composite.comp.inspect.spv.h"
 
 #include <algorithm>
 #include <cmath>
@@ -123,6 +124,7 @@ namespace threepp::vulkan {
 
     PostComposite::~PostComposite() {
         VkDevice d = ctx_.device();
+        if (inspectPipe_) vkDestroyPipeline(d, inspectPipe_, nullptr);
         if (pipe_)           vkDestroyPipeline(d, pipe_, nullptr);
         if (pipeLayout_)     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)       vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
@@ -645,7 +647,20 @@ namespace threepp::vulkan {
         if (srcHeight == 0) srcHeight = height;
         // The render graph makes the inputs' writes visible (declared by the
         // caller and declare()).
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+        if (oceanInspect && !inspectPipe_) {
+            VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            mi.pCode=kPostCompositeInspectCompSpv; mi.codeSize=sizeof(kPostCompositeInspectCompSpv);
+            VkShaderModule module=VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx_.device(),&mi,nullptr,&module),"inspector post module");
+            VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            ci.stage.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT; ci.stage.module=module; ci.stage.pName="main";
+            ci.layout=pipeLayout_;
+            const VkResult result=vkCreateComputePipelines(ctx_.device(),ctx_.pipelineCache(),1,&ci,nullptr,&inspectPipe_);
+            vkDestroyShaderModule(ctx_.device(),module,nullptr);
+            check(result,"inspector post pipeline");
+        }
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, oceanInspect ? inspectPipe_ : pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
 
@@ -668,6 +683,7 @@ namespace threepp::vulkan {
         pc.u[4] = width;
         pc.u[5] = height;
         pc.u[6] = postFlags;
+        if (oceanInspect) pc.u[6] |= 16u;
         pc.u[7] = preExposureBits;
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 3; ++c)

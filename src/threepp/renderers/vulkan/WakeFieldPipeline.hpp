@@ -60,6 +60,12 @@ namespace threepp::vulkan {
     };
     static_assert(sizeof(WakePatchGpu) == 72, "WakePatchGpu must match ocean_wake.glsl's WakePatch");
 
+    // Render-only natural-cap exclusion; mirrors FoamHull in ocean_wake.glsl.
+    struct FoamHullGpu {
+        float centerX, centerZ, halfLength, halfBeam, sinYaw, cosYaw;
+    };
+    static_assert(sizeof(FoamHullGpu) == 24);
+
     // Mirrors WakeTable in ocean_wake.glsl up to (not including) its sources.
     struct WakeTableGpu {
         uint32_t patchCount;
@@ -78,9 +84,15 @@ namespace threepp::vulkan {
         float    rippleViscosity;
         float    rippleGain;
         float    albedo;
+        float    driftX;
+        float    driftZ;
+        uint32_t foamHullCount;
+        uint32_t padOrbit;
         WakePatchGpu patches[DisplacedMesh::kMaxWakePatches];
+        FoamHullGpu foamHulls[DisplacedMesh::kMaxVessels];
     };
-    static_assert(sizeof(WakeTableGpu) == 64 + 72 * DisplacedMesh::kMaxWakePatches,
+    static_assert(DisplacedMesh::kMaxVessels == 8, "OCEAN_FOAM_MAX_HULLS must match");
+    static_assert(sizeof(WakeTableGpu) == 64 + 16 + 72 * DisplacedMesh::kMaxWakePatches + 24 * DisplacedMesh::kMaxVessels,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
     static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
                   "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");

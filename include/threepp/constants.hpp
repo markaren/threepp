@@ -108,7 +108,9 @@ namespace threepp {
         // gentlest highlight rolloff of the set; holds saturated emitters
         // without hue skew. NOTE: numeric value diverges from three.js
         // (threepp assigned 6 to Neutral first).
-        AgX = 7
+        AgX = 7,
+        // AgX's toe below middle grey, ACES filmic's shoulder and saturation above (a prototype; Vulkan only)
+        AgXAces = 8
     };
 
     enum class Mapping {

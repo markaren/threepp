@@ -17,6 +17,8 @@
 #include "SkinningPipeline.hpp"
 #include "TetSkinningPipeline.hpp"
 #include "WakeFieldPipeline.hpp"
+#include "WaterDisplacePipeline.hpp"
+#include "CdlodFilter.hpp"
 
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
@@ -26,7 +28,10 @@
 #include "threepp/textures/Texture.hpp"
 #include "threepp/utils/GeometryLod.hpp"
 
+#include "threepp/objects/OceanLod.hpp"
+#include <map>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -588,7 +593,9 @@ namespace threepp::vulkan::impl {
             std::unique_ptr<water::PhillipsSpectrum> phillips;
             std::unique_ptr<water::DynamicSpectrum>  dyn;
             std::unique_ptr<water::IFFT>             ifft;
+            std::unique_ptr<vulkan::CdlodFilter> filter;
             bool  phillipsRecorded = false;
+            bool  extUploaded = false;   // DisplacedMesh::externalCascades[i] written at least once (its images then GENERAL)
             float tileSize = 0.f;            // 0 = cascade not in use
         };
         std::array<Cascade, 3> cascades;
@@ -673,6 +680,10 @@ namespace threepp::vulkan::impl {
         // (sampleHeight()'s sticky opt-in), so scenes that never query
         // wave height pay no memory for it; null handles until then.
         Buffer    heightReadback[3][kFramesInFlight] = {};
+        // Host-visible staging for DisplacedMesh::externalCascades (height then
+        // displacement, dim²·16 bytes), one per frame in flight; allocated on
+        // first use.
+        Buffer    externalStaging[3][kFramesInFlight] = {};
         // Per-cascade readback texture dimension. Cascades can run at
         // different FFT resolutions — each cascade's readback buffer is
         // sized to its own dim²·16 bytes: the height image (RG32F) at
@@ -716,9 +727,15 @@ namespace threepp::vulkan::impl {
         // reallocated; null handles until then.
         static constexpr uint32_t kMaxVessels     = 8;// = DisplacedMesh::kMaxVessels (asserted at the upload)
         static constexpr uint32_t kMaxWakeSamples = 64;// per vessel
-        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 56u;// vulkan::OceanHullGpu
+        // the water push's 32-byte surface tail (skirt/CDLOD) heads the buffer.
+        static constexpr VkDeviceSize kVesselTailBytes  = 32u;
+        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * sizeof(vulkan::OceanHullGpu);
         static constexpr VkDeviceSize kVesselTrailBytes = kMaxVessels * kMaxWakeSamples * 32u;
         Buffer    vesselBuffer[kFramesInFlight] = {};
+        Buffer lodBuffer[kFramesInFlight] = {};
+        std::map<std::array<float,3>, unsigned> lodSlots;
+        std::vector<std::array<float,3>> lodHomes;
+        float lodEyeX = 1e30f, lodEyeZ = 1e30f, lodEyeHeight = 1e30f;
 
         // World-space foam texture — 2D R32F covering the cascade-0
         // tile (foamTileSize × foamTileSize world m), REPEAT-sampled
@@ -728,11 +745,14 @@ namespace threepp::vulkan::impl {
         // world coords, the ocean mesh can be re-tessellated freely
         // without dragging foam along with the vertex indices.
         //
-        // No ping-pong needed because foam_world.comp only reads and
-        // writes its own texel each invocation — no cross-texel
-        // dependency, so `imageLoad` + `imageStore` on the same image
-        // is race-free.
+        // foam_world.comp writes only its own texel here; its
+        // advection reads neighbours, from foamPrevImage below.
         water::OceanImage foamImage;
+        // the advection reads its neighbours, so the previous frame's foam is copied here before each
+        // dispatch and read from it (binding 7); foamImage stays the one written, sampled and read back.
+        water::OceanImage foamPrevImage;
+        Buffer foamAuditBuffer{}; // allocated only for THREEPP_OCEAN_FOAM_DIAGNOSTICS
+        float foamAuditTime = -1.f, foamAuditDt = 0.f;
         // The wake field (DisplacedMesh::WakeField), when the mesh had one
         // switched on as the renderer first saw it; null otherwise.
         std::unique_ptr<vulkan::WakeFieldPipeline::State> wake;
@@ -865,7 +885,16 @@ namespace threepp::vulkan::impl {
         // shades the raster's. After `flags` so every word offset the shaders
         // index by (kGeomDescColorWord, kGeomDescFlagsWord) stays where it was.
         VkDeviceAddress colorAddress;
+        // the renderer semantic class the opt-in reflection-hit
+        // AOV reports (VulkanCoreScene buildGeometryDesc; 0 = unclassified).
+        // A word of its own: upstream's flags bits 8..31 are the vertex-colour
+        // flag and the material index. Appended after colorAddress so every
+        // upstream word offset stays put; stride 80 (kGeomDescWords = 20).
+        uint32_t reflectionClass;
+        uint32_t _padClass;
     };
+    static_assert(sizeof(GeometryDesc) == 80 && offsetof(GeometryDesc, reflectionClass) == 72,
+                  "GeometryDesc: reflectionClass must sit at 72, stride 80 (geometry_desc.glsl).");
 
     struct LodJob {
         const BufferGeometry* geom = nullptr;

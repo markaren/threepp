@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "OceanExtended.hpp"
 
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
@@ -801,7 +802,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // Cloud shadow map — FIXED 512² R8 (independent of the render
                 // extent; recreated here on resize). Top-down cloud
                 // transmittance regenerated per frame by cloud_shadow.comp.
-                g.cloudShadow = createAttachmentImage2D(512, 512, VK_FORMAT_R8_UNORM,
+                g.cloudShadow = createAttachmentImage2D(512, vulkan::oceanExtended() ? 1024 : 512, VK_FORMAT_R8_UNORM,
                                                         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                         VK_IMAGE_ASPECT_COLOR_BIT, N("cloudShadow"));
                 // Gaussian-splat depth AOV. Splats are PRIMARY-view
@@ -1205,6 +1206,8 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
         }
 
 void VulkanRenderer::Impl::createRasterGbufPipeline() {
+            // the extended ocean's switches in gbuffer.frag (ocean_extended.glsl): no entries with them off
+            const vulkan::OceanSpec oceanSpec;
             VkShaderModuleCreateInfo vsmci{};
             vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             vsmci.codeSize = sizeof(kGbufferVertSpv);
@@ -1230,6 +1233,7 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
             stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
             stages[1].module = fragModule;
             stages[1].pName  = "main";
+            stages[1].pSpecializationInfo = oceanSpec.info();
 
             // Vertex input mirrors the BLAS allocation layout: positions /
             // normals / uvs / prev-positions packed (R32G32B32_SFLOAT for
@@ -1395,6 +1399,7 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
             stagesInd[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
             stagesInd[1].module = fragIndModule;
             stagesInd[1].pName  = "main";
+            stagesInd[1].pSpecializationInfo = oceanSpec.info();
 
             // Empty vertex input state — VS doesn't bind anything, it reads
             // from buffer device addresses stored in the per-draw SSBO.
@@ -1444,8 +1449,13 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
             // screen-door to "emit texture alpha as the blend factor". The
             // regular pipelines keep DECAL_PASS=0.
             const uint32_t kDecalPassOn = 1u;
-            VkSpecializationMapEntry decalSpecEntry{0, 0, sizeof(uint32_t)};
-            VkSpecializationInfo decalSpecInfo{1, &decalSpecEntry, sizeof(uint32_t), &kDecalPassOn};
+            // (+ the extended ocean entries, words 1 and 2, when they are on)
+            std::array<uint32_t, 3> decalVals{kDecalPassOn, 0u, 0u};
+            std::array<VkSpecializationMapEntry, 3> decalEntries{};
+            decalEntries[0] = {0, 0, sizeof(uint32_t)};
+            uint32_t decalCount = 1, decalWords = 1;
+            oceanSpec.appendTo(decalVals, 1u, decalEntries, decalCount, decalWords);
+            VkSpecializationInfo decalSpecInfo{decalCount, decalEntries.data(), decalWords * sizeof(uint32_t), decalVals.data()};
             VkPipelineShaderStageCreateInfo stagesDecal[2] = {stagesInd[0], stagesInd[1]};
             stagesDecal[1].pSpecializationInfo = &decalSpecInfo;
 
@@ -1483,6 +1493,7 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
         }
 
 void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samples) {
+            const vulkan::OceanSpec oceanSpec;// gbuffer.frag's the extended ocean switches (ocean_extended.glsl)
             if (rasterGbufIndirectPipelineMS != VK_NULL_HANDLE) {
                 vkDestroyPipeline(ctx->device(), rasterGbufIndirectPipelineMS, nullptr);
                 rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
@@ -1589,6 +1600,7 @@ void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samp
             stagesInd[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
             stagesInd[1].module = fragIndModule;
             stagesInd[1].pName  = "main";
+            stagesInd[1].pSpecializationInfo = oceanSpec.info();
 
             VkPipelineVertexInputStateCreateInfo viInd{};
             viInd.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1624,8 +1636,13 @@ void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samp
             cbDecal.pAttachments = cbasDecal;
 
             const uint32_t kDecalPassOn = 1u;
-            VkSpecializationMapEntry decalSpecEntry{0, 0, sizeof(uint32_t)};
-            VkSpecializationInfo decalSpecInfo{1, &decalSpecEntry, sizeof(uint32_t), &kDecalPassOn};
+            // (+ the extended ocean entries, words 1 and 2, when they are on)
+            std::array<uint32_t, 3> decalVals{kDecalPassOn, 0u, 0u};
+            std::array<VkSpecializationMapEntry, 3> decalEntries{};
+            decalEntries[0] = {0, 0, sizeof(uint32_t)};
+            uint32_t decalCount = 1, decalWords = 1;
+            oceanSpec.appendTo(decalVals, 1u, decalEntries, decalCount, decalWords);
+            VkSpecializationInfo decalSpecInfo{decalCount, decalEntries.data(), decalWords * sizeof(uint32_t), decalVals.data()};
             VkPipelineShaderStageCreateInfo stagesDecal[2] = {stagesInd[0], stagesInd[1]};
             stagesDecal[1].pSpecializationInfo = &decalSpecInfo;
 

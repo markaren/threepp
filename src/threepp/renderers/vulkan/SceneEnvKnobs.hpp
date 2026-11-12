@@ -37,6 +37,10 @@ namespace threepp::vulkan {
         bool  bgRotActive = false;
         float bgIntensity  = 1.f;
         float bgBlurriness = 0.f;
+        bool waterClearDayGrade = false; // optional water chroma compensation
+        bool waterDiffuseSky = false; // smooth sky, suitable for slope quadrature
+        bool waterBodyFix = false; // opt-in radiometric column closure
+        unsigned waterDebug = 0; // opt-in AOV, envKnobFlags bits 8..12
 
         // Column-major world -> env (the transpose), as the GLSL mat3 columns.
         static void worldToEnvColumns(const float envToWorld[9], float out[9]) {
@@ -53,7 +57,8 @@ namespace threepp::vulkan {
         bool operator==(const SceneEnvKnobs& o) const {
             return std::equal(envToWorld, envToWorld + 9, o.envToWorld) && envRotActive == o.envRotActive &&
                    envIntensity == o.envIntensity && std::equal(bgToWorld, bgToWorld + 9, o.bgToWorld) &&
-                   bgRotActive == o.bgRotActive && bgIntensity == o.bgIntensity && bgBlurriness == o.bgBlurriness;
+                   bgRotActive == o.bgRotActive && bgIntensity == o.bgIntensity && bgBlurriness == o.bgBlurriness &&
+                   waterClearDayGrade == o.waterClearDayGrade && waterDiffuseSky == o.waterDiffuseSky && waterBodyFix == o.waterBodyFix && waterDebug == o.waterDebug;
         }
         bool operator!=(const SceneEnvKnobs& o) const { return !(*this == o); }
 
@@ -61,6 +66,10 @@ namespace threepp::vulkan {
             SceneEnvKnobs k;
             const auto* sc = dynamic_cast<const Scene*>(&scene);
             if (!sc) return k;
+            if (const auto it = sc->userData.find("waterBodyFix"); it != sc->userData.end())
+                if (const auto* enabled = std::any_cast<bool>(&it->second)) k.waterBodyFix = *enabled;
+            if (const auto it = sc->userData.find("waterDebug"); it != sc->userData.end())
+                if (const auto* mode = std::any_cast<unsigned>(&it->second)) k.waterDebug = *mode & 31u;
 
             const auto rotation = [](const Euler& e, float out[9]) {
                 if (static_cast<float>(e.x) == 0 && static_cast<float>(e.y) == 0 && static_cast<float>(e.z) == 0)
@@ -77,6 +86,10 @@ namespace threepp::vulkan {
                 k.bgRotActive  = rotation(sc->backgroundRotation, k.bgToWorld);
                 k.bgIntensity  = sc->backgroundIntensity;
                 k.bgBlurriness = std::clamp(sc->backgroundBlurriness, 0.f, 1.f);
+                if (const auto it = sc->userData.find("waterClearDayGrade"); it != sc->userData.end())
+                    if (const auto* enabled = std::any_cast<bool>(&it->second)) k.waterClearDayGrade = *enabled;
+                if (const auto it = sc->userData.find("waterDiffuseSky"); it != sc->userData.end())
+                    if (const auto* enabled = std::any_cast<bool>(&it->second)) k.waterDiffuseSky = *enabled;
             }
             const bool envIsBackground = !sc->environment && textureBackground;
             if (envIsBackground) {

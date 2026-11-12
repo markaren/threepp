@@ -15,6 +15,7 @@
 
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxShadow*
 
+#include <cstddef>
 #include <cstdint>
 
 namespace threepp::vulkan::impl {
@@ -77,6 +78,7 @@ namespace threepp::vulkan::impl {
         // bgBlurriness * (mips - 1). envKnobFlags bit 0 = envRot is not the
         // identity, bit 1 = bgRot is not the identity: the shaders skip the
         // multiply otherwise, so a default scene samples exactly as before.
+        // Bit 2 requests the application's clear-day water chroma compensation.
         float    envRot[9];
         float    envIntensity;
         float    bgRot[9];
@@ -186,8 +188,10 @@ namespace threepp::vulkan::impl {
         float hfTopNoise;    // peak displacement (m); 0 = off
         float hfTopInvScale; // 1 / feature size (1/m)
         float hfTopOffset[3];// .xz wind drift, .y evolution phase, in noise-space units
+        float hfFloor;       // the air medium's uniform background haze under the layer (keepSceneFog); 0 = one term
     };
-    static_assert(sizeof(GpuFogUbo) == 112);
+    static_assert(sizeof(GpuFogUbo) == 116 && offsetof(GpuFogUbo, hfFloor) == 112,
+                  "GpuFogUbo: upstream fields through hfTopOffset, then hfFloor (fog_ubo.glsl, deferred_filter_common.glsl).");
 
     // Volumetric cloud layer (VulkanRenderer::setClouds) + near-field
     // heterogeneous height fog (VulkanRenderer::setHeightFog). Both ride the
@@ -214,8 +218,9 @@ namespace threepp::vulkan::impl {
         float shadowActive; // 1.0 = cloud shadow map valid this frame (clouds on)
         float epoch;        // history generation — cloud_march rejects prev-epoch
                             // history (first-enable garbage, reconfigured decks)
+        float hfFloor;      // the air medium's uniform background haze under the layer (keepSceneFog); 0 = one term
     };
-    static_assert(sizeof(GpuCloudUbo) == 68);
+    static_assert(sizeof(GpuCloudUbo) == 72);
 
     struct DebugResolvePC {
         uint32_t view;      // 1 = normal, 2 = motion, 3 = ids, 4 = albedo

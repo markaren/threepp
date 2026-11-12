@@ -210,6 +210,9 @@ vec3 envLobeGGX(vec3 V, vec3 N, float roughness, float lod, vec2 rot) {
 // shaded geometry hit (the mirror ray returns it sharp; the spatial blur IS
 // the gloss there, sized by this distance's projected footprint).
 float gTraceHitT = -1.0;
+#ifdef THREEPP_OCEAN_REFL_HITS_DIAG
+bool gTraceHitHull = false;// first shaded hit class247; opt-in reflhits AOV only
+#endif
 // True when the first shaded reflected hit is a MOVING mesh (kGeomFlagMoved,
 // stamped from meshMovedBits each frame). The reflection/GI temporal accumulator
 // resets on it: a moving reflected object can't be temporally integrated (the
@@ -237,6 +240,46 @@ bool gTraceSkipWater = false;
 int gScoutKind  = -1;
 int gScoutWHits = 0;
 #endif
+
+// THREEPP_OCEAN_REFL_WATER_HIT (oceanOptions2 bit 21, on by default; =0 rolls back to the pass-through above): the water's own
+// reflection ray that meets the sea ends there and returns that water's radiance. Passing through let a trough mirror
+// a hull through the crest standing between them, and a ray that left below the surface had no answer at all (the
+// near-black shapes of a low camera). The hit is shaded once, with no further bounce: the sky its facets reflect
+// towards the ray (four facets one slope deviation either side of the hit's normal, weighted by visible area and
+// exact Fresnel, a reflected direction under the hit's plane or the horizon lifted onto it), foam where the hit
+// lies in foam, and the share it does not reflect handed back (gTraceWaterBody) for the caller to fill with the
+// water body's own light, which only it knows. Not a dark opaque surface: at grazing incidence the hit reflects
+// the low sky nearly whole, so the calm-water dots the pass-through was for do not come back.
+// Upstream's wave reflections (DisplacedMesh::Params::waveReflections, kOceanWaveReflect) answer the same question
+// for the same ray. They never both act: this test runs first and ends the ray, and the host specialises
+// kOceanWaveReflect to 0 whenever bit 21 is set (DeferredShade::recordDispatch). With THREEPP_OCEAN_REFL_WATER_HIT=0 the
+// wave-reflection dive below is the path again, exactly as upstream draws it.
+bool  gTraceHitWater  = false;// the caller's own leg (bounce 0) ended on the sea
+float gTraceWaterBody = 0.0;  // the share of that hit left to the water body, 1 - its reflectance - its foam
+float gWaterHitMss    = 0.07; // the slope variance of the water (shadeWater sets it: banked + remainder)
+float waterFresnelExact(float c, float n);
+vec4 waterHitReflection(vec3 n, vec3 v, float mss, float ior, float lod) {
+    if (dot(n, v) < 0.0) n = -n;
+    const vec3 tv = v - n * dot(n, v);
+    const vec3 t = dot(tv, tv) > 1e-8 ? normalize(tv) : normalize(cross(n, vec3(0.0, 0.0, 1.0)));
+    const vec3 b = cross(n, t);
+    const float s = sqrt(0.5 * max(mss, 0.0));
+    vec3 sum = vec3(0.0); float sumF = 0.0, sumW = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        const vec3 f = normalize(n + s * (k == 0 ? t : k == 1 ? -t : k == 2 ? b : -b));
+        const float c = dot(f, v);
+        if (c <= 0.0) continue;
+        const float w = c / max(dot(f, n), 1e-6);
+        const float fr = waterFresnelExact(c, ior);
+        vec3 r = reflect(-v, f);
+        const float up = dot(r, n);
+        if (up < 0.02) r = normalize(r + n * (0.02 - up));
+        if (r.y < 0.02) r = normalize(vec3(r.x, 0.02, r.z));
+        sum += w * fr * sampleEnvLod(r, lod);
+        sumF += w * fr; sumW += w;
+    }
+    return sumW > 0.0 ? vec4(sum, sumF) / sumW : vec4(0.0);
+}
 
 // Escape before any reflective bounce, handed back instead of shaded. When the
 // caller sets gTraceDeferMiss, a ray that leaves the scene with b == 0 adds
@@ -457,6 +500,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     float legEyeDist = length(origin - gPrimaryOrigin);
     float curMissLod = missLod;
     gTraceHitT = -1.0;
+    gTraceHitWater = false;
+    gTraceWaterBody = 0.0;
+#ifdef THREEPP_OCEAN_REFL_HITS_DIAG
+    gTraceHitHull = false;
+#endif
     gTraceHitMoved = false;
     gTraceMissTput = vec3(0.0);
     // Reset the moving-occluder shadow flag so it observes ONLY this trace's
@@ -499,7 +547,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     for (; step < REFL_MAX_STEPS; ++step) {
         bool cutoutCapped = false;// this traversal's budget confirmed a transparent texel
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 1e-3, d, 1e30);
+        // THREEPP_OCEAN_REFL_SKIP_SEA retains upstream's in-traversal cutout tests.
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT,
+                              kOceanExt && gTraceSkipWater && ((pc.oceanOptions & 4u) != 0u) ? kRayMaskAllButSea : kRayMaskAll, o, 1e-3, d, 1e30);
         while (rayQueryProceedEXT(rq)) {
             if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
             const int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
@@ -550,6 +600,16 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // crest and keep tracing; the offset scales with the hit distance so a
         // far grazing hit doesn't re-hit the same triangle from float error.
         if (gTraceSkipWater && geoms[hitId].foamAddress != 0ul) {
+            if (kOceanExt && (pc.oceanOptions2 & 2097152u) != 0u) {// THREEPP_OCEAN_REFL_WATER_HIT: the ray ends on this water
+                const vec4 wr = waterHitReflection(hitN, -d, gWaterHitMss, hm.ior > 1.0 ? hm.ior : 1.333, max(curMissLod, 0.12 * maxLod));
+                float cover = 0.0;
+                if (pc.oceanFoamTileSize > 0.0) cover = clamp(sampleFoamBicubic((o + d * tHit).xz / pc.oceanFoamTileSize) * 2.5, 0.0, 1.0);
+                // (foam: a matt white under the sky, as far as one read of the bake's zenith side tells)
+                const vec3 foamL = 0.55 * sampleEnvLod(vec3(0.0, 1.0, 0.0), maxLod);
+                radiance += tput * mix(wr.rgb, foamL, cover) * envInt;
+                if (b == 0) { gTraceHitWater = true; gTraceWaterBody = (1.0 - wr.a) * (1.0 - cover); }
+                break;
+            }
 #if SCOUT_WATER == 8
             ++gScoutWHits;
 #endif
@@ -898,6 +958,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // MOVED flag tells the temporal accumulator to reset (moving reflection).
         if (gTraceHitT < 0.0) {
             gTraceHitT = length(hitP - origin);
+#ifdef THREEPP_OCEAN_REFL_HITS_DIAG
+            if (((lights.envKnobFlags >> 8u) & 31u) == 17u)
+                gTraceHitHull = geoms[hitId].reflectionClass == 247u;
+#endif
             gTraceHitMoved = (geoms[hitId].flags & kGeomFlagMoved) != 0u;
         }
         // Reflected-hit diffuse fill. PROBE-GI mode: the probe field IS the
@@ -1192,6 +1256,18 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
 
     const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+#ifdef THREEPP_LOCAL_GI_VARIANT
+    // The ocean's display material is not a Lambertian white bounce source.
+    // Use the dielectric sky reflection for this cheap indirect ray; the
+    // primary water shader continues to own foam, transmission and scattering.
+    if ((pc.oceanOptions2 & (1u << 2u)) != 0u && hm.transmission > 0.0// THREEPP_LOCAL_GI
+        && geoms[hitId].foamAddress != 0ul) {
+        if (dot(hitN, -dir) < 0.0) hitN = -hitN;
+        const float c = clamp(dot(hitN, -dir), 0.0, 1.0);
+        const float F = 0.02037 + (1.0 - 0.02037) * pow(1.0 - c, 5.0);
+        return sampleEnvLod(reflect(dir, hitN), maxLod) * F * envInt;
+    }
+#endif
     gGiRayHitMoved = (geoms[hitId].flags & kGeomFlagMoved) != 0u;// moving 1-bounce hit (before the unlit early-out — those count too)
     if (hm.roughness < 0.0) return hAlbedo;// unlit hit (e.g. a pure-emissive proxy)
 

@@ -5,6 +5,8 @@
 // once, right after their extensions, so the functions a stage calls are
 // the same text in both and evaluate the same way.
 
+#extension GL_EXT_control_flow_attributes : require
+
 // This pass owns the per-pixel dust march (applyParticleFog), so it carries
 // the r16f volume array (binding 69) the froxel pipelines do not. Must precede
 // every include that can reach particle_density.glsl.
@@ -54,6 +56,7 @@ vec3 gPrimaryDir    = vec3(0.0, 0.0, -1.0);
 // flipping the whole thing at once. Every other camera-relative term keeps
 // using gPrimaryOrigin. Set beside it, so the same is true per pixel.
 float gNearPointY = 0.0;
+float gNearSurfaceY = 0.0;// drawn surface over the near point in per-pixel water mode
 // This pixel's integer coordinate, in the same global-invocation space every
 // other per-pixel term uses. A GLOBAL rather than a parameter because
 // applyParticleFog needs it for its spatial dither and is reached through
@@ -170,6 +173,8 @@ layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emi
 // thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
 layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
+layout(set = 0, binding = 94) uniform sampler2D oceanDisplace0;
+layout(set = 0, binding = 95) uniform sampler2D oceanDisplace2;
 // The ocean's wake field (DisplacedMesh::WakeField, WakeFieldPipeline): what
 // propellers, jets and paddles left on the water, as one 2D array of
 // world-anchored patches (R foam, G aeration, B turbulence m/s, A lane). A 1x1
@@ -186,6 +191,12 @@ layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
 // This pixel's read of it, taken once in main() where the ocean's fine normal
 // is built and used again by shadeWater (bubbles, film). Zero off a wake.
 vec4 gWake = vec4(0.0);
+vec2 gFoamXZ = vec2(0.0);
+#ifdef THREEPP_OCEAN_UNIFORM_CURRENT
+layout(constant_id=19) const float currentX=0;
+layout(constant_id=20) const float currentZ=0;
+#endif
+float gSeaRelief = 1.0;
 // The field's own scale on what its film and bubbles turn back (WakeField::albedo).
 float gWakeAlbedo = 1.0;
 // Breaking crests (DisplacedMesh::Params::breakingCrests): this pixel's crest
@@ -287,6 +298,7 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float hfTopNoise;    // peak displacement of the base height (m); 0 = off
     float hfTopInvScale; // 1 / feature size (1/m)
     vec3  hfTopOffset;   // wind drift and evolution, in noise-space units
+    float hfFloor;       // background air haze, after the upstream displaced-top fields
 } fog;
 
 // ── World-space irradiance probe grid (multi-bounce GI, on by default) ──────
@@ -420,6 +432,7 @@ layout(set = 0, binding = 53) uniform sampler3D froxelLutTex;
 // the layer costs nothing and is image-identical to today when disabled. See
 // cloudMarch()/cloudDensity() in deferred_shade_60_fog_volumetrics.glsl.
 #include "cloud_ubo.glsl"
+#include "cloud_density.glsl"// the reflected cloud deck
 
 // Half-res cloud march result (cloud_march.comp, binding 59). LINEAR sampler —
 // the full-res shade composites it with ONE bilinear upsample tap. rgb =
@@ -528,6 +541,8 @@ vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
 float heightFogOpticalDepth(vec3 a, vec3 b);// deferred_shade_60_fog_volumetrics.glsl
 vec3  sampleEnvLod(vec3 dir, float lod);
 vec3  sampleEnvDiffuse(vec3 n);    // deferred_shade_10_lighting_utils.glsl
+bool  airHorizonInScatterOn();
+vec3  airHorizonInScatter(vec3 dir);
 vec3  sampleBackground(vec3 dir);           // deferred_shade_10_lighting_utils.glsl
 // Composite the upsampled half-res cloud layer (binding 61) over `col` at this
 // pixel. sceneDist = this pixel's own camera→surface distance (1e30 for sky).
@@ -573,9 +588,13 @@ vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
     const vec3  fogLight  = lights.ambient
                           + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     const vec3  medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
+    // The haze in front of the cloud takes the same airlight as the sky behind and the surfaces under it: with the
+    // horizon in-scatter on, the horizon sky in the ray's azimuth (weather job: a raining deck inside 2 km of rain was
+    // veiled with the zenith light, darker than the fogged sea's airlight, and a bright band sat on the horizon)
+    const vec3  air = airHorizonInScatterOn() ? airHorizonInScatter(dirWS) : medAlbedo * fogLight;
     return col * cl.a
          + cl.rgb * fogT
-         + medAlbedo * fogLight * ((1.0 - fogT) * (1.0 - cl.a));
+         + air * ((1.0 - fogT) * (1.0 - cl.a));
 }
 
 // Set by shadowVis (in _10) when a committed shadow hit is a currently-MOVING
@@ -710,5 +729,77 @@ vec3 murkAmbient(vec3 amb, vec3 P, vec3 dir);
 #include "deferred_shade_20_restir_di.glsl"
 #include "deferred_shade_30_gi_gather.glsl"
 #include "deferred_shade_40_reflections.glsl"
+// the swell cascade's horizontal displacement, B-spline filtered (Sigg & Hadwiger: 4 bilinear
+// taps, C2). Its plain bilinear read is C0: its kinks on the 2.93 m texel grid go into the rest-position inversion and,
+// differenced, into the long waves' Jacobian (a piecewise-linear normal). A suspect for the flat facets beside her
+// hull; it did not remove them (they go only with the foam off), but it takes the grid out of these reads.
+vec2 disp0Smooth(vec2 uv) {
+    const vec2 res = vec2(textureSize(oceanDisplace0, 0));
+    const vec2 st = uv * res - 0.5, i = floor(st), f = st - i, f2 = f * f, f3 = f2 * f;
+    const vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0, w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+    const vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0, w3 = f3 / 6.0;
+    const vec2 g0 = w0 + w1, g1 = w2 + w3, c0 = (i - 0.5 + w1 / g0) / res, c1 = (i + 1.5 + w3 / g1) / res;
+    return g0.y * (g0.x * textureLod(oceanDisplace0, vec2(c0.x, c0.y), 0.0).rg + g1.x * textureLod(oceanDisplace0, vec2(c1.x, c0.y), 0.0).rg)
+         + g1.y * (g0.x * textureLod(oceanDisplace0, vec2(c0.x, c1.y), 0.0).rg + g1.x * textureLod(oceanDisplace0, vec2(c1.x, c1.y), 0.0).rg);
+}
+
+#ifdef THREEPP_OCEAN_INSPECT
+#include "ocean_inspect_state.glsl"
+#endif
 #include "deferred_shade_50_water_glass.glsl"
 #include "deferred_shade_60_fog_volumetrics.glsl"
+#ifdef THREEPP_OCEAN_INSPECT
+#include "ocean_inspect.glsl"
+#endif
+// rain-drop rings on the water, as a slope (d eta / dx, d eta / dz). Impacts on a 0.3 m lattice, each cell
+// holding a drop at a hashed point and phase with a probability rising with the rain rate; a ring of ~4 cm capillary
+// ripples spreads at 0.3 m/s over 0.6 s and fades as it goes.
+vec2 rainRings(vec2 xz, float t, float rate) {
+    const float cell = 0.3, life = 0.6;
+    const vec2  c0 = floor(xz / cell);
+    vec2 slope = vec2(0.0);
+    const float p = clamp(rate / 20.0, 0.08, 1.0);
+    for (int j = -1; j <= 1; ++j)
+        for (int i = -1; i <= 1; ++i) {
+            const vec2  c  = c0 + vec2(i, j);
+            const float h1 = fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453);
+            const float h2 = fract(sin(dot(c, vec2(39.3468, 11.135))) * 24634.6345);
+            const float h3 = fract(sin(dot(c, vec2(73.156, 52.235))) * 15731.743);
+            const float age = fract(t / life + h3) * life;
+            const float cyc = floor(t / life + h3);
+            if (fract(sin(dot(c + cyc, vec2(4.898, 7.23))) * 23421.631) > p) continue;   // no drop here this cycle
+            const vec2  ctr = (c + vec2(h1, h2)) * cell;
+            const vec2  d   = xz - ctr;
+            const float r   = length(d);
+            const float rr  = 0.3 * age;
+            const float env = exp(-age / 0.25) * exp(-(r - rr) * (r - rr) / (0.0016 + 0.002 * age));
+            if (r > 1e-4) slope += 0.35 * env * cos(6.2831853 * (r - rr) / 0.04) * d / r;
+        }
+    return slope;
+}
+
+
+// Shared by the full-resolution shade and upstream's half-resolution sun march.
+void initNearSurfaceY(vec2 ndc) {
+    // Per-pixel water side (THREEPP_UNDERWATER_PIXEL): the height of the drawn water over the near point, by a
+    // vertical ray down through whatever stands over it (a deck, a hull) to the first water hit
+    gNearSurfaceY     = fog.waterSurfaceY;
+    if (kOceanExt && (pc.oceanOptions2 & (1u << 17u)) != 0u && fog.waterSurfaceY < 1e29 && fog.murkDensity > 0.0) {// THREEPP_UNDERWATER_PIXEL
+        const vec3 np = camNearPoint(ndc);
+        vec3  o    = vec3(np.x, max(np.y, fog.waterSurfaceY) + 20.0, np.z);
+        float tMax = o.y - min(np.y, fog.waterSurfaceY) + 20.0;
+        for (int k = 0; k < 4; ++k) {
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 0.0, vec3(0.0, -1.0, 0.0), tMax);
+            while (rayQueryProceedEXT(rq)) {}
+            if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) break;
+            const float t = rayQueryGetIntersectionTEXT(rq, true);
+            if (geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true)].foamAddress != 0ul) {
+                gNearSurfaceY = o.y - t;
+                break;
+            }
+            o.y -= t + 0.01, tMax -= t + 0.01;
+            if (tMax <= 0.0) break;
+        }
+    }
+}

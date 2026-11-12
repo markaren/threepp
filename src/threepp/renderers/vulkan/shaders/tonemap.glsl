@@ -101,6 +101,19 @@ vec3 agx(vec3 color) {
     color = LINEAR_REC2020_TO_LINEAR_SRGB * color;
     return clamp(color, 0.0, 1.0);
 }
+// AgX below middle grey, ACES filmic above (ToneMapping::AgXAces, THREEPP_OCEAN_TONEMAP=mid; a prototype): AgX's toe, which
+// keeps dark water apart instead of crushing it, with ACES's shoulder and saturation. The two curves cross at
+// middle grey (a grey of 0.18 x exposure comes out 127 and 128), so the hand-over is there: by the brightest
+// channel, over one stop either side, so a saturated colour of low luminance (a red hull) stays on ACES.
+vec3 agxAces(vec3 c) {
+    // (a saturated colour is ACES at every level: a hand-over that moved with brightness alone let its minor
+    // channels fall as it brightened. Greys and the sea's own colours, under 0.6 saturation, are untouched)
+    const float mx = max(max(c.r, c.g), max(c.b, 1e-10));
+    const float w = max(smoothstep(-1.0, 1.0, log2(mx / 0.18)), smoothstep(0.6, 0.9, (mx - min(min(c.r, c.g), c.b)) / mx));
+    if (w <= 0.0) return agx(c);
+    if (w >= 1.0) return acesFilmic(c / 0.6);
+    return mix(agx(c), acesFilmic(c / 0.6), w);
+}
 vec3 toneMap(vec3 c, uint mode, float exposure) {
     if (mode == 1u) return c * exposure;                    // Linear
     if (mode == 2u) return reinhard(c * exposure);          // Reinhard
@@ -108,6 +121,7 @@ vec3 toneMap(vec3 c, uint mode, float exposure) {
     if (mode == 4u) return acesFilmic(c * (exposure / 0.6));// ACESFilmic
     if (mode == 6u) return neutral(c * exposure);           // Khronos PBR Neutral
     if (mode == 7u) return agx(c * exposure);               // AgX
+    if (mode == 8u) return agxAces(c * exposure);           // AgX toe, ACES shoulder
     return c;// None / Custom — pass-through
 }
 

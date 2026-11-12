@@ -369,12 +369,60 @@ vec3 envSpecularWeight(vec3 F0, vec2 ab) {
     const vec3  Fms    = FssEss * Favg / (1.0 - Ems * Favg);
     return FssEss + Fms * Ems;
 }
-vec3 sampleEnvLod(vec3 dir, float lod) {
+vec3 sampleEnvRaw(vec3 dir, float lod) {
     // scene.environmentRotation (world -> env) and environmentIntensity.
     if ((lights.envKnobFlags & 1u) != 0u) dir = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * dir;
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
+}
+// The cloud layer (setClouds) in what the environment gives every OTHER consumer than the visible sky
+// (which composites the march itself): a reflected or env-lit direction meets the same drifting deck the
+// sky shows and the sun is shadowed by. Along a direction from ro (lod below 0.4 of the chain) the deck is
+// the curved shell the march uses, read from the far cloud map's columns along the ray's ground track
+// (cloudSlantT, three fetches, was three full density taps), so it reaches the horizon; it sinks
+// into the sky's haze with distance as the march's clouds do. The blurred mips the diffuse terms read take
+// the coverage mean. Its radiance: the light falling on the deck (sun + sky) turned back down by a deck of
+// albedo about 0.6. Exact no-op without clouds.
+// The deck's light and its coverage-mean blend, set once per pixel by cloudInitPixel() at the top of main():
+// sampleEnvLod runs dozens of times a pixel, and a lazily-filled cache (or the blend's own branches) inlined
+// at each call site cost the shade 1.6-3.3 ms (measured). Off, mul 1 and add 0 leave every
+// lookup exact.
+vec3  gCloudL   = vec3(0.0);
+float gCloudMul = 1.0;
+vec3  gCloudAdd = vec3(0.0);
+void cloudInitPixel() {
+    if (!kOceanExt || clouds.enabled < 0.5) return;
+    vec3 E = PI * (lights.ambient + sampleEnvRaw(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u)));
+    if (lights.dirCount > 0u) E += lights.dirLights[0].color * max(normalize(lights.dirLights[0].direction).y, 0.05);
+    gCloudL   = 0.6 * E / PI;
+    gCloudMul = 1.0 - 0.8 * clamp(clouds.coverage, 0.0, 1.0);   // the deck's mean clear fraction
+    gCloudAdd = gCloudL * (1.0 - gCloudMul);
+}
+vec3 cloudLight() { return gCloudL; }
+vec3 cloudOverSky(vec3 ro, vec3 dir, vec3 sky, float lod, float weight) {
+    if (clouds.enabled < 0.5 || dir.y <= -0.02) return sky;
+    const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
+    const vec3 cloudL = gCloudL;
+    float T = gCloudMul;
+    float aerial = 0.0;
+    if (lod < 0.4 * maxLod) {
+        const float R = 6.371e6, dy = max(dir.y, 0.0);
+        const float tA = R * (-dy + sqrt(dy * dy + 2.0 * (clouds.bottomY - ro.y) / R));
+        const float tB = R * (-dy + sqrt(dy * dy + 2.0 * (clouds.topY - ro.y) / R));
+        T = cloudSlantT(ro, dir, tA, tB);
+        aerial = 1.0 - exp(-tA * 2.2e-5);   // as cloud_march.comp
+    }
+    const vec3 withDeck = mix(cloudL, sky, clamp(T, 0.0, 1.0));
+    return mix(sky, mix(withDeck, sky, aerial * 0.6), weight);
+}
+// Every general env consumer (IBL, glossy GGX taps, bounce misses) takes the deck as its coverage mean: the
+// per-direction deck (the far map along the ray) is read only where the water reflects the sky, once per pixel
+// (shadeWater), which carries the cloud pattern the eye sees in the sea at the cost of one lookup
+vec3 sampleEnvLod(vec3 dir, float lod) {
+    if (!kOceanExt) return sampleEnvRaw(dir, lod);// upstream's sampleEnvLod
+    const vec3 sky = sampleEnvRaw(dir, lod);
+    return dir.y > -0.02 ? sky * gCloudMul + gCloudAdd : sky;
 }
 
 // The environment as a DIFFUSE surface sees it. The last prefiltered mip,
@@ -402,11 +450,28 @@ vec3 sampleEnvDiffuse(vec3 n) {
 // chain at roughness = blurriness (the LOD the specular IBL uses for that
 // roughness). GLRenderer's cube_frag does the same. Not scaled by
 // environmentIntensity, which is a lighting knob. Defaults: LOD 0, x1.
+layout(set = 0, binding = 102) uniform sampler2D sunBackgroundTex;
+vec3 consistentSunDisc(vec3 dir) {
+    if (lights.dirCount == 0u) return vec3(0.0);
+    const vec3 S = normalize(lights.dirLights[0].direction);
+    const float radius = 0.004625122517784974; // 0.265 degrees
+    const float sr = sin(radius);
+    const float theta = atan(length(cross(dir,S)), dot(dir,S));
+    const float pixel = 2.0 * abs(cam.projInverse[1][1]) / float(max(pc.height,1u));
+    const float coverage = 1.0-smoothstep(radius-0.5*pixel,radius+0.5*pixel,theta);
+    const float r = sin(min(theta,radius))/sr;
+    const float limb = 0.4+0.6*sqrt(max(0.0,1.0-r*r));
+    return lights.dirLights[0].color * (coverage*limb/(PI*sr*sr*0.8));
+}
 vec3 sampleBackground(vec3 dir) {
     if ((lights.envKnobFlags & 2u) != 0u) dir = mat3(lights.bgRotC0, lights.bgRotC1, lights.bgRotC2) * dir;
     const float u   = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v   = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     const float lod = lights.bgBlurriness * float(max(pc.envMipCount, 1u) - 1u);
+    if (kOceanExt) {
+        const vec4 solarBg = textureLod(sunBackgroundTex, vec2(u, v), 0.0);
+        if (solarBg.a == 2.0) return solarBg.rgb * lights.bgIntensity + consistentSunDisc(dir);
+    }
     return textureLod(envTex, vec2(u, v), lod).rgb * lights.bgIntensity;
 }
 
@@ -716,10 +781,10 @@ void traceIndirect(rayQueryEXT rq, uint extraFlags, uint mask, vec3 origin, floa
 // order, not by distance, which a count does not mind.
 // Without ray query (ray_query_stub.glsl) every ray below misses: both return
 // 1. That variant's shadows come from the shadow maps (shadow_maps.glsl).
-float shadowVis(vec3 origin, vec3 dir, float tMax) {
+float shadowVisMask(vec3 origin, vec3 dir, float tMax, uint mask) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
-                          kRayMaskOpaque, origin, 0.0, dir, tMax);
+                          mask, origin, 0.0, dir, tMax);
     // Bits 20-27: the distance from the eye, in steps of 4 m, from which the cap
     // holds. Nearer than that a shadow is exact: it is at a few metres that a
     // capped shadow shows the cards' outlines.
@@ -752,6 +817,8 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
         gShadowMovingOccluder = true;
     return 0.0;
 }
+float shadowVis(vec3 origin, vec3 dir, float tMax) { return shadowVisMask(origin, dir, tMax, kRayMaskOpaque); }
+float shadowVisNoSea(vec3 origin, vec3 dir, float tMax) { return shadowVisMask(origin, dir, tMax, kRayMaskLand); }
 // What the GLASS on a shadow ray lets through, as one number: per glass surface
 // crossed, the luminance of its tint and its faces' Fresnel loss at normal
 // incidence ((1 - F0) a face; a thin-walled sheet is two faces, a solid's
@@ -827,12 +894,16 @@ float lampShadowVis(vec3 origin, vec3 dir, float tMax, bool cheapHit) {
 // commits the first hit. Blend and transmissive instances are still culled by
 // the mask, as above. Not for surface shadows: a leaf's shadow on the ground
 // keeps its shape through shadowVis.
-float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
+float shadowVisOpaqueMask(vec3 origin, vec3 dir, float tMax, uint mask) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                          kRayMaskOpaque, origin, 0.0, dir, tMax);
+                          mask, origin, 0.0, dir, tMax);
     while (rayQueryProceedEXT(rq)) {}
     return (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
+
+float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
+    return shadowVisOpaqueMask(origin, dir, tMax, kRayMaskOpaque);
 }
 
 // The sun's visibility at a PRIMARY point (the shaded pixel, the water, the
@@ -840,12 +911,15 @@ float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
 // only): the map where one covers P, else the ray (a miss without ray
 // query). N: the surface normal for the map's receiver offset, vec3(0) in a
 // medium. `opaque` takes the fog's opaque-cutout ray for the fallback.
-float primarySunVis(uint i, vec3 P, vec3 N, vec3 orig, vec3 L, bool opaque) {
+float primarySunVisMask(uint i, vec3 P, vec3 N, vec3 orig, vec3 L, bool opaque, uint mask) {
     if (kSM && i == 0u) {
         const float v = smSunVis(P, N, vec2(gl_GlobalInvocationID.xy));
         if (v >= 0.0) return v;
     }
-    return opaque ? shadowVisOpaque(orig, L, 1e30) : shadowVis(orig, L, 1e30);
+    return opaque ? shadowVisOpaqueMask(orig, L, 1e30, mask) : shadowVisMask(orig, L, 1e30, mask);
+}
+float primarySunVis(uint i, vec3 P, vec3 N, vec3 orig, vec3 L, bool opaque) {
+    return primarySunVisMask(i, P, N, orig, L, opaque, kRayMaskOpaque);
 }
 
 // distFalloff (point/spot d^decay): gi_bounce.glsl, included by _30.
@@ -905,30 +979,75 @@ vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
 // (sunShadowVis lives after blueNoiseDef — it dithers off the blue-noise tile.)
 
 // ── Value-noise / fBm (verbatim from shade_common.glsl) — foam shading only ──
+// Retained for atmospheric sampling only. Foam uses the integer lattice hash below.
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
 }
+// a lattice corner's hash, from its integer coordinates. hash21(i + vec2(1, 0)) is a float hash: the
+// compiler may fuse (i + 1) * 123.34 into one FMA in one cell and not in the next, the fract amplifies the rounding, and
+// the two cells sharing a corner then read different values for it: a step along every lattice line, a straight seam
+// in whatever is thresholded on it. An integer hash (pcg2d, Jarzynski & Olano 2020) of the corner is exact.
+vec2 hash22i(vec2 corner) {
+    uvec2 v = uvec2(ivec2(corner)) * 1664525u + 1013904223u;
+    v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    return vec2(v) * (1.0 / 4294967296.0);
+}
 float vnoise21(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
+    float a, b, c, d;
+    if (kOceanExt) {
+        a = hash22i(i).x;
+        b = hash22i(i + vec2(1.0, 0.0)).x;
+        c = hash22i(i + vec2(0.0, 1.0)).x;
+        d = hash22i(i + vec2(1.0, 1.0)).x;
+    } else {// upstream's float hash
+        a = hash21(i);
+        b = hash21(i + vec2(1.0, 0.0));
+        c = hash21(i + vec2(0.0, 1.0));
+        d = hash21(i + vec2(1.0, 1.0));
+    }
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
+// fbm4 had no lattice-free octave. Value noise is flat across every lattice line (its smoothstep weights) and
+// the octaves shared one axis-aligned lattice, so every steep threshold the foam puts on it (its outline, its holes, the
+// close-up clumps, the streak cells stretched along the wind) cut straight edges meeting at right angles: dark
+// rectangles across the foam, flat-sided shards close up. Gradient noise (quintic weights) has no flat lines, and each
+// octave turns 36.87 deg. Scaled to fbm4's old mean and spread (0.467, 0.124), so the thresholds tuned on it keep their
+// cover.
+float gnoise21(vec2 p) {
+    const vec2 i = floor(p), f = p - i, u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    const float a = dot(hash22i(i) * 2.0 - 1.0, f);
+    const float b = dot(hash22i(i + vec2(1.0, 0.0)) * 2.0 - 1.0, f - vec2(1.0, 0.0));
+    const float c = dot(hash22i(i + vec2(0.0, 1.0)) * 2.0 - 1.0, f - vec2(0.0, 1.0));
+    const float d = dot(hash22i(i + vec2(1.0, 1.0)) * 2.0 - 1.0, f - vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
 float fbm4(vec2 p) {
-    float a = 0.0;
-    float w = 0.5;
+    if (!kOceanExt) {// upstream: value noise on one lattice
+        float a = 0.0;
+        float w = 0.5;
+        for (int i = 0; i < 4; ++i) {
+            a += w * vnoise21(p);
+            p *= 2.03;
+            w *= 0.5;
+        }
+        return a;
+    }
+    const mat2 turn = mat2(0.8, -0.6, 0.6, 0.8) * 2.03;
+    float a = 0.0, w = 0.5;
     for (int i = 0; i < 4; ++i) {
-        a += w * vnoise21(p);
-        p *= 2.03;
+        a += w * gnoise21(p);
+        p = turn * p;
         w *= 0.5;
     }
-    return a;
+    return 0.467 + 1.218 * a;
 }
 
 // Bicubic B-spline reconstruction of the world foam accumulator via 4
@@ -936,6 +1055,16 @@ float fbm4(vec2 p) {
 // renders every isolated foam texel as a soft axis-aligned SQUARE (the
 // bilinear tent's support is a square), which reads as a grid artifact up
 // close; the cubic kernel reconstructs round, C1-smooth blobs.
+// all four channels (foam, freshness, storm streaks), B-spline filtered
+vec4 sampleFoamBicubic4(vec2 uv) {
+    const vec2 res = vec2(textureSize(oceanFoamWorld, 0));
+    const vec2 st = uv * res - 0.5, i = floor(st), f = st - i, f2 = f * f, f3 = f2 * f;
+    const vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0), w1 = (3.0 * f3 - 6.0 * f2 + 4.0) * (1.0 / 6.0);
+    const vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0), w3 = f3 * (1.0 / 6.0);
+    const vec2 g0 = w0 + w1, g1 = w2 + w3, c0 = (i - 0.5 + w1 / g0) / res, c1 = (i + 1.5 + w3 / g1) / res;
+    return g0.y * (g0.x * textureLod(oceanFoamWorld, vec2(c0.x, c0.y), 0.0) + g1.x * textureLod(oceanFoamWorld, vec2(c1.x, c0.y), 0.0))
+         + g1.y * (g0.x * textureLod(oceanFoamWorld, vec2(c0.x, c1.y), 0.0) + g1.x * textureLod(oceanFoamWorld, vec2(c1.x, c1.y), 0.0));
+}
 float sampleFoamBicubic(vec2 uv) {
     const vec2 res = vec2(textureSize(oceanFoamWorld, 0));
     const vec2 st  = uv * res - 0.5;

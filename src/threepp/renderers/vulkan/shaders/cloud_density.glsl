@@ -89,6 +89,23 @@ float cloudDensity(vec3 p, float time) {
     return clamp(shape, 0.0, 1.0) * clouds.density;
 }
 
+// The eroded density's EXPECTATION over the erosion noise: the base shape through g(s), the mean of
+// cloudRemap(s, 0.45 det, 1, 0, 1) over the Worley fBm's distribution (fitted to 0.015).
+// For the far cloud map, whose 312 m texels average the ~120 m erosion away: the erosion's 81 cell hashes
+// per tap would buy nothing there.
+float cloudDensityMean(vec3 p, float time) {
+    const float thick = max(clouds.topY - clouds.bottomY, 1.0);
+    const float h01   = (p.y - clouds.bottomY) / thick;
+    if (h01 < 0.0 || h01 > 1.0) return 0.0;
+    const float grad = smoothstep(0.0, 0.12, h01) * (1.0 - smoothstep(0.55, 1.0, h01));
+    if (grad <= 0.0) return 0.0;
+    const vec3 wind = vec3(clouds.wind.x, 0.0, clouds.wind.z) * time;
+    const vec3 evo  = vec3(0.0, clouds.evolveSpeed * time * 6.0, 0.0);
+    const float base  = cloudValueFbm((p + wind) * 0.00075 + evo * 0.00075);
+    const float shape = cloudRemap(base, 1.0 - clamp(clouds.coverage, 0.0, 1.0), 1.0, 0.0, 1.0) * grad;
+    return pow(clamp((shape - 0.19) / 0.81, 0.0, 1.0), 1.1) * clouds.density;
+}
+
 // ── Near-field height fog (heterogeneous froxels) ─────────────────────────────
 // Exponential height falloff × wind-scrolled 3D-noise modulation → drifting
 // ground-mist patches. Returns σ_t (1/m). REQUIRES the height-fog fields on the
@@ -104,11 +121,16 @@ float heightFogDensity(vec3 p, float time) {
     // on every scene that leaves hfNoiseAmount at its default, which is most of
     // them, once per froxel in BOTH froxel passes. amt is a UBO scalar, so the
     // branch is uniform across the dispatch and costs nothing where it fails.
-    if (amt <= 0.0) return max(base, 0.0);
+#ifdef AIR_FLOOR
+    const float floorS = clouds.hfFloor;   // the uniform haze under the layer, no churn
+#else
+    const float floorS = 0.0;
+#endif
+    if (amt <= 0.0) return max(base, 0.0) + floorS;
     // Wind-scrolled fBm churns the patches (shares the cloud wind vector).
     const vec3  wind = vec3(clouds.wind.x, 0.0, clouds.wind.z) * time;
     const float n    = cloudValueFbm((p + wind) * 0.02);// ~50 m mist features
-    return max(base * mix(1.0, n * 2.0, amt), 0.0);
+    return max(base * mix(1.0, n * 2.0, amt), 0.0) + floorS;
 }
 
 // σ per unit cloud density — KEEP IN SYNC with cloud_march.comp's sigmaMul so

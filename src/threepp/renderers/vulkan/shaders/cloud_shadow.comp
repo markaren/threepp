@@ -4,8 +4,10 @@
 
 #include "vulkan_shared.h"// ShadePush
 
-// Cloud shadow map — a 512² R8 top-down cloud TRANSMITTANCE field over an
-// 8 km square centred on the camera. One thread per texel marches the cloud
+// Cloud maps — a 512x1024 R8 image: the top half is the top-down
+// cloud SUN TRANSMITTANCE field over a 16 km square centred on the camera, the
+// bottom half the deck's vertical column transmittance over 160 km (the far
+// map, see below and cloud_map.glsl). One thread per texel marches the cloud
 // shell along the SUN direction and stores exp(-τ) (1 = full sun, 0 = full
 // shade). The surface shading, froxel sun in-scatter and water path multiply
 // their sun visibility by a bilinear sample of this map → moving cloud shadows
@@ -34,20 +36,37 @@ const float PI = 3.14159265358979;
 
 #include "cloud_density.glsl"// cloudDensity, kCloudSigmaMul
 
-// KEEP IN SYNC with cloudShadowSample() in cloud_shadow_sample.glsl: the map
-// covers a 2·kCloudShadowHalfExt square centred on the camera XZ.
-const float kCloudShadowHalfExt = 4000.0;// metres (8 km square)
+// KEEP IN SYNC with cloud_map.glsl (the readers): rows 0-511 the NEAR sun map over a 16 km square, rows
+// 512-1023 the FAR column map over a 160 km square, both centred on the camera xz.
+const float kCloudShadowHalfExt = 8000.0;// metres (16 km square: a low sun puts the shadow kilometres off its cloud)
+const float kCloudFarHalfExt    = 80000.0;
+const float kCloudShadowHalfExtUpstream = 4000.0;// metres (upstream's 8 km square, kOceanExt off)
 const int   kCloudShadowRes     = 512;
 
 void main() {
     const ivec2 tx = ivec2(gl_GlobalInvocationID.xy);
-    if (tx.x >= kCloudShadowRes || tx.y >= kCloudShadowRes) return;
+    // the extended ocean (kOceanExt): the near and the far map stacked; upstream's one 512² near map over 8 km without it
+    if (tx.x >= kCloudShadowRes || tx.y >= (kOceanExt ? 2 : 1) * kCloudShadowRes) return;
     if (clouds.shadowActive < 0.5) { imageStore(cloudShadowImage, tx, vec4(1.0)); return; }
+    const bool far = kOceanExt && tx.y >= kCloudShadowRes;
 
     // Texel → world XZ (camera-centred square).
-    const vec2 uv    = (vec2(tx) + 0.5) / float(kCloudShadowRes);
+    const vec2 uv    = kOceanExt ? (vec2(tx.x, tx.y % kCloudShadowRes) + 0.5) / float(kCloudShadowRes)
+                                 : (vec2(tx) + 0.5) / float(kCloudShadowRes);
     const vec2 cenXZ = cam.viewInverse[3].xz;
-    const vec2 wxz   = cenXZ + (uv * 2.0 - 1.0) * kCloudShadowHalfExt;
+    const vec2 wxz   = kOceanExt ? cenXZ + (uv * 2.0 - 1.0) * (far ? kCloudFarHalfExt : kCloudShadowHalfExt)
+                                 : cenXZ + (uv * 2.0 - 1.0) * kCloudShadowHalfExtUpstream;
+
+    if (far) {
+        // The column's vertical transmittance from the eroded density's expectation, 3 taps: what the water's
+        // reflected deck and the far shadows and sun light read (cloud_map.glsl)
+        const float th = max(clouds.topY - clouds.bottomY, 1.0);
+        float od = 0.0;
+        for (int i = 0; i < 3; ++i)
+            od += cloudDensityMean(vec3(wxz.x, clouds.bottomY + (float(i) + 0.5) / 3.0 * th, wxz.y), clouds.timeSec);
+        imageStore(cloudShadowImage, tx, vec4(clamp(exp(-od * th / 3.0 * kCloudSigmaMul), 0.0, 1.0)));
+        return;
+    }
 
     const vec3 sunDir = (lights.dirCount > 0u) ? normalize(lights.dirLights[0].direction)
                                                : normalize(vec3(0.3, 0.85, 0.2));
@@ -58,7 +77,7 @@ void main() {
     // accumulating optical depth (a few taps — the map is low-frequency).
     const vec3  origin = vec3(wxz.x, clouds.bottomY, wxz.y);
     const float tExit  = (clouds.topY - clouds.bottomY) / sunDir.y;
-    const int   N      = 8;
+    const int   N      = kOceanExt ? 4 : 8;
     const float seg    = tExit / float(N);
     float od = 0.0;
     for (int i = 0; i < N; ++i) {

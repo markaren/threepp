@@ -1,0 +1,14 @@
+#version 460
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform sampler2D heights;
+layout(binding=1) uniform sampler2D displacements;
+layout(binding=2,rgba32f) writeonly uniform image2D packed;
+layout(push_constant) uniform Pc { uint dim; float tileSize; float waveScale; } pc;
+float h(ivec2 q) { return texelFetch(heights,(q+ivec2(pc.dim))%ivec2(pc.dim),0).r; }
+void main() {
+    ivec2 q=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(q,ivec2(pc.dim))))return;
+    vec2 slope=vec2(h(q+ivec2(1,0))-h(q-ivec2(1,0)),h(q+ivec2(0,1))-h(q-ivec2(0,1)))
+        * (pc.waveScale*float(pc.dim)/(2.0*pc.tileSize*pc.tileSize));
+    imageStore(packed,q,vec4(texelFetch(displacements,q,0).rg,dot(slope,slope),h(q)));
+}

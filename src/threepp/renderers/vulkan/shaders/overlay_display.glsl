@@ -123,6 +123,11 @@ vec3 odToneMap(vec3 c, uint mode, float exposure) {
     if (mode == 4u) return odAcesFilmic(c * (exposure / 0.6));// ACESFilmic
     if (mode == 6u) return odNeutral(c * exposure);           // Khronos PBR Neutral
     if (mode == 7u) return odAgx(c * exposure);               // AgX
+    if (mode == 8u) {                                         // AgX toe, ACES shoulder (post_composite.comp's agxAces)
+        const vec3 e = c * exposure;
+        const float mx = max(max(e.r, e.g), max(e.b, 1e-10));
+        return mix(odAgx(e), odAcesFilmic(e / 0.6), max(smoothstep(-1.0, 1.0, log2(mx / 0.18)), smoothstep(0.6, 0.9, (mx - min(min(e.r, e.g), e.b)) / mx)));
+    }
     return c;// None / Custom — pass-through
 }
 

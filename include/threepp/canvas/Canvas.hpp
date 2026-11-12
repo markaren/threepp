@@ -43,6 +43,7 @@ namespace threepp {
         void exitOnKeyEscape(bool value);
 
         void setSize(std::pair<int, int> size);
+        void setTitle(const std::string& title);
 
         /// Move the window so its OUTER top-left corner — decorations
         /// included — lands at (x, y) in screen coordinates: {0, 0} puts the

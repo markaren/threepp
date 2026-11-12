@@ -26,11 +26,12 @@ namespace threepp::vulkan {
         // Same cap as WaterDisplacePipeline — each DisplacedMesh owns one
         // descriptor set here.
         static constexpr uint32_t kMaxOceans = 16;
+        // a breaking event's life (s), shared with deferred_shade_50_water_glass.glsl's kFoamCarryLife.
+        static constexpr double kFoamCarryLife = 0.5;
 
-        // Must match foam_world.comp's `Pc` struct (68 bytes of fields):
-        // 3 × VkDeviceAddress (24) + 11 × u32/float (44). The vessels are the
-        // same per-frame buffer WaterDisplacePipeline reads
-        // (OceanHullGpu[hullCount]).
+        // 128-byte host range: the original 112-byte prefix is unchanged,
+        // currentTime is at 112, and the optional audit address is at 120.
+        // Vessels share WaterDisplacePipeline's OceanHullGpu[hullCount].
         struct PushConstants {
             VkDeviceAddress disturbAddr;   // 0 = no disturbance buffer
             VkDeviceAddress wakeTrailAddr; // every vessel's trail, sliced per hull
@@ -45,7 +46,22 @@ namespace threepp::vulkan {
             uint32_t        cascadeMask;
             uint32_t        disturbCount;
             float           decay;
+            // The extended ocean's fold whitecaps (its main only; upstream's main
+            // has no natural deposit): 0 wherever the crest foam or breaking
+            // crests own the whitecaps.
+            float           natFoamScale;
             uint32_t        hullCount;     // active vessels (0 = no vessel foam)
+            float           gateOffX;      // the breaking gate: group velocity x time (world m)
+            float           gateOffZ;
+            float           gateT;         // < 0 = no gate
+            float           fineFold;      // the fine cascade's breaking fold; <= 0 = none
+            float           coarseFold;    // the swell cascade's
+            float           simDt;         // s since the last dispatch
+            float driftX, driftZ, rowSpacing; // advection
+            float carryT = 0;              // THREEPP_OCEAN_FOAM_CARRY: 1 + t / kFoamCarryLife; 0 = off
+            float currentTime = 0; // current-only material foam origin
+            float bandPacked = 0;  // the shade's band packing (1 + Hs + 100 x round(100 x thr)), read under THREEPP_OCEAN_FOAM_CARRY (was auditPad)
+            VkDeviceAddress auditAddr = 0; // optional positive-dt diagnostic, never sampled by rendering
         };
 
         explicit FoamWorldPipeline(VulkanContext& ctx);

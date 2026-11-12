@@ -58,6 +58,7 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float hfTopNoise;    // peak displacement of the base height (m); 0 = off
     float hfTopInvScale; // 1 / feature size (1/m)
     vec3  hfTopOffset;   // wind drift and evolution, in noise-space units
+    float hfFloor;       // the extended ocean: uniform background haze under the layer; offset 112
 } fog;
 
 layout(push_constant) uniform Pc {
@@ -111,8 +112,9 @@ vec3 camOriginAt(ivec2 q) {
 float heightFogOpticalDepth(vec3 a, vec3 b) {
     const float baseY = heightFogDisplacedBaseY(b, fog.hfBaseY, fog.hfTopNoise,
                                                 fog.hfTopInvScale, fog.hfTopOffset);
-    return heightFogLegOpticalDepth(a, b, fog.hfDensity, fog.hfFalloff,
-                                    baseY, fog.waterSurfaceY);
+    // the extended ocean: + the uniform background haze under the layer (hfFloor 0 adds exact 0.0).
+    return airLegOpticalDepth(a, b, fog.hfDensity, fog.hfFalloff,
+                              baseY, fog.waterSurfaceY, fog.hfFloor);
 }
 
 // Fog transmittance over the camera→surface leg — the GI/reflection recombine

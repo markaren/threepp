@@ -5,6 +5,8 @@
 #include "threepp/math/Color.hpp"
 #include "threepp/math/MathUtils.hpp"
 
+#include "threepp/objects/OceanLod.hpp"
+#include "threepp/renderers/vulkan/EnvKnob.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -112,15 +114,65 @@ namespace threepp {
 
         // Mesh density is decoupled from the FFT field: the renderer samples the
         // height texture via normalised UVs, so the plane can be any tessellation.
-        auto geo = PlaneGeometry::create(sizeX, sizeZ, resX - 1u, resZ - 1u);
-        geo->rotateX(-math::PI / 2.0f);
+        // A skirt adds rings on every side; the plane keeps the inner grid's cell size
+        // (the shader's normal stencil derives from it), the renderer places the rings.
+        // the extended ocean's skirt and CDLOD mesh: neither with its master switch off (upstream's plane)
+        const bool oceanExt = vulkan::env::flag("THREEPP_OCEAN_EXTENDED", true);
+        const bool useCdlod = oceanExt && options.cdlod;
+        const unsigned int ring = oceanExt ? options.skirtRings : 0u;
+        std::shared_ptr<BufferGeometry> geo;
+        if (!useCdlod) {
+            geo = PlaneGeometry::create(sizeX * float(resX - 1u + 2u * ring) / float(resX - 1u),
+                                         sizeZ * float(resZ - 1u + 2u * ring) / float(resZ - 1u),
+                                         resX - 1u + 2u * ring, resZ - 1u + 2u * ring);
+            geo->rotateX(-math::PI / 2.0f);
+        }
 
-        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(pond, fjord));
+        std::shared_ptr<BufferGeometry> mesh = geo;
+        if (useCdlod) {
+            using namespace oceanlod;
+            mesh = BufferGeometry::create();
+            std::vector<float> pos(vertices*3), norm(vertices*3), uv(vertices*2);
+            std::vector<unsigned int> indices;
+            indices.reserve(slots*cells*cells*6);
+            for (unsigned p=0; p<slots; ++p) {
+                for (unsigned z=0; z<side; ++z) for (unsigned x=0; x<side; ++x) {
+                    unsigned i=p*side*side+z*side+x;
+                    pos[3*i]=float(x); pos[3*i+2]=float(z); norm[3*i+1]=1.f;
+                    if (x<cells && z<cells) {
+                        unsigned a=i,b=i+side,c=b+1,d=i+1;
+                        indices.insert(indices.end(),{a,b,d,b,c,d});
+                    }
+                }
+            }
+            mesh->setAttribute("position",FloatBufferAttribute::create(pos,3));
+            mesh->setAttribute("normal",FloatBufferAttribute::create(norm,3));
+            mesh->setAttribute("uv",FloatBufferAttribute::create(uv,2));
+            mesh->setIndex(indices);
+            // The patch template's own box is a few metres at the origin, but the surface it draws covers the warped
+            // grid's extent and more. Hand bounds-driven consumers (the probe GI grid's fit to the scene) the box the
+            // warped plane has, so the same scene gets the same probe grid under either mesh: with the template's box
+            // the grid shrank onto the structures, and every non-water surface came out 2.5-10 luma darker by day.
+            const float bx = 0.5f * sizeX * float(resX - 1u + 2u * ring) / float(resX - 1u);
+            const float bz = 0.5f * sizeZ * float(resZ - 1u + 2u * ring) / float(resZ - 1u);
+            mesh->boundingBox = Box3(Vector3(-bx, 0.f, -bz), Vector3(bx, 0.f, bz));
+        }
+        auto ocean = std::make_shared<Ocean>(mesh, makeOceanMaterial(pond, fjord));
+        ocean->cdlod = useCdlod;
         ocean->halfExtent_ = scaleRef * 0.5f;
         // Non-square grids can't be derived from sqrt(vertexCount) — hand the
         // renderer the actual topology.
-        ocean->gridWidth = resX;
-        ocean->gridDepth = resZ;
+        ocean->gridWidth = resX + 2u * ring;
+        ocean->gridDepth = resZ + 2u * ring;
+        ocean->skirt.rings = ring;
+        ocean->skirt.reach = options.skirtReach;
+        if (useCdlod) {
+            ocean->gridWidth=oceanlod::side;
+            ocean->gridDepth=oceanlod::side*oceanlod::slots;
+            ocean->skirt.rings=0;
+            ocean->rtProxyCells=0;
+            ocean->frustumCulled=false;
+        }
 
         // Resolve the auto (−1) tile sentinels: proportional to the water
         // body's scale, capped at the 1000 m reference trio — see
@@ -182,6 +234,7 @@ namespace threepp {
     }
 
     void Ocean::warpToward(float worldX, float worldZ, float coefA) {
+        if (cdlod) return; // CDLOD owns allocation and preserves per-vertex motion history.
         warp.centerX = worldX;
         warp.centerZ = worldZ;
         warp.halfRange = halfExtent_;

@@ -5,8 +5,8 @@
 // froxel_integrate.comp and particle_light.comp bind it at 58 of the deferred
 // set; splat_common.glsl defines CLOUD_UBO_BINDING 19 before the include.
 //
-// cloud_march.comp, the one reader of the host's trailing `epoch`, declares
-// its own copy with that member.
+// The trailing epoch and background-haze density match GpuCloudUbo.
+// cloud_march.comp declares its own copy of the same layout.
 
 #ifndef CLOUD_UBO_GLSL
 #define CLOUD_UBO_GLSL
@@ -30,6 +30,10 @@ layout(set = 0, binding = CLOUD_UBO_BINDING, scalar) uniform CloudUbo {
     float hfFalloff;    // height-fog exponential height scale (m)
     float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
     float shadowActive; // 1.0 = cloud shadow map valid this frame
+    float epoch;        // cloud history generation
+    float hfFloor;      // uniform air haze below the height-fog layer
 } clouds;
+#define AIR_FLOOR
+#include "ocean_extended.glsl"// kOceanExt: the master switch (cloud_map.glsl, the cloud passes)
 
 #endif// CLOUD_UBO_GLSL

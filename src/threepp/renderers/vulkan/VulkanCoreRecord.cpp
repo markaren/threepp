@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "OceanExtended.hpp"
 #include "VulkanCpuPhaseProf.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 #include "threepp/renderers/vulkan/SpirvReflect.hpp"
@@ -1294,6 +1295,7 @@ void VulkanRenderer::Impl::addSwapchainPasses(rg::RenderGraph& g, uint32_t image
 }
 
 void VulkanRenderer::Impl::addSplatPasses(rg::RenderGraph& g) {
+            if (inspectField()) return;
             // ── Gaussian splats into the linear-HDR scene ──────────────────────
             // After the shade (so the G-buffer depth it tests against, and the
             // sceneHdr it composites over, are both final) and before the DoF
@@ -1681,7 +1683,7 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
             // confusion — every point projects sharp by construction. The CoC
             // derivation below would read a tan(fov/2) the projection never
             // carried and defocus the frame by an arbitrary amount.
-            if (!secondary && dofEnabled_ && !view().orthoFrame_ && dof_ && dof_->valid()) {
+            if (!inspectField() && !secondary && dofEnabled_ && !view().orthoFrame_ && dof_ && dof_->valid()) {
                 const float     kSensorH  = prepOut().filmHeightM;// sensor height (m)
                 constexpr float kMaxCocPx = 32.f;        // full-res radius clamp
                 const float fl = (kSensorH * 0.5f) / std::max(prepOut().tanHalfFovY, 1e-3f);
@@ -1698,6 +1700,7 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
             }
 
             const auto addBloom = [&] {
+                if (inspectField()) return;
                 if (bloomIntensity_ <= 0.0f) return;
                 auto pass = g.addPass("bloom", [this, f](VkCommandBuffer c) {
                     view().bloom_->recordPyramid(c, f, regionRenderExt_.width, regionRenderExt_.height,
@@ -1734,6 +1737,7 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 }
                 const bool sprites = !secondary && bbLayerInPost_;
                 auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity, sprites](VkCommandBuffer c) {
+                    view().post_->oceanInspect = inspectField();
                     view().post_->recordDispatch(c, f, regionSwapExt_.width, regionSwapExt_.height,
                                                  static_cast<uint32_t>(toneMapping_),
                                                  exposureBits, preExpBits_, envIsBgColor,
@@ -1992,6 +1996,7 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 addBloom();
                 const auto taaInput = g.importImage("taa.input", view().taa_->inputImage(f), kColor, 1, kGeneral);
                 auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity](VkCommandBuffer c) {
+                    view().post_->oceanInspect = inspectField();
                     view().post_->recordDispatch(c, f, regionRenderExt_.width, regionRenderExt_.height,
                                                  static_cast<uint32_t>(toneMapping_),
                                                  exposureBits, preExpBits_, envIsBgColor,
@@ -2015,8 +2020,9 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 // primary; a secondary view is a plain temporal resolve,
                 // unless it is a fisheye side view, whose pixels are the
                 // primary's picture (without the sharpen its water read as a
-                // soft band beside the primary's).
-                const bool  displayStage = !secondary || view().lensRigFace;
+                // soft band beside the primary's). The ocean inspector's field
+                // view is neither sharpened nor blurred.
+                const bool  displayStage = (!secondary || view().lensRigFace) && !inspectField();
                 const bool  sharpen      = displayStage && sharpenStrength_ > 0.0f;
                 const float mblur        = displayStage ? motionBlurAmount_ : 0.f;
                 auto taa = g.addPass("taa", [this, f, imageIndex, alpha, taaDtFrames, ext, ptExt, sharpen, mblur](VkCommandBuffer c) {
@@ -3742,6 +3748,7 @@ const Image2D& VulkanRenderer::Impl::overlayDepthImage() {
 
 void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex) {
             THREEPP_CPUPROF("frame.O0_tailPassesBuild");
+            if (inspectField()) return; // palette is the complete image, including non-water
             const uint32_t f = currentFrame;
             constexpr auto kColor   = VK_IMAGE_ASPECT_COLOR_BIT;
             constexpr auto kDepth   = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -3962,6 +3969,13 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             // prepass).
             addHeadPasses(g);
             addDeformAndTlasPasses(g);
+            // A sensor frame (renderSensorViews): the world-space work every
+            // view shares, and the probe-GI update the primary's shade would
+            // have run; no primary G-buffer, shade, post or swapchain.
+            if (frameIsSensor_) {
+                addSceneDispatchPasses(g, DispatchPart::ProbeOnly);
+                return;
+            }
             if (asyncFrame_) {
                 // The async-compute pilot: the shade's G-buffer-free inputs go
                 // to computeGraph_ (it already holds the ocean BLAS rebuild and
@@ -4177,6 +4191,8 @@ void VulkanRenderer::Impl::createEventShadePipeline() {
             ssci.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
             ssci.module = mod;
             ssci.pName  = "main";
+            const vulkan::OceanSpec oceanSpec;// ocean_extended.glsl (deferred_shade_00_common): none with the extended ocean off
+            ssci.pSpecializationInfo = oceanSpec.info();
 
             VkComputePipelineCreateInfo cpci{};
             cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;

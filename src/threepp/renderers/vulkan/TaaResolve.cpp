@@ -9,6 +9,7 @@
 #include "threepp/renderers/vulkan/shaders/motion_blur.comp.spv.h"
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 
 namespace threepp::vulkan {
@@ -721,7 +722,8 @@ namespace threepp::vulkan {
         // First-frame history is undefined → force alpha=1 so the resolved
         // output is purely the current frame and garbage doesn't bleed into
         // a permanent history. Subsequent frames use the caller's alpha.
-        const float alpha = (historyInvalidResolves_ > 0) ? 1.0f : blendAlpha;
+        const char* noHistory = std::getenv("THREEPP_OCEAN_DIAG_NO_TAA_HISTORY");
+        const float alpha = (historyInvalidResolves_ > 0 || (noHistory && *noHistory == '1')) ? 1.0f : blendAlpha;
         uint32_t alphaBits;
         std::memcpy(&alphaBits, &alpha, sizeof(alphaBits));
         // Layout: blendAlpha, output w/h (history + dispatch + writes),

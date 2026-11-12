@@ -392,10 +392,15 @@ VulkanRenderer::Impl::~Impl() {
                 destroyImage2D(ctx->allocator(), d, st->climateImage);
                 if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->foamImage.view, nullptr);
                 if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
+                if (st->foamPrevImage.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->foamPrevImage.view, nullptr);
+                if (st->foamPrevImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamPrevImage.image, st->foamPrevImage.alloc);
                 for (auto& ring : st->heightReadback)
                     for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
+                for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
+                destroyBuffer(ctx->allocator(), st->foamAuditBuffer);
                 for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
+                for (auto& b : st->lodBuffer) destroyBuffer(ctx->allocator(), b);
                 if (st->wake && wakeField_) wakeField_->destroyState(*st->wake);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.
@@ -439,6 +444,7 @@ VulkanRenderer::Impl::~Impl() {
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
             if (envIsSky) envImage = {};// the sky bake's own; it goes with the bake below
             destroyImage2D(ctx->allocator(), d, envImage);
+            destroyImage2D(ctx->allocator(), d, sunBackgroundImage);
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             // 1x1 stand-ins bound to the MS gbuffer descriptor slots whenever
             // MSAA is off. Created once by ensureGbufDummyMS() (guarded by
@@ -447,6 +453,7 @@ VulkanRenderer::Impl::~Impl() {
             // recreated on resize, so this destructor is their only owner.
             for (auto& img : gbufDummyMS_) destroyImage2D(ctx->allocator(), d, img);
             destroyShadowResources();
+            for (auto& b : inspectBuffers_) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);

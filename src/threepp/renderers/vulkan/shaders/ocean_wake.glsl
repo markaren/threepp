@@ -12,6 +12,14 @@
 #define THREEPP_OCEAN_WAKE_GLSL
 
 #define OCEAN_WAKE_MAX_PATCHES 8
+#include "ocean_extended.glsl"// kOceanExt: upstream's sampler with the extended ocean off
+#define OCEAN_FOAM_MAX_HULLS 8
+
+// The live ocean-breaking source must not interpret the hull-exclusion
+// transition's artificial height/normal as a natural breaking crest.
+struct FoamHull {
+    float centerX, centerZ, halfLength, halfBeam, sinYaw, cosYaw;
+};
 
 // One patch: a square window of water, world-anchored, `res` texels a side.
 // 72 bytes.
@@ -71,9 +79,35 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
     float rippleViscosity;  // m2/s
     float rippleGain;
     float albedo;           // scales what the film and the bubbles turn back; 1 = as shaded
+    float driftX;           // the surface's slow drift (m/s)
+    float driftZ;
+    uint foamHullCount;
+    uint _padOrbit;
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
+    FoamHull foamHulls[OCEAN_FOAM_MAX_HULLS];
     WakeSource sources[];
 };
+
+float oceanNaturalCapHullKeep(uint64_t tableAddr, vec2 xz) {
+    if (tableAddr <= 1ul) return 1.0;
+    WakeTable tb = WakeTable(tableAddr);
+    float keep = 1.0;
+    for (uint i = 0u; i < min(tb.foamHullCount, uint(OCEAN_FOAM_MAX_HULLS)); ++i) {
+        const FoamHull h = tb.foamHulls[i];
+        const vec2 d = xz - vec2(h.centerX, h.centerZ);
+        const vec2 local = vec2(h.cosYaw*d.x-h.sinYaw*d.y, h.sinYaw*d.x+h.cosYaw*d.y);
+        // Same tapered footprint and margin as water_displace::hullLocal.
+        const float u = clamp(-local.y / h.halfLength, -1.0, 1.0);
+        const float width = h.halfBeam * (u <= 0.0 ? pow(max(1.0-u*u,0.0),0.6) : 1.0-0.25*u*u);
+        const float edge = max(abs(local.x)-width, abs(local.y)-h.halfLength);
+        const float margin = clamp(0.6*h.halfBeam, 0.3, 2.0);
+        // No spectral cap inside the artificial transition. Recover over one
+        // more margin with zero derivative at both ends: no hard moving rim.
+        // Outside 2*margin this is exactly one; open-water calibration stays.
+        keep *= smoothstep(margin, 2.0*margin, edge);
+    }
+    return keep;
+}
 
 #ifdef OCEAN_WAKE_SAMPLER
 // Value noise over (x, y, time): (value in -1..1, d/dx, d/dy), quintic fade.
@@ -137,17 +171,40 @@ vec4 oceanWakeSample(uint64_t tableAddr, vec2 xz, float footprint) {
         const vec2  e    = min(uv, 1.0 - uv);
         const float edge = smoothstep(0.0, 0.06, min(e.x, e.y));
         vec4 s;
-        if (footprint <= p.texel) {
-            s = oceanWakeBicubic(uv, float(k), res);
+        // the field's 0.16 m texels showed as small grid-aligned squares near the hull: its sources
+        // and the film's threshold are steep enough that a bilinear tap's kinks (and the box of taps' axis-aligned grid) read
+        // as texel edges. Every read is now the C1 B-spline (bicubic), taken at a point jittered within a texel by a smooth function of
+        // the world position (the grid's phase is broken; the B-spline's own support averages the jitter back out), and a
+        // footprint wider than a texel is covered by B-spline taps on a grid rotated by the same hash, not the texel axes.
+        // (smooth in xz, so it adds no seams of its own: two incommensurate sine waves, a few texels long, warping each other)
+        const vec2  hq   = 0.5 + 0.5 * vec2(sin(dot(xz, vec2(3.1, 1.7)) + 1.3 * sin(dot(xz, vec2(-1.1, 2.3)))),
+                                            sin(dot(xz, vec2(-2.3, 2.9)) + 1.3 * sin(dot(xz, vec2(1.9, 0.7)))));
+        const vec2  jit  = (hq - 0.5) * (0.7 / res);
+        if (!kOceanExt) {// upstream: bicubic at the point, else n x n bilinear taps over the footprint
+            if (footprint <= p.texel) {
+                s = oceanWakeBicubic(uv, float(k), res);
+            } else {
+                // n x n bilinear taps over the footprint (a tap spans two texels)
+                const int   m    = int(clamp(ceil(0.5 * footprint / p.texel), 1.0, 4.0));
+                const float step = footprint / (float(m) * p.size);
+                s = vec4(0.0);
+                for (int a = 0; a < m; ++a)
+                    for (int b = 0; b < m; ++b)
+                        s += textureLod(OCEAN_WAKE_SAMPLER,
+                                        vec3(uv + (vec2(float(a), float(b)) - 0.5 * float(m - 1)) * step, float(k)), 0.0);
+                s /= float(m * m);
+            }
+        } else if (footprint <= p.texel) {
+            s = oceanWakeBicubic(uv + jit, float(k), res);
         } else {
-            // n x n bilinear taps over the footprint (a tap spans two texels)
             const int   m    = int(clamp(ceil(0.5 * footprint / p.texel), 1.0, 4.0));
             const float step = footprint / (float(m) * p.size);
+            const float ang  = 6.2831853 * hq.x;
+            const mat2  rot  = mat2(cos(ang), sin(ang), -sin(ang), cos(ang));
             s = vec4(0.0);
             for (int a = 0; a < m; ++a)
                 for (int b = 0; b < m; ++b)
-                    s += textureLod(OCEAN_WAKE_SAMPLER,
-                                    vec3(uv + (vec2(float(a), float(b)) - 0.5 * float(m - 1)) * step, float(k)), 0.0);
+                    s += oceanWakeBicubic(uv + jit + rot * ((vec2(float(a), float(b)) - 0.5 * float(m - 1)) * step), float(k), res);
             s /= float(m * m);
         }
         acc = max(acc, s * edge);

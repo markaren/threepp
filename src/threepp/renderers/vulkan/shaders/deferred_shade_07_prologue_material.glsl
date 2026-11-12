@@ -47,7 +47,12 @@
     // diffuse indirect with the scene ambient (diffIndW below, on the denoised
     // and the inline path alike) and the env specular (specularOcclusion, as
     // three.js's computeSpecularOcclusion). 1 exactly without a map.
-    const float matAo     = 1.0 - primUvTap.a;
+    // the extended ocean: a water pixel stores its normal z in .a instead (gbuffer.frag),
+    // so only a material with an aoMap reads it; without one upstream writes
+    // exactly 0 there, so 1.0 is the same value to the bit.
+    // THREEPP_OCEAN_WATER_GBUFFER_NORMAL off (kWaterGbufN): upstream's read.
+    const float matAo     = kWaterGbufN ? ((pm.occlusionTexIndex >= 0) ? 1.0 - primUvTap.a : 1.0)
+                                        : 1.0 - primUvTap.a;
 
     const float NdotV = max(dot(N, V), 1e-4);
     const vec3  dielF0 = dielectricF0(pm.ior, pm.specularIntensity, pm.specularColor);

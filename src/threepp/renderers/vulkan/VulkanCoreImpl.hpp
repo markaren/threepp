@@ -637,7 +637,7 @@ namespace threepp {
             if ((rs & vulkan::impl::kRayCastOff) || (en.camAttached && !(rs & vulkan::impl::kRayCastOn)))
                 return kRayMaskNoShadow;// FP viewmodel: visible, never occludes
             if (!en.isDisplaced && md && alphaMaskGroup(*md)) return kRayMaskAlpha;
-            return kRayMaskOpaque;
+            return kRayMaskOpaque | (en.isDisplaced ? kRayMaskSea : kRayMaskLand);
         }
         // The per-instance half: `group` is tlasRayMask's answer, fadeCasts
         // lodFadeCasts' for the entry. The ray shadow LOD (rayShadowState)
@@ -649,7 +649,7 @@ namespace threepp {
             const uint8_t rs = en.rayShadowState;
             if ((rs & vulkan::impl::kRayShadowProxy) && group != kRayMaskNoShadow) return group;
             if (!fadeCasts) return 0u;
-            if (group == kRayMaskOpaque && (rs & (vulkan::impl::kRayShadowFar | vulkan::impl::kRayShadowNear)))
+            if ((group & kRayMaskOpaque) != 0u && (rs & (vulkan::impl::kRayShadowFar | vulkan::impl::kRayShadowNear)))
                 return kRayMaskNoShadow;
             return group;
         }
@@ -768,14 +768,15 @@ namespace threepp {
         // structural rebuild starts the table afresh in entry order.
         struct MatTableKey {
             const Material* mat = nullptr;
+            float oceanPeakWavelength = 0.f;// per-ocean render metadata
             unsigned int matId = 0;// Material::id: a new material at a dead one's address is a new key
             bool operator==(const MatTableKey& o) const {
-                return mat == o.mat && matId == o.matId;
+                return mat == o.mat && matId == o.matId && oceanPeakWavelength == o.oceanPeakWavelength;
             }
         };
         struct MatTableKeyHash {
             size_t operator()(const MatTableKey& k) const {
-                return std::hash<const void*>{}(k.mat) ^ (size_t(k.matId) * 0x9E3779B97F4A7C15ull);
+                return std::hash<const void*>{}(k.mat) ^ (size_t(k.matId) * 0x9E3779B97F4A7C15ull) ^ std::hash<float>{}(k.oceanPeakWavelength);
             }
         };
         std::vector<MaterialDesc> matTable_;
@@ -934,6 +935,7 @@ namespace threepp {
         float mediumBaseYThisFrame_   = 0.0f;
         float mediumFalloffThisFrame_ = 1.0e6f;
         float mediumNoiseThisFrame_   = 0.0f;
+        float mediumFloorThisFrame_   = 0.0f;// the uniform haze under an explicit layer (keepSceneFog)
         // Air-fog single-scattering tint (= scene.fog colour when present, else
         // white — mirrors the shade pass's medAlbedo). The overlay-fog snapshot
         // fades particles toward this (× no env, the accepted particle-domain
@@ -970,6 +972,7 @@ namespace threepp {
         float heightFogTopNoise_      = 0.0f;
         float heightFogTopNoiseScale_ = 150.0f;
         float heightFogTopNoiseSpeed_ = 4.0f;
+        bool  heightFogKeepSceneFog_ = false;// HeightFogSettings::keepSceneFog
 
         // Environment equirect (HDR float) used by the primary miss
         // for backgrounds and by closest-hit for a single mirror-reflection
@@ -977,6 +980,7 @@ namespace threepp {
         // valid; replaced lazily when the scene's environment / background
         // texture is set or changed.
         Image2D envImage{};
+        Image2D sunBackgroundImage{}; // camera-only disc-free table
         unsigned int envTextureIdUploaded = 0xFFFFFFFFu;
         bool envIsDefault  = true;
         bool envIsBgColor  = false;
@@ -1030,6 +1034,8 @@ namespace threepp {
         // chop detail (FFT cells finer than the 1 m mesh resolves).
         Image2D oceanFineHeightDummy{};
         VkImageView oceanFineHeightView   = VK_NULL_HANDLE;// either dummy or cascade-2 view
+        VkImageView oceanDisplace0View    = VK_NULL_HANDLE;// dummy or the swell cascade's displacement
+        VkImageView oceanDisplace2View    = VK_NULL_HANDLE;// dummy or the fine cascade's
         VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
         float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
         float       oceanWaveScale        = 1.f;          // its params.waveScale (the path tracer's fine slope)
@@ -1064,6 +1070,11 @@ namespace threepp {
         VkImageLayout oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
         uint32_t      oceanClimate        = 0u;
         Image2D     crestFoamPatternImage{};
+        // The ocean's far-field skirt as the deferred shade banks it (see
+        // DisplacedMesh::Skirt): centre XZ, the Chebyshev distances over which
+        // its displacement fades out, and the long waves' mean square slope.
+        float       oceanSkirt[5] = {0.f, 0.f, 0.f, 0.f, 0.f};
+        float       rainRate = 0.f;   // rain on the water (mm/h), VulkanRenderer::setRainRate
         // The wake field's state images (deferred shade binding 78): the live
         // ocean's, or WakeFieldPipeline's 1x1 dummy. The shade samples it only
         // through the patch table the ocean's GeometryDesc::foamAddress names.
@@ -2080,6 +2091,7 @@ namespace threepp {
         // THREEPP_DENOISE=0 disables the deferred SVGF denoiser from the
         // environment — an A/B discriminator for "is this artifact shading or
         // temporal/denoise?" without plumbing a flag through every example.
+        bool denoiseFeedback_ = true;// setDenoiseFeedback
         bool denoiseEnabled_ = vulkan::env::flag("THREEPP_DENOISE", true);
 
         // MSAA G-buffer dominant-sample resolve — see vulkan/GbufResolve.
@@ -2775,6 +2787,7 @@ namespace threepp {
         // DLSS is the ACTIVE upscaler this frame: available AND runtime-enabled.
         // Outranks FSR (see useFsr) and forces the projection jitter on, like FSR.
         [[nodiscard]] bool useDlss() const {
+            if (inspectField()) return false;
 #if defined(THREEPP_WITH_DLSS)
             return dlssActive_ && dlssEnabled_;
 #else
@@ -2786,6 +2799,7 @@ namespace threepp {
         // Drives the record branch and the jitter source (FSR needs jitter, so it
         // also forces the projection jitter on — see cameraJitterOn).
         [[nodiscard]] bool useFsr() const {
+            if (inspectField()) return false;
 #if defined(THREEPP_WITH_FSR)
             return fsrActive_ && fsrEnabled_ && !useDlss();
 #else
@@ -3597,6 +3611,15 @@ namespace threepp {
         // VulkanRenderer::LightingView as an integer (0 = the lit frame);
         // the primary view's denoise recombine reads it.
         uint32_t lightingView_ = 0;
+        uint32_t inspectMode_ = 0, inspectSolo_ = 0, inspectLastFrame_ = 0;
+        int inspectX_ = -1, inspectY_ = -1;
+        bool inspectFrozen_ = false;
+        std::unordered_map<const DisplacedMesh*, double> inspectFrozenOceanTimes_;
+        OceanInspectSample inspectOcean_{};
+        std::vector<vulkan::Buffer> inspectBuffers_;
+        VkImageView inspectHeight_[3]{}, inspectDisplace_[3]{};
+        [[nodiscard]] bool inspectField() const { return !view().secondary && inspectMode_ > 0 && (inspectMode_ < 16 || inspectMode_ == 17); }
+
 
         // (cameraUbos moved to ViewContext.)
 
@@ -6356,7 +6379,7 @@ namespace threepp {
         // The async-compute pilot builds it in two calls: AsyncOnly (probeGI,
         // clusterBuild, cloudShadow, froxels, into computeGraph_) and
         // SkipAsync (everything else, into the frame graph).
-        enum class DispatchPart { All, AsyncOnly, SkipAsync };
+        enum class DispatchPart { All, AsyncOnly, SkipAsync, ProbeOnly };
         void addSceneDispatchPasses(vulkan::rg::RenderGraph& g, DispatchPart part = DispatchPart::All);
 
         // Called once after bloom_->createImages(); wires sceneHdr views.
@@ -6870,6 +6893,22 @@ namespace threepp {
         // native, as every public addView view is.
         uint32_t addViewImpl(Camera& camera, uint32_t width, uint32_t height,
                              uint32_t renderWidth = 0u, uint32_t renderHeight = 0u);
+        // Sensor frames (VulkanRenderer::renderSensorViews): the frame records the
+        // world-space head (instances, deformers, TLAS, probe GI) and the ENABLED
+        // secondary views only. No swapchain image is acquired, written or
+        // presented, so a sensor frame between two display frames leaves the
+        // window alone. sensorFrame_ is set around the render() call;
+        // frameIsSensor_ latches it for endFrame.
+        bool sensorFrame_   = false;
+        bool sensorSceneHold_ = true;          // sensor frames at the last build's instant skip the build
+        double sceneBuiltT_ = -1e300;          // the frame time the scene was last built at
+        const Object3D* sceneBuiltRoot_ = nullptr;
+        double probeLastT_  = -1.0;   // the frame time of the last probe-GI update (a sensor frame skips a repeat)
+        std::unordered_map<const void*, float> displacedLastT_;   // a DisplacedMesh's last update time (sensor frames skip a repeat)
+        bool frameIsSensor_ = false;
+        void renderSensorViewsImpl(Object3D& scene, Camera& camera);
+        bool setViewEnabledImpl(uint32_t handle, bool enabled);
+        bool setViewSensorModeImpl(uint32_t handle, bool enabled);
         bool     removeViewImpl(uint32_t handle);
         bool     setViewCameraImpl(uint32_t handle, Camera& camera);
         ViewContext* findView(uint32_t handle);
@@ -6879,6 +6918,7 @@ namespace threepp {
         // jitter. Read by both camera UBO uploads (the raster jitter gate)
         // and by the two resolve calls (blend alpha 1 = passthrough).
         [[nodiscard]] bool viewTaaOff() const {
+            if (inspectField()) return true;
             return !view().taaEnabled && (view().secondary || !(useFsr() || useDlss()));
         }
         // Allocate / free everything a SECONDARY view owns. Both assume the

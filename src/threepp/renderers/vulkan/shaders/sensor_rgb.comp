@@ -1,0 +1,91 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_image_load_formatted : require
+
+// A colour camera's image chain on a sensor view (VulkanRenderer::
+// setViewSensorChain, Kind::Rgb), the motion blur and the sensor after the
+// render:
+//   mode 0 (accumulate): the view's picture, decoded to linear light and
+//     divided by the render's gain, through the lens remap (bilinear over
+//     the base pixels, each the mean of its ss x ss samples), added to the
+//     linear accumulator (cleared first when `clear`). One per sub-pose of
+//     the exposure.
+//   mode 1 (finish): the accumulator's mean through a global-shutter CMOS:
+//     electrons = min(full well, linear x k), shot noise sqrt(e) and read
+//     noise, x g, sRGB encoded to RGBA8; and the workgroups' sums of the
+//     linear mean (all channels), which the host's auto-exposure meters.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform readonly image2D srcImg;
+
+#include "sensor_common.glsl"
+
+layout(set = 0, binding = 1, scalar) readonly buffer Taps { Tap taps[]; };
+layout(set = 0, binding = 2, scalar) buffer Acc { vec4 acc[]; };
+layout(set = 0, binding = 3, scalar) writeonly buffer Out { uint outPx[]; };
+layout(set = 0, binding = 4, scalar) writeonly buffer Sums { float sums[]; };
+
+layout(push_constant, scalar) uniform PC {
+    uint  baseW;
+    uint  baseH;
+    uint  ss;
+    uint  outW;
+    uint  outH;
+    uint  mode;
+    uint  clear;
+    float invGain;
+    float nInv;     // 1 / sub-poses accumulated
+    float k;        // electrons per linear unit (full well x exposure / reference)
+    float g;        // output per electron (gain / full well)
+    float fullWell;
+    float readNoise;
+    uint  seed;
+} pc;
+
+shared float wgSum[64];
+
+void main() {
+    const ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    const bool  inside = o.x < int(pc.outW) && o.y < int(pc.outH);
+    const uint  idx = inside ? uint(o.y) * pc.outW + uint(o.x) : 0u;
+
+    if (pc.mode == 0u) {
+        if (!inside) return;
+        const Tap t = taps[idx];
+        vec3 v = vec3(0.0);
+        if (t.i00 >= 0) {
+            const ivec2 b = ivec2(t.i00 % int(pc.baseW), t.i00 / int(pc.baseW));
+            const vec3 a00 = basePixelLinear(b, pc.ss), a10 = basePixelLinear(b + ivec2(1, 0), pc.ss);
+            const vec3 a01 = basePixelLinear(b + ivec2(0, 1), pc.ss), a11 = basePixelLinear(b + ivec2(1, 1), pc.ss);
+            v = ((1.0 - t.fy) * ((1.0 - t.fx) * a00 + t.fx * a10) + t.fy * ((1.0 - t.fx) * a01 + t.fx * a11)) * pc.invGain;
+        }
+        acc[idx] = vec4((pc.clear != 0u ? vec3(0.0) : acc[idx].rgb) + v, 0.0);
+        return;
+    }
+
+    // finish
+    float lsum = 0.0;
+    if (inside) {
+        const vec3 lin = acc[idx].rgb * pc.nInv;
+        uint s = pcgHash(pc.seed * 2654435761u ^ pcgHash(idx + 0x9e3779b9u));
+        vec3 outc;
+        for (int c = 0; c < 3; ++c) {
+            const float el = min(pc.fullWell, max(0.0, lin[c]) * pc.k);
+            const float e  = el + sqrt(el) * rndNormal(s) + pc.readNoise * rndNormal(s);
+            outc[c] = srgbEncode(e * pc.g);
+        }
+        const uvec3 b8 = uvec3(floor(outc * 255.0 + 0.5));
+        outPx[idx] = b8.r | (b8.g << 8u) | (b8.b << 16u) | (255u << 24u);
+        lsum = lin.r + lin.g + lin.b;
+    }
+    wgSum[gl_LocalInvocationIndex] = lsum;
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (gl_LocalInvocationIndex < stride) wgSum[gl_LocalInvocationIndex] += wgSum[gl_LocalInvocationIndex + stride];
+        barrier();
+    }
+    if (gl_LocalInvocationIndex == 0u)
+        sums[gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x] = wgSum[0];
+}

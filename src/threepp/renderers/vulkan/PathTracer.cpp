@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/PathTracer.hpp"
+#include "threepp/renderers/vulkan/OceanExtended.hpp"
 
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 #include "threepp/renderers/vulkan/ParticleFieldPass.hpp"// OverlayGradeGpu
@@ -105,6 +106,8 @@ namespace threepp::vulkan {
             stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = mod;
             stage.pName  = "main";
+            const OceanSpec oceanSpec;// ocean_extended.glsl (ocean_wake.glsl): none with the extended ocean off
+            stage.pSpecializationInfo = oceanSpec.info();
             VkComputePipelineCreateInfo cpci{};
             cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
             cpci.stage  = stage;

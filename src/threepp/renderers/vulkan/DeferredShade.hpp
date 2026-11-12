@@ -48,6 +48,8 @@ namespace threepp::vulkan {
             const VkBuffer*    lightsUbo  = nullptr;// [framesInFlight] GpuLightsUbo (scalar)
             VkImageView        envView    = VK_NULL_HANDLE;// prefiltered PMREM mip chain
             VkSampler          envSampler = VK_NULL_HANDLE;
+            VkImageView        sunBackgroundView = VK_NULL_HANDLE;
+            VkSampler          sunBackgroundSampler = VK_NULL_HANDLE;
             const VkImageView* gbufNormal = nullptr;// [framesInFlight]
             const VkImageView* gbufDepth  = nullptr;// [framesInFlight] (depth-aspect view)
             const VkImageView* gbufIds    = nullptr;// [framesInFlight] (usampler2D)
@@ -91,8 +93,11 @@ namespace threepp::vulkan {
             // Ocean textures (thin-shell water branch). Single shared handles —
             // 1×1 dummies when no DisplacedMesh is in the scene (the tile-size
             // push constants gate sampling). Mirror RT bindings 32 + 44.
+            VkImageView inspectHeight[3]{}, inspectDisplace[3]{};
             VkImageView        oceanFineView    = VK_NULL_HANDLE;// FFT fine-cascade height
             VkSampler          oceanFineSampler = VK_NULL_HANDLE;
+            VkImageView        oceanDisplace0View = VK_NULL_HANDLE;// horizontal displacement, swell and fine cascades (same sampler)
+            VkImageView        oceanDisplace2View = VK_NULL_HANDLE;
             VkImageView        oceanFoamView    = VK_NULL_HANDLE;// world-space foam accumulator
             VkSampler          oceanFoamSampler = VK_NULL_HANDLE;
             // Crest foam (bindings 91, 92): the foam texture over the water's
@@ -163,7 +168,7 @@ namespace threepp::vulkan {
             const VkImageView* cloudAux   = nullptr;// [framesInFlight] rg16f half-res
             // Cloud shadow map (bindings 64/65) — 512² R8 top-down cloud
             // transmittance, per FIF, regenerated each frame.
-            const VkImageView* cloudShadow = nullptr;// [framesInFlight] r8 512²
+            const VkImageView* cloudShadow = nullptr;// [framesInFlight] r8 512x1024 (near sun map over far column map)
             // Half-res RTAO (bindings 72-76) — the per-FIF AO+bent-normal image
             // (rgba16f) + its rgba16f aux (histLen/E[ao²]/near-field ao/skyVis),
             // each ping-ponged across frames-in-flight for the temporal
@@ -252,6 +257,8 @@ namespace threepp::vulkan {
             uint32_t emissiveCount = 0;
             float emissiveTotalPower = 0.f;
             float fireflyClamp       = 0.f;
+            uint32_t inspectMode = 0, inspectSolo = 0;
+            VkDeviceAddress inspectAddress = 0;
             float oceanFineTileSize  = 0.f;
             bool  oceanChopNormals   = false;// chop normals on this frame: oceanFineHeight is a ChopMoments chain
             float oceanFoamTileSize  = 0.f;
@@ -261,6 +268,8 @@ namespace threepp::vulkan {
             // per-pixel slope by the map (needs the chop normals), bit 1 the
             // crest foam's levels by it (needs the crest foam). 0 = none.
             uint32_t oceanClimate    = 0u;
+            float oceanSkirt[5] = {0.f, 0.f, 0.f, 0.f, 0.f};// centre x, z; fade d0, d1; long-wave mss
+            float rainRate = 0.f;// rain on the water (mm/h)
             bool denoise  = true;
             bool restirDI = false;
             bool volFog   = false;// volumetric spot-light beams
@@ -366,6 +375,7 @@ namespace threepp::vulkan {
             // kRayRecon permutation (constant_id 5), raw channels and guides.
             bool rayRecon = false;
         };
+        bool inspectionEnabled = false;
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
         // The sun's fog march at half resolution with temporal accumulation
@@ -470,6 +480,9 @@ namespace threepp::vulkan {
         // lightingView: VulkanRenderer::LightingView as an integer (0 = the
         // lit frame). 2, 4 and 7 (before spatial filtering) run a single
         // unfiltered recombine pass with no history feedback.
+        // The SVGF history feedback (the filtered GI / shadow ratio re-injected as the next frame's history);
+        // VulkanRenderer::setDenoiseFeedback.
+        bool historyFeedback = true;
         void recordFilterAndComposite(VkCommandBuffer cb, uint32_t frame,
                                       uint32_t width, uint32_t height,
                                       uint32_t gbufMsaaSamples = 1,
@@ -503,6 +516,8 @@ namespace threepp::vulkan {
         // THREEPP_VK_SHADE_* knobs read at construction add diagnostics to it.
         uint32_t              specMask_     = 0;    // kShadeSpecMsaa | THREEPP_VK_SHADE_SPEC_MASK
         bool                  specProbe_    = false;// THREEPP_VK_SHADE_SPEC_PROBE
+        VkShaderModule inspectMod_ = VK_NULL_HANDLE;
+        std::vector<SpirvBinding> inspectReflection_;
         VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept for the lazy creates
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
         VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget, bool rayRecon,

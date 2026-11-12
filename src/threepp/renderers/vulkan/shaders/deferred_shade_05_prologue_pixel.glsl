@@ -7,6 +7,7 @@
 // early-out between them.
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+    cloudInitPixel();
     const vec2 size = vec2(float(pc.width), float(pc.height));
     const vec2 uv   = (vec2(px) + 0.5) / size;
 
@@ -147,6 +148,7 @@
     gPrimaryDir       = camRayDir(ndc);
     gPixelCoord       = px;
     gNearPointY       = camNearPoint(ndc).y;// this pixel's port point — MEDIUM tests only
+    initNearSurfaceY(ndc);
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
     const uint id = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).x

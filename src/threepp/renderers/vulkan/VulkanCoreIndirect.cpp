@@ -853,7 +853,10 @@ namespace threepp {
             // (interopWorldStatic — marching-cubes soups) is the same case.
             bool warpReproject = rec->interopWorldStatic;
             if (en.isDisplaced) {
-                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f;
+                // Foam and fine shading are Eulerian fields. CDLOD geometric
+                // vertex velocity rejects their TAA history unnecessarily.
+                // Match the default ocean; retain an A/B diagnostic override.
+                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f || (static_cast<DisplacedMesh*>(en.mesh)->cdlod && (!std::getenv("THREEPP_OCEAN_CDLOD_WORLD_HISTORY") || std::string(std::getenv("THREEPP_OCEAN_CDLOD_WORLD_HISTORY")) != "0"));
             }
             di.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
                                      ? rec->prevVertex.address

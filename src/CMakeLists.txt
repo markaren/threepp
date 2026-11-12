@@ -856,6 +856,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/LidarScanner.hpp"
             "threepp/renderers/vulkan/EnvPrefilter.hpp"
             "threepp/renderers/vulkan/EventCameraDetector.hpp"
+            "threepp/renderers/vulkan/SensorChain.hpp"
             "threepp/renderers/vulkan/SkinningPipeline.hpp"
             "threepp/renderers/vulkan/TetSkinningPipeline.hpp"
             "threepp/renderers/vulkan/GpuTimings.hpp"
@@ -913,6 +914,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
             "threepp/renderers/vulkan/SkyBake.cpp"
             "threepp/renderers/vulkan/EventCameraDetector.cpp"
+            "threepp/renderers/vulkan/SensorChain.cpp"
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
             "threepp/renderers/vulkan/TetSkinningPipeline.cpp"
             "threepp/renderers/vulkan/GpuTimings.cpp"
@@ -939,6 +941,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/TlasGen.cpp"
             "threepp/renderers/vulkan/ParticleFieldPass.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
+            "threepp/renderers/vulkan/CdlodFilter.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/WakeFieldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
@@ -1231,6 +1234,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/event_detect.comp"
         kEventDetectCompSpv
         _event_detect_spv_h)
+    # A camera's image chain on a sensor view (SensorChain): the colour
+    # camera's lens, blur and sensor, and the event camera's pixels.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sensor_rgb.comp"
+        kSensorRgbCompSpv
+        _sensor_rgb_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sensor_evs.comp"
+        kSensorEvsCompSpv
+        _sensor_evs_spv_h)
     # Fast deterministic shading for the event-camera pipeline. Reads the
     # raster G-buffer + material/light buffers, outputs a packed BGRA8
     # luma buffer matching the swapchain layout — feeds event_detect
@@ -1273,6 +1286,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/post_composite.comp"
         kPostCompositeCompSpv
         _post_composite_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/post_composite.comp"
+        kPostCompositeInspectCompSpv _post_inspect_spv_h
+        VARIANT_SUFFIX inspect DEFINES THREEPP_OCEAN_INSPECT)
     # Camera image formation: lens distortion + sensor noise on the FINISHED
     # frame, after the overlay pass so it covers everything the camera sees.
     # See vulkan/SensorPass.{hpp,cpp}.
@@ -1363,6 +1380,36 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
         kDeferredShadeCompSpv
         _deferred_shade_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeLocalCompSpv
+        _deferred_shade_local_spv_h
+        VARIANT_SUFFIX local
+        DEFINES THREEPP_LOCAL_GI_VARIANT)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cdlod_filter.comp"
+        kCdlodFilterCompSpv _cdlod_filter_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeCdlodCompSpv _deferred_shade_cdlod_spv_h
+        VARIANT_SUFFIX cdlod DEFINES THREEPP_CDLOD)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeCdlodLocalCompSpv _deferred_shade_cdlod_local_spv_h
+        VARIANT_SUFFIX cdlodlocal DEFINES THREEPP_CDLOD THREEPP_LOCAL_GI_VARIANT)
+    # The default shader preprocesses every inspector addition away.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeInspectCompSpv _inspect_spv_h
+        VARIANT_SUFFIX inspect DEFINES THREEPP_OCEAN_INSPECT)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeInspectLocalCompSpv _inspect_local_spv_h
+        VARIANT_SUFFIX inspect_local DEFINES THREEPP_OCEAN_INSPECT THREEPP_LOCAL_GI_VARIANT)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeInspectNoRtCompSpv _inspect_nort_spv_h
+        VARIANT_SUFFIX inspect_nort DEFINES THREEPP_OCEAN_INSPECT THREEPP_NO_RAY_QUERY)
     # No-ray-query variants (THREEPP_NO_RAY_QUERY, ray_query_stub.glsl): every
     # ray misses, for a device without VK_KHR_ray_query. DeferredShade picks
     # the set from VulkanContext::rayQuerySupported().
@@ -1372,6 +1419,17 @@ if (THREEPP_WITH_VULKAN)
         _deferred_shade_nort_spv_h
         VARIANT_SUFFIX nort
         DEFINES THREEPP_NO_RAY_QUERY)
+    # the extended ocean's master switch off (THREEPP_OCEAN_EXTENDED=0, OceanExtended.hpp):
+    # the shade with the base renderer's own shadeWater in place of the extended ocean's
+    # (deferred_shade_50_water_glass.glsl); with and without ray query.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeUpstreamCompSpv _deferred_shade_upstream_spv_h
+        VARIANT_SUFFIX upstream DEFINES THREEPP_OCEAN_UPSTREAM_WATER)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeUpstreamNoRtCompSpv _deferred_shade_upstream_nort_spv_h
+        VARIANT_SUFFIX upstream_nort DEFINES THREEPP_OCEAN_UPSTREAM_WATER THREEPP_NO_RAY_QUERY)
     # Demodulated-lighting filter + composite stages (formerly the two channels
     # of deferred_denoise.comp; shared pieces in deferred_filter_common.glsl,
     # picked up automatically by compile_vulkan_shader's *.glsl DEPENDS glob):
@@ -1591,6 +1649,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
         kWaterDisplaceChopCompSpv
         _water_displace_chop_spv_h
+        VARIANT_SUFFIX chop
+        DEFINES OCEAN_CHOP=1)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace_cdlod.comp"
+        kWaterDisplaceCdlodCompSpv
+        _water_displace_cdlod_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace_cdlod.comp"
+        kWaterDisplaceCdlodChopCompSpv
+        _water_displace_cdlod_chop_spv_h
         VARIANT_SUFFIX chop
         DEFINES OCEAN_CHOP=1)
     compile_vulkan_shader(threepp
@@ -2029,3 +2097,33 @@ if (THREEPP_TREAT_WARNINGS_AS_ERRORS)
         target_compile_options(threepp PRIVATE "/WX")
     endif ()
 endif ()
+
+if(THREEPP_WITH_VULKAN)
+    foreach(_kind current current_local current_nort current_cdlod current_cdlod_local)
+        set(_defs THREEPP_OCEAN_UNIFORM_CURRENT)
+        if(_kind MATCHES "cdlod")
+            list(APPEND _defs THREEPP_CDLOD)
+        endif()
+        if(_kind MATCHES "local$")
+            list(APPEND _defs THREEPP_LOCAL_GI_VARIANT)
+        elseif(_kind STREQUAL "current_nort")
+            list(APPEND _defs THREEPP_NO_RAY_QUERY)
+        endif()
+        compile_vulkan_shader(threepp
+            "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+            kDeferredShade_${_kind} _shade_${_kind}
+            VARIANT_SUFFIX ${_kind} DEFINES ${_defs})
+    endforeach()
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
+        kFoamWorldCurrentCompSpv _foam_current
+        VARIANT_SUFFIX current DEFINES THREEPP_OCEAN_UNIFORM_CURRENT)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
+        kFoamWorldAuditCompSpv _foam_audit
+        VARIANT_SUFFIX audit DEFINES THREEPP_OCEAN_FOAM_DIAGNOSTICS)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
+        kFoamWorldAuditCurrentCompSpv _foam_audit_current
+        VARIANT_SUFFIX audit_current DEFINES THREEPP_OCEAN_FOAM_DIAGNOSTICS THREEPP_OCEAN_UNIFORM_CURRENT)
+endif()

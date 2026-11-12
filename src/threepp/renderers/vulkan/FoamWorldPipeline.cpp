@@ -1,4 +1,7 @@
 #include "threepp/renderers/vulkan/FoamWorldPipeline.hpp"
+#include "threepp/renderers/vulkan/OceanExtended.hpp"
+#include <array>
+#include <cstring>
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
@@ -6,11 +9,17 @@
 #include "threepp/renderers/vulkan/shaders/foam_world.comp.spv.h"
 
 #include <array>
+#include "threepp/objects/UniformCurrent.hpp"
+#include "threepp/renderers/vulkan/shaders/foam_world.comp.current.spv.h"
+#include "threepp/renderers/vulkan/shaders/foam_world.comp.audit.spv.h"
+#include "threepp/renderers/vulkan/shaders/foam_world.comp.audit_current.spv.h"
+#include <cstdlib>
 
 namespace threepp::vulkan {
 
-    static_assert(sizeof(FoamWorldPipeline::PushConstants) == 72,
-                  "FoamWorldPipeline::PushConstants must match foam_world.comp's Pc layout (72 bytes)");
+    static_assert(sizeof(FoamWorldPipeline::PushConstants) == 128,
+                  "FoamWorldPipeline::PushConstants must match the diagnostic Pc layout");
+    static_assert(offsetof(FoamWorldPipeline::PushConstants, auditAddr) == 120);
 
     FoamWorldPipeline::FoamWorldPipeline(VulkanContext& ctx)
         : ctx_(ctx) {
@@ -29,7 +38,9 @@ namespace threepp::vulkan {
     void FoamWorldPipeline::createPipeline() {
         // Bindings: 0..5 = 6 cascade combined image-samplers (h0/d0/h1/d1/h2/d2);
         //           6   = foam storage image (read-via-imageLoad + write-via-imageStore).
-        std::array<VkDescriptorSetLayoutBinding, 7> bb{};
+        //           7   = the previous frame's foam (read-only, the advection's source).
+        //           8   = the swell's displacement as drawn (the CDLOD filter's output, or binding 1's).
+        std::array<VkDescriptorSetLayoutBinding, 9> bb{};
         for (uint32_t i = 0; i < 6; ++i) {
             bb[i].binding         = i;
             bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -40,6 +51,10 @@ namespace threepp::vulkan {
         bb[6].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bb[6].descriptorCount = 1;
         bb[6].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        bb[7] = bb[6];
+        bb[7].binding         = 7;
+        bb[8] = bb[0];
+        bb[8].binding         = 8;
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -66,6 +81,15 @@ namespace threepp::vulkan {
         smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         smci.codeSize = sizeof(kFoamWorldCompSpv);
         smci.pCode    = kFoamWorldCompSpv;
+        // With the extended ocean master switch off: upstream's one SPIR-V, no specialization.
+        const bool oceanExt = oceanExtended();
+        const auto current = oceanExt ? UniformCurrent::environment() : UniformCurrent{};
+        if(current.enabled) { smci.codeSize=sizeof(kFoamWorldCurrentCompSpv); smci.pCode=kFoamWorldCurrentCompSpv; }
+        // Separate SPIR-V keeps the unset rendering path exactly unchanged.
+        if (oceanExt && std::getenv("THREEPP_OCEAN_FOAM_DIAGNOSTICS")) {
+            smci.codeSize = current.enabled ? sizeof(kFoamWorldAuditCurrentCompSpv) : sizeof(kFoamWorldAuditCompSpv);
+            smci.pCode = current.enabled ? kFoamWorldAuditCurrentCompSpv : kFoamWorldAuditCompSpv;
+        }
         VkShaderModule mod = VK_NULL_HANDLE;
         check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
               "vkCreateShaderModule(foamWorld)");
@@ -75,6 +99,21 @@ namespace threepp::vulkan {
         stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
         stage.module = mod;
         stage.pName  = "main";
+        // the uniform current (19, 20) and ocean_extended.glsl's constants (21, 22)
+        const OceanSpec oceanSpec;
+        std::array<uint32_t, 4> specData{};
+        std::memcpy(&specData[0], &current.x, sizeof(float));
+        std::memcpy(&specData[1], &current.z, sizeof(float));
+        std::array<VkSpecializationMapEntry, 4> specEntries{};
+        uint32_t specCount = 0, specWords = 0;
+        if (current.enabled) {
+            specEntries[specCount++] = {19, 0, 4};
+            specEntries[specCount++] = {20, 4, 4};
+            specWords = 2;
+        }
+        oceanSpec.appendTo(specData, 2u, specEntries, specCount, specWords);
+        const VkSpecializationInfo spec{specCount, specEntries.data(), specWords * sizeof(uint32_t), specData.data()};
+        if (specCount) stage.pSpecializationInfo = &spec;
 
         VkComputePipelineCreateInfo cpci{};
         cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -89,9 +128,9 @@ namespace threepp::vulkan {
         // kMaxOceans sets (one per DisplacedMesh).
         std::array<VkDescriptorPoolSize, 2> ps{};
         ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps[0].descriptorCount = 6 * kMaxOceans;
+        ps[0].descriptorCount = 7 * kMaxOceans;
         ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        ps[1].descriptorCount = 1 * kMaxOceans;
+        ps[1].descriptorCount = 2 * kMaxOceans;
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = kMaxOceans;

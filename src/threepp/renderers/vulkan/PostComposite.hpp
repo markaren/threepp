@@ -123,6 +123,8 @@ namespace threepp::vulkan {
         [[nodiscard]] bool colorGradeActive() const { return lutActive_; }
         [[nodiscard]] const ColorGrade& colorGrade() const { return grade_; }
 
+        bool oceanInspect = false; // encoded field palette, bypass the camera look
+
         // Records the composite dispatch (leading sceneHdr write→read
         // barrier included). effBloomIntensity is the level-normalized
         // intensity (<= 0 skips the bloom add); exposureBits = the FULL
@@ -168,6 +170,7 @@ namespace threepp::vulkan {
 
         VkDescriptorSetLayout dsLayout_   = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline inspectPipe_ = VK_NULL_HANDLE;
         VkPipeline            pipe_       = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_   = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]

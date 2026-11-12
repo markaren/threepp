@@ -25,7 +25,7 @@ namespace threepp::vulkan {
     // One vessel as water_displace.comp and foam_world.comp read it: the
     // DisplacedMesh::HullExclusion pose, the wake's forward speed and the
     // vessel's slice of the wake-trail buffer. Mirrors `OceanHull` in
-    // ocean_cascade.glsl field for field (scalar layout, 56 bytes).
+    // ocean_cascade.glsl field for field (scalar layout, 124 bytes).
     struct OceanHullGpu {
         float    centerX;
         float    centerZ;
@@ -41,8 +41,25 @@ namespace threepp::vulkan {
         uint32_t trailCount;
         uint32_t analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam (VesselWake::analyticWaves)
         uint32_t _pad;
+        float    radEnabled;
+        float    radOmega;
+        float    radK;
+        float    radAbar;
+        float    radDraught;
+        float    radPhase;
+        float    radHeaveRe;
+        float    radHeaveIm;
+        float    radRollRe;
+        float    radRollIm;
+        float    radPitchRe;
+        float    radPitchIm;
+        float    refR;
+        float    refK;
+        float    refDirX;
+        float    refDirZ;
+        float    radBand;
     };
-    static_assert(sizeof(OceanHullGpu) == 56, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
+    static_assert(sizeof(OceanHullGpu) == 124, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
 
     class WaterDisplacePipeline {
 
@@ -52,6 +69,8 @@ namespace threepp::vulkan {
         // kRippleBinding: the wake field's ripples, or its 1x1 stand-in, and
         // kClimateBinding: the wave climate's map, or a 1x1 stand-in).
         static constexpr uint32_t kMaxOceans = 16;
+        static constexpr uint32_t kPushConstantBytes = 128;
+        static constexpr uint32_t kSurfaceParamsBytes = 32;
         // water_displace.comp's binding of the wake field's ripples (6-9 are
         // left to other ocean inputs).
         static constexpr uint32_t kRippleBinding = 10;
@@ -59,9 +78,9 @@ namespace threepp::vulkan {
         // its header row), or a 1x1 stand-in while the ocean has none.
         static constexpr uint32_t kClimateBinding = 11;
 
-        // Must match water_displace.comp's `Pc` struct (128 bytes, the
-        // maximum): 5 × VkDeviceAddress (40) + 20 × u32/float (80) + the wake
-        // table's address (8). The vessels live in
+        // The GPU Pc stays 128 bytes. The host-only 32-byte feature tail is
+        // uploaded before the hull array, at hullAddr - kSurfaceParamsBytes.
+        // The vessels live in
         // a per-frame buffer (hullAddr → OceanHullGpu[hullCount]); one hull
         // alone used to fill this block to the 128-byte maximum.
         struct PushConstants {
@@ -105,6 +124,13 @@ namespace threepp::vulkan {
             // while this is set: the ripples' height is read at the proxy's
             // spacing, so the traced and the drawn surface carry the same waves.
             VkDeviceAddress wakeTableAddr;
+            uint32_t        skirtRings;    // DisplacedMesh::Skirt (0 = none)
+            float           skirtGrowth;   // each ring this much wider than the last
+            float           skirtFade0;    // the skirt's displacement fades out
+            float           skirtFade1;    // between these spacings (m)
+            float           skirtInvTwoR;  // 1 / (2 R_earth); 0 = flat
+            uint32_t        skirtPad;
+            VkDeviceAddress lodPatches;
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);
@@ -143,6 +169,8 @@ namespace threepp::vulkan {
 
     private:
         VulkanContext&        ctx_;
+        VkPipeline lodPipeline_ = VK_NULL_HANDLE;
+        VkPipeline lodChopPipeline_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout dsLayout_       = VK_NULL_HANDLE;
         VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            pipeline_       = VK_NULL_HANDLE;

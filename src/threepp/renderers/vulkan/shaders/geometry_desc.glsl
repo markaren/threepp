@@ -19,6 +19,8 @@ struct GeometryDesc {
     uint     flags;// the kGeomFlag* bits of vulkan_shared.h, which the shaders that read this word include;
                    // bits 9..31 the entry's material record, flags >> kGeomFlagMaterialShift
     uint64_t colorAddress;// per-vertex colours when kGeomFlagVertexColor, else 0 (packed: unorm8x4, else float xyz)
+    uint     reflectionClass;// the extended ocean: renderer semantic class for the opt-in reflhits AOV (0 = none); offset 72
+    uint     _padClass;
 };
 
 #endif// GEOMETRY_DESC_GLSL

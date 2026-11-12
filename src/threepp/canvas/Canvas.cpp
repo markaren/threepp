@@ -1012,6 +1012,10 @@ void Canvas::setSize(std::pair<int, int> size) {
     pimpl_->setSize(size);
 }
 
+void Canvas::setTitle(const std::string& title) {
+    if (pimpl_->window) glfwSetWindowTitle(pimpl_->window, title.c_str());
+}
+
 void Canvas::setPosition(std::pair<int, int> position) {
 
     pimpl_->setPosition(position);

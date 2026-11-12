@@ -1,0 +1,215 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_image_load_formatted : require
+
+// An event camera's pixel array on a sensor view (VulkanRenderer::
+// setViewSensorChain, Kind::Events): one render of the view through the lens
+// remap into events, ESIM as EventCameraSensor generates them (the log of the
+// 8-bit sRGB luma, a linear ramp between renders, one event per threshold
+// crossing stamped where the ramp crosses it, the reference advanced by the
+// crossings) with an IMX636-class pixel's non-idealities, all per pixel:
+//  - its own contrast threshold (the host draws them: fixed-pattern mismatch);
+//  - a photoreceptor low-pass on the log intensity whose time constant falls
+//    with the photocurrent (tau = tauDay illumRef / I, clamped to
+//    [tauDay, tauMax]; the ramp passes through it exactly);
+//  - a readout delay on each signal event (exponential, mean jitter);
+//  - a refractory period (an event within it of the pixel's last is lost;
+//    a lost signal event still moves the reference);
+//  - background activity (Poisson, faster in the dark) and hot pixels
+//    (Poisson at the pixel's own rate, alternating polarity).
+// Event times are seconds after the render before this one (t0); a delayed
+// event may land past this render (> dt), and the host carries it into the
+// next packet. The pixel's last event time is kept relative to the newest
+// render, so it never loses precision however long the run.
+// Also the display pane: +1 / -1 where the pixel signalled this render,
+// decaying toward 0 otherwise, as 8-bit grey (0.5 = quiet), rows top-down.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform readonly image2D srcImg;
+
+#include "sensor_common.glsl"
+
+struct PixelState {
+    float thr;
+    float ref;
+    float last;
+    float filt;
+    float lastRel;   // the last event's time, relative to the newest render (s)
+    float hotRate;   // Hz, 0 = not hot
+    int   hotPol;
+    float viz;
+};
+
+struct EvtRec {
+    uint  xy;        // x | y << 16
+    float t;         // s after t0
+    int   pol;
+    uint  signal;
+};
+
+layout(set = 0, binding = 1, scalar) readonly buffer Taps { Tap taps[]; };
+layout(set = 0, binding = 2, scalar) buffer State { PixelState st[]; };
+layout(set = 0, binding = 3, scalar) buffer Events {
+    uint count;
+    uint capacity;
+    uint overflow;
+    uint pad;
+    EvtRec ev[];
+} events;
+layout(set = 0, binding = 4, scalar) buffer TauHist { uint tauHist[40]; };
+layout(set = 0, binding = 5, scalar) writeonly buffer Viz { uint vizPx[]; };
+// the list's count, capacity and overflow flag in device memory: the per-workgroup atomic there, not on
+// the host-visible list (an atomic across the bus per workgroup cost milliseconds a render); the host
+// list's header is copied from it at the end of the frame
+layout(set = 0, binding = 6, scalar) buffer Counter {
+    uint count;
+    uint capacity;
+    uint overflow;
+    uint pad;
+} counter;
+
+layout(push_constant, scalar) uniform PC {
+    uint  baseW;
+    uint  baseH;
+    uint  ss;
+    uint  outW;
+    uint  outH;
+    uint  first;
+    float dt;
+    uint  seed;
+    float minLuma;
+    uint  maxEvents;
+    float refractory;
+    float baHz;
+    float baDark;
+    uint  bwOn;
+    float tauDay;
+    float tauMax;
+    float illumRef;
+    float illumGain;
+    float jitter;
+    uint  background;
+    float vizDecay;
+    uint  writeViz;
+    uint  opIndex;   // which of the frame's renders (the host's t0 for its events)
+} pc;
+
+PixelState s;
+uint rng;
+uint pixXY;
+// A pixel's events this render, gathered here and appended per workgroup (one atomic on the
+// shared count per workgroup, not per event: the list is host memory)
+const int kLoc = 24;
+EvtRec loc[kLoc];
+int  nLoc = 0;
+bool lostLoc = false;
+shared uint wgCount, wgBase;
+
+bool emit(float ts, int pol, bool signal) {
+    if (signal && pc.bwOn != 0u && pc.jitter > 0.0) ts += -pc.jitter * log(rnd(rng));
+    if (ts - s.lastRel < pc.refractory) return false;
+    s.lastRel = ts;
+    if (nLoc < kLoc) loc[nLoc++] = EvtRec(pixXY, ts, pol, (signal ? 1u : 0u) | (pc.opIndex << 1u));
+    else lostLoc = true;
+    return true;
+}
+
+// 8-bit like the CPU path: the base pixel as an 8-bit value, the remap rounded to 8 bits
+vec3 q8(vec3 c) { return floor(c * 255.0 + 0.5); }
+
+void pixel() {
+    const ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (o.x >= int(pc.outW) || o.y >= int(pc.outH)) return;
+    const uint idx = uint(o.y) * pc.outW + uint(o.x);
+    pixXY = uint(o.x) | (uint(o.y) << 16u);
+
+    const Tap t = taps[idx];
+    vec3 c8 = vec3(0.0);
+    if (t.i00 >= 0) {
+        const ivec2 b = ivec2(t.i00 % int(pc.baseW), t.i00 / int(pc.baseW));
+        const vec3 a00 = q8(basePixelEncoded(b, pc.ss)), a10 = q8(basePixelEncoded(b + ivec2(1, 0), pc.ss));
+        const vec3 a01 = q8(basePixelEncoded(b + ivec2(0, 1), pc.ss)), a11 = q8(basePixelEncoded(b + ivec2(1, 1), pc.ss));
+        c8 = floor((1.0 - t.fy) * ((1.0 - t.fx) * a00 + t.fx * a10) + t.fy * ((1.0 - t.fx) * a01 + t.fx * a11) + 0.5);
+    }
+    const float luma = max(pc.minLuma, (0.2126 * c8.r + 0.7152 * c8.g + 0.0722 * c8.b) / 255.0);
+    const float L = log(luma);
+
+    s = st[idx];
+    if (pc.first != 0u) {
+        s.ref = s.last = s.filt = L;
+        s.lastRel = -1e30;
+        s.viz = 0.0;
+        st[idx] = s;
+        if (pc.writeViz != 0u) vizPx[idx] = 128u;
+        return;
+    }
+    rng = pcgHash(pc.seed * 2654435761u ^ pcgHash(idx + 0x632be5abu));
+    const float dt = pc.dt;
+    bool fired = false;
+    int  firedPol = 0;
+
+    // signal: ESIM with the pixel's own threshold, through its bandwidth
+    float y0 = s.last, y1 = L;
+    float tau = 0.0;
+    if (pc.bwOn != 0u) {
+        const float I = pow(luma, 2.2) / pc.illumGain;
+        tau = pc.tauDay * clamp(pc.illumRef / max(I, 1e-9), 1.0, pc.tauMax / pc.tauDay);
+        const float sl = (L - s.last) / dt, e = exp(-dt / tau);
+        y0 = s.filt;
+        y1 = L - sl * tau + (y0 - s.last + sl * tau) * e;
+        s.filt = y1;
+    }
+    const float d = y1 - s.ref, span = y1 - y0;
+    if (abs(d) >= s.thr) {
+        const int k = min(int(pc.maxEvents), int(abs(d) / s.thr)), pol = d > 0.0 ? 1 : -1;
+        if (pc.bwOn != 0u) atomicAdd(tauHist[clamp(int(floor(10.0 * log(tau / 1e-5) / log(10.0))), 0, 39)], 1u);
+        for (int j = 0; j < k; ++j) {
+            const float level = s.ref + float(pol * (j + 1)) * s.thr;
+            const float frac = abs(span) < 1e-6 ? 1.0 : clamp((level - y0) / span, 0.0, 1.0);
+            emit(frac * dt, pol, true);
+        }
+        s.ref += float(pol * k) * s.thr;
+        fired = true, firedPol = pol;
+    }
+    s.last = L;
+
+    if (pc.background != 0u) {
+        // background activity, faster in the dark
+        const float norm = 1.0 + 0.5 * pc.baDark;
+        const float r = pc.baHz * (1.0 + pc.baDark * (1.0 - min(1.0, luma))) / norm;
+        for (int n = rndPoisson(rng, r * dt); n > 0; --n) {
+            const float ts = rnd(rng) * dt;
+            emit(ts, rnd(rng) < 0.5 ? 1 : -1, false);
+        }
+        // a hot pixel
+        if (s.hotRate > 0.0)
+            for (int n = rndPoisson(rng, s.hotRate * dt); n > 0; --n)
+                if (emit(rnd(rng) * dt, s.hotPol, false)) s.hotPol = -s.hotPol;
+    }
+
+    s.lastRel -= dt;   // relative to this render, the next one's t0
+    s.viz = fired ? float(firedPol) : s.viz * pc.vizDecay;
+    st[idx] = s;
+    if (pc.writeViz != 0u) {
+        const uint g = uint(clamp((0.5 + 0.5 * clamp(s.viz, -1.0, 1.0)) * 255.0, 0.0, 255.0));
+        vizPx[idx] = g | (g << 8u) | (g << 16u) | (255u << 24u);
+    }
+}
+
+void main() {
+    pixel();
+    if (gl_LocalInvocationIndex == 0u) wgCount = 0u;
+    barrier();
+    const uint off = atomicAdd(wgCount, uint(nLoc));
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) wgBase = wgCount > 0u ? atomicAdd(counter.count, wgCount) : 0u;
+    barrier();
+    for (int k = 0; k < nLoc; ++k) {
+        const uint i = wgBase + off + uint(k);
+        if (i < counter.capacity) events.ev[i] = loc[k];
+        else counter.overflow = 1u;
+    }
+    if (lostLoc) counter.overflow = 1u;
+}

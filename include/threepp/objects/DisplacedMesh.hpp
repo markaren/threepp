@@ -227,6 +227,19 @@ namespace threepp {
             // explicit foam disturbances are NOT scaled by this. Ocean::create
             // derives ~size/300 (capped at 1), so small water stays calm.
             float foamAmount = 1.0f;
+            // Breaking gate on those whitecaps: a noise moving at this velocity (m/s, the
+            // waves' group velocity) that changes over foamGateLife (s). 0 = no gate.
+            float foamGateVx = 0.f, foamGateVz = 0.f, foamGateLife = 0.f;
+            float foamDriftX = 0.f, foamDriftZ = 0.f;   // the surface drift that carries foam (m/s, world x, z)
+            float foamStormStreaks = 0.f;             // > 0 = build the storm streak channel, its wind factor
+            float foamRowSpacing = 0.f;               // the windrows' spacing across the wind (m); 0 = none
+            // The fine cascade's fold (1 - det J at a 1.5 m stencil) at which it breaks; 0 = it does not.
+            float foamFineFold = 0.f;
+            // The swell cascade's fold at which it starts to break.
+            float foamCoarseFold = 0.05f;
+            // the live breaking band's sea and threshold, packed as the shade gets them (1 + Hs + 100 x round(100 x
+            // threshold)), so the foam field can keep what the band breaks; 0 = none.
+            float foamBandPacked = 0.f;
 
             // FFT texture resolution per cascade (must be power of two).
             // Band-passed cascades need only enough texels to resolve their
@@ -283,6 +296,10 @@ namespace threepp {
         // fraction of the middle cascade's tile (3 m of 127 m), never under
         // five of its texels.
         static constexpr float kShortWaveHandoff = 3.0f / 127.0f;
+        // Render-only reflection visibility length from the driving sea spectrum.
+        // 0 = unavailable. When changed, bump material()->needsUpdate() so its
+        // MaterialDesc metadata is refreshed; no wave/displacement input changes.
+        float reflectionPeakWavelength = 0.f;
 
         // Hull exclusion zone: suppresses wave displacement inside a
         // world-space oriented rectangle so the ocean doesn't clip through
@@ -318,6 +335,24 @@ namespace threepp {
             float centerY    = 0.f;   // world y of the hull's waterline plane
             float pitch      = 0.f;   // rad, +bow up
             float roll       = 0.f;   // rad, +starboard up
+            // Drawn-mesh radiation/reflection only; sampleHeight and physics ignore these.
+            float radEnabled = 0.f;   // exactly 0 skips all band math (opt-in)
+            float radOmega   = 0.f;   // motion angular frequency, rad/s
+            float radK       = 0.f;   // omega^2/g, 1/m
+            float radAbar    = 0.f;   // (1-exp(-k*beam))*exp(-k*draught)
+            float radDraught = 0.f;   // metres; used by the application's Abar calculation
+            float radPhase   = 0.f;   // omega*(draw time - phasor epoch), radians
+            float radHeaveRe = 0.f;   // complex heave at the phasor epoch, metres
+            float radHeaveIm = 0.f;
+            float radRollRe  = 0.f;   // complex tan(clamped roll), +starboard up
+            float radRollIm  = 0.f;
+            float radPitchRe = 0.f;   // complex tan(clamped pitch), +bow up
+            float radPitchIm = 0.f;
+            float refR       = 0.f;   // 1-exp(-refK*beam)
+            float refK       = 0.f;   // dominant incident peak wavenumber, 1/m
+            float refDirX    = 0.f;   // incident propagation unit vector, scene XZ
+            float refDirZ    = 0.f;
+            float radBand    = 0.f;   // max(1.5*wavelength,60), metres; cut at 3*band
         };
         HullExclusion hullExclusion;
 
@@ -345,6 +380,27 @@ namespace threepp {
             float coefA     = 1.f;   // 1 = linear (no warp); lower = denser centre
         };
         MeshWarp warp;
+        // Opt-in renderer allocation; physical and legacy CPU field queries stay unchanged.
+        bool cdlod = false;
+        float lodEyeX = 0.f, lodEyeZ = 0.f, lodEyeHeight = 0.f;
+
+        // Far-field skirt: `rings` extra vertex rings round the grid, each wider than
+        // the last by `growth` (set by the renderer so the outermost reaches `reach`,
+        // metres from the warp centre), so the water runs out to the horizon instead
+        // of ending at the mesh's edge. The inner grid's vertices are computed exactly
+        // as without a skirt. The skirt's displacement fades out as its spacing grows
+        // past what it can carry (`fadeSpacing0` .. `fadeSpacing1`, m), it follows the
+        // Earth's curvature (`earthRadius`, m; 0 = flat), and the deferred shade banks
+        // the long waves' mean square slope it no longer draws (`mss`) into the
+        // water's roughness. rings = 0: no skirt.
+        struct Skirt {
+            uint32_t rings = 0;
+            float reach = 0.f;
+            float fadeSpacing0 = 25.f, fadeSpacing1 = 100.f;
+            float earthRadius = 6.371e6f;
+            float mss = 0.f;
+        };
+        Skirt skirt;
 
         // Vessel wake: per-frame state used by water_displace.comp to inject a
         // Kelvin V-wake (geometric height), a bow bump, and a foam trail behind
@@ -491,7 +547,7 @@ namespace threepp {
         // shade is byte-identical. `resolution` and `patches` are LATCHED when
         // the renderer first sees the mesh; the other knobs are live.
         static constexpr uint32_t kMaxWakePatches = 8;
-        static constexpr uint32_t kMaxWakeSources = 256;
+        static constexpr uint32_t kMaxWakeSources = 640;
         // THREEPP_WAKE_HEIGHTS from the environment, read once: "0" = false,
         // anything else or unset = true.
         static bool defaultRippleHeights();
@@ -555,6 +611,8 @@ namespace threepp {
             // at night turns it down: under a moon, or the night sky's own light,
             // a race is otherwise a pale band on a sea that mirrors a dark sky.
             float albedo          = 1.0f;
+            // The surface's slow drift (m/s): the waves' own motion comes with sampling at the rest position.
+            float driftX = 0.f, driftZ = 0.f;
         };
         WakeField wakeField;
 
@@ -653,6 +711,9 @@ namespace threepp {
         // never query wave height pay nothing for it. Internal; do not mutate
         // from user code.
         mutable bool wantsHeightReadback = false;
+        // Explicit matched-field mode: current host uploads, Catmull-Rom C0/C1.
+        // Default retains the historical B-spline/readback behavior.
+        bool currentExternalQueries = false;
 
         // Renderer-filled spatial-domain wave fields, one per cascade,
         // copied back from GPU each frame after the IFFT pass (only while
@@ -667,6 +728,7 @@ namespace threepp {
         struct CascadeField {
             std::vector<float> data;
             std::vector<float> disp;
+            mutable std::vector<std::vector<float>> lodHeight, lodDisp;
             uint32_t dim      = 0;
             float    tileSize = 0.f;
             // The band's mean wavenumber (rad/m) the bound harmonic uses;
@@ -721,6 +783,27 @@ namespace threepp {
         // The map's three cascade gains at a rest point (1, 1, 1 without a
         // map): the same bilinear read the shaders make.
         [[nodiscard]] std::array<float, 3> waveClimateGain(float x, float z) const;
+        // A cascade's spatial fields supplied by the host instead of its FFT chain
+        // (e.g. a sea made of given wave components that a vessel's motion is also
+        // driven by). When `dim` equals the cascade's texture size and both vectors
+        // hold dim*dim RG pairs, the renderer uploads them each frame in place of
+        // the cascade's Phillips / dynamic-spectrum / IFFT output, in the same
+        // convention the IFFT leaves: row-major cell (ix, iz) at index
+        // (iz*dim + ix)*2, texel (ix, iz) over world XZ (ix, iz) * tileSize / dim
+        // (cascade 1 in its rotated domain), values UNNORMALIZED (the shader divides
+        // by the cascade's tileSize, then scales the
+        // height by waveScale and the displacement by choppiness). `height` R is
+        // the vertical displacement (G unused); `disp` RG the horizontal (x, z).
+        // Everything that reads the cascade (displacement, normals, foam, the
+        // traced surface, sampleHeight's mirror) then sees the supplied field.
+        // dim = 0 (the default): the FFT chain runs as before.
+        struct ExternalField {
+            std::vector<float> height;
+            std::vector<float> disp;
+            mutable std::vector<std::vector<float>> lodHeight, lodDisp;
+            uint32_t dim = 0;
+        };
+        ExternalField externalCascades[3];
 
         // Combined wave height of the rendered surface over (worldX, worldZ).
         // Mirrors water_displace.comp's sampleDisplacement(): cascades 0 and 1
@@ -773,10 +856,23 @@ namespace threepp {
         // rendered surface (which another footprint flattens). So a boat
         // crossing a ship's wake that samples this under her own hull feels
         // the ship's wake.
+        // Open-water CDLOD field query, including its continuous filter, fade,
+        // chop inverse, curvature and selected triangle interpolation. Excludes
+        // hull planes/wakes; shares the delayed mirror. Use for visual diagnostics,
+        // never as a replacement for physical excitation or contact emitters.
+        float sampleLodHeight(float worldX, float worldZ) const;
+        // Continuous filtered field before triangle interpolation (audit).
+        float sampleLodFieldHeight(float worldX, float worldZ) const;
+        // Unfiltered legacy mirror, exposed for comparing the LOD visual query
+        // with the original field independently of allocation/curvature.
+        float sampleUnfilteredHeight(float worldX, float worldZ,
+                                     uint32_t cascadeMask = 0b111u) const;
+
         float sampleWakeHeight(float worldX, float worldZ) const;
 
     private:
         WaveClimate waveClimate_;
+        std::array<float,3> sampleLodDisplacement(float restX,float restZ) const;
     };
 
 }// namespace threepp
