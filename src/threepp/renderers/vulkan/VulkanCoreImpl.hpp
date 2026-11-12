@@ -2757,6 +2757,7 @@ namespace threepp {
         // init, creates nothing).
         [[nodiscard]] bool dlssAvailableOrPending();
         [[nodiscard]] bool dlssRrAvailableOrPending();// the same for Ray Reconstruction
+        [[nodiscard]] bool dlssOnOrPending();         // and DLSS is switched on (the public dlss())
         // A windowed canvas stays hidden until its first frame has been
         // presented (see the constructor of VulkanRenderer); once.
         bool   windowRevealed_ = false;

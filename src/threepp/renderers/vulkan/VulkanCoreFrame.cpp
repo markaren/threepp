@@ -1848,6 +1848,14 @@ bool VulkanRenderer::Impl::dlssAvailableOrPending() {
 #endif
         }
 
+bool VulkanRenderer::Impl::dlssOnOrPending() {
+#if defined(THREEPP_WITH_DLSS)
+            return dlssEnabled_ && dlssAvailableOrPending();
+#else
+            return false;
+#endif
+        }
+
 bool VulkanRenderer::Impl::dlssRrAvailableOrPending() {
 #if defined(THREEPP_WITH_DLSS)
             return dlssAvailableOrPending() && dlss_ && dlss_->rayReconstructionAvailable();

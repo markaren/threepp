@@ -2190,7 +2190,7 @@ namespace threepp {
     }
 
     bool VulkanRenderer::dlss() const {
-        return core()->dlssEnabled_ && core()->dlssAvailableOrPending();
+        return core()->dlssOnOrPending();
     }
 
     bool VulkanRenderer::dlssAvailable() const {
