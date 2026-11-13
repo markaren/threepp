@@ -205,6 +205,7 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 //      of hard shells, which is the better failure.
 vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     gPdLegT = 1.0;// every early return below is a leg with no dust on it
+    gPdLegAt = 1e30;
     if (!flagOn(2048u)) return col;
 #ifdef PD_LINEAR
     const uint n = min(pd.counts.x, uint(kMaxDensityFields));
@@ -385,10 +386,23 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         // pdLightTransmittance is the medium ITSELF — Beer-Lambert through
         // the density mirrors from the centroid toward the sun, the term
         // that makes a soot column's shaded side actually dark.
+        // MULTIPLE SCATTERING, as a second, slower-dying octave of the same
+        // leg. Beer-Lambert alone is single scattering: light that is scattered
+        // out of the sun's leg is lost. In a medium that scatters nearly all it
+        // meets (fog, cloud, steam) it is not lost, it arrives by another road,
+        // and the shaded side of a fog bank is grey-white, where single
+        // scattering left it lit by the sky alone: blue, with white only on the
+        // sunward rims. The octave is the leg at a quarter of its optical depth
+        // (T^0.25), without the phase function's forward peak (many scatterings
+        // forget the direction), weighted by the albedo's fourth power: 0.65
+        // for white fog, 0.03 for 0.45 grey dust, nothing for soot.
+        const float Tsun = pdSurfaceLightTransmittance(cen, L);
+        const float a1   = dot(medAlbedo, vec3(1.0 / 3.0));
+        const float ms   = 0.7 * a1 * a1 * a1 * a1;
+        const float ph   = hgPhase(dot(L, rd), medG);
         sun += lights.dirLights[i].color
-             * (hgPhase(dot(L, rd), medG)
-                * primarySunVis(i, cen, vec3(0.0), cen, L, false) * cloudShadowSample(cen)
-                * pdLightTransmittance(cen, L));
+             * (primarySunVis(i, cen, vec3(0.0), cen, L, false) * cloudShadowSample(cen)
+                * max(ph * Tsun, ms * (1.0 / (4.0 * 3.14159265)) * pow(Tsun, 0.25)));
     }
     const vec3 amb = lights.ambient
                    + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
@@ -467,6 +481,7 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // fjord's case, and the reported one.
     const float trDust = exp(-tau);
     gPdLegT = trDust;
+    gPdLegAt = dot(cen - ro, rd);
 
     // Emission is ADDED, not scattered: it is radiance the medium produced, so
     // it neither multiplies by the albedo (that is the fraction of INCIDENT
@@ -1136,7 +1151,13 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // keeps only the clustered POINT-light glow + the medium-extinction LUT) and this
 // owns [0, tEnd] outright. The per-pixel jittered step offset relies on TAA to
 // average into smooth shafts.
-vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+//
+// dustAt / dustTr: a ParticleField medium on this leg, as applyParticleFog
+// found it (gPdLegAt, gPdLegT): the air's in-scatter from beyond dustAt is
+// seen through the dust and takes its transmittance. Added whole, the haze
+// BEHIND a plume lay in front of it: a far plume was washed out by kilometres
+// of air it should have hidden. (1e30, 1) = no dust: the terms are untouched.
+vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px, float dustAt, float dustTr) {
     // WHOLE-RAY sun shafts (Phase 3 unified fog). No 512 m split any more — there
     // is no sun seam by construction. Same height-fog σ PROFILE and HG phase as
     // before; the camera→x transmittance is now the closed-form MEAN height-fog
@@ -1245,7 +1266,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         }
         // σ_s = σ_t · albedo (albedo applied once below); cloud shadow overhead
         // dims the shafts exactly like the (now-deleted) froxel sun term did.
-        const vec3 add = stepSum * (trCam * sigmaX * cloudShadowSample(x));
+        const vec3 add = stepSum * (trCam * sigmaX * cloudShadowSample(x) * (t > dustAt ? dustTr : 1.0));
         if (traced) sum += add;
         else sumTail += add;
     }
@@ -1254,14 +1275,19 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     return sum * medAlbedo * (dtRt * trWater) + sumTail * medAlbedo * (dtTail * trWater);
 }
 
-// The sun march for a PRIMARY ray (the camera to this pixel's surface, or
-// 2000 m of sky). With setFogMarchHalfRes (flags bit 30) fog_march.comp has
+vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    return volumetricDirScatter(ro, rd, tMax, px, 1e30, 1.0);
+}
+
+// The sun march for a PRIMARY ray (the camera to this pixel's surface, or the
+// sky to the air's optical-depth horizon). Call it straight after the leg's
+// applyParticleFog: it reads that leg's dust (gPdLegAt, gPdLegT). With setFogMarchHalfRes (flags bit 30) fog_march.comp has
 // marched it at half resolution this frame: the 2x2 half-res taps around the
 // pixel, bilinear, each weighted by how close its leg's length is to this
 // pixel's own (a trunk's in-scatter stays off the sky beside it); with no tap
 // within reach, the one whose leg is nearest. Off, the march runs here.
 vec3 fogDirPrimary(vec3 ro, vec3 rd, float tMax, ivec2 px) {
-    if ((kRayBudget & kRayBudgetFogHalf) == 0u || !flagOn(1073741824u)) return volumetricDirScatter(ro, rd, tMax, px);
+    if ((kRayBudget & kRayBudgetFogHalf) == 0u || !flagOn(1073741824u)) return volumetricDirScatter(ro, rd, tMax, px, gPdLegAt, gPdLegT);
     const ivec2 hsize = paneHalfSize();// the pane's half extent, not textureSize
     const vec2  hp    = (vec2(px) + 0.5) * 0.5 - 0.5;
     const ivec2 b     = ivec2(floor(hp));

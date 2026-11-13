@@ -71,6 +71,11 @@ ivec2 gPixelCoord = ivec2(0);
 // skyBackground() and the reflection legs too, so it is read at the one call
 // site that wants it, not threaded out of every caller.
 float gPdLegT = 1.0;
+// Where on that leg the dust sits: the distance along the ray to the march's
+// sigma-weighted centroid (1e30 = no dust on it). The sun march of the air
+// (fogDirPrimary) splits its leg there: the haze behind a plume is seen
+// through the plume.
+float gPdLegAt = 1e30;
 
 #include "lights_ubo.glsl"
 

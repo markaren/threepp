@@ -118,7 +118,10 @@ void main() {
         // the night sky). Physical radiance → always pre-exposed.
         sky += (froxelInscatter(uv, kFroxelZMax)
               + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
-              + fogDirPrimary(camPos, dirWS, 2000.0, px)
+              // To the air's optical-depth horizon, as a far surface's leg is:
+              // stopped at 2000 m, thin haze put a line along the horizon, the
+              // sea under it carrying the sun's glow of its whole leg.
+              + fogDirPrimary(camPos, dirWS, 1e30, px)
               // Shafts against open water: on a background pixel the murk march
               // is the ONLY structure in the frame, so it is what stops the
               // endless blue from being a flat gradient.
