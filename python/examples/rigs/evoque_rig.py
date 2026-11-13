@@ -241,6 +241,14 @@ class Shell:
                 o.material.ao_map = None
             except Exception:  # noqa: BLE001 - not every material has one
                 pass
+            if o.material.name == "tyre":
+                # The model's tyre is metal-ish (metalness 0.58, roughness 0.35, and the packed
+                # metal-roughness map on top): it mirrored the sky as a white sheen. Rubber:
+                # near-black, rough, not metal.
+                m = o.material
+                m.map = m.roughness_map = m.metalness_map = None
+                m.color, m.roughness, m.metalness = tp.Color(0.025, 0.025, 0.025), 0.9, 0.0
+                m.needs_update()
             if "lights_position_back" in o.name:
                 o.set_material(self.tail)
             elif "lights_reverse" in o.name:
