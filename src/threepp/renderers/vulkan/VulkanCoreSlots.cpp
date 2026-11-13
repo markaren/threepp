@@ -542,7 +542,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     spans[idx].count = newCount;
                 }
                 if (newCount != oldCount) {
-                    spans[idx].aabbValid = false;
+                    spans[idx].aabbValid = false; spans[idx].cullPartial = false;
                     // The probe-fit chunks before the one the change touches stand.
                     spans[idx].probeChunksValid = std::min(spans[idx].probeChunksValid,
                                                            std::min(oldCount, newCount) / EntrySpan::kProbeChunk);

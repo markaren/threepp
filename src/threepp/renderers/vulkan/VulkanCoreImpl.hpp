@@ -1179,6 +1179,19 @@ namespace threepp {
         // deferred shade can index by primaryInstanceId-1 to make the
         // FC-halving decision per-pixel instead of scene-wide.
         std::vector<uint32_t> meshMovedBits_;
+        // Entries whose world matrix changed this frame through an edit that
+        // said its rows were PLACED (InstancedMesh::markMatrixRows placed =
+        // true: a pool's slot handed to another object), a bit each, cleared
+        // with meshMovedBits_. Such a row is not in meshMovedBits_: its TLAS
+        // row is marked through tlasRowDirty_, and its motion is identity with
+        // the previous matrix taken as the new one (no motion vector, no
+        // moving-object history reset in the shade).
+        std::vector<uint32_t> entryPlacedBits_;
+        [[nodiscard]] bool entryPlaced(size_t i) const {
+            const size_t w = i >> 5;
+            return w < entryPlacedBits_.size() && (entryPlacedBits_[w] & (1u << (i & 31u))) != 0u;
+        }
+        std::vector<uint32_t> movedBitsShadeScratch_;// meshMovedBits_ less entryPlacedBits_ (uploadMeshMovedBits)
         std::array<Buffer, kFramesInFlight> meshMovedBitsBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> meshMovedBitsBufferCapacity{};
         // Per-entry sticky "recently moved" countdown backing GeometryDesc._pad —

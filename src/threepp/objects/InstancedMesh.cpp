@@ -148,6 +148,72 @@ void InstancedMesh::setFadeAt(size_t index, float fade, bool complement) {
     a[index * 2] = clampFade(fade);
     a[index * 2 + 1] = complement ? 1.f : 0.f;
     instanceFade_->needsUpdate();
+    fadeEdits_[fadeEditCount_++ % kEditLog] = {instanceFade_->version, static_cast<uint32_t>(index),
+                                                static_cast<uint32_t>(index + 1), false};
+}
+
+void InstancedMesh::markMatrixRows(size_t offset, size_t n, bool placed) {
+
+    if (n == 0) return;
+    checkInstanceIndex(offset + n - 1, maxCount_);
+    instanceMatrix_->needsUpdate();
+    matrixEdits_[matrixEditCount_++ % kEditLog] = {instanceMatrix_->version, static_cast<uint32_t>(offset),
+                                                    static_cast<uint32_t>(offset + n), placed};
+}
+
+void InstancedMesh::setMatrices(size_t offset, size_t n, const float* elements, bool placed) {
+
+    if (n == 0) return;
+    checkInstanceIndex(offset + n - 1, maxCount_);
+    std::copy_n(elements, n * 16, instanceMatrix_->array().data() + offset * 16);
+    markMatrixRows(offset, n, placed);
+}
+
+bool InstancedMesh::rowsSince(const std::array<RowEdit, kEditLog>& log, size_t logged, unsigned int seen,
+                              unsigned int now, RowEdits& out) {
+
+    out = {};
+    if (now == seen) return true;// nothing since
+    // Every version from seen + 1 to now must be one logged edit, newest first;
+    // a version no edit left (a bare needsUpdate) or one past the log is a gap.
+    unsigned int want = now;
+    bool first = true;
+    const size_t kept = std::min(logged, kEditLog);
+    for (size_t k = 0; k < kept; ++k) {
+        const RowEdit& e = log[(logged - 1 - k) % kEditLog];
+        if (e.version != want) return false;
+        if (first) {
+            out.lo = e.lo;
+            out.hi = e.hi;
+            first = false;
+        } else {
+            out.lo = std::min(out.lo, e.lo);
+            out.hi = std::max(out.hi, e.hi);
+        }
+        if (!e.placed) {
+            if (out.movedHi <= out.movedLo) {
+                out.movedLo = e.lo;
+                out.movedHi = e.hi;
+            } else {
+                out.movedLo = std::min(out.movedLo, e.lo);
+                out.movedHi = std::max(out.movedHi, e.hi);
+            }
+        }
+        if (want - 1u == seen) return true;
+        --want;
+    }
+    return false;
+}
+
+bool InstancedMesh::matrixRowsSince(unsigned int seen, RowEdits& out) const {
+
+    return rowsSince(matrixEdits_, matrixEditCount_, seen, instanceMatrix_->version, out);
+}
+
+bool InstancedMesh::fadeRowsSince(unsigned int seen, RowEdits& out) const {
+
+    if (!instanceFade_) return false;
+    return rowsSince(fadeEdits_, fadeEditCount_, seen, instanceFade_->version, out);
 }
 
 void InstancedMesh::setFades(size_t offset, size_t n, const float* fades, const bool* complement) {
@@ -162,6 +228,8 @@ void InstancedMesh::setFades(size_t offset, size_t n, const float* fades, const 
         a[(offset + i) * 2 + 1] = (complement && complement[i]) ? 1.f : 0.f;
     }
     instanceFade_->needsUpdate();
+    fadeEdits_[fadeEditCount_++ % kEditLog] = {instanceFade_->version, static_cast<uint32_t>(offset),
+                                                static_cast<uint32_t>(offset + n), false};
 }
 
 float InstancedMesh::getFadeAt(size_t index) const {

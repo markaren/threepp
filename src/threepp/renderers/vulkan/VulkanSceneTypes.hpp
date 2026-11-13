@@ -337,6 +337,25 @@ namespace threepp::vulkan::impl {
         // so their shadow, GI and reflection histories and their static
         // shadow-cache casters.
         bool instancesMoved = false;
+        // The rows [rowsLo, rowsHi) the last refresh of an instance-matrix edit
+        // went through (InstancedMesh::matrixRowsSince): the whole span when the
+        // edits' rows were not known, when the count changed since rowsCount,
+        // or when the mesh's own transform moved. The motion matrices read it.
+        uint32_t rowsLo = 0, rowsHi = 0;
+        uint32_t rowsCount = ~0u;
+        bool rowsRanged = false;          // this frame's refresh took [rowsLo, rowsHi) alone (consumed by the motion pass)
+        // The cull bounds still current but for the rows [cullLo, cullHi)
+        // (cullPartial; refreshSpanCullBounds re-boxes their blocks only).
+        // Anything else that clears aabbValid clears cullPartial with it.
+        bool cullPartial = false;
+        uint32_t cullLo = 0, cullHi = 0;
+        // Rows whose motion block may be non-identity, [motionLo, motionHi),
+        // valid while motionCount == count (computeAndUploadMotionMatrices).
+        uint32_t motionLo = 0, motionHi = 0;
+        uint32_t motionCount = ~0u;
+        // How many of the span's packed fade words are non-zero (fadeAny is
+        // fadeNonZero > 0), so a fade edit's rows alone are re-packed.
+        uint32_t fadeNonZero = 0;
         // True while the motionMat scratch holds non-identity blocks for this
         // span (set when a moved span writes real deltas; the next static
         // frame resets its blocks to identity once and clears this).

@@ -151,6 +151,41 @@ int main() {
     plain->position.y += 0.5f;
     renderer.render(scene, camera);
     expectMoving(renderer, 1u, "the plain mesh");
+    settle(kSticky + 1);
+
+    // Recorded row edits (InstancedMesh::markMatrixRows / setMatrices): the
+    // renderer refreshes those rows alone, and a PLACED row (its slot handed
+    // to another object) is not a mover.
+    const auto write = [&](size_t i, float lift, bool placed) {
+        const auto m = slotMatrix(i, lift);
+        std::copy(m.elements.begin(), m.elements.end(), mats.begin() + i * 16);
+        field->setMatrices(i, 1, m.elements.data(), placed);
+    };
+    std::printf("recorded edits, moved:\n");
+    write(5, 1.f, false);
+    write(1000, 1.f, false);
+    renderer.render(scene, camera);
+    expectMoving(renderer, 2u, "two rows written as moved");
+    settle(kSticky + 1);
+    expectMoving(renderer, 0u, "settled again");
+
+    std::printf("recorded edits, placed:\n");
+    write(20, 3.f, true);
+    write(600, 3.f, true);
+    renderer.render(scene, camera);
+    expectMoving(renderer, 0u, "two rows placed: none moving");
+    write(30, 3.f, true);
+    write(31, 3.f, false);
+    renderer.render(scene, camera);
+    expectMoving(renderer, 1u, "one placed, one moved beside it: the moved one");
+    settle(kSticky + 1);
+
+    std::printf("a bare needsUpdate after recorded edits (every row looked at):\n");
+    write(40, 1.f, true);
+    resend();
+    renderer.render(scene, camera);
+    expectMoving(renderer, 1u, "placed then re-sent bare: the row counts as moved, as before");
+    settle(kSticky + 1);
 
     std::printf("%s (%d failure%s)\n", failures == 0 ? "PASS" : "FAIL", failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

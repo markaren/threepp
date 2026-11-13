@@ -165,27 +165,61 @@ namespace threepp {
         // static, ~55 ms at 100k moving).
         bool changedAny = false;
         for (auto& sp : entrySpans_) {
+            // The rows that can hold a non-identity block, [motionLo, motionHi),
+            // are known while motionCount is the span's count; the rows this
+            // frame's refresh changed are [rowsLo, rowsHi) when it was ranged
+            // (refreshSpanMatrices). Every other row's block is identity and
+            // stays so: its matrix did not change.
+            const bool motionKnown = sp.motionCount == sp.count;
+            const bool ranged = sp.rowsRanged && motionKnown;
+            sp.rowsRanged = false;
             if (!sp.movedThisFrame) {
                 if (sp.motionNonIdentity) {
                     // Span stopped moving: collapse its blocks back to
                     // identity once. prev already equals cur (unchanged).
-                    for (uint32_t j = 0; j < sp.count; ++j)
+                    const uint32_t a = motionKnown ? std::min(sp.motionLo, sp.count) : 0u;
+                    const uint32_t b = motionKnown ? std::min(sp.motionHi, sp.count) : sp.count;
+                    for (uint32_t j = a; j < b; ++j)
                         std::memcpy(&motionScratch_[(size_t(sp.first) + j) * 16u],
                                     kIdentity, 64);
                     sp.motionNonIdentity = false;
-                    changedAny = true;
-                    markMotionDirty(sp.first, sp.count);
+                    sp.motionLo = sp.motionHi = 0u;
+                    if (b > a) {
+                        changedAny = true;
+                        markMotionDirty(sp.first + a, b - a);
+                    }
                 }
                 continue;
             }
+            uint32_t a = 0u, b = sp.count;
+            if (ranged) {
+                a = std::min(sp.rowsLo, sp.count);
+                b = std::min(sp.rowsHi, sp.count);
+                if (sp.motionHi > sp.motionLo) {
+                    a = std::min(a, std::min(sp.motionLo, sp.count));
+                    b = std::max(b, std::min(sp.motionHi, sp.count));
+                }
+            }
+            uint32_t nonLo = b, nonHi = a;// the rows left non-identity
             bool spanNonIdentity = false;
             const bool changedBefore = changedAny;
             changedAny = false;
-            for (uint32_t j = 0; j < sp.count; ++j) {
+            for (uint32_t j = a; j < b; ++j) {
                 const size_t i = size_t(sp.first) + j;
                 const float* cur = entries[i].worldMatrix.data();
                 float* prev = prevWorldByEntry_[i].data();
                 float* dst = &motionScratch_[i * 16u];
+                if (entryPlaced(i)) {
+                    // A row its mesh said was handed to another object: where
+                    // it is now is where it always was (no motion vector).
+                    if (std::memcmp(dst, kIdentity, 64) != 0) {
+                        std::memcpy(dst, kIdentity, 64);
+                        changedAny = true;
+                    }
+                    std::memcpy(prev, cur, 64);
+                    prevWorldValidByEntry_[i] = 1u;
+                    continue;
+                }
                 if (!prevWorldValidByEntry_[i]) {
                     // First-seen (cold-start): identity motion, seed prev.
                     std::memcpy(dst, kIdentity, 64);
@@ -250,9 +284,14 @@ namespace threepp {
                 std::memcpy(prev, cur, 64);
                 spanNonIdentity = true;
                 changedAny = true;
+                nonLo = std::min(nonLo, j);
+                nonHi = std::max(nonHi, j + 1u);
             }
             if (spanNonIdentity) sp.motionNonIdentity = true;
-            if (changedAny) markMotionDirty(sp.first, sp.count);
+            sp.motionLo = spanNonIdentity ? nonLo : 0u;
+            sp.motionHi = spanNonIdentity ? nonHi : 0u;
+            sp.motionCount = sp.count;
+            if (changedAny) markMotionDirty(sp.first + a, b - a);
             changedAny = changedAny || changedBefore;
         }
         if (changedAny) ++motionScratchVersion_;
@@ -319,6 +358,19 @@ namespace threepp {
         if (meshMovedBits_.empty()) return;
         const VkDeviceSize bytes = meshMovedBits_.size() * sizeof(uint32_t);
         const VkDeviceSize cap   = meshMovedBitsBufferCapacity[frame] * sizeof(uint32_t);
+        // The shade reads these as "this object moved": a placed row (its slot
+        // handed to another object, entryPlacedBits_) did not, so it is left out.
+        bool anyPlaced = false;
+        for (const uint32_t w : entryPlacedBits_)
+            if (w != 0u) { anyPlaced = true; break; }
+        if (anyPlaced) {
+            movedBitsShadeScratch_.assign(meshMovedBits_.begin(), meshMovedBits_.end());
+            const size_t n = std::min(movedBitsShadeScratch_.size(), entryPlacedBits_.size());
+            for (size_t w = 0; w < n; ++w) movedBitsShadeScratch_[w] &= ~entryPlacedBits_[w];
+            uploadHostVisible(ctx->allocator(), meshMovedBitsBuffers[frame],
+                              movedBitsShadeScratch_.data(), std::min(bytes, cap));
+            return;
+        }
         uploadHostVisible(ctx->allocator(), meshMovedBitsBuffers[frame],
                           meshMovedBits_.data(), std::min(bytes, cap));
     }

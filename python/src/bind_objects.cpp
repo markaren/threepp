@@ -287,7 +287,7 @@ namespace threepp_py {
                      "events, too dear every frame on a large scene; a pool that grows and shrinks often keeps "
                      "a high-water count and parks the unused instances out of sight instead.")
                 .def("set_matrix_at", &InstancedMesh::setMatrixAt, py::arg("index"), py::arg("matrix"))
-                .def("set_matrices", [](InstancedMesh& im, const py::array& matrices, size_t offset) {
+                .def("set_matrices", [](InstancedMesh& im, const py::array& matrices, size_t offset, bool placed) {
                     const auto dt = matrices.dtype();
                     if (dt.kind() != 'f' || (dt.itemsize() != 4 && dt.itemsize() != 8)) {
                         throw py::value_error("set_matrices: matrices must be float32 or float64");
@@ -318,13 +318,17 @@ namespace threepp_py {
                             }
                         }
                     }
-                    im.instanceMatrix()->needsUpdate();
-                }, py::arg("matrices"), py::arg("offset") = 0,
+                    if (n == 0) im.instanceMatrix()->needsUpdate();
+                    else im.markMatrixRows(offset, n, placed);
+                }, py::arg("matrices"), py::arg("offset") = 0, py::arg("placed") = false,
                    "Write N instance matrices in one call: instances offset .. offset+N-1. matrices is a "
                    "float32/float64 numpy array, shape (N, 16) in Matrix4.elements order (column-major, "
                    "what get_matrix_at(i).elements() holds) or (N, 4, 4) conventional row-major M[row, col] "
                    "(transposed on copy). Marks the instance matrix for re-upload, which set_matrix_at "
-                   "does not. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.")
+                   "does not, and records the rows written so a renderer refreshes only those. placed=True: "
+                   "these rows now hold other objects than before (a pool's slots handed on, or parked out of "
+                   "sight), not moved ones: no motion vectors, no moving-object history resets for them. "
+                   "Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.")
                 .def("get_matrix_at", [](InstancedMesh& im, size_t i) {
                     Matrix4 mtx;
                     im.getMatrixAt(i, mtx);

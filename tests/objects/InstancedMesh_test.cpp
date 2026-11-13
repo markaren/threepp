@@ -96,3 +96,52 @@ TEST_CASE("ObjectLoader: count-0 InstancedMesh with instanceColor loads safely")
     // No instances means no per-instance color buffer to fill.
     CHECK(mesh->instanceColor() == nullptr);
 }
+
+
+TEST_CASE("recorded row edits: the rows since a version, or unknown") {
+    auto mesh = InstancedMesh::create(BoxGeometry::create(), MeshBasicMaterial::create(), 100);
+    const float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const unsigned v0 = mesh->instanceMatrix()->version;
+    InstancedMesh::RowEdits ed;
+
+    mesh->setMatrices(10, 1, m);
+    mesh->setMatrices(40, 1, m, true);
+    REQUIRE(mesh->matrixRowsSince(v0, ed));
+    CHECK(ed.lo == 10);
+    CHECK(ed.hi == 41);
+    CHECK(ed.movedLo == 10);
+    CHECK(ed.movedHi == 11);
+    CHECK(!ed.placedOnly(10));
+    CHECK(ed.placedOnly(40));
+
+    // Since the newer version: the placed edit alone.
+    REQUIRE(mesh->matrixRowsSince(v0 + 1, ed));
+    CHECK(ed.lo == 40);
+    CHECK(ed.hi == 41);
+    CHECK(ed.movedHi <= ed.movedLo);
+
+    // A bare needsUpdate is an edit with no rows: unknown from before it.
+    const unsigned v1 = mesh->instanceMatrix()->version;
+    mesh->instanceMatrix()->needsUpdate();
+    CHECK(!mesh->matrixRowsSince(v1, ed));
+    mesh->markMatrixRows(3, 2);
+    CHECK(!mesh->matrixRowsSince(v1, ed));
+    REQUIRE(mesh->matrixRowsSince(v1 + 1, ed));
+    CHECK(ed.lo == 3);
+    CHECK(ed.hi == 5);
+
+    // More edits than the log keeps: unknown.
+    const unsigned v2 = mesh->instanceMatrix()->version;
+    for (int k = 0; k < 200; ++k) mesh->setMatrices(k % 100, 1, m);
+    CHECK(!mesh->matrixRowsSince(v2, ed));
+
+    // Fades: none until the first write, then recorded the same way.
+    CHECK(!mesh->fadeRowsSince(0, ed));
+    const float f[2] = {0.5f, 0.25f};
+    mesh->setFades(7, 2, f);
+    const unsigned fv = mesh->instanceFade()->version;
+    mesh->setFadeAt(50, 0.5f);
+    REQUIRE(mesh->fadeRowsSince(fv, ed));
+    CHECK(ed.lo == 50);
+    CHECK(ed.hi == 51);
+}

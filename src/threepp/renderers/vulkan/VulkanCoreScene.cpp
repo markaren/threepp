@@ -699,7 +699,7 @@ void VulkanRenderer::Impl::recordSceneNode(SceneWalkOut& w, Object3D& o, bool vi
                 // frustum cull default-includes the span on the same flag.
                 sp.localBoundsValid = false;
                 sp.localRadius      = 0.f;
-                sp.aabbValid        = false;
+                sp.aabbValid        = false; sp.cullPartial = false;
                 w.fields.emplace_back(particleField, sp.first);
             }
             // A visibility flip of this mesh is applied in place by the
@@ -1376,7 +1376,7 @@ bool VulkanRenderer::Impl::refreshSpanCullBounds(EntrySpan& sp) {
                 sp.localHalf[0]   = h.x; sp.localHalf[1]   = h.y; sp.localHalf[2]   = h.z;
                 sp.localRadius    = h.length();// enclosing-sphere radius
                 sp.localBoundsValid = true;
-                sp.aabbValid = false;
+                sp.aabbValid = false; sp.cullPartial = false;
             }
             // Lazily recompute the span's world AABB after a matrix
             // refresh. A single-entry span gets the EXACT world box (Arvo
@@ -1384,7 +1384,74 @@ bool VulkanRenderer::Impl::refreshSpanCullBounds(EntrySpan& sp) {
             // instanced span gets the union of world sphere centers
             // dilated by radius x max scale (conservative).
             // The per-instance spheres follow the count (an in-place setCount).
-            if (sp.count > 1 && sp.cullSpheres.size() != sp.count) sp.aabbValid = false;
+            if (sp.count > 1 && sp.cullSpheres.size() != sp.count) { sp.aabbValid = false; sp.cullPartial = false; }
+            // A row edit (refreshSpanMatrices' ranged refresh) left the bounds
+            // current but for rows [cullLo, cullHi): their blocks are boxed
+            // again, the chunks holding them re-joined, and the span box
+            // joined from the chunks. Min and max are exact, so this is the
+            // whole walk's result bit for bit.
+            if (!sp.aabbValid && sp.cullPartial && sp.count > 1) {
+                sp.cullPartial = false;
+                const uint32_t nChunks = (sp.count + kCullChunk - 1u) / kCullChunk;
+                const uint32_t nBlocks = (sp.count + kCullBlock - 1u) / kCullBlock;
+                if (sp.chunkAabbs.size() == nChunks && sp.blockAabbs.size() == nBlocks &&
+                    sp.cullSpheres.size() == sp.count && sp.cullLo < sp.cullHi) {
+                    const float* lc = sp.localCenter;
+                    const uint32_t b0 = std::min(sp.cullLo, sp.count) / kCullBlock;
+                    const uint32_t b1 = std::min((std::min(sp.cullHi, sp.count) + kCullBlock - 1u) / kCullBlock, nBlocks);
+                    for (uint32_t bk = b0; bk < b1; ++bk) {
+                        const uint32_t j0 = bk * kCullBlock;
+                        const uint32_t j1 = std::min(sp.count, j0 + kCullBlock);
+                        drawStatsOut().cullBoxedRows += j1 - j0;
+                        float mn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+                        float mx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+                        float maxScaleSq = 0.f;
+                        for (uint32_t j = j0; j < j1; ++j) {
+                            const float* M = entries[sp.first + j].worldMatrix.data();
+                            const float cx = M[0]*lc[0] + M[4]*lc[1] + M[8]*lc[2] + M[12];
+                            const float cy = M[1]*lc[0] + M[5]*lc[1] + M[9]*lc[2] + M[13];
+                            const float cz = M[2]*lc[0] + M[6]*lc[1] + M[10]*lc[2] + M[14];
+                            mn[0] = std::min(mn[0], cx); mx[0] = std::max(mx[0], cx);
+                            mn[1] = std::min(mn[1], cy); mx[1] = std::max(mx[1], cy);
+                            mn[2] = std::min(mn[2], cz); mx[2] = std::max(mx[2], cz);
+                            const float s0 = M[0]*M[0] + M[1]*M[1] + M[2]*M[2];
+                            const float s1 = M[4]*M[4] + M[5]*M[5] + M[6]*M[6];
+                            const float s2 = M[8]*M[8] + M[9]*M[9] + M[10]*M[10];
+                            const float sMax = std::max(s0, std::max(s1, s2));
+                            maxScaleSq = std::max(maxScaleSq, sMax);
+                            sp.cullSpheres[j] = {cx, cy, cz, sp.localRadius * std::sqrt(sMax)};
+                        }
+                        const float r = sp.localRadius * std::sqrt(maxScaleSq);
+                        auto& bb = sp.blockAabbs[bk];
+                        for (int k = 0; k < 3; ++k) {
+                            bb[k]     = mn[k] - r;
+                            bb[k + 3] = mx[k] + r;
+                        }
+                    }
+                    const uint32_t perChunk = kCullChunk / kCullBlock;
+                    const uint32_t c0 = b0 / perChunk, c1 = std::min((b1 + perChunk - 1u) / perChunk, nChunks);
+                    for (uint32_t c = c0; c < c1; ++c) {
+                        auto& cb = sp.chunkAabbs[c];
+                        cb = {FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX};
+                        for (uint32_t bk = c * perChunk; bk < std::min((c + 1u) * perChunk, nBlocks); ++bk) {
+                            const auto& bb = sp.blockAabbs[bk];
+                            for (int k = 0; k < 3; ++k) {
+                                cb[k]     = std::min(cb[k], bb[k]);
+                                cb[k + 3] = std::max(cb[k + 3], bb[k + 3]);
+                            }
+                        }
+                    }
+                    float smn[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+                    float smx[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+                    for (const auto& cb : sp.chunkAabbs)
+                        for (int k = 0; k < 3; ++k) {
+                            smn[k] = std::min(smn[k], cb[k]);
+                            smx[k] = std::max(smx[k], cb[k + 3]);
+                        }
+                    for (int k = 0; k < 3; ++k) { sp.aabbMin[k] = smn[k]; sp.aabbMax[k] = smx[k]; }
+                    sp.aabbValid = true;
+                }
+            }
             if (!sp.aabbValid) {
                 const float* lc = sp.localCenter;
                 if (sp.count == 1) {
@@ -1764,6 +1831,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
 
             std::fill(meshMovedBits_.begin(), meshMovedBits_.end(), 0u);
             std::fill(drawRowFlagBits_.begin(), drawRowFlagBits_.end(), 0u);
+            std::fill(entryPlacedBits_.begin(), entryPlacedBits_.end(), 0u);
             hiddenFlippedThisFrame_ = false;
             slotsEditedThisFrame_ = false;
 
@@ -2621,7 +2689,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // boundingBox invalidation — mirrors the generic loop.
                             if (auto gg = sp.mesh->geometry()) gg->boundingBox.reset();
                             sp.localBoundsValid = false;
-                            sp.aabbValid = false;
+                            sp.aabbValid = false; sp.cullPartial = false;
                             sp.probeChunksValid = 0;
                         }
                     }
@@ -2987,7 +3055,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     for (auto& sp : entrySpans_) {
                         if (sp.first < entryGeomDirty.size() && entryGeomDirty[sp.first]) {
                             sp.localBoundsValid = false;
-                            sp.aabbValid = false;
+                            sp.aabbValid = false; sp.cullPartial = false;
                             sp.probeChunksValid = 0;
                         }
                     }
@@ -3975,6 +4043,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             }
                             else for (uint32_t j = 0; j < sp.count; ++j) {
                                 const size_t i = size_t(sp.first) + j;
+                                if (tlasRowsOnly && (i & 31u) == 0u && j + 32u <= sp.count) {
+                                    // A whole word of rows none of whose bits is set:
+                                    // all 32 kept, as the row test below would.
+                                    const size_t w = i >> 5;
+                                    const uint32_t bits = (w < meshMovedBits_.size() ? meshMovedBits_[w] : 0u) |
+                                                          (w < tlasRowDirty_.size() ? tlasRowDirty_[w] : 0u);
+                                    if (bits == 0u) {
+                                        tlasWrite += 32u;
+                                        j += 31u;
+                                        continue;
+                                    }
+                                }
                                 if (tlasRowsOnly && !tlasRowChanged(i)) {
                                     ++tlasWrite;
                                     continue;
@@ -5184,11 +5264,32 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     const unsigned int v = sp.inst->instanceMatrix()->version;
                     const bool meshMoved = std::memcmp(sp.meshWorld.data(), mw, 64) != 0;
                     if (v == sp.instMatVersion && !meshMoved) continue;
+                    // The rows the edits since the last refresh wrote, when the
+                    // mesh recorded them all (InstancedMesh::matrixRowsSince)
+                    // and nothing else moved: those rows alone are refreshed.
+                    // Otherwise every row, as before.
+                    InstancedMesh::RowEdits ed;
+                    const bool ranged = !meshMoved && sp.rowsCount == sp.count && sp.instMatVersion != ~0u &&
+                                        sp.inst->matrixRowsSince(sp.instMatVersion, ed);
+                    const uint32_t j0 = ranged ? std::min(ed.lo, sp.count) : 0u;
+                    const uint32_t j1 = ranged ? std::min(ed.hi, sp.count) : sp.count;
                     sp.instMatVersion = v;
+                    sp.rowsCount = sp.count;
+                    sp.rowsLo = j0;
+                    sp.rowsHi = j1;
+                    sp.rowsRanged = ranged;
                     std::memcpy(sp.meshWorld.data(), mw, 64);
                     sp.movedThisFrame = true;
+                    if (ranged && (sp.aabbValid || sp.cullPartial)) {
+                        // The bounds stay but for these rows' blocks.
+                        sp.cullLo = sp.cullPartial ? std::min(sp.cullLo, j0) : j0;
+                        sp.cullHi = sp.cullPartial ? std::max(sp.cullHi, j1) : j1;
+                        sp.cullPartial = true;
+                    } else {
+                        sp.cullPartial = false;
+                    }
                     sp.aabbValid = false;
-                    sp.probeChunksValid = 0;
+                    sp.probeChunksValid = ranged ? std::min(sp.probeChunksValid, j0 / EntrySpan::kProbeChunk) : 0u;
                     // An instance-matrix edit alone: the entries it changed
                     // are marked moved here, one by one (see instancesMoved).
                     // A moved mesh moves every instance, which the diff marks.
@@ -5196,7 +5297,15 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     if (sp.instancesMoved) {
                         const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
                         if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
+                        if (lastW >= entryPlacedBits_.size()) entryPlacedBits_.resize(lastW + 1, 0u);
                     }
+                    // A changed row is in meshMovedBits_ either way (its TLAS
+                    // row, its draw record, its cull box follow it); a PLACED
+                    // one (the edit said its slot went to another object) is
+                    // also in entryPlacedBits_, which keeps it out of the
+                    // moved-sticky state, the shade's moved bits and the motion
+                    // vectors (VulkanCoreFrame, uploadMeshMovedBits,
+                    // computeAndUploadMotionMatrices).
                     // Tight refresh: world = meshWorld * instanceMat[j],
                     // straight off the raw attribute floats (no
                     // bounds-checked getMatrixAt). The multiply itself
@@ -5215,13 +5324,14 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     const Matrix4& meshWorld = *sp.mesh->matrixWorld;
                     Matrix4 instMat;
                     Matrix4 world;
-                    for (uint32_t j = 0; j < sp.count; ++j) {
+                    for (uint32_t j = j0; j < j1; ++j) {
                         std::memcpy(instMat.elements.data(), arr.data() + size_t(j) * 16u, 64);
                         world.multiplyMatrices(meshWorld, instMat);
                         float* wm = lastVisibleEntries_[sp.first + j].worldMatrix.data();
                         if (sp.instancesMoved && std::memcmp(wm, world.elements.data(), 64) != 0) {
                             const uint32_t i = sp.first + j;
                             meshMovedBits_[i >> 5] |= (1u << (i & 31u));
+                            if (ranged && ed.placedOnly(j)) entryPlacedBits_[i >> 5] |= (1u << (i & 31u));
                         }
                         std::memcpy(wm, world.elements.data(), 64);
                         // Keep the fingerprint's matrix mirror fresh so a
@@ -5235,7 +5345,12 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     std::memcpy(sp.meshWorld.data(), mw, 64);
                     sp.movedThisFrame = true;
                     sp.aabbValid = false;
+                    sp.cullPartial = false;
                     sp.probeChunksValid = 0;
+                    sp.rowsLo = 0;
+                    sp.rowsHi = sp.count;
+                    sp.rowsCount = sp.count;
+                    sp.rowsRanged = false;
                     std::memcpy(lastVisibleEntries_[sp.first].worldMatrix.data(), mw, 64);
                     prevSceneFingerprint[sp.first].matrix = lastVisibleEntries_[sp.first].worldMatrix;
                 }
@@ -5750,6 +5865,16 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                 if (!all && sp.fadeKnown && attr == sp.fadeAttr && ver == sp.fadeVersion &&
                     meshFade == sp.meshFade && meshComp == sp.meshFadeComplement)
                     continue;
+                // Only the rows the fade edits since the last pack wrote, when
+                // the mesh recorded them all (InstancedMesh::fadeRowsSince) and
+                // nothing else about the span's fades changed: the rest of its
+                // words are as they were.
+                InstancedMesh::RowEdits ed;
+                const bool ranged = !all && sp.fadeKnown && attr && attr == sp.fadeAttr && sp.inst &&
+                                    meshFade == sp.meshFade && meshComp == sp.meshFadeComplement &&
+                                    sp.inst->fadeRowsSince(sp.fadeVersion, ed);
+                const uint32_t j0 = ranged ? std::min(ed.lo, sp.count) : 0u;
+                const uint32_t j1 = ranged ? std::min(ed.hi, sp.count) : sp.count;
                 sp.fadeKnown = true;
                 sp.fadeAttr = attr;
                 sp.fadeVersion = ver;
@@ -5761,9 +5886,9 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                 const bool eligible = !(e0.isOverlay || e0.isParticle || e0.isParticleField);
                 const uint32_t meshWord = eligible ? packLodFade(meshFade, meshComp) : 0u;
                 const std::vector<float>* fa = (attr && eligible) ? &attr->array() : nullptr;
-                bool any = false;
                 bool spanChanged = false;
-                for (uint32_t j = 0; j < sp.count; ++j) {
+                uint32_t nonZero = ranged ? sp.fadeNonZero : 0u;
+                for (uint32_t j = j0; j < j1; ++j) {
                     const size_t i = size_t(sp.first) + j;
                     uint32_t w = meshWord;
                     if (fa) {
@@ -5771,6 +5896,8 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                         w = o + 2u <= fa->size() ? packLodFade((*fa)[o], (*fa)[o + 1] != 0.f) : 0u;
                     }
                     const uint32_t was = entryLodFade_[i];
+                    if (ranged) nonZero -= was != 0u ? 1u : 0u;
+                    nonZero += w != 0u ? 1u : 0u;
                     if (w != was) {
                         out.words = true;
                         spanChanged = true;
@@ -5781,10 +5908,13 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                         entryLodFade_[i] = w;
                         markDrawRowFlags(i);
                     }
-                    any = any || w != 0u;
                 }
-                sp.fadeAny = any;
-                if (spanChanged) markLodFadeDirty(sp.first, sp.count);
+                sp.fadeNonZero = nonZero;
+                sp.fadeAny = nonZero != 0u;
+                if (spanChanged) {
+                    if (ranged) markLodFadeDirty(sp.first + j0, j1 - j0);
+                    else markLodFadeDirty(sp.first, sp.count);
+                }
             }
             if (out.casters) ++lodFadeCastEpoch_;
             if (out.words) ++lodFadeVersion_;

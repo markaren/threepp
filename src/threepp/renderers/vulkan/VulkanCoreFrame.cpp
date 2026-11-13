@@ -1136,8 +1136,17 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                     for (size_t i = 0; i < geomDescsCached_.size(); ++i) {
                         const uint32_t w = static_cast<uint32_t>(i) >> 5u;
                         const uint32_t bit = 1u << (static_cast<uint32_t>(i) & 31u);
-                        const bool movedNow = w < meshMovedBits_.size() && (meshMovedBits_[w] & bit);
-                        if (!movedNow && meshMovedSticky_[i] == 0u && !all) continue;
+                        bool movedNow = w < meshMovedBits_.size() && (meshMovedBits_[w] & bit);
+                        // A placed row (its slot handed to another object) is
+                        // that object's first frame there, not a move: it is
+                        // not moving, whatever the slot's last owner was doing.
+                        bool placed = false;
+                        if (movedNow && entryPlaced(i)) {
+                            movedNow = false;
+                            placed = true;
+                            meshMovedSticky_[i] = 0u;
+                        }
+                        if (!movedNow && meshMovedSticky_[i] == 0u && !all && !placed) continue;
                         if (movedNow) meshMovedSticky_[i] = kMovedStickyFrames;
                         else if (meshMovedSticky_[i] > 0u) --meshMovedSticky_[i];
                         const uint32_t moved = meshMovedSticky_[i] > 0u ? kGeomFlagMoved : 0u;
