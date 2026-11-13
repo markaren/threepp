@@ -179,7 +179,7 @@ float hullContactFade(OceanHull hu, vec2 p) {
     const float lZ = hu.sinYaw * dx + hu.cosYaw * dz;
     const float u  = clamp(-lZ / hu.halfLength, -1.0, 1.0);
     const float halfBeamAtLZ = u <= 0.0 ? hu.halfBeam * pow(max(1.0 - u * u, 0.0), 0.6)
-                                        : hu.halfBeam * (1.0 - 0.25 * u * u);
+                                        : hu.halfBeam * (1.0 - (1.0 - hu.sternBeam) * u * u);
     const float edgeDist = max(abs(lX) - halfBeamAtLZ, abs(lZ) - hu.halfLength);
     return smoothstep(0.0, clamp(0.2 * hu.halfBeam, 0.15, 0.6), edgeDist);
 }
@@ -541,7 +541,11 @@ void main() {
         const float planeY = hu.centerY
                            + tan(clamp(hu.pitch, -1.0, 1.0)) * hl.y
                            + tan(clamp(hu.roll,  -1.0, 1.0)) * hl.x;
-        disp.y  = mix(planeY, disp.y, hl.z);
+        // The hull presses the water down to her waterline; she never lifts it. Where her
+        // plane stands ABOVE the sea (her bow thrown up by a wave, her side rolled out),
+        // the sea stays where it is and her bottom shows, as it does on a real ship;
+        // blended toward the plane there, the water was dragged up her side in a sheet.
+        disp.y  = mix(min(planeY, disp.y), disp.y, hl.z);
         disp.x *= hl.z;
         disp.z *= hl.z;
         hullFadeAll *= hl.z;
@@ -646,7 +650,7 @@ void main() {
                     sHalfBeamAtLZ = hu.halfBeam *
                                     pow(max(1.0 - uHull * uHull, 0.0), 0.6);
                 } else {
-                    sHalfBeamAtLZ = hu.halfBeam * (1.0 - 0.25 * uHull * uHull);
+                    sHalfBeamAtLZ = hu.halfBeam * (1.0 - (1.0 - hu.sternBeam) * uHull * uHull);
                 }
                 const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
                 const float sHullEdgeZ = abs(sLZ) - hu.halfLength;

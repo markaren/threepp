@@ -40,7 +40,7 @@ namespace threepp::vulkan {
         uint32_t trailFirst;  // first WakeSample of this vessel in the trail buffer
         uint32_t trailCount;
         uint32_t analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam (VesselWake::analyticWaves)
-        uint32_t _pad;
+        float    sternBeam;   // HullExclusion::sternBeam
     };
     static_assert(sizeof(OceanHullGpu) == 56, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
 

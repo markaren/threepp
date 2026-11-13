@@ -2188,6 +2188,14 @@ class DisplacedMesh(Mesh):
         def half_beam(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def stern_beam(self) -> float:
+            """
+            The share of her beam the footprint keeps at her stern (default 0.75; about 0.95 for a square transom as wide as she is).
+            """
+        @stern_beam.setter
+        def stern_beam(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def half_length(self) -> float:
             """
             Half the vessel's length (m). 0 DISABLES hull exclusion and the wake.

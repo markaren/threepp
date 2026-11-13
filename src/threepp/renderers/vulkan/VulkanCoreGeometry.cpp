@@ -3820,6 +3820,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 g.trailCount   = static_cast<uint32_t>(std::min<size_t>(
                         wk.trail.size(), DisplacedMeshState::kMaxWakeSamples));
                 g.analyticWaves = wk.analyticWaves ? 1u : 0u;
+                g.sternBeam    = std::clamp(he.sternBeam, 0.f, 1.f);
                 hullWakes[hullCount] = &wk;
                 ++hullCount;
             }

@@ -77,7 +77,7 @@ struct OceanHull {
     uint  trailFirst;   // this vessel's samples in the wake-trail buffer
     uint  trailCount;
     uint  analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam; 0 = the wake field makes its waves
-    uint  _pad;
+    float sternBeam;    // the share of her beam the footprint keeps at her stern (HullExclusion::sternBeam)
 };
 
 // A rest point in vessel `hu`'s frame, and how far outside its footprint it
@@ -93,7 +93,7 @@ vec3 hullLocal(OceanHull hu, vec2 p) {
     // the `hullHalfWidth` lambda the example uses for foam splats.
     // Bow tapers sharply (≈ elliptical with exponent 0.6) so wave
     // suppression follows the actual prow instead of the rectangular
-    // bbox corner; stern keeps ~75 % beam (transom-style aft form).
+    // bbox corner; stern keeps sternBeam of the beam (0.75 by default: a transom-style aft form).
     // Without this taper the ocean was flattened in the empty
     // bow/stern wings of the bounding box, leaving visible flat
     // patches outside the hull.
@@ -102,7 +102,7 @@ vec3 hullLocal(OceanHull hu, vec2 p) {
     if (u <= 0.0) {
         halfBeamAtLZ = hu.halfBeam * pow(max(1.0 - u * u, 0.0), 0.6);
     } else {
-        halfBeamAtLZ = hu.halfBeam * (1.0 - 0.25 * u * u);
+        halfBeamAtLZ = hu.halfBeam * (1.0 - (1.0 - hu.sternBeam) * u * u);
     }
     const float edgeX    = abs(lX) - halfBeamAtLZ;
     const float edgeZ    = abs(lZ) - hu.halfLength;

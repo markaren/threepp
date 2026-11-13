@@ -318,6 +318,13 @@ namespace threepp {
             float centerY    = 0.f;   // world y of the hull's waterline plane
             float pitch      = 0.f;   // rad, +bow up
             float roll       = 0.f;   // rad, +starboard up
+            // The share of her beam the footprint keeps at her stern: it
+            // narrows from full beam amidships to this at the transom (her
+            // bow always runs to a point). 0.75 suits a hull that draws in
+            // aft; a square transom as wide as she is wants about 0.95, or
+            // the sea comes in over her quarters where the footprint is
+            // narrower than her deck.
+            float sternBeam  = 0.75f;
         };
         HullExclusion hullExclusion;
 

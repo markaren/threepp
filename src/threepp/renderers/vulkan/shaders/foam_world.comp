@@ -180,7 +180,7 @@ void main() {
                                         pow(max(1.0 - uHull * uHull, 0.0), 0.6);
                     } else {
                         sHalfBeamAtLZ = hu.halfBeam *
-                                        (1.0 - 0.25 * uHull * uHull);
+                                        (1.0 - (1.0 - hu.sternBeam) * uHull * uHull);
                     }
                     const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
                     const float sHullEdgeZ = abs(sLZ) - hu.halfLength;
@@ -221,7 +221,7 @@ void main() {
                         halfBeamAtLZ = hu.halfBeam *
                                        pow(max(1.0 - uHull * uHull, 0.0), 0.6);
                     } else {
-                        halfBeamAtLZ = hu.halfBeam * (1.0 - 0.25 * uHull * uHull);
+                        halfBeamAtLZ = hu.halfBeam * (1.0 - (1.0 - hu.sternBeam) * uHull * uHull);
                     }
                     const float hullEdgeX = abs(lX) - halfBeamAtLZ;
                     const float hullEdgeZ = abs(lZ) - hu.halfLength;

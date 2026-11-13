@@ -182,6 +182,9 @@ namespace threepp_py {
                 .def_readwrite("half_length", &DisplacedMesh::HullExclusion::halfLength,
                                "Half the vessel's length (m). 0 DISABLES hull exclusion and the wake.")
                 .def_readwrite("half_beam", &DisplacedMesh::HullExclusion::halfBeam, "Half the beam (m).")
+                .def_readwrite("stern_beam", &DisplacedMesh::HullExclusion::sternBeam,
+                               "The share of her beam the footprint keeps at her stern (default 0.75; about 0.95 for a "
+                               "square transom as wide as she is).")
                 .def_readwrite("sin_yaw", &DisplacedMesh::HullExclusion::sinYaw,
                                "sin/cos of the heading: forward = (sin_yaw, cos_yaw), starboard = (cos_yaw, -sin_yaw).")
                 .def_readwrite("cos_yaw", &DisplacedMesh::HullExclusion::cosYaw)

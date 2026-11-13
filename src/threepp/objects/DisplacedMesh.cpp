@@ -235,7 +235,7 @@ namespace threepp {
                     halfBeamAtLZ = hullExclusion.halfBeam *
                                    std::pow(std::max(1.f - uHull * uHull, 0.f), 0.6f);
                 } else {
-                    halfBeamAtLZ = hullExclusion.halfBeam * (1.f - 0.25f * uHull * uHull);
+                    halfBeamAtLZ = hullExclusion.halfBeam * (1.f - (1.f - hullExclusion.sternBeam) * uHull * uHull);
                 }
                 const float hullEdgeX = std::abs(lX) - halfBeamAtLZ;
                 const float hullEdgeZ = std::abs(lZ) - hullExclusion.halfLength;
