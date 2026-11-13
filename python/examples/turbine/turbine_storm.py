@@ -1,14 +1,19 @@
-"""A vessel standing by an offshore wind turbine, seen through a 139 degree fisheye from above her
-wheelhouse: a still or a short film of the sea in a storm, or in working weather with a USV and a
-drone on the job.
+"""A vessel standing by an offshore wind turbine in a storm, or in working weather with a USV and
+a drone on the job: a still or a short film, from one of five viewpoints.
 
     python turbine_storm.py --shot storm.png
-    python turbine_storm.py --film storm.mp4 [--seconds 12] [--camera-look]
+    python turbine_storm.py --film storm.mp4 [--seconds 12] [--view drone] [--from 15] [--camera-look]
     python turbine_storm.py --weather calm --film calm.mp4
 
 What is in it: R/V Gunnerus (threepp-data's Gunnerus.glb), the IEA 15 MW turbine of this folder in
 its film fit-out (turbine_film.glb, see below), an overcast sky (Poly Haven's mud_road_puresky,
 CC0, fetched once), and with --weather calm the Mariner USV (../usv) and the M350 (../uav).
+
+The views (--view): mast (the default: a 139 degree fisheye over her wheelhouse, riding her),
+drone (a slow arc off her quarter), beam (low off her lee side), platform (from the turbine's
+boarding deck, down on her) and wide (the fisheye from upwind, the whole turbine in frame).
+--from SECONDS starts a shot later in the same sea, so shots from several views cut together as
+one stretch of time.
 
 The sea. --weather storm is wind 20 m/s over 26 km of fetch on a 3 m swell, DRAWN AT TWICE ITS
 HEIGHT (wave_scale 2): a look setting. A sum of linear waves at a measured spectrum is too gentle
@@ -18,12 +23,15 @@ to pinch into crests, and at twice the height it does; do not read wave heights 
 wave tiles' repeat as rows of caps toward the horizon.
 
 The foam. The ocean's own crest foam, here started where the drawn surface is well pinched
-(THREEPP_OCEAN_FOLD_FOAM_J, set before the renderer reads it). At
-the hull and round the pile the scene lays foam into the ocean's wake field itself: where the water
-rises or falls fast against the hull, and where the sea runs past the pile.
+(THREEPP_OCEAN_FOLD_FOAM_J, set before the renderer reads it). At the hull and round the pile the
+scene lays foam into the ocean's wake field itself: where the water rises or falls fast against
+them, and in the storm from sources on her waterline and on the pile (her thrusters' races, the
+sea breaking against her side, the run-up on the pile and the eddies it sheds), each swelling up
+and dying away, thrown outward and carried off by the field's own flow.
 
-The turbine's film fit-out is this folder's turbine with a few more fittings and shells dense
-enough to colour per vertex (run-off, splash-zone grime, rust runs: weather() below). Build it once:
+The turbine's film fit-out is this folder's turbine with a boarding deck toward the vessel, a few
+more fittings and its paint weathered (turbine_weather.py). In the storm its rotor faces the wind
+and turns. Build the model once:
 
     blender --background --factory-startup --python build_turbine_blender.py -- \\
         --overrides turbine_film_overrides.json --out turbine_film.glb
@@ -43,6 +51,7 @@ sys.path.insert(0, _HERE)
 
 from demo_common import Encoder, cli_arg, parse_size           # noqa: E402
 from turbine_out import out_dir                                # noqa: E402
+from turbine_weather import weather                            # noqa: E402
 
 STORM = cli_arg("--weather", "storm", str) != "calm"
 SHOT = cli_arg("--shot", "", str)
@@ -69,8 +78,9 @@ TURBINE_AT = (17.0, 22.0)                       # pile axis, world XZ; the vesse
 TURBINE_LIFT = 6.0                              # the platform stands clear of a sea drawn at twice its height
 PILE_R = 5.3
 LENGTH, HALF_L, HALF_B = 31.25, 15.0, 4.3       # Gunnerus
-CAM, AIM = np.array([0.0, 25.0, -15.0]), np.array([0.0, 3.0, 13.0])   # in the vessel's frame
-WARM = 420                                      # steps before the first frame: the sea and its foam settle
+CAM, AIM = np.array([0.0, 25.0, -15.0]), np.array([0.0, 3.0, 13.0])   # the mast view, in the vessel's frame
+# Steps before the first frame: the sea and its foam settle. --from SECONDS starts later in the same sea.
+WARM = max(420, int(round(60.0 * cli_arg("--from", 7.0, float))))
 
 
 def data_dir():
@@ -92,59 +102,28 @@ def need(path, how):
     return path
 
 
-def weather(o):
-    """Nothing at sea stays the colour it was painted: run-off streaks, chalking, splash-zone grime,
-    rust runs below fittings and dried salt on the yellow, grime toward the foot of the tower. Per
-    vertex, on the big shells only."""
-    if not isinstance(o, tp.Mesh):
-        return
-    c = o.material.color
-    yellow = c.r > 0.55 and c.g > 0.45 and c.b < 0.30
-    grey = abs(c.r - c.g) < 0.06 and abs(c.g - c.b) < 0.08 and c.r > 0.45
-    P = np.asarray(o.geometry.get_attribute("position"), dtype=np.float64).reshape(-1, 3)
-    if not (yellow or grey) or len(P) < 3000:
-        return
-    y, az = P[:, 1], np.arctan2(P[:, 2], P[:, 0])
-    rng = np.random.default_rng(11 if yellow else 23)
-
-    def streaks(count, yscale):                 # narrow round the shell, long down it
-        n = np.zeros_like(y)
-        for _ in range(count):
-            m, ph = int(rng.integers(9, 90)), rng.uniform(0, 6.28)
-            yk, yp = rng.uniform(0.02, yscale), rng.uniform(0, 6.28)
-            n += np.sin(m * az + ph + 0.6 * np.sin(yk * y + yp)) * np.sin(yk * 0.5 * y + yp) / (1 + 0.03 * m)
-        return n / math.sqrt(count)
-    run, chalk = streaks(14, 0.25), streaks(6, 0.9)
-    col = np.tile([c.r, c.g, c.b], (len(P), 1))
-    col *= (1.0 - 0.16 * np.clip(run, 0, None) - 0.07 * np.clip(-run, 0, None) + 0.06 * chalk)[:, None]
-    if yellow:
-        splash = np.clip((6.0 - (y + 1.5 * chalk)) / 9.0, 0.0, 1.0) ** 1.4
-        col = col * (1.0 - 0.8 * splash)[:, None] + np.array([0.16, 0.15, 0.07]) * (0.8 * splash)[:, None]
-        rust = np.zeros_like(y)
-        for a0 in rng.uniform(-math.pi, math.pi, 22):
-            top, ln = rng.uniform(2.0, 14.5), rng.uniform(1.5, 6.0)
-            d = np.angle(np.exp(1j * (az - a0)))
-            rust = np.maximum(rust, np.exp(-0.5 * (d / 0.012) ** 2) * np.clip((top - y) / 0.3, 0, 1)
-                              * np.clip(1 - (top - y) / ln, 0, 1))
-        col = col * (1.0 - 0.55 * rust)[:, None] + np.array([0.30, 0.13, 0.05]) * (0.55 * rust)[:, None]
-        salt = np.clip(1 - np.abs(y - 6.5) / 4.0, 0, 1) * np.clip(chalk + 0.3, 0, 1)
-        col = col * (1.0 - 0.18 * salt)[:, None] + 0.135 * salt[:, None]
-    else:
-        low = np.clip(1.0 - (y - y.min()) / 25.0, 0.0, 1.0)
-        col *= (1.0 - 0.10 * low * (0.6 + 0.4 * np.clip(run, 0, None)))[:, None]
-        col[:, 2] *= 1.0 - 0.05 * low
-    o.geometry.set_attribute("color", np.clip(col, 0.0, 1.0).astype(np.float32))
-    o.material.vertex_colors = True
-    o.material.color = tp.Color(1.0, 1.0, 1.0)
-    o.material.roughness = max(o.material.roughness, 0.7)
-
-
 # ---------------------------------------------------------------- the scene
 canvas = tp.Canvas("turbine storm", width=W, height=H, vsync=False, headless=True)
 renderer = tp.VulkanRenderer(canvas)
-renderer.tone_mapping = tp.ToneMapping.Linear   # a high-key overcast day, the white steel near clipping
-renderer.tone_mapping_exposure = 3.0
-renderer.set_lens_distortion("fisheye")         # equidistant, k = 0: the camera's own fov sets its focal length
+renderer.tone_mapping = tp.ToneMapping.ACESFilmic   # an overcast day: the white steel keeps its shading
+renderer.tone_mapping_exposure = 2.6
+# The viewpoints (--view NAME): what the eye stands on ("ship": it rides her, in her frame;
+# "world": it stands still), eye, aim, and the lens: None = the 139 degree fisheye, else an
+# ordinary lens of that vertical field of view (degrees). All but the mast's are ASSUMED places.
+VIEWS = {
+    "mast": ("ship", CAM, AIM, None),                                    # over her wheelhouse, looking forward and down
+    "drone": ("world", (62.0, 42.0, -48.0), (6.0, 2.0, 10.0), 34.0),     # off her port quarter, high: the wash and the pile
+    "beam": ("world", (78.0, 10.0, -30.0), (9.0, 7.0, 13.0), 27.0),      # low off her lee quarter, the pile beside her
+    "platform": ("world", (13.0, 27.5, 16.5), (-1.0, 2.0, -2.0), 62.0),  # from the turbine's deck, down on her
+    "wide": ("world", (-95.0, 10.0, -75.0), (17.0, 95.0, 22.0), None),   # from upwind, close in: the whole turbine, rotor and all
+}
+VIEW = cli_arg("--view", "mast", str)
+if VIEW not in VIEWS:
+    sys.exit(f"--view: one of {', '.join(VIEWS)}")
+VIEW_ON, VIEW_EYE, VIEW_AIM, VIEW_FOV = VIEWS[VIEW]
+VIEW_EYE, VIEW_AIM = np.array(VIEW_EYE, dtype=float), np.array(VIEW_AIM, dtype=float)
+if VIEW_FOV is None:
+    renderer.set_lens_distortion("fisheye")     # equidistant, k = 0: the camera's own fov sets its focal length
 
 scene = tp.Scene()
 sky = tp.RGBELoader().load(fetch_file("https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/mud_road_puresky_4k.hdr",
@@ -219,11 +198,55 @@ for name in ("marine_growth", "anode_cage"):    # what grows and hangs below the
 turbine.traverse(weather)
 scene.add(turbine)
 
+# The model is built in its inspection state (rotor locked, blades feathered, nacelle along +X).
+# In the storm she is at work: nacelle turned so the rotor faces upwind, blades pitched as the
+# reference turbine has them at 20 m/s (about 18 degrees), rotor at its rated 7.56 rpm.
+ROTOR = turbine.get_object_by_name("rotor") if STORM else None
+ROTOR_RATE = 7.56 * 2.0 * math.pi / 60.0         # rad/s
+if ROTOR is not None:
+    turbine.get_object_by_name("nacelle").rotation.y = math.atan2(math.sin(p.wind_theta), -math.cos(p.wind_theta))
+    for i in (1, 2, 3):
+        turbine.get_object_by_name(f"pitch_{i}").rotate_y(math.radians(18.0 - 90.0))
+
 wash = tp.VesselWash(ocean, 0, length=LENGTH, half_length=HALF_L, half_beam=HALF_B, mass=5.0e5, draft=2.7, size=120.0)
+# How she sits. SINK: metres under her design waterline (a LOOK setting for the storm: on a sea drawn
+# at twice its height a hull that follows the mean of the water under her rides with her bottom
+# showing). DECK_CAP: the ocean's plane for her is laid this far over her waterline, just under her
+# working deck, so the sea stands as high against her side as it comes and is held down only where
+# it would come up through the deck (laid on her waterline it pressed every higher crest down
+# round her, a square pit in the sea at her stern).
+SINK = 0.5 if STORM else 0.0
+DECK_CAP = 1.0
+POSE_Z = (-12.0, -8.0, -4.0, 0.0, 4.0, 8.0, 12.0)   # stations along her the sea is read at
 HULL_PTS = [(HALF_B * 1.05 * math.sin(a), HALF_L * 1.02 * math.cos(a)) for a in np.linspace(0, 2 * math.pi, 18, endpoint=False)]
 PILE_PTS = [(math.cos(a), math.sin(a)) for a in np.linspace(0, 2 * math.pi, 12, endpoint=False)]
 DOWNWIND = (math.cos(p.wind_theta), math.sin(p.wind_theta))
 WASH_GAIN = 0.8 if STORM else 1.0
+# In the storm she holds station on her two propellers and her bow thruster against the wind and
+# the waves' drift, and her wash boils: sources on her waterline and on the pile, each swelling up
+# and dying away over a few seconds. All of these figures are ASSUMED, set by eye.
+HOLD = 4.0e4                                     # N, the mean force she holds against
+PROPS = (("prop_port", -1.6, -2.0, -13.0), ("prop_stbd", 1.6, -2.0, -13.0))   # x, depth, z in her frame; discs of 1 m radius
+BOW_THRUSTER = (0.0, -1.6, 10.5)
+BOILS, PILE_BOILS = (70, 22) if STORM else (0, 0)
+BOIL_LIFE = (3.0, 6.0)                           # s
+BOIL_FOAM, BOIL_AIR, BOIL_TURB = 0.85, 0.8, 4.0  # what a boil lays at its height: foam, air, turbulence (m/s)
+BOIL_THROW, PILE_THROW = 3.0, 2.6                # m/s: outward from her side at most, and downwind off the pile
+if STORM:
+    wash.air = 4.0                               # a displacement hull's propellers take little air down as computed
+    wf = ocean.wake_field                        # a wash that lasts, and that the field's flow tears rather than spreads
+    wf.foam_life, wf.foam_thinning, wf.aeration_life = 14.0, 6.0, 9.0
+    wf.turbulence_life, wf.velocity_life, wf.spread, wf.eddy_texels = 8.0, 6.0, 0.01, 30.0
+boil_rng = np.random.default_rng(7)
+boils = {}                                       # slot -> (x, z, vx, vz, radius, strength, ends, began)
+pile_boils = {}
+
+
+def swell(now, began, ends):
+    """A boil's strength over its life: up from nothing and back to nothing (sin squared), so the
+    foam it lays grows out of the water instead of appearing on it."""
+    return math.sin(math.pi * min(max((now - began) / max(ends - began, 1e-3), 0.0), 1.0)) ** 2
+
 
 mariner = drone = None
 if not STORM:
@@ -245,7 +268,8 @@ if not STORM:
             prop.parent.add(blur)
             prop.visible = False
 
-camera = tp.PerspectiveCamera(math.degrees(2 * math.atan((H / 2) / ((W / 2) / (HFOV / 2)))), W / H, 0.1, 4000)
+camera = tp.PerspectiveCamera(math.degrees(2 * math.atan((H / 2) / ((W / 2) / (HFOV / 2)))) if VIEW_FOV is None else VIEW_FOV,
+                              W / H, 0.1, 4000)
 scene.add(camera)
 
 # ---------------------------------------------------------------- one step
@@ -260,17 +284,68 @@ def step(dt=1.0 / 60.0):
     t += dt
     sh = ocean.sample_height
     # The vessel rides the sea: a first-order follow of the surface under her.
-    hb, hs, hp, hm, hc = sh(0.0, -11.0), sh(0.0, 11.0), sh(3.5, 0.0), sh(-3.5, 0.0), sh(0.0, 0.0)
-    want = np.array([0.8 * (hb + hs + hp + hm + hc) / 5.0, 0.8 * math.atan2(hb - hs, 22.0), -0.6 * math.atan2(hp - hm, 7.0)])
+    # Seven stations along her length (the sea's mean height and its slope under her, by least
+    # squares) and one either side amidships.
+    hz = [sh(0.0, z) for z in POSE_Z]
+    slope = sum(z * h for z, h in zip(POSE_Z, hz)) / sum(z * z for z in POSE_Z)
+    hp, hm = sh(3.5, 0.0), sh(-3.5, 0.0)
+    want = np.array([sum(hz) / len(hz), 0.9 * math.atan(-slope), -0.6 * math.atan2(hp - hm, 7.0)])
     pose = pose + (want - pose) * min(1.0, dt / 0.8)
-    ship.position.y = float(pose[0])
+    ship.position.y = float(pose[0]) - SINK
     ship.rotation.x, ship.rotation.z = float(pose[1]), -float(pose[2])
-    ocean.hull_exclusion.set_pose(0.0, 0.0, float(pose[0]), 0.0, float(pose[1]), float(pose[2]), HALF_L, HALF_B)
+    # Her plane as the ocean takes it (DECK_CAP over her waterline, see above): pitch is +bow up and
+    # roll +starboard (+X) up there, while rotation.x = +a puts her +Z end DOWN and rotation.z = -a
+    # puts her +X side DOWN, so both signs turn over.
+    ocean.hull_exclusion.set_pose(0.0, 0.0, float(pose[0]) - SINK + DECK_CAP, 0.0, -float(pose[1]), -float(pose[2]),
+                                  HALF_L, HALF_B)
+    if ROTOR is not None:
+        ROTOR.rotate_x(ROTOR_RATE * dt)
 
     ocean.clear_wake_sources()
-    wash.update(dt, (0.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 0.0, 0.0))
+    thrusters = []
+    if STORM:
+        # What she has to hold comes and goes with the gusts and the wave groups.
+        hold = HOLD * (0.55 + 0.6 * (0.5 + 0.5 * math.sin(0.21 * t)) * (0.5 + 0.5 * math.sin(0.057 * t + 1.0))
+                       + 0.35 * math.sin(0.83 * t + 2.0) ** 2)
+        fx, fz = -hold * DOWNWIND[0], -hold * DOWNWIND[1]
+        for name, x, y, z in PROPS:              # her length's share, and half the sideways one by their rudders
+            thrusters.append((name, (x, float(pose[0]) - SINK + y, z), (0.25 * fx, 0.0, 0.5 * fz), 1.0, False))
+        bx, by, bz = BOW_THRUSTER                # the other half of the sideways share, athwartships at her bow
+        thrusters.append(("bow_thruster", (bx, float(pose[0]) - SINK + by, bz), (0.5 * fx, 0.0, 0.0), 0.5, True))
+    wash.update(dt, (0.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 0.0, 0.0), thrusters)
+    for slot in range(BOILS):
+        b = boils.get(slot)
+        if b is None or t >= b[6]:
+            # A point on her waterline: more of them at her stern, where the propellers work,
+            # and on her weather side, where the sea strikes her.
+            a = boil_rng.uniform(0.0, 2.0 * math.pi)
+            for _ in range(3):                   # the weights, by rejection
+                ox, oz = math.sin(a), math.cos(a)
+                weather = max(0.0, -(ox * DOWNWIND[0] + oz * DOWNWIND[1]))
+                if boil_rng.random() < 0.35 + 0.4 * max(0.0, -oz) ** 2 + 0.35 * weather:
+                    break
+                a = boil_rng.uniform(0.0, 2.0 * math.pi)
+            ox, oz = math.sin(a), math.cos(a)
+            # Foam is MADE at her side and nowhere else: every source lies on her waterline
+            # (within a metre or so of it), and what it makes is thrown outward and carried
+            # off by the water's own flow in the wake field. How hard it is thrown differs
+            # round her and wanders with time, which is what gives the wash its lobes.
+            lobe = 0.25 + 0.75 * (0.5 + 0.5 * math.sin(3.0 * a + 0.11 * t + 1.3)) * (0.5 + 0.5 * math.sin(2.0 * a - 0.07 * t))
+            out = boil_rng.uniform(0.2, 1.2)
+            nx, nz = ox / HALF_B, oz / HALF_L    # the outline's outward normal
+            nn = math.hypot(nx, nz)
+            nx, nz = nx / nn, nz / nn
+            s = boil_rng.uniform(0.5, 1.0)
+            throw = BOIL_THROW * lobe * boil_rng.uniform(0.5, 1.0)
+            b = boils[slot] = (HALF_B * ox + nx * out, HALF_L * oz + nz * out,
+                               nx * throw + 0.8 * DOWNWIND[0], nz * throw + 0.8 * DOWNWIND[1],
+                               boil_rng.uniform(0.56, 1.36), s, t + boil_rng.uniform(*BOIL_LIFE), t)
+        x, z, vx, vz, r, s, t1, t0 = b
+        s *= swell(t, t0, t1)
+        wash.put(f"b{slot}", (x, 0.0, z), (vx, 0.0, vz), r, foam=BOIL_FOAM * s, aeration=BOIL_AIR * s,
+                 turbulence=BOIL_TURB * s)
     for i, (x, z) in enumerate(HULL_PTS):       # foam where the water rises or falls fast against the hull
-        g = sh(x, z) - (pose[0] + z * math.sin(pose[1]) - x * math.sin(pose[2]))
+        g = sh(x, z) - (pose[0] - SINK - z * math.sin(pose[1]) - x * math.sin(pose[2]))
         v = (g - gap.get(i, g)) / dt
         gap[i] = g
         s = WASH_GAIN * min(max((abs(v) - 0.35) / 1.4, 0.0), 1.0)
@@ -287,6 +362,32 @@ def step(dt=1.0 / 60.0):
         if s > 0.02:
             wash.put(f"p{i}", (TURBINE_AT[0] + cx * (PILE_R + 0.9), 0.0, TURBINE_AT[1] + cz * (PILE_R + 0.9)),
                      (1.2 * s * DOWNWIND[0], 0.0, 1.2 * s * DOWNWIND[1]), 1.4, foam=0.9 * s, aeration=0.5 * s, turbulence=0.8 * s)
+    # The pile stands in the sea's way. A crest runs up its weather side and falls back as
+    # white water; the water that has passed it is torn into eddies shed from one side and
+    # then the other, and they carry their foam and air off to leeward in a trail.
+    for slot in range(PILE_BOILS):
+        b = pile_boils.get(slot)
+        if b is None or t >= b[6]:
+            cross = (-DOWNWIND[1], DOWNWIND[0])
+            if boil_rng.random() < 0.3:          # run-up: against the weather side
+                a = boil_rng.uniform(-1.0, 1.0)
+                dx, dz = -math.cos(a) * DOWNWIND[0] + math.sin(a) * cross[0], -math.cos(a) * DOWNWIND[1] + math.sin(a) * cross[1]
+                px, pz = (PILE_R + 0.6) * dx, (PILE_R + 0.6) * dz
+                vx, vz = 0.8 * dx + math.sin(a) * cross[0], 0.8 * dz + math.sin(a) * cross[1]
+                r, s = boil_rng.uniform(0.4, 0.72), boil_rng.uniform(0.6, 1.0)
+            else:                                # the lee: made at the pile's sides, shed from one and then the other
+                side = 1.0 if int(t / 2.3 + slot) % 2 == 0 else -1.0
+                a = side * boil_rng.uniform(0.9, 1.9)          # round toward the lee from the side it leaves by
+                dx, dz = -math.cos(a) * DOWNWIND[0] + math.sin(a) * cross[0], -math.cos(a) * DOWNWIND[1] + math.sin(a) * cross[1]
+                px, pz = (PILE_R + 0.7) * dx, (PILE_R + 0.7) * dz
+                carry = PILE_THROW * boil_rng.uniform(0.6, 1.0)  # the flow past the pile takes it off downwind
+                vx, vz = carry * DOWNWIND[0] - 0.6 * side * cross[0], carry * DOWNWIND[1] - 0.6 * side * cross[1]
+                r, s = boil_rng.uniform(0.48, 1.2), boil_rng.uniform(0.5, 1.0)
+            b = pile_boils[slot] = (TURBINE_AT[0] + px, TURBINE_AT[1] + pz, vx, vz, r, s, t + boil_rng.uniform(*BOIL_LIFE), t)
+        x, z, vx, vz, r, s, t1, t0 = b
+        s *= (0.45 + 0.55 * sp) * swell(t, t0, t1)   # more when the sea is working against the pile
+        wash.put(f"t{slot}", (x, 0.0, z), (vx, 0.0, vz), r, foam=BOIL_FOAM * s, aeration=BOIL_AIR * s,
+                 turbulence=BOIL_TURB * s)
 
     if mariner is not None:
         # The Mariner comes in from ahead at 4 m/s, bow toward the vessel (her model: X forward).
@@ -312,9 +413,19 @@ def step(dt=1.0 / 60.0):
     # The camera rides the vessel.
     cx, sx, cz, sz = math.cos(pose[1]), math.sin(pose[1]), math.cos(-pose[2]), math.sin(-pose[2])
     R = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]]) @ np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
-    eye = R @ CAM + [0.0, pose[0], 0.0]
-    at = R @ AIM + [0.0, pose[0], 0.0]
-    up = R @ [0.0, 1.0, 0.0]
+    if VIEW_ON == "ship":
+        eye = R @ VIEW_EYE + [0.0, pose[0] - SINK, 0.0]
+        at = R @ VIEW_AIM + [0.0, pose[0] - SINK, 0.0]
+        up = R @ [0.0, 1.0, 0.0]
+    else:
+        eye, at, up = VIEW_EYE, VIEW_AIM, np.array([0.0, 1.0, 0.0])
+        if VIEW == "drone":
+            # A drone does not hang still: a slow arc round the two of them, sinking a little
+            # and closing in, from her port quarter toward her beam.
+            s = max(t - WARM / 60.0, 0.0)
+            a = math.atan2(VIEW_EYE[2] - at[2], VIEW_EYE[0] - at[0]) + math.radians(3.2) * s
+            r = math.hypot(VIEW_EYE[0] - at[0], VIEW_EYE[2] - at[2]) * (1.0 - 0.012 * s)
+            eye = np.array([at[0] + r * math.cos(a), VIEW_EYE[1] - 0.7 * s, at[2] + r * math.sin(a)])
     camera.position.set(*eye.tolist())
     camera.up.set(*up.tolist())
     camera.look_at(tp.Vector3(*at.tolist()))
