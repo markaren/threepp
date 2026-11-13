@@ -42,7 +42,8 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))         # examples/ (build_common)
 from build_common import (Part, R, T, Z_TO_X, Z_TO_Y, annulus, box, box_between, cylinder,  # noqa: E402
-                          frame_from_forward_up, frustum, loft, make_materials, new_object, revolve, strut)
+                          extrude_xy, frame_from_forward_up, frame_y_toward, frustum, loft, make_materials,
+                          new_object, revolve, strut)
 
 
 def val(d):
@@ -86,6 +87,12 @@ def torus(Rr, rs, y, n=96, m=8):
             j1 = (j + 1) % m
             f.append((i * m + j, i1 * m + j, i1 * m + j1, i * m + j1))
     return v, f
+
+
+def tube_arc(Rr, rs, y, a0, a1, n=48, m=8):
+    """A horizontal rail tube about +Y at height y from azimuth a0 to a1, capped at both ends."""
+    return loft([[tuple(pol(Rr + rs * math.cos(2 * math.pi * j / m), a, y + rs * math.sin(2 * math.pi * j / m)))
+                  for j in range(m)] for a in np.linspace(a0, a1, n + 1)])
 
 
 def ring_y(part, r0, r1, y0, y1, mat, n=96):
@@ -228,6 +235,173 @@ def build_monopile(spec, pile, growth, cage):
     pile.add(v, f, "hole_dark", M)
 
 
+# ---------------------------------------------------------------- platform fit-out (film overrides only)
+def placed(c, out):
+    """Placement whose local +Z is the horizontal direction `out`, +Y up, origin at c."""
+    z = np.asarray(out, float)
+    z = z / np.linalg.norm(z)
+    y = np.array([0.0, 1.0, 0.0])
+    M = np.eye(4)
+    M[:3, 0], M[:3, 1], M[:3, 2], M[:3, 3] = np.cross(y, z), y, z, c
+    return M
+
+
+def local_box(part, M, p0, p1, mat):
+    v, f, Mb = box_between(p0, p1)
+    part.add(v, f, mat, M @ Mb)
+
+
+def cabinet(part, base, out, w, d, h, mat):
+    """An outdoor equipment cabinet standing at base, doors toward `out`: a raised plinth, a body
+    with a rain hood, door shut-lines, handles, a louvred vent and a label plate. ASSUMED,
+    fitted by eye to photographs of platform cabinets."""
+    M = placed(base, out)
+    hx, hz = 0.5 * w, 0.5 * d
+    ph = 0.12                                                            # plinth frame
+    local_box(part, M, (-hx + 0.04, 0.0, -hz + 0.04), (hx - 0.04, ph, hz - 0.04), "galv_steel")
+    local_box(part, M, (-hx, ph, -hz), (hx, h, hz), mat)
+    # rain hood: overhangs the doors more than the back, a lip down its front
+    local_box(part, M, (-hx - 0.04, h, -hz - 0.03), (hx + 0.04, h + 0.05, hz + 0.09), mat)
+    local_box(part, M, (-hx - 0.04, h - 0.05, hz + 0.06), (hx + 0.04, h, hz + 0.09), mat)
+    # doors: one, or a pair on a wide cabinet; shut-lines a hair proud, dark
+    nd = 2 if w > 1.5 else 1
+    zf = hz
+    y0, y1 = ph + 0.06, h - 0.07
+    edges = np.linspace(-hx + 0.05, hx - 0.05, nd + 1)
+    sl = 0.012
+    for x in edges:
+        local_box(part, M, (x - sl, y0, zf - 0.002), (x + sl, y1, zf + 0.004), "paint_black")
+    for y in (y0, y1):
+        local_box(part, M, (edges[0] - sl, y - sl, zf - 0.002), (edges[-1] + sl, y + sl, zf + 0.004), "paint_black")
+    for k in range(nd):
+        xa, xb = edges[k], edges[k + 1]
+        hxk = xb - 0.12 if (nd == 1 or k == 0) else xa + 0.12            # handles at the meeting edge
+        yh = y0 + 0.52 * (y1 - y0)
+        local_box(part, M, (hxk - 0.018, yh - 0.11, zf), (hxk + 0.018, yh + 0.11, zf + 0.04), "galv_steel")
+        hinge_x = xa + 0.03 if hxk > 0.5 * (xa + xb) else xb - 0.03
+        for yk in (y0 + 0.25, y1 - 0.25):
+            local_box(part, M, (hinge_x - 0.02, yk - 0.06, zf), (hinge_x + 0.02, yk + 0.06, zf + 0.03), "paint_black")
+        # louvred vent low on the door: a dark recess with slats across it
+        vx0, vx1 = xa + 0.12, xb - 0.12
+        if vx1 - vx0 > 0.3:
+            vy0 = y0 + 0.12
+            local_box(part, M, (vx0, vy0, zf - 0.002), (vx1, vy0 + 0.30, zf + 0.003), "paint_black")
+            for j in range(5):
+                yj = vy0 + 0.03 + j * 0.055
+                local_box(part, M, (vx0 + 0.01, yj, zf), (vx1 - 0.01, yj + 0.03, zf + 0.025), mat)
+        # label plate, upper door
+        xc = 0.5 * (xa + xb)
+        local_box(part, M, (xc - 0.13, y1 - 0.38, zf), (xc + 0.13, y1 - 0.22, zf + 0.008), "label_white")
+
+
+def lamp_post(part, base, inward):
+    """A floodlight on a post: the head on a short arm, aimed down and inward over the deck."""
+    inward = np.asarray(inward, float) / np.linalg.norm(inward)
+    top = base + np.array([0.0, 3.2, 0.0])
+    strut(part, base, top, 0.045, "galv_steel", 8)
+    arm = top + inward * 0.6 + np.array([0.0, 0.12, 0.0])
+    strut(part, top, arm, 0.035, "galv_steel", 8)
+    aim = inward * math.cos(math.radians(55.0)) - np.array([0.0, math.sin(math.radians(55.0)), 0.0])
+    c = arm - np.array([0.0, 0.08, 0.0])
+    v, f = revolve([(0.0, -0.20), (0.10, -0.20), (0.17, -0.02), (0.17, 0.06)], 16)       # housing, open to the lens
+    part.add(v, f, "door_grey", T(*c) @ frame_y_toward(aim) @ Z_TO_Y())
+    v, f = cylinder(0.15, 0.05, 0.075, 16)
+    part.add(v, f, "lamp_lens", T(*c) @ frame_y_toward(aim) @ Z_TO_Y())
+
+
+def landing_deck(part, LD, R0, Ro, py, rh):
+    """A working deck cantilevered out from the platform ring at azimuth LD['azimuth_deg'], where a
+    vessel's crane sets people and stores down: a dark deck, a hatched landing square near its
+    outer edge, a toe board and railing round it, cantilever beams and braces under it to the
+    shell. ASSUMED: sized from another simulator's turbine scaled to ours, fitted by eye."""
+    a = math.radians(LD["azimuth_deg"])
+    n, t, up = radial(a), tangent(a), np.array([0.0, 1.0, 0.0])
+    Md = np.eye(4)
+    Md[:3, 0], Md[:3, 1], Md[:3, 2] = n, t, up                           # local (s, w, y): out, across, up
+
+    def P(s, w, y):
+        return n * s + t * w + up * y
+    S, hw, ch = LD["reach"], 0.5 * LD["width"], LD["chamfer"]
+    al = math.asin(hw / Ro)
+    inner = [(Ro * math.cos(q), Ro * math.sin(q)) for q in np.linspace(-al, al, 9)]
+    outer = [(S - ch, hw), (S, hw - ch), (S, -(hw - ch)), (S - ch, -hw)]
+    v, f = extrude_xy(inner + outer, py - 0.25, py)
+    part.add(v, f, "grating", Md)
+    # the edge: from the ring round the outside and back to the ring
+    edge = [inner[-1]] + outer + [inner[0]]
+    for (sa, wa), (sb, wb) in zip(edge[:-1], edge[1:]):
+        d = np.array([sb - sa, wb - wa])
+        L = float(np.linalg.norm(d))
+        d /= L
+        o = np.array([-d[1], d[0]])                                      # outward (the loop runs clockwise in (s, w))
+        p0, p1 = np.array([sa, wa]) - d * 0.06, np.array([sb, wb]) + d * 0.06
+        q = [p0 - o * 0.02, p1 - o * 0.02, p1 + o * 0.12, p0 + o * 0.12]
+        v, f = extrude_xy([tuple(x) for x in q], py - 0.35, py + 0.12)   # fascia and toe board in one
+        part.add(v, f, "rail_yellow", Md)
+    # railing, inset from the edge, posts at most 1.5 m apart
+    s0r = math.sqrt((Ro - 0.06) ** 2 - (hw - 0.06) ** 2)
+    ri = 0.06
+    rl = [(s0r, hw - ri), (S - ch - ri * 0.4, hw - ri), (S - ri, hw - ch - ri * 0.4), (S - ri, -(hw - ch - ri * 0.4)),
+          (S - ch - ri * 0.4, -(hw - ri)), (s0r, -(hw - ri))]
+    for (sa, wa), (sb, wb) in zip(rl[:-1], rl[1:]):
+        L = math.hypot(sb - sa, wb - wa)
+        k = max(1, int(math.ceil(L / 1.5)))
+        for j in range(k + 1):
+            if j == 0 and (sa, wa) != rl[0]:
+                continue
+            u_ = j / k
+            s_, w_ = sa + (sb - sa) * u_, wa + (wb - wa) * u_
+            strut(part, P(s_, w_, py - 0.02), P(s_, w_, py + rh), 0.03, "rail_yellow", 8)
+        for yr, rr in ((py + rh, 0.035), (py + 0.55 * rh, 0.025)):
+            strut(part, P(sa, wa, yr), P(sb, wb, yr), rr, "rail_yellow", 8)
+            v, f = revolve([(0.0, -rr), (rr, -0.6 * rr), (rr, 0.6 * rr), (0.0, rr)], 8)   # a knuckle at the bend
+            part.add(v, f, "rail_yellow", T(*P(sb, wb, yr)))
+    # cantilever beams and their braces back to the shell, a cross beam under the outer edge
+    yb = py - 0.5
+    for w_ in (-0.62 * hw, 0.62 * hw):
+        sr = math.sqrt(max(R0 * R0 - w_ * w_, 0.0)) - 0.05
+        strut(part, P(sr, w_, yb), P(S - 0.3, w_, yb), 0.17, "rail_yellow", 12)
+        strut(part, P(sr, w_, py - 4.0), P(S - 1.6, w_, yb - 0.12), 0.13, "rail_yellow", 12)
+    strut(part, P(S - 0.3, -(hw - 0.4), yb + 0.1), P(S - 0.3, hw - 0.4, yb + 0.1), 0.12, "rail_yellow", 10)
+    strut(part, P(Ro + 0.6, -0.62 * hw, yb + 0.1), P(Ro + 0.6, 0.62 * hw, yb + 0.1), 0.10, "rail_yellow", 10)
+    # the landing square: a 3 m square with a hatched (yellow and black) border, a cross at its centre
+    LZ = LD["landing_zone"]
+    sc, L2, bw = S - LZ["edge_gap"] - 0.5 * LZ["size"], 0.5 * LZ["size"], LZ["border"]
+    yt = py + 0.012
+    blk = 0.3
+    for side in range(4):
+        # walk one side of the square; the corners belong to the side that starts there
+        c0 = [(sc - L2, -L2), (sc - L2, L2), (sc + L2, L2), (sc + L2, -L2)][side]
+        c1 = [(sc - L2, L2), (sc + L2, L2), (sc + L2, -L2), (sc - L2, -L2)][side]
+        d = np.array(c1) - np.array(c0)
+        L = float(np.linalg.norm(d))
+        d /= L
+        inw = np.array([sc, 0.0]) - (np.array(c0) + np.array(c1)) * 0.5
+        inw /= np.linalg.norm(inw)
+        L -= bw                                                          # the next side's band owns the far corner
+        m = int(round(L / blk))
+        ln = 0.06                                                        # solid yellow lines along both edges
+        for e0, e1 in ((0.0, ln), (bw - ln, bw)):
+            q = [np.array(c0) + inw * e0, np.array(c0) + d * L + inw * e0, np.array(c0) + d * L + inw * e1,
+                 np.array(c0) + inw * e1]
+            v, f = extrude_xy([tuple(x) for x in q], py - 0.01, yt)
+            part.add(v, f, "marking_yellow", Md)
+        for j in range(0, m, 2):                                         # yellow slashes between them
+            pa, pb = np.array(c0) + d * (L * j / m), np.array(c0) + d * (L * (j + 1) / m)
+            sk = d * min(0.5 * (bw - 2 * ln), L * (m - j - 1) / m)
+            q = [pa + inw * ln, pb + inw * ln, pb + sk + inw * (bw - ln), pa + sk + inw * (bw - ln)]
+            v, f = extrude_xy([tuple(x) for x in q], py - 0.01, yt - 0.002)
+            part.add(v, f, "marking_yellow", Md)
+    cw, cl = 0.05, 0.45
+    for q in ([(sc - cl, -cw), (sc + cl, -cw), (sc + cl, cw), (sc - cl, cw)],
+              [(sc - cw, -cl), (sc + cw, -cl), (sc + cw, -cw), (sc - cw, -cw)],
+              [(sc - cw, cw), (sc + cw, cw), (sc + cw, cl), (sc - cw, cl)]):
+        v, f = extrude_xy(q, py - 0.01, yt)
+        part.add(v, f, "marking_yellow", Md)
+    # a floodlight at the outer corner, over the landing square
+    lamp_post(part, P(S - ch - 0.1, hw - 0.15, py), -t * 0.6 - n * 0.8)
+
+
 # ---------------------------------------------------------------- transition piece
 def build_tp(spec, part):
     TPs = spec["transition_piece"]
@@ -244,17 +418,38 @@ def build_tp(spec, part):
     ring_y(part, R0 - 0.05, R0 + 0.12, y1 - 0.35, y1, "flange_grey", 128)
     # platform deck, its knee braces, railing
     ring_y(part, R0 - 0.1, Ro, py - 0.25, py, "grating", 128)
-    ring_y(part, Ro - 0.02, Ro + 0.12, py - 0.35, py + 0.12, "rail_yellow", 128)       # toe board
+    rh = val(TPs["railing_height"])
+    # An optional landing deck (transition_piece.fittings.landing_deck) opens the ring's railing
+    # and toe board over its width; without it the ring is closed all round.
+    LDk = (TPs.get("fittings") or {}).get("landing_deck")
+    if LDk:
+        a_ld = math.radians(LDk["azimuth_deg"])
+        hw_ld = 0.5 * LDk["width"]
+        gap_t = math.asin(hw_ld / Ro)                                          # the toe board's opening
+        gap_r = math.asin((hw_ld - 0.06) / (Ro - 0.06))                        # the rails' opening
+        part.add(*arc_box(Ro - 0.02, Ro + 0.12, a_ld + gap_t, a_ld - gap_t + 2 * math.pi, py - 0.35, py + 0.12, 120),
+                 "rail_yellow")
+        part.add(*tube_arc(Ro - 0.06, 0.035, py + rh, a_ld + gap_r, a_ld - gap_r + 2 * math.pi, 140), "rail_yellow")
+        part.add(*tube_arc(Ro - 0.06, 0.025, py + 0.55 * rh, a_ld + gap_r, a_ld - gap_r + 2 * math.pi, 140),
+                 "rail_yellow")
+    else:
+        ring_y(part, Ro - 0.02, Ro + 0.12, py - 0.35, py + 0.12, "rail_yellow", 128)       # toe board
     for k in range(12):
         a = 2 * math.pi * (k + 0.5) / 12
         strut(part, pol(R0 - 0.05, a, py - 3.2), pol(Ro - 0.4, a, py - 0.2), 0.14, "tp_yellow", 10)
-    rh = val(TPs["railing_height"])
     n_posts = 40
     for k in range(n_posts):
         a = 2 * math.pi * k / n_posts
+        if LDk and abs(math.remainder(a - a_ld, 2 * math.pi)) < gap_r + 0.03:
+            continue
         strut(part, pol(Ro - 0.06, a, py - 0.02), pol(Ro - 0.06, a, py + rh), 0.03, "rail_yellow", 8)
-    part.add(*torus(Ro - 0.06, 0.035, py + rh, 160, 8), "rail_yellow")
-    part.add(*torus(Ro - 0.06, 0.025, py + 0.55 * rh, 160, 8), "rail_yellow")
+    if LDk:
+        for s in (-1.0, 1.0):                                                  # end posts at the opening
+            a = a_ld + s * gap_r
+            strut(part, pol(Ro - 0.06, a, py - 0.02), pol(Ro - 0.06, a, py + rh), 0.03, "rail_yellow", 8)
+    else:
+        part.add(*torus(Ro - 0.06, 0.035, py + rh, 160, 8), "rail_yellow")
+        part.add(*torus(Ro - 0.06, 0.025, py + 0.55 * rh, 160, 8), "rail_yellow")
 
     # boat landing: two fender tubes on stubs, the ladder between them
     az = math.radians(val(TPs["boat_landing_azimuth_deg"]))
@@ -317,8 +512,12 @@ def build_tp(spec, part):
     strut(part, top, tip, 0.14, "rail_yellow", 12)
     strut(part, base + [0.0, DV["height"] - 1.6, 0.0], top + radial(ad) * 1.6, 0.08, "rail_yellow", 10)
     strut(part, tip, tip - [0.0, 1.8, 0.0], 0.012, "galv_steel", 6)
-    v, f, M = box_between(tip - [0.15, 2.1, 0.15], tip - [-0.15, 1.8, -0.15])
-    part.add(v, f, "paint_black", M)
+    if TPs.get("fittings"):                                     # the film fit-out: a hook block, not a box
+        v, f = revolve([(0.0, -0.3), (0.12, -0.22), (0.12, 0.0), (0.0, 0.08)], 12)
+        part.add(v, f, "paint_black", T(*(tip - [0.0, 1.8, 0.0])) @ Z_TO_Y())
+    else:
+        v, f, M = box_between(tip - [0.15, 2.1, 0.15], tip - [-0.15, 1.8, -0.15])
+        part.add(v, f, "paint_black", M)
 
     # Optional fittings (transition_piece.fittings): more of what stands on and hangs off a real
     # transition piece, for a scene that looks at it from close by. All of it ASSUMED, fitted by eye.
@@ -341,23 +540,25 @@ def build_tp(spec, part):
                       "rail_yellow", 8)
         Rm = 0.5 * (R0 + Ro)
         for a_deg, w, d, h, mat in FT.get("cabinets", []):       # (azimuth, width, depth, height, material)
-            a = math.radians(a_deg)
-            hw_ = 0.5 * w / Rm
-            part.add(*arc_box(Rm - 0.5 * d, Rm + 0.5 * d, a - hw_, a + hw_, py, py + h, 6), mat)
-            part.add(*arc_box(Rm - 0.5 * d - 0.06, Rm + 0.5 * d + 0.06, a - hw_ - 0.01, a + hw_ + 0.01, py + h,
-                              py + h + 0.06, 6), "paint_black")
+            cabinet(part, pol(Rm, math.radians(a_deg), py), radial(math.radians(a_deg)), w, d, h, mat)
         for a_deg in FT.get("lamp_azimuths_deg", []):            # lamp posts on the railing line
             a = math.radians(a_deg)
-            strut(part, pol(Ro - 0.12, a, py), pol(Ro - 0.12, a, py + 3.2), 0.045, "galv_steel", 8)
-            strut(part, pol(Ro - 0.12, a, py + 3.2), pol(Ro - 0.75, a, py + 3.35), 0.035, "galv_steel", 8)
-            c = pol(Ro - 0.75, a, py + 3.3)
-            v, f, M = box_between(c - [0.22, 0.07, 0.22], c + [0.22, 0.07, 0.22])
-            part.add(v, f, "paint_black", M)
+            lamp_post(part, pol(Ro - 0.12, a, py), -radial(a))
+        if LDk:
+            landing_deck(part, LDk, R0, Ro, py, rh)
         if "stores_davit_azimuth_deg" in FT:                     # a second, lighter davit for stores
             a2 = math.radians(FT["stores_davit_azimuth_deg"])
             b2 = pol(Ro - 1.0, a2, py)
+            v, f = cylinder(0.32, py, py + 0.08, 20)                         # its foot flange
+            part.add(v, f, "rail_yellow", T(b2[0], 0.0, b2[2]) @ Z_TO_Y())
             strut(part, b2, b2 + [0.0, 3.2, 0.0], 0.14, "rail_yellow", 16)
-            strut(part, b2 + [0.0, 3.1, 0.0], b2 + [0.0, 3.1, 0.0] + radial(a2) * 2.4, 0.10, "rail_yellow", 12)
+            top2 = b2 + [0.0, 3.1, 0.0]
+            tip2 = top2 + radial(a2) * 2.4
+            strut(part, top2, tip2, 0.10, "rail_yellow", 12)
+            strut(part, b2 + [0.0, 2.0, 0.0], top2 + radial(a2) * 1.2, 0.06, "rail_yellow", 10)   # the jib's brace
+            strut(part, tip2, tip2 - [0.0, 1.4, 0.0], 0.01, "galv_steel", 6)                # the fall and its hook block
+            v, f = revolve([(0.0, -0.22), (0.09, -0.16), (0.09, 0.0), (0.0, 0.06)], 12)
+            part.add(v, f, "paint_black", T(*(tip2 - [0.0, 1.4, 0.0])) @ Z_TO_Y())
 
 
 # ---------------------------------------------------------------- tower
