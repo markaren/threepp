@@ -834,7 +834,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 sunRefr = normalize(sunRefr);
                 const float phase = min(hgPhase(dot(dRef, sunRefr), kWaterInScatterG) * 4.0 * PI,
                                         kWaterInScatterPhaseMax);// 1 == isotropic
-                Ein += lights.dirLights[i].color * (ndl * vis * cloudShadowSample(P) * phase);
+                Ein += lights.dirLights[i].color * (ndl * vis * cloudShadowSample(P) * pdSurfaceLightTransmittance(P, L) * phase);
             }
             Ein *= (1.0 - F);
 
@@ -954,7 +954,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             }
             if (vis <= 0.0) continue;
             const float spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
-            vec3 c = spec * ndl * lights.dirLights[i].color * (vis * cloudShadowSample(P));
+            vec3 c = spec * ndl * lights.dirLights[i].color * (vis * cloudShadowSample(P) * pdSurfaceLightTransmittance(P, L));
             // Directional lights are deltas → GGX spikes; clamp so a glint blooms
             // bright but never fireflies. (×4 over the global clamp → bright suns.)
             const float cl = max(max(c.r, c.g), c.b);

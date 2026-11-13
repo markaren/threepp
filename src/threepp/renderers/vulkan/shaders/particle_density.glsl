@@ -330,6 +330,49 @@ float pdLightTransmittance(vec3 p, vec3 L) {
     return exp(-tau);
 }
 
+// ── THE MEDIUM'S SHADOW ON A SURFACE ─────────────────────────────────────────
+// The same Beer-Lambert leg as pdLightTransmittance, for a point that is NOT in
+// the medium: a patch of sea or ground whose sun passes through a plume on its
+// way down. Without it a fog bank or a smoke column shaded itself and left the
+// surface under it in full sun, which is the cue that says "painted on" from
+// the air: a plume over water is read by the dark stripe beside it.
+//
+// It differs from pdLightTransmittance in where the taps go. That one starts at
+// p because p sits in the dust; here p can be kilometres from the box, and taps
+// spread from p would nearly all land in clear air. Each volume is marched over
+// its OWN [entry, exit] stretch of the ray, so the taps are all in a box and a
+// second plume elsewhere takes none of the first one's. 16 midpoint taps, fixed
+// and unjittered, for pdLightTransmittance's reasons.
+float pdSurfaceLightTransmittance(vec3 p, vec3 L) {
+    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
+    if (n == 0u) return 1.0;
+    const vec3 inv = 1.0 / L;// ±inf on axis-parallel components is fine below
+    const int  kTaps = 16;
+    float tau = 0.0;
+    for (uint i = 0u; i < n; ++i) {
+        const vec3  bmin  = pd.boxMin[i].xyz;
+        const vec3  bsize = 1.0 / pd.boxInvSize[i].xyz;
+        const vec3  ta = (bmin - p) * inv;
+        const vec3  tb = (bmin + bsize - p) * inv;
+        const vec3  lo = min(ta, tb), hi = max(ta, tb);
+        const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
+        const float x = min(min(hi.x, hi.y), hi.z);
+        if (x <= e) continue;
+        const float dl = (x - e) / float(kTaps);
+        for (int s = 0; s < kTaps; ++s) {
+            const vec3 q  = p + L * (e + (float(s) + 0.5) * dl);
+            const vec3 tt = clamp((q - bmin) * pd.boxInvSize[i].xyz, vec3(0.0), vec3(1.0));
+            // The primary march's edge feather, so the shadow is of the plume
+            // the camera sees and not of the box's outermost voxels.
+            const vec3 fw = smoothstep(vec3(0.0), vec3(0.045), tt)
+                          * smoothstep(vec3(0.0), vec3(0.045), 1.0 - tt);
+            tau += texture(particleDensityLinTex[i], tt).r * (fw.x * fw.y * fw.z) * dl;
+        }
+        if (tau > 8.0) break;// e^-8: fully occluded, the rest cannot matter
+    }
+    return exp(-tau);
+}
+
 // ── THE CHEAP LEG: emission + extinction only, for SECONDARY rays ────────────
 // plans/particle-atmosphere.md, "water-fire reflection march".
 //

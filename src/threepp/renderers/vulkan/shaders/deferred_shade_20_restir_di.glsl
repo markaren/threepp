@@ -656,7 +656,7 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         vec3 c = vec3(0.0);
         if (dot(N, L) > 0.0)
             c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
-              * lights.dirLights[i].color * (cloudShadow * caus * leg);
+              * lights.dirLights[i].color * (cloudShadow * pdSurfaceLightTransmittance(P, L) * caus * leg);
         U += c;
         mv[nL] = (kSM && i == 0u && dot(c, c) > 0.0) ? smSunVis(P, N, vec2(px)) : -1.0;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
