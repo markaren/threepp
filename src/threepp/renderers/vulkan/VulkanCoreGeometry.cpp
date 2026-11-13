@@ -3479,7 +3479,112 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             }
             // st.chopOn (chop normals this frame) was resolved by
             // syncOceanChop in the scene build, with the shade's binding.
+            // A cascade whose fields the host supplies this frame
+            // (DisplacedMesh::externalCascades) runs neither its spectrum nor
+            // its transforms: its images are written from the host's arrays.
+            uint32_t externalMask = 0;
+            for (uint32_t i = 0; i < 3; ++i) {
+                const auto& ext = dm.externalCascades[i];
+                const size_t n = st.heightReadbackDim[i];
+                if ((st.cascadeMask & (1u << i)) && ext.dim != 0 && ext.dim == n &&
+                    ext.height.size() == n * n * 2 && ext.disp.size() == n * n * 2) externalMask |= 1u << i;
+            }
+            auto uploadExternal = [&](uint32_t i) {
+                auto& c = st.cascades[i];
+                const auto& ext = dm.externalCascades[i];
+                const uint32_t n = ext.dim;
+                // The height and the displacement, and with the chop normals
+                // on the two derivative fields the chain would have made
+                // (dynamic_spectrum.comp): staging buffer of this frame in
+                // flight -> the cascade's images.
+                const uint32_t fields = st.chopOn ? 4u : 2u;
+                const VkDeviceSize fieldBytes = VkDeviceSize(n) * n * 8u;
+                auto& sb = st.externalStaging[i][currentFrame];
+                if (sb.handle == VK_NULL_HANDLE) {
+                    sb = createBuffer(ctx->allocator(), ctx->device(), 4 * fieldBytes,
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+                                      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                              VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                    ctx->setObjectName(sb.handle, (std::string("ocean.externalCascade") + std::to_string(i)).c_str());
+                }
+                void* mapped = nullptr;
+                check(vmaMapMemory(ctx->allocator(), sb.alloc, &mapped), "vmaMapMemory(external cascade)");
+                auto* out = static_cast<float*>(mapped);
+                const size_t texels = size_t(n) * n;
+                const float* H = ext.height.data();
+                const float* D = ext.disp.data();
+                float* oH = out;
+                float* oD = out + 2 * texels;
+                std::memcpy(oD, D, fieldBytes);
+                if (!st.chopOn) {
+                    for (size_t q = 0; q < texels; ++q) {
+                        oH[2 * q]     = H[2 * q];
+                        oH[2 * q + 1] = 0.f;
+                    }
+                } else {
+                    // Central differences over the periodic tile, per metre:
+                    // slope = (dh/dx, dh/dz), the displacement gradient's
+                    // diagonal = (dDx/dx, dDz/dz), and its off-diagonal dDx/dz
+                    // beside the height, where the chain leaves it.
+                    float* oS = out + 4 * texels;
+                    float* oJ = out + 6 * texels;
+                    const float inv2dx = float(n) / (2.f * c.tileSize);
+                    for (uint32_t z = 0; z < n; ++z) {
+                        const size_t zm = size_t((z + n - 1) % n) * n, zp = size_t((z + 1) % n) * n, z0 = size_t(z) * n;
+                        for (uint32_t x = 0; x < n; ++x) {
+                            const size_t xm = (x + n - 1) % n, xp = (x + 1) % n, q = z0 + x;
+                            oH[2 * q]     = H[2 * q];
+                            oH[2 * q + 1] = (D[2 * (zp + x)] - D[2 * (zm + x)]) * inv2dx;
+                            oS[2 * q]     = (H[2 * (z0 + xp)] - H[2 * (z0 + xm)]) * inv2dx;
+                            oS[2 * q + 1] = (H[2 * (zp + x)] - H[2 * (zm + x)]) * inv2dx;
+                            oJ[2 * q]     = (D[2 * (z0 + xp)] - D[2 * (z0 + xm)]) * inv2dx;
+                            oJ[2 * q + 1] = (D[2 * (zp + x) + 1] - D[2 * (zm + x) + 1]) * inv2dx;
+                        }
+                    }
+                }
+                vmaUnmapMemory(ctx->allocator(), sb.alloc);
+                vmaFlushAllocation(ctx->allocator(), sb.alloc, 0, fields * fieldBytes);
+                const VkImage dst[4] = {c.dyn->ht().image, c.dyn->displacement().image,
+                                        st.chopOn ? c.dyn->slope().image : VK_NULL_HANDLE,
+                                        st.chopOn ? c.dyn->jacDiag().image : VK_NULL_HANDLE};
+                VkImageMemoryBarrier imb[4]{};
+                for (uint32_t k = 0; k < fields; ++k) {
+                    imb[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    imb[k].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                    imb[k].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    // every texel is written below, so what the image held may go
+                    imb[k].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    imb[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    imb[k].image = dst[k];
+                    imb[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    imb[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    imb[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                }
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 0, nullptr, 0, nullptr, fields, imb);
+                for (uint32_t k = 0; k < fields; ++k) {
+                    VkBufferImageCopy bic{};
+                    bic.bufferOffset = VkDeviceSize(k) * fieldBytes;
+                    bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    bic.imageExtent = {n, n, 1};
+                    vkCmdCopyBufferToImage(cb, sb.handle, dst[k], VK_IMAGE_LAYOUT_GENERAL, 1, &bic);
+                }
+                for (uint32_t k = 0; k < fields; ++k) {
+                    imb[k].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    imb[k].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+                    imb[k].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                }
+                // the readback below waits on COMPUTE: make the copy visible there too
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+                                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | ctx->rtShaderStage(),
+                                     0, 0, nullptr, 0, nullptr, fields, imb);
+            };
             auto evolveCascade = [&](uint32_t i) {
+                if (externalMask & (1u << i)) {
+                    uploadExternal(i);
+                    return;
+                }
                 auto& c = st.cascades[i];
                 if (!c.phillipsRecorded) {
                     c.phillips->recordCompute(cb);
@@ -3513,12 +3618,12 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 std::array<water::IFFT::Job, 6> jobs{};
                 uint32_t jobCount = 0, done = 0;
                 for (uint32_t i = 0; i < 3; ++i) {
-                    if (!(st.cascadeMask & (1u << i)) || (done & (1u << i))) continue;
+                    if (!(st.cascadeMask & ~externalMask & (1u << i)) || (done & (1u << i))) continue;
                     const uint32_t n = st.cascades[i].ifft->textureSize();
                     auto& list = lists[jobCount];
                     uint32_t count = 0;
                     for (uint32_t j = i; j < 3; ++j) {
-                        if (!(st.cascadeMask & (1u << j)) || st.cascades[j].ifft->textureSize() != n) continue;
+                        if (!(st.cascadeMask & ~externalMask & (1u << j)) || st.cascades[j].ifft->textureSize() != n) continue;
                         list[count++] = &spectra[2 * j];
                         list[count++] = &spectra[2 * j + 1];
                         done |= 1u << j;
@@ -3534,12 +3639,12 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 if (st.chopOn) {
                     uint32_t chopJobs = 0, chopDone = 0;
                     for (uint32_t i = 0; i < 3; ++i) {
-                        if (!(st.cascadeMask & (1u << i)) || (chopDone & (1u << i))) continue;
+                        if (!(st.cascadeMask & ~externalMask & (1u << i)) || (chopDone & (1u << i))) continue;
                         const uint32_t n = st.cascades[i].ifft->textureSize();
                         auto& list = chopLists[chopJobs++];
                         uint32_t count = 0;
                         for (uint32_t j = i; j < 3; ++j) {
-                            if (!(st.cascadeMask & (1u << j)) || st.cascades[j].ifft->textureSize() != n) continue;
+                            if (!(st.cascadeMask & ~externalMask & (1u << j)) || st.cascades[j].ifft->textureSize() != n) continue;
                             list[count++] = &st.cascades[j].dyn->slope();
                             list[count++] = &st.cascades[j].dyn->jacDiag();
                             chopDone |= 1u << j;
@@ -3552,8 +3657,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             for (uint32_t i = 0; i < 3; ++i) {
                 if (!(st.cascadeMask & (1u << i))) continue;
                 auto& c = st.cascades[i];
-                if (!batchFft) {
-                    evolveCascade(i);
+                if (!batchFft) evolveCascade(i);
+                if (!batchFft && !(externalMask & (1u << i))) {
                     water::OceanImage ht  = c.dyn->ht();
                     water::OceanImage dsp = c.dyn->displacement();
                     ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;

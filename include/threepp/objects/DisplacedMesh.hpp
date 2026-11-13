@@ -738,6 +738,35 @@ namespace threepp {
         // map): the same bilinear read the shaders make.
         [[nodiscard]] std::array<float, 3> waveClimateGain(float x, float z) const;
 
+        // A cascade's spatial fields supplied by the host instead of its
+        // spectrum and inverse FFT (default none): a sea made of given wave
+        // components that also move a vessel, a field computed elsewhere, the
+        // waves round a pile. When `dim` equals the cascade's texture size
+        // (Params::textureSize0..2) and both vectors hold dim * dim pairs, the
+        // renderer uploads them every frame in place of the chain's output,
+        // in the convention the inverse FFT leaves:
+        //  - row-major, x fastest: texel (ix, iz) at index (iz * dim + ix) * 2, its
+        //    centre over the ocean's XZ at (ix + 0.5, iz + 0.5) * tileSize / dim (cascade 1
+        //    in its rotated domain), periodic over the tile;
+        //  - `height` holds the vertical displacement in its first value of
+        //    each pair (the second is not read), `disp` the horizontal (x, z);
+        //  - the values are metres times the cascade's tile size: the shaders
+        //    divide by the tile size, then scale the height by waveScale and
+        //    the displacement by the choppiness.
+        // Everything that reads the cascade then sees the supplied field: the
+        // displacement, the normals, the crest foam, the traced surface and
+        // sampleHeight. With the chop normals on the renderer makes the
+        // derivative fields they need from the supplied ones by central
+        // differences (the chain makes its own exactly), which costs host
+        // time on a large cascade. Anything else (dim 0, a size that does not
+        // match) leaves the cascade to its chain.
+        struct ExternalField {
+            std::vector<float> height;
+            std::vector<float> disp;
+            uint32_t dim = 0;
+        };
+        ExternalField externalCascades[3];
+
         // Combined wave height of the rendered surface over (worldX, worldZ).
         // Mirrors water_displace.comp's sampleDisplacement(): cascades 0 and 1
         // are B-spline filtered, cascade 2 bilinear, and each contributes

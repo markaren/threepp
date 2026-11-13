@@ -527,6 +527,48 @@ namespace threepp_py {
                         "displacement, per vertex and per pixel; the crest foam and sample_height follow); "
                         "channel 3 is not read. 1 everywhere is the sea without a map. Set it before the first "
                         "render for the crest foam to follow it.")
+                .def(
+                        "set_external_cascade",
+                        [](DisplacedMesh& o, uint32_t cascade,
+                           py::array_t<float, py::array::c_style | py::array::forcecast> height,
+                           py::object disp) {
+                            if (cascade > 2u) throw py::value_error("set_external_cascade: cascade is 0, 1 or 2");
+                            const float tile = cascade == 0u ? o.params.tileSize0 : cascade == 1u ? o.params.tileSize1 : o.params.tileSize2;
+                            const uint32_t size = cascade == 0u ? o.params.textureSize0 : cascade == 1u ? o.params.textureSize1 : o.params.textureSize2;
+                            if (tile <= 0.f) throw py::value_error("set_external_cascade: this ocean has no such cascade");
+                            if (height.ndim() != 2 || height.shape(0) != height.shape(1) || static_cast<uint32_t>(height.shape(0)) != size)
+                                throw py::value_error("set_external_cascade: height must be an N x N float array, N the cascade's texture size (" + std::to_string(size) + ")");
+                            const size_t texels = size_t(size) * size;
+                            auto& e = o.externalCascades[cascade];
+                            e.height.assign(texels * 2, 0.f);
+                            e.disp.assign(texels * 2, 0.f);
+                            const float* h = height.data();
+                            for (size_t q = 0; q < texels; ++q) e.height[2 * q] = h[q] * tile;
+                            if (!disp.is_none()) {
+                                auto d = disp.cast<py::array_t<float, py::array::c_style | py::array::forcecast>>();
+                                if (d.ndim() != 3 || static_cast<uint32_t>(d.shape(0)) != size || static_cast<uint32_t>(d.shape(1)) != size || d.shape(2) != 2)
+                                    throw py::value_error("set_external_cascade: disp must be an N x N x 2 float array");
+                                const float* dp = d.data();
+                                for (size_t q = 0; q < texels * 2; ++q) e.disp[q] = dp[q] * tile;
+                            }
+                            e.dim = size;
+                        },
+                        py::arg("cascade"), py::arg("height"), py::arg("disp") = py::none(),
+                        "Supply cascade 0, 1 or 2 yourself instead of its spectrum and inverse FFT: `height` is an "
+                        "N x N float32 array in metres (N = the cascade's texture size), row j along z, column i along "
+                        "x, the centre of texel (i, j) over the ocean's XZ at (i + 0.5, j + 0.5) * tile_size / N, periodic over the tile "
+                        "(cascade 1 in its rotated domain); `disp` is the horizontal displacement, N x N x 2 (x, z) "
+                        "in metres, or None for none. The drawn sea is the height times wave_scale and the "
+                        "displacement times the choppiness, as for the built-in waves; displacement, normals, crest "
+                        "foam, the traced surface and sample_height all follow the supplied field. The field is "
+                        "uploaded every frame as it stands, so call this again for each new instant.")
+                .def(
+                        "clear_external_cascade",
+                        [](DisplacedMesh& o, uint32_t cascade) {
+                            if (cascade > 2u) throw py::value_error("clear_external_cascade: cascade is 0, 1 or 2");
+                            o.externalCascades[cascade] = {};
+                        },
+                        py::arg("cascade"), "Give the cascade back to its spectrum and inverse FFT.")
                 .def("clear_wave_climate", &DisplacedMesh::clearWaveClimate,
                      "Drop the wave climate map: one sea everywhere again.")
                 .def_property_readonly("has_wave_climate", &DisplacedMesh::hasWaveClimate)

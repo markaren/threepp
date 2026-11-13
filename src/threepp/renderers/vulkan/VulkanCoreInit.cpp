@@ -410,6 +410,7 @@ VulkanRenderer::Impl::~Impl() {
                 if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
                 for (auto& ring : st->heightReadback)
                     for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
+                for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                 for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                 if (st->wake && wakeField_) wakeField_->destroyState(*st->wake);

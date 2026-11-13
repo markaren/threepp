@@ -4375,6 +4375,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // switch that removed an ocean (VUID 05137).
                         for (auto& ring : st->heightReadback)
                             for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
+                        for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                         destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                         for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors

@@ -673,6 +673,10 @@ namespace threepp::vulkan::impl {
         // (sampleHeight()'s sticky opt-in), so scenes that never query
         // wave height pay no memory for it; null handles until then.
         Buffer    heightReadback[3][kFramesInFlight] = {};
+        // Host-visible staging for DisplacedMesh::externalCascades (height,
+        // displacement, then the chop normals' two derivative fields:
+        // dim²·32 bytes), one per frame in flight; allocated on first use.
+        Buffer    externalStaging[3][kFramesInFlight] = {};
         // Per-cascade readback texture dimension. Cascades can run at
         // different FFT resolutions — each cascade's readback buffer is
         // sized to its own dim²·16 bytes: the height image (RG32F) at

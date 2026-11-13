@@ -551,6 +551,55 @@ def test_sim_time_pins_ocean_against_frame_pacing(vk_renderer):
         vk_renderer.sim_time = None
 
 
+@pytest.mark.skipif(not hasattr(tp, "Ocean"), reason="Ocean needs the Vulkan build")
+def test_external_cascade_is_the_drawn_sea(vk_renderer):
+    """A cascade supplied by the caller replaces its spectrum and inverse FFT: with one
+    sine swell along x and a lower one along z on cascade 0, and the other cascades supplied
+    flat, sample_height returns that field times wave_scale; given back, the cascade is the spectrum's sea again."""
+    scene = tp.Scene()
+    scene.background = 0x202830
+    ocean = tp.Ocean(size=200.0, resolution=64, wind_speed=10.0, fft_size=128, wave_scale=1.5)
+    scene.add(ocean)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 1000)
+    cam.position.set(0, 15, 40)
+    cam.look_at(0, 0, 0)
+    p = ocean.params
+    tile0, n0 = p.tile_size_0, p.texture_size_0
+    amp, waves = 0.8, 4                                      # 4 wavelengths over the tile: 32 texels each
+    k = 2.0 * np.pi * waves / tile0
+    x = (np.arange(n0, dtype=np.float32) + 0.5) * (tile0 / n0)          # texel centres
+    kz, amp_z = 2.0 * np.pi * 3 / tile0, 0.3                 # and a lower one along z, to tell the axes apart
+    swell = (amp * np.sin(k * x)[None, :] + amp_z * np.sin(kz * x)[:, None]).astype(np.float32)   # row j along z, column i along x
+
+    with pytest.raises(ValueError):
+        ocean.set_external_cascade(0, np.zeros((n0 // 2, n0 // 2), np.float32))
+    ocean.set_external_cascade(0, swell)
+    for c, (tile, n) in enumerate(((p.tile_size_1, p.texture_size_1), (p.tile_size_2, p.texture_size_2)), start=1):
+        if tile > 0.0:
+            ocean.set_external_cascade(c, np.zeros((n, n), np.float32), np.zeros((n, n, 2), np.float32))
+
+    probes = [(0.0, 0.0), (13.5, -7.25), (-41.0, 30.5), (3.0, 55.0)]
+    ocean.sample_height(0.0, 0.0)  # arms the GPU->CPU height readback (sticky opt-in)
+    try:
+        for i in range(5):
+            vk_renderer.sim_time = 3.0 + i / 30.0
+            vk_renderer.render(scene, cam)
+        got = [ocean.sample_height(px, pz) for px, pz in probes]
+        want = [1.5 * float(amp * np.sin(k * px) + amp_z * np.sin(kz * pz)) for px, pz in probes]
+        assert got == pytest.approx(want, abs=0.02 * 1.5 * amp), "the supplied swell is not the drawn sea"
+
+        for c in range(3):
+            ocean.clear_external_cascade(c)
+        for i in range(5):
+            vk_renderer.sim_time = 3.2 + i / 30.0
+            vk_renderer.render(scene, cam)
+        back = [ocean.sample_height(px, pz) for px, pz in probes]
+        assert back != pytest.approx(want, abs=0.02), "the cascade did not go back to its spectrum"
+        assert any(abs(h) > 1e-3 for h in back)
+    finally:
+        vk_renderer.sim_time = None
+
+
 def _ocean_height_series(renderer, *, t0, frames, dt, pace_s, probe=(12.5, -7.25)):
     """Render a fresh 1400 m / 640-vertex / FFT-1024 Ocean for `frames` frames with
     renderer.sim_time stepped from t0 by dt, sleeping pace_s of WALL time after
