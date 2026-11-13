@@ -22,6 +22,6 @@ showcase; each is a measurement that a claim somewhere else rests on.
 
 `smoke_test.py` and `idun_egl_smoke.py` put `python/` on `sys.path` and so run the in-tree build;
 the other three import whatever `threepp` is installed (the wheel, an editable install, or
-`PYTHONPATH=python`). `sensor_audit.py` is also a module: `../netpen/warp_netpen.py` imports it
+`PYTHONPATH=python`). `sensor_audit.py` is also a module: the net-pen demo imports it
 for its manifest format, and `../colab/make_sensor_audit_notebook.py` embeds it verbatim in the
 Colab notebook, so a change here changes both.
