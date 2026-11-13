@@ -41,7 +41,6 @@ examples/uav/aerosonde.glb
 examples/uav/bixler3.glb
 # Generated from turbine_spec.json by examples/turbine/build_turbine_blender.py (headless Blender)
 examples/turbine/turbine.glb
-examples/turbine/turbine_film.glb
 # Renders, clips and survey data the turbine demo writes (TURBINE_OUT overrides the folder)
 examples/turbine/out/
 # Default output folders of the soft-body films, the snake net-pen and the rover demos (--out overrides)

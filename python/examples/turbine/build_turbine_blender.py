@@ -410,7 +410,7 @@ def build_tp(spec, part):
     py = val(TPs["platform_y"])
     Ro = val(TPs["platform_outer_radius"])
     # The shell is two rings unless the spec asks for more (shell_ring_spacing, m): a scene that
-    # colours it per vertex (run-off, grime: turbine_storm.py) needs rings to colour.
+    # colours it per vertex (run-off, grime) needs rings to colour.
     dy = TPs.get("shell_ring_spacing")
     ys_ = [y0, y1] if not dy else [float(q) for q in np.linspace(y0, y1, int((y1 - y0) / dy) + 1)]
     v, f = revolve([(R0 - 0.35, y0)] + [(R0, q) for q in ys_] + [(R0 - 0.35, y1)], 256 if dy else 128)
@@ -1009,7 +1009,7 @@ def main(argv):
     ap.add_argument("--out", default="turbine.glb")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--overrides", default="",
-                    help="a JSON file laid over the spec, key by key (turbine_film_overrides.json)")
+                    help="a JSON file laid over the spec, key by key (a fit-out of its own)")
     a = ap.parse_args(argv)
 
     def path(p):
