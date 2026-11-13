@@ -331,6 +331,10 @@ namespace threepp_py {
                                "The ripples' height is part of the ocean's geometry, and an absorbing layer at "
                                "each window's edge takes up the waves that reach it instead of the forced decay. "
                                "On by default (THREEPP_WAKE_HEIGHTS=0 turns it off). Live.")
+                .def_readwrite("lace", &DisplacedMesh::WakeField::lace,
+                               "The foam level (share of the surface covered) that water full of air carries: "
+                               "a race or a boil wears a lace of foam, and its air is drawn in plumes under it. "
+                               "0 = the film alone over an even haze. Default 0.5. Read every frame.")
                 .def_readwrite("albedo", &DisplacedMesh::WakeField::albedo,
                                "Scales the light the film and the bubbles turn back; 1 = as the water shade "
                                "has them (the default). Read every frame. A scene whose camera opens wide at "

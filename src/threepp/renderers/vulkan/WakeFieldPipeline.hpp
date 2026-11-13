@@ -78,9 +78,10 @@ namespace threepp::vulkan {
         float    rippleViscosity;
         float    rippleGain;
         float    albedo;
+        float    lace;
         WakePatchGpu patches[DisplacedMesh::kMaxWakePatches];
     };
-    static_assert(sizeof(WakeTableGpu) == 64 + 72 * DisplacedMesh::kMaxWakePatches,
+    static_assert(sizeof(WakeTableGpu) == 68 + 72 * DisplacedMesh::kMaxWakePatches,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
     static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
                   "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");

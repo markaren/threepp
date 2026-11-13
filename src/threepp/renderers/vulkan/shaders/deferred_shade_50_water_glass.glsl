@@ -869,20 +869,40 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // lit surface takes. Shaded as a diffuse body under the surface (the macro
     // normal: it is a volume, the chop is not in it) and laid in place of the
     // deep body by its optical thickness. The hue is the material's own
-    // attenuation colour brought most of the way to white, so it follows
-    // whatever sea the scene has made.
+    // attenuation colour, so it follows whatever sea the scene has made: the
+    // light has been down through the water and back, which is that colour
+    // taken twice and a half (a grey-green sea gives a teal wash). LOOK
+    // constants (Lars, 2026-11-12, on the storm scene's hull wash: "love the
+    // teal one"): the bubbles turn back half the light, nine tenths of it in
+    // the water's hue, and hide the deep water 2.5 times as fast as the air
+    // thickens.
     if (!below && gWake.g > 2e-3) {
         vec3 hue = max(pm.attenuationColor, vec3(1e-4));
-        hue = mix(vec3(1.0), hue / max(max(hue.r, hue.g), hue.b), 0.7);
+        hue = mix(vec3(1.0), pow(hue / max(max(hue.r, hue.g), hue.b), vec3(2.5)), 0.9);
         const vec3 aerDiff = sampleEnvDiffuse(Nmacro) + lights.ambient + hemiAmbient(Nmacro);
-        const vec3 aerLit  = shadeDiffuseDirect(P, Nmacro, V, 0.30 * gWakeAlbedo * hue, 1.0, 0.0,
+        const vec3 aerLit  = shadeDiffuseDirect(P, Nmacro, V, 0.5 * gWakeAlbedo * hue, 1.0, 0.0,
                                                 vec3(0.0), doShadows, aerDiff,
                                                 vec3(0.0), 0.0,
                                                 vec3(0.0),
                                                 0.0, 1.3, 0.0, seed,
                                                 /*addEmissive=*/true,
                                                 /*cheapHit=*/false);
-        transmitColor = mix(transmitColor, aerLit, 1.0 - exp(-1.8 * gWake.g));
+        // The air is not an even cloud: it comes up in the plumes the
+        // turbulence gathers it into, with clear water between, and drawn
+        // even it is a milky haze lying on the sea. Its thickness takes the
+        // same pattern the foam above it is cut from (the photo, on the
+        // water's rest coordinates, so it rides and never slides): thick
+        // under the foam, a third as thick in the gaps.
+        float plumes = 1.0;
+        if (kOceanCrestFoam != 0u && gWakeLace > 0.0) {
+            const vec2  qA = P.xz - gCrestDisp;
+            const float dA = length(P - gPrimaryOrigin);
+            const float pxA = (cam.camAux.x > 0.5 ? 1.0 : dA) * 2.0 * cam.projInverse[1][1] / max(float(pc.height), 1.0);
+            // 13 m across one tile: the plumes are larger than the lace on them
+            const float lodA = log2(max(1.0, pxA / max(dot(Nmacro, V), 0.05) * 512.0 / 13.0));
+            plumes = mix(0.33, 1.0, smoothstep(0.15, 0.85, textureLod(oceanCrestFoamPattern, qA / 13.0 + 0.37, lodA + 1.5).r));
+        }
+        transmitColor = mix(transmitColor, aerLit, 1.0 - exp(-2.5 * gWake.g * plumes));
     }
 
 #if SCOUT_WATER == 6
@@ -1056,7 +1076,12 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             foamF     = cf.r;
             foamFresh = cf.g;
         }
-        bool cfFilm = false;// the foam level is a vessel's film, drawn as it was
+        // How much of the foam here is a vessel's (the rest is the sea's own).
+        // The two are ONE foam on one water: their levels add as covers do,
+        // and the drawing goes over from one's look to the other's by this
+        // share, so a whitecap running into a wash joins it.
+        float       filmShare = 0.0;
+        const float crestF    = foamF;
         // What the vessels left on the water is the same stuff, so it is
         // drawn the same way: the wake field's film (how much foam its flow
         // has carried here) reads as a foam level. It stops just short of a
@@ -1066,11 +1091,20 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         // field's albedo scale.
         float cfAlbedo = kOceanFoamAlbedoWhitlock;
         if (geoms[instIdx].foamAddress > 1ul) {
-            const float filmF = clamp((gWake.r - 0.05) / 0.35, 0.0, 0.9);
-            if (filmF > foamF) {
-                foamF    = filmF;
-                cfAlbedo *= gWakeAlbedo;
-                cfFilm   = true;
+            float filmF = clamp((gWake.r - 0.05) / 0.35, 0.0, 0.9);
+            // Water a propeller or a breaking sea has filled with air does
+            // not lie under a clean surface: the bubbles keep coming up and
+            // each leaves foam where it bursts, so a wash is a lace of white
+            // over paler water for as long as there is air in it (the bubbles
+            // under it are the block above). The field's air reads as a foam
+            // level too, short of the film's own: a boil is open water with
+            // foam on it, never a sheet, so WakeField::lace of the photo's
+            // range at most. LOOK constants.
+            filmF = max(filmF, gWakeLace * smoothstep(0.03, 0.30, gWake.g));
+            if (filmF > 0.0) {
+                const float c = clamp(crestF, 0.0, 1.0);
+                filmShare = filmF / max(filmF + c, 1e-4);
+                foamF     = max(foamF, 1.0 - (1.0 - c) * (1.0 - filmF));
             }
         }
 #if CREST_FOAM_SCOUT == 1
@@ -1109,8 +1143,34 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // How far this point is inside the covered set, in the photo's own
             // units. Half-width of the edge: what the average took, never less
             // than a thin edge, which itself closes with F (no foam is no foam).
-            const float excess = n - (1.0 - foamF);
-            const float halfW  = max(0.5 * (1.0 - kept), min(0.04, foamF));
+            float nUse  = n;
+            float halfW = max(0.5 * (1.0 - kept), min(0.04, foamF));
+            if (filmShare > 0.0) {
+                // A wash is not whitecap foam cut to a stencil. It has foam of
+                // every thickness: dense white where the air comes up, and
+                // round that a veil thin enough to see the water through. So
+                // its edge is wide (the photo's values near the threshold are
+                // the veil: 0.22 of the photo's range either way), and the
+                // photo is laid a second time much larger (24 m a tile, a
+                // little over half the pattern), which gathers the foam into
+                // masses metres across with open water between. By the wash's
+                // share of the foam here, so a whitecap keeps its own look and
+                // the two join without a seam. LOOK constants (Lars,
+                // 2026-11-12: of four settings, "the mid one was the best").
+                {
+                    const float T  = 24.0;
+                    const vec2  rC = vec2(0.8253356, 0.5646425);// cos, sin of 0.6 rad
+                    const vec2  qC = vec2(rC.x * q.x - rC.y * q.y, rC.y * q.x + rC.x * q.y) / T + vec2(0.31, 0.77);
+                    const vec2  aC = vec2(rC.x * gA.x - rC.y * gA.y, rC.y * gA.x + rC.x * gA.y) / T;
+                    const vec2  xC = vec2(rC.x * gX.x - rC.y * gX.y, rC.y * gX.x + rC.x * gX.y) / T;
+                    const float nC = textureGrad(oceanCrestFoamPattern, qC, aC, xC).r;
+                    // (two equalised patterns mixed are less spread than one: put it back)
+                    const float w  = 0.55 * filmShare;
+                    nUse = 0.5 + (mix(n, nC, w) - 0.5) * inversesqrt(w * w + (1.0 - w) * (1.0 - w));
+                }
+                halfW = max(halfW, 0.22 * filmShare);
+            }
+            const float excess = nUse - (1.0 - foamF);
             // Foam on open water is a layer of bubbles a few deep, not a
             // lid: the water shows through it. LOOK constants (Lars,
             // 2026-11-10: "foam should have opacity and not so white"): a
@@ -1127,14 +1187,22 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // it, as F squared: gone well before F is. LOOK constants (Lars,
             // 2026-11-11: "it needs to shrink and go transparent, not just
             // grey out").
-            if (!cfFilm) {
+            {
                 const float fresh = clamp(foamFresh, 0.0, 1.0);
-                const float left  = clamp(foamF, 0.0, 1.0);
+                const float left  = clamp(crestF, 0.0, 1.0);
                 layer    = 0.95 * max(fresh, left * left);
                 cfAlbedo = 0.85;
             }
-            const float cover  = clamp(excess / (2.0 * halfW) + 0.5, 0.0, 1.0) *
-                                 layer * (below ? 0.12 : 1.0);
+            const float inside = clamp(excess / (2.0 * halfW) + 0.5, 0.0, 1.0);
+            if (filmShare > 0.0) {
+                // A wash's thick foam is white and nearly closed, the veil
+                // round it greyer (0.45 of the white) and half open; by the
+                // wash's share of the foam here.
+                const float thick = smoothstep(0.35, 1.0, inside);
+                cfAlbedo = mix(cfAlbedo, 0.85 * gWakeAlbedo * mix(0.45, 1.0, thick), filmShare);
+                layer    = mix(layer, mix(0.55, 0.95, thick), filmShare);
+            }
+            const float cover  = inside * layer * (below ? 0.12 : 1.0);
 #if CREST_FOAM_SCOUT == 2
             return vec3(cover);
 #endif

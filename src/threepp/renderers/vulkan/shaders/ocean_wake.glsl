@@ -53,7 +53,7 @@ struct WakeSource {
     float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
 };
 
-// 64-byte header, then the patches, then the sources of this step.
+// 68-byte header, then the patches, then the sources of this step.
 layout(buffer_reference, scalar) readonly buffer WakeTable {
     uint  patchCount;
     uint  res;
@@ -71,6 +71,7 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
     float rippleViscosity;  // m2/s
     float rippleGain;
     float albedo;           // scales what the film and the bubbles turn back; 1 = as shaded
+    float lace;             // the foam level water full of air carries (WakeField::lace); 0 = none
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
     WakeSource sources[];
 };

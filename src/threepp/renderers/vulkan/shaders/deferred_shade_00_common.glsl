@@ -188,6 +188,8 @@ layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
 vec4 gWake = vec4(0.0);
 // The field's own scale on what its film and bubbles turn back (WakeField::albedo).
 float gWakeAlbedo = 1.0;
+// The foam level its aerated water carries (WakeField::lace).
+float gWakeLace = 0.0;
 // Breaking crests (DisplacedMesh::Params::breakingCrests): this pixel's crest
 // steepness, interpolated from the per-vertex value water_displace.comp wrote
 // into the ocean's UVs; -1e30 when the ocean carries none (the switch is off).

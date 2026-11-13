@@ -2503,6 +2503,14 @@ class DisplacedMesh(Mesh):
         def aeration_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def lace(self) -> float:
+            """
+            The foam level (share of the surface covered) that water full of air carries: a race or a boil wears a lace of foam, and its air is drawn in plumes under it. 0 = the film alone over an even haze. Default 0.5. Read every frame.
+            """
+        @lace.setter
+        def lace(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def albedo(self) -> float:
             """
             Scales the light the film and the bubbles turn back; 1 = as the water shade has them (the default). Read every frame. A scene whose camera opens wide at night turns it down: under a moon, or the night sky's own light, a race is otherwise a pale band on a sea that mirrors a dark sky.

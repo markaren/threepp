@@ -144,7 +144,12 @@
         float wakeBoilVar = 0.0;// slope variance of the boil that went under a pixel
         if (geoms[id - 1u].foamAddress > 1ul) {
             gWakeAlbedo = WakeTable(geoms[id - 1u].foamAddress).albedo;
-            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz,
+            gWakeLace   = WakeTable(geoms[id - 1u].foamAddress).lace;
+            // Read at the water's REST position (gCrestDisp is zero without
+            // crest foam): what the field holds lies ON the water, foam, air
+            // and churn, so it rides the waves' orbital motion as the sea's
+            // own foam does and the two never slide over each other.
+            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz - gCrestDisp,
                                     clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
             wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
             gKept *= wakeCalm;
@@ -288,7 +293,12 @@
         float wakeBoilVar = 0.0;// slope variance of the boil that went under a pixel
         if (geoms[id - 1u].foamAddress > 1ul) {
             gWakeAlbedo = WakeTable(geoms[id - 1u].foamAddress).albedo;
-            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz,
+            gWakeLace   = WakeTable(geoms[id - 1u].foamAddress).lace;
+            // Read at the water's REST position (gCrestDisp is zero without
+            // crest foam): what the field holds lies ON the water, foam, air
+            // and churn, so it rides the waves' orbital motion as the sea's
+            // own foam does and the two never slide over each other.
+            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz - gCrestDisp,
                                     clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
             wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
             gKept *= wakeCalm;

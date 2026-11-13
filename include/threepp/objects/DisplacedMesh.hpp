@@ -562,6 +562,15 @@ namespace threepp {
             // at night turns it down: under a moon, or the night sky's own light,
             // a race is otherwise a pale band on a sea that mirrors a dark sky.
             float albedo          = 1.0f;
+            // The foam that water full of air carries. A race or a boil is
+            // not a milky cloud under a clean surface: the bubbles keep
+            // coming up and each leaves foam where it bursts, so the water
+            // wears a lace of white for as long as there is air in it. This
+            // is the foam level (the share of the surface covered, as the
+            // film's) that fully aerated water reads as; the air under it is
+            // then drawn in plumes under the foam rather than as an even
+            // haze. 0 = the film alone, and an even haze. A LOOK constant.
+            float lace            = 0.5f;
         };
         WakeField wakeField;
 
