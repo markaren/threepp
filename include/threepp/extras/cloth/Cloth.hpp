@@ -140,7 +140,13 @@ namespace threepp {
         Params params;
 
         // positions: one per particle. indices: three per triangle.
-        Cloth(std::vector<Vector3> positions, std::vector<unsigned int> indices, const Params& p = {})
+        // Two constructors, not a `= {}` default: GCC rejects a default
+        // argument of a nested struct with member initializers inside the
+        // class that encloses it.
+        Cloth(std::vector<Vector3> positions, std::vector<unsigned int> indices)
+            : Cloth(std::move(positions), std::move(indices), Params{}) {}
+
+        Cloth(std::vector<Vector3> positions, std::vector<unsigned int> indices, const Params& p)
             : params(p), x_(std::move(positions)), tris_(std::move(indices)) {
 
             if (tris_.size() % 3 != 0) throw std::invalid_argument("Cloth: index count is not a multiple of 3");

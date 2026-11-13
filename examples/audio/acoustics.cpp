@@ -328,10 +328,6 @@ int main(int argc, char** argv) {
     system.add(radio);
     system.add(inside);
 
-
-    system.occlusionOf(radio);
-    system.occlusionOf(inside);
-
     radio.play();
     inside.play();
 
