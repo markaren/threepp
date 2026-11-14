@@ -884,6 +884,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/FieldBillboardState.hpp"
             "threepp/renderers/vulkan/state/PostChainState.hpp"
             "threepp/renderers/vulkan/state/SplatState.hpp"
+            "threepp/renderers/vulkan/state/LensState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
