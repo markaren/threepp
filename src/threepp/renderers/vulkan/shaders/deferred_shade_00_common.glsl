@@ -534,6 +534,7 @@ vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
 // unit. cam/clouds/fog/lights UBOs are already declared above.
 float heightFogOpticalDepth(vec3 a, vec3 b);// deferred_shade_60_fog_volumetrics.glsl
 vec3  sampleEnvLod(vec3 dir, float lod);
+vec3  hazeSkyLight(vec3 rd);
 vec3  sampleEnvDiffuse(vec3 n);    // deferred_shade_10_lighting_utils.glsl
 vec3  sampleBackground(vec3 dir);           // deferred_shade_10_lighting_utils.glsl
 // Composite the upsampled half-res cloud layer (binding 61) over `col` at this
@@ -577,8 +578,7 @@ vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
     // the closed form regardless (heightFogOpticalDepth also self-clamps len + od).
     const vec3  cloudP = camP + dirWS * min(meanDist, 6.0e4);
     const float fogT  = exp(-heightFogOpticalDepth(camP, cloudP));
-    const vec3  fogLight  = lights.ambient
-                          + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    const vec3  fogLight  = lights.ambient + hazeSkyLight(dirWS);
     const vec3  medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
     return col * cl.a
          + cl.rgb * fogT

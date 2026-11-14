@@ -78,8 +78,7 @@ float heightFogOpticalDepth(vec3 a, vec3 b) {
 // signature compatibility (the LUT extinction it selected is now analytic).
 vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit) {
     const float T = exp(-heightFogOpticalDepth(ro, hit));
-    const vec3 fogLight  = lights.ambient
-                         + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    const vec3 fogLight  = lights.ambient + hazeSkyLight(hit - ro);
     const vec3 medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
     return col * T + medAlbedo * fogLight * (vec3(1.0) - T);
 }
@@ -478,13 +477,14 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // for term, so it is reused rather than sampled a second time.
     vec3 trAir = vec3(1.0);
     vec3 airIn = vec3(0.0);// I·(1 − T), summed per medium
+    const vec3 ambAir = lights.ambient + hazeSkyLight(rd);// the air's light, as the surface path's fogLight
     if (clouds.heteroActive > 0.5) {
         const vec3 T = vec3(exp(-heightFogOpticalDepth(ro, cen)));
-        airIn += ((fog.enabled > 0.5) ? fog.color : vec3(1.0)) * amb * (vec3(1.0) - T);
+        airIn += ((fog.enabled > 0.5) ? fog.color : vec3(1.0)) * ambAir * (vec3(1.0) - T);
         trAir *= T;
     } else if (fog.enabled > 0.5) {
         const vec3 T = exp(-fog.sigmaT * fogPathLength(ro, cen));
-        airIn += fog.color * amb * (vec3(1.0) - T);
+        airIn += fog.color * ambAir * (vec3(1.0) - T);
         trAir *= T;
     }
     if (fog.murkDensity > 0.0) {
@@ -529,8 +529,7 @@ vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
     // three.js-style, makes fog GLOW in dark scenes (a black Cornell room
     // washed out to white). Spot-light in-scatter is added separately by the
     // fog-driven volumetricSpotScatter march (the god rays).
-    const vec3 fogLight = lights.ambient
-                        + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    const vec3 fogLight = lights.ambient + hazeSkyLight(hit - ro);
     return col * tr + fog.color * fogLight * (vec3(1.0) - tr);
 }
 // ── Underwater murk (setUnderwaterMurk) ──────────────────────────────────────
@@ -1004,7 +1003,7 @@ vec3 applySkyFog(vec3 sky, vec3 dir) {
         const float strength = 1.0 - exp(-sigma * 45.0);    // density → how much sky is obscured
         T = 1.0 - band * strength;
     }
-    const vec3 fogLight = lights.ambient + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+    const vec3 fogLight = lights.ambient + hazeSkyLight(dir);
     const vec3 hazeCol  = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
     return mix(sky, hazeCol * fogLight, 1.0 - T);
 }

@@ -377,6 +377,23 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
 }
 
+// The sky's light on the air along a view ray. Haze scatters forward, so what it
+// sends to the eye is mostly the sky beyond it: the sky low over the horizon in
+// the ray's own azimuth, read as the wide lobe that still points (0.7 of the
+// chain, as the diffuse reads below). A far hull, the far sea and the foot of the
+// sky then fade to the sky they stand against, bright toward the sun and dark
+// away from it, where the sphere mean gave one colour all round and drew a band
+// at the horizon wherever the sky was not that colour. A ray straight up or down
+// has no azimuth and keeps the mean.
+vec3 hazeSkyLight(vec3 rd) {
+    const float top  = float(max(pc.envMipCount, 1u) - 1u);
+    const vec3  mean = sampleEnvLod(vec3(0.0, 1.0, 0.0), top);
+    const float hl   = length(rd.xz);
+    if (hl < 1e-4) return mean;
+    const vec3  low  = normalize(vec3(rd.x / hl, 0.2, rd.z / hl));
+    return mix(mean, sampleEnvLod(low, 0.7 * top), smoothstep(0.0, 0.5, hl / max(length(rd), 1e-6)));
+}
+
 // The environment as a DIFFUSE surface sees it. The last prefiltered mip,
 // which every diffuse read used, is GGX at roughness 1: as good as the
 // whole-sphere mean, the same colour for a face under the sky and a face
