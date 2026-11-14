@@ -159,6 +159,7 @@
 #include "state/SensorState.hpp"
 #include "state/RasterState.hpp"
 #include "state/DeformState.hpp"
+#include "state/ViewState.hpp"
 
 namespace threepp {
 
@@ -215,7 +216,8 @@ namespace threepp {
                                   vulkan::impl::SceneState,
                                   vulkan::impl::SensorState,
                                   vulkan::impl::RasterState,
-                                  vulkan::impl::DeformState {
+                                  vulkan::impl::DeformState,
+                                  vulkan::impl::ViewState {
 
         // Mirrored from VulkanRenderer (Renderer base) at the start of each
         // render() so the renderFrame path can read them without a pointer back
@@ -1287,20 +1289,6 @@ namespace threepp {
         // note and the per-view ownership rationale travel with it).
         using RasterGbufImages = vulkan::impl::RasterGbufImages;
 
-        // Definition moved to VulkanViewContext.hpp.
-        using ViewContext = vulkan::impl::ViewContext;
-        // Every view this renderer drives. views_[0] is the PRIMARY (the
-        // swapchain-presenting one) and always exists — it is created in the
-        // constructor and never removed, so `view()` is unconditionally valid.
-        std::vector<std::unique_ptr<ViewContext>> views_;
-        // The view currently being set up / recorded. Always views_[0] today;
-        // the per-view render loop retargets it. A raw pointer (not an index)
-        // so a view() call is one indirection in the hot record path.
-        ViewContext* curView_ = nullptr;
-        // Handles are dense and monotonic, never reused. 0 is reserved for the
-        // primary (and doubles as "invalid" from addView), so a stale handle
-        // from a removed view can never alias a later one.
-        uint32_t nextViewId_ = 1;
         // Total bytes VMA currently has allocated across every heap. Sampled
         // before/after a view's allocation to report what that view cost —
         // measured rather than computed from a table of formats that would rot
@@ -1335,15 +1323,6 @@ namespace threepp {
         }
         ViewContext&       view()       { return *viewPtr(); }
         const ViewContext& view() const { return *viewPtr(); }
-        // What the frame prep left for the passes of the view being built or
-        // recorded (ViewPrepOut, defined with ViewContext). A view's prep
-        // running on a pool thread writes into its own ViewContext::prepStage
-        // instead, which the frame thread takes in view order before that
-        // view's passes are built; prepOut() is the one this thread's code
-        // writes and reads.
-        using ViewPrepOut     = vulkan::impl::ViewPrepOut;
-        using ViewPrepScratch = vulkan::impl::ViewPrepScratch;
-        ViewPrepOut prepOut_;
         ViewPrepOut& prepOut() {
             auto* v = static_cast<ViewContext*>(vulkan::par::threadContext());
             return v ? v->prepStage : prepOut_;
@@ -5893,7 +5872,6 @@ namespace threepp {
         // Called at the frame boundary; a no-op (and harmlessly retried next
         // frame) until the shared render pass exists.
         void applyPendingViewChanges();
-        bool pendingViewChanges_ = false;
         // Every secondary view's chain, as passes after the primary's in the
         // frame graph. Shares the frame's TLAS/BLAS, lights, materials and
         // textures; re-runs only what is genuinely per-camera. Returns whether
@@ -5940,13 +5918,6 @@ namespace threepp {
         // picture of the primary alone), and before the overlay, so ImGui and
         // sprites still draw on top.
         void addViewCompositePass(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
-        struct ViewCompositeJob {
-            VkImage    src;
-            VkOffset2D srcOff;
-            VkOffset2D dstOff;
-            VkExtent2D ext;
-        };
-        std::vector<ViewCompositeJob> viewCompositeJobs_;// this frame's, built by addViewCompositePass
         bool setViewDisplayRectImpl(uint32_t handle, int x, int y, int w, int h);
         // Per-view permission to rasterize sensor-only surfaces. Raster state
         // only — read while the draw list is built, so it takes effect on the
