@@ -878,6 +878,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/LodState.hpp"
             "threepp/renderers/vulkan/state/SceneState.hpp"
             "threepp/renderers/vulkan/state/SensorState.hpp"
+            "threepp/renderers/vulkan/state/RasterState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
