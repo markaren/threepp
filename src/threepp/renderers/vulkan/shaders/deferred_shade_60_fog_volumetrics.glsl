@@ -268,6 +268,17 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     vec3  albW = vec3(0.0);// sigma-weighted albedo, already carrying the w weight
     float gW   = 0.0;      // sigma-weighted HG g, same weighting
     vec3  pnt  = vec3(0.0);// point-light in-scatter, ALREADY albedo-multiplied
+    // The sun is evaluated at kSunDepths places along the ray, not at the one
+    // centroid of all of it: the march is cut into that many equal stretches
+    // and each keeps its own weight and centroid. One centroid for a ray that
+    // crosses a sunlit plume and then a shaded one lands in whichever weighs
+    // more, and the choice flips from pixel to pixel: seen from the side, four
+    // plumes one behind another were ribbons of full sun on full shade. A
+    // stretch with no dust in it costs nothing.
+    const int kSunDepths = 8;
+    float segW[kSunDepths];
+    vec3  segC[kSunDepths];
+    for (int g = 0; g < kSunDepths; ++g) { segW[g] = 0.0; segC[g] = vec3(0.0); }
     for (int s = 0; s < STEPS; ++s) {
         const float slab0 = t0 + float(s) * dt;
         // Rule 1's surface clip: the slab straddling tMax contributes its
@@ -312,6 +323,9 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         tau  += sig * ds;
         wsum += w;
         cen  += w * x;
+        const int g = min(s * kSunDepths / STEPS, kSunDepths - 1);
+        segW[g] += w;
+        segC[g] += w * x;
         if (multi) {
             albW += albStep * (tr * ds);
             gW   += gStep * (tr * ds);
@@ -396,13 +410,20 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         // (T^0.25), without the phase function's forward peak (many scatterings
         // forget the direction), weighted by the albedo's fourth power: 0.65
         // for white fog, 0.03 for 0.45 grey dust, nothing for soot.
-        const float Tsun = pdSurfaceLightTransmittance(cen, L);
-        const float a1   = dot(medAlbedo, vec3(1.0 / 3.0));
-        const float ms   = 0.7 * a1 * a1 * a1 * a1;
-        const float ph   = hgPhase(dot(L, rd), medG);
+        const float a1 = dot(medAlbedo, vec3(1.0 / 3.0));
+        const float ms = 0.7 * a1 * a1 * a1 * a1 * (1.0 / (4.0 * 3.14159265));
+        const float ph = hgPhase(dot(L, rd), medG);
+        float lit = 0.0;// the weighted mean over the stretches of what reaches each from the sun
+        for (int g = 0; g < kSunDepths; ++g) {
+            if (segW[g] <= 0.0) continue;
+            const float Tsun = pdSurfaceLightTransmittance(segC[g] / segW[g], L);
+            lit += segW[g] * max(ph * Tsun, ms * pow(Tsun, 0.25));
+        }
+        // The geometry's shadow and the cloud layer's stay at the one centroid:
+        // a traced ray a stretch is not what a plume's shading needs.
         sun += lights.dirLights[i].color
              * (primarySunVis(i, cen, vec3(0.0), cen, L, false) * cloudShadowSample(cen)
-                * max(ph * Tsun, ms * (1.0 / (4.0 * 3.14159265)) * pow(Tsun, 0.25)));
+                * (lit / wsum));
     }
     const vec3 amb = lights.ambient
                    + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));

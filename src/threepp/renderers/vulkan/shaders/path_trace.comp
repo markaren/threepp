@@ -1034,7 +1034,7 @@ vec3 analyticNee(const Surf s, vec3 V, inout uint seed, bool sunByPhotons) {
         if (max(max(fc.r, fc.g), fc.b) <= 0.0) continue;
         const bool  envSun = envSunLight() && i == lights.dirCount - 1u;// its caustics: the miss branch
         const float vis = (envSun ? shadowVisFindable(offsetOrigin(s, L), L, 1e30) : shadowVis(offsetOrigin(s, L), L, 1e30))
-                        * cloudSunTransmittance(s.P, L);
+                        * cloudSunTransmittance(s.P, L) * pdSurfaceLightTransmittance(s.P, L);
         lit += fc * col * (vis * wL);
     }
     for (uint i = 0u; i < lights.pointCount; ++i) {
@@ -1096,7 +1096,11 @@ vec3 ambientRadiance(vec3 d) {
 // draws its own point and shadow ray, so the shafts between trunks and
 // through the crowns converge to their exact shape. The sun reaches the
 // point unattenuated by the air, as in the deferred march.
-vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, inout uint seed) {
+// dustAt / dustTr: a ParticleField medium on the leg (the distance to the
+// station dustLeg lit, and the leg's dust transmittance): the air's glow
+// beyond it is seen through it, and the sun reaches the air through the
+// medium (pdSurfaceLightTransmittance), as in the deferred march's split leg.
+vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, float dustAt, float dustTr, inout uint seed) {
     if (lights.dirCount == 0u || odEnd <= 1e-6 || tEnd <= 0.0) return vec3(0.0);
     const float Tend   = exp(-odEnd);
     const float target = -log(max(1.0 - rnd(seed) * (1.0 - Tend), 1e-30));
@@ -1105,16 +1109,18 @@ vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, inout uint seed) {
         const float mid = 0.5 * (lo + hi);
         if (airOpticalDepth(o, o + d * mid) < target) lo = mid; else hi = mid;
     }
-    const vec3 x = o + d * (0.5 * (lo + hi));
+    const float tx = 0.5 * (lo + hi);
+    const vec3 x = o + d * tx;
     if (fog.waterSurfaceY < 1e29 && x.y < fog.waterSurfaceY) return vec3(0.0);
     vec3 sum = vec3(0.0);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = sunConeDir(normalize(lights.dirLights[i].direction), seed);
         const float ph = hgPhase(dot(L, d), fog.anisotropy);
         if (ph <= 0.0) continue;
-        sum += lights.dirLights[i].color * (ph * shadowVis(x, L, 1e30) * cloudSunTransmittance(x, L));
+        sum += lights.dirLights[i].color
+             * (ph * shadowVis(x, L, 1e30) * cloudSunTransmittance(x, L) * pdSurfaceLightTransmittance(x, L));
     }
-    return sum * airAlbedo() * (1.0 - Tend);
+    return sum * airAlbedo() * ((1.0 - Tend) * (tx > dustAt ? dustTr : 1.0));
 }
 
 // ── The lamps in the air ────────────────────────────────────────────────────
@@ -1380,10 +1386,17 @@ DustLeg dustLeg(vec3 ro, vec3 rd, float tMax, inout uint seed) {
     const vec3  medAlbedo = albW / wsum;
     const float medG      = gW / wsum;
     vec3 sun = vec3(0.0);
+    // The medium's own shadow toward the sun and the octave that stands for
+    // light scattered more than once in a bright medium: the deferred
+    // shade's terms (applyParticleFog), so the two pictures agree. The
+    // shadow of a medium is not traced as a path through it here either.
+    const float a1 = dot(medAlbedo, vec3(1.0 / 3.0));
+    const float ms = 0.7 * a1 * a1 * a1 * a1 * (1.0 / (4.0 * PI));
     for (uint i = 0u; i < lights.dirCount; ++i) {
-        const vec3 L = sunConeDir(normalize(lights.dirLights[i].direction), seed);
+        const vec3  L    = sunConeDir(normalize(lights.dirLights[i].direction), seed);
+        const float Tsun = pdSurfaceLightTransmittance(r.xPick, L);
         sun += lights.dirLights[i].color *
-               (hgPhase(dot(L, rd), medG) * shadowVis(r.xPick, L, 1e30) * pdLightTransmittance(r.xPick, L));
+               (max(hgPhase(dot(L, rd), medG) * Tsun, ms * pow(Tsun, 0.25)) * shadowVis(r.xPick, L, 1e30));
     }
     const vec3 amb = lights.ambient + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     r.add = medAlbedo * (amb + sun) * wsum + emis;
@@ -1740,25 +1753,33 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         // lit it, and its transmittance on everything beyond.
         {
             float legT = 1.0;
+            DustLeg dl;
+            dl.T = 1.0;
+            dl.add = vec3(0.0);
+            dl.xPick = o;
+            float dustAt = 1e30;
+            if (!inside && pd.counts.x > 0u) {
+                dl = dustLeg(o, d, miss ? 1e30 : tHit, seed);
+                if (dl.T < 1.0) dustAt = dot(dl.xPick - o, d);
+            }
             if (!inside && airOn()) {
                 const vec3 up = airUp();
                 if (miss) {
                     const float Tsky = airSkyTransmittance(o, d);
                     const float tEnd = airSkyLegLength(o);
                     L += throughput * (airAlbedo() * airAmbientLight(up) * (1.0 - Tsky) +
-                                       airSunScatter(o, d, tEnd, airOpticalDepth(o, o + d * tEnd), seed));
+                                       airSunScatter(o, d, tEnd, airOpticalDepth(o, o + d * tEnd), dustAt, dl.T, seed));
                     legT = Tsky;
                 } else {
                     const float od = airOpticalDepth(o, o + d * tHit);
                     L += throughput * (airAlbedo() * airAmbientLight(up) * (1.0 - exp(-od)) +
-                                       airSunScatter(o, d, tHit, od, seed));
+                                       airSunScatter(o, d, tHit, od, dustAt, dl.T, seed));
                     legT = exp(-od);
                 }
             }
             if (!inside && (airOn() || pc.volDensity > 0.0))
                 L += throughput * airLampScatter(o, d, miss ? 1e30 : tHit, seed);
             if (!inside && pd.counts.x > 0u) {
-                const DustLeg dl = dustLeg(o, d, miss ? 1e30 : tHit, seed);
                 const float   Ta = airOn() ? exp(-airOpticalDepth(o, dl.xPick)) : 1.0;
                 L += throughput * dl.add * Ta;
                 legT *= dl.T;
