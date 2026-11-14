@@ -888,6 +888,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/AtmosphereState.hpp"
             "threepp/renderers/vulkan/state/LightingState.hpp"
             "threepp/renderers/vulkan/state/GIState.hpp"
+            "threepp/renderers/vulkan/state/OcclusionState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
