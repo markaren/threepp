@@ -874,6 +874,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/GeometryState.hpp"
             "threepp/renderers/vulkan/state/TlasState.hpp"
             "threepp/renderers/vulkan/state/EnvironmentState.hpp"
+            "threepp/renderers/vulkan/state/OceanState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
