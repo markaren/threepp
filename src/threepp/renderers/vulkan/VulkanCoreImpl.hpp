@@ -151,6 +151,7 @@
 // The state groups Impl inherits (one header each, see the map at Impl).
 #include "state/CoreState.hpp"
 #include "state/GeometryState.hpp"
+#include "state/TlasState.hpp"
 
 namespace threepp {
 
@@ -199,7 +200,8 @@ namespace threepp {
     }// namespace
 
     struct VulkanRenderer::Impl : vulkan::impl::CoreState,
-                                  vulkan::impl::GeometryState {
+                                  vulkan::impl::GeometryState,
+                                  vulkan::impl::TlasState {
 
         // Mirrored from VulkanRenderer (Renderer base) at the start of each
         // render() so the renderFrame path can read them without a pointer back
@@ -348,34 +350,6 @@ namespace threepp {
         // readback buffers at stage time instead (one frame late).
         std::vector<std::tuple<DisplacedMesh*, DisplacedMeshState*, float>> pendingDisplacedDeforms_;
 
-        // Single TLAS over all mesh instances in the scene.
-        VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-        Buffer tlasBuffer;
-        // Per-in-flight-frame instance buffers. The per-frame TLAS refit is
-        // recorded into the frame command buffer (not a one-shot drain), so the
-        // host instance write for frame N must not clobber the buffer frame N-1
-        // is still reading — hence one buffer per in-flight slot, indexed by
-        // currentFrame. The structural full build (buildTlas) writes all slots.
-        Buffer tlasInstancesBuffers[kFramesInFlight];
-        // Persistent scratch for the in-frame TLAS refit (sized once; reused —
-        // safe only because the frame graph's entry barrier orders each frame's
-        // AS builds after the previous frame's work; submit order alone is not
-        // an execution dependency).
-        Buffer tlasRefitScratch_{};
-        VkDeviceSize tlasRefitScratchSize_ = 0;
-        // Instance count of the TLAS's last full BUILD. A MODE_UPDATE with any
-        // other count is a spec violation that corrupts traversal, so
-        // recordTlasRefit promotes such a refit to a full build (or skips it
-        // when the existing storage can't hold the build). The structural
-        // fingerprint now catches membership flips too — this is the backstop.
-        uint32_t tlasBuiltInstanceCount_ = 0;
-        // Per-frame TLAS refit, staged by ensureSceneBuilt and recorded into the
-        // frame command buffer by recordCommandBuffer (after the deformable BLAS
-        // rebuilds). Replaces the old mid-frame refitTlas one-shot drain.
-        std::vector<VkAccelerationStructureInstanceKHR> pendingTlasInstances_;
-        bool pendingTlasRefit_ = false;
-        bool pendingTlasFullBuild_ = false;
-
         // Definition moved to VulkanGeometryState.hpp.
         using GeometryDesc = vulkan::impl::GeometryDesc;
         // The word view of it that the shaders reading only the material index
@@ -511,61 +485,8 @@ namespace threepp {
             }
         }
 
-        // ── Per-slot dirty state for the entries-indexed desc rings ──────────
-        // What one frame-in-flight slot still owes the GPU: either the whole
-        // array, or a set of half-open element ranges. Ranges matter because
-        // the GeometryDesc array is entries-indexed and large (until the
-        // material table, the MaterialDescs were too: 47.7 MB at 78.4k
-        // entries), so a whole-array flush for a small per-frame change costs
-        // milliseconds of CPU. The material table's ranges are record ranges.
-        //
-        // Per slot, not global: a change dirtied on frame N must reach every
-        // slot's buffer, but each slot may only be written after its own fence
-        // has signalled, so each slot accumulates independently and is cleared
-        // alone when its turn comes.
-        struct DescDirtyRanges {
-            // Half-open [first, last) entry ranges, kept sorted and coalesced.
-            std::vector<std::pair<uint32_t, uint32_t>> ranges;
-            bool whole = false;// structural rebuild / unidentifiable source
-            uint32_t maxRanges = 64;// past this many, one whole-array flush
-
-            bool any() const { return whole || !ranges.empty(); }
-            void clear() {
-                whole = false;
-                ranges.clear();
-            }
-            void markWhole() {
-                whole = true;
-                ranges.clear();// subsumed
-            }
-            // The scene walk marks in increasing entry order, so coalescing
-            // against the last range collapses a contiguous instanced span into
-            // one range. Marks also arrive out of order: a slot not flushed last
-            // frame still holds that frame's ranges when the next walk starts
-            // again from entry 0. A mark that overlaps or touches the last range
-            // widens it at either end; any other is a range of its own (the
-            // upload copies each range, so an overlap with an older one is
-            // harmless). Until 2026-10-15 a mark below the last range only
-            // raised its end and was lost: an edit to an earlier entry the frame
-            // after an edit to a later one never showed (VulkanInstanceColor_test,
-            // phase 3).
-            void mark(uint32_t first, uint32_t count = 1) {
-                if (whole || count == 0) return;
-                const uint32_t last = first + count;
-                if (!ranges.empty() && first <= ranges.back().second && last >= ranges.back().first) {
-                    ranges.back().first  = std::min(ranges.back().first, first);
-                    ranges.back().second = std::max(ranges.back().second, last);
-                    return;
-                }
-                // Many ranges suggest a scene-wide change; fall back to one
-                // whole-array flush (broader than necessary, never wrong).
-                if (ranges.size() >= maxRanges) {
-                    markWhole();
-                    return;
-                }
-                ranges.emplace_back(first, last);
-            }
-        };
+        // Definition moved to state/StateCommon.hpp.
+        using DescDirtyRanges = vulkan::impl::DescDirtyRanges;
 
         // Per-frame-in-flight GeometryDesc storage — same fence-gated ring as
         // materialDescsBuffers below. Ringed for auto-LOD: a level switch
@@ -1322,27 +1243,6 @@ namespace threepp {
         // GeometryDesc::indexAddress.
         bool lodChangedThisFrame_ = false;
 
-        // ── Cutout ray distance (setCutoutRayDistance; 0 = off, the default) ─
-        // Every BLAS is non-opaque so that a cutout caster's hits come back to
-        // the shader as candidates to alpha-test. A shadow ray through a tree
-        // crosses many leaf cards, and each is a round trip (material read, UV
-        // fetch, texture sample). Beyond this distance from the camera a
-        // cutout caster's instance is FORCE_OPAQUE instead: the RT core
-        // commits the first card it meets. Its shadow is then the cards' own
-        // outline, not the leaves'. Reflection and GI rays already trace with
-        // gl_RayFlagsOpaqueEXT and are unchanged.
-        // The entries are classified for a camera position and re-classified
-        // once the camera has moved 5 % of the distance from it (a flag flip
-        // is a full TLAS build, so not every frame of a moving camera pays
-        // one); an entry that moves by itself waits for that too.
-        float cutoutRayDistance_ = 0.f;
-        // setCutoutRayCap: the per-ray answer to the same cost (shadowVis in
-        // deferred_shade_10_lighting_utils.glsl; ShadePush flags bits 16-19).
-        uint32_t cutoutRayCap_ = 0u;
-        float    cutoutRayCapFrom_ = 0.f;// ...for what is shaded at least this far from the eye
-        float cutoutRayClassifiedFor_ = 0.f;// the distance the entries' bits were derived for
-        float cutoutRayCamPos_[3] = {0.f, 0.f, 0.f};// ...and the camera position
-        bool  cutoutRayClassified_ = false;// false after a full re-expansion (the bits were reset)
         // Lean frames: re-derive MeshEntry::rayFarOpaque when due. Reads
         // the material table, so call after the material patch. True when any
         // entry's bit flipped (the TLAS must then be refilled and rebuilt).
@@ -1363,20 +1263,6 @@ namespace threepp {
         [[nodiscard]] uint64_t spanTlasSig(const vulkan::impl::EntrySpan& sp, uint8_t mask,
                                            VkGeometryInstanceFlagsKHR flags, bool cutout, const BlasRecord* rec,
                                            VkDeviceAddress blas0, bool perEntryLod) const;
-        // The lean fill's layout key: pendingTlasInstances_ is rewritten in
-        // place only while these hold (buildTlas clears tlasFillValid_), and
-        // tlasInstDirty_ names the instance ranges each frame slot still lacks.
-        bool     tlasFillValid_        = false;
-        uint64_t tlasFillSpansVersion_ = ~0ull;
-        size_t   tlasFillEntryCount_   = 0;
-        bool     tlasFillGenOn_        = false;
-        std::array<DescDirtyRanges, kFramesInFlight> tlasInstDirty_{DescDirtyRanges{.maxRanges = 1024},
-                                                                    DescDirtyRanges{.maxRanges = 1024}};
-        // Entries whose TLAS row changed for a reason meshMovedBits_ does not
-        // carry (a crossfade side, a ray shadow or cutout reclassification),
-        // a bit each; consumed by the next fill.
-        std::vector<uint32_t> tlasRowDirty_;
-        std::vector<uint32_t> tlasSpanOrder_;// the lean fill's span order (stable, then volatile)
         // THREEPP_VK_DRAW_STATS=N: every N primary frames, one stderr line of
         // what the frame prep walked (drawStatsTick). Diagnostics only. A
         // view that prepares beside the others counts into its own
@@ -1430,12 +1316,6 @@ namespace threepp {
         void readRayCounts(uint32_t frame);
         void recordRayCountClear(VkCommandBuffer cb);
         void recordRayCountCopy(VkCommandBuffer cb);
-        uint64_t rayShadowEpochSeen_    = 0;
-        uint64_t rayShadowSpansVersion_ = ~0ull;
-        size_t   rayShadowEntryCount_   = 0;
-        float    rayShadowCamPos_[3]    = {0.f, 0.f, 0.f};// the camera the states were derived for
-        float    rayShadowStep_         = 0.f;            // 5 % of the smallest distance; 0: none set
-        bool     rayShadowClassified_   = false;
         // Host mirror of the last-uploaded GeometryDesc array (entries-
         // indexed, same layout as the `geomDescs` local built in the full
         // rebuild). The lean auto-LOD path patches indexAddress/indexed in
@@ -1735,10 +1615,6 @@ namespace threepp {
         void markMotionWhole() {
             for (auto& d : motionDirty_) d.markWhole();
         }
-        // TLAS refit instance staging, swapped with pendingTlasInstances_ so
-        // both vectors keep their capacity across frames (a fresh 4.8 MB
-        // allocation per moving frame at 100k instances otherwise).
-        std::vector<VkAccelerationStructureInstanceKHR> tlasInstanceScratch_;
         // Version of every input that shapes DrawInfo/indirect-cmd contents
         // EXCEPT the per-view cull bits (those live on the view as
         // cullVersion). Bumped by ensureSceneBuilt on any non-quiet frame and
@@ -6409,12 +6285,6 @@ namespace threepp {
         // cascades they leave stale and lists ShadowMapPass::onTop.
         uint32_t shadowCacheStaleFrames_ = 0;
         void     updateShadowCasterSnap(vulkan::ShadowMapPass& smp, uint32_t cascades);
-        // buildShadowDrawData's scratch: the view's own
-        // (ViewPrepScratch::shadowChunks). Definition moved to
-        // VulkanViewContext.hpp.
-        using ShadowChunk = vulkan::impl::ShadowChunk;
-        // The TLAS fill's per-chunk GeometryDesc dirty rows (same chunking).
-        std::vector<std::vector<uint32_t>> tlasChunkDirty_;
         // Depth-only, reverse-Z, dynamic rendering into one D32 layer: the
         // indirect G-buffer draw reduced to position + the cutout test, with
         // depth clamp where the device has it and dynamic cull mode, front

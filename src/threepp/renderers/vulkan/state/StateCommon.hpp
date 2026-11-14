@@ -131,3 +131,63 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+namespace threepp::vulkan::impl {
+
+        // ── Per-slot dirty state for the entries-indexed desc rings ──────────
+        // What one frame-in-flight slot still owes the GPU: either the whole
+        // array, or a set of half-open element ranges. Ranges matter because
+        // the GeometryDesc array is entries-indexed and large (until the
+        // material table, the MaterialDescs were too: 47.7 MB at 78.4k
+        // entries), so a whole-array flush for a small per-frame change costs
+        // milliseconds of CPU. The material table's ranges are record ranges.
+        //
+        // Per slot, not global: a change dirtied on frame N must reach every
+        // slot's buffer, but each slot may only be written after its own fence
+        // has signalled, so each slot accumulates independently and is cleared
+        // alone when its turn comes.
+        struct DescDirtyRanges {
+            // Half-open [first, last) entry ranges, kept sorted and coalesced.
+            std::vector<std::pair<uint32_t, uint32_t>> ranges;
+            bool whole = false;// structural rebuild / unidentifiable source
+            uint32_t maxRanges = 64;// past this many, one whole-array flush
+
+            bool any() const { return whole || !ranges.empty(); }
+            void clear() {
+                whole = false;
+                ranges.clear();
+            }
+            void markWhole() {
+                whole = true;
+                ranges.clear();// subsumed
+            }
+            // The scene walk marks in increasing entry order, so coalescing
+            // against the last range collapses a contiguous instanced span into
+            // one range. Marks also arrive out of order: a slot not flushed last
+            // frame still holds that frame's ranges when the next walk starts
+            // again from entry 0. A mark that overlaps or touches the last range
+            // widens it at either end; any other is a range of its own (the
+            // upload copies each range, so an overlap with an older one is
+            // harmless). Until 2026-10-15 a mark below the last range only
+            // raised its end and was lost: an edit to an earlier entry the frame
+            // after an edit to a later one never showed (VulkanInstanceColor_test,
+            // phase 3).
+            void mark(uint32_t first, uint32_t count = 1) {
+                if (whole || count == 0) return;
+                const uint32_t last = first + count;
+                if (!ranges.empty() && first <= ranges.back().second && last >= ranges.back().first) {
+                    ranges.back().first  = std::min(ranges.back().first, first);
+                    ranges.back().second = std::max(ranges.back().second, last);
+                    return;
+                }
+                // Many ranges suggest a scene-wide change; fall back to one
+                // whole-array flush (broader than necessary, never wrong).
+                if (ranges.size() >= maxRanges) {
+                    markWhole();
+                    return;
+                }
+                ranges.emplace_back(first, last);
+            }
+        };
+
+}// namespace threepp::vulkan::impl

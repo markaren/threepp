@@ -872,6 +872,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/StateCommon.hpp"
             "threepp/renderers/vulkan/state/CoreState.hpp"
             "threepp/renderers/vulkan/state/GeometryState.hpp"
+            "threepp/renderers/vulkan/state/TlasState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
