@@ -868,6 +868,9 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanSceneTypes.hpp"
             "threepp/renderers/vulkan/ParticleFieldPass.hpp"
             "threepp/renderers/vulkan/VulkanViewContext.hpp"
+            # The state groups VulkanRenderer::Impl inherits (state/*.hpp).
+            "threepp/renderers/vulkan/state/StateCommon.hpp"
+            "threepp/renderers/vulkan/state/CoreState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
