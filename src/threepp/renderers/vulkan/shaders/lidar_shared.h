@@ -61,6 +61,10 @@ namespace threepp::vulkan_lidar {
     //   halves is the ground-truth degradation label (plan §4.6.1). Results
     //   for the clean leg occupy the second half of the result buffer.
     inline constexpr uint32_t kLidarFlagPairedClean = 1u;
+    //   NoOpticalMedia: the rays are not light (a radar, a sonar). The scene
+    //   fog fallback and the ParticleField density volumes are skipped; the
+    //   dedicated LidarParams medium still applies.
+    inline constexpr uint32_t kLidarFlagNoOpticalMedia = 2u;
 
     // 56-byte push constant block. Fits well within the 128-byte minimum
     // pushConstants size that every Vulkan implementation guarantees.
@@ -128,6 +132,7 @@ struct LidarResult {
 };
 
 #define kLidarFlagPairedClean 1u
+#define kLidarFlagNoOpticalMedia 2u
 
 #endif  // __cplusplus
 

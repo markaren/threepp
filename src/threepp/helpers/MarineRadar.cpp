@@ -26,10 +26,9 @@ MarineRadar::MarineRadar(const MarineRadarModel& m)
     params.detectorThreshold = 0.f;
     params.maxReturns = 1;
     params.samplesPerBeam = 1;
-    // Keep the scene's visual fog out of the trace (see ImagingSonar).
-    params.mediumExtinction = 1e-5f;
-    params.mediumSurfaceY = -1e20f;
-    params.mediumAlbedo = 0.f;
+    // Microwaves: the camera's fog and haze volumes are not in the trace.
+    // Rain is the model's own RainCells.
+    params.opticalMedia = false;
     anchorRpm_ = model.rpm;
     rebuild();
 }

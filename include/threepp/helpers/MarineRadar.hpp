@@ -31,8 +31,8 @@ namespace threepp {
      * clears the picture.
      *
      * Radar materials are keyed on stable instance ids (the ocean gets
-     * RadarMaterial::Sea()). The renderer's visual fog is kept out of the
-     * trace; rain is the model's own RainCells.
+     * RadarMaterial::Sea()). The camera's fog and haze volumes are kept out of
+     * the trace; rain is the model's own RainCells.
      */
     class MarineRadar: public Object3D, public VisionSensor {
 

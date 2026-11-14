@@ -103,7 +103,7 @@ layout(push_constant) uniform Pc {
     // Sensor blind zone: first-leg tMin, so the beam passes through the
     // sensor's own housing instead of returning it.
     float minRange;
-    // kLidarFlagPairedClean.
+    // kLidarFlagPairedClean | kLidarFlagNoOpticalMedia.
     uint flags;
 } pc;
 
@@ -304,7 +304,10 @@ void main() {
 
     // The uniform gate: false collapses every particle expression below to the
     // pre-phase-3 arithmetic (see the file header).
-    const bool pdActive = (pd.counts.x != 0u) && !cleanLeg;
+    // A ray that is not light (a radar's, a sonar's) goes through neither the
+    // density volumes nor the scene fog below: both are what the camera sees.
+    const bool optical  = (pc.flags & kLidarFlagNoOpticalMedia) == 0u;
+    const bool pdActive = (pd.counts.x != 0u) && !cleanLeg && optical;
 
     const LidarBeam beam = beams[i];
     const uint maxRet    = max(pc.maxReturns, 1u);
@@ -331,7 +334,7 @@ void main() {
     const bool  useMedium = pc.mediumExtinction > 1.0e-6;
     const float sigmaT    = useMedium
             ? pc.mediumExtinction
-            : (fog.enabled * dot(fog.sigmaT, vec3(0.2126, 0.7152, 0.0722)));
+            : (optical ? fog.enabled * dot(fog.sigmaT, vec3(0.2126, 0.7152, 0.0722)) : 0.0);
     const float fogAlbedo = useMedium
             ? pc.mediumAlbedo
             : (fog.enabled * dot(fog.color, vec3(0.2126, 0.7152, 0.0722)));

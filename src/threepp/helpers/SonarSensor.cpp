@@ -22,6 +22,9 @@ SonarSensor::SonarSensor(const SonarModel& model)
     // sonar target may be black paint. Every hit inside the range window is a
     // return; the acoustic model decides how bright.
     params.detectorThreshold = 0.f;
+    // Sound: the camera's fog, murk and haze volumes are not in the trace. A
+    // water column, if wanted, is the dedicated medium in `params`.
+    params.opticalMedia = false;
 }
 
 std::uint64_t SonarSensor::speckleSeed() const {

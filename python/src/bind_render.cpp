@@ -139,7 +139,11 @@ namespace threepp_py {
                                "Trace every beam twice in one dispatch -- as-is, and with the "
                                "ParticleField density medium off, same beams and RNG keys. The "
                                "difference IS the degradation. PathTracedLidarSensor.scan() "
-                               "returns the clean leg under the 'clean' key.");
+                               "returns the clean leg under the 'clean' key.")
+                .def_readwrite("optical_media", &LidarParams::opticalMedia,
+                               "True (default) for light: the trace goes through the scene's fog and every "
+                               "ParticleField density volume. False for rays that are not light (a radar, a "
+                               "sonar): those media are skipped; the dedicated medium still applies.");
 
         py::class_<LidarModel>(m, "LidarModel",
                                "A spinning LIDAR's beam pattern: the beams' elevations and the azimuth sweep, for PathTracedLidarSensor(model) and LidarSensor. "

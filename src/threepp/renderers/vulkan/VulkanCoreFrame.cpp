@@ -573,9 +573,8 @@ int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
             pc.mediumAlbedo     = std::clamp(params.mediumAlbedo, 0.f, 1.f);
             pc.mediumAnisotropy = std::clamp(params.mediumAnisotropy, -0.95f, 0.95f);
             pc.minRange         = std::max(0.f, params.minRange);
-            pc.flags            = params.pairedCleanTrace
-                                          ? vulkan_lidar::kLidarFlagPairedClean
-                                          : 0u;
+            pc.flags            = (params.pairedCleanTrace ? vulkan_lidar::kLidarFlagPairedClean : 0u) |
+                                  (params.opticalMedia ? 0u : vulkan_lidar::kLidarFlagNoOpticalMedia);
 
             // ── The ParticleField density medium (parent plan phase 3) ──────
             // Bound from exactly the source the deferred descriptor sets use,

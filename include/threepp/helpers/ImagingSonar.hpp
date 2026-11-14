@@ -35,8 +35,8 @@ namespace threepp {
      * VulkanRenderer::kSensorOnlyLayer with setSensorOnlySurfaces(true), as
      * for every ray-traced sensor.
      *
-     * The renderer's visual fog is kept out of the trace (the sonar models
-     * its own water column); `params` is the tracer's LidarParams, set up for
+     * The camera's fog, murk and haze volumes are kept out of the trace (the
+     * sonar models its own water column); `params` is the tracer's LidarParams, set up for
      * that and rarely worth touching.
      *
      * Reproducible: noise and reverberation are keyed on the ping count, the

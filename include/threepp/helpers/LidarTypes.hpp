@@ -168,6 +168,17 @@ namespace threepp {
         //
         // Vulkan (path-traced) backend only; the raster LidarSensor ignores it.
         bool pairedCleanTrace = false;
+
+        // ── WHAT KIND OF WAVE THE RAY STANDS FOR ───────────────────────────
+        // True for light (a lidar, a depth camera): the trace goes through
+        // the media the camera sees, i.e. the scene's fog (when no dedicated
+        // medium above is set) and every ParticleField density volume.
+        //
+        // False for a sensor that only borrows the ray tracer for geometry (a
+        // radar, a sonar): haze, smoke and visual rain are optical and are
+        // not in its trace at all. Its own medium, when it has one, is the
+        // dedicated medium above or the sensor's own model.
+        bool opticalMedia = true;
     };
 
     /**

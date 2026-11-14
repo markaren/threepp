@@ -11,12 +11,16 @@
 #include "threepp/helpers/MarineRadar.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/ParticleField.hpp"
+#include "threepp/scenes/FogExp2.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <random>
+#include <vector>
 
 using namespace threepp;
 
@@ -371,4 +375,99 @@ TEST_CASE("MarineRadar: a scaled parent does not widen the vertical beam") {
     INFO("target SNR " << a << " dB unscaled, " << b << " dB under the scaled root");
     CHECK(a > 10.f);
     CHECK(std::abs(a - b) < 0.5f);
+}
+
+namespace {
+
+    // A dense haze box (a ParticleField density volume) centred on `centre`:
+    // about one optical depth of camera haze across its 3 m of z.
+    std::shared_ptr<ParticleField> hazeBox(const Vector3& centre, const Vector3& half) {
+        constexpr std::uint32_t kRes = 32, kCount = 131'072;
+        ParticleField::Config cfg;
+        cfg.capacity = kCount;
+        cfg.wSemantic = ParticleField::WSemantic::Radius;
+        cfg.uniformRadius = 0.01f;
+        auto haze = ParticleField::create(cfg);
+        std::mt19937 rng(20261114u);
+        std::uniform_real_distribution<float> u(-1.f, 1.f);
+        std::vector<ParticlePos> pos(kCount);
+        for (auto& p : pos) {
+            p = {centre.x + half.x * u(rng), centre.y + half.y * u(rng), centre.z + half.z * u(rng), 0.01f};
+        }
+        haze->submit(pos.data(), kCount);
+        haze->setLiveCount(kCount);
+        auto& dr = haze->densityRepr();
+        dr.enabled = true;
+        dr.center = centre;
+        dr.halfExtent = half;
+        dr.resolution = kRes;
+        dr.sigmaPerParticle = 0.4f * float(kRes) * float(kRes) * float(kRes) / float(kCount);
+        return haze;
+    }
+
+    bool sameReturns(const std::vector<LidarReturn>& a, const std::vector<LidarReturn>& b) {
+        if (a.size() != b.size()) return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (a[i].returnNo != b[i].returnNo || a[i].returnKind != b[i].returnKind ||
+                a[i].hitInstanceId != b[i].hitInstanceId || a[i].distance != b[i].distance) return false;
+        }
+        return true;
+    }
+
+}// namespace
+
+TEST_CASE("ImagingSonar: the camera's haze volume and scene fog are not in the acoustic trace") {
+    REQUIRE_RT_GPU(r);
+    Scene scene;
+    auto ahead = box(6.f, 6.f, 1.f);
+    ahead->position.set(0.f, 0.f, -10.f);
+    scene.add(ahead);
+    build(*r, scene);
+
+    ImagingSonar sonar(smallSonar());
+    sonar.updateMatrixWorld();
+    SonarFrame frame;
+    sonar.ping(*r, frame);
+    const std::vector<LidarReturn> clear = sonar.lastReturns();
+    REQUIRE(hitsBeyond(clear, -1e9f) > 0);
+
+    // Optical media between the sonar and the box: light does not get through
+    // unscathed, sound does not know they are there.
+    auto haze = hazeBox(Vector3(0.f, 0.f, -5.f), Vector3(5.f, 4.f, 1.5f));
+    scene.add(haze);
+    scene.fog = FogExp2(Color(0.5f, 0.5f, 0.5f), 0.2f);
+    build(*r, scene);
+    sonar.ping(*r, frame);
+    CHECK(sameReturns(clear, sonar.lastReturns()));
+}
+
+TEST_CASE("MarineRadar: the camera's haze volume does not erase radar targets") {
+    REQUIRE_RT_GPU(r);
+    Scene scene;
+    auto target = box(20.f, 20.f, 20.f);
+    target->position.set(0, 10, -150);
+    scene.add(target);
+    build(*r, scene);
+
+    const auto sweep = [&] {
+        MarineRadar radar(smallRadar());
+        radar.position.set(0, 10, 0);
+        radar.updateMatrixWorld();
+        radar.setSimTime(0.0);
+        radar.update(*r);
+        runAt(radar, *r, 0.99);
+        return radar.image().snrDb;
+    };
+    const std::vector<float> clear = sweep();
+    // The control: a second radar over the same scene forms the same picture.
+    const bool repeats = sweep() == clear;
+    REQUIRE(repeats);
+
+    // All round the antenna, between it and the target.
+    auto haze = hazeBox(Vector3(0.f, 10.f, 0.f), Vector3(30.f, 12.f, 30.f));
+    haze->densityRepr().sigmaPerParticle *= 0.2f;// about two optical depths to the box's edge
+    scene.add(haze);
+    build(*r, scene);
+    const bool unchanged = sweep() == clear;
+    CHECK(unchanged);
 }

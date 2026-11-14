@@ -12,12 +12,9 @@ ImagingSonar::ImagingSonar(const ImagingSonarModel& m)
     params.detectorThreshold = 0.f;
     params.maxReturns = 1;
     params.samplesPerBeam = 1;
-    // Keep the renderer's visual fog out of the trace: a LIDAR medium that
-    // lives entirely below every ray (the tracer then never falls back to
-    // the scene's fog). The sonar's own water column is its Sv.
-    params.mediumExtinction = 1e-5f;
-    params.mediumSurfaceY = -1e20f;
-    params.mediumAlbedo = 0.f;
+    // Sound: the camera's fog, murk and haze volumes are not in the trace.
+    // The sonar's own water column is its Sv.
+    params.opticalMedia = false;
     rebuild();
 }
 
