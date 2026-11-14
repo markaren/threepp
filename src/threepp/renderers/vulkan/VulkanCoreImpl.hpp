@@ -164,6 +164,7 @@
 #include "state/PostChainState.hpp"
 #include "state/SplatState.hpp"
 #include "state/LensState.hpp"
+#include "state/AtmosphereState.hpp"
 
 namespace threepp {
 
@@ -225,7 +226,8 @@ namespace threepp {
                                   vulkan::impl::FieldBillboardState,
                                   vulkan::impl::PostChainState,
                                   vulkan::impl::SplatState,
-                                  vulkan::impl::LensState {
+                                  vulkan::impl::LensState,
+                                  vulkan::impl::AtmosphereState {
 
         // Mirrored from VulkanRenderer (Renderer base) at the start of each
         // render() so the renderFrame path can read them without a pointer back
@@ -658,68 +660,6 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> clusterLightsBuffers{};// host-visible mapped (CPU fills per frame)
         std::array<Buffer, kFramesInFlight> clusterGridBuffers{};  // device-local (cluster_build writes)
         uint32_t clusterLightCountThisFrame_ = 0;
-        bool     fogEnabledThisFrame_ = false;// scene.fog present (froxel-volumetrics gate)
-
-        // Layout (and its doc comment) moved to VulkanGpuLayouts.hpp.
-        using GpuFogUbo = vulkan::impl::GpuFogUbo;
-        std::array<Buffer, kFramesInFlight> fogUbos{};
-        float    fogAnisotropy_ = 0.0f;
-        float    fogWaterSurfaceY_ = 1e30f;
-        float    murkDensity_ = 0.0f;               // setUnderwaterMurk (0 = off); the clearest channel of murkSigma_
-        float    murkSigma_[3] = {0.0f, 0.0f, 0.0f};// setUnderwaterMurk extinction per channel (all = murkDensity_ in the scalar form)
-        float    murkColor_[3] = {1.0f, 1.0f, 1.0f};// setUnderwaterMurk tint
-        float    murkAmbientFalloff_ = 0.0f;        // setUnderwaterAmbientFalloff (0 = off)
-        bool     murkSpriteForeshortening_ = true;  // setUnderwaterSpriteForeshortening
-        // ── Resolved unified fog medium for THIS frame (computed by updateFogUbo,
-        // consumed by updateCloudUbo + the froxel gate) ──────────────────────────
-        // Phase 2 "one knob": scene.fog is the primary control — when present it
-        // supplies the medium density (FogExp2.density / linear-Fog span) + colour
-        // and the froxel volumetrics run in heterogeneous mode with a near-uniform
-        // default profile (baseY 0, huge falloff). setHeightFog is the advanced
-        // profile control: it sets baseY/falloff/noise; its density is used only
-        // when scene.fog is absent (back-compat for existing mist users). When
-        // both are set, scene.fog's density wins (heightFog.density ignored).
-        bool  mediumActiveThisFrame_ = false;// air medium present → run froxels hetero
-        float mediumDensityThisFrame_ = 0.0f;
-        float mediumBaseYThisFrame_   = 0.0f;
-        float mediumFalloffThisFrame_ = 1.0e6f;
-        float mediumNoiseThisFrame_   = 0.0f;
-        // Air-fog single-scattering tint (= scene.fog colour when present, else
-        // white — mirrors the shade pass's medAlbedo). The overlay-fog snapshot
-        // fades particles toward this (× no env, the accepted particle-domain
-        // approximation). Consumed by the overlay particle draw in the record.
-        float mediumTintThisFrame_[3] = {1.0f, 1.0f, 1.0f};
-        // Near-uniform default profile falloff (m) when scene.fog drives the
-        // medium without an explicit setHeightFog profile. exp(-y/H) ≈ 1 over any
-        // real scene extent, and heightFogOpticalDepth clamps y<baseY to full
-        // density → a homogeneous medium (the degenerate case of the height-fog
-        // integral). The sky path detects this magnitude to avoid a divergent
-        // infinite-ray optical depth (see applySkyFog).
-        static constexpr float kUniformFogFalloff = 1.0e6f;
-
-        // Layout (and its doc comment) moved to VulkanGpuLayouts.hpp.
-        using GpuCloudUbo = vulkan::impl::GpuCloudUbo;
-        std::array<Buffer, kFramesInFlight> cloudUbos{};
-        bool  cloudsEnabled_   = false;
-        // Bumped by setClouds on enable / material reconfigure (NOT on identical
-        // per-frame re-sets — the fjord demo calls setClouds every frame).
-        // Wrapped &1023: the aux .a channel is fp16, int-exact only to 2048.
-        int   cloudEpoch_      = 1;
-        float cloudCoverage_   = 0.45f;
-        float cloudDensity_    = 1.0f;
-        float cloudBottomY_    = 600.0f;
-        float cloudTopY_       = 1400.0f;
-        float cloudEvolveSpeed_= 1.0f;
-        float cloudWind_[3]    = {8.0f, 0.0f, 2.0f};
-        // Near-field heterogeneous height fog (VulkanRenderer::setHeightFog).
-        bool  heightFogEnabled_    = false;
-        float heightFogDensity_    = 0.02f;
-        float heightFogBaseY_      = 0.0f;
-        float heightFogFalloff_    = 80.0f;
-        float heightFogNoiseAmount_= 0.6f;
-        float heightFogTopNoise_      = 0.0f;
-        float heightFogTopNoiseScale_ = 150.0f;
-        float heightFogTopNoiseSpeed_ = 4.0f;
 
         // Let go of envImage: retired when this Impl owns it, forgotten when it
         // is the sky bake's, which keeps its image for the renderer's life.
@@ -1008,11 +948,6 @@ namespace threepp {
         // Device-local because the atomics, aimed at host memory, cost the
         // shade 17 ms a frame.
         float    sunSoftDistance_ = 0.f;
-        uint32_t fogMarchSteps_   = 16u;
-        float    fogMarchRtRange_ = 0.f;
-        // setFogMarchHalfRes: fog_march.comp at half res. THREEPP_VK_FOG_HALF_RES=1
-        // starts it on (an A/B on an app that does not set the knob).
-        bool     fogMarchHalfRes_ = vulkan::env::flag("THREEPP_VK_FOG_HALF_RES");
         bool     countRays_       = false;
         std::array<Buffer, kFramesInFlight> rayCountBufs_{};    // device-local
         std::array<Buffer, kFramesInFlight> rayCountReadback_{};// host-mapped
@@ -1922,39 +1857,11 @@ namespace threepp {
         // deterministic Fibonacci 64-sample gather (clean + settles), no
         // per-frame flicker.
         bool  deferredAO_ = true;
-        // Deferred volumetric spot-light beams (ray-marched single scattering in
-        // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
-        float deferredVolDensity_ = 0.f;
-        float deferredVolAniso_   = 0.55f;
-        // The directional sun shafts / aerial glow are ALWAYS on when the fog medium
-        // is present (froxels own the near field, volumetricDirScatter the > 512 m
-        // tail). There is no public toggle; this stays true and only feeds the
-        // shade/froxel volFog flag.
-        bool  deferredVolFog_     = true;
-        // setUnlitFogScatter: the unlit branch of the shade takes the volumetric
-        // in-scatter too (shade flags bit 28). Off = extinction and ambient only.
-        bool  unlitFogScatter_    = false;
-        // ── Rotor downwash (setDownwash; scenes/Downwash.hpp) ──────────────
-        // uploadDownwash packs the enabled sources into this slot's block once
-        // per frame, after the fence wait; downwashAddr_ is then its device
-        // address (0 = no downwash this frame) and downwashCount_ the packed
-        // count. The G-buffer (RasterCameraUbo.downwash), the grass wind push
-        // block and the particle emitters' aux records read these.
-        std::shared_ptr<Downwash> downwash_;
-        std::array<Buffer, kFramesInFlight> downwashBufs_{};
-        VkDeviceAddress downwashAddr_  = 0;
-        uint32_t        downwashCount_ = 0;
-        // Last frame's centres by source slot (the particles' motion vectors);
-        // reset whenever the list's version changes.
-        std::array<Vector3, 8> downwashPrevCenters_{};
-        uint64_t downwashPrevVersion_ = ~0ull;
-        const Downwash* downwashPrevOwner_ = nullptr;
         void uploadDownwash(uint32_t frame);
         // Whether a live jet of the downwash reaches a grass field whose world
         // REST box is `box` (the wind gate and the cull bound): a conservative
         // test against the jet's farthest reach over that box's heights.
         [[nodiscard]] bool downwashReachesBox(const Box3& box) const;
-        bool  fogShadowOpaqueCutouts_ = true; // setFogShadowOpaqueCutouts (shade flags bit 29); off = exact
         bool  indirectOpaqueCutouts_  = true; // setIndirectOpaqueCutouts (shade flags bit 31 clear, probe flags bit 3 clear); off = the GI, probe and AO rays alpha-test cutouts
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
