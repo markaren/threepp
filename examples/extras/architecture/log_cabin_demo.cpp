@@ -1,6 +1,6 @@
 // Procedural log-cabin demo.
 //
-// Renders the cabin from threepp/extras/architecture/LogCabin.hpp with a live
+// Renders the cabin from examples/libs/architecture/LogCabin.hpp with a live
 // ImGui panel that rebuilds it when a parameter changes. Defaults to the
 // OpenGL backend; pass --vulkan to force the other path.
 //
@@ -16,7 +16,7 @@
 
 #include "renderer_factory.hpp"
 
-#include "threepp/extras/architecture/LogCabin.hpp"
+#include "architecture/LogCabin.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"

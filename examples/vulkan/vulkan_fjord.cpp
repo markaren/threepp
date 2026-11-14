@@ -61,7 +61,7 @@
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 
-#include "threepp/extras/architecture/LogCabin.hpp"
+#include "architecture/LogCabin.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/RockGeometry.hpp"
@@ -716,7 +716,7 @@ namespace {
     };
 
     // The hytte on the east bench, from the procedural log-cabin generator
-    // (extras/architecture). Shorter and shallower than the generator's own
+    // (examples/libs/architecture). Shorter and shallower than the generator's own
     // defaults so it sits inside the flattened pad without crowding the dock
     // path, and stained dark the way decades of weather off the fjord leave it.
     architecture::CabinParams fjordCabinParams() {

@@ -16,8 +16,8 @@
 // Every tiling texture wraps seamlessly: the lattice noise is sampled with an
 // explicit period, and any cellular layout uses an integer cell count per tile.
 
-#ifndef THREEPP_EXTRAS_ARCHITECTURE_CABINTEXTURES_HPP
-#define THREEPP_EXTRAS_ARCHITECTURE_CABINTEXTURES_HPP
+#ifndef THREEPP_EXAMPLES_ARCHITECTURE_CABINTEXTURES_HPP
+#define THREEPP_EXAMPLES_ARCHITECTURE_CABINTEXTURES_HPP
 
 #include "threepp/extras/core/NoiseUtils.hpp"
 #include "threepp/extras/core/TextureBake.hpp"
@@ -578,4 +578,4 @@ namespace threepp::architecture {
 
 }// namespace threepp::architecture
 
-#endif//THREEPP_EXTRAS_ARCHITECTURE_CABINTEXTURES_HPP
+#endif//THREEPP_EXAMPLES_ARCHITECTURE_CABINTEXTURES_HPP

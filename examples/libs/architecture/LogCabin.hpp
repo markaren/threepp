@@ -24,11 +24,11 @@
 // walls carry the eaves. The porch is on the +Z ("front") side. y = 0 is grade
 // — the foundation extends below it so the cabin can be sunk into a slope.
 
-#ifndef THREEPP_EXTRAS_ARCHITECTURE_LOGCABIN_HPP
-#define THREEPP_EXTRAS_ARCHITECTURE_LOGCABIN_HPP
+#ifndef THREEPP_EXAMPLES_ARCHITECTURE_LOGCABIN_HPP
+#define THREEPP_EXAMPLES_ARCHITECTURE_LOGCABIN_HPP
 
 #include "threepp/core/BufferGeometry.hpp"
-#include "threepp/extras/architecture/CabinTextures.hpp"
+#include "architecture/CabinTextures.hpp"
 #include "threepp/extras/core/Shape.hpp"
 #include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -2092,4 +2092,4 @@ namespace threepp::architecture {
 
 }// namespace threepp::architecture
 
-#endif//THREEPP_EXTRAS_ARCHITECTURE_LOGCABIN_HPP
+#endif//THREEPP_EXAMPLES_ARCHITECTURE_LOGCABIN_HPP

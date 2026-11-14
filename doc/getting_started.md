@@ -831,7 +831,7 @@ under `extras/` and `helpers/`, with `audio/` and `splats/` beside them:
   terrain and buildings from Norwegian open data (`GeoTerrain.hpp`, `GeoBuildings.hpp`, `GeoScene`).
 - `extras/vegetation/` — `TreeGenerator`, `GrassField`, `buildGrassTiles`, `buildCanopyForest`.
 - `extras/road/` — `RoadNetwork`, `RoadGenerator`.
-- `extras/fauna/` (`Flock`, bird flocks), `extras/conveyor/`, `extras/architecture/` (`createLogCabin`).
+- `extras/fauna/` (`Flock`, bird flocks), `extras/conveyor/`.
 - `extras/pointcloud/` — `VoxelGrid`, marching cubes (`IsoMesh`), ICP registration.
 
 **Rendering extras** — `Ocean` (Vulkan: FFT water with foam), `ParticleField` (Vulkan: GPU

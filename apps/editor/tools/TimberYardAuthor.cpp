@@ -892,7 +892,7 @@ class SawMill:
     //
     // The obvious way to stand a forest and a yard office around this scene is
     // the two generators the editor already ships: TreeConfig (Add ▸ Tree) and
-    // architecture::createLogCabin. Both were built, exported and MEASURED
+    // the examples' architecture::createLogCabin. Both were built, exported and MEASURED
     // here, and neither can be in this document, because a generator emits a
     // BufferGeometry and the serializer writes every vertex of one as text:
     //
