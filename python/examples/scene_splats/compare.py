@@ -82,6 +82,9 @@ def psnr(a, b):
 data = tp.SplatLoader.load_ply(splats_path)
 n_splats = len(data)
 cloud = tp.SplatCloud(data)
+# The file is in the COLMAP frame (+Y down) like every 3DGS .ply; the editor's
+# import turns it upright with this same half turn on the node.
+cloud.rotation.x = math.pi
 splat_scene = tp.Scene()
 splat_scene.background = tp.Color(*common.BACKGROUND)
 splat_scene.add(cloud)

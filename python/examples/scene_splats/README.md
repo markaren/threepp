@@ -36,8 +36,12 @@ py -3.14 python/examples/scene_splats/compare.py
 - **The splats are display values.** They were fitted to the tone-mapped frame, so
   `compare.py` renders them with `ToneMapping.NoToneMapping`; a tone curve on top
   would apply it twice.
-- **The `.ply` is in the scene's frame** (Y up). Load it with `SplatLoader.load_ply`
-  and do not give it the half turn a COLMAP-convention scan needs.
+- **The `.ply` is in the frame every 3DGS `.ply` comes in**, the COLMAP one with +Y
+  down. Training runs in the scene's own frame and the export turns the splats half a
+  turn about X (centres, rotations and the SH terms that are odd in y and z), so the
+  editor's import and the `gaussian_splats` example, which turn every `.ply` back
+  with `rotation.x = pi` on the node, show it upright where the rover stood.
+  `points3d.ply` stays in the dataset's own frame (Y up), as `transforms.json` needs.
 
 ## Results (2026-11-15, RTX 5080, 800×600)
 
@@ -46,14 +50,14 @@ py -3.14 python/examples/scene_splats/compare.py
 | | |
 | --- | --- |
 | dataset | 224 views in 89 s |
-| training, 7000 steps | 60 s, 280k splats |
-| held-out PSNR, gsplat's render | 37.45 dB (worst view 34.2), SSIM 0.984 |
-| held-out PSNR, threepp's Vulkan render of the same `.ply` | 36.79 dB (worst 34.0) |
+| training, 7000 steps | 64 s, 279k splats |
+| held-out PSNR, gsplat's render | 37.46 dB (worst view 34.2), SSIM 0.984 |
+| held-out PSNR, threepp's Vulkan render of the same `.ply`, turned upright on the node | 36.80 dB (worst 34.0) |
 | threepp vs gsplat, same splats | 44.4 dB |
 | expected depth vs the true depth, median | 3.4 mm |
 | `bake_surface` at 2 cm voxels, distance to the real surfaces | median 3.1 mm, p90 10 mm, 98.8 % within one voxel |
-| … on the rover alone | median 4.9 mm, p90 21 mm, 87.5 % within one voxel |
-| the rover's visible surface the bake reaches (within two voxels) | 98.9 % |
+| … on the rover alone | median 4.9 mm, p90 21 mm, 87.7 % within one voxel |
+| the rover's visible surface the bake reaches (within two voxels) | 98.8 % |
 
 Where the bake is wrong, by looking at `compare_sheet.jpg`: wheel spokes and hubs
 fill in, the gold-foil sides come out lumpy (the glitter texture makes the splat depth
@@ -85,5 +89,5 @@ The first build takes a few minutes, from a Visual Studio developer shell with
 - View-dependent light is only as good as SH degree 3: glass and water reflections
   will train poorly.
 - The bake's cameras are the dataset's own (every fourth training view), which is
-  why it covers 98.9 % of what is visible; the 32 % of the rover no camera sees (the
+  why it covers 98.8 % of what is visible; the 32 % of the rover no camera sees (the
   underside, inside the wheels) has no surface, by construction.

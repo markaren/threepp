@@ -8,9 +8,12 @@ Depth supervision is on by default: the dataset's depth is exact, so it costs
 nothing to use, and it pulls splats onto the surfaces that bake_surface and the
 sensors will later read.
 
-The .ply is in the scene's own frame (threepp world, Y up), in the INRIA 3DGS
-layout: opacity as a logit, log scales, quaternion w first, f_rest channel-major.
-Load it with SplatLoader.load_ply and do NOT flip it.
+The .ply is in the INRIA 3DGS layout (opacity as a logit, log scales, quaternion w
+first, f_rest channel-major) and in the frame every other 3DGS .ply comes in, the
+COLMAP one with +Y down: training runs in the scene's own frame (Y up) and the
+export turns the splats half a turn about X. The editor and the gaussian_splats
+example give an imported .ply the opposite half turn, so it stands upright there,
+in the scene's own place.
 
 Runs in its own venv that sees the system torch, because gsplat compiles CUDA
 kernels on first use:
@@ -274,15 +277,25 @@ sheet = (np.concatenate(sheet_rows, 0) * 255 + 0.5).astype(np.uint8)
 Image.fromarray(sheet).resize((sheet.shape[1] // 2, sheet.shape[0] // 2)).save(
     os.path.join(out_dir, "eval_sheet.jpg"), quality=90)
 
-# --- export: INRIA 3DGS .ply -------------------------------------------------
+# --- export: INRIA 3DGS .ply, in the COLMAP frame (+Y down) ------------------
+# Half a turn about X, R = diag(1, -1, -1), exactly: the means take R; each
+# Gaussian's rotation takes R in front, which for a w-first quaternion is
+# (w, x, y, z) -> (-x, w, -z, y); and the colour seen along d must be the colour
+# the turned splat shows along R d, so every SH basis function that is odd in
+# (y, z) changes sign (INRIA order, l = 1..3).
+SH_SIGN_HALF_TURN_X = torch.tensor([-1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1, -1, 1],
+                                   dtype=torch.float32, device=dev)
 with torch.no_grad():
-    means = params["means"].cpu().numpy()
+    means = params["means"].cpu().numpy() * np.array([1.0, -1.0, -1.0], np.float32)
     n = len(means)
+    q = params["quats"]
+    quats = torch.stack([-q[:, 1], q[:, 0], -q[:, 3], q[:, 2]], 1).cpu().numpy()
+    shN = params["shN"] * SH_SIGN_HALF_TURN_X[: n_sh - 1, None]
     f_dc = params["sh0"][:, 0, :].cpu().numpy()
-    f_rest = params["shN"].transpose(1, 2).reshape(n, -1).cpu().numpy()   # channel-major
+    f_rest = shN.transpose(1, 2).reshape(n, -1).cpu().numpy()   # channel-major
     cols = [means, np.zeros_like(means), f_dc, f_rest,
             params["opacities"][:, None].cpu().numpy(),
-            params["scales"].cpu().numpy(), params["quats"].cpu().numpy()]   # quats are w, x, y, z
+            params["scales"].cpu().numpy(), quats]
 names = (["x", "y", "z", "nx", "ny", "nz", "f_dc_0", "f_dc_1", "f_dc_2"]
          + [f"f_rest_{k}" for k in range(f_rest.shape[1])]
          + ["opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"])
