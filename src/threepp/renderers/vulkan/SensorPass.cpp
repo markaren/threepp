@@ -319,24 +319,30 @@ namespace threepp::vulkan {
                 ubo.faceRect[f][1] = r.v0;
                 ubo.faceRect[f][2] = r.u1 > r.u0 ? 1.f / (r.u1 - r.u0) : 0.f;
                 ubo.faceRect[f][3] = r.v1 > r.v0 ? 1.f / (r.v1 - r.v0) : 0.f;
-                const bool     live   = (p.rig.faceMask & (1u << f)) != 0u && p.faceViews[f] != VK_NULL_HANDLE;
-                const uint64_t serial = live ? imageViewSerial(p.faceViews[f]) : 0u;
-                if (boundFaces_[frame][f] == serial) continue;
-                VkDescriptorImageInfo fi{};
-                fi.sampler     = sampler_;
-                fi.imageView   = live ? p.faceViews[f] : snapshot_[frame].view;
-                fi.imageLayout = live ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                VkWriteDescriptorSet w{};
-                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w.dstSet          = sets_[frame];
-                w.dstBinding      = 2;
-                w.dstArrayElement = static_cast<uint32_t>(f);
-                w.descriptorCount = 1;
-                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w.pImageInfo      = &fi;
-                vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
-                boundFaces_[frame][f] = serial;
             }
+        }
+        // The face slots, rig or no rig: a slot whose face is not live this
+        // frame goes back to the snapshot. Once the rig is off its side views
+        // are destroyed, and a slot left on one would name a dead view in a
+        // binding the shader statically uses.
+        for (int f = 0; f < lensrig::kFaceCount; ++f) {
+            const bool     live   = p.rigActive && (p.rig.faceMask & (1u << f)) != 0u && p.faceViews[f] != VK_NULL_HANDLE;
+            const uint64_t serial = live ? imageViewSerial(p.faceViews[f]) : 0u;
+            if (boundFaces_[frame][f] == serial) continue;
+            VkDescriptorImageInfo fi{};
+            fi.sampler     = sampler_;
+            fi.imageView   = live ? p.faceViews[f] : snapshot_[frame].view;
+            fi.imageLayout = live ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = sets_[frame];
+            w.dstBinding      = 2;
+            w.dstArrayElement = static_cast<uint32_t>(f);
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo      = &fi;
+            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+            boundFaces_[frame][f] = serial;
         }
         std::memcpy(rigUboMapped_[frame], &ubo, sizeof(ubo));
         return true;
