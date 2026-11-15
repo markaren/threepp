@@ -10,12 +10,16 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #include <fstream>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <optional>
 #include <regex>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.obj"};
+}
 
 using namespace threepp;
 
@@ -406,7 +410,7 @@ struct OBJLoader::Impl {
         }
 
         if (!std::filesystem::exists(path)) {
-            std::cerr << "[OBJLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+            THREEPP_LOG(kLog, Error) << "Cannot load " << absolute(path).string() << ": the file does not exist";
             return nullptr;
         }
 
@@ -557,15 +561,15 @@ struct OBJLoader::Impl {
 
                 if (line == "\\0") continue;
 
-                std::cerr << "[OBJLoader] Unexpected line: " << line << ":" << line.size() << std::endl;
+                THREEPP_LOG(kLog, Warn) << path.string() << ": the line '" << line << "' is not understood and is skipped";
             }
         }
 
         state.finalize();
 
         if (state.badIndexCount > 0) {
-            std::cerr << "[OBJLoader] dropped " << state.badIndexCount
-                      << " face(s)/point(s) with out-of-range indices" << std::endl;
+            THREEPP_LOG(kLog, Warn) << path.string() << ": " << state.badIndexCount
+                                 << " faces or points have out-of-range indices and are dropped";
         }
 
         auto container = Group::create();
@@ -603,8 +607,8 @@ struct OBJLoader::Impl {
                 if (geometry.uvs.size() / 2 != geometry.vertices.size() / 3) {
                     // Some records carried texture coordinates and some did not. A
                     // uv attribute shorter than position reads past its buffer.
-                    std::cerr << "[OBJLoader] '" << object->name
-                              << "': uv count does not match vertex count, dropping uvs" << std::endl;
+                    THREEPP_LOG(kLog, Warn) << "Object '" << object->name
+                                            << "' has a different number of uvs and vertices; its uvs are dropped";
                 } else {
                     bufferGeometry->setAttribute("uv", FloatBufferAttribute::create(geometry.uvs, 2));
                 }

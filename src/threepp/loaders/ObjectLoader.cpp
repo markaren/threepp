@@ -1154,14 +1154,14 @@ std::shared_ptr<Object3D> ObjectLoader::load(const std::filesystem::path& path) 
 
         } catch (const std::exception& e) {
 
-            std::cerr << "[ObjectLoader] " << e.what() << std::endl;
+            THREEPP_LOG(kLogObject, Error) << "Cannot load " << path.string() << ": " << e.what();
             return nullptr;
         }
 
         if (!archive_->has(objectjson::archiveDocument)) {
 
-            std::cerr << "[ObjectLoader] " << path.string() << " is an archive with no "
-                      << objectjson::archiveDocument << std::endl;
+            THREEPP_LOG(kLogObject, Error) << "Cannot load " << path.string() << ": the archive has no "
+                                        << objectjson::archiveDocument;
             archive_.reset();
             return nullptr;
         }
@@ -1179,7 +1179,7 @@ std::shared_ptr<Object3D> ObjectLoader::load(const std::filesystem::path& path) 
 
         std::ifstream in(path, std::ios::binary);
         if (!in) {
-            std::cerr << "[ObjectLoader] unable to open " << path.string() << std::endl;
+            THREEPP_LOG(kLogObject, Error) << "Cannot open " << path.string();
             return nullptr;
         }
 

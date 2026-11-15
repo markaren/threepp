@@ -53,7 +53,7 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <map>
 #include <any>
 #include <optional>
@@ -64,6 +64,10 @@
 // ordered_json keeps object keys in insertion order, so the same scene always
 // dumps to a byte-identical document (autosave/VCS diffs stay minimal).
 using json = nlohmann::ordered_json;
+namespace {
+    constinit threepp::log::Category kLog{"loader.object"};
+}
+
 using namespace threepp;
 using namespace threepp::objectjson;
 
@@ -121,7 +125,7 @@ namespace {
 
         void warn(std::string message) {
 
-            std::cerr << "[ObjectExporter] " << message << std::endl;
+            THREEPP_LOG(kLog, Warn) << message;
             warnings.push_back(std::move(message));
         }
     };

@@ -108,10 +108,10 @@ namespace threepp::gltf {
     bool GLTFParser::primitiveAccessorsValid(int meshIdx, const std::string& meshName,
                                  int primIdx, const json& prim) const {
         auto reject = [&](const std::string& why) {
-            std::cerr << "GLTFLoader: skipping primitive " << primIdx
-                      << " of mesh " << meshIdx;
-            if (!meshName.empty()) std::cerr << " ('" << meshName << "')";
-            std::cerr << " - " << why << std::endl;
+            log::Line line(kLog, log::Level::Warn);
+            line << "Primitive " << primIdx << " of mesh " << meshIdx;
+            if (!meshName.empty()) line << " ('" << meshName << "')";
+            line << " is skipped: " << why;
             return false;
         };
 
@@ -162,9 +162,8 @@ namespace threepp::gltf {
             // unsupported topologies rather than misrender them.
             const int primMode = prim.value("mode", 4);
             if (primMode != 4) {
-                std::cerr << "GLTFLoader: skipping primitive " << primIdx
-                          << " of mesh " << meshIdx << " - unsupported mode "
-                          << primMode << " (only TRIANGLES is supported)" << std::endl;
+                THREEPP_LOG(kLog, Warn) << "Primitive " << primIdx << " of mesh " << meshIdx << " is skipped: its mode "
+                                        << primMode << " is not TRIANGLES, the only one threepp loads";
                 ++primIdx;
                 continue;
             }
@@ -521,9 +520,8 @@ namespace threepp::gltf {
                     light->updateMatrix();
                     light->visible = false;  // hidden by default; user opts in
                     obj->add(light);
-                    std::cerr << "[GLTFLoader] Light: " << light->name
-                              << " type=" << ltype << " intensity=" << intensity
-                              << " range=" << range << std::endl;
+                    THREEPP_LOG(kLog, Debug) << "Light '" << light->name << "' (" << ltype << ", intensity " << intensity
+                                              << ", range " << range << ") is loaded hidden";
                 }
             }
         }

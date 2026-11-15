@@ -8,10 +8,14 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <mutex>
 #include <regex>
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.image"};
+}
 
 using namespace threepp;
 
@@ -73,7 +77,7 @@ struct TextureLoader::Impl {
         }
 
         if (!std::filesystem::exists(path)) {
-            std::cerr << "[TextureLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+            THREEPP_LOG(kLog, Error) << "Cannot load " << absolute(path).string() << ": the file does not exist";
             return nullptr;
         }
 

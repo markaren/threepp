@@ -253,7 +253,7 @@ namespace threepp::gltf {
             if (!list.empty()) list += ", ";
             list += name;
         }
-        std::cerr << "[threepp] GLTFLoader: material extensions not handled (loaded as if absent): " << list << std::endl;
+        THREEPP_LOG(kLog, Warn) << "Material extensions not supported, loaded as if absent: " << list;
     }
 
     std::shared_ptr<Material> GLTFParser::loadMaterial(int matIdx) {

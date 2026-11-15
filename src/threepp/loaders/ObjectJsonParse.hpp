@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <limits>
 #include <memory>
 #include <optional>
@@ -32,6 +32,9 @@
 
 namespace threepp::objectjson {
 
+    // The JSON scene loader and exporter.
+    inline constinit log::Category kLogObject{"loader.object"};
+
     // Everything the document asks for but threepp cannot represent is
     // collected here as well as logged, so an editor can surface it.
     struct Warnings {
@@ -40,7 +43,7 @@ namespace threepp::objectjson {
 
         void add(std::string message) {
 
-            std::cerr << "[ObjectLoader] " << message << std::endl;
+            THREEPP_LOG(kLogObject, Warn) << message;
             messages.push_back(std::move(message));
         }
     };

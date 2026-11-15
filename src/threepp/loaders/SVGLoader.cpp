@@ -1927,7 +1927,7 @@ ShapePath parsePathNode(const pugi::xml_node& node) {
                 break;
 
             default:
-                std::cerr << command << std::endl;
+                THREEPP_LOG(svg::kLogSvg, Warn) << "Path command '" << command << "' is not supported and is skipped";
         }
 
         doSetFirstPoint = false;

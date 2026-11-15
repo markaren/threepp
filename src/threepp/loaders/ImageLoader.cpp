@@ -21,7 +21,11 @@
 
 #include <cstring>
 #include <fstream>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.image"};
+}
 
 using namespace threepp;
 
@@ -54,7 +58,7 @@ namespace {
             // Animated WebP lives in the demux module, which is not vendored. Decoding
             // the still image out of an animation container would silently hand back one
             // arbitrary frame, so say what happened instead.
-            std::cerr << "[ImageLoader] Animated WebP is not supported\n";
+            THREEPP_LOG(kLog, Error) << "Animated WebP images are not supported; the image is not loaded";
             return std::nullopt;
         }
 

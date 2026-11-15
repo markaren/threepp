@@ -6,14 +6,18 @@
 // stb_image.h is already compiled via ImageLoader.cpp — just declare the API.
 #include "stb_image.h"
 
-#include <iostream>
+#include "threepp/utils/Log.hpp"
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.rgbe"};
+}
 
 using namespace threepp;
 
 std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, bool flipY) {
 
     if (!std::filesystem::exists(path)) {
-        std::cerr << "[RGBELoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << absolute(path).string() << ": the file does not exist";
         return nullptr;
     }
 
@@ -29,7 +33,7 @@ std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, boo
     float* pixels = stbi_loadf(path.string().c_str(), &width, &height, &channels, 3);
 
     if (!pixels) {
-        std::cerr << "[RGBELoader] Failed to load '" << path.string() << "': " << stbi_failure_reason() << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << path.string() << ": " << stbi_failure_reason();
         return nullptr;
     }
 

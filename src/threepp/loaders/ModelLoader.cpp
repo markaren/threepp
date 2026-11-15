@@ -12,8 +12,12 @@
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
 
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <threepp/utils/StringUtils.hpp>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.model"};
+}
 
 using namespace threepp;
 
@@ -21,7 +25,7 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
     const auto ext = utils::toLower(path.extension().string());
 
     if (!exists(path)) {
-        std::cerr << "[ModelLoader] File does not exist: " << std::filesystem::absolute(path).string() << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << std::filesystem::absolute(path).string() << ": the file does not exist";
         return nullptr;
     }
 
@@ -73,7 +77,6 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
             scene->animations = result->animations;
             return scene;
         }
-        std::cerr << "[ModelLoader] GLTFLoader returned no result for '" << path << "'." << std::endl;
         return nullptr;
     }
 
@@ -94,7 +97,7 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
     }
 #endif
 
-    std::cerr << "[ModelLoader] Unsupported file extension '" << ext << "'." << std::endl;
+    THREEPP_LOG(kLog, Error) << "Cannot load " << path.string() << ": '" << ext << "' is not a model format threepp reads";
     return nullptr;
 }
 

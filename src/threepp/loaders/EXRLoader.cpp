@@ -14,10 +14,14 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.exr"};
+}
 
 using namespace threepp;
 
@@ -236,7 +240,7 @@ namespace {
             c.name = name;
             const int32_t type = r.i32();
             if (type < 0 || type > 2) {
-                std::cerr << "[EXRLoader] channel '" << name << "' has unknown pixel type " << type << std::endl;
+                THREEPP_LOG(kLog, Error) << "EXR channel '" << name << "' has an unknown pixel type " << type;
                 return false;
             }
             c.type = static_cast<PixelType>(type);
@@ -347,28 +351,28 @@ namespace {
         ByteReader r{bytes, size};
 
         if (r.u32() != EXR_MAGIC || !r.ok) {
-            std::cerr << "[EXRLoader] not an OpenEXR file (bad magic)" << std::endl;
+            THREEPP_LOG(kLog, Error) << "The data is not an OpenEXR image (wrong magic number)";
             return std::nullopt;
         }
 
         const uint32_t version = r.u32();
         if (!r.ok) return std::nullopt;
         if (version & FLAG_TILED) {
-            std::cerr << "[EXRLoader] tiled EXR files are not supported" << std::endl;
+            THREEPP_LOG(kLog, Error) << "Tiled EXR images are not supported";
             return std::nullopt;
         }
         if (version & (FLAG_DEEP | FLAG_MULTIPART)) {
-            std::cerr << "[EXRLoader] deep / multi-part EXR files are not supported" << std::endl;
+            THREEPP_LOG(kLog, Error) << "Deep and multi-part EXR images are not supported";
             return std::nullopt;
         }
 
         ExrHeader h;
         if (!parseHeader(r, h)) {
-            std::cerr << "[EXRLoader] malformed header" << std::endl;
+            THREEPP_LOG(kLog, Error) << "The EXR header is malformed";
             return std::nullopt;
         }
         if (!h.hasChannels || !h.hasCompression || !h.hasDataWindow) {
-            std::cerr << "[EXRLoader] header is missing channels, compression or dataWindow" << std::endl;
+            THREEPP_LOG(kLog, Error) << "The EXR header lacks channels, compression or dataWindow";
             return std::nullopt;
         }
 
@@ -377,15 +381,15 @@ namespace {
             (h.compression != Compression::None && h.compression != Compression::Rle &&
              h.compression != Compression::Zips && h.compression != Compression::Zip &&
              h.compression != Compression::Piz)) {
-            std::cerr << "[EXRLoader] unsupported compression: " << compressionName(h.compression)
-                      << " (supported: NONE, RLE, ZIPS, ZIP, PIZ)" << std::endl;
+            THREEPP_LOG(kLog, Error) << "EXR compression " << compressionName(h.compression)
+                                     << " is not supported (NONE, RLE, ZIPS, ZIP and PIZ are)";
             return std::nullopt;
         }
 
         const int64_t width = static_cast<int64_t>(h.xMax) - h.xMin + 1;
         const int64_t height = static_cast<int64_t>(h.yMax) - h.yMin + 1;
         if (width <= 0 || height <= 0 || width > MAX_DIM || height > MAX_DIM || width * height > MAX_PIXELS) {
-            std::cerr << "[EXRLoader] implausible dataWindow: " << width << 'x' << height << std::endl;
+            THREEPP_LOG(kLog, Error) << "The EXR dataWindow " << width << 'x' << height << " is implausible";
             return std::nullopt;
         }
 
@@ -397,7 +401,7 @@ namespace {
         for (size_t i = 0; i < h.channels.size(); ++i) {
             const auto& c = h.channels[i];
             if (c.xSampling != 1 || c.ySampling != 1) {
-                std::cerr << "[EXRLoader] channel '" << c.name << "' is subsampled; not supported" << std::endl;
+                THREEPP_LOG(kLog, Error) << "EXR channel '" << c.name << "' is subsampled, which is not supported";
                 return std::nullopt;
             }
             if (c.name == "R") { component[i] = 0; haveRgb = true; }
@@ -409,7 +413,7 @@ namespace {
         if (!haveRgb && !haveY) {
             std::string found;
             for (const auto& c : h.channels) found += (found.empty() ? "" : ", ") + c.name;
-            std::cerr << "[EXRLoader] no R/G/B or Y channel; file has: " << found << std::endl;
+            THREEPP_LOG(kLog, Error) << "The EXR image has no R, G, B or Y channel; it has " << found;
             return std::nullopt;
         }
         if (haveRgb && haveY) {
@@ -434,7 +438,7 @@ namespace {
         // decodes. Reachable only with an absurd channel count, but that is
         // exactly what a crafted header would carry.
         if (bytesPerLine * static_cast<size_t>(linesPerBlock) > static_cast<size_t>(INT32_MAX)) {
-            std::cerr << "[EXRLoader] scanline block too large (" << h.channels.size() << " channels)" << std::endl;
+            THREEPP_LOG(kLog, Error) << "An EXR scanline block is too large (" << h.channels.size() << " channels)";
             return std::nullopt;
         }
 
@@ -442,7 +446,7 @@ namespace {
         std::vector<uint64_t> offsets(static_cast<size_t>(numBlocks));
         for (auto& o : offsets) o = r.u64();
         if (!r.ok) {
-            std::cerr << "[EXRLoader] truncated chunk offset table" << std::endl;
+            THREEPP_LOG(kLog, Error) << "The EXR chunk offset table is truncated";
             return std::nullopt;
         }
 
@@ -461,7 +465,7 @@ namespace {
 
             const uint64_t offset = offsets[static_cast<size_t>(b)];
             if (offset >= size) {
-                std::cerr << "[EXRLoader] chunk offset past end of file" << std::endl;
+                THREEPP_LOG(kLog, Error) << "An EXR chunk offset points past the end of the data";
                 return std::nullopt;
             }
 
@@ -469,15 +473,15 @@ namespace {
             const int32_t y = cr.i32();
             const int32_t dataSize = cr.i32();
             if (!cr.ok || dataSize < 0) {
-                std::cerr << "[EXRLoader] truncated chunk header" << std::endl;
+                THREEPP_LOG(kLog, Error) << "An EXR chunk header is truncated";
                 return std::nullopt;
             }
             if (y < h.yMin || y > h.yMax || (y - h.yMin) % linesPerBlock != 0) {
-                std::cerr << "[EXRLoader] chunk claims scanline " << y << ", outside the dataWindow" << std::endl;
+                THREEPP_LOG(kLog, Error) << "An EXR chunk claims scanline " << y << ", outside the dataWindow";
                 return std::nullopt;
             }
             if (!cr.need(static_cast<size_t>(dataSize))) {
-                std::cerr << "[EXRLoader] chunk data runs past end of file" << std::endl;
+                THREEPP_LOG(kLog, Error) << "An EXR chunk runs past the end of the data";
                 return std::nullopt;
             }
 
@@ -493,13 +497,13 @@ namespace {
             // this wrong turns every noisy or tiny image into garbage.
             if (h.compression == Compression::None || static_cast<size_t>(dataSize) >= uncompressedSize) {
                 if (static_cast<size_t>(dataSize) < uncompressedSize) {
-                    std::cerr << "[EXRLoader] uncompressed chunk is short" << std::endl;
+                    THREEPP_LOG(kLog, Error) << "An uncompressed EXR chunk is too short";
                     return std::nullopt;
                 }
                 std::memcpy(block.data(), chunk, uncompressedSize);
             } else if (h.compression == Compression::Rle) {
                 if (!rleUncompress(chunk, static_cast<size_t>(dataSize), block)) {
-                    std::cerr << "[EXRLoader] corrupt RLE chunk" << std::endl;
+                    THREEPP_LOG(kLog, Error) << "An RLE chunk of the EXR image is corrupt";
                     return std::nullopt;
                 }
                 reconstruct(block, scratch);
@@ -509,7 +513,7 @@ namespace {
                 if (!detail::pizDecode(chunk, static_cast<size_t>(dataSize), shortsPerSample,
                                        static_cast<int>(width), static_cast<int>(linesInBlock),
                                        block.data(), uncompressedSize)) {
-                    std::cerr << "[EXRLoader] corrupt PIZ chunk" << std::endl;
+                    THREEPP_LOG(kLog, Error) << "A PIZ chunk of the EXR image is corrupt";
                     return std::nullopt;
                 }
             } else {
@@ -517,8 +521,8 @@ namespace {
                         reinterpret_cast<char*>(block.data()), static_cast<int>(uncompressedSize),
                         reinterpret_cast<const char*>(chunk), dataSize);
                 if (written != static_cast<int>(uncompressedSize)) {
-                    std::cerr << "[EXRLoader] corrupt ZIP chunk (inflate produced " << written
-                              << " of " << uncompressedSize << " bytes)" << std::endl;
+                    THREEPP_LOG(kLog, Error) << "A ZIP chunk of the EXR image is corrupt (inflate gave " << written
+                                             << " of " << uncompressedSize << " bytes)";
                     return std::nullopt;
                 }
                 reconstruct(block, scratch);
@@ -562,13 +566,13 @@ namespace {
 std::shared_ptr<Texture> EXRLoader::load(const std::filesystem::path& path, bool flipY) {
 
     if (!std::filesystem::exists(path)) {
-        std::cerr << "[EXRLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << absolute(path).string() << ": the file does not exist";
         return nullptr;
     }
 
     std::ifstream file(path, std::ios::binary);
     if (!file) {
-        std::cerr << "[EXRLoader] Failed to open '" << path.string() << "'" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot open " << path.string();
         return nullptr;
     }
     std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)),
@@ -576,7 +580,7 @@ std::shared_ptr<Texture> EXRLoader::load(const std::filesystem::path& path, bool
 
     auto decoded = decode(bytes.data(), bytes.size(), flipY);
     if (!decoded) {
-        std::cerr << "[EXRLoader] Failed to load '" << path.string() << "'" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << path.string() << ": the EXR data does not decode (the reason is the message before)";
         return nullptr;
     }
 

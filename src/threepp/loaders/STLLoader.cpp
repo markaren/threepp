@@ -3,10 +3,14 @@
 
 #include <cstring>
 #include <fstream>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.stl"};
+}
 
 using namespace threepp;
 
@@ -55,8 +59,8 @@ namespace {
 
         const size_t expect = dataOffset + static_cast<size_t>(faces) * faceLength;
         if (data.size() < expect) {
-            std::cerr << "[STLLoader] Truncated binary STL: header claims " << faces
-                      << " faces but file is too small!" << std::endl;
+            THREEPP_LOG(kLog, Error) << "The binary STL header claims " << faces
+                                     << " faces, but the data is too short for them; nothing is loaded";
             return nullptr;
         }
 
@@ -128,19 +132,19 @@ namespace {
 std::shared_ptr<BufferGeometry> STLLoader::load(const std::filesystem::path& path) const {
 
     if (!exists(path)) {
-        std::cerr << "[STLLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << absolute(path).string() << ": the file does not exist";
         return nullptr;
     }
 
     std::ifstream reader(path, std::ios::binary | std::ios::ate);
     if (!reader) {
-        std::cerr << "[STLLoader] Failed to open file: '" << absolute(path).string() << "'!" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot open " << absolute(path).string();
         return nullptr;
     }
 
     const auto fileSize = static_cast<std::streamoff>(reader.tellg());
     if (fileSize <= 0) {
-        std::cerr << "[STLLoader] Empty file: '" << absolute(path).string() << "'!" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << absolute(path).string() << ": the file is empty";
         return nullptr;
     }
     reader.seekg(0, std::ios::beg);

@@ -14,7 +14,7 @@
 #include "SVGTypes.hpp"
 
 #include <cmath>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <regex>
 #include <string>
 #include <vector>
@@ -22,6 +22,8 @@
 
 
 namespace threepp::svg {
+
+    inline constinit log::Category kLogSvg{"loader.svg"};
 
     struct RE {
 
@@ -594,7 +596,7 @@ namespace threepp::svg {
 
         } else {
 
-            std::cerr << "fill-rule: '" << fillRule << "' is currently not implemented." << std::endl;
+            THREEPP_LOG_ONCE(kLogSvg, Warn) << "fill-rule '" << fillRule << "' is not supported; paths that use it make no shape";
             return std::nullopt;
         }
     }

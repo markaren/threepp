@@ -3,9 +3,13 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <string>
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.image"};
+}
 
 using namespace threepp;
 
@@ -40,7 +44,7 @@ std::shared_ptr<CubeTexture> CubeTextureLoader::load(const std::array<std::files
             // ImageLoader returns nullopt for a path that does not exist or
             // will not decode. A mistyped face path is the single most likely
             // way to call this wrongly, so fail the way every other loader does.
-            std::cerr << "[CubeTextureLoader] Cannot load cube face: " << path << "\n";
+            THREEPP_LOG(kLog, Error) << "Cannot load the cube face " << path.string() << "; the cube texture is not made";
             return nullptr;
         }
         images.emplace_back(std::move(*load));

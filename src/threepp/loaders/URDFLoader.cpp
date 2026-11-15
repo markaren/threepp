@@ -21,13 +21,17 @@
 
 #include <array>
 #include <cmath>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <iterator>
 #include <list>
 #include <map>
 #include <set>
 #include <unordered_map>
 
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.urdf"};
+}
 
 using namespace threepp;
 
@@ -208,7 +212,7 @@ namespace {
             }
 
             if (!loader) {
-                std::cerr << "[URDFLoader] No geometry loader set, cannot load " << fileName << std::endl;
+                THREEPP_LOG(kLog, Warn) << "No geometry loader is set, so the mesh " << fileName << " is not loaded";
                 return nullptr;
             }
 
@@ -392,12 +396,12 @@ namespace {
         const auto count = std::distance(nodes.begin(), nodes.end());
         if (count < 2) return;
 
-        const std::string message =
-                "[URDFLoader] warning: link '" + name + "' has " + std::to_string(count) + " <" + tag +
+        const std::string text =
+                "link '" + name + "' has " + std::to_string(count) + " <" + tag +
                 "> elements; the articulation uses the first and ignores " + std::to_string(count - 1) +
                 " (" + model + ")";
-        std::cerr << message << std::endl;
-        diagnostics.push_back(message);
+        THREEPP_LOG(kLog, Warn) << text;
+        diagnostics.push_back("[URDFLoader] warning: " + text);
     }
 
     // Walk the URDF link/joint tree (root first) into a flat articulation description.
@@ -515,12 +519,12 @@ struct URDFLoader::Impl {
         const bool ok = xacro::expand(doc, out, inputs, diags);
 
         for (const auto& warning : diags.warnings()) {
-            std::cerr << "[xacro] warning: " << warning << std::endl;
+            THREEPP_LOG(kLog, Warn) << "xacro: " << warning;
             diagnostics.push_back("[xacro] warning: " + warning);
         }
         if (!ok) {
             for (const auto& error : diags.errors()) {
-                std::cerr << "[xacro] " << error << std::endl;
+                THREEPP_LOG(kLog, Error) << "xacro: " << error;
                 fail(error);
             }
             // expand() only returns false with something in diags.errors(), but a caller

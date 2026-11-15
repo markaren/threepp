@@ -3,7 +3,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <iostream>
 #include <vector>
 
 // PIZ, in two halves:
@@ -466,7 +465,6 @@ bool threepp::detail::pizDecode(const unsigned char* in, std::size_t inSize,
 
     std::vector<uint16_t> tmp(totalShorts);
     if (!hufUncompress(in + pos, static_cast<size_t>(length), tmp.data(), totalShorts)) {
-        std::cerr << "[EXRLoader] corrupt PIZ chunk (huffman)" << std::endl;
         return false;
     }
 

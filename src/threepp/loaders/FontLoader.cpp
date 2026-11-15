@@ -9,9 +9,13 @@
 
 #include <fstream>
 #include <initializer_list>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <utility>
 
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.font"};
+}
 
 using namespace threepp;
 
@@ -134,7 +138,7 @@ namespace {
 std::optional<Font> FontLoader::load(const std::filesystem::path& path) {
 
     if (!std::filesystem::exists(path)) {
-        std::cerr << "[FontLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+        THREEPP_LOG(kLog, Error) << "Cannot load " << absolute(path).string() << ": the file does not exist";
         return std::nullopt;
     }
 

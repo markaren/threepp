@@ -855,7 +855,7 @@ namespace threepp {
         try {
             return parseBytes(data, basePath, preserveNarrowAttributes);
         } catch (const std::exception& e) {
-            std::cerr << "[GLTFLoader] Error loading from memory: " << e.what() << "\n";
+            THREEPP_LOG(gltf::kLog, Error) << "Cannot load glTF from memory: " << e.what();
             return std::nullopt;
         }
     }
@@ -868,7 +868,7 @@ namespace threepp {
 
             return parseBytes(data, path.parent_path(), preserveNarrowAttributes);
         } catch (const std::exception& e) {
-            std::cerr << "[GLTFLoader] Error loading " << path << ": " << e.what() << "\n";
+            THREEPP_LOG(gltf::kLog, Error) << "Cannot load " << path.string() << ": " << e.what();
             return std::nullopt;
         }
     }

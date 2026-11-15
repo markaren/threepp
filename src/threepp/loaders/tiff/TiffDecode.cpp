@@ -9,10 +9,14 @@
 #include <climits>
 #include <cstdint>
 #include <cstring>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <map>
 #include <string>
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.image"};
+}
 
 namespace {
 
@@ -43,7 +47,7 @@ namespace {
     constexpr uint32_t kCompressionPackBits = 32773;
 
     std::nullopt_t fail(const std::string& why) {
-        std::cerr << "[ImageLoader] TIFF: " << why << "\n";
+        THREEPP_LOG(kLog, Error) << "The TIFF image does not decode: " << why;
         return std::nullopt;
     }
 

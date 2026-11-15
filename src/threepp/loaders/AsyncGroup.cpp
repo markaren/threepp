@@ -3,7 +3,7 @@
 
 #include <atomic>
 #include <exception>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -11,6 +11,10 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.model"};
+}
 
 using namespace threepp;
 
@@ -26,9 +30,9 @@ namespace {
         try {
             result = ctx->fn();
         } catch (const std::exception& e) {
-            std::cerr << "[AsyncGroup] load failed: " << e.what() << std::endl;
+            THREEPP_LOG(kLog, Error) << "A background load failed: " << e.what() << "; the group stays empty";
         } catch (...) {
-            std::cerr << "[AsyncGroup] load failed: unknown exception" << std::endl;
+            THREEPP_LOG(kLog, Error) << "A background load failed with an unknown exception; the group stays empty";
         }
 
         if (auto ag = ctx->weak.lock()) {

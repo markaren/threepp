@@ -30,9 +30,13 @@
 #include <charconv>
 #include <cstdlib>
 #include <functional>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <sstream>
 #include <unordered_map>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.collada"};
+}
 
 using namespace threepp;
 
@@ -788,20 +792,20 @@ struct ColladaLoader::Impl {
 
     std::shared_ptr<Group> load(const std::filesystem::path& path) {
         if (!std::filesystem::exists(path)) {
-            std::cerr << "[ColladaLoader] No such file: '" << std::filesystem::absolute(path).string() << "'!" << std::endl;
+            THREEPP_LOG(kLog, Error) << "Cannot load " << std::filesystem::absolute(path).string() << ": the file does not exist";
             return nullptr;
         }
 
         pugi::xml_document doc;
         const auto result = doc.load_file(path.string().c_str());
         if (!result) {
-            std::cerr << "[ColladaLoader] Failed to parse XML: " << result.description() << std::endl;
+            THREEPP_LOG(kLog, Error) << "Cannot load " << path.string() << ": the XML does not parse (" << result.description() << ")";
             return nullptr;
         }
 
         const auto root = doc.child("COLLADA");
         if (!root) {
-            std::cerr << "[ColladaLoader] Not a valid COLLADA file." << std::endl;
+            THREEPP_LOG(kLog, Error) << "Cannot load " << path.string() << ": it has no COLLADA root element";
             return nullptr;
         }
 
@@ -994,7 +998,7 @@ struct ColladaLoader::Impl {
         }
 
         if (!visualScene) {
-            std::cerr << "[ColladaLoader] No visual scene found." << std::endl;
+            THREEPP_LOG(kLog, Warn) << path.string() << " has no visual scene; the loaded group is empty";
             return sceneGroup;
         }
 
@@ -1163,13 +1167,13 @@ struct ColladaLoader::Impl {
             for (const auto& jName : sd.jointNames) {
                 const auto it = nodesById.find(jName);
                 if (it == nodesById.end()) {
-                    std::cerr << "[ColladaLoader] skin joint '" << jName << "' not found in scene." << std::endl;
+                    THREEPP_LOG(kLog, Warn) << "Skin joint '" << jName << "' is not in the scene; its mesh loads without the skin";
                     bones.clear();
                     break;
                 }
                 auto bone = std::dynamic_pointer_cast<Bone>(it->second);
                 if (!bone) {
-                    std::cerr << "[ColladaLoader] skin joint '" << jName << "' is not a Bone node." << std::endl;
+                    THREEPP_LOG(kLog, Warn) << "Skin joint '" << jName << "' is not a bone; its mesh loads without the skin";
                     bones.clear();
                     break;
                 }

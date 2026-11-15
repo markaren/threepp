@@ -7,8 +7,12 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.dds"};
+}
 
 namespace threepp {
 
@@ -198,21 +202,21 @@ namespace threepp {
 
         std::shared_ptr<Texture> parseDDS(const uint8_t* raw, size_t size, bool flipY) {
             if (size < 4 + sizeof(DDSHeader)) {
-                std::cerr << "[DDSLoader] File too small\n";
+                THREEPP_LOG(kLog, Error) << "The DDS data is too small to hold a header; the texture is not loaded";
                 return nullptr;
             }
 
             uint32_t magic = 0;
             std::memcpy(&magic, raw, 4);
             if (magic != DDS_MAGIC) {
-                std::cerr << "[DDSLoader] Invalid DDS magic\n";
+                THREEPP_LOG(kLog, Error) << "The data is not a DDS image (wrong magic number); the texture is not loaded";
                 return nullptr;
             }
 
             DDSHeader hdr{};
             std::memcpy(&hdr, raw + 4, sizeof(DDSHeader));
             if (hdr.dwSize != 124) {
-                std::cerr << "[DDSLoader] Unexpected DDS header size\n";
+                THREEPP_LOG(kLog, Error) << "The DDS header size is " << hdr.dwSize << ", not 124; the texture is not loaded";
                 return nullptr;
             }
 
@@ -220,8 +224,8 @@ namespace threepp {
             // sane GPU limits before doing arithmetic with it.
             constexpr uint32_t maxDim = 16384;
             if (hdr.dwWidth == 0 || hdr.dwHeight == 0 || hdr.dwWidth > maxDim || hdr.dwHeight > maxDim) {
-                std::cerr << "[DDSLoader] Rejecting image dimensions "
-                          << hdr.dwWidth << "x" << hdr.dwHeight << "\n";
+                THREEPP_LOG(kLog, Error) << "DDS image size " << hdr.dwWidth << "x" << hdr.dwHeight
+                                         << " is outside 1 to 16384; the texture is not loaded";
                 return nullptr;
             }
 
@@ -238,7 +242,7 @@ namespace threepp {
                 else if (fcc == makeFourCC('A','T','I','2')) glFmt = GL_COMPRESSED_RG_RGTC2;
                 else if (fcc == makeFourCC('D','X','1','0')) {
                     if (size < dataOffset + sizeof(DDSHeaderDXT10)) {
-                        std::cerr << "[DDSLoader] Truncated DX10 header\n";
+                        THREEPP_LOG(kLog, Error) << "The DDS DX10 header is truncated; the texture is not loaded";
                         return nullptr;
                     }
                     DDSHeaderDXT10 dx10{};
@@ -249,8 +253,8 @@ namespace threepp {
             }
 
             if (glFmt == 0) {
-                std::cerr << "[DDSLoader] Unsupported DDS format (FourCC=0x"
-                          << std::hex << hdr.ddspf.dwFourCC << std::dec << ")\n";
+                THREEPP_LOG(kLog, Error) << "DDS format FourCC 0x" << std::hex << hdr.ddspf.dwFourCC
+                                         << " is not supported; the texture is not loaded";
                 return nullptr;
             }
 
@@ -271,7 +275,7 @@ namespace threepp {
                 // dataOffset <= size holds on entry, so the subtraction cannot
                 // wrap the way `dataOffset + bytes` could.
                 if (bytes > size - dataOffset) {
-                    std::cerr << "[DDSLoader] Truncated mip level " << i << "\n";
+                    THREEPP_LOG(kLog, Warn) << "DDS mip level " << i << " is truncated; the texture keeps only the levels before it";
                     break;
                 }
 
@@ -311,7 +315,7 @@ namespace threepp {
     std::shared_ptr<Texture> DDSLoader::load(const std::filesystem::path& path, bool flipY) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file) {
-            std::cerr << "[DDSLoader] Cannot open: " << path << "\n";
+            THREEPP_LOG(kLog, Error) << "Cannot open " << path.string();
             return nullptr;
         }
         const auto fileSize = file.tellg();

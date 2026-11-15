@@ -37,7 +37,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <limits>
 #include <map>
 #include <optional>
@@ -47,6 +47,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+namespace {
+    constinit threepp::log::Category kLog{"loader.usd"};
+}
 
 namespace threepp {
 
@@ -145,7 +149,7 @@ namespace threepp {
                 if (!std::filesystem::exists(cache)) {
                     std::string err;
                     if (!fetchHttp(url, cache, err)) {
-                        std::cerr << "[USDLoader] " << err << "\n";
+                        THREEPP_LOG(kLog, Error) << "Cannot fetch " << url << ": " << err;
                         return {};
                     }
                 }
@@ -621,7 +625,7 @@ namespace threepp {
                      lnext::ComposeLoadedStage(&stage, resolver, pathStr, options, &warn, &err, compositionOptions);
             }
             if (!ok) {
-                std::cerr << "[USDLoader] Failed to load '" << pathStr << "': " << err << "\n";
+                THREEPP_LOG(kLog, Error) << "Cannot load " << pathStr << ": " << err;
                 return nullptr;
             }
 
@@ -642,7 +646,7 @@ namespace threepp {
             tnext::RenderSceneConverter converter(config);
             tnext::ConvertResult converted = converter.Convert(stage);
             if (!converted.success) {
-                std::cerr << "[USDLoader] Failed to convert '" << pathStr << "': " << converted.error << "\n";
+                THREEPP_LOG(kLog, Error) << "Cannot convert " << pathStr << " to a scene: " << converted.error;
                 return nullptr;
             }
             tnext::RenderScene& scene = converted.scene;
@@ -672,7 +676,7 @@ namespace threepp {
             addLights(build, *root);
 
             if (build.meshCount == 0) {
-                std::cerr << "[USDLoader] No usable geometry in '" << pathStr << "'\n";
+                THREEPP_LOG(kLog, Warn) << pathStr << " has no mesh threepp can use; nothing is loaded";
                 return nullptr;
             }
 
@@ -1011,7 +1015,8 @@ namespace threepp {
             if (!reader) {
                 reader = std::make_shared<lnext::USDZReader>();
                 if (!reader->OpenFile(package)) {
-                    std::cerr << "[USDLoader] Cannot open package '" << package << "': " << reader->Error() << "\n";
+                    THREEPP_LOG(kLog, Error) << "Cannot open the package " << package << ": " << reader->Error()
+                                             << "; textures inside it do not load";
                 }
             }
             std::replace(entry.begin(), entry.end(), '\\', '/');

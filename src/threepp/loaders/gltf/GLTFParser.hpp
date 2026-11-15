@@ -16,7 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
-#include <iostream>
+#include "threepp/utils/Log.hpp"
 #include <limits>
 #include <map>
 #include <set>
@@ -51,6 +51,8 @@
 #include "meshoptimizer.h"
 
 namespace threepp::gltf {
+
+    inline constinit log::Category kLog{"loader.gltf"};
 
     using json = nlohmann::json;
     namespace fs = std::filesystem;
