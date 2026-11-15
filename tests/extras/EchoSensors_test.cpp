@@ -12,14 +12,20 @@
 #include "threepp/helpers/EchoSynthesis.hpp"
 #include "threepp/helpers/ImagingSonarModel.hpp"
 #include "threepp/helpers/MarineRadarModel.hpp"
+#include "threepp/scenes/Weather.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <complex>
+#include <chrono>
+#include <cstdio>
+#include <utility>
+#include <vector>
 
 using namespace threepp;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 
 namespace {
 
@@ -301,13 +307,16 @@ namespace {
         return o;
     }
 
+    // The sea state matters only to the sea material and to multipath; the
+    // cases that use neither fold with the default weather.
     double columnPower(MarineRadarSynthesizer& syn, const MarineRadarModel& m, const RadarMaterials& mats,
-                       const Vector3& origin, const Vector3& p, std::int32_t* labelOut = nullptr) {
+                       const Vector3& origin, const Vector3& p, std::int32_t* labelOut = nullptr,
+                       const Weather& weather = Weather{}) {
         const auto o = oneRayAt(syn, origin, p);
         std::vector<std::complex<float>> col(m.rangeBins);
         std::vector<std::int32_t> lab(m.rangeBins);
         std::vector<float> amp(m.rangeBins);
-        syn.foldSlot(m, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{}, 1, col.data(),
+        syn.foldSlot(m, mats, weather, 0.0, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{}, 1, col.data(),
                      lab.data(), amp.data(), m.rangeBins);
         double s = 0.0;
         for (const auto& c : col) s += std::norm(std::complex<double>(c));
@@ -362,8 +371,8 @@ TEST_CASE("MarineRadar: a fold writes no further than the rows it is given") {
     std::vector<std::complex<float>> col(rows + guard, {7.f, 7.f});
     std::vector<std::int32_t> lab(rows + guard, 77);
     std::vector<float> amp(rows + guard, 7.f);
-    const unsigned extent = syn.foldSlot(m, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin,
-                                         Matrix3{}, 1, col.data(), lab.data(), amp.data(), rows);
+    const unsigned extent = syn.foldSlot(m, mats, Weather{}, 0.0, 0, o.returns.data(), o.dirs.data(),
+                                         o.solid.data(), origin, Matrix3{}, 1, col.data(), lab.data(), amp.data(), rows);
     CHECK(extent <= rows);
     for (unsigned j = rows; j < rows + guard; ++j) {
         REQUIRE(col[j] == std::complex<float>(7.f, 7.f));
@@ -392,13 +401,13 @@ TEST_CASE("MarineRadar: rain is attenuated by the showers nearer than it, whatev
     none.rainRate = 0.f;// skipped: keeps the near shower second in both lists
 
     auto fold = [&](const std::vector<RainCell>& rain) {
-        auto mm = m;
-        mm.rain = rain;
-        std::vector<std::complex<float>> col(mm.rangeBins);
-        std::vector<std::int32_t> lab(mm.rangeBins);
-        std::vector<float> amp(mm.rangeBins);
-        syn.foldSlot(mm, mats, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{}, 1,
-                     col.data(), lab.data(), amp.data(), mm.rangeBins);
+        Weather weather;
+        weather.rain = rain;
+        std::vector<std::complex<float>> col(m.rangeBins);
+        std::vector<std::int32_t> lab(m.rangeBins);
+        std::vector<float> amp(m.rangeBins);
+        syn.foldSlot(m, mats, weather, 0.0, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin, Matrix3{},
+                     1, col.data(), lab.data(), amp.data(), m.rangeBins);
         return col;
     };
     const auto alone = fold({none, nearCell});
@@ -418,10 +427,115 @@ TEST_CASE("MarineRadar: rain is attenuated by the showers nearer than it, whatev
     CHECK_THAT(10.0 * std::log10(pFarFirst / pAlone), WithinAbs(0.0, 0.01));
 }
 
+TEST_CASE("MarineRadar: a moving shower is folded where it is at the trace's time") {
+    MarineRadarModel m;
+    m.multipath = false;
+    m.minRange = 20.f;
+    m.maxRange = 6020.f;
+    m.rangeBins = 1000;
+    MarineRadarSynthesizer syn(m);
+    RadarMaterials mats;
+    const Vector3 origin(0, 5, 0);
+    const auto o = oneRayAt(syn, origin, Vector3(0, 5, -5900.f));
+
+    auto fold = [&](const RainCell& cell, double time) {
+        Weather weather;
+        weather.rain = {cell};
+        std::vector<std::complex<float>> col(m.rangeBins);
+        std::vector<std::int32_t> lab(m.rangeBins);
+        std::vector<float> amp(m.rangeBins);
+        syn.foldSlot(m, mats, weather, time, 0, o.returns.data(), o.dirs.data(), o.solid.data(), origin,
+                     Matrix3{}, 1, col.data(), lab.data(), amp.data(), m.rangeBins);
+        return std::make_pair(col, lab);
+    };
+    RainCell moving;
+    moving.centre = Vector3(150.f, 0, -2000.f);
+    moving.velocity = Vector3(-6.f, 0, -9.f);
+    moving.radius = 300.f;
+    moving.rainRate = 30.f;
+    const double t = 40.0;
+    RainCell placed = moving;
+    placed.centre = moving.centreAt(t);
+    placed.velocity = Vector3();
+    CHECK(placed.centre.x == -90.f);
+    CHECK(placed.centre.z == -2360.f);
+
+    const auto atT = fold(moving, t);
+    const auto atZero = fold(placed, 0.0);
+    unsigned nonZero = 0;
+    for (unsigned j = 0; j < m.rangeBins; ++j) {
+        REQUIRE(atT.first[j] == atZero.first[j]);
+        REQUIRE(atT.second[j] == atZero.second[j]);
+        nonZero += atT.first[j] != std::complex<float>(0.f, 0.f);
+    }
+    CHECK(nonZero > 0u);
+    // And it is not where it started: the fold at time 0 differs.
+    const auto start = fold(moving, 0.0);
+    bool differs = false;
+    for (unsigned j = 0; j < m.rangeBins; ++j) differs = differs || start.first[j] != atT.first[j];
+    CHECK(differs);
+}
+
+TEST_CASE("Rain: volume reflectivity and attenuation at 9.41 GHz against IEC 62388 Table D.5") {
+    const double lambda = 299792458.0 / 9.41e9;
+    const double eta4 = 10.0 * std::log10(rainVolumeReflectivity(4.0, lambda));
+    const double eta16 = 10.0 * std::log10(rainVolumeReflectivity(16.0, lambda));
+    INFO("eta: " << eta4 << " dB at 4 mm/h, " << eta16 << " dB at 16 mm/h; attenuation "
+                 << rainSpecificAttenuation(4.0) << ", " << rainSpecificAttenuation(16.0) << " dB/km");
+    CHECK_THAT(eta4, WithinAbs(-63.0, 0.2));
+    CHECK_THAT(eta16, WithinAbs(-53.3, 0.2));
+    CHECK_THAT(rainSpecificAttenuation(4.0), WithinAbs(0.059, 0.002));
+    CHECK_THAT(rainSpecificAttenuation(16.0), WithinAbs(0.347, 0.005));
+}
+
+TEST_CASE("Weather: the significant wave height of the ocean's spectrum") {
+    auto hs = [](float U, float fetch, float swell = 0.f) {
+        Weather w;
+        w.windSpeed = U;
+        w.fetch = fetch;
+        w.swellHeight = swell;
+        return w.significantWaveHeight();
+    };
+    const double a = hs(4.5f, 1500.f), b = hs(9.6f, 8000.f), c = hs(10.f, 0.f);
+    INFO("Hs: " << a << " m (4.5 m/s, 1.5 km), " << b << " m (9.6 m/s, 8 km), " << c << " m (10 m/s, developed)");
+    CHECK_THAT(a, WithinRel(0.096, 0.03));
+    CHECK_THAT(b, WithinRel(0.48, 0.03));
+    CHECK_THAT(c, WithinRel(2.141, 0.03));
+
+    // Monotone in fetch at a fixed wind up to 0.9 of the fully developed
+    // fetch 1609 U^2, and fully developed from there on. In between it is
+    // not: the peak's share of the variance (1 / A_gamma) falls faster than
+    // r^0.5567 rises as gamma goes to 1, so the height peaks about 3.5% over
+    // the developed one near r = 0.955 and comes down to it at r = 1.
+    double last = 0.0;
+    for (const float f : {100.f, 1000.f, 5000.f, 20000.f, 60000.f, 120000.f, 144810.f}) {
+        const double h = hs(10.f, f);
+        CHECK(h >= last);
+        last = h;
+    }
+    const double developed = hs(10.f, 0.f);
+    CHECK_THAT(hs(10.f, 1609.f * 100.f), WithinRel(developed, 1e-9));
+    CHECK_THAT(hs(10.f, 400000.f), WithinRel(developed, 1e-9));
+
+    // Swell adds in quadrature.
+    CHECK_THAT(hs(9.6f, 8000.f, 1.5f), WithinRel(std::sqrt(b * b + 1.5 * 1.5), 1e-9));
+    CHECK_THAT(hs(0.f, 0.f, 1.5f), WithinRel(1.5, 1e-9));
+}
+
+TEST_CASE("Douglas sea state: seaStateFromWaveHeight inverts douglasWaveHeight") {
+    for (const double s : {0.0, 0.5, 1.0, 2.3, 4.0, 6.0}) {
+        INFO("sea state " << s);
+        CHECK_THAT(seaStateFromWaveHeight(douglasWaveHeight(s)), WithinAbs(s, 1e-9));
+    }
+    CHECK(seaStateFromWaveHeight(9.0) == 6.0);
+    CHECK(seaStateFromWaveHeight(-1.0) == 0.0);
+}
+
 TEST_CASE("MarineRadar: two-ray lobing over a glassy sea") {
     MarineRadarModel m;
-    m.seaState = 0.f;// no roughness: the full Fresnel reflection
     m.rangeBins = 1024;
+    Weather calm;
+    calm.windSpeed = 0.f;// no waves, no roughness: the full Fresnel reflection
     MarineRadarSynthesizer syn(m);
     RadarMaterials mats;
     mats.set(9, RadarMaterial::Metal());
@@ -436,7 +550,8 @@ TEST_CASE("MarineRadar: two-ray lobing over a glassy sea") {
         auto off = m;
         off.multipath = false;
         MarineRadarSynthesizer a(on), b(off);
-        return 10.0 * std::log10(columnPower(a, on, mats, origin, p) / columnPower(b, off, mats, origin, p));
+        return 10.0 * std::log10(columnPower(a, on, mats, origin, p, nullptr, calm) /
+                                 columnPower(b, off, mats, origin, p, nullptr, calm));
     };
     // Half a wavelength of path difference + the sea's ~180 deg phase flip:
     // the two rays add, F ~ 2, +12 dB two-way. A whole wavelength: they cancel.
@@ -672,8 +787,8 @@ TEST_CASE("MarineRadar: a calibration sphere returns the radar equation's SNR") 
             col[c].resize(m.rangeBins);
             lab[c].resize(m.rangeBins);
             amp[c].resize(m.rangeBins);
-            syn.foldSlot(m, mats, sl, ret.data(), dirs.data(), solid.data(), origin, Matrix3{}, 1, col[c].data(),
-                         lab[c].data(), amp[c].data(), m.rangeBins);
+            syn.foldSlot(m, mats, Weather{}, 0.0, sl, ret.data(), dirs.data(), solid.data(), origin, Matrix3{}, 1,
+                         col[c].data(), lab[c].data(), amp[c].data(), m.rangeBins);
         }
         auto at = [](std::int64_t sl) { return static_cast<std::size_t>(sl + 1); };
         auto inRing = [](std::int64_t sl) { return sl >= -1 && sl <= 1; };
@@ -697,4 +812,245 @@ TEST_CASE("MarineRadar: a calibration sphere returns the radar equation's SNR") 
     INFO("sphere SNR " << measured << " dB, radar equation " << expected << " dB");
     CHECK_THAT(measured, WithinAbs(expected, 1.0));
     CHECK(labelled == seeds);
+}
+
+// Not a test of a result: what one slot costs to fold, with and without a
+// shower on its bearing. Hidden; run with "[.bench]".
+TEST_CASE("MarineRadar: the cost of folding one slot, dry and through a shower", "[.bench]") {
+    MarineRadarModel m = MarineRadarModel::Radome24in();
+    m.minRange = 25.f;
+    m.maxRange = 1852.f;
+    m.rangeBins = 1024;
+    m.pulseLength = 80e-9f;
+    MarineRadarSynthesizer syn(m);
+    RadarMaterials mats;
+    mats.set(1, RadarMaterial::Sea());
+    const Vector3 origin(0, 4, 0);
+    std::vector<Vector3> dirs;
+    std::vector<float> solid;
+    syn.slotRays(0, origin.y, dirs, solid);
+    const unsigned n = syn.raysPerSlot();
+
+    // Every ray that reaches the sea inside the range hits it; the rest miss.
+    std::vector<LidarReturn> miss(n), sea(n);
+    unsigned seaHits = 0;
+    for (unsigned i = 0; i < n; ++i) {
+        if (dirs[i].y >= 0.f) continue;
+        const float t = -origin.y / dirs[i].y;
+        if (t > m.maxRange) continue;
+        sea[i] = hitAt(origin, dirs[i], t, 1);
+        sea[i].normal = Vector3(0, 1, 0);
+        ++seaHits;
+    }
+
+    Weather dry, wet;
+    dry.windSpeed = wet.windSpeed = 9.6f;
+    dry.fetch = wet.fetch = 8000.f;
+    RainCell cell;// the USV demo's squall, on the slot's bearing
+    cell.centre = Vector3(0, 0, -900.f);
+    cell.radius = 150.f;
+    cell.top = 1400.f;
+    cell.rainRate = 16.f;
+    wet.rain = {cell};
+
+    std::vector<std::complex<float>> col(m.rangeBins);
+    std::vector<std::int32_t> lab(m.rangeBins);
+    std::vector<float> amp(m.rangeBins);
+    auto ms = [&](const std::vector<LidarReturn>& returns, const Weather& w) {
+        constexpr int reps = 20;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int k = 0; k < reps; ++k) {
+            syn.foldSlot(m, mats, w, 0.0, 0, returns.data(), dirs.data(), solid.data(), origin, Matrix3{}, 1,
+                         col.data(), lab.data(), amp.data(), m.rangeBins);
+        }
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / reps;
+    };
+    const double a = ms(miss, dry), b = ms(sea, dry), c = ms(miss, wet), d = ms(sea, wet);
+    std::printf("rays per slot %u, sea hits %u\n", n, seaHits);
+    std::printf("ms per slot: all miss dry %.4f | sea dry %.4f | all miss shower %.4f | sea shower %.4f\n", a, b, c, d);
+    std::printf("at 24 rpm, 2048 spokes, 60 fps (13.65 slots a frame): dry %.2f ms, shower %.2f ms a frame\n",
+                13.65 * b, 13.65 * d);
+    // A wide shower that covers the whole range: the cost must not grow with its size.
+    Weather wide = wet;
+    wide.rain[0].radius = 1500.f;
+    const double e = ms(sea, wide);
+    std::printf("ms per slot: sea wide shower (radius 1500 m) %.4f\n", e);
+    SUCCEED();
+}
+
+namespace {
+
+    // The radar of the USV demo: a 24 in radome on a 1 nmi range scale.
+    MarineRadarModel rainRadar() {
+        MarineRadarModel m = MarineRadarModel::Radome24in();
+        m.minRange = 25.f;
+        m.maxRange = 1852.f;
+        m.rangeBins = 1024;
+        m.pulseLength = 80e-9f;
+        return m;
+    }
+
+    Weather showerAhead(float radius, float top, float rainRate) {
+        Weather w;
+        w.windSpeed = 9.6f;
+        w.fetch = 8000.f;
+        RainCell cell;// on slot 0's bearing
+        cell.centre = Vector3(0, 0, -900.f);
+        cell.radius = radius;
+        cell.top = top;
+        cell.rainRate = rainRate;
+        w.rain = {cell};
+        return w;
+    }
+
+    struct RainWindows {
+        std::vector<double> energy;// mean over the keys of the sum of |column|^2 in each window
+        double rayleigh = 0.0;     // (mean |x|)^2 / mean |x|^2 of the bin at `probeRange`
+    };
+
+    enum class RainHits { None, Sea, Wall };
+
+    // Slot 0 folded once per revolution key. Every ray misses (None), or every
+    // ray that reaches the sea inside the range hits it (Sea), or every ray
+    // hits a metal wall 1600 m out along itself (Wall).
+    RainWindows foldRainWindows(const Vector3& origin, const Weather& w, RainHits hits,
+                                const std::vector<std::pair<double, double>>& windows, unsigned firstKey,
+                                unsigned keys, double probeRange = 900.0) {
+        const MarineRadarModel m = rainRadar();
+        MarineRadarSynthesizer syn(m);
+        RadarMaterials mats;
+        mats.set(1, RadarMaterial::Sea());
+        mats.set(9, RadarMaterial::Metal());
+        std::vector<Vector3> dirs;
+        std::vector<float> solid;
+        syn.slotRays(0, origin.y, dirs, solid);
+        std::vector<LidarReturn> returns(syn.raysPerSlot());
+        for (unsigned i = 0; i < returns.size(); ++i) {
+            if (hits == RainHits::Wall) {
+                returns[i] = hitAt(origin, dirs[i], 1600.f, 9);
+            } else if (hits == RainHits::Sea && dirs[i].y < 0.f && -origin.y / dirs[i].y <= m.maxRange) {
+                returns[i] = hitAt(origin, dirs[i], -origin.y / dirs[i].y, 1);
+                returns[i].normal = Vector3(0, 1, 0);
+            }
+        }
+        std::vector<std::complex<float>> col(m.rangeBins);
+        std::vector<std::int32_t> lab(m.rangeBins);
+        std::vector<float> amp(m.rangeBins);
+        RainWindows out;
+        out.energy.assign(windows.size(), 0.0);
+        const auto probe = static_cast<std::size_t>((probeRange - m.minRange) / m.binWidth());
+        double sumAbs = 0.0, sumSq = 0.0;
+        for (unsigned k = 0; k < keys; ++k) {
+            syn.foldSlot(m, mats, w, 0.0, 0, returns.data(), dirs.data(), solid.data(), origin, Matrix3{},
+                         firstKey + k, col.data(), lab.data(), amp.data(), m.rangeBins);
+            for (unsigned j = 0; j < m.rangeBins; ++j) {
+                const double R = m.minRange + (j + 0.5) * m.binWidth();
+                const double e = std::norm(std::complex<double>(col[j]));
+                for (std::size_t q = 0; q < windows.size(); ++q) {
+                    if (R >= windows[q].first && R < windows[q].second) out.energy[q] += e;
+                }
+            }
+            sumAbs += std::abs(std::complex<double>(col[probe]));
+            sumSq += std::norm(std::complex<double>(col[probe]));
+        }
+        for (double& e : out.energy) e /= keys;
+        if (sumSq > 0.0) out.rayleigh = (sumAbs / keys) * (sumAbs / keys) / (sumSq / keys);
+        return out;
+    }
+
+}// namespace
+
+// Prints the numbers the rain cases below are pinned to. Hidden; run with "[.rainref]".
+TEST_CASE("MarineRadar: reference energies of the rain fold", "[.rainref]") {
+    const std::vector<std::pair<double, double>> thirds = {{450, 750}, {750, 1050}, {1050, 1350}};
+    const std::vector<std::pair<double, double>> wide = {{200, 733}, {733, 1266}, {1266, 1800}};
+    const std::vector<std::pair<double, double>> behind = {{1400, 1800}};
+    auto show = [](const char* name, const RainWindows& a) {
+        std::printf("%s:", name);
+        for (const double e : a.energy) std::printf(" %.4e", e);
+        std::printf(" rayleigh %.4f\n", a.rayleigh);
+    };
+    auto behindDb = [&](const Vector3& origin, const Weather& wet, RainHits hits) {
+        Weather dry = wet;
+        dry.rain.clear();
+        return 10.0 * std::log10(foldRainWindows(origin, wet, hits, behind, 1, 1).energy[0] /
+                                 foldRainWindows(origin, dry, hits, behind, 1, 1).energy[0]);
+    };
+    const Vector3 low(0, 4, 0), high(0, 200, 0);
+    show("demo 16", foldRainWindows(low, showerAhead(150.f, 1400.f, 16.f), RainHits::None, thirds, 1, 800));
+    show("demo 100", foldRainWindows(low, showerAhead(150.f, 1400.f, 100.f), RainHits::None, thirds, 1, 800));
+    show("low top 16", foldRainWindows(low, showerAhead(600.f, 60.f, 16.f), RainHits::None, wide, 1, 800));
+    show("from above 100", foldRainWindows(high, showerAhead(600.f, 100.f, 100.f), RainHits::None, wide, 1, 800));
+    std::printf("sea behind, 100 mm/h, past the echo (1560 m on): %.4f dB\n",
+                10.0 * std::log10(foldRainWindows(low, showerAhead(150.f, 1400.f, 100.f), RainHits::Sea, {{1560, 1800}}, 1, 1).energy[0] /
+                                  foldRainWindows(low, showerAhead(150.f, 1400.f, 0.f), RainHits::Sea, {{1560, 1800}}, 1, 1).energy[0]));
+    std::printf("wall behind, 100 mm/h: %.4f dB\n", behindDb(low, showerAhead(150.f, 1400.f, 100.f), RainHits::Wall));
+    std::printf("wall behind, low top 100 mm/h: %.4f dB\n", behindDb(low, showerAhead(150.f, 60.f, 100.f), RainHits::Wall));
+    SUCCEED();
+}
+
+// The rain fold's output, pinned to what the march of one echo per ray per
+// range step gave (2026-11-15, the numbers "[.rainref]" prints): the mean echo
+// energy of a shower in three range windows, over 800 revolutions, and what a
+// shower takes from the echoes behind it. A fold that sums the rays' rain per
+// range cell draws other noise, so the energies are compared as means (the
+// two sets of 800 draws differ by about 2% from sampling alone) and the single
+// bin's amplitudes as a Rayleigh distribution, (mean |x|)^2 / mean |x|^2 = pi / 4.
+TEST_CASE("MarineRadar: a shower's mean echo, range window by range window") {
+    const std::vector<std::pair<double, double>> thirds = {{450, 750}, {750, 1050}, {1050, 1350}};
+    const std::vector<std::pair<double, double>> wide = {{200, 733}, {733, 1266}, {1266, 1800}};
+    const Vector3 low(0, 4, 0), high(0, 200, 0);
+    struct Case {
+        const char* name;
+        Vector3 origin;
+        Weather weather;
+        std::vector<std::pair<double, double>> windows;
+        std::array<double, 3> energy;
+    };
+    const std::vector<Case> cases = {
+            // The USV demo's squall: the near flank, the core, the far flank.
+            {"16 mm/h", low, showerAhead(150.f, 1400.f, 16.f), thirds, {1.7472e-11, 8.7174e-11, 8.7819e-12}},
+            // Heavy: the far flank is also dimmed by the rain before it.
+            {"100 mm/h", low, showerAhead(150.f, 1400.f, 100.f), thirds, {3.1867e-10, 1.3174e-09, 1.0426e-10}},
+            // A wide shower with its top at 60 m: the rays that climb leave it.
+            {"top at 60 m", low, showerAhead(600.f, 60.f, 16.f), wide, {3.8560e-10, 4.3033e-11, 5.8193e-12}},
+            // An antenna 200 m up over rain that tops out at 100 m: the rays enter it from above.
+            {"from above", high, showerAhead(600.f, 100.f, 100.f), wide, {8.5335e-10, 7.8497e-10, 1.6656e-10}},
+    };
+    for (const Case& c : cases) {
+        const auto got = foldRainWindows(c.origin, c.weather, RainHits::None, c.windows, 1, 800);
+        for (std::size_t q = 0; q < 3; ++q) {
+            INFO(c.name << ", window " << q << ": " << got.energy[q] << " against " << c.energy[q]);
+            CHECK_THAT(got.energy[q], WithinRel(c.energy[q], 0.07));
+        }
+        INFO(c.name << ": Rayleigh ratio " << got.rayleigh);
+        CHECK_THAT(got.rayleigh, WithinAbs(0.7854, 0.04));
+    }
+}
+
+TEST_CASE("MarineRadar: what a shower takes from the echoes behind it") {
+    const std::vector<std::pair<double, double>> behind = {{1400, 1800}};
+    // Past the reach of the shower's own echo: the rays that climb carry it
+    // out to 1350 m / cos(elevation), about 1516 m, plus the pulse's 12 m.
+    const std::vector<std::pair<double, double>> clear = {{1560, 1800}};
+    const Vector3 low(0, 4, 0);
+    auto behindDb = [&](const Weather& wet, RainHits hits, const std::vector<std::pair<double, double>>& window) {
+        Weather dry = wet;
+        dry.rain.clear();
+        return 10.0 * std::log10(foldRainWindows(low, wet, hits, window, 1, 1).energy[0] /
+                                 foldRainWindows(low, dry, hits, window, 1, 1).energy[0]);
+    };
+    // The sea past the shower: every ray that reaches it crossed the whole
+    // shower, so the loss is the shower's own, two ways. Its attenuation
+    // 0.0101 R^1.276 dB/km is a Gaussian across of sigma 150 / sqrt(1.276) m:
+    // 3.600 dB/km at the centre times 0.1328 sqrt(2 pi) km = 1.198 dB one way.
+    // (A window that still held the tail of the shower's echo, a fiftieth of
+    // the sea's energy, moved with the draw by tenths of a dB: the first
+    // version of this case pinned one draw.)
+    CHECK_THAT(behindDb(showerAhead(150.f, 1400.f, 100.f), RainHits::Sea, clear), WithinAbs(-2.396, 0.05));
+    // A wall 1600 m along every ray: the rays aimed below the horizon leave
+    // the rain at the sea before the shower and lose nothing.
+    CHECK_THAT(behindDb(showerAhead(150.f, 1400.f, 100.f), RainHits::Wall, behind), WithinAbs(-1.5999, 0.05));
+    // The same with the shower's top at 60 m: the rays that climb leave it too.
+    CHECK_THAT(behindDb(showerAhead(150.f, 60.f, 100.f), RainHits::Wall, behind), WithinAbs(-0.0261, 0.01));
 }

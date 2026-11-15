@@ -21,10 +21,14 @@
 // Each slot's returns are summed coherently (two-way phase 2kR plus a stable
 // scatterer phase) into a complex range profile through the pulse's
 // matched-filter response; a SPOKE is then the antenna's two-way azimuth
-// pattern convolved across the slots around it, plus thermal noise kTBF. Rain
-// cells add volume returns (Marshall-Palmer Z = 200 R^1.6) and attenuate what
-// lies behind them. The receiver applies the controls an operator has: gain,
-// sea clutter (STC) and rain clutter (FTC, a range differentiator in dB).
+// pattern convolved across the slots around it, plus thermal noise kTBF. The
+// weather is the scene's shared Weather (scenes/Weather.hpp): its wind, fetch
+// and swell give the significant wave height, from which come the NRL sea
+// state and the sea's roughness, and its rain cells add volume returns
+// (Marshall-Palmer Z = 200 R^1.6; the rays' rain variance summed per range
+// cell, one random draw per cell) and attenuate what lies behind them. The
+// receiver applies the controls an operator has: gain, sea clutter (STC) and
+// rain clutter (FTC, a range differentiator in dB).
 //
 // What it is not: flat earth (no radar horizon past the scene), no ducting,
 // no multiple bounces between targets (a corner reflector is a material, not
@@ -38,6 +42,7 @@
 #include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/scenes/Weather.hpp"
 
 #include <algorithm>
 #include <array>
@@ -61,6 +66,20 @@ namespace threepp {
 
     // Significant wave height (m) at the middle of a Douglas sea state.
     [[nodiscard]] double douglasWaveHeight(double seaState);
+
+    // The Douglas sea state of a significant wave height (m): the inverse of
+    // douglasWaveHeight, piecewise linear through the same table; 0 at 0 m,
+    // 6 at 5 m and above.
+    [[nodiscard]] double seaStateFromWaveHeight(double hs);
+
+    // Rain's radar volume reflectivity eta (m^-1) at `rainRate` mm/h and
+    // `wavelength` m: Marshall-Palmer Z = 200 R^1.6 mm^6/m^3 and |K|^2 = 0.93
+    // for water, eta = pi^5 |K|^2 Z / lambda^4.
+    [[nodiscard]] double rainVolumeReflectivity(double rainRate, double wavelength);
+
+    // Rain's one-way specific attenuation (dB/km) at `rainRate` mm/h near
+    // 9.4 GHz (ITU-R P.838 class values): 0.0101 R^1.276.
+    [[nodiscard]] double rainSpecificAttenuation(double rainRate);
 
     /**
      * How a surface scatters the radar back, per unit area:
@@ -101,18 +120,6 @@ namespace threepp {
             const auto it = byInstance.find(instanceId);
             return it == byInstance.end() ? defaultMaterial : it->second;
         }
-    };
-
-    /**
-     * A rain shower: a column of rain from the sea up to `top`, with a
-     * Gaussian rain-rate profile across (sigma = `radius`) peaking at
-     * `rainRate` mm/h.
-     */
-    struct RainCell {
-        Vector3 centre;// x, z centre; y unused
-        float radius = 300.f;
-        float top = 1500.f;   // world y
-        float rainRate = 8.f; // mm/h at the centre
     };
 
     /**
@@ -163,10 +170,10 @@ namespace threepp {
         std::uint64_t seed = 0x7AD4A5EAULL;
 
         // ── Environment ──────────────────────────────────────────────────
+        // The sea state and the rain come from the scene's Weather, which
+        // foldSlot takes; these are the radar's own view of the sea.
         float seaLevel = 0.f;
-        float seaState = 3.f;  // Douglas
         bool multipath = true; // two-ray propagation factor over the sea
-        std::vector<RainCell> rain;
 
         // ── Display controls ─────────────────────────────────────────────
         float gainDb = 0.f;         // lowers the threshold
@@ -200,7 +207,7 @@ namespace threepp {
         float worldBearingDeg = 0.f;// from world -Z ("north") clockwise toward +X
         std::vector<float> snrDb;  // per range bin, before the display controls
         std::vector<float> display;// [0, 1] after gain / STC / FTC
-        std::vector<std::int32_t> label;// strongest contributor's instance id, -1 none, -3 rain
+        std::vector<std::int32_t> label;// strongest contributor's instance id, -1 none, -3 the weather's rain
     };
 
     /**
@@ -258,9 +265,15 @@ namespace threepp {
          * `worldFromLevel` turns into the world) and `solidAngle` are the
          * slot's raysPerSlot() rays. `antennaFromLevel` is the antenna's
          * pitch and roll, where its vertical pattern is read; nullptr = level.
+         * `weather` gives the sea state (from its significant wave height)
+         * and the rain cells, each where it is at scenario time `time`: the
+         * time the slot was traced. The rain's echoes of all rays and all
+         * showers are summed per range cell and drawn once per cell (see
+         * foldRain); the rain on a ray's way dims its surface echo.
          * Returns the profile's extent: one past its last non-zero bin.
          */
-        unsigned foldSlot(const MarineRadarModel& model, const RadarMaterials& materials, std::int64_t slot,
+        unsigned foldSlot(const MarineRadarModel& model, const RadarMaterials& materials, const Weather& weather,
+                      double time, std::int64_t slot,
                       const LidarReturn* returns, const Vector3* dirs, const float* solidAngle,
                       const Vector3& origin, const Matrix3& worldFromLevel, std::uint64_t revolutionKey,
                       std::complex<float>* column, std::int32_t* label, float* labelAmp, unsigned columnBins,
@@ -295,6 +308,49 @@ namespace threepp {
         echo::ArrayPattern vPattern_;
         std::vector<float> kernel_;   // two-way azimuth voltage per slot offset, [-K, K]
         std::vector<double> tiltMean_;// running mean of the sea tilt modulation per range band
+
+        // Scratch of the rain fold, kept so that a warm fold does not allocate.
+        struct RainShower {
+            double x, z, radius, reach, top, rate;// reach: where the rate falls to 0.05 mm/h, at most 3 radii
+        };
+        struct RainChord {// one shower along one horizontal direction, on ground range s
+            double sA = 0.0, sB = 0.0, ds = 0.0;
+            std::size_t off = 0;
+            unsigned nodes = 0;// 0: the direction misses the shower
+        };
+        struct RainRay {
+            unsigned ray, group, band;
+            double ce, tEnd, weight;
+        };
+        struct RainBand {
+            unsigned group;
+            double cb;
+            int kMin, kMax;
+            std::size_t off;
+        };
+        struct RainInterval {
+            unsigned shower;
+            double tA, tB;
+        };
+        struct RainScratch {
+            std::vector<RainShower> showers;
+            std::vector<double> groupDir;  // hx, hz per horizontal direction
+            std::vector<RainChord> chords; // group x shower
+            std::vector<double> nodeEta, nodeAtt;
+            std::vector<RainRay> fast;
+            std::vector<RainBand> bands;
+            std::vector<double> u, att, attEdge, wDiff, cDiff;// per band, kMax - kMin + 2 each
+            std::vector<RainInterval> intervals;
+            std::vector<double> rayAtt;   // one-way dB of rain to each ray's end
+            std::vector<double> var, count;// per range cell
+        } rain_;
+
+        // The rain of one slot into rain_.var / rain_.count (per range cell of
+        // width `cellW` from r0) and rain_.rayAtt (per ray).
+        void foldRain(const MarineRadarModel& model, const Weather& weather, double time,
+                      const LidarReturn* returns, const Vector3* dirs, const float* solidAngle,
+                      const Vector3& origin, const Matrix3& worldFromLevel, const Matrix3* antennaFromLevel,
+                      double r0, double r1, double cellW, double C, double lambda);
 
         void finishSpoke(const MarineRadarModel& model, std::vector<std::complex<double>>& sum,
                          std::uint64_t revolutionKey, RadarSpoke& out) const;

@@ -422,6 +422,14 @@ namespace threepp_py {
               "NRL sea clutter reflectivity sigma0 (dB m^2/m^2), Gregers-Hansen & Mital 2012.");
         m.def("douglas_wave_height", &douglasWaveHeight, py::arg("sea_state"),
               "Mid-band significant wave height (m) of a Douglas sea state.");
+        m.def("sea_state_from_wave_height", &seaStateFromWaveHeight, py::arg("hs"),
+              "Douglas sea state of a significant wave height (m): the inverse of douglas_wave_height "
+              "(0 at 0 m, 6 at 5 m and above).");
+        m.def("rain_volume_reflectivity", &rainVolumeReflectivity, py::arg("rain_rate"), py::arg("wavelength"),
+              "Rain's radar volume reflectivity eta (1/m) at rain_rate mm/h and wavelength m "
+              "(Marshall-Palmer Z = 200 R^1.6, |K|^2 = 0.93).");
+        m.def("rain_specific_attenuation", &rainSpecificAttenuation, py::arg("rain_rate"),
+              "Rain's one-way specific attenuation (dB/km) at rain_rate mm/h near 9.4 GHz: 0.0101 R^1.276.");
 
         py::class_<RadarMaterial>(m, "RadarMaterial",
                                   "Radar backscatter per unit area: Lambert + Kirchhoff glint + an isotropic term, or the NRL sea.")
@@ -447,24 +455,10 @@ namespace threepp_py {
                 .def("get", [](const RadarMaterials& a, std::int32_t id) { return a.of(id); }, py::arg("instance_id"))
                 .def("clear", [](RadarMaterials& a) { a.byInstance.clear(); });
 
-        py::class_<RainCell>(m, "RainCell", "A rain shower: Gaussian rain rate across (sigma = radius), sea to top.")
-                .def(py::init([](float x, float z, float radius, float top, float rate) {
-                         RainCell c;
-                         c.centre.set(x, 0.f, z);
-                         c.radius = radius;
-                         c.top = top;
-                         c.rainRate = rate;
-                         return c;
-                     }),
-                     py::arg("x"), py::arg("z"), py::arg("radius") = 300.f, py::arg("top") = 1500.f, py::arg("rain_rate") = 8.f)
-                .def_readwrite("centre", &RainCell::centre)
-                .def_readwrite("radius", &RainCell::radius)
-                .def_readwrite("top", &RainCell::top)
-                .def_readwrite("rain_rate", &RainCell::rainRate, "mm/h at the centre");
-
         py::class_<MarineRadarModel>(m, "MarineRadarModel",
                                      "A rotating marine radar: transmitter, antenna (geometry baked at rebuild), "
-                                     "receiver, the sea and rain it sees, and the operator's controls.")
+                                     "receiver and the operator's controls. The sea state and the rain come from "
+                                     "MarineRadar.weather.")
                 .def(py::init<>())
                 .def_readwrite("frequency", &MarineRadarModel::frequency)
                 .def_readwrite("peak_power_w", &MarineRadarModel::peakPowerW)
@@ -494,11 +488,7 @@ namespace threepp_py {
                 .def_readwrite("pattern_span_beamwidths", &MarineRadarModel::patternSpanBeamwidths)
                 .def_readwrite("seed", &MarineRadarModel::seed)
                 .def_readwrite("sea_level", &MarineRadarModel::seaLevel)
-                .def_readwrite("sea_state", &MarineRadarModel::seaState)
                 .def_readwrite("multipath", &MarineRadarModel::multipath)
-                .def_property("rain", [](const MarineRadarModel& r) { return r.rain; },
-                              [](MarineRadarModel& r, const std::vector<RainCell>& v) { r.rain = v; },
-                              "List of RainCell (a copy: assign a new list to change it).")
                 .def_readwrite("gain_db", &MarineRadarModel::gainDb)
                 .def_readwrite("threshold_db", &MarineRadarModel::thresholdDb)
                 .def_readwrite("dynamic_range_db", &MarineRadarModel::dynamicRangeDb)

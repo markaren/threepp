@@ -9,7 +9,7 @@ import os
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cloth', 'ClothMesh', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'LogLevel', 'LogRecord', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'capture_log', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'set_log_level', 'set_log_levels', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'take_log', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cloth', 'ClothMesh', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'LogLevel', 'LogRecord', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Weather', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'capture_log', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rain_specific_attenuation', 'rain_volume_reflectivity', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'sea_state_from_wave_height', 'select_lod', 'set_log_level', 'set_log_levels', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'take_log', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AcousticMaterial:
     """
     Backscatter per unit area: Lambert mu cos^2 plus a Kirchhoff facet glint.
@@ -6312,9 +6312,17 @@ class MarineRadar(Object3D, Sensor):
     @property
     def rays_per_slot(self) -> int:
         ...
+    @property
+    def weather(self) -> Weather:
+        """
+        The scene's shared Weather: assign the one the ocean is set from. The radar keeps the object, not a copy, and reads it on every update(): its wind, fetch and swell give the sea state, its rain cells the rain.
+        """
+    @weather.setter
+    def weather(self, arg0: Weather) -> None:
+        ...
 class MarineRadarModel:
     """
-    A rotating marine radar: transmitter, antenna (geometry baked at rebuild), receiver, the sea and rain it sees, and the operator's controls.
+    A rotating marine radar: transmitter, antenna (geometry baked at rebuild), receiver and the operator's controls. The sea state and the rain come from MarineRadar.weather.
     """
     horizontal_taper: ArrayTaper
     multipath: bool
@@ -6446,14 +6454,6 @@ class MarineRadarModel:
     def pulse_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
-    def rain(self) -> list[RainCell]:
-        """
-        List of RainCell (a copy: assign a new list to change it).
-        """
-    @rain.setter
-    def rain(self, arg1: collections.abc.Sequence[RainCell]) -> None:
-        ...
-    @property
     def rain_clutter(self) -> float:
         """
         FTC 0..1
@@ -6491,12 +6491,6 @@ class MarineRadarModel:
         ...
     @sea_level.setter
     def sea_level(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
-    @property
-    def sea_state(self) -> float:
-        ...
-    @sea_state.setter
-    def sea_state(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def seed(self) -> int:
@@ -7876,6 +7870,10 @@ class Ocean(DisplacedMesh):
     def __init__(self, size: typing.SupportsFloat | typing.SupportsIndex = 1000.0, resolution: typing.SupportsInt | typing.SupportsIndex = 512, wind_speed: typing.SupportsFloat | typing.SupportsIndex = 10.0, wind_theta: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, choppiness: typing.SupportsFloat | typing.SupportsIndex = 0.550000011920929, wave_scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, tile_size_1: typing.SupportsFloat | typing.SupportsIndex = -1.0, tile_size_2: typing.SupportsFloat | typing.SupportsIndex = -1.0, fft_size: typing.SupportsInt | typing.SupportsIndex = 1024, size_z: typing.SupportsFloat | typing.SupportsIndex = 0.0, resolution_z: typing.SupportsInt | typing.SupportsIndex = 0, look: str = 'auto', fetch: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
         A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a rectangle (vertices only where the water is — the wave field is unaffected). resolution is the vertex grid along X; resolution_z=0 keeps cells square-ish. fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent (a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. look picks the water material: 'auto' = pond recipe under 100 m, ocean above; 'ocean'/'pond' pin it regardless of scale; 'fjord' is the glacial recipe whose turquoise comes from volume SCATTERING (Vulkan deferred only). fetch (m) = 0 is a fully developed sea (long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea (see Params.fetch). wind_theta is the direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X).
+        """
+    def set_weather(self, weather: Weather) -> None:
+        """
+        Take the wind speed and direction, fetch and swell of a Weather. Live like set_wind; call it again after changing the weather (the ocean keeps no reference to it).
         """
     def set_wind(self, speed: typing.SupportsFloat | typing.SupportsIndex, theta: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
@@ -10093,10 +10091,21 @@ class RadarPpiStyle:
         ...
 class RainCell:
     """
-    A rain shower: Gaussian rain rate across (sigma = radius), sea to top.
+    A rain shower: a column of rain from the sea up to `top`, with a Gaussian rain-rate profile across (sigma = radius) peaking at rain_rate mm/h, moving at `velocity` (m/s, x and z used).
     """
-    centre: Vector3
-    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex = 300.0, top: typing.SupportsFloat | typing.SupportsIndex = 1500.0, rain_rate: typing.SupportsFloat | typing.SupportsIndex = 8.0) -> None:
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex = 300.0, top: typing.SupportsFloat | typing.SupportsIndex = 1500.0, rain_rate: typing.SupportsFloat | typing.SupportsIndex = 8.0, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    def centre_at(self, time: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        """
+        The centre at scenario time `time` (s).
+        """
+    @property
+    def centre(self) -> Vector3:
+        """
+        x, z at time 0; y unused
+        """
+    @centre.setter
+    def centre(self, arg0: Vector3) -> None:
         ...
     @property
     def radius(self) -> float:
@@ -10114,9 +10123,19 @@ class RainCell:
         ...
     @property
     def top(self) -> float:
-        ...
+        """
+        world y
+        """
     @top.setter
     def top(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def velocity(self) -> Vector3:
+        """
+        m/s; x, z used
+        """
+    @velocity.setter
+    def velocity(self, arg0: Vector3) -> None:
         ...
 class RangeNoiseModel:
     """
@@ -14316,6 +14335,76 @@ class WaterProperties:
     @temperature.setter
     def temperature(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+class Weather:
+    """
+    The weather of a scene in physical units, a pure function of scenario time: one object shared by everything that derives an effect from it. Ocean.set_weather(w) takes its wind, fetch and swell; MarineRadar.weather = w makes the radar read its sea state and rain.
+    """
+    def __init__(self) -> None:
+        ...
+    def rain_rate_at(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, time: typing.SupportsFloat | typing.SupportsIndex) -> float:
+        """
+        Rain rate (mm/h) at the surface point (x, z) at `time`: the cells' sum.
+        """
+    def significant_wave_height(self) -> float:
+        """
+        Significant wave height (m) of the sea this wind, fetch and swell raise: the analytic height of the ocean's spectrum.
+        """
+    @property
+    def fetch(self) -> float:
+        """
+        m of open water upwind; 0 = a fully developed sea.
+        """
+    @fetch.setter
+    def fetch(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rain(self) -> list[RainCell]:
+        """
+        List of RainCell (a copy: assign a new list to change it).
+        """
+    @rain.setter
+    def rain(self, arg1: collections.abc.Sequence[RainCell]) -> None:
+        ...
+    @property
+    def swell_height(self) -> float:
+        """
+        Significant height of the swell, m.
+        """
+    @swell_height.setter
+    def swell_height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def swell_period(self) -> float:
+        """
+        s
+        """
+    @swell_period.setter
+    def swell_period(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def swell_theta(self) -> float:
+        """
+        Direction the swell travels toward, radians.
+        """
+    @swell_theta.setter
+    def swell_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wind_speed(self) -> float:
+        """
+        Wind at 10 m, m/s.
+        """
+    @wind_speed.setter
+    def wind_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wind_theta(self) -> float:
+        """
+        Direction the wind blows TOWARD (radians, (cos, sin) in world XZ), as Ocean.
+        """
+    @wind_theta.setter
+    def wind_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class WrenchSample:
     """
     One six-component wrench reading, in the measured joint's child frame. force is N, torque is N*m.
@@ -14438,6 +14527,14 @@ def nrl_sea_clutter_db(grazing_deg: typing.SupportsFloat | typing.SupportsIndex,
     """
 def rad_to_deg(radians: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
+def rain_specific_attenuation(rain_rate: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    """
+    Rain's one-way specific attenuation (dB/km) at rain_rate mm/h near 9.4 GHz: 0.0101 R^1.276.
+    """
+def rain_volume_reflectivity(rain_rate: typing.SupportsFloat | typing.SupportsIndex, wavelength: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    """
+    Rain's radar volume reflectivity eta (1/m) at rain_rate mm/h and wavelength m (Marshall-Palmer Z = 200 R^1.6, |K|^2 = 0.93).
+    """
 def rand_float() -> float:
     ...
 def rand_float_range(min: typing.SupportsFloat | typing.SupportsIndex, max: typing.SupportsFloat | typing.SupportsIndex) -> float:
@@ -14449,6 +14546,10 @@ def rand_int(low: typing.SupportsInt | typing.SupportsIndex, high: typing.Suppor
 def rotate_equirect(texture: Texture, x_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0, y_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0, z_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> Texture:
     """
     Resample an equirect float texture by a 3D rotation (Euler XYZ degrees). For a Z-up scene with a Y-up HDRI: rotate_equirect(env, -90, 0, 0).
+    """
+def sea_state_from_wave_height(hs: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    """
+    Douglas sea state of a significant wave height (m): the inverse of douglas_wave_height (0 at 0 m, 6 at 5 m and above).
     """
 def select_lod(cloud: SplatCloud, camera: Camera, viewport_height_px: typing.SupportsInt | typing.SupportsIndex, target_splats_per_pixel: typing.SupportsFloat | typing.SupportsIndex = 1.0, hysteresis: typing.SupportsFloat | typing.SupportsIndex = 1.25, per_node: bool = True) -> int:
     """

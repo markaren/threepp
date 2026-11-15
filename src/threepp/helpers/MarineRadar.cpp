@@ -27,7 +27,7 @@ MarineRadar::MarineRadar(const MarineRadarModel& m)
     params.maxReturns = 1;
     params.samplesPerBeam = 1;
     // Microwaves: the camera's fog and haze volumes are not in the trace.
-    // Rain is the model's own RainCells.
+    // Rain is the weather's rain cells, folded in by the synthesizer.
     params.opticalMedia = false;
     anchorRpm_ = model.rpm;
     rebuild();
@@ -163,6 +163,7 @@ void MarineRadar::fire(VulkanRenderer& renderer, std::int64_t upTo) {
     const auto count = static_cast<unsigned>(std::min<std::int64_t>(upTo - nextFire_, std::max(1u, maxSlotsPerBatch)));
 
     beginScan();
+    pendingTime_ = simTime();
     if (!parent) updateMatrixWorld();
     getWorldPosition(pendingOrigin_);
     // The rotation alone: it is inverted by transposing below, which a scaled
@@ -217,11 +218,15 @@ void MarineRadar::collect(VulkanRenderer& renderer) {
     if (returns_.size() < static_cast<std::size_t>(per) * pendingCount_) return;
     const unsigned spokes = image_.spokes;
     const auto bins = static_cast<std::size_t>(image_.bins);
+    // The rain is where it was when the scene was traced. No weather at all
+    // (a null pointer assigned) is a calm, dry one.
+    static const Weather calm{0.f};
+    const Weather& w = weather ? *weather : calm;
     for (unsigned i = 0; i < pendingCount_; ++i) {
         const std::int64_t s = pendingFirst_ + i;
         const std::size_t ri = ringIndex(s, spokes);
         const std::uint64_t revKey = echo::combineKeys(model.seed, static_cast<std::uint64_t>(floorDiv(s, spokes)));
-        ringExtent_[ri] = synth_->foldSlot(model, materials, s, &returns_[static_cast<std::size_t>(i) * per],
+        ringExtent_[ri] = synth_->foldSlot(model, materials, w, pendingTime_, s, &returns_[static_cast<std::size_t>(i) * per],
                          &pendingDirs_[static_cast<std::size_t>(i) * per], &pendingSolid_[static_cast<std::size_t>(i) * per],
                          pendingOrigin_, pendingLevel_, revKey, &ring_[ri * bins], &ringLabel_[ri * bins],
                          &ringAmp_[ri * bins], image_.bins, &pendingTilt_);

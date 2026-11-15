@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using namespace threepp;
@@ -73,6 +74,27 @@ double threepp::douglasWaveHeight(double seaState) {
     if (i >= 6) return hs[6];
     const double f = s - i;
     return hs[i] + f * (hs[i + 1] - hs[i]);
+}
+
+double threepp::seaStateFromWaveHeight(double hsM) {
+    // douglasWaveHeight's table, walked the other way.
+    static const double hs[] = {0.0, 0.05, 0.3, 0.875, 1.875, 3.25, 5.0};
+    if (!(hsM > 0.0)) return 0.0;
+    if (hsM >= hs[6]) return 6.0;
+    unsigned i = 0;
+    while (hsM > hs[i + 1]) ++i;
+    return i + (hsM - hs[i]) / (hs[i + 1] - hs[i]);
+}
+
+double threepp::rainVolumeReflectivity(double rainRate, double wavelength) {
+    // Marshall-Palmer reflectivity, |K|^2 = 0.93 for water.
+    const double Z = 200.0 * std::pow(rainRate, 1.6) * 1e-18;// m^6/m^3
+    return std::pow(kPi, 5.0) * 0.93 * Z / std::pow(wavelength, 4.0);
+}
+
+double threepp::rainSpecificAttenuation(double rainRate) {
+    // Specific attenuation near 9.4 GHz (ITU-R P.838 class values).
+    return 0.0101 * std::pow(rainRate, 1.276);
 }
 
 double RadarMaterial::sigma0(double cosTheta) const {
@@ -239,7 +261,8 @@ void MarineRadarSynthesizer::slotRays(std::int64_t slot, double antennaHeight, s
 }
 
 unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const RadarMaterials& materials,
-                                      std::int64_t slot, const LidarReturn* returns, const Vector3* dirs,
+                                      const Weather& weather, double time, std::int64_t slot,
+                                      const LidarReturn* returns, const Vector3* dirs,
                                       const float* solidAngle, const Vector3& origin,
                                       const Matrix3& worldFromLevel, std::uint64_t revolutionKey,
                                       std::complex<float>* column, std::int32_t* label, float* labelAmp,
@@ -263,13 +286,20 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
     const RangeResponse resp(0.5 * kC * model.pulseLength, PulseKind::CW);
     const double hs = resp.halfSpan();
     const double h = origin.y - model.seaLevel;
-    const double sigmaH = 0.25 * douglasWaveHeight(model.seaState);
+    // The sea the weather raises: its significant wave height sets the
+    // roughness of the two-ray reflection and, as a Douglas number, the NRL
+    // clutter. Once per fold, not per ray.
+    const double waveHeight = weather.significantWaveHeight();
+    const double seaState = seaStateFromWaveHeight(waveHeight);
+    const double sigmaH = 0.25 * waveHeight;
     const double fGHz = model.frequency * 1e-9;
     const double sinMin = std::sin(0.1 * kDeg);
     const auto sIdx = static_cast<std::uint64_t>(floorMod(slot, spokes_));
 
     unsigned extent = 0;
-    auto deposit = [&](double range, std::complex<double> a, std::int32_t id) {
+    // `labelBy` is the amplitude the bin's label is weighed by: a surface
+    // ray's own, or for the rain the share of one ray in the cell's sum.
+    auto deposit = [&](double range, std::complex<double> a, std::int32_t id, double labelBy) {
         if (range + hs < r0 || range - hs > r1) return;
         const double x = (range - r0) / binW;
         const int jlo = std::max(0, static_cast<int>(std::floor(x - hs / binW)));
@@ -281,7 +311,7 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
             column[j] += std::complex<float>(a * (0.25 * w));
         }
         const int jc = std::clamp(static_cast<int>(std::floor(x)), 0, static_cast<int>(bins) - 1);
-        const float amp = static_cast<float>(std::abs(a));
+        const float amp = static_cast<float>(labelBy);
         if (amp > labelAmp[jc]) {
             labelAmp[jc] = amp;
             label[jc] = id;
@@ -294,15 +324,27 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
     };
     std::array<double, kTiltBands> tiltW{}, tiltSum{};
 
-    // One ray's rain, every shower's steps together, walked in range order:
-    // an echo is dimmed by the rain nearer than it, whichever shower that
-    // rain belongs to and wherever that shower sits in the list (showers
-    // overlap, so sorting the showers would not do).
-    struct RainStep {
-        double t, dt, rate;
-        std::uint32_t cell, step;
-    };
-    std::vector<RainStep> rainSteps;
+    // ── Rain: the volume echoes of all rays, one draw per range cell ──
+    // The rain's echoes are independent complex Gaussians, so their sum in a
+    // range cell is one complex Gaussian whose variance is the sum of theirs.
+    // foldRain adds up that variance per cell over the rays and the showers,
+    // and the rain each ray crosses before its end; here each cell makes one
+    // draw and one deposit.
+    const double cellW = std::max(binW, 0.5 * resp.resolution());
+    foldRain(model, weather, time, returns, dirs, solidAngle, origin, worldFromLevel, antennaFromLevel, r0, r1,
+             cellW, C, lambda);
+    // A salt no ray index reaches: the cells' keys never meet the rays'.
+    constexpr std::uint64_t kRainSalt = 0x5241494E43454C4CULL;
+    const std::uint64_t rainKey = combineKeys(combineKeys(revolutionKey, sIdx), kRainSalt);
+    for (std::size_t c = 0; c < rain_.var.size(); ++c) {
+        const double v = rain_.var[c];
+        if (!(v > 0.0)) continue;
+        const std::complex<double> g = complexGaussian(combineKeys(rainKey, c));
+        // The label is weighed by the RMS share of one ray, so that rain takes
+        // a bin's label from a surface ray as when each ray deposited its own.
+        deposit(r0 + (static_cast<double>(c) + 0.5) * cellW, std::sqrt(v) * g, -3,
+                std::sqrt(v / std::max(1.0, rain_.count[c])) * std::abs(g));
+    }
 
     const unsigned n = raysPerSlot();
     for (unsigned i = 0; i < n; ++i) {
@@ -325,67 +367,8 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
             R = d.length();
         }
 
-        // ── Rain on the way: volume echoes, and the attenuation they cost ──
-        double rainAttDb = 0.0;// one-way, accumulated to the hit
-        const double tEnd = hit ? std::min(R, r1) : r1;
-        rainSteps.clear();
-        for (std::size_t c = 0; c < model.rain.size(); ++c) {
-            const RainCell& cell = model.rain[c];
-            if (cell.rainRate <= 0.f || cell.radius <= 0.f) continue;
-            // Horizontal approach to the shower's axis: |o + t d - c|^2 in xz.
-            const double ox = origin.x - cell.centre.x, oz = origin.z - cell.centre.z;
-            const double dx = dW.x, dz = dW.z;
-            const double qa = dx * dx + dz * dz;
-            const double rr = 3.0 * cell.radius;
-            double tA = r0, tB = tEnd;
-            if (qa > 1e-12) {
-                const double qb = 2.0 * (ox * dx + oz * dz);
-                const double qc = ox * ox + oz * oz - rr * rr;
-                const double disc = qb * qb - 4.0 * qa * qc;
-                if (disc <= 0.0) continue;
-                const double sq = std::sqrt(disc);
-                tA = std::max(tA, (-qb - sq) / (2.0 * qa));
-                tB = std::min(tB, (-qb + sq) / (2.0 * qa));
-            } else if (ox * ox + oz * oz > rr * rr) {
-                continue;
-            }
-            // Between the sea and the shower's top.
-            if (std::abs(dW.y) > 1e-9) {
-                const double tSea = (model.seaLevel - origin.y) / dW.y;
-                const double tTop = (cell.top - origin.y) / dW.y;
-                tA = std::max(tA, std::min(tSea, tTop));
-                tB = std::min(tB, std::max(tSea, tTop));
-            } else if (origin.y < model.seaLevel || origin.y > cell.top) {
-                continue;
-            }
-            if (tB <= tA) continue;
-            const double step = std::max(binW, 0.5 * resp.resolution());
-            const int steps = std::min(256, static_cast<int>(std::ceil((tB - tA) / step)));
-            const double dt = (tB - tA) / steps;
-            for (int st = 0; st < steps; ++st) {
-                const double t = tA + (st + 0.5) * dt;
-                const double px = ox + t * dx, pz = oz + t * dz;
-                const double rate = cell.rainRate * std::exp(-(px * px + pz * pz) / (2.0 * cell.radius * cell.radius));
-                if (rate < 0.05) continue;
-                rainSteps.push_back({t, dt, rate, static_cast<std::uint32_t>(c), static_cast<std::uint32_t>(st)});
-            }
-        }
-        std::sort(rainSteps.begin(), rainSteps.end(), [](const RainStep& a, const RainStep& b) {
-            if (a.t != b.t) return a.t < b.t;
-            return a.cell != b.cell ? a.cell < b.cell : a.step < b.step;
-        });
-        for (const RainStep& rs : rainSteps) {
-            // Marshall-Palmer reflectivity, |K|^2 = 0.93 for water.
-            const double Z = 200.0 * std::pow(rs.rate, 1.6) * 1e-18;// m^6/m^3
-            const double eta = std::pow(kPi, 5.0) * 0.93 * Z / std::pow(lambda, 4.0);
-            const double dV = rs.t * rs.t * dOmega * rs.dt;
-            const double p = C * eta * dV / std::pow(rs.t, 4.0) * std::pow(10.0, -0.2 * rainAttDb);
-            const std::uint64_t key = combineKeys(combineKeys(combineKeys(revolutionKey, sIdx), i),
-                                                  static_cast<std::uint64_t>(rs.step) * 31 + rs.cell);
-            deposit(rs.t, std::sqrt(p) * gv2 * complexGaussian(key), -3);
-            // Specific attenuation near 9.4 GHz (ITU-R P.838 class values).
-            rainAttDb += 0.0101 * std::pow(rs.rate, 1.276) * rs.dt * 1e-3;
-        }
+        // The rain on the way, one-way, to the hit.
+        const double rainAttDb = rain_.rayAtt[i];
 
         if (!hit || R < r0 || R > r1 + hs || R < 1e-3) continue;
 
@@ -399,7 +382,7 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
             // NRL at the mean grazing angle; the rendered wave facet's own tilt
             // redistributes it (normalised so the band's mean stays on NRL).
             const double sinM = std::clamp(h / R, sinMin, 1.0);
-            const double s0 = dbToPower(nrlSeaClutterDb(std::asin(sinM) / kDeg, fGHz, model.seaState,
+            const double s0 = dbToPower(nrlSeaClutterDb(std::asin(sinM) / kDeg, fGHz, seaState,
                                                         model.polarization));
             const double m = std::clamp(cosT / sinM, 0.0, 30.0);
             const unsigned b = band(R);
@@ -435,13 +418,369 @@ unsigned MarineRadarSynthesizer::foldSlot(const MarineRadarModel& model, const R
         if (!(p > 0.0)) continue;
         // Each ray its own scatterer (see ImagingSonarSynthesizer::synthesize).
         const double phase = 2.0 * k * R + scattererPhase(r.position, lambda, combineKeys(combineKeys(seed_, sIdx), i));
-        deposit(R, phasor(std::sqrt(p) * gv2, phase) * F2, r.hitInstanceId);
+        const std::complex<double> a = phasor(std::sqrt(p) * gv2, phase) * F2;
+        deposit(R, a, r.hitInstanceId, std::abs(a));
     }
 
     for (unsigned b = 0; b < kTiltBands; ++b) {
         if (tiltW[b] > 0.0) tiltMean_[b] = 0.95 * tiltMean_[b] + 0.05 * (tiltSum[b] / tiltW[b]);
     }
     return extent;
+}
+
+// The rain of one slot. For ray i (world direction d, solid angle dOmega,
+// vertical gain gv) a path element dt at range t inside shower c echoes with
+// variance C eta dOmega dt / t^2 10^(-0.2 A(t)) gv^4: eta the volume
+// reflectivity at c's own rate there (overlapping showers echo separately),
+// A(t) the one-way attenuation of all showers' rain on the ray before t. Rain
+// lies where a shower's Gaussian rate is at least 0.05 mm/h, inside 3 of its
+// radii, between the sea and its top, and counts from r0 to the ray's end
+// (its hit, or r1).
+//
+// The cost must not grow with a shower's size, so the rays share work:
+//  - Rays of nearly one horizontal direction (a group: sideways at r1 by at
+//    most 0.05 of the smallest shower's radius) read a shower's eta and
+//    attenuation from one table on ground range s, made once per fold. A ray
+//    at elevation e is at s = t cos e.
+//  - A FAST ray has every shower it reaches cut only by the disc, r0 and its
+//    end, not by the sea or a top. The fast rays of a group are split into
+//    bands of cos e narrow enough that the band's own cos e moves a point by at
+//    most 0.05 of the smallest shower radius at r1. Each band tabulates its
+//    variance per unit weight per cell, U[k], and its attenuation; a ray adds
+//    its weight gv^4 dOmega over the cells from r0 to its end (difference
+//    arrays), and its hit is dimmed by the band's attenuation at its end.
+//  - Every other ray (it leaves a shower through the top or the sea, enters
+//    from above, or is nearly vertical) walks the cells of its own rain,
+//    accumulating its own attenuation.
+void MarineRadarSynthesizer::foldRain(const MarineRadarModel& model, const Weather& weather, double time,
+                                      const LidarReturn* returns, const Vector3* dirs, const float* solidAngle,
+                                      const Vector3& origin, const Matrix3& worldFromLevel,
+                                      const Matrix3* antennaFromLevel, double r0, double r1, double cellW,
+                                      double C, double lambda) {
+    RainScratch& rs = rain_;
+    const unsigned n = raysPerSlot();
+    rs.rayAtt.assign(n, 0.0);
+    rs.var.clear();
+    rs.count.clear();
+    rs.showers.clear();
+    for (const RainCell& cell : weather.rain) {
+        const double rate = cell.rainRate;
+        if (!(rate > 0.05) || !(cell.radius > 0.f)) continue;
+        // Each shower where it was when the slot was traced. Its rain ends
+        // where the rate falls below 0.05 mm/h or at 3 radii, whichever is nearer.
+        const Vector3 c = cell.centreAt(time);
+        const double reach = cell.radius * std::min(3.0, std::sqrt(2.0 * std::log(rate / 0.05)));
+        rs.showers.push_back({c.x, c.z, cell.radius, reach, cell.top, rate});
+    }
+    if (rs.showers.empty()) return;
+
+    const auto S = static_cast<unsigned>(rs.showers.size());
+    const int K = std::max(1, static_cast<int>(std::ceil((r1 - r0) / cellW)));
+    rs.var.assign(static_cast<std::size_t>(K), 0.0);
+    rs.count.assign(static_cast<std::size_t>(K), 0.0);
+    rs.groupDir.clear();
+    rs.chords.clear();
+    rs.nodeEta.clear();
+    rs.nodeAtt.clear();
+    rs.fast.clear();
+    rs.bands.clear();
+    rs.u.clear();
+    rs.att.clear();
+    rs.attEdge.clear();
+    rs.wDiff.clear();
+    rs.cDiff.clear();
+
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    const double ln10 = std::log(10.0);
+    double rMin = kInf;// the smallest radius of a shower a group reaches
+
+    // A group's tables: per shower, its chord through the rain on ground range
+    // and eta and the specific attenuation (dB/m) at nodes along it.
+    auto makeGroup = [&](double hx, double hz) {
+        rs.groupDir.push_back(hx);
+        rs.groupDir.push_back(hz);
+        for (const RainShower& sh : rs.showers) {
+            RainChord ch;
+            const double ox = origin.x - sh.x, oz = origin.z - sh.z;
+            const double b = ox * hx + oz * hz;
+            const double disc = b * b - (ox * ox + oz * oz - sh.reach * sh.reach);
+            if (disc > 0.0) {
+                const double sq = std::sqrt(disc);
+                ch.sA = std::max(0.0, -b - sq);
+                ch.sB = std::min(r1, -b + sq);
+            }
+            if (ch.sB > ch.sA) {
+                rMin = std::min(rMin, sh.radius);
+                const double step = std::min(cellW, 0.25 * sh.radius);
+                ch.nodes = std::max(2u, static_cast<unsigned>(std::ceil((ch.sB - ch.sA) / step)) + 1u);
+                ch.ds = (ch.sB - ch.sA) / (ch.nodes - 1);
+                ch.off = rs.nodeEta.size();
+                for (unsigned j = 0; j < ch.nodes; ++j) {
+                    const double s = ch.sA + j * ch.ds;
+                    const double px = ox + s * hx, pz = oz + s * hz;
+                    const double rate = sh.rate * std::exp(-(px * px + pz * pz) / (2.0 * sh.radius * sh.radius));
+                    rs.nodeEta.push_back(rainVolumeReflectivity(rate, lambda));
+                    rs.nodeAtt.push_back(rainSpecificAttenuation(rate) * 1e-3);
+                }
+            }
+            rs.chords.push_back(ch);
+        }
+        return static_cast<unsigned>(rs.groupDir.size() / 2 - 1);
+    };
+    // eta and attenuation at ground range s on a chord (s inside it).
+    auto sample = [&](const RainChord& ch, double s, double& eta, double& att) {
+        const double x = std::clamp((s - ch.sA) / ch.ds, 0.0, static_cast<double>(ch.nodes - 1));
+        const unsigned j = std::min(static_cast<unsigned>(x), ch.nodes - 2);
+        const double f = x - j;
+        const std::size_t o = ch.off + j;
+        eta = rs.nodeEta[o] + f * (rs.nodeEta[o + 1] - rs.nodeEta[o]);
+        att = rs.nodeAtt[o] + f * (rs.nodeAtt[o + 1] - rs.nodeAtt[o]);
+    };
+
+    // A clip shorter than this is no clip (the hit's range and the sea's
+    // differ by rounding).
+    const double tol = 1e-3 * cellW;
+    // Rays join a group whose direction moves their points sideways by at most
+    // 0.05 of the smallest shower's radius at r1: slotRays jitters each ray's
+    // azimuth on its own, so no two rays share a direction exactly.
+    double rSmallest = kInf;
+    for (const RainShower& sh : rs.showers) rSmallest = std::min(rSmallest, sh.radius);
+    const double dirTol = std::max(1e-5, 0.05 * rSmallest / r1);
+    for (unsigned i = 0; i < n; ++i) {
+        const double dOmega = solidAngle[i];
+        if (!(dOmega > 0.0)) continue;
+        Vector3 dW = dirs[i];
+        dW.applyMatrix3(worldFromLevel).normalize();
+        Vector3 dA = dirs[i];
+        if (antennaFromLevel) dA.applyMatrix3(*antennaFromLevel);
+        const double gv = vPattern_(dA.y);
+        const double weight = gv * gv * gv * gv * dOmega;
+        if (!(weight > 0.0)) continue;
+
+        const LidarReturn& r = returns[i];
+        const bool hit = r.returnNo > 0 && r.returnKind == 0 && r.hitInstanceId != -2;
+        double tEnd = r1;
+        if (hit) {
+            Vector3 d = r.position;
+            d.sub(origin);
+            tEnd = std::min(static_cast<double>(d.length()), r1);
+        }
+        if (tEnd <= r0) continue;
+
+        const double dx = dW.x, dy = dW.y, dz = dW.z;
+        const double ce = std::sqrt(dx * dx + dz * dz);
+        // A nearly vertical ray has no group: it takes the exact path below.
+        bool hasGroup = false;
+        unsigned g = 0;
+        if (ce > 1e-3) {
+            const double hx = dx / ce, hz = dz / ce;
+            const auto groups = static_cast<unsigned>(rs.groupDir.size() / 2);
+            for (g = 0; g < groups; ++g) {
+                if (std::abs(rs.groupDir[2 * g] - hx) < dirTol && std::abs(rs.groupDir[2 * g + 1] - hz) < dirTol) break;
+            }
+            if (g == groups) g = makeGroup(hx, hz);
+            hasGroup = true;
+        }
+
+        // Per shower: the ray's stretch inside the rain's disc, from r0 to its
+        // end, then between the sea and the shower's top.
+        rs.intervals.clear();
+        bool reaches = false, clipped = !hasGroup;
+        for (unsigned c = 0; c < S; ++c) {
+            const RainShower& sh = rs.showers[c];
+            double a, b;
+            if (hasGroup) {
+                const RainChord& ch = rs.chords[g * S + c];
+                if (ch.nodes == 0) continue;
+                a = ch.sA / ce;
+                b = ch.sB / ce;
+            } else {
+                const double ox = origin.x - sh.x, oz = origin.z - sh.z;
+                const double qa = dx * dx + dz * dz;
+                a = r0, b = tEnd;
+                if (qa > 1e-12) {
+                    const double qb = 2.0 * (ox * dx + oz * dz);
+                    const double qc = ox * ox + oz * oz - sh.reach * sh.reach;
+                    const double disc = qb * qb - 4.0 * qa * qc;
+                    if (disc <= 0.0) continue;
+                    const double sq = std::sqrt(disc);
+                    a = (-qb - sq) / (2.0 * qa);
+                    b = (-qb + sq) / (2.0 * qa);
+                } else if (ox * ox + oz * oz > sh.reach * sh.reach) {
+                    continue;
+                }
+            }
+            a = std::max(a, r0);
+            b = std::min(b, tEnd);
+            if (b <= a) continue;
+            reaches = true;
+            double vA = -kInf, vB = kInf;
+            if (std::abs(dy) > 1e-9) {
+                const double tSea = (model.seaLevel - origin.y) / dy;
+                const double tTop = (sh.top - origin.y) / dy;
+                vA = std::min(tSea, tTop);
+                vB = std::max(tSea, tTop);
+            } else if (origin.y < model.seaLevel || origin.y > sh.top) {
+                vA = kInf, vB = -kInf;
+            }
+            if (vA > a + tol || vB < b - tol) clipped = true;
+            const double tA = std::max(a, vA), tB = std::min(b, vB);
+            if (tB > tA) rs.intervals.push_back({c, tA, tB});
+        }
+        if (!reaches) continue;
+        if (!clipped) {
+            rs.fast.push_back({i, g, 0u, ce, tEnd, weight});
+            continue;
+        }
+
+        // The exact path: the cells of the ray's own rain, in range order.
+        if (rs.intervals.empty()) continue;
+        double tLo = kInf, tHi = -kInf;
+        for (const RainInterval& iv : rs.intervals) {
+            tLo = std::min(tLo, iv.tA);
+            tHi = std::max(tHi, iv.tB);
+        }
+        const int kLo = std::clamp(static_cast<int>(std::floor((tLo - r0) / cellW)), 0, K - 1);
+        const int kHi = std::clamp(static_cast<int>(std::floor((tHi - r0) / cellW)), 0, K - 1);
+        double A = 0.0;// one-way dB before the cell
+        for (int k = kLo; k <= kHi; ++k) {
+            const double e0 = r0 + k * cellW, e1 = e0 + cellW;
+            double v = 0.0, at = 0.0;
+            for (const RainInterval& iv : rs.intervals) {
+                const double lo = std::max(e0, iv.tA), hi = std::min(e1, iv.tB);
+                if (hi <= lo) continue;
+                const double L = hi - lo, tm = 0.5 * (lo + hi);
+                double eta, att;
+                if (hasGroup) {
+                    sample(rs.chords[g * S + iv.shower], tm * ce, eta, att);
+                } else {
+                    const RainShower& sh = rs.showers[iv.shower];
+                    const double px = origin.x - sh.x + tm * dx, pz = origin.z - sh.z + tm * dz;
+                    const double rate = sh.rate * std::exp(-(px * px + pz * pz) / (2.0 * sh.radius * sh.radius));
+                    if (rate < 0.05) continue;
+                    eta = rainVolumeReflectivity(rate, lambda);
+                    att = rainSpecificAttenuation(rate) * 1e-3;
+                }
+                v += eta * L / (tm * tm);
+                at += att * L;
+            }
+            if (v > 0.0) {
+                rs.var[k] += C * v * weight * std::exp(-0.2 * ln10 * A);
+                rs.count[k] += 1.0;
+            }
+            A += at;
+        }
+        rs.rayAtt[i] = A;
+    }
+    if (rs.fast.empty()) return;
+
+    // The fast rays' bands, group by group, in cos e.
+    std::sort(rs.fast.begin(), rs.fast.end(), [](const RainRay& a, const RainRay& b) {
+        if (a.group != b.group) return a.group < b.group;
+        return a.ce != b.ce ? a.ce < b.ce : a.ray < b.ray;
+    });
+    constexpr unsigned kMaxBands = 64;
+    const double tol0 = 0.05 * rMin / r1;
+    for (std::size_t b0 = 0; b0 < rs.fast.size();) {
+        std::size_t b1 = b0;
+        while (b1 < rs.fast.size() && rs.fast[b1].group == rs.fast[b0].group) ++b1;
+        // A band spans 2 tolC in cos e, its centre within tolC of each ray.
+        double tolC = tol0;
+        auto bandCount = [&](double tc) {
+            unsigned nb = 0;
+            double start = -kInf;
+            for (std::size_t j = b0; j < b1; ++j) {
+                if (rs.fast[j].ce > start + 2.0 * tc) ++nb, start = rs.fast[j].ce;
+            }
+            return nb;
+        };
+        while (bandCount(tolC) > kMaxBands) tolC *= 2.0;
+
+        const unsigned g = rs.fast[b0].group;
+        for (std::size_t j0 = b0; j0 < b1;) {
+            std::size_t j1 = j0;
+            while (j1 < b1 && rs.fast[j1].ce <= rs.fast[j0].ce + 2.0 * tolC) ++j1;
+            RainBand band{g, 0.5 * (rs.fast[j0].ce + rs.fast[j1 - 1].ce), 0, -1, rs.u.size()};
+            for (std::size_t j = j0; j < j1; ++j) rs.fast[j].band = static_cast<unsigned>(rs.bands.size());
+
+            // The cells where any shower of the group lies, seen at the band's cos e.
+            double tLo = kInf, tHi = -kInf;
+            for (unsigned c = 0; c < S; ++c) {
+                const RainChord& ch = rs.chords[g * S + c];
+                if (ch.nodes == 0) continue;
+                tLo = std::min(tLo, ch.sA / band.cb);
+                tHi = std::max(tHi, ch.sB / band.cb);
+            }
+            band.kMin = std::max(0, static_cast<int>(std::floor((tLo - r0) / cellW)));
+            band.kMax = std::min(K - 1, static_cast<int>(std::floor((tHi - r0) / cellW)));
+            const std::size_t m = band.kMax >= band.kMin ? static_cast<std::size_t>(band.kMax - band.kMin + 1) : 0;
+            rs.u.resize(band.off + m + 1, 0.0);
+            rs.att.resize(band.off + m + 1, 0.0);
+            rs.attEdge.resize(band.off + m + 1, 0.0);
+            rs.wDiff.resize(band.off + m + 1, 0.0);
+            rs.cDiff.resize(band.off + m + 1, 0.0);
+            // U per unit weight, dimmed by the attenuation up to the cell's near
+            // edge (the old march dimmed a step by the rain before it).
+            for (std::size_t j = 0; j < m; ++j) {
+                const double t = r0 + (band.kMin + static_cast<double>(j) + 0.5) * cellW;
+                const double s = t * band.cb;
+                double eta = 0.0, at = 0.0;
+                for (unsigned c = 0; c < S; ++c) {
+                    const RainChord& ch = rs.chords[g * S + c];
+                    if (ch.nodes == 0 || s < ch.sA || s > ch.sB) continue;
+                    double e, a;
+                    sample(ch, s, e, a);
+                    eta += e;
+                    at += a;
+                }
+                const std::size_t o = band.off + j;
+                if (eta > 0.0) rs.u[o] = C * eta * cellW / (t * t) * std::exp(-0.2 * ln10 * rs.attEdge[o]);
+                rs.att[o] = at;
+                rs.attEdge[o + 1] = rs.attEdge[o] + at * cellW;
+            }
+            rs.bands.push_back(band);
+            j0 = j1;
+        }
+        b0 = b1;
+    }
+
+    // Each fast ray's weight over the cells from r0 to its end, the last cell
+    // in part, and its hit's attenuation from the band's.
+    for (const RainRay& f : rs.fast) {
+        const RainBand& band = rs.bands[f.band];
+        if (band.kMax < band.kMin) continue;
+        const auto m = band.kMax - band.kMin + 1;
+        const double x = (f.tEnd - r0) / cellW;
+        const int kE = static_cast<int>(std::floor(x));
+        const double frac = x - kE;
+        const int jE = kE - band.kMin;
+        if (jE < 0) continue;// its rain lies past its end
+        const std::size_t o = band.off;
+        rs.wDiff[o] += f.weight;
+        rs.cDiff[o] += 1.0;
+        if (jE < m) {
+            rs.wDiff[o + jE] += f.weight * (frac - 1.0);
+            rs.wDiff[o + jE + 1] -= f.weight * frac;
+            rs.cDiff[o + jE] += frac - 1.0;
+            rs.cDiff[o + jE + 1] -= frac;
+            rs.rayAtt[f.ray] = rs.attEdge[o + jE] + rs.att[o + jE] * frac * cellW;
+        } else {
+            rs.rayAtt[f.ray] = rs.attEdge[o + m];
+        }
+    }
+    for (const RainBand& band : rs.bands) {
+        if (band.kMax < band.kMin) continue;
+        double w = 0.0, cnt = 0.0;
+        for (int j = 0; j <= band.kMax - band.kMin; ++j) {
+            const std::size_t o = band.off + j;
+            w += rs.wDiff[o];
+            cnt += rs.cDiff[o];
+            if (rs.u[o] > 0.0 && w > 0.0) {
+                rs.var[band.kMin + j] += rs.u[o] * w;
+                rs.count[band.kMin + j] += cnt;
+            }
+        }
+    }
 }
 
 void MarineRadarSynthesizer::finishSpoke(const MarineRadarModel& model, std::vector<std::complex<double>>& sum,

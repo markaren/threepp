@@ -17,6 +17,72 @@
 // a DisplacedMesh.Vessel for any of the MAX_VESSELS, with the same members.
 #include "bindings.hpp"
 
+#include <pybind11/stl.h>
+
+#include <memory>
+#include <vector>
+
+#include "threepp/scenes/Weather.hpp"
+
+namespace threepp_py {
+
+    namespace {
+
+        // tp.RainCell and tp.Weather: renderer-free, so bound on every build.
+        // Registered at the top of init_ocean, before init_render and
+        // init_vulkan, so Ocean.set_weather and MarineRadar.weather see the
+        // Python names when their signatures are baked.
+        void bindWeather(py::module_& m) {
+            using namespace threepp;
+            py::class_<RainCell>(m, "RainCell",
+                                 "A rain shower: a column of rain from the sea up to `top`, with a Gaussian "
+                                 "rain-rate profile across (sigma = radius) peaking at rain_rate mm/h, moving at "
+                                 "`velocity` (m/s, x and z used).")
+                    .def(py::init([](float x, float z, float radius, float top, float rate, float vx, float vz) {
+                             RainCell c;
+                             c.centre.set(x, 0.f, z);
+                             c.velocity.set(vx, 0.f, vz);
+                             c.radius = radius;
+                             c.top = top;
+                             c.rainRate = rate;
+                             return c;
+                         }),
+                         py::arg("x"), py::arg("z"), py::arg("radius") = 300.f, py::arg("top") = 1500.f,
+                         py::arg("rain_rate") = 8.f, py::arg("vx") = 0.f, py::arg("vz") = 0.f)
+                    .def_readwrite("centre", &RainCell::centre, "x, z at time 0; y unused")
+                    .def_readwrite("velocity", &RainCell::velocity, "m/s; x, z used")
+                    .def_readwrite("radius", &RainCell::radius)
+                    .def_readwrite("top", &RainCell::top, "world y")
+                    .def_readwrite("rain_rate", &RainCell::rainRate, "mm/h at the centre")
+                    .def("centre_at", &RainCell::centreAt, py::arg("time"), "The centre at scenario time `time` (s).");
+
+            py::class_<Weather, std::shared_ptr<Weather>>(
+                    m, "Weather",
+                    "The weather of a scene in physical units, a pure function of scenario time: one object "
+                    "shared by everything that derives an effect from it. Ocean.set_weather(w) takes its wind, "
+                    "fetch and swell; MarineRadar.weather = w makes the radar read its sea state and rain.")
+                    .def(py::init<>())
+                    .def_readwrite("wind_speed", &Weather::windSpeed, "Wind at 10 m, m/s.")
+                    .def_readwrite("wind_theta", &Weather::windTheta,
+                                   "Direction the wind blows TOWARD (radians, (cos, sin) in world XZ), as Ocean.")
+                    .def_readwrite("fetch", &Weather::fetch, "m of open water upwind; 0 = a fully developed sea.")
+                    .def_readwrite("swell_height", &Weather::swellHeight, "Significant height of the swell, m.")
+                    .def_readwrite("swell_period", &Weather::swellPeriod, "s")
+                    .def_readwrite("swell_theta", &Weather::swellTheta, "Direction the swell travels toward, radians.")
+                    .def_property("rain", [](const Weather& w) { return w.rain; },
+                                  [](Weather& w, const std::vector<RainCell>& v) { w.rain = v; },
+                                  "List of RainCell (a copy: assign a new list to change it).")
+                    .def("significant_wave_height", &Weather::significantWaveHeight,
+                         "Significant wave height (m) of the sea this wind, fetch and swell raise: the analytic "
+                         "height of the ocean's spectrum.")
+                    .def("rain_rate_at", &Weather::rainRateAt, py::arg("x"), py::arg("z"), py::arg("time"),
+                         "Rain rate (mm/h) at the surface point (x, z) at `time`: the cells' sum.");
+        }
+
+    }// namespace
+
+}// namespace threepp_py
+
 #ifdef THREEPP_PY_HAS_VULKAN
 
 #include <pybind11/numpy.h>
@@ -94,6 +160,8 @@ namespace threepp_py {
     }// namespace
 
     void init_ocean(py::module_& m) {
+
+        bindWeather(m);
 
         // ---- DisplacedMesh ---------------------------------------------------
         // Bound as a subclass of the already-registered Mesh: Mesh is a
@@ -637,7 +705,11 @@ namespace threepp_py {
                 .def("set_wind", &Ocean::setWind, py::arg("speed"), py::arg("theta"),
                      "Set wind speed (m/s) and direction (radians). Live: the renderer "
                      "regenerates the spectra next frame and the sea morphs smoothly into "
-                     "the new state.");
+                     "the new state.")
+                .def("set_weather", &Ocean::setWeather, py::arg("weather"),
+                     "Take the wind speed and direction, fetch and swell of a Weather. Live like "
+                     "set_wind; call it again after changing the weather (the ocean keeps no "
+                     "reference to it).");
 
         // ---- VesselWash ------------------------------------------------------
         // What a vessel leaves on the wake field, for a boat that is not a
@@ -745,8 +817,9 @@ namespace threepp_py {
 namespace threepp_py {
 
     // The FFT ocean needs the Vulkan backend; tp.Ocean / tp.DisplacedMesh are
-    // absent on a GL-only build (mirrors init_vulkan's no-op fallback).
-    void init_ocean(py::module_&) {}
+    // absent on a GL-only build (mirrors init_vulkan's no-op fallback). The
+    // weather is renderer-free and stays.
+    void init_ocean(py::module_& m) { bindWeather(m); }
 
 }// namespace threepp_py
 

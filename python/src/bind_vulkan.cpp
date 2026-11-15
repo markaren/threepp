@@ -2970,6 +2970,10 @@ namespace threepp_py {
                                "MarineRadarModel; mutate in place. Geometry: a new range scale (range_bins, "
                                "min_range, max_range) rebuilds at the next update(); the rest takes rebuild().")
                 .def_readwrite("materials", &MarineRadar::materials, "RadarMaterials; mutate in place.")
+                .def_readwrite("weather", &MarineRadar::weather,
+                               "The scene's shared Weather: assign the one the ocean is set from. The radar "
+                               "keeps the object, not a copy, and reads it on every update(): its wind, fetch "
+                               "and swell give the sea state, its rain cells the rain.")
                 .def_readwrite("params", &MarineRadar::params)
                 .def_readwrite("max_slots_per_batch", &MarineRadar::maxSlotsPerBatch)
                 .def("rebuild", &MarineRadar::rebuild)

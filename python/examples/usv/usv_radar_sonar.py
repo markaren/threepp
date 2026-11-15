@@ -28,9 +28,17 @@ and every sonar (beam, bin) carries the instance id of what made its echo
     python usv_radar_sonar.py                       # drive; the loop runs on autopilot until you steer
     python usv_radar_sonar.py --shot 12 --out rs.png  # headless: settle the terrain, run the loop 12 s, write the frame + both displays
 
-Options: --pack <dir> (default geodata/aalesund), --sea-state 3, --rain (a squall
-over the basin), --array (a 4 ft open array instead of the Mariner's radome),
---start <metres along the loop>, --size 1600x900.
+Options: --pack <dir> (default geodata/aalesund), --wind 9.6 (m/s over 8 km of
+fetch: the one tp.Weather the ocean, the radar's sea state and the sonar's
+surface roughness are derived from), --rain (a squall over the basin;
+--rain-rate 30 mm/h at its centre, --rain-radius 300 m), --array (a 4 ft open
+array instead of the Mariner's radome),
+--start <metres along the loop>, --size 1600x900, and for a --shot only
+--eye x,y,z --target x,y,z (a fixed camera in place of the chase).
+
+Under --rain the camera sees the shower the radar sees: an overcast sky and a
+dimmer sun, each rain cell as a column of medium from the sea to the cloud
+base, and streaks round the camera as heavy as the rain where it is.
 
 Keys: W/S throttle, A/D steer (either hands the helm back from the autopilot),
 P autopilot, N north-up / head-up, L ground-truth labels, M sonar multipath,
@@ -76,8 +84,12 @@ SHOT_T = cli_arg("--shot", 0.0, float) if "--shot" in sys.argv else 0.0
 HEADLESS = SHOT_T > 0.0
 OUT = cli_arg("--out", "usv_radar_sonar.png", str)
 W, H = parse_size(cli_arg("--size", "1600x900", str))
-SEA_STATE = cli_arg("--sea-state", 3.0, float)
+WIND = cli_arg("--wind", 9.6, float)
 RAIN = "--rain" in sys.argv
+# A shower one can see: at 16 mm/h and 150 m a line of sight through the middle keeps 58% of its
+# light, a veil too thin to tell from an even grey sky; at 30 mm/h and 300 m it keeps under a fifth.
+RAIN_RATE = cli_arg("--rain-rate", 30.0, float)       # mm/h at the shower's centre
+RAIN_RADIUS = cli_arg("--rain-radius", 300.0, float)  # m, the sigma of its Gaussian profile
 OPEN_ARRAY = "--array" in sys.argv
 START_S = cli_arg("--start", 760.0, float)
 CONTOUR_DEPTH = 14.0          # m: the loop's depth contour
@@ -107,14 +119,26 @@ SUN_DIR = np.array([-0.45, 0.30, -0.84])      # a low afternoon sun in the south
 SUN_DIR /= np.linalg.norm(SUN_DIR)
 
 
-def make_sky_hdr(path, w=2048, h=1024):
-    """A clear west-coast afternoon: pale horizon, a deep zenith, a low sun."""
+def make_sky_hdr(path, w=2048, h=1024, overcast=False):
+    """A clear west-coast afternoon: pale horizon, a deep zenith, a low sun.
+    `overcast`: the same afternoon under a grey cloud deck (--rain): no sun disc,
+    the deck lighter toward the horizon and brightest where the sun is behind it."""
     j = np.arange(h).reshape(h, 1)
     i = np.arange(w).reshape(1, w)
     theta = (j / h) * math.pi
     phi = (i / w) * 2 * math.pi - math.pi
     y = np.broadcast_to(np.cos(theta), (h, w))
     x, z = np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi)
+    if overcast:
+        # ASSUMED look numbers: a grey deck, not a measured sky.
+        horizon, zenith, haze = np.array([0.56, 0.58, 0.60]), np.array([0.40, 0.42, 0.45]), np.array([0.25, 0.27, 0.29])
+        up = np.clip(y, 0.0, 1.0)[..., None] ** 0.5
+        down = np.clip(-y, 0.0, 1.0)[..., None] ** 0.6
+        sky = np.where(y[..., None] >= 0.0, horizon * (1.0 - up) + zenith * up, horizon * (1.0 - down) + haze * down)
+        ang = np.arccos(np.clip(np.stack([x, y, z], axis=-1) @ SUN_DIR, -1.0, 1.0))
+        glow = np.exp(-(ang / math.radians(40.0)) ** 2) * 0.30 * (0.5 + 0.5 * (1.0 - up[..., 0]))
+        sky = sky + glow[..., None] * np.array([1.0, 0.97, 0.92]) * (y[..., None] > -0.05)
+        return write_radiance_hdr(path, sky)
     horizon, zenith, haze = np.array([0.62, 0.66, 0.72]), np.array([0.10, 0.22, 0.46]), np.array([0.30, 0.33, 0.37])
     up = np.clip(y, 0.0, 1.0)[..., None] ** 0.4
     down = np.clip(-y, 0.0, 1.0)[..., None] ** 0.6
@@ -126,7 +150,11 @@ def make_sky_hdr(path, w=2048, h=1024):
     return write_radiance_hdr(path, sky)
 
 
-env = tp.RGBELoader().load(make_sky_hdr(os.path.join(tempfile.gettempdir(), "threepp_usv_rs_sky.hdr")))
+if RAIN:
+    env = tp.RGBELoader().load(make_sky_hdr(os.path.join(tempfile.gettempdir(), "threepp_usv_rs_overcast.hdr"),
+                                            overcast=True))
+else:
+    env = tp.RGBELoader().load(make_sky_hdr(os.path.join(tempfile.gettempdir(), "threepp_usv_rs_sky.hdr")))
 scene = tp.Scene()
 scene.background = env
 scene.environment = env
@@ -135,6 +163,16 @@ sun = tp.DirectionalLight(0xffe8cc, 2.4)
 sun.position.set(*(SUN_DIR * 600.0))
 sun.cast_shadow = True
 scene.add(sun)
+if RAIN:
+    # Rain falls from cloud: the sun behind the deck, a quarter of its light and soft
+    # shadows, and a light haze (sigma = 3 / visibility). At 15 km the haze greyed the
+    # far shore as much as the shower did, and the shower no longer stood out from it:
+    # 30 km. ASSUMED look numbers, all four.
+    sun.intensity = 0.6
+    sun.color = tp.Color(0.95, 0.94, 0.92)
+    renderer.sun_angular_radius = 3.0
+    scene.set_fog_exp2(tp.Color(0.62, 0.64, 0.66), 3.0 / 30000.0)
+    renderer.tone_mapping_exposure = 0.8
 
 _t0 = time.perf_counter()
 GEO = tp.GeoScene(PACK, forest_focus=(400.0, 0.0, 400.0), scatter=False, cars=False, forest_extent=1500.0)
@@ -173,8 +211,18 @@ def label_subtree(root, ident):
 for _name, _ident in (("geo_urban_props", ID_PROPS), ("geo_buildings", ID_BUILDINGS), ("geo_road_bridges", ID_BRIDGES)):
     label_subtree(GEO.get_object_by_name(_name), _ident)
 
-ocean = tp.Ocean(size=SEA_SIZE, resolution=512, wind_speed=3.0 + 2.2 * SEA_STATE, wind_theta=0.5,
-                 choppiness=0.6, fetch=8000.0)
+# The scene's one weather: the ocean's spectrum, the radar's sea clutter and rain, and the
+# sonar's surface roughness are all derived from it.
+weather = tp.Weather()
+weather.wind_speed = WIND
+weather.wind_theta = 0.5
+weather.fetch = 8000.0
+if RAIN:
+    weather.rain = [tp.RainCell(820.0, 760.0, radius=RAIN_RADIUS, top=1400.0, rain_rate=RAIN_RATE)]   # over the basin
+
+ocean = tp.Ocean(size=SEA_SIZE, resolution=512, wind_speed=weather.wind_speed, wind_theta=weather.wind_theta,
+                 choppiness=0.6, fetch=weather.fetch)
+ocean.set_weather(weather)
 # A sheet this size would ask cascade 0 for a 4 km swell: pin the tiles to a harbour sea.
 ocean.params.tile_size_0 = 320.0
 ocean.params.tile_size_1 = 40.6
@@ -188,6 +236,189 @@ ocean.wake_field.resolution, ocean.wake_field.patches = 1024, 1
 ocean.wake_field.ripple_resolution = 512
 scene.add(ocean)
 renderer.set_instance_id(ocean, ID_SEA)
+
+
+# --------------------------------------------------------------------------- #
+#  The shower on camera (--rain): the same cells the radar sees, as a medium
+# --------------------------------------------------------------------------- #
+# Extinction of rain, sigma = A * R^B per km at R mm/h. The pilot takes the lidar-measured
+# fit 0.16 R^0.74; the Marshall-Palmer drop-size theory gives 0.365 R^0.63, about 1.7 times
+# more at 16 mm/h. Through the middle of the demo's cell (16 mm/h, 150 m) the fit gives an
+# optical depth of about 0.55: a line of sight keeps a bit more than half its light.
+RAIN_SIGMA_A, RAIN_SIGMA_B = 0.16, 0.74
+RAIN_CUT = 0.05               # mm/h: below this the radar draws no rain, and neither does the camera
+COLUMN_RES = 64               # voxels per axis: 14 m across, 22 m in height for the demo's cell
+SIGMA_STEP = 1.0 / 4096.0     # 1/m: the density volume stores sigma in whole steps of this
+MAX_COLUMNS = 8               # the renderer's density volume limit
+
+
+def rain_sigma(rate):
+    """Extinction (1/m) of rain falling at `rate` mm/h."""
+    return RAIN_SIGMA_A * 1e-3 * np.power(rate, RAIN_SIGMA_B)
+
+
+def column_lattice(cell, res, seed):
+    """One parcel on each voxel CENTRE of the cell's box (offsets from the cell's centre) and
+    its weight in whole sigma steps. The scatter rounds each parcel's deposit to a whole step,
+    and rain is only a few steps thick: a plain rounding draws contour rings, so each parcel
+    rounds down or up at random, up with the probability of the fraction (a fixed seed).
+    The column stands to the cell's own top, as the radar's does. Cut at a cloud base of
+    600 m it ended in a rounded lid in the middle of an even grey sky (the baked sky has no
+    cloud base for it to hang from); to the top it reads as the darker sky over the shower."""
+    top = cell.top
+    half = np.array([3.0 * cell.radius, 0.5 * top, 3.0 * cell.radius])
+    u = (np.arange(res) + 0.5) / res * 2.0 - 1.0
+    gx, gy, gz = np.meshgrid(u * half[0], u * half[1] + half[1], u * half[2], indexing="ij")
+    rate = cell.rain_rate * np.exp(-(gx * gx + gz * gz) / (2.0 * cell.radius * cell.radius))
+    rate = np.where(rate < RAIN_CUT, 0.0, rate)
+    # Uniform in height, fading out over the top 15% so the column has no flat lid.
+    f = np.clip((top - gy) / (0.15 * top), 0.0, 1.0)
+    sigma = rain_sigma(rate) * f * f * (3.0 - 2.0 * f)
+    steps = sigma / SIGMA_STEP
+    lo = np.floor(steps)
+    w = lo + (np.random.default_rng(seed).random(steps.shape) < steps - lo)
+    if w.max() > 16.0:
+        print(f"rain: {int((w > 16).sum())} voxels past the scatter's weight cap of 16 steps, clipped")
+    w = np.minimum(w, 16.0)
+    vox = 2.0 * half / res
+    mid = res // 2
+    tau = float(w[:, 2, mid].sum()) * SIGMA_STEP * vox[0]
+    print(f"rain column: {cell.rain_rate:g} mm/h, sigma {1e3 * sigma.max():.2f} /km at the centre "
+          f"({steps.max():.1f} steps), mean {steps.mean():.4f} steps analytic vs {w.mean():.4f} dithered, "
+          f"optical depth through the middle {tau:.2f} (transmittance {math.exp(-tau):.2f}), "
+          f"voxels {vox[0]:.1f} x {vox[1]:.1f} m")
+    offs = np.stack([gx.ravel(), gy.ravel(), gz.ravel(), np.ones(gx.size)], 1).astype(np.float32)
+    rgba = np.ones((gx.size, 4), np.float32)
+    rgba[:, 3] = w.ravel()
+    return offs, rgba, half, vox
+
+
+def rain_columns(weather):
+    """A density volume for every rain cell on the weather (up to the renderer's limit)."""
+    cols = []
+    for k, cell in enumerate(weather.rain[:MAX_COLUMNS]):
+        offs, rgba, half, vox = column_lattice(cell, COLUMN_RES, 20261115 + k)
+        cfg = tp.ParticleField.Config()
+        cfg.capacity = COLUMN_RES ** 3
+        cfg.ownership = tp.ParticleField.Ownership.HostRing
+        cfg.attributes = True
+        f = tp.ParticleField.create(cfg)
+        f.frustum_culled = False
+        c = cell.centre_at(0.0)
+        f.set_density_repr(tp.Vector3(c.x, float(half[1]), c.z), tp.Vector3(*map(float, half)), SIGMA_STEP, COLUMN_RES)
+        # Raindrops scatter forward and absorb little, but a shower stands in the shade of its
+        # own cloud, which the baked sky cannot know: lit by the whole open sky at a drop's
+        # albedo the column came out the sky's own grey and vanished against it. A lower albedo
+        # stands in for that shade. ASSUMED look numbers; forward so it does not read as fog.
+        f.density_repr.albedo = tp.Color(0.40, 0.40, 0.41)
+        f.density_repr.anisotropy = 0.6
+        pos = offs.copy()
+        pos[:, 0] += c.x
+        pos[:, 2] += c.z
+        f.submit(pos)
+        f.set_attributes(rgba)
+        scene.add(f)
+        cols.append({"field": f, "cell": k, "offs": offs, "at": (c.x, c.z), "vox": float(vox[0])})
+    if len(weather.rain) > MAX_COLUMNS:
+        print(f"rain: {len(weather.rain)} cells, the first {MAX_COLUMNS} drawn")
+    return cols
+
+
+def move_columns(t):
+    """A moving cell's box follows it, a whole voxel at a time (the weights are relative to the centre)."""
+    for col in COLUMNS:
+        c = weather.rain[col["cell"]].centre_at(t)
+        if math.hypot(c.x - col["at"][0], c.z - col["at"][1]) < col["vox"]:
+            continue
+        f = col["field"]
+        f.density_repr.center = tp.Vector3(c.x, f.density_repr.center.y, c.z)
+        pos = col["offs"].copy()
+        pos[:, 0] += c.x
+        pos[:, 2] += c.z
+        f.submit(pos)
+        col["at"] = (c.x, c.z)
+
+
+# Rain at the camera: streaks in a slab that follows the lens (warp_sailboat.py's rain field,
+# without its own density volume: the columns above are the medium). Their number follows the
+# rain rate where the camera is; a streak count is a look, not a drop census (ASSUMED: full at 25 mm/h).
+STREAK_CAP = 200_000
+STREAK_HALF = 26.0            # lateral half-extent = the wrap period / 2
+STREAK_FULL = 25.0            # mm/h
+STREAK_BB = 0.135
+
+
+def make_streaks():
+    rc = tp.ParticleField.Config()
+    rc.capacity = STREAK_CAP
+    rc.ownership = tp.ParticleField.Ownership.Renderer
+    rc.w_semantic = tp.ParticleField.WSemantic.Radius
+    rc.uniform_radius = 0.013
+    f = tp.ParticleField.create(rc)
+    f.frustum_culled = False
+    f.set_billboard_repr(tp.Color(0.72, 0.79, 0.90), tp.Color(0.60, 0.67, 0.78), STREAK_BB, 0.30)
+    br = f.billboard_repr
+    br.lod_near = 0.0
+    br.lod_fade = 0.0
+    br.stretch_seconds = 0.024
+    br.stretch_max = 30.0
+    br.stretch_max_screen = 0.045
+    br.near_fade = 1.20
+    br.softness = 0.95
+    br.fade_power = 0.0
+    br.size_taper = 0.0
+    br.bright_jitter = 0.55
+    br.splash_ring_width = 0.28
+    br.glow = 0.0
+    re = f.emitter                        # a COPY: mutate and hand it back
+    re.spawn_center = tp.Vector3(0.0, 16.0, 0.0)
+    re.spawn_half_extent = tp.Vector3(STREAK_HALF, 0.35, STREAK_HALF)
+    re.velocity = tp.Vector3(0.0, -9.0, 0.0)
+    re.speed_spread = 0.35
+    # The drops drift with the weather's wind.
+    re.wind = tp.Vector3(weather.wind_speed * math.cos(weather.wind_theta), 0.0,
+                         weather.wind_speed * math.sin(weather.wind_theta))
+    re.drift_amplitude = 0.03
+    re.drift_frequency = 0.9
+    re.drift_scale = 6.0
+    re.lifetime = 2.4
+    re.duty_cycle = 0.92
+    re.size = 0.013
+    re.size_jitter = 0.30
+    re.seed = 20260822
+    re.follow = True
+    re.follow_snap = 4.0
+    rs_ = re.surface
+    rs_.enabled = True                    # drops land on the deck and on the sea
+    rs_.resolution = 512
+    rs_.splash_seconds = 0.30
+    rs_.splash_grow = 12.0
+    rs_.bias = 0.010
+    rs_.rest_seconds = 0.0
+    rs_.fade_seconds = 0.05
+    re.surface = rs_
+    f.set_emitter(re)
+    f.set_emitter_time(0.0, 1.0 / 60.0)
+    f.set_live_count(0)
+    scene.add(f)
+    return f
+
+
+def weather_frame(t, dt):
+    """Per frame under --rain: moving cells' columns, and the streaks round the camera."""
+    move_columns(t)
+    cp = camera.position
+    rate = weather.rain_rate_at(cp.x, cp.z, t)
+    live = int(STREAK_CAP * min(max(rate / STREAK_FULL, 0.0), 1.0)) if rate >= RAIN_CUT else 0
+    streaks.set_live_count(live)
+    if live > 0:
+        streaks.set_follow_center(tp.Vector3(cp.x, cp.y, cp.z))
+        streaks.set_emitter_time(t, dt)
+
+
+if RAIN:
+    COLUMNS = rain_columns(weather)
+    streaks = make_streaks()
 
 
 # --------------------------------------------------------------------------- #
@@ -266,10 +497,8 @@ radar_model.min_range = 25.0
 radar_model.max_range = 1852.0
 radar_model.range_bins = 1024
 radar_model.pulse_length = 80e-9
-radar_model.sea_state = SEA_STATE
-if RAIN:
-    radar_model.rain = [tp.RainCell(820.0, 760.0, radius=150.0, top=1400.0, rain_rate=16.0)]   # over the basin
 radar = tp.MarineRadar(radar_model)
+radar.weather = weather
 radar.materials.set(ID_SEA, tp.RadarMaterial.sea_surface())
 radar.materials.set(ID_OTTERX, tp.RadarMaterial.fibreglass())
 radar.materials.set(ID_OTTER, tp.RadarMaterial.fibreglass())
@@ -288,7 +517,7 @@ sm.range_bins = 768
 sm.water.temperature = 8.0
 sm.water.salinity = 33.0
 sm.surface_y = 0.0
-sm.surface_rms_height = 0.02 + 0.03 * SEA_STATE
+sm.surface_rms_height = weather.significant_wave_height() / 4.0
 sonar.rebuild()
 sonar.materials.default_material = tp.AcousticMaterial.sand()
 sonar.materials.set(ID_SEA, tp.AcousticMaterial.sea_surface())
@@ -486,10 +715,17 @@ controls.max_distance = 400.0
 canvas.on_window_resize(resize_handler(camera, renderer))
 _anchor = np.zeros(3)
 _cam = {"yaw": None}
+# Stills only: --eye x,y,z and --target x,y,z hold the --shot camera there instead of the chase.
+SHOT_EYE = [float(v) for v in cli_arg("--eye", "", str).split(",")] if HEADLESS and "--eye" in sys.argv else None
+SHOT_TARGET = [float(v) for v in cli_arg("--target", "0,0,0", str).split(",")]
 
 
 def chase_camera(dt, first=False):
     """Behind her starboard quarter, high enough to see what lies ahead of her."""
+    if SHOT_EYE is not None:
+        camera.position.set(*SHOT_EYE)
+        camera.look_at(tp.Vector3(*SHOT_TARGET))
+        return
     fwd = hull.R[:, 0]
     yaw = math.atan2(fwd[0], fwd[2])
     if _cam["yaw"] is None or first:
@@ -558,6 +794,8 @@ def step(dt):
         h = ocean.sample_height(float(q[0]), float(q[1]))
         bb.position.set(float(q[0]), h - 0.35, float(q[1]))
     GEO.update(camera.position)
+    if RAIN:
+        weather_frame(t, dt)
 
 
 # Where the sensors were when they fired: the ground-truth report's poses (--shot only).
@@ -654,9 +892,14 @@ def draw_ui():
     ch, v = tp.imgui.slider_float("rain (FTC)", radar.model.rain_clutter, 0.0, 1.0)
     if ch:
         radar.model.rain_clutter = v
-    ch, v = tp.imgui.slider_float("sea state", radar.model.sea_state, 0.0, 6.0)
+    ch, v = tp.imgui.slider_float("wind m/s", weather.wind_speed, 0.0, 25.0)
     if ch:
-        radar.model.sea_state = v
+        weather.wind_speed = v
+        ocean.set_weather(weather)
+        sm.surface_rms_height = weather.significant_wave_height() / 4.0
+    hs = weather.significant_wave_height()
+    tp.imgui.text(f"Hs {hs:.2f} m over {weather.fetch / 1000:.0f} km of fetch, "
+                  f"Douglas {tp.sea_state_from_wave_height(hs):.1f}")
     tp.imgui.text(f"{radar.rays_per_slot} rays/spoke, radar {state['radar_ms']:.1f} ms, scope {state['ppi_ms']:.1f} ms")
     tp.imgui.separator()
     tp.imgui.text("Sonar")

@@ -32,6 +32,7 @@
 #define THREEPP_OCEAN_HPP
 
 #include "threepp/objects/DisplacedMesh.hpp"
+#include "threepp/scenes/Weather.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -157,6 +158,13 @@ namespace threepp {
         // correlated, so the sea morphs smoothly into the new state instead
         // of popping. Safe to drive from a UI slider every frame.
         void setWind(float speed, float theta);
+
+        // The sea a scene's Weather describes: copies its wind speed and
+        // direction, fetch and swell (height, period, direction) into
+        // `params`. Live in the same way as setWind: the renderer sees the
+        // changed fields and regenerates the spectra. Call it again after
+        // changing the weather; the ocean keeps no reference to it.
+        void setWeather(const Weather& weather);
 
         Ocean(const std::shared_ptr<BufferGeometry>& geometry,
               const std::shared_ptr<Material>& material);

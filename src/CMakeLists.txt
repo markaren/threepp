@@ -652,6 +652,7 @@ set(sources
         "threepp/scenes/Fog.cpp"
         "threepp/scenes/FogExp2.cpp"
         "threepp/scenes/Downwash.cpp"
+        "threepp/scenes/Weather.cpp"
 
         "threepp/objects/Group.cpp"
         "threepp/objects/Line.cpp"

@@ -193,4 +193,13 @@ namespace threepp {
         params.windTheta = theta;
     }
 
+    void Ocean::setWeather(const Weather& weather) {
+        params.windSpeed = weather.windSpeed;
+        params.windTheta = weather.windTheta;
+        params.fetch = weather.fetch;
+        params.swellHeight = weather.swellHeight;
+        params.swellPeriod = weather.swellPeriod;
+        params.swellTheta = weather.swellTheta;
+    }
+
 }// namespace threepp

@@ -32,12 +32,17 @@ namespace threepp {
      *
      * Radar materials are keyed on stable instance ids (the ocean gets
      * RadarMaterial::Sea()). The camera's fog and haze volumes are kept out of
-     * the trace; rain is the model's own RainCells.
+     * the trace; the sea state and the rain come from `weather`, the scene's
+     * shared Weather.
      */
     class MarineRadar: public Object3D, public VisionSensor {
 
     public:
         MarineRadarModel model;
+        // The scene's weather: assign the shared Weather the ocean also reads.
+        // The radar reads it on every update (its wind, fetch and swell for the
+        // sea state, its rain cells where they were when each slot was traced).
+        std::shared_ptr<Weather> weather = std::make_shared<Weather>();
         RadarMaterials materials;
         LidarParams params;
         // At most this many slots per trace (a stall then catches up over a
@@ -99,6 +104,7 @@ namespace threepp {
         std::uint64_t scansCollected_ = 0;
         std::int64_t pendingFirst_ = 0;
         unsigned pendingCount_ = 0;
+        double pendingTime_ = 0.0;// sim time of the trace in flight
         Vector3 pendingOrigin_;
         Matrix3 pendingRotation_;// world from the antenna, rotation only
         Matrix3 pendingLevel_;   // world from the antenna's level frame (its heading only)
