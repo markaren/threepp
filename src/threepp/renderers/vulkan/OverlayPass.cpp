@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/OverlayPass.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 #include "threepp/renderers/vulkan/SceneEnvKnobs.hpp"
@@ -1734,9 +1735,9 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // The frame's record() calls share the slot's pool (see beginFrame).
     const uint32_t spriteSetsLeft = kMaxSpritesPerFrame - spriteSetsUsed_;
     if (draws.size() > spriteSetsLeft) {
-        std::cerr << "[VulkanRenderer] HUD sprite count " << (spriteSetsUsed_ + draws.size())
-                  << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
-                  << "; extras dropped\n";
+        THREEPP_LOG_ONCE(kLogOverlay, Warn) << "HUD sprite count " << (spriteSetsUsed_ + draws.size())
+                                            << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
+                                            << "; the rest are not drawn";
         draws.resize(spriteSetsLeft);
     }
     spriteSetsUsed_ += static_cast<uint32_t>(draws.size());

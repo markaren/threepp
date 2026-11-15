@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/FsrUpscaler.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/fsr_reactive.comp.spv.h"
@@ -63,15 +64,15 @@ namespace threepp::vulkan {
             }
             if (!m) m = LoadLibraryA("amd_fidelityfx_vk.dll");// default search order
             if (!m) {
-                std::fprintf(stderr,
-                             "[threepp] FSR: LoadLibrary(amd_fidelityfx_vk.dll) failed "
-                             "(err %lu) - falling back to the built-in TAA upscaler.\n",
+                THREEPP_LOGF(kLogUpscale, Warn, "FSR: LoadLibrary(amd_fidelityfx_vk.dll) failed "
+                             "(err %lu); the built-in TAA upscaler runs instead",
                              static_cast<unsigned long>(GetLastError()));
                 return false;
             }
             ffxLoadFunctions(&g_ffx, m);
             if (!g_ffx.CreateContext) {
-                std::fprintf(stderr, "[threepp] FSR: amd_fidelityfx_vk.dll missing ffx entry points.\n");
+                THREEPP_LOGF(kLogUpscale, Warn, "FSR: amd_fidelityfx_vk.dll lacks the ffx entry points; "
+                                                "the built-in TAA upscaler runs instead");
                 return false;
             }
             return true;
@@ -81,9 +82,11 @@ namespace threepp::vulkan {
         // ffx create/validation paths invoke the message callback unconditionally,
         // so leaving it null crashes (a null call) instead of reporting the issue.
         void ffxMessageSink(uint32_t type, const wchar_t* message) {
-            std::fprintf(stderr, "[threepp] FSR runtime %s: %ls\n",
-                         type == FFX_API_MESSAGE_TYPE_ERROR ? "ERROR" : "WARNING",
-                         message ? message : L"(null)");
+            if (type == FFX_API_MESSAGE_TYPE_ERROR) {
+                THREEPP_LOGF(kLogUpscale, Error, "FSR runtime: %ls", message ? message : L"(null)");
+            } else {
+                THREEPP_LOGF(kLogUpscale, Warn, "FSR runtime: %ls", message ? message : L"(null)");
+            }
             std::fflush(stderr);
         }
 
@@ -194,9 +197,8 @@ namespace threepp::vulkan {
         ffxContext context = nullptr;
         const ffxReturnCode_t rc = g_ffx.CreateContext(&context, &createDesc.header, nullptr);
         if (rc != FFX_API_RETURN_OK || context == nullptr) {
-            std::fprintf(stderr,
-                         "[threepp] FSR: ffxCreateContext failed (code %u) - "
-                         "falling back to the built-in TAA upscaler.\n",
+            THREEPP_LOGF(kLogUpscale, Warn, "FSR: ffxCreateContext failed (code %u); "
+                         "the built-in TAA upscaler runs instead",
                          static_cast<unsigned>(rc));
             context_ = nullptr;
             return false;
@@ -207,7 +209,7 @@ namespace threepp::vulkan {
         // Reactive mask scratch at the DISPLAY (== maxRenderSize) extent — the
         // compute writes only the render sub-region each frame.
         createReactiveImages(displayWidth, displayHeight);
-        std::fprintf(stderr, "[threepp] FSR 3.1 upscaler active (%ux%u display).\n",
+        THREEPP_LOGF(kLogUpscale, Info, "FSR 3.1 upscaler active (%ux%u display)",
                      displayWidth, displayHeight);
         return true;
     }

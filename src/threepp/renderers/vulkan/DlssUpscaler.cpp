@@ -1,5 +1,6 @@
 
 #include "threepp/renderers/vulkan/DlssUpscaler.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/StartupTiming.hpp"
 #include "threepp/renderers/vulkan/shaders/fsr_reactive.comp.spv.h"// shared bias-mask generator
@@ -190,14 +191,14 @@ namespace threepp::vulkan {
         NVSDK_NGX_FeatureCommonInfo fci{};
         fci.PathListInfo.Path   = modulePathPtrs_;
         fci.PathListInfo.Length = 1;
-        // THREEPP_DLSS_LOG=1: NGX's own verbose log on stdout, each line with
-        // the time since the previous one (where a slow NGX init goes).
+        // THREEPP_DLSS_LOG=1: NGX's own verbose log (vulkan.upscale, Info), each
+        // line with the time since the previous one (where a slow NGX init goes).
         if (env::flag("THREEPP_DLSS_LOG")) {
             fci.LoggingInfo.LoggingCallback = [](const char* message, NVSDK_NGX_Logging_Level,
                                                  NVSDK_NGX_Feature) {
                 static auto last = std::chrono::steady_clock::now();
                 const auto now = std::chrono::steady_clock::now();
-                std::printf("[ngx +%.1f ms] %s", std::chrono::duration<double, std::milli>(now - last).count(),
+                THREEPP_LOGF(kLogUpscale, Info, "ngx +%.1f ms: %s", std::chrono::duration<double, std::milli>(now - last).count(),
                             message);
                 last = now;
             };
@@ -240,9 +241,8 @@ namespace threepp::vulkan {
         const auto r0 = static_cast<NVSDK_NGX_Result>(ngxInit_.get());
         startupMark("dlss: wait for ngx init");
         if (NVSDK_NGX_FAILED(r0)) {
-            std::fprintf(stderr,
-                         "[threepp] DLSS: NGX init failed (0x%08x) - "
-                         "falling back to FSR/TAA.\n", static_cast<unsigned>(r0));
+            THREEPP_LOGF(kLogUpscale, Warn, "DLSS: NGX init failed (0x%08x); FSR or TAA upscales instead",
+                         static_cast<unsigned>(r0));
             return false;// nothing to shut down
         }
         ngxInited_ = true;
@@ -262,16 +262,14 @@ namespace threepp::vulkan {
         rrAvailable_ = available && rrAvailable;
         startupMark("dlss: capabilities");
         if (!available) {
-            std::fprintf(stderr,
-                         "[threepp] DLSS: not available on this GPU/driver - "
-                         "falling back to FSR/TAA.\n");
+            THREEPP_LOGF(kLogUpscale, Warn, "DLSS is not available on this GPU or driver; FSR or TAA upscales instead");
             releaseNgx();
             return false;
         }
 
         r = NVSDK_NGX_VULKAN_AllocateParameters(&params_);
         if (NVSDK_NGX_FAILED(r) || !params_) {
-            std::fprintf(stderr, "[threepp] DLSS: parameter allocation failed (0x%08x).\n",
+            THREEPP_LOGF(kLogUpscale, Warn, "DLSS: parameter allocation failed (0x%08x); FSR or TAA upscales instead",
                          static_cast<unsigned>(r));
             params_ = nullptr;
             releaseNgx();
@@ -351,9 +349,8 @@ namespace threepp::vulkan {
                 ctx_.device(), initCb, 1u, 1u, &feature_, params_, &cp);
         startupMark("dlss: create feature");
         if (NVSDK_NGX_FAILED(r) || !feature_) {
-            std::fprintf(stderr,
-                         "[threepp] DLSS: feature creation failed (0x%08x) - "
-                         "falling back to FSR/TAA.\n", static_cast<unsigned>(r));
+            THREEPP_LOGF(kLogUpscale, Warn, "DLSS: feature creation failed (0x%08x); FSR or TAA upscales instead",
+                         static_cast<unsigned>(r));
             feature_ = nullptr;
             return false;
         }
@@ -365,7 +362,7 @@ namespace threepp::vulkan {
         // compute writes only the render sub-region each frame.
         createReactiveImages(displayWidth, displayHeight);
         startupMark("dlss: reactive images");
-        std::fprintf(stderr, "[threepp] DLSS upscaler active (%ux%u display, quality mode %d).\n",
+        THREEPP_LOGF(kLogUpscale, Info, "DLSS upscaler active (%ux%u display, quality mode %d)",
                      displayWidth, displayHeight, static_cast<int>(quality));
         return true;
     }
@@ -509,9 +506,8 @@ namespace threepp::vulkan {
             // the diagnosis. failing() trips after 3 consecutive failures; the
             // frame loop then falls back to FSR/TAA and recreates the feature.
             if (evalFails_ == 0) {
-                std::fprintf(stderr,
-                             "[threepp] DLSS: evaluate failed (0x%08x) - render %ux%u, "
-                             "display %ux%u, feature %ux%u; will self-heal after 3 failures.\n",
+                THREEPP_LOGF(kLogUpscale, Warn, "DLSS: evaluate failed (0x%08x): render %ux%u, "
+                             "display %ux%u, feature %ux%u; it recreates itself after 3 failures",
                              static_cast<unsigned>(r),
                              in.renderWidth, in.renderHeight,
                              in.displayWidth, in.displayHeight,
@@ -587,9 +583,8 @@ namespace threepp::vulkan {
             // Same diagnosis line as SR's, with the RR feature's own render
             // extent (it is created at the render size, not the display's).
             if (rrEvalFails_ == 0) {
-                std::fprintf(stderr,
-                             "[threepp] DLSS-RR: evaluate failed (0x%08x) - render %ux%u, "
-                             "display %ux%u, feature %ux%u -> %ux%u; will self-heal after 3 failures.\n",
+                THREEPP_LOGF(kLogUpscale, Warn, "DLSS-RR: evaluate failed (0x%08x): render %ux%u, "
+                             "display %ux%u, feature %ux%u -> %ux%u; it recreates itself after 3 failures",
                              static_cast<unsigned>(r),
                              in.renderWidth, in.renderHeight,
                              in.displayWidth, in.displayHeight,
@@ -621,7 +616,7 @@ namespace threepp::vulkan {
         if (!paramsRR_) {
             const NVSDK_NGX_Result pr = NVSDK_NGX_VULKAN_AllocateParameters(&paramsRR_);
             if (NVSDK_NGX_FAILED(pr) || !paramsRR_) {
-                std::fprintf(stderr, "[threepp] DLSS-RR: parameter allocation failed (0x%08x) - SR runs.\n",
+                THREEPP_LOGF(kLogUpscale, Warn, "DLSS-RR: parameter allocation failed (0x%08x); DLSS SR runs",
                              static_cast<unsigned>(pr));
                 paramsRR_  = nullptr;
                 rrBlocked_ = true;
@@ -652,9 +647,8 @@ namespace threepp::vulkan {
         const NVSDK_NGX_Result r = NGX_VULKAN_CREATE_DLSSD_EXT1(
                 ctx_.device(), initCb, 1u, 1u, &featureRR_, paramsRR_, &cp);
         if (NVSDK_NGX_FAILED(r) || !featureRR_) {
-            std::fprintf(stderr,
-                         "[threepp] DLSS-RR: feature creation failed (0x%08x) - render %ux%u, "
-                         "display %ux%u, quality mode %d; SR runs.\n",
+            THREEPP_LOGF(kLogUpscale, Warn, "DLSS-RR: feature creation failed (0x%08x): render %ux%u, "
+                         "display %ux%u, quality mode %d; DLSS SR runs",
                          static_cast<unsigned>(r), renderWidth, renderHeight,
                          displayW_, displayH_, quality_);
             featureRR_ = nullptr;
@@ -665,8 +659,7 @@ namespace threepp::vulkan {
         rrRenderW_   = renderWidth;
         rrRenderH_   = renderHeight;
         rrEvalFails_ = 0;
-        std::fprintf(stderr,
-                     "[threepp] DLSS Ray Reconstruction active (%ux%u render, %ux%u display, quality mode %d).\n",
+        THREEPP_LOGF(kLogUpscale, Info, "DLSS Ray Reconstruction active (%ux%u render, %ux%u display, quality mode %d)",
                      renderWidth, renderHeight, displayW_, displayH_, quality_);
         return true;
     }
@@ -675,7 +668,7 @@ namespace threepp::vulkan {
         if (featureRR_) {
             NVSDK_NGX_VULKAN_ReleaseFeature(featureRR_);
             featureRR_ = nullptr;
-            std::fprintf(stderr, "[threepp] DLSS Ray Reconstruction feature released.\n");
+            THREEPP_LOGF(kLogUpscale, Debug, "DLSS Ray Reconstruction feature released");
         }
         rrRenderW_ = rrRenderH_ = 0;
         rrEvalFails_ = 0;
@@ -684,9 +677,8 @@ namespace threepp::vulkan {
     void DlssUpscaler::giveUpRayReconstruction() {
         destroyRayReconstruction();
         rrBlocked_ = true;
-        std::fprintf(stderr,
-                     "[threepp] DLSS-RR: persistent evaluate failure - off until the next display "
-                     "resize or preset change (SR runs).\n");
+        THREEPP_LOGF(kLogUpscale, Warn, "DLSS-RR keeps failing to evaluate; it is off until the next display "
+                                        "resize or preset change, and DLSS SR runs");
     }
 
     void DlssUpscaler::createReactivePipeline() {

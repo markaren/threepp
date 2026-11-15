@@ -1,4 +1,5 @@
 #include "ParticleFieldPass.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 
 #include "VulkanContext.hpp"
 
@@ -818,12 +819,11 @@ ParticleFieldPass::State& ParticleFieldPass::ensureState(const ParticleField& fi
                                                            bytes, kExternalPositionUsage);
             }
         } else {
-            std::fprintf(stderr,
-                         "[ParticleField] Ownership::Interop asked for on a device with no "
+            THREEPP_LOGF(kLogParticles, Warn, "Ownership::Interop asked for on a device with no "
                          "external-memory extension (VK_KHR_external_memory_win32/fd): no "
                          "buffer can be exported and no device-to-device copy is possible. "
-                         "Falling back to the host ring — feed this field with submit() "
-                         "(ParticleField::hostFallback() is now true).\n");
+                         "Falling back to the host ring: feed this field with submit() "
+                         "(ParticleField::hostFallback() is now true).");
             const_cast<ParticleField&>(field).setHostFallback();
         }
     }
@@ -887,10 +887,9 @@ ParticleFieldPass::enableInterop(ParticleField& field, std::function<void()> dev
 
     State& st = ensureState(field);
     if (field.config().ownership != ParticleField::Ownership::Interop) {
-        std::fprintf(stderr,
-                     "[ParticleField] enableParticleFieldInterop on a field that was not "
-                     "created with Ownership::Interop — ignored. Ownership is fixed at "
-                     "create, like capacity.\n");
+        THREEPP_LOGF(kLogParticles, Warn, "enableParticleFieldInterop on a field that was not "
+                     "created with Ownership::Interop is ignored. Ownership is fixed at "
+                     "create, like capacity.");
         return {};
     }
     // The fallback case already printed why, and hostFallback() is set: the
@@ -1308,11 +1307,10 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 parkedUnarmed = true;
                 if (!st.interopUnarmedLogged) {
                     st.interopUnarmedLogged = true;
-                    std::fprintf(stderr,
-                                 "[ParticleField] an Ownership::Interop field is in the scene "
-                                 "but no device copy is registered — it renders nothing. Call "
+                    THREEPP_LOGF(kLogParticles, Warn, "an Ownership::Interop field is in the scene "
+                                 "but no device copy is registered, so it renders nothing. Call "
                                  "VulkanRenderer::enableParticleFieldInterop(field, copy) "
-                                 "once, and import the handle it returns.\n");
+                                 "once, and import the handle it returns.");
                 }
             }
             if (live > 0) {
@@ -1518,10 +1516,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                     // once, then silent: surface interaction is simply absent.
                     if (!bakeUnsupportedLogged_) {
                         bakeUnsupportedLogged_ = true;
-                        std::fprintf(stderr,
-                                     "[threepp] ParticleField: EmitterParams::Surface needs "
-                                     "VK_KHR_ray_query, which this device does not support "
-                                     "— flakes will not rest.\n");
+                        THREEPP_LOGF(kLogParticles, Warn, "EmitterParams::Surface needs VK_KHR_ray_query, "
+                                                          "which this device does not support, so flakes will not rest");
                     }
                 } else {
                     ensureBakePipeline();

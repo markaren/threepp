@@ -2,6 +2,7 @@
 // public surface and architecture overview.
 
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"// flushHostWrites
@@ -551,9 +552,8 @@ namespace threepp::water {
                 warnedTile   = s.tileSize;
                 const double kHi = std::min(s.kMax > 0.f ? double(s.kMax) : 1e9, 1e9);
                 const double kLo = std::max(2.0 * dk, double(s.kMin));
-                std::fprintf(stderr,
-                             "[ocean] swell of %.1f s is not drawn: its peak wavelength %.0f m is outside what "
-                             "cascade 0 (tile %.0f m) carries, periods %.1f to %.1f s\n",
+                THREEPP_LOGF(vulkan::kLogOcean, Warn, "swell of %.1f s is not drawn: its peak wavelength %.0f m is outside what "
+                             "cascade 0 (tile %.0f m) carries, periods %.1f to %.1f s",
                              double(s.swellPeriod), 2.0 * pi / kp, double(s.tileSize),
                              2.0 * pi / std::sqrt(g * kHi), 2.0 * pi / std::sqrt(g * kLo));
             }
@@ -932,7 +932,7 @@ namespace threepp::water {
             const char* e = std::getenv("THREEPP_OCEAN_FFT");
             if (!e || !*e || std::strcmp(e, "shared") == 0) return Path::Shared;
             if (std::strcmp(e, "butterfly") == 0) return Path::Butterfly;
-            std::fprintf(stderr, "[IFFT] THREEPP_OCEAN_FFT=%s is neither butterfly nor shared; using shared\n", e);
+            THREEPP_LOGF(vulkan::kLogOcean, Warn, "THREEPP_OCEAN_FFT=%s is neither butterfly nor shared; using shared", e);
             return Path::Shared;
         }();
         return path;
@@ -1206,7 +1206,7 @@ namespace threepp::water {
             // butterfly path down with it: this IFFT stays on that path.
             destroySharedPipelines();
             sharedSupported_ = false;
-            std::fprintf(stderr, "[IFFT] N=%u: the shared-memory FFT did not build (%s); the butterfly path runs\n",
+            THREEPP_LOGF(vulkan::kLogOcean, Warn, "N=%u: the shared-memory FFT did not build (%s); the butterfly path runs",
                          textureSize_, e.what());
             return false;
         }

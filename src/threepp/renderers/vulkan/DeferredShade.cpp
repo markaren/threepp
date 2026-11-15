@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/DeferredShade.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
@@ -1348,9 +1349,8 @@ namespace threepp::vulkan {
         const bool recorded = std::find(shadeKeysCached_.begin(), shadeKeysCached_.end(),
                                         std::make_pair(shadeSpvHash_, key)) != shadeKeysCached_.end();
         if (!recorded) {
-            std::fprintf(stderr,
-                         "[VulkanRenderer] compiling the deferred shade variant 0x%llx: about two "
-                         "minutes on the first run, cached afterwards\n",
+            THREEPP_LOGF(kLogShade, Info, "compiling the deferred shade variant 0x%llx: about two "
+                         "minutes on the first run, cached afterwards",
                          static_cast<unsigned long long>(key));
             std::fflush(stderr);
         }
@@ -1382,7 +1382,7 @@ namespace threepp::vulkan {
             if (const int64_t n = ctx_.pipelineStat(perm, "Register Count"); n >= 0) {
                 std::snprintf(regs, sizeof(regs), ", %lld registers", static_cast<long long>(n));
             }
-            std::fprintf(stderr, "[shade-spec] %s flags=0x%x mask=0x%x probe=%u: %.0f ms%s\n", label,
+            THREEPP_LOGF(kLogShade, Info, "%s flags=0x%x mask=0x%x probe=%u: %.0f ms%s", label,
                          values[0], values[1], values[2], ms, regs);
         }
         ctx_.dumpPipelineStats(perm, label);

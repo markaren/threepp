@@ -1,5 +1,6 @@
 #include <cstdio>
 #include "threepp/renderers/vulkan/ProbeGI.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 #include "threepp/renderers/vulkan/EnvKnob.hpp"
 
@@ -417,7 +418,7 @@ namespace threepp::vulkan {
         // points clamp in probeIrradiance, so a slightly-outgrown AABB
         // degrades gracefully; a real scene swap trips the thresholds and
         // takes the full wipe.
-        const bool log = env::flag("THREEPP_PROBE_LOG");
+        const bool log = kLogProbe.enabled(::threepp::log::Level::Debug);
         // Layout: a scene the fit would cover at more than sceneFitMax_ per
         // probe gets the camera-centred cascades. The AABB then only decides
         // the layout; the windows are placed by recentre.
@@ -435,7 +436,7 @@ namespace threepp::vulkan {
                 for (int a = 0; a < 3; ++a) cSpacing_[c][a] = sp;
             }
             if (log)
-                std::fprintf(stderr, "[probe] grid CASCADES x%u (scene fit would be %.3f m) base=%.3f m\n",
+                THREEPP_LOGF(kLogProbe, Debug, "grid CASCADES x%u (scene fit would be %.3f m) base=%.3f m",
                              cascadeCount_, maxSpacing, cascadeBase_);
             gridFitted_     = true;
             cascadesPlaced_ = false;// recentre places the windows; until then nothing samples them
@@ -466,7 +467,7 @@ namespace threepp::vulkan {
             if (keep) return;
         }
         if (log) {
-            std::fprintf(stderr, "[probe] grid %s origin=(%.6f %.6f %.6f) spacing=(%.6f %.6f %.6f) dims=(%u %u %u)\n",
+            THREEPP_LOGF(kLogProbe, Debug, "grid %s origin=(%.6f %.6f %.6f) spacing=(%.6f %.6f %.6f) dims=(%u %u %u)",
                          gridFitted_ ? "REFIT" : "fit", newOrigin[0], newOrigin[1], newOrigin[2],
                          newSpacing[0], newSpacing[1], newSpacing[2], dims[0], dims[1], dims[2]);
         }

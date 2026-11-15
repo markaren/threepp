@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/TransientPool.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 
 #include "threepp/renderers/vulkan/RenderGraph.hpp"
 
@@ -108,7 +109,7 @@ namespace threepp::vulkan {
             r.erase(std::remove(r.begin(), r.end(), this), r.end());
         }
         if (!images_.empty()) {
-            std::fprintf(stderr, "[TransientPool] '%s' destroyed with %zu images still bound\n", name_,
+            THREEPP_LOGF(kLogMemory, Warn, "'%s' destroyed with %zu images still bound", name_,
                          images_.size());
             for (const auto& [image, e] : images_) vkDestroyImage(device_, image, nullptr);
         }

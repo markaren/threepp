@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/SplatPass.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 #include "threepp/renderers/vulkan/EnvKnob.hpp"
 
@@ -1094,13 +1095,12 @@ namespace threepp::vulkan {
             }
             if (wanted > kMaxEntries) {
                 budgetCapped_ = true;
-                std::cerr << "[threepp] SplatPass: this frame's tile expansion wants "
+                THREEPP_LOG(kLogSplat, Warn) << "SplatPass: this frame's tile expansion wants "
                           << wanted << " (splat, tile) pairs, past the " << kMaxEntries
                           << " ceiling (" << (kMaxEntryBytes >> 20)
-                          << " MB of sort buffers). Frames will be TRUNCATED — splats "
+                          << " MB of sort buffers). Frames will be TRUNCATED, with splats "
                              "missing from some tiles. Fewer or smaller splats, or a "
-                             "coarser tile grid, is the fix."
-                          << std::endl;
+                             "coarser tile grid, is the fix.";
             }
         }
 
@@ -1130,9 +1130,8 @@ namespace threepp::vulkan {
             for (const auto& e : clouds) {
                 if (!e.cloud || resident_.count(e.cloud)) continue;
                 if (freeSlots_.empty() && slotsUsed_ >= kMaxClouds) {
-                    std::cerr << "[threepp] SplatPass: more than " << kMaxClouds
-                              << " splat clouds in one scene; the extra ones are not drawn"
-                              << std::endl;
+                    THREEPP_LOG_ONCE(kLogSplat, Warn) << "SplatPass: more than " << kMaxClouds
+                              << " splat clouds in one scene; the extra ones are not drawn";
                     break;
                 }
                 auto c = std::make_unique<Cloud>();
@@ -1176,10 +1175,9 @@ namespace threepp::vulkan {
                 // leaves whoever saw them with no explanation. Sizing a cloud
                 // for the first time is not that and says nothing.
                 if (grewOnOverflow)
-                    std::cerr << "[threepp] SplatPass: tile expansion budget "
+                    THREEPP_LOG(kLogSplat, Warn) << "SplatPass: tile expansion budget "
                               << entryBudget_ << " -> " << needEntries
-                              << " (splat, tile) pairs after a truncated frame"
-                              << std::endl;
+                              << " (splat, tile) pairs after a truncated frame";
                 allocateScratch(needSplats, needEntries);
                 // The overflow counters just consumed describe a frame that no
                 // longer exists. Clearing them stops the next few syncs from
@@ -1205,7 +1203,7 @@ namespace threepp::vulkan {
             vmaGetAllocationInfo(ctx_.allocator(), debugBuf_[lastFrame_].alloc, &ai);
             invalidateHostReads(ctx_.allocator(), debugBuf_[lastFrame_].alloc);
             if (const auto* w = static_cast<const uint32_t*>(ai.pMappedData); w && w[2]) {
-                std::cerr << "[splat] entries " << w[2] << " overflow " << w[3]
+                THREEPP_LOG(kLogSplat, Info) << "entries " << w[2] << " overflow " << w[3]
                           << " visible " << w[4] << " scanBad " << w[10]
                           << " orderBad " << w[11]
                           // The three hashes are what makes this an A/B
@@ -1216,7 +1214,7 @@ namespace threepp::vulkan {
                           // sorted payload, composited pixels) and are the level
                           // at which a sort change must be byte-identical.
                           << " hashKey " << w[7] << " hashVal " << w[8]
-                          << " hashColor " << w[9] << std::endl;
+                          << " hashColor " << w[9];
             }
         }
 

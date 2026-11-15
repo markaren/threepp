@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdio>
 #include "EnvKnob.hpp"
+#include "VulkanLog.hpp"
 
 #include <cstdlib>
 #include <map>
@@ -81,19 +82,24 @@ namespace threepp::vulkan::cpuprof {
             if (spikeMs > 0.0) {
                 const auto it = frameAcc.find("scene.0_total");
                 if (it != frameAcc.end() && it->second > spikeMs) {
-                    std::fprintf(stderr, "[cpuprof] spike frame %llu:", static_cast<unsigned long long>(frameNo));
+                    log::Line line(kLogCpuProf, log::Level::Info);
+                    char buf[160];
+                    std::snprintf(buf, sizeof(buf), "spike frame %llu:", static_cast<unsigned long long>(frameNo));
+                    line << buf;
                     for (auto& [k, v] : frameAcc)
-                        if (v >= 0.25) std::fprintf(stderr, " %s=%.2f", k.c_str(), v);
-                    std::fprintf(stderr, "\n");
+                        if (v >= 0.25) {
+                            std::snprintf(buf, sizeof(buf), " %s=%.2f", k.c_str(), v);
+                            line << buf;
+                        }
                 }
             }
             frameAcc.clear();
             if (++frames < window) return;
             ++blocks;
-            std::fprintf(stderr, "[cpuprof] block %u: avg ms/frame over %u frames (max: the worst frame)\n",
+            THREEPP_LOGF(kLogCpuProf, Info, "block %u: avg ms/frame over %u frames (max: the worst frame)",
                          blocks, frames);
             for (auto& [k, v] : acc)
-                std::fprintf(stderr, "  %-34s %9.4f   max %8.3f\n", k.c_str(), v / frames, maxAcc[k]);
+                THREEPP_LOGF(kLogCpuProf, Info, "  %-34s %9.4f   max %8.3f", k.c_str(), v / frames, maxAcc[k]);
             std::fflush(stderr);
             // Windowed: start the next block from zero (see the header note).
             acc.clear();

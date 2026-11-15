@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/PathTracer.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 #include "threepp/renderers/vulkan/ParticleFieldPass.hpp"// OverlayGradeGpu
@@ -119,7 +120,7 @@ namespace threepp::vulkan {
             vkDestroyShaderModule(ctx.device(), mod, nullptr);
             if (stats) {
                 if (const int64_t n = ctx.pipelineStat(pipe, "Register Count"); n >= 0)
-                    std::fprintf(stderr, "[path-trace] %s: %lld registers\n", what, static_cast<long long>(n));
+                    THREEPP_LOGF(kLogPathTracer, Info, "%s: %lld registers", what, static_cast<long long>(n));
                 ctx.dumpPipelineStats(pipe, what);
             }
             return pipe;

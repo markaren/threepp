@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <cstdio>
@@ -190,7 +191,7 @@ namespace threepp::vulkan {
         const auto s = sets().find(set);
         if (s == sets().end()) {
             if (warned().insert(reinterpret_cast<uint64_t>(set)).second) {
-                std::fprintf(stderr, "[RenderGraph] descriptor set %p has no shadow; its pass declares nothing\n",
+                THREEPP_LOGF(kLogRenderGraph, Warn, "descriptor set %p has no shadow; its pass declares nothing",
                              static_cast<void*>(set));
             }
             return;
@@ -244,9 +245,8 @@ namespace threepp::vulkan {
                 const auto v = views().find(el.view);
                 if (v == views().end()) {
                     if (warned().insert(reinterpret_cast<uint64_t>(el.view)).second) {
-                        std::fprintf(stderr,
-                                     "[RenderGraph] image view %p (set %u binding %u) is not registered; "
-                                     "its accesses are not declared\n",
+                        THREEPP_LOGF(kLogRenderGraph, Warn, "image view %p (set %u binding %u) is not registered; "
+                                     "its accesses are not declared",
                                      static_cast<void*>(el.view), setIndex, rb.binding);
                     }
                     continue;
