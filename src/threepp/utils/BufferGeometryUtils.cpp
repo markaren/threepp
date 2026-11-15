@@ -20,7 +20,12 @@
 #include <limits>
 #include <string>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.geometry"};
+}
 
 namespace {
 
@@ -38,14 +43,15 @@ namespace {
             if (!itemSize) itemSize = attribute->itemSize();
             if (itemSize.value() != attribute->itemSize()) {
 
-                std::cerr << "THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.itemSize must be consistent across matching attributes." << std::endl;
+                THREEPP_LOG(kLog, Warn) << "mergeBufferAttributes: item sizes differ (" << itemSize.value() << " and "
+                                        << attribute->itemSize() << "); nothing is merged";
                 return nullptr;
             }
 
             if (!normalized) normalized = attribute->normalized();
             if (normalized.value() != attribute->normalized()) {
 
-                std::cerr << "THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.normalized must be consistent across matching attributes." << std::endl;
+                THREEPP_LOG(kLog, Warn) << "mergeBufferAttributes: some attributes are normalized and some are not; nothing is merged";
                 return nullptr;
             }
 
@@ -116,7 +122,9 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
         if (isIndexed != (geometry->hasIndex())) {
 
-            std::cerr << "THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index " << i << ". All geometries must have compatible attributes; make sure index attribute exists among all geometries, or in none of them." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "mergeBufferGeometries: geometry " << i
+                                    << (isIndexed ? " has no index and the first has one" : " has an index and the first has none")
+                                    << "; all or none must be indexed. Nothing is merged";
             return nullptr;
         }
 
@@ -126,7 +134,8 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
             if (!attributesUsed.contains(name)) {
 
-                std::cerr << "THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index " << i << ". All geometries must have compatible attributes; make sure \"" + name + "\" attribute exists among all geometries, or in none of them." << std::endl;
+                THREEPP_LOG(kLog, Warn) << "mergeBufferGeometries: geometry " << i << " has attribute '" << name
+                                        << "' and the first has not; nothing is merged";
                 return nullptr;
             }
 
@@ -139,7 +148,8 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
         if (attributesCount != attributesUsed.size()) {
 
-            std::cout << "THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index " << i << ". Make sure all geometries have the same number of attributes." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "mergeBufferGeometries: geometry " << i << " has " << attributesCount << " attributes and the first has "
+                                    << attributesUsed.size() << "; nothing is merged";
             return nullptr;
         }
 
@@ -157,7 +167,8 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
             } else {
 
-                std::cerr << "THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index " << i << ". The geometry must have either an index or a position attribute" << std::endl;
+                THREEPP_LOG(kLog, Warn) << "mergeBufferGeometries: geometry " << i
+                                        << " has neither an index nor a position attribute, so its group has no size; nothing is merged";
                 return nullptr;
             }
 
@@ -208,7 +219,8 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
         if (!mergedAttribute) {
 
-            std::cerr << "THREE.BufferGeometryUtils: .mergeBufferGeometries() failed while trying to merge the " << name << " attribute." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "mergeBufferGeometries: attribute '" << name
+                                    << "' could not be merged (its type differs between geometries or is not supported); nothing is merged";
             return nullptr;
         }
 
@@ -237,7 +249,7 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
     const auto* positionAttr = geometry.getAttribute<float>("position");
     if (!positionAttr) {
 
-        std::cerr << "THREE.BufferGeometryUtils: .mergeVertices() failed. Geometry is missing a position attribute." << std::endl;
+        THREEPP_LOG(kLog, Warn) << "mergeVertices: the geometry has no float 'position' attribute; it returns null";
         return nullptr;
     }
 
@@ -268,7 +280,7 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
         } else {
             FloatAttributeView view(attr.get());
             if (!view) {
-                std::cerr << "THREE.BufferGeometryUtils: .mergeVertices() failed. Unsupported attribute type for \"" << name << "\"." << std::endl;
+                THREEPP_LOG(kLog, Warn) << "mergeVertices: attribute '" << name << "' has an unsupported type; it returns null";
                 return nullptr;
             }
             floatViews.emplace(name, std::move(view));

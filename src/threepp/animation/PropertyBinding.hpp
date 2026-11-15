@@ -10,8 +10,11 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
+#include "threepp/utils/Log.hpp"
 
 namespace threepp {
+
+    inline constinit log::Category kPropertyBindingLog{"core.animation"};
 
     class PropertyBinding {
 
@@ -117,7 +120,8 @@ namespace threepp {
                     buffer[offset] = idx < static_cast<int>(inf.size()) ? inf[idx] : 0.f;
                 }
             } else {
-                std::cerr << that->propertyName << " is not readable." << std::endl;
+                THREEPP_LOG_ONCE(kPropertyBindingLog, Warn) << "Animation property '" << that->propertyName
+                                                            << "' cannot be read; the track reads nothing for it";
             }
         }
 
@@ -133,7 +137,8 @@ namespace threepp {
                 applyMorphInfluence(that->targetObject, idx, buffer[offset]);
                 for (auto* t : that->extraTargets) applyMorphInfluence(t, idx, buffer[offset]);
             } else {
-                std::cerr << that->propertyName << " is not writable." << std::endl;
+                THREEPP_LOG_ONCE(kPropertyBindingLog, Warn) << "Animation property '" << that->propertyName
+                                                            << "' cannot be written; the track does not animate it";
             }
         }
 
@@ -149,7 +154,8 @@ namespace threepp {
                 applyMorphInfluence(that->targetObject, idx, buffer[offset]);
                 for (auto* t : that->extraTargets) applyMorphInfluence(t, idx, buffer[offset]);
             } else {
-                std::cerr << "_setValue_direct_setMatrixWorldNeedsUpdate: " << that->propertyName << " is not writable." << std::endl;
+                THREEPP_LOG_ONCE(kPropertyBindingLog, Warn) << "Animation property '" << that->propertyName
+                                                            << "' cannot be written; the track does not animate it";
             }
             that->targetObject->matrixWorldNeedsUpdate = true;
         }

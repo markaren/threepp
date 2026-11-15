@@ -14,9 +14,13 @@
 #include <limits>
 #include <stdexcept>
 
+#include "threepp/utils/Log.hpp"
+
 namespace threepp {
 
     namespace {
+        constinit log::Category kLog{"core.ocean"};
+
         // An ocean look switch's environment variable: exactly "0" is off,
         // "1", "on" or "true" is on; unset keeps `fallback`, and anything
         // else keeps it too, with a warning.
@@ -25,7 +29,7 @@ namespace threepp {
             if (!v || !*v) return fallback;
             if (std::strcmp(v, "0") == 0) return false;
             if (std::strcmp(v, "1") == 0 || std::strcmp(v, "on") == 0 || std::strcmp(v, "true") == 0) return true;
-            std::fprintf(stderr, "[DisplacedMesh] %s=%s not understood (0 is off; 1, on or true is on); it stays %s\n",
+            THREEPP_LOGF(kLog, Warn, "%s=%s is not understood (0 is off; 1, on or true is on); it stays %s",
                          name, v, fallback ? "on" : "off");
             return fallback;
         }

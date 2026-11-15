@@ -7,7 +7,12 @@
 #include <iostream>
 #include <sstream>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.material"};
+}
 
 
 Material::Material()
@@ -470,7 +475,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
         }
         ss << "]";
 
-        std::cerr << "Unused material values: " << ss.str() << std::endl;
+        THREEPP_LOG(kLog, Warn) << "Material values not recognised and ignored: " << ss.str();
     }
 }
 

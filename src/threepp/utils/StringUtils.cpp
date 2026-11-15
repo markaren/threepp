@@ -9,7 +9,12 @@
 #endif
 #include <iostream>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.string"};
+}
 
 std::vector<std::string> utils::split(const std::string& s, char delimiter) {
 
@@ -108,7 +113,7 @@ int utils::parseInt(const std::string& str) {
     try {
         value = std::stoi(str);
     } catch (const std::exception& e) {
-        std::cerr << "Threepp: Error during int conversion: " << e.what() << '\n';
+        THREEPP_LOG(kLog, Warn) << "parseInt: '" << str << "' is not an integer (" << e.what() << "); it returns 0";
     }
 #endif
 
@@ -126,7 +131,7 @@ float utils::parseFloat(const std::string& str) {
     try {
         value = std::stof(str);
     } catch (const std::exception& e) {
-        std::cerr << "Threepp: Error during float conversion: " << e.what() << '\n';
+        THREEPP_LOG(kLog, Warn) << "parseFloat: '" << str << "' is not a number (" << e.what() << "); it returns 0";
     }
 #endif
 

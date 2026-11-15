@@ -10,7 +10,12 @@
 #include <iostream>
 #include <regex>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.animation"};
+}
 
 namespace {
 
@@ -319,7 +324,7 @@ void PropertyBinding::bind() {
     // ensure there is a value node
     if (!targetObject) {
 
-        std::cerr << "THREE.PropertyBinding: Trying to update node for track: " << this->path << " but it wasn't found." << std::endl;
+        THREEPP_LOG(kLog, Warn) << "Track '" << this->path << "' names a node that is not in the scene; the track does nothing";
         return;
     }
 

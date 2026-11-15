@@ -17,7 +17,12 @@
 #include <iostream>
 #include <limits>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.object"};
+}
 
 namespace {
 
@@ -31,9 +36,8 @@ namespace {
 
             if (node == &child) {
 
-                std::cerr << "[Object3D] add: rejected inserting '" << child.name
-                          << "' under '" << parent.name
-                          << "' - it is the target itself or one of its ancestors" << std::endl;
+                THREEPP_LOG(kLog, Warn) << "add: '" << child.name << "' is not added under '" << parent.name
+                                        << "': it is that object itself or one of its ancestors";
                 return false;
             }
         }
@@ -234,7 +238,7 @@ void Object3D::add(const std::shared_ptr<Object3D>& object) {
 
     if (!object) {
 
-        std::cerr << "[Object3D] add: ignored null child" << std::endl;
+        THREEPP_LOG(kLog, Warn) << "add: a null child is ignored";
         return;
     }
 

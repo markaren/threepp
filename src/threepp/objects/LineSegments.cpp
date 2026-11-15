@@ -4,7 +4,12 @@
 #include <iostream>
 #include <memory>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.geometry"};
+}
 
 LineSegments::LineSegments(
         const std::shared_ptr<BufferGeometry>& geometry,
@@ -43,7 +48,7 @@ void LineSegments::computeLineDistances() {
 
     } else {
 
-        std::cerr << "THREE.LineSegments.computeLineDistances(): Computation only possible with non-indexed BufferGeometry." << std::endl;
+        THREEPP_LOG(kLog, Warn) << "LineSegments::computeLineDistances needs a non-indexed geometry; no distances are computed";
     }
 }
 

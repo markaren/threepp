@@ -4,7 +4,12 @@
 #include <cmath>
 #include <iostream>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.animation"};
+}
 
 namespace {
 
@@ -44,7 +49,8 @@ void Skeleton::init() {
 
         if (bones.size() != boneInverses.size()) {
 
-            std::cerr << "THREE.Skeleton: Number of inverse bone matrices does not match amount of bones." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "Skeleton: " << boneInverses.size() << " inverse bone matrices for " << bones.size()
+                                    << " bones; every inverse is reset to identity";
 
             this->boneInverses = {};
 

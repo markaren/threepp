@@ -5,8 +5,11 @@
 #include <iostream>
 #include <stdexcept>
 
+#include "threepp/utils/Log.hpp"
 
 namespace {
+
+    constinit threepp::log::Category kLog{"core.gl"};
 
     // Which loader filled in GLAD's pointers. They are process-wide and
     // first-load-wins, so a second call is normally a harmless no-op — the
@@ -59,10 +62,9 @@ void threepp::loadGlad() {
 void threepp::loadGlad(GLADloadproc procAddress) {
 
     if (gladLoadedBy() == Loader::builtin) {
-        std::cerr << "threepp: GLAD was already loaded through gladLoadGL() (the GLX dispatch); "
-                     "this context's own loader is being ignored, and its entry points may "
-                     "belong to a different context. Use one GL context per process."
-                  << std::endl;
+        THREEPP_LOG(kLog, Warn) << "GLAD was already loaded through gladLoadGL() (the GLX dispatch); "
+                                   "this context's own loader is ignored, and its entry points may "
+                                   "belong to a different context. Use one GL context per process.";
         return;
     }
     if (gladLoadedBy() != Loader::none) return;

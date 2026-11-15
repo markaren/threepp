@@ -18,7 +18,12 @@
 #include "TransformControlsPlane.hpp"
 
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.controls"};
+}
 
 namespace {
 
@@ -552,7 +557,7 @@ void TransformControls::updateMatrixWorld(bool force) {
 
         if (!pimpl_->object->parent) {
 
-            std::cerr << "TransformControls: The attached 3D object must be a part of the scene graph." << std::endl;
+            THREEPP_LOG_ONCE(kLog, Warn) << "TransformControls: the attached object has no parent; add it to the scene first";
 
         } else {
 

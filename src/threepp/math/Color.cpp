@@ -12,7 +12,12 @@
 #include <sstream>
 #include <unordered_map>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.color"};
+}
 
 namespace {
 
@@ -644,7 +649,7 @@ Color& Color::convertLinearToSRGB() {
 Color& Color::setColorName(const std::string& style, ColorSpace colorSpace) {
 
     if (!colorKeywords.contains(style)) {
-        std::cerr << "THREE.Color: Unknown color '" + style + "'" << std::endl;
+        THREEPP_LOG(kLog, Warn) << "Unknown color name '" << style << "'; the color is unchanged";
         return *this;
     }
 

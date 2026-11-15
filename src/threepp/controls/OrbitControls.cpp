@@ -10,7 +10,12 @@
 #include <cmath>
 #include <iostream>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.controls"};
+}
 
 namespace {
 
@@ -251,7 +256,7 @@ struct OrbitControls::Impl {
         } else {
 
             // camera neither orthographic nor perspective
-            std::cerr << "[OrbitControls] encountered an unknown camera type - pan disabled." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "OrbitControls: the camera is neither perspective nor orthographic; panning is turned off";
             scope.enablePan = false;
         }
     }
@@ -269,7 +274,7 @@ struct OrbitControls::Impl {
             zoomChanged = true;
         } else {
 
-            std::cerr << "[OrbotControls] encountered an unknown camera type - dolly/zoom disabled." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "OrbitControls: the camera is neither perspective nor orthographic; zoom is turned off";
             scope.enableZoom = false;
         }
     }
@@ -283,7 +288,7 @@ struct OrbitControls::Impl {
             this->camera.updateProjectionMatrix();
             zoomChanged = true;
         } else {
-            std::cerr << "[OrbotControls] encountered an unknown camera type - dolly/zoom disabled." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "OrbitControls: the camera is neither perspective nor orthographic; zoom is turned off";
             scope.enableZoom = false;
         }
     }

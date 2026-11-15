@@ -26,7 +26,12 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.canvas"};
+}
 
 namespace {
 
@@ -203,7 +208,7 @@ namespace {
         // clang-format on
     }
     void error_callback(int /*error*/, const char* description) {
-        std::cerr << "Error: " << description << std::endl;
+        THREEPP_LOG(kLog, Error) << "GLFW: " << description;
     }
 
     static int& glfwRefCount() {
@@ -275,9 +280,9 @@ namespace {
             // packages still ship 3.3 (Ubuntu 22.04), so an external GLFW can
             // land here even though the vendored copy is 3.4.
             if (const char* forced = std::getenv("THREEPP_GLFW_PLATFORM"); forced && std::string_view{forced} == "null") {
-                std::cerr << "Canvas: THREEPP_GLFW_PLATFORM=null ignored - GLFW "
-                          << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
-                          << " predates the Null platform (needs 3.4)" << std::endl;
+                THREEPP_LOG(kLog, Warn) << "THREEPP_GLFW_PLATFORM=null is ignored: GLFW "
+                                        << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
+                                        << " has no Null platform (it needs 3.4)";
             }
 #endif
             if (!glfwInit()) {
@@ -292,9 +297,7 @@ namespace {
                 if (headless && !wantNull) {
                     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
                     if (glfwInit()) {
-                        std::cerr << "Canvas: display server unreachable; headless "
-                                     "canvas continues on the GLFW Null platform"
-                                  << std::endl;
+                        THREEPP_LOG(kLog, Warn) << "No display server; the headless canvas runs on the GLFW Null platform";
                         return;
                     }
                 }
@@ -303,9 +306,9 @@ namespace {
                 // leaving "glfwInit() failed" next to an X11 error on a machine
                 // whose only fault is having no display server.
                 if (headless) {
-                    std::cerr << "Canvas: a headless canvas needs a display server here - GLFW "
-                              << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
-                              << " predates the Null platform (needs 3.4)" << std::endl;
+                    THREEPP_LOG(kLog, Error) << "A headless canvas needs a display server here: GLFW "
+                                             << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
+                                             << " has no Null platform (it needs 3.4)";
                 }
 #endif
                 --glfwRefCount();
@@ -356,7 +359,7 @@ namespace {
         if (strict && std::string_view{strict} == "1") {
             throw std::runtime_error(message + " (THREEPP_REQUIRE_HARDWARE_GL=1)");
         }
-        std::cerr << message << std::endl;
+        THREEPP_LOG(kLog, Warn) << message;
 #endif
     }
 
@@ -1175,7 +1178,7 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
 
     if (!unused.empty()) {
 
-        std::cerr << "Unused Canvas parameters: [" << utils::join(unused, ',') << "]" << std::endl;
+        THREEPP_LOG(kLog, Warn) << "Canvas parameters not recognised and ignored: " << utils::join(unused, ',');
     }
 }
 
@@ -1231,7 +1234,7 @@ Canvas::Parameters& Canvas::Parameters::favicon(const std::filesystem::path& pat
     if (exists(path)) {
         favicon_ = path;
     } else {
-        std::cerr << "Invalid favicon path: " << absolute(path) << std::endl;
+        THREEPP_LOG(kLog, Warn) << "Favicon " << absolute(path) << " does not exist; the window keeps its default icon";
     }
 
     return *this;

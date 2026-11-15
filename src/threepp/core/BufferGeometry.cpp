@@ -9,7 +9,12 @@
 #include <iostream>
 #include <utility>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.geometry"};
+}
 
 namespace {
 
@@ -353,7 +358,8 @@ void BufferGeometry::computeBoundingBox() {
 
     if (this->boundingBox->min().isNan()) {
 
-        std::cerr << "THREE.BufferGeometry.computeBoundingBox(): Computed min/max have NaN values. The 'position' attribute is likely to have NaN values." << std::endl;
+        THREEPP_LOG(kLog, Warn) << "computeBoundingBox: the box is NaN; the 'position' attribute of geometry '" << this->name
+                                << "' probably holds NaN values";
     }
 }
 
@@ -443,7 +449,8 @@ void BufferGeometry::computeBoundingSphere() {
 
         if (std::isnan(this->boundingSphere->radius)) {
 
-            std::cerr << "THREE.BufferGeometry.computeBoundingSphere(): Computed radius is NaN. The 'position' attribute is likely to have NaN values." << std::endl;
+            THREEPP_LOG(kLog, Warn) << "computeBoundingSphere: the radius is NaN; the 'position' attribute of geometry '" << this->name
+                                    << "' probably holds NaN values";
         }
     }
 }
@@ -533,7 +540,7 @@ std::shared_ptr<BufferGeometry> BufferGeometry::toNonIndexed() const {
 
     if (!this->hasIndex()) {
 
-        std::cerr << "THREE.BufferGeometry.toNonIndexed(): BufferGeometry is already non-indexed." << std::endl;
+        THREEPP_LOG(kLog, Warn) << "toNonIndexed: the geometry is already non-indexed; it returns null";
         return nullptr;
     }
 

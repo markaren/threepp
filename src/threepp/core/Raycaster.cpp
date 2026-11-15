@@ -7,7 +7,12 @@
 #include <algorithm>
 #include <iostream>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.raycaster"};
+}
 
 namespace {
 
@@ -89,6 +94,6 @@ void Raycaster::setFromCamera(const Vector2& coords, Camera& camera) {
         this->camera = &camera;
 
     } else {
-        std::cerr << "[Raycaster] Unsupported camera type" << std::endl;
+        THREEPP_LOG(kLog, Warn) << "setFromCamera: the camera is neither perspective nor orthographic; the ray is unchanged";
     }
 }

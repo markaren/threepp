@@ -9,7 +9,12 @@
 #include <cmath>
 #include <iostream>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.controls"};
+}
 
 namespace {
 
@@ -166,7 +171,7 @@ struct TrackballControls::Impl {
 
             } else {
 
-                std::cerr << "[TrackballControls] encountered an unknown camera type - zoom disabled." << std::endl;
+                THREEPP_LOG(kLog, Warn) << "TrackballControls: the camera is neither perspective nor orthographic; zoom is turned off";
                 scope.enableZoom = false;
                 return;
             }

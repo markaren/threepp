@@ -11,7 +11,12 @@
 #include <iostream>
 #include <stdexcept>
 
+#include "threepp/utils/Log.hpp"
 using namespace threepp;
+
+namespace {
+    constinit log::Category kLog{"core.animation"};
+}
 
 namespace {
 
@@ -285,7 +290,8 @@ void KeyframeTrack::setInterpolation(Interpolation interpolation) {
             }
         }
 
-        std::cerr << "THREE.KeyframeTrack: " << message << std::endl;
+        THREEPP_LOG(kLog, Warn) << "Track '" << name_ << "' (" << ValueTypeName()
+                                << ") does not support the requested interpolation; it keeps its previous one or the default";
         return;
     }
 
