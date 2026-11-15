@@ -892,6 +892,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/ParticleState.hpp"
             "threepp/renderers/vulkan/state/GpuDrivenState.hpp"
             "threepp/renderers/vulkan/state/DebugState.hpp"
+            "threepp/renderers/vulkan/state/OverlayState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
