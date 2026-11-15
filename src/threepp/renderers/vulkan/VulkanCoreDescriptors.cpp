@@ -139,10 +139,10 @@ void VulkanRenderer::Impl::ensureSplatTarget() {
                 view().splatTarget == vulkan::SplatPass::kNoTarget) {
                 view().splatTarget = splat_->acquireTarget();
                 if (view().splatTarget == vulkan::SplatPass::kNoTarget)
-                    std::cerr << "[threepp] setViewSplats: no free splat target ("
-                              << vulkan::SplatPass::kMaxTargets - 1
-                              << " secondary views already hold one); view "
-                              << view().id << " renders without splats" << std::endl;
+                    THREEPP_LOG(vulkan::kLogSplat, Warn) << "setViewSplats: no free splat target ("
+                                                         << vulkan::SplatPass::kMaxTargets - 1
+                                                         << " secondary views already hold one); view "
+                                                         << view().id << " renders without splats";
             }
             const uint32_t splatTarget = view().secondary ? view().splatTarget : 0u;
             if (splatTarget == vulkan::SplatPass::kNoTarget) return;
@@ -593,11 +593,9 @@ void VulkanRenderer::Impl::fitProbeGridToScene() {
             if (sceneBox.isEmpty()) return;
             const float mn[3] = {sceneBox.min().x, sceneBox.min().y, sceneBox.min().z};
             const float mx[3] = {sceneBox.max().x, sceneBox.max().y, sceneBox.max().z};
-            if (vulkan::env::flag("THREEPP_PROBE_LOG")) {
-                std::fprintf(stderr, "[probe] fit frame=%llu entries=%zu box=(%.6f %.6f %.6f)-(%.6f %.6f %.6f)\n",
-                             static_cast<unsigned long long>(frameSerial_), lastVisibleEntries_.size(),
-                             mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]);
-            }
+            THREEPP_LOGF(vulkan::kLogProbe, Debug, "fit frame=%llu entries=%zu box=(%.6f %.6f %.6f)-(%.6f %.6f %.6f)",
+                         static_cast<unsigned long long>(frameSerial_), lastVisibleEntries_.size(),
+                         mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]);
             probeGI_->setGridBounds(mn, mx);
         }
 

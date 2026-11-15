@@ -4054,12 +4054,8 @@ void VulkanRenderer::Impl::addSceneCapturePass(rg::RenderGraph& g, uint32_t imag
             // with TRANSFER_SRC usage. setSceneCaptureEnabled throws when the
             // context already exists; this covers a pre-first-render enable.
             if (!ctx->swapchainSupportsTransferSrc()) {
-                static bool warned = false;
-                if (!warned) {
-                    warned = true;
-                    std::cerr << "[VulkanRenderer] scene capture skipped: the surface "
-                                 "does not support TRANSFER_SRC swapchain usage\n";
-                }
+                THREEPP_LOG_ONCE(vulkan::kLogRenderer, Warn) << "scene capture is skipped: the surface does not "
+                                                                "support TRANSFER_SRC swapchain usage";
                 return;
             }
             if (sceneCaptureBufW_ != ext.width || sceneCaptureBufH_ != ext.height ||

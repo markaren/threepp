@@ -275,11 +275,10 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                                        const std::vector<std::pair<ParticleField*, uint32_t>>& builtFields) {
             THREEPP_CPUPROF("scene.3c_slotEdit");
             if (slotsDisabled() || !sceneBuilt_ || slotCapacity_ == 0u) return false;
-            // THREEPP_VULKAN_SLOTS_LOG=1: one line per change the slot path
+            // THREEPP_LOG=vulkan.scene:debug: one line per change the slot path
             // hands to the structural rebuild, saying why.
-            static const bool logDeclines = vulkan::env::flag("THREEPP_VULKAN_SLOTS_LOG");
             const auto decline = [&](const char* why) {
-                if (logDeclines) std::fprintf(stderr, "[VulkanRenderer] slot edit declined: %s\n", why);
+                THREEPP_LOGF(vulkan::kLogScene, Debug, "slot edit declined: %s", why);
                 return false;
             };
             auto& entries = lastVisibleEntries_;
@@ -847,9 +846,8 @@ bool VulkanRenderer::Impl::deltaDisabled() {
 bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
             THREEPP_CPUPROF("scene.3c_slotDelta");
             if (slotsDisabled() || deltaDisabled() || !sceneBuilt_ || slotCapacity_ == 0u) return false;
-            static const bool logDeclines = vulkan::env::flag("THREEPP_VULKAN_SLOTS_LOG");
             const auto decline = [&](const char* why) {
-                if (logDeclines) std::fprintf(stderr, "[VulkanRenderer] slot delta declined: %s\n", why);
+                THREEPP_LOGF(vulkan::kLogScene, Debug, "slot delta declined: %s", why);
                 return false;
             };
             auto& entries = lastVisibleEntries_;

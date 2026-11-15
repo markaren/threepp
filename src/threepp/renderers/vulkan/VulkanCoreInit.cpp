@@ -245,20 +245,19 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
         }
 
 namespace {
-    // THREEPP_VK_EXIT_TIMING=1: one line per section of the renderer's
+    // THREEPP_LOG=vulkan.exit:debug: one line per section of the renderer's
     // teardown with the time it took, for finding where a slow exit goes.
     struct ExitTimer {
         bool on;
         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
         ExitTimer() {
-            on = vulkan::env::flag("THREEPP_VK_EXIT_TIMING");
+            on = vulkan::kLogExit.enabled(log::Level::Debug);
         }
         void mark(const char* what) {
             if (!on) return;
             const auto now = std::chrono::steady_clock::now();
-            std::cout << "[vk-exit] renderer: " << what << " "
-                      << std::chrono::duration<double, std::milli>(now - last).count()
-                      << " ms" << std::endl;
+            THREEPP_LOG(vulkan::kLogExit, Debug) << "renderer: " << what << " "
+                                                 << std::chrono::duration<double, std::milli>(now - last).count() << " ms";
             last = now;
         }
     };

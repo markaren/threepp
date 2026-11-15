@@ -21,6 +21,7 @@
 #include "EnvPrefilter.hpp"
 #include "SkyBake.hpp"
 #include "SceneEnvKnobs.hpp"
+#include "VulkanLog.hpp"
 #include "EventCameraDetector.hpp"
 #include "LidarScanner.hpp"
 #include "SkinningPipeline.hpp"

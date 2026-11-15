@@ -164,10 +164,7 @@ VkResult VulkanRenderer::Impl::acquireOrReuseSwapchainImage(uint32_t& imageIndex
             // timing, i.e. wall clock — if any shading input ever depends on
             // imageIndex, this trace is how the leak shows itself (two runs
             // print different sequences at the frame the pixels diverge).
-            static const bool traceAcquire = vulkan::env::flag("THREEPP_VK_TRACE_ACQUIRE");
-            if (traceAcquire) {
-                std::cout << "acquire frame=" << frameSerial_ << " img=" << imageIndex << "\n";
-            }
+            THREEPP_LOG(vulkan::kLogFrame, Trace) << "acquire frame=" << frameSerial_ << " img=" << imageIndex;
             return r;
         }
 
@@ -816,7 +813,7 @@ void VulkanRenderer::Impl::recreateSwapchainAndDescriptors() {
             // and the compositor hands SUBOPTIMAL to a hidden window whenever
             // another process is presenting, so a replay audit has to be able
             // to see it happen (frame index, not wall time).
-            std::fprintf(stderr, "[VulkanRenderer] swapchain recreated at frame %llu\n",
+            THREEPP_LOGF(vulkan::kLogFrame, Debug, "swapchain recreated at frame %llu",
                          static_cast<unsigned long long>(frameSerial_));
             // A headless canvas renders at the size it asks for (offscreen
             // ring or headless surface), so tell the context what that is now.
@@ -870,8 +867,8 @@ void VulkanRenderer::Impl::setGbufferMsaa(uint32_t samples) {
             // with shaders reading another would be silently wrong even where
             // it didn't crash.
             if (clamped == 2 && !gbufMsaaCountSupported(2)) {
-                std::cerr << "[VulkanRenderer] gbuffer MSAA 2x is not supported by this "
-                             "device (only 1x/4x are spec-guaranteed); using 4x.\n";
+                THREEPP_LOG(vulkan::kLogRenderer, Warn) << "gbuffer MSAA 2x is not supported by this device "
+                                                           "(only 1x and 4x are guaranteed); using 4x";
                 clamped = 4;
             }
             if (clamped == gbufMsaaSamples_) return;
@@ -1386,6 +1383,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
                 beginCommandRecording(cmdBuffers[currentFrame]);
                 overlayPass_->beginFrame(currentFrame);
+                log::setFrame(frameSerial_);
                 // The Sky's bake, when refreshEnvTextureFromScene marked one:
                 // mip 0 and the prefiltered mips of the env image, rewritten
                 // in place ahead of every pass of this frame that samples it
@@ -1573,6 +1571,7 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             VkCommandBuffer cb = cmdBuffers[currentFrame];
             beginCommandRecording(cb);
             overlayPass_->beginFrame(currentFrame);
+            log::setFrame(frameSerial_);
 
             // UNDEFINED → TRANSFER_DST, vkCmdClearColorImage, TRANSFER_DST → GENERAL.
             const VkImage img = ctx->swapchainImages()[imageIndex];
@@ -1991,8 +1990,8 @@ void VulkanRenderer::Impl::advanceHeadlessClock() {
             if (simTimeSec_ >= 0.0 || !ctx || !ctx->presentSuppressed()) return;
             if (headlessClockSec_ < 0.0) {
                 headlessClockSec_ = 0.0;
-                std::fprintf(stderr, "[VulkanRenderer] headless: no sim_time set, stepping the "
-                                     "renderer clock 1/60 s per frame\n");
+                THREEPP_LOGF(vulkan::kLogFrame, Info, "headless: no sim_time set, so the renderer clock steps "
+                                                      "1/60 s per frame");
             } else {
                 headlessClockSec_ += 1.0 / 60.0;
             }
@@ -2029,14 +2028,13 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                     if (!warned) {
                         if (const Mesh* lit = overlayPass_->litMeshInLastRecord()) {
                             warned = true;
-                            std::cerr << "[VulkanRenderer] render() with an OrthographicCamera drew "
+                            THREEPP_LOG(vulkan::kLogOverlay, Warn) << "render() with an OrthographicCamera drew "
                                          "the scene as a 2D overlay: unlit fills in scene order, no "
                                          "depth test, no background. Mesh '"
                                       << (lit->name.empty() ? lit->type() : lit->name)
                                       << "' has a lit material, so this camera is probably a 3D "
                                          "view - call setOrthographicSceneRendering(true) "
-                                         "(Python: orthographic_scene_rendering = True). "
-                                         "Printed once.\n";
+                                         "(Python: orthographic_scene_rendering = True).";
                         }
                     }
                 } else {
@@ -2062,9 +2060,8 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                             if (view().taa_) view().taa_->invalidateHistory();
                         } else {
                             dlssActive_ = false;// give up until the next resize
-                            std::fprintf(stderr,
-                                         "[threepp] DLSS: persistent evaluate failure - "
-                                         "disabled until the next display resize (FSR/TAA fallback).\n");
+                            THREEPP_LOGF(vulkan::kLogUpscale, Warn, "DLSS keeps failing to evaluate; it is off until "
+                                                                    "the next display resize, and FSR or TAA upscales instead");
                         }
                     }
                     // A deferred setRenderScale / setGbufferMsaa is applied in
@@ -2293,7 +2290,7 @@ void VulkanRenderer::Impl::applyPendingViewChanges() {
                 if (!v->pendingCreate) continue;
                 v->pendingCreate = false;
                 createSecondaryViewResources(*v);
-                std::fprintf(stderr, "[threepp] view %u: %ux%u, %.1f MB\n",
+                THREEPP_LOGF(vulkan::kLogFrame, Debug, "view %u: %ux%u, %.1f MB",
                              v->id, v->outExt.width, v->outExt.height,
                              static_cast<double>(v->allocatedBytes) / (1024.0 * 1024.0));
             }
@@ -3171,9 +3168,8 @@ VulkanRenderer::Impl::enableFrameInterop(uint32_t viewHandle,
             std::vector<VulkanRenderer::FrameInteropExport> out;
             if (!ctx || channels.empty()) return out;
             if (!ctx->externalMemorySupported()) {
-                std::cerr << "[VulkanRenderer] enableFrameInterop: this device has no "
-                             "external-memory extension - use readGBufferAOVs (host readback) "
-                             "instead.\n";
+                THREEPP_LOG(vulkan::kLogInterop, Warn) << "enableFrameInterop: this device has no external-memory "
+                                                          "extension; use readGBufferAOVs (host readback) instead";
                 return out;
             }
             // The same "a real frame's contents are in there" predicate the AOV
@@ -3222,8 +3218,8 @@ VulkanRenderer::Impl::enableFrameInterop(uint32_t viewHandle,
                     c.buf = vulkan::createExternalBuffer(ctx->physicalDevice(), ctx->device(),
                                                          bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
                 } catch (const std::exception& e) {
-                    std::cerr << "[VulkanRenderer] enableFrameInterop: export failed (" << e.what()
-                              << ") - this channel stays on the host readback path.\n";
+                    THREEPP_LOG(vulkan::kLogInterop, Warn) << "enableFrameInterop: export failed (" << e.what()
+                                                              << "); this channel stays on the host readback path";
                     continue;
                 }
                 state.channels.push_back(std::move(c));
@@ -3244,9 +3240,8 @@ VulkanRenderer::Impl::enableFrameInterop(uint32_t viewHandle,
                 out.push_back(e);
                 totalBytes += c.buf.size;
             }
-            std::fprintf(stderr,
-                         "[VulkanRenderer] frame interop armed on view %u: %zu channel(s), "
-                         "%.1f MB exported\n",
+            THREEPP_LOGF(vulkan::kLogInterop, Debug, "frame interop armed on view %u: %zu channel(s), "
+                         "%.1f MB exported",
                          viewHandle, state.channels.size(),
                          static_cast<double>(totalBytes) / (1024.0 * 1024.0));
             frameInterops_.push_back(std::move(state));
@@ -3273,9 +3268,9 @@ void VulkanRenderer::Impl::invalidateFrameInterop(uint32_t viewHandle, const cha
             bool armed = false;
             for (const auto& s : frameInterops_) armed = armed || s.viewHandle == viewHandle;
             if (!armed) return;
-            std::cerr << "[VulkanRenderer] frame interop disabled on view " << viewHandle << ": "
-                      << why << " reallocates the source images, and they must not be freed "
-                                "under a live foreign import. Re-enable and re-import.\n";
+            THREEPP_LOG(vulkan::kLogInterop, Warn) << "frame interop disabled on view " << viewHandle << ": "
+                                                  << why << " reallocates the source images, and they must not be freed "
+                                                            "under a live foreign import. Re-enable and re-import.";
             disableFrameInterop(viewHandle);
         }
 
@@ -3363,9 +3358,8 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
             VmaTotalStatistics stats{};
             vmaCalculateStatistics(ctx->allocator(), &stats);
             constexpr double MB = 1024.0 * 1024.0;
-            std::fprintf(stderr,
-                         "[threepp][vk-mem] %s: reserved %.1f MB in %u blocks, "
-                         "live %.1f MB in %u allocations\n",
+            THREEPP_LOGF(vulkan::kLogMemory, Info, "%s: reserved %.1f MB in %u blocks, "
+                         "live %.1f MB in %u allocations",
                          tag,
                          stats.total.statistics.blockBytes / MB,
                          stats.total.statistics.blockCount,
@@ -3375,8 +3369,7 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
             for (uint32_t i = 0; i < heaps; ++i) {
                 const bool devLocal =
                         (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
-                std::fprintf(stderr,
-                             "[threepp][vk-mem]   heap %u%s: usage %.1f MB / budget %.1f MB\n",
+                THREEPP_LOGF(vulkan::kLogMemory, Info, "  heap %u%s: usage %.1f MB / budget %.1f MB",
                              i, devLocal ? " (device-local)" : "",
                              budgets[i].usage / MB, budgets[i].budget / MB);
             }
@@ -3460,13 +3453,11 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
                 add("deform.inputs", st->heightFrac);
             }
             if (!rows.empty()) {
-                std::fprintf(stderr,
-                             "[threepp][vk-mem]   geometry placement, MB / buffers: %-18s %-18s %-18s\n",
+                THREEPP_LOGF(vulkan::kLogMemory, Info, "  geometry placement, MB / buffers: %-18s %-18s %-18s",
                              "device-local", "BAR (DL+HV)", "host");
                 PlacementRow total{"total"};
                 for (const auto& r : rows) {
-                    std::fprintf(stderr,
-                                 "[threepp][vk-mem]     %-30s %9.1f / %-6u %9.1f / %-6u %9.1f / %-6u\n",
+                    THREEPP_LOGF(vulkan::kLogMemory, Info, "    %-30s %9.1f / %-6u %9.1f / %-6u %9.1f / %-6u",
                                  r.name.c_str(),
                                  r.bytes[0] / MB, r.count[0], r.bytes[1] / MB, r.count[1],
                                  r.bytes[2] / MB, r.count[2]);
@@ -3475,8 +3466,7 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
                         total.count[k] += r.count[k];
                     }
                 }
-                std::fprintf(stderr,
-                             "[threepp][vk-mem]     %-30s %9.1f / %-6u %9.1f / %-6u %9.1f / %-6u\n",
+                THREEPP_LOGF(vulkan::kLogMemory, Info, "    %-30s %9.1f / %-6u %9.1f / %-6u %9.1f / %-6u",
                              total.name.c_str(),
                              total.bytes[0] / MB, total.count[0], total.bytes[1] / MB, total.count[1],
                              total.bytes[2] / MB, total.count[2]);
@@ -3518,25 +3508,21 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
                 std::sort(hv.begin(), hv.end(), [](const SiteRow* a, const SiteRow* b) {
                     return a->bytes[1] + a->bytes[2] > b->bytes[1] + b->bytes[2];
                 });
-                std::fprintf(stderr,
-                             "[threepp][vk-mem]   host-visible buffers by creating line, MB / buffers: "
-                             "%-18s %-18s %-18s usage\n",
+                THREEPP_LOGF(vulkan::kLogMemory, Info, "  host-visible buffers by creating line, MB / buffers: "
+                             "%-18s %-18s %-18s usage",
                              "device-local", "BAR (DL+HV)", "host");
                 for (const SiteRow* r : hv) {
-                    std::fprintf(stderr,
-                                 "[threepp][vk-mem]     %-36s %9.2f / %-6u %9.2f / %-6u %9.2f / %-6u 0x%x\n",
+                    THREEPP_LOGF(vulkan::kLogMemory, Info, "    %-36s %9.2f / %-6u %9.2f / %-6u %9.2f / %-6u 0x%x",
                                  r->site.c_str(),
                                  r->bytes[0] / MB, r->count[0], r->bytes[1] / MB, r->count[1],
                                  r->bytes[2] / MB, r->count[2], r->usage);
                 }
-                std::fprintf(stderr,
-                             "[threepp][vk-mem]     %-36s %9.2f / %-6u %9.2f / %-6u %9.2f / %-6u\n",
+                THREEPP_LOGF(vulkan::kLogMemory, Info, "    %-36s %9.2f / %-6u %9.2f / %-6u %9.2f / %-6u",
                              "all registered buffers",
                              siteTotal[0] / MB, siteCount[0], siteTotal[1] / MB, siteCount[1],
                              siteTotal[2] / MB, siteCount[2]);
                 for (uint32_t i = 0; i < heaps; ++i) {
-                    std::fprintf(stderr,
-                                 "[threepp][vk-mem]     VMA heap %u: %.1f MB live in %u allocations\n",
+                    THREEPP_LOGF(vulkan::kLogMemory, Info, "    VMA heap %u: %.1f MB live in %u allocations",
                                  i, stats.memoryHeap[i].statistics.allocationBytes / MB,
                                  stats.memoryHeap[i].statistics.allocationCount);
                 }

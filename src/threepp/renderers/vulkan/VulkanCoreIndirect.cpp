@@ -83,11 +83,10 @@ namespace threepp {
         auto& s = drawStats_;
         if (++s.frames < static_cast<uint64_t>(every)) return;
         const double n = double(s.frames);
-        std::fprintf(stderr,
-                     "[draw-stats] per frame over %llu: entries %.0f spans %.0f | cached spans %.0f rows %.0f drawn %.0f "
+        THREEPP_LOGF(vulkan::kLogDrawStats, Info, "per frame over %llu: entries %.0f spans %.0f | cached spans %.0f rows %.0f drawn %.0f "
                      "rebuilt %.0f | other drawn %.0f | tlas rows %.0f rewritten %.0f fills %.2f full %.2f | "
                      "cull walks %.2f chunks %.0f blocks %.0f rows tested %.0f boxed %.0f | "
-                     "span records written %.0f whole spans %.2f | geometry drains so far %llu\n",
+                     "span records written %.0f whole spans %.2f | geometry drains so far %llu",
                      static_cast<unsigned long long>(s.frames), s.entries / n, s.spans / n, s.cachedSpans / n,
                      s.cachedRows / n, s.cachedDrawn / n, s.cacheRebuildRows / n,
                      (double(s.otherDrawn) - double(s.cachedDrawn)) / n, s.tlasRows / n, s.tlasRewritten / n,
@@ -1246,7 +1245,7 @@ namespace threepp {
                     else if (meta && std::memcmp(&pool.checkMeta[s.base + j], &c.occl[j], sizeof(c.occl[j])) != 0) ++stale;
                 }
                 if (stale != 0u) {
-                    std::fprintf(stderr, "[span-records] mesh %u slot %u: %u of %u rows stale\n", e.meshId, frame, stale, e.count);
+                    THREEPP_LOGF(vulkan::kLogScene, Error, "mesh %u slot %u: %u of %u rows stale", e.meshId, frame, stale, e.count);
                     std::abort();
                 }
             }
