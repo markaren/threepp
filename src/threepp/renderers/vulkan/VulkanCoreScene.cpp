@@ -1789,26 +1789,28 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             THREEPP_CPUPROF("scene.0_total");
             // The locals the phases share (SceneBuildFrame.hpp).
             SceneBuildFrame sb;
+            prepareSceneBuild(sb, scene, camera);
+            matchSceneSnapshot(sb, scene, camera);
+            refreshSceneEntries(sb, scene, camera);
+            settleLeanEntries(sb);
+            selectAutoLodLevels(camera);
+            captureRayCamera(sb, camera);
+            diffLeanEntries(sb);
+            fingerprintEntries(sb);
+            scanDeformers(sb, camera);
+            if (updateSceneInPlace(sb)) return;
+
+            rebuildScene(sb, camera);
+        }
+
+// The build's opening: the displacement focus and epoch, the deform queues the last
+// frame left behind, the async one-shots that finished, the scene's (and a parentless
+// camera's) world matrices, live material texture edits, and this build's per-entry
+// bit masks and flags cleared.
+// Needs: nothing. Leaves: sb.dispEpochNow (read by the lean diff and the generic
+// compare); world matrices current for every phase below.
+void VulkanRenderer::Impl::prepareSceneBuild(SceneBuildFrame& sb, Object3D& scene, Camera& camera) {
             auto& dispEpochNow = sb.dispEpochNow;
-            auto& snapLean = sb.snapLean;
-            auto& currFp = sb.currFp;
-            auto& rayCamPos = sb.rayCamPos;
-            auto& rayShadowChanged = sb.rayShadowChanged;
-            auto& structuralSame = sb.structuralSame;
-            auto& matricesSame = sb.matricesSame;
-            auto& materialValuesSame = sb.materialValuesSame;
-            auto& bonesDirtyAny = sb.bonesDirtyAny;
-            auto& displacedDirtyAny = sb.displacedDirtyAny;
-            auto& grassDirtyAny = sb.grassDirtyAny;
-            auto& geomDirtyAny = sb.geomDirtyAny;
-            auto& morphDirtyAny = sb.morphDirtyAny;
-            auto& entryGeomDirty = sb.entryGeomDirty;
-            auto& entryMatDirty = sb.entryMatDirty;
-            auto& leanOk = sb.leanOk;
-            auto& entryBonesDirty = sb.entryBonesDirty;
-            auto& entryDisplacedDirty = sb.entryDisplacedDirty;
-            auto& entryGrassDirty = sb.entryGrassDirty;
-            auto& entryMorphDirty = sb.entryMorphDirty;
             // displacementMap refinement: the focus, taken once (and again after
             // refineDisplacement), and whether this build re-checks every
             // displaced entry's spec (the epoch moved, see dispPixelEdge_).
@@ -1858,6 +1860,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             hiddenFlippedThisFrame_ = false;
             slotsEditedThisFrame_ = false;
 
+        }
+
+// Decides whether this frame can reuse last frame's entries (the snapshot fast path):
+// the flat check when no structure version moved, else the replay walk.
+// Needs: world matrices (prepareSceneBuild). Leaves: sb.snapLean.
+void VulkanRenderer::Impl::matchSceneSnapshot(SceneBuildFrame& sb, Object3D& scene, Camera& camera) {
+            auto& snapLean = sb.snapLean;
             // SNAPSHOT FAST PATH: replay the last expansion's traversal against
             // cheap invariants. On a match (the overwhelmingly common frame —
             // including matrix-only motion like a driving car or URDF joints),
@@ -1884,7 +1893,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("scene.2_snapshotMatch");
                 snapLean = sceneSnapshotMatches(scene, camera);
             }
-            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+        }
+
+// Brings the entry list up to date. A lean frame refreshes the spans' and lines'
+// world matrices in place; otherwise the edit-proportional slot delta is tried and,
+// when it does not take the change, the full expansion runs (expandSceneEntries).
+// Either structural branch then bumps the snapshot, probe-grid, LOD and surface-bake
+// versions.
+// Needs: sb.snapLean. Leaves: lastVisibleEntries_, entrySpans_, the snapshot.
+void VulkanRenderer::Impl::refreshSceneEntries(SceneBuildFrame& sb, Object3D& scene, Camera& camera) {
+            const auto& snapLean = sb.snapLean;
             if (snapLean) {
                 THREEPP_CPUPROF("scene.3_leanMatrixRefresh");
                 // Per SPAN: a span's entry world matrices are a pure function
@@ -1930,6 +1948,28 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (deltaApplied && deltaCheck) deltaWalkCheck(scene, camera);
             }
             if (!deltaApplied) {
+            expandSceneEntries(scene, camera);
+            }// !deltaApplied
+            ++snapshotGen_;
+            probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
+            ++lodLevelVersion_;// the entries are laid out anew
+            // ...and re-bake every ParticleField surface height map (F5). The
+            // set of things a flake can land on is exactly what just changed,
+            // and this is the trigger the plan names ("the same trigger as
+            // entry rebuild"). Cheap: it bumps a counter, and only the fields
+            // that actually use a map pay for a re-trace.
+            if (particleFieldPass_) particleFieldPass_->invalidateSurfaceBakes();
+            cutoutRayClassified_ = false;// the fresh entries' rayFarOpaque bits are all reset
+            }// !snapLean
+        }
+
+// The full expansion: walks the scene into fresh entries, lines, spans and fields
+// (reusing last walk's nodes on lazy walks), optionally re-walks without reuse to
+// compare, then hands the result to the slot editor or, when it declines, lays the
+// entries out anew (walking again in full when the first walk was lazy).
+// Needs: refreshSceneEntries found no lean frame and no applicable delta.
+// Leaves: the new entries/spans/lines/fields and the snapshot.
+void VulkanRenderer::Impl::expandSceneEntries(Object3D& scene, Camera& camera) {
             THREEPP_CPUPROF_NAMED(profExpand, "scene.3b_fullExpansion");
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
@@ -2311,18 +2351,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             ++spansVersion_;
             particleFields_     = std::move(builtFields);
             }
-            }// !deltaApplied
-            ++snapshotGen_;
-            probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
-            ++lodLevelVersion_;// the entries are laid out anew
-            // ...and re-bake every ParticleField surface height map (F5). The
-            // set of things a flake can land on is exactly what just changed,
-            // and this is the trigger the plan names ("the same trigger as
-            // entry rebuild"). Cheap: it bumps a counter, and only the fields
-            // that actually use a map pay for a re-trace.
-            if (particleFieldPass_) particleFieldPass_->invalidateSurfaceBakes();
-            cutoutRayClassified_ = false;// the fresh entries' rayFarOpaque bits are all reset
-            }// !snapLean
+        }
+
+// A slot edit makes the frame lean from here on (its untouched spans refreshed);
+// a lean frame then lands the hidden meshes' admissions and the pending stable ids.
+// Needs: refreshSceneEntries. Leaves: sb.snapLean final for this build.
+void VulkanRenderer::Impl::settleLeanEntries(SceneBuildFrame& sb) {
+            auto& snapLean = sb.snapLean;
             // A slot edit left entries, spans and fingerprints in the shape a
             // lean frame starts from: from here on this frame IS one, with the
             // spans it did not touch refreshed and diffed as on any other.
@@ -2340,6 +2375,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 refreshPendingStableIds();
             }
 
+        }
+
+// Automatic mesh LOD selection, every frame, on the entries whichever path produced
+// above: writes MeshEntry::lodLevel, lodChangedThisFrame_ and autoLodStats_ (the
+// draining of finished chains first). Both TLAS fills below read en.lodLevel.
+// Needs: the entries with this frame's world matrices.
+void VulkanRenderer::Impl::selectAutoLodLevels(Camera& camera) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
             // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
             // Runs UNCONDITIONALLY every frame — camera motion alone can flip
             // a level even when nothing else about the scene changed — right
@@ -2599,6 +2642,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (lodChangedThisFrame_) ++lodLevelVersion_;
             }
 
+        }
+
+// The camera position for the cutout ray distance, and the entries' ray-shadow LOD
+// states for this camera, before either TLAS fill reads them.
+// Leaves: sb.rayCamPos, sb.rayShadowChanged.
+void VulkanRenderer::Impl::captureRayCamera(SceneBuildFrame& sb, Camera& camera) {
+            auto& rayCamPos = sb.rayCamPos;
+            auto& rayShadowChanged = sb.rayShadowChanged;
             // Camera position for the cutout ray distance (setCutoutRayDistance):
             // read by the lean path's classifyCutoutFar and by the full
             // rebuild's instance loop.
@@ -2613,6 +2664,25 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // either TLAS fill reads them (the matrices are this frame's).
             rayShadowChanged = classifyRayShadow(rayCamPos);
 
+        }
+
+// Sizes the per-entry change bits and, on a lean frame, diffs the cached
+// fingerprints against the live objects per span (material, geometry and matrix
+// changes), updating them in place; a texture swap clears leanOk so the full
+// fingerprint path decides.
+// Needs: sb.snapLean, sb.dispEpochNow. Leaves: sb.leanOk, the change flags, the
+// per-entry geometry/material dirty bits.
+void VulkanRenderer::Impl::diffLeanEntries(SceneBuildFrame& sb) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            const auto& dispEpochNow = sb.dispEpochNow;
+            const auto& snapLean = sb.snapLean;
+            auto& structuralSame = sb.structuralSame;
+            auto& matricesSame = sb.matricesSame;
+            auto& materialValuesSame = sb.materialValuesSame;
+            auto& geomDirtyAny = sb.geomDirtyAny;
+            auto& entryGeomDirty = sb.entryGeomDirty;
+            auto& entryMatDirty = sb.entryMatDirty;
+            auto& leanOk = sb.leanOk;
             // Change flags shared by the LEAN in-place diff and the generic
             // compare loop below — exactly one of the two fills them.
             entryGeomDirty.assign(entries.size(), false);
@@ -2730,6 +2800,15 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     entryGeomDirty.assign(entries.size(), false);
                 }
             }
+        }
+
+// The full path's per-entry fingerprints (when the lean diff did not settle the
+// frame), copied from last frame's where nothing about the entry moved.
+// Needs: sb.leanOk. Leaves: sb.currFp.
+void VulkanRenderer::Impl::fingerprintEntries(SceneBuildFrame& sb) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            auto& currFp = sb.currFp;
+            const auto& leanOk = sb.leanOk;
 
             // Per-entry fingerprint construction (full path only — the lean
             // path diffed prev's fingerprints in place above). Hot path on big
@@ -2811,6 +2890,23 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 }
             }
             }// !leanOk (fingerprint re-derivation)
+        }
+
+// The deformer scans: per-entry dirty bits for skinned poses, displaced and grass
+// meshes and morph influences; a lean frame folds them into the moved bits and
+// the *DirtyAny flags here.
+// Needs: the entries, sb.leanOk. Leaves: the entry*Dirty bits and, lean, the flags.
+void VulkanRenderer::Impl::scanDeformers(SceneBuildFrame& sb, Camera& camera) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            auto& bonesDirtyAny = sb.bonesDirtyAny;
+            auto& displacedDirtyAny = sb.displacedDirtyAny;
+            auto& grassDirtyAny = sb.grassDirtyAny;
+            auto& morphDirtyAny = sb.morphDirtyAny;
+            const auto& leanOk = sb.leanOk;
+            auto& entryBonesDirty = sb.entryBonesDirty;
+            auto& entryDisplacedDirty = sb.entryDisplacedDirty;
+            auto& entryGrassDirty = sb.entryGrassDirty;
+            auto& entryMorphDirty = sb.entryMorphDirty;
 
             // Per-entry bone-dirty bits. SkinnedMesh poses change without
             // touching the SkinnedMesh's worldMatrix, so the matrix-fingerprint
@@ -2959,9 +3055,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
             }
-            if (updateSceneInPlace(sb)) return;
-
-            rebuildScene(sb, camera);
         }
 
 // The non-structural update: when the scene was built before and the fingerprints

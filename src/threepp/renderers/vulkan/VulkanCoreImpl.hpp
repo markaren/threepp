@@ -2599,6 +2599,16 @@ namespace threepp {
         // build is finished (updateSceneInPlace) or, for refreshDirtyGeometry, when
         // updateSceneInPlace must fall through to the full rebuild.
         struct SceneBuildFrame;
+        void prepareSceneBuild(SceneBuildFrame& sb, Object3D& scene, Camera& camera);
+        void matchSceneSnapshot(SceneBuildFrame& sb, Object3D& scene, Camera& camera);
+        void refreshSceneEntries(SceneBuildFrame& sb, Object3D& scene, Camera& camera);
+        void expandSceneEntries(Object3D& scene, Camera& camera);
+        void settleLeanEntries(SceneBuildFrame& sb);
+        void selectAutoLodLevels(Camera& camera);
+        void captureRayCamera(SceneBuildFrame& sb, Camera& camera);
+        void diffLeanEntries(SceneBuildFrame& sb);
+        void fingerprintEntries(SceneBuildFrame& sb);
+        void scanDeformers(SceneBuildFrame& sb, Camera& camera);
         bool updateSceneInPlace(SceneBuildFrame& sb);
         void rebuildScene(SceneBuildFrame& sb, Camera& camera);
 
