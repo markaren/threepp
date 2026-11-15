@@ -222,7 +222,7 @@ namespace threepp::vulkan::rg {
         // contents are dead on entry, so no layout to hand over).
         void declareAsPass(RenderGraph& target, PassBuilder& pass) const;
 
-        // ── Introspection (tests, THREEPP_RG_DUMP) ───────────────────────────
+        // ── Introspection (tests, THREEPP_LOG=vulkan.rendergraph:debug) ───────────────────────────
         [[nodiscard]] size_t passCount() const { return passes_.size(); }
         [[nodiscard]] const std::vector<PlannedBarrier>& barriersBefore(size_t pass) const {
             return passes_[pass].barriers;

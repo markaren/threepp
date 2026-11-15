@@ -583,7 +583,7 @@ int main() {
         }
         // ── The same churn around a live ParticleField ───────────────────────
         // A field publishes its entry index to its pass; its arrival and its
-        // departure may each be a rebuild (THREEPP_VULKAN_SLOTS_LOG names them),
+        // departure may each be a rebuild (THREEPP_LOG=vulkan.scene:debug names them),
         // every event around it must be a slot edit like any other.
         {
             ParticleField::Config cfg;

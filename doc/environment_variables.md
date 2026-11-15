@@ -22,6 +22,70 @@ result is cached), *per renderer* means when a renderer (or one of its passes) i
 constructed, and *per call* means each time the code runs, for example every frame.
 Changing a variable after it has been read once has no effect.
 
+## Logging
+
+The library's console messages go through one facade (`threepp/utils/Log.hpp`).
+Every message has a category and a level (trace, debug, info, warning, error), and
+goes to stderr as one line, `[category] warning: text` (info, debug and trace lines
+carry no level word). The default threshold is info for every category, so a plain
+run prints only warnings, errors and a few facts such as the GPU. An application can
+also set thresholds with `threepp::log::setLevel` and capture records with
+`threepp::log::setSink`; `THREEPP_LOG` wins over `setLevel`.
+
+| Variable | Kind | Default | Effect | Read | Notes |
+|---|---|---|---|---|---|
+| `THREEPP_LOG` | string `<category>:<level>,...` | unset: info everywhere | Sets thresholds. A category covers itself and the categories below it (`vulkan` covers `vulkan.probe`), `*` covers all, and a bare level applies to `*`; a later entry wins for what it covers. Levels: `trace`, `debug`, `info`, `warn`, `error`, `off`. Example: `THREEPP_LOG=vulkan.probe:debug,core:warn`. | once | |
+| `THREEPP_LOG_FILE` | string (file path) | unset: no file | Also writes every record that passes its threshold to this file, each line prefixed with the frame number and the seconds since the first record (`f123 4.567s [vulkan.validation] error: ...`). | once | diagnostic |
+
+Categories (`THREEPP_LOG=<category>:debug` shows a category's diagnostics):
+
+| Category | What it reports |
+|---|---|
+| `core.animation` | animation tracks, property bindings, skeletons |
+| `core.canvas` | the window, GLFW errors, the GL context |
+| `core.color` | unknown color names |
+| `core.controls` | orbit, trackball and transform controls |
+| `core.geometry` | bounding volumes, line distances, geometry merges |
+| `core.gl` | the GLAD loader |
+| `core.material` | material values that are not recognised |
+| `core.object` | the scene graph (`Object3D::add`) |
+| `core.ocean` | the ocean look switches of `DisplacedMesh` |
+| `core.raycaster` | `Raycaster::setFromCamera` |
+| `core.string` | number parsing |
+| `vulkan.validation` | validation layer errors and warnings, strict-validation verdicts |
+| `vulkan.device` | the GPU, ray tracing, surface, swapchain and present mode (extension notes at debug) |
+| `vulkan.pipeline_cache` | pipeline cache load and save (debug) |
+| `vulkan.pipeline_stats` | `THREEPP_VULKAN_PIPELINE_STATS` output |
+| `vulkan.startup` | the time of each renderer startup step (debug) |
+| `vulkan.exit` | the time of each renderer and context teardown step (debug) |
+| `vulkan.renderer` | calls the renderer ignores or cannot honour |
+| `vulkan.frame` | the headless clock, swapchain recreation and view sizes (debug), each acquire (trace) |
+| `vulkan.overlay` | HUD and 2D overlay passes |
+| `vulkan.upscale` | DLSS, FSR and NGX (`THREEPP_DLSS_LOG`) |
+| `vulkan.shade` | deferred shade variants and their compile times |
+| `vulkan.rendergraph` | render graph diagnostics; each graph's passes when it changes (debug) |
+| `vulkan.memory` | `THREEPP_VK_MEMDUMP` reports, transient pools |
+| `vulkan.geometry` | BLAS and TLAS builds, auto-LOD, skinning, deforming geometry |
+| `vulkan.displacement` | displacementMap refinement; each refined geometry's time (debug) |
+| `vulkan.interop` | vertex and frame interop |
+| `vulkan.texture` | textures and environment maps |
+| `vulkan.scene` | scene build: walk checks, morph targets; slot edits and deltas handed to the rebuild (debug) |
+| `vulkan.draw_stats` | `THREEPP_VK_DRAW_STATS` output |
+| `vulkan.cpuprof` | `THREEPP_CPU_PHASE_PROFILE` output |
+| `vulkan.probe` | the probe grid fit and its decisions (debug) |
+| `vulkan.shadow` | the shadow mode; static shadow cache generation steps (debug) and per-frame cascade and layer lines (trace) |
+| `vulkan.splat` | Gaussian splats, `THREEPP_VK_SPLAT_CHECKSUM` output |
+| `vulkan.particles` | particle fields |
+| `vulkan.ocean` | the ocean spectrum and FFT |
+| `vulkan.pathtracer` | the path tracer |
+
+These variables were replaced by categories and are no longer read:
+`THREEPP_PROBE_LOG` (`vulkan.probe:debug`), `THREEPP_DISP_LOG` (`vulkan.displacement:debug`),
+`THREEPP_VULKAN_SLOTS_LOG` (`vulkan.scene:debug`), `THREEPP_VK_SHADOW_CACHE_DEBUG`
+(`vulkan.shadow:trace`), `THREEPP_VK_STARTUP_TIMING` (`vulkan.startup:debug`),
+`THREEPP_VK_EXIT_TIMING` (`vulkan.exit:debug`), `THREEPP_VK_TRACE_ACQUIRE`
+(`vulkan.frame:trace`) and `THREEPP_RG_DUMP` (`vulkan.rendergraph:debug`).
+
 ## Window, context and device
 
 | Variable | Kind | Default | Effect | Read | Notes |
@@ -41,7 +105,7 @@ Changing a variable after it has been read once has no effect.
 |---|---|---|---|---|---|
 | `THREEPP_DLSS_JITTER_SIGN_X` | string | negative | `neg` or `pos` forces the sign of the X jitter handed to DLSS; anything else keeps the default. | once | diagnostic |
 | `THREEPP_DLSS_JITTER_SIGN_Y` | string | positive | `neg` or `pos` forces the sign of the Y jitter handed to DLSS; anything else keeps the default. | once | diagnostic |
-| `THREEPP_DLSS_LOG` | flag | off | Prints NGX's own verbose log on stdout, each line with the time since the previous one. | per NGX init | diagnostic |
+| `THREEPP_DLSS_LOG` | flag | off | Turns on NGX's own verbose log, written to `vulkan.upscale` at info, each line with the time since the previous one. | per NGX init | diagnostic |
 | `THREEPP_DENOISE` | flag | on | `0` turns off the deferred SVGF denoiser, to tell a shading artifact from a temporal or denoise one. | per renderer | A/B hatch |
 | `THREEPP_DENOISE_ATROUS_PASSES` | integer | 4 | Number of a-trous passes of the deferred GI denoise filter, clamped to 2..4 (fewer passes forces the old global cut). | once | A/B hatch |
 
@@ -64,7 +128,6 @@ Changing a variable after it has been read once has no effect.
 | `THREEPP_VK_PROBE_WARMUP` | flag | on | `0` turns off the boosted probe updates after a full clear (flat budget and the shader's flat history cap). | per renderer | A/B hatch |
 | `THREEPP_VK_PROBE_FAR` | flag | off | Beyond the coarsest probe cascade the probe path fills with the ray-free sky term instead of its gather. | once | |
 | `THREEPP_VK_FOG_HALF_RES` | flag | off | Starts the fog march (`fog_march.comp`) at half resolution, as `setFogMarchHalfRes(true)` would; the setter wins. | per renderer | A/B hatch |
-| `THREEPP_PROBE_LOG` | flag | off | Prints the probe grid fit (frame, entry count, scene box) and the fit decisions to stderr. | per call | diagnostic |
 
 ## Path tracer
 
@@ -87,7 +150,6 @@ These four are parsed by hand: on unless the value is exactly `0`.
 | `THREEPP_VK_SHADOW_LAMPS` | string `<spots>,<points>` | 4 spots, 8 points | Number of shadowed spot and point lights, each clamped to the maximum; the points part is optional. The setters win. | per renderer | A/B hatch |
 | `THREEPP_VK_SHADOW_CACHE` | flag | on | `0` turns off the static shadow caches of the cascades and the lamp layers. | per renderer | A/B hatch |
 | `THREEPP_VK_SHADOW_CACHE_MARGIN` | number | 1.15 | How much wider than its slice a cached cascade's box is frozen, clamped to 1..2. | per renderer | |
-| `THREEPP_VK_SHADOW_CACHE_DEBUG` | flag | off | Prints a line per static-cache generation step (what flipped) and per frame (layers cached, rebuilt, drawn, skipped). | per renderer | diagnostic |
 | `THREEPP_VK_SHADOW_DWELL` | flag | on | `0` turns off the moving-caster shadow dwell and top-up machinery. | once | A/B hatch |
 
 ## Geometry and acceleration structures
@@ -98,7 +160,6 @@ These four are parsed by hand: on unless the value is exactly `0`.
 | `THREEPP_NO_FORCE_OPAQUE` | flag | off | Stops marking TLAS instances of materials no ray query can reject as force-opaque. | once | A/B hatch |
 | `THREEPP_VK_BLAS_COMPACT` | flag | on | `0` turns off compaction of static BLASes (they stay at their build size). | per renderer | A/B hatch |
 | `THREEPP_VK_TLAS_FILL_INPLACE` | flag | on | `0` fills the TLAS instance list from empty every time instead of rewriting only the changed rows. | once | A/B hatch |
-| `THREEPP_DISP_LOG` | flag | off | Prints the time and triangle counts of each geometry refined for a displacement map. | once | diagnostic |
 
 ## Scene build and draw records
 
@@ -108,8 +169,7 @@ These four are parsed by hand: on unless the value is exactly `0`.
 | `THREEPP_VULKAN_NO_SLOTS` | flag | off | Every scene content change becomes a structural rebuild in the dense layout instead of a slot edit. | once | A/B hatch |
 | `THREEPP_VULKAN_NO_DELTA` | flag | off | Turns off the scene delta path (in-place add and remove of subtrees). | once | A/B hatch |
 | `THREEPP_VULKAN_SYNC_ADMIT` | flag | off | Admits hidden meshes synchronously and encodes a slot edit's textures one after another on the render thread. | once | A/B hatch |
-| `THREEPP_VULKAN_WALK_CHECK` | flag | off | After a delta or a reusing expansion, also walks the scene in full and compares node for node; mismatches go to stderr. | once | diagnostic |
-| `THREEPP_VULKAN_SLOTS_LOG` | flag | off | Prints one line per scene change the slot edit or slot delta hands to the structural rebuild, saying why. | once | diagnostic |
+| `THREEPP_VULKAN_WALK_CHECK` | flag | off | After a delta or a reusing expansion, also walks the scene in full and compares node for node; mismatches are `vulkan.scene` warnings. | once | diagnostic |
 | `THREEPP_VK_SPAN_DRAW_CACHE` | flag | on | `0` sends every instanced span through the per-entry draw record loop instead of the per-span draw cache. | once | A/B hatch |
 | `THREEPP_VK_SPAN_RECORDS` | flag | on | `0` rebuilds every cached span's draw records each frame instead of keeping them between frames. | once | A/B hatch |
 | `THREEPP_VK_SPAN_RECORDS_CHECK` | flag | off | Checks every kept span record against what the entries say each frame; a stale one ends the process. | once | diagnostic |
@@ -183,15 +243,11 @@ starting with `0` forces the feature off for every ocean, anything else forces i
 
 | Variable | Kind | Default | Effect | Read | Notes |
 |---|---|---|---|---|---|
-| `THREEPP_CPU_PHASE_PROFILE` | flag | off | Turns on the CPU phase profiler, which prints each named phase's mean and worst milliseconds per window of frames. | once | diagnostic |
+| `THREEPP_CPU_PHASE_PROFILE` | flag | off | Turns on the CPU phase profiler, which logs each named phase's mean and worst milliseconds per window of frames to `vulkan.cpuprof`. | once | diagnostic |
 | `THREEPP_CPU_PHASE_WINDOW` | integer | 300 | Frames per printed profiler block. | once | diagnostic |
 | `THREEPP_CPU_PHASE_SPIKE` | integer | 0 (off) | A frame whose scene total passes this many milliseconds prints its own phases. | once | diagnostic |
-| `THREEPP_VK_STARTUP_TIMING` | flag | off | Prints the time of each renderer startup step. | once | diagnostic |
-| `THREEPP_VK_EXIT_TIMING` | flag | off | Prints one line per section of the renderer's and the Vulkan context's teardown with the time it took. | per renderer (at destruction) | diagnostic |
-| `THREEPP_VK_MEMDUMP` | flag | off | Dumps GPU memory statistics after init, after each structural scene build and at frame 8, and keeps the live-buffer registry for them. | per renderer and per scene build; once for frame 8 and the registry | diagnostic |
-| `THREEPP_VK_DRAW_STATS` | integer | 0 (off) | Every N primary frames prints what the frame prep walked; when above 0 also logs which geometry edits drain the device. | once | diagnostic |
-| `THREEPP_VK_TRACE_ACQUIRE` | flag | off | Prints the frame serial and swapchain image index of each acquire. | once | diagnostic |
-| `THREEPP_RG_DUMP` | flag | off | Prints each render graph to stderr whenever its text changes. | once | diagnostic |
+| `THREEPP_VK_MEMDUMP` | flag | off | Dumps GPU memory statistics to `vulkan.memory` after init, after each structural scene build and at frame 8, and keeps the live-buffer registry for them. | per renderer and per scene build; once for frame 8 and the registry | diagnostic |
+| `THREEPP_VK_DRAW_STATS` | integer | 0 (off) | Every N primary frames logs what the frame prep walked to `vulkan.draw_stats`; when above 0 also logs which geometry edits drain the device. | once | diagnostic |
 | `THREEPP_VULKAN_PIPELINE_STATS` | flag | off | Captures pipeline executable statistics (changes how pipelines are compiled). | per renderer | diagnostic |
 | `THREEPP_SHADE_DUMP_DIR` | string (directory) | unset: no dump | `debugHashShadeImages` also writes each shade image's bytes to this directory as `<name>_f<serial>.raw`. | per call | diagnostic |
 | `THREEPP_SHADE_DUMP_MIN` | integer | 0 | First frame serial of the shade image dump window. | per call | diagnostic |

@@ -2114,7 +2114,7 @@ namespace threepp {
             // barriers. `view` is 0 for the primary and the addView handle for
             // a secondary; the record tail after the views (scene capture,
             // frame interop, event camera, composite) is the primary's. Names
-            // are the graph's pass names, the same THREEPP_RG_DUMP prints, and a
+            // are the graph's pass names, the same THREEPP_LOG=vulkan.rendergraph:debug prints, and a
             // name repeats across views. Nothing outside the graph has a row:
             // the screen-space sprite overlay, HUD render() calls, ImGui and the
             // present transition are gpuTotalMs minus the rows' sum. Empty when
