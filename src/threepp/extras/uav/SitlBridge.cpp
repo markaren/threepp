@@ -3,6 +3,7 @@
 // near/far macro fallout) into consumers.
 
 #include "threepp/extras/uav/SitlBridge.hpp"
+#include "threepp/utils/Log.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -28,6 +29,8 @@
 namespace threepp::uav {
 
     namespace {
+
+        constinit log::Category kLog{"extras.sitl"};
 
 #ifdef _WIN32
         using socket_t = SOCKET;
@@ -131,7 +134,9 @@ namespace threepp::uav {
 
         if (!decode(buf, static_cast<int>(n), out)) {
             if (!impl_->warnedBadPacket) {
-                std::fprintf(stderr, "[sitl] dropping unrecognized %d-byte packet (bad magic/length)\n",
+                THREEPP_LOGF(kLog, Warn,
+                             "Dropping a %d-byte packet that is not a SITL JSON frame (wrong magic or length); "
+                             "later ones are dropped without a message",
                              static_cast<int>(n));
                 impl_->warnedBadPacket = true;
             }
@@ -157,9 +162,10 @@ namespace threepp::uav {
             char oldIp[INET_ADDRSTRLEN] = {}, newIp[INET_ADDRSTRLEN] = {};
             inet_ntop(AF_INET, &prevPeer.sin_addr, oldIp, sizeof oldIp);
             inet_ntop(AF_INET, &from.sin_addr, newIp, sizeof newIp);
-            std::fprintf(stderr,
-                         "[sitl] reset: %s (peer %s:%u -> %s:%u, frame %u -> %u)\n",
-                         newPeer ? "PEER CHANGED" : "frame_count rollback",
+            THREEPP_LOGF(kLog, Warn,
+                         "SITL reset: %s (peer %s:%u -> %s:%u, frame %u -> %u)",
+                         newPeer ? "the peer changed, which two SITL instances on one port do on every frame"
+                                 : "the frame count went back, so SITL restarted",
                          oldIp, ntohs(prevPeer.sin_port), newIp, ntohs(from.sin_port),
                          impl_->lastFrameCount, out.frameCount);
         }
