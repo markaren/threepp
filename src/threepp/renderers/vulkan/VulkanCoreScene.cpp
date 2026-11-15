@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "SceneBuildFrame.hpp"
 
 #include "CpuPar.hpp"
 #include "VulkanCpuPhaseProf.hpp"
@@ -1786,6 +1787,28 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // The whole scene build, every phase below included (the profiler
             // is flat: a nested phase adds to this key too).
             THREEPP_CPUPROF("scene.0_total");
+            // The locals the phases share (SceneBuildFrame.hpp).
+            SceneBuildFrame sb;
+            auto& dispEpochNow = sb.dispEpochNow;
+            auto& snapLean = sb.snapLean;
+            auto& currFp = sb.currFp;
+            auto& rayCamPos = sb.rayCamPos;
+            auto& rayShadowChanged = sb.rayShadowChanged;
+            auto& structuralSame = sb.structuralSame;
+            auto& matricesSame = sb.matricesSame;
+            auto& materialValuesSame = sb.materialValuesSame;
+            auto& bonesDirtyAny = sb.bonesDirtyAny;
+            auto& displacedDirtyAny = sb.displacedDirtyAny;
+            auto& grassDirtyAny = sb.grassDirtyAny;
+            auto& geomDirtyAny = sb.geomDirtyAny;
+            auto& morphDirtyAny = sb.morphDirtyAny;
+            auto& entryGeomDirty = sb.entryGeomDirty;
+            auto& entryMatDirty = sb.entryMatDirty;
+            auto& leanOk = sb.leanOk;
+            auto& entryBonesDirty = sb.entryBonesDirty;
+            auto& entryDisplacedDirty = sb.entryDisplacedDirty;
+            auto& entryGrassDirty = sb.entryGrassDirty;
+            auto& entryMorphDirty = sb.entryMorphDirty;
             // displacementMap refinement: the focus, taken once (and again after
             // refineDisplacement), and whether this build re-checks every
             // displaced entry's spec (the epoch moved, see dispPixelEdge_).
@@ -1793,7 +1816,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 captureDisplacementFocus(camera);
                 dispFocusPending_ = false;
             }
-            const bool dispEpochNow = std::exchange(dispEpochPending_, false);
+            dispEpochNow = std::exchange(dispEpochPending_, false);
             // Deform work is queued here and recorded by the same frame. A frame
             // that never recorded (beginDeferredFrame gave up on an out-of-date
             // swapchain, a resize or a minimised window) leaves its queue behind,
@@ -1848,7 +1871,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // Ahead of it, when nothing in the scene was added, removed or
             // swapped (Object3D::structureVersion): no walk at all, only the
             // nodes a plain field can change (flatSnapshotCheck).
-            bool snapLean = flatSnapshotCheck(scene, camera);
+            snapLean = flatSnapshotCheck(scene, camera);
             if (snapLean) ++tlasStats_.flatChecks;
             static const bool flatCheck = vulkan::env::flag("THREEPP_VULKAN_WALK_CHECK");
             if (snapLean && flatCheck) deltaWalkCheck(scene, camera);
@@ -1862,7 +1885,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 snapLean = sceneSnapshotMatches(scene, camera);
             }
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
-            std::vector<MeshFingerprint> currFp;
             if (snapLean) {
                 THREEPP_CPUPROF("scene.3_leanMatrixRefresh");
                 // Per SPAN: a span's entry world matrices are a pure function
@@ -2580,7 +2602,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // Camera position for the cutout ray distance (setCutoutRayDistance):
             // read by the lean path's classifyCutoutFar and by the full
             // rebuild's instance loop.
-            float rayCamPos[3];
             {
                 Vector3 p;
                 p.setFromMatrixPosition(*camera.matrixWorld);
@@ -2590,26 +2611,17 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             }
             // Ray shadow LOD: the entries' states for this camera, before
             // either TLAS fill reads them (the matrices are this frame's).
-            const bool rayShadowChanged = classifyRayShadow(rayCamPos);
+            rayShadowChanged = classifyRayShadow(rayCamPos);
 
             // Change flags shared by the LEAN in-place diff and the generic
             // compare loop below — exactly one of the two fills them.
-            bool structuralSame = true;
-            bool matricesSame = true;
-            bool materialValuesSame = true;
-            bool bonesDirtyAny = false;
-            bool displacedDirtyAny = false;
-            bool grassDirtyAny = false;
-            bool tetDirtyAny = false;
-            bool geomDirtyAny = false;
-            bool morphDirtyAny = false;
-            std::vector<bool> entryGeomDirty(entries.size(), false);
+            entryGeomDirty.assign(entries.size(), false);
             // Per-entry "material values bumped" bits — the ONLY entries whose
             // MaterialDesc must be re-derived in the material-values fast path
             // (materialFromMesh is a ~25-dynamic_cast + shared_ptr-churn walk).
             // Filled by both the LEAN in-place diff and the generic compare so
             // a single material toggle costs O(changed) instead of O(scene).
-            std::vector<bool> entryMatDirty(entries.size(), false);
+            entryMatDirty.assign(entries.size(), false);
 
             // LEAN IN-PLACE DIFF: prevSceneFingerprint IS this frame's
             // fingerprint state — diff against the live objects and update it
@@ -2625,7 +2637,6 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // full fingerprint + compare path (which classifies it STRUCTURAL)
             // with every already-committed entry still holding verified-
             // correct values.
-            bool leanOk = false;
             if (snapLean) {
                 THREEPP_CPUPROF("scene.5_leanDiff");
                 leanOk = true;
@@ -2808,7 +2819,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // skinned meshes mark dirty so the structural-rebuild path skins
             // before its first ray trace. Gated on the cached isSkinned flag
             // so non-skinned entries skip the type probe entirely.
-            std::vector<bool> entryBonesDirty(entries.size(), false);
+            entryBonesDirty.assign(entries.size(), false);
             {
             THREEPP_CPUPROF("scene.6_deformerScans");
             // Deformer flags are per-MESH — gate on the span's first entry so
@@ -2839,7 +2850,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // advances continuously). Same per-entry-bool pattern as bones,
             // routed through the cached isDisplaced flag instead of a fresh
             // dynamic_cast every frame.
-            std::vector<bool> entryDisplacedDirty(entries.size(), false);
+            entryDisplacedDirty.assign(entries.size(), false);
             {
                 THREEPP_CPUPROF("scene.6_deformerScans");
                 for (const auto& sp : entrySpans_) {
@@ -2857,7 +2868,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // casting shadows and appearing in reflections/GI. Grass keeps no
             // prevVertex buffer, so a skipped frame reports zero per-vertex motion
             // exactly like an animated frame — no TAA ghosting from the freeze.
-            std::vector<bool> entryGrassDirty(entries.size(), false);
+            entryGrassDirty.assign(entries.size(), false);
             {
                 THREEPP_CPUPROF("scene.6_deformerScans");
                 // Camera world position (translation column of matrixWorld).
@@ -2886,7 +2897,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // here. Both predicates come from the cached fingerprint flags;
             // the getMorphAttributes hash lookup + SkinnedMesh dynamic_cast
             // used to run for every entry every frame.
-            std::vector<bool> entryMorphDirty(entries.size(), false);
+            entryMorphDirty.assign(entries.size(), false);
             {
             THREEPP_CPUPROF("scene.6_deformerScans");
             for (const auto& sp : entrySpans_) {
@@ -2948,1316 +2959,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
             }
-            // Continuous-motion fast path: when only the per-mesh matrices
-            // changed (everything else — topology, materials, textures —
-            // matches), refit the TLAS in place and let the deferred shade's
-            // ray-query reproject.
-            // We only have to detect the matrix-only case ahead of time;
-            // motion matrices themselves are computed each frame in
-            // renderFrame so we can defer the host write past the fence wait.
-            // (entries IS lastVisibleEntries_ — cached in place, both paths.)
-            if (sceneBuilt_ && (leanOk || currFp.size() == prevSceneFingerprint.size())) {
-                // Four classes of change:
-                //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
-                //   matrices      — per-mesh world matrices: TLAS refit + bit set.
-                //   materialVals  — pbr floats (KHR_animation_pointer animates colors,
-                //                   roughness, etc): re-upload matDescs in place + bit set.
-                //   geomData      — same BufferGeometry pointer but attribute version
-                //                   bumped (user mutated vertices in-place): re-upload
-                //                   data + in-place BLAS rebuild + TLAS refit. Falls
-                //                   through to structural if vertex/index count changed.
-                // Splitting matters: KHR_animation_pointer changes pbr every frame
-                // without changing any pointer or texture. Lumping it under
-                // structural caused a full rebuild every frame, which reset
-                // the gbuf+sampleIndex globally and froze accumulation
-                // scene-wide.
-                // The LEAN path already filled the change flags in its in-place
-                // diff; only the full path runs the generic compare here.
-                if (!leanOk) {
-                THREEPP_CPUPROF("scene.5c_genericCompare");
-                for (size_t i = 0; i < currFp.size(); ++i) {
-                    const auto& a = currFp[i];
-                    const auto& b = prevSceneFingerprint[i];
-                    if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
-                        // Same addresses, different objects (see MeshFingerprint):
-                        // STRUCTURAL, so the rebuild's liveCheck prune drops the
-                        // dead objects' GPU resources before anything is looked
-                        // up by those addresses again.
-                        a.meshId != b.meshId || a.geomId != b.geomId || a.matId != b.matId ||
-                        // TLAS membership flip (wireframe/overlay toggled) — the
-                        // instance set changed, so a refit would MODE_UPDATE with
-                        // a different instance count than the last build (spec
-                        // violation → corrupt TLAS → traversal hang). Rebuild.
-                        a.overlay != b.overlay || a.tex != b.tex) {
-                        structuralSame = false;
-                        break;
-                    }
-                    const bool xfmChanged   = std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0;
-                    // matVersion catches changes the pbr float-array doesn't —
-                    // notably KHR_texture_transform animation (rotation/offset/
-                    // scale of a texture). PropertyBinding bumps Material::version
-                    // on every setMaterialProperty hit, so this fires whenever
-                    // anything on the material has been touched even if the
-                    // PBR floats themselves didn't move.
-                    const bool matChanged   = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0
-                                              || a.matVersion != b.matVersion;
-                    const bool bonesChanged = entryBonesDirty[i];
-                    const bool dispChanged  = entryDisplacedDirty[i];
-                    const bool grassChanged = entryGrassDirty[i];
-                    const bool geomChanged  = (a.geomVersion != b.geomVersion);
-                    const bool morphChanged = entryMorphDirty[i];
-                    if (xfmChanged) matricesSame = false;
-                    if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
-                    // A material edit that moved its displacementMap (map, scale,
-                    // bias, transform; Material::needsUpdate) re-displaces the
-                    // geometry: the refresh below then rebuilds its record whole.
-                    const bool dispMoved = (matChanged || (dispEpochNow && entries[i].isDisplacementMapped)) &&
-                                           !entries[i].isParticle && displacementChanged(*entries[i].mesh);
-                    if (bonesChanged) bonesDirtyAny = true;
-                    if (dispChanged)  displacedDirtyAny = true;
-                    if (grassChanged) grassDirtyAny = true;
-                    // Particle billboard meshes mutate attributes every frame but
-                    // own no BLAS; never flag them geomDirty (would fire a per-
-                    // frame vkDeviceWaitIdle for a refit that skips them). The
-                    // billboard pass re-uploads their vertex cache itself.
-                    if ((geomChanged || dispMoved) && !entries[i].isParticle) {
-                        geomDirtyAny = true;
-                        entryGeomDirty[i] = true;
-                        entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
-                        // Invalidate the cached boundingBox so the next
-                        // cullEntriesAgainstFrustum recomputes it from the
-                        // current positions. Without this, plain meshes with
-                        // in-place vertex updates (PhysX soft bodies) keep
-                        // the rest-pose AABB and get culled out by the raster
-                        // pass once the body settles outside that stale box —
-                        // gbuffer ends up with sky at those pixels and the
-                        // hybrid deferred shade renders the background through them.
-                        if (auto g = entries[i].mesh->geometry()) {
-                            g->boundingBox.reset();
-                        }
-                    }
-                    if (morphChanged) morphDirtyAny = true;
-                    // All flavors of change invalidate this pixel's history —
-                    // share the same per-mesh bit. Reproject+halve FC for any
-                    // of: matrix shift, pbr shift, pose deformation, ocean
-                    // surface displacement, geometry data mutation, morph blend.
-                    if (xfmChanged || matChanged || bonesChanged || dispChanged || geomChanged || morphChanged) {
-                        const size_t w = i >> 5;
-                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
-                        meshMovedBits_[w] |= (1u << (i & 31u));
-                    }
-                }
-                // The lean diff invalidates span bounds itself; the generic
-                // compare above only fills per-entry bits — mirror the geom-
-                // dirty invalidation onto the spans (the expansion snapshotted
-                // local bounds BEFORE the edit was detected).
-                if (geomDirtyAny) {
-                    for (auto& sp : entrySpans_) {
-                        if (sp.first < entryGeomDirty.size() && entryGeomDirty[sp.first]) {
-                            sp.localBoundsValid = false;
-                            sp.aabbValid = false; sp.cullPartial = false;
-                            sp.probeChunksValid = 0;
-                        }
-                    }
-                }
-                }
-                // Instance colors live in the entries' GeometryDescs (see
-                // setGeomInstanceColor), but no fingerprint sees them: they are
-                // neither a material version nor a geometry attribute. Poll
-                // the attribute per span and route a change through the
-                // material-values patch. Only consumed when structuralSame; a
-                // structural rebuild re-derives every desc and re-records.
-                for (auto& sp : entrySpans_) {
-                    if (!sp.inst) continue;
-                    const FloatBufferAttribute* col = sp.inst->instanceColor();
-                    const unsigned int colVer = col ? col->version : ~0u;
-                    if (col == sp.instColorAttr && colVer == sp.instColorVersion) continue;
-                    sp.instColorAttr    = col;
-                    sp.instColorVersion = colVer;
-                    materialValuesSame = false;
-                    const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
-                    if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
-                    for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
-                        entryMatDirty[i] = true;
-                        meshMovedBits_[i >> 5] |= (1u << (i & 31u));
-                    }
-                }
-                if (structuralSame) {
-                    if (bonesDirtyAny) {
-                        THREEPP_CPUPROF("scene.6b_bonesQueue");
-                        // Re-skin every SkinnedMesh whose pose changed and
-                        // rebuild its BLAS in place. The BLAS handle/address
-                        // stays valid, but the BLAS's wrapping AABB grows when
-                        // a pose pushes vertices outside the previous extents
-                        // — the TLAS caches that AABB at build/refit time, so
-                        // without a TLAS refit rays get culled before they
-                        // reach the BLAS, clipping the silhouette.
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            if (!entryBonesDirty[i]) continue;
-                            auto* sm = static_cast<SkinnedMesh*>(entries[i].mesh);
-                            auto stIt = skinnedMeshStates.find(sm);
-                            if (stIt == skinnedMeshStates.end()) continue;
-                            refreshSkinnedBlas(*sm, *stIt->second);
-                        }
-                    }
-                    if (displacedDirtyAny) {
-                        THREEPP_CPUPROF("scene.6b_displacedQueue");
-                        // Queue each DisplacedMesh water update (FFT chain →
-                        // water_displace.comp → BLAS rebuild in place); the
-                        // chain is recorded into the frame command buffer in
-                        // recordCommandBuffer — NO blocking one-shot submit
-                        // (the old drain stalled the CPU on all in-flight GPU
-                        // work, tens of ms on large scenes). The CPU height-
-                        // field mirror is NOT taken here: this runs before the
-                        // frame's fence wait, while the frames in flight may
-                        // still be copying into the readback — beginDeferredFrame
-                        // mirrors the queued meshes right after vkWaitForFences,
-                        // from the readback slot that fence proves complete.
-                        const float now = static_cast<float>(frameNowSec());
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            if (!entryDisplacedDirty[i]) continue;
-                            auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
-                            auto stIt = displacedStates.find(dm);
-                            if (stIt == displacedStates.end()) continue;
-                            syncOceanChop(*dm, *stIt->second);
-                            pendingDisplacedDeforms_.emplace_back(dm, stIt->second.get(), now);
-                            ++dm->frameTick;
-                        }
-                    }
-                    if (grassDirtyAny) {
-                        THREEPP_CPUPROF("scene.6b_grassQueue");
-                        // Queue each GrassMesh deform; the grass_wind dispatch +
-                        // BLAS refit are recorded into the frame command buffer
-                        // in recordCommandBuffer (no blocking submit), mirroring
-                        // the skinned-mesh path. One mesh = one TLAS instance.
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            if (!entryGrassDirty[i]) continue;
-                            auto* gm = static_cast<GrassMesh*>(entries[i].mesh);
-                            auto stIt = grassStates.find(gm);
-                            if (stIt == grassStates.end()) continue;
-                            pendingGrassDeforms_.emplace_back(gm, stIt->second.get());
-                            ++gm->frameTick;
-                        }
-                    }
-                    if (morphDirtyAny) {
-                        THREEPP_CPUPROF("scene.6b_morphQueue");
-                        std::unordered_set<Mesh*> refreshed;
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            if (!entryMorphDirty[i]) continue;
-                            Mesh* m = entries[i].mesh;
-                            if (!refreshed.insert(m).second) continue;
-                            auto mIt = morphedMeshStates.find(m);
-                            if (mIt == morphedMeshStates.end()) continue;
-                            refreshMorphedBlas(*m, *mIt->second);
-                        }
-                    }
-                    // Tet-skinned soft bodies (PhysX) deform every frame — re-upload
-                    // their collision-tet positions, queue the GPU skin + BLAS refit,
-                    // and flag motion for reprojection/TAA like the other deformers.
-                    // At most one refresh per mesh per frame: refreshTetBlas advances
-                    // the tetPos write ring, whose depth only covers the in-flight
-                    // frames if it moves once per submission.
-                    std::unordered_set<Mesh*> tetRefreshed;
-                    for (const auto& sp : entrySpans_) {
-                        if (!entries[sp.first].isTet) continue;
-                        for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
-                            if (!tetRefreshed.insert(entries[i].mesh).second) continue;
-                            auto tIt = tetMeshStates.find(entries[i].mesh);
-                            if (tIt == tetMeshStates.end()) continue;
-                            refreshTetBlas(*entries[i].mesh, *tIt->second);
-                            tetDirtyAny = true;
-                            const size_t w = i >> 5;
-                            if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
-                            meshMovedBits_[w] |= (1u << (i & 31u));
-                        }
-                    }
-                    // Geometries whose prevVertex was re-snapshotted (to OLD
-                    // positions) this frame. The prevVertex re-sync pass below
-                    // must SKIP these so their legitimate change-frame deformation
-                    // motion survives — they settle on the next clean frame.
-                    std::unordered_set<const BufferGeometry*> geomRefreshedThisFrame;
+            if (updateSceneInPlace(sb)) return;
 
-                    // ── Zero-copy vertex interop: the UNCONDITIONAL enqueue ──
-                    // Everything else on this path is gated on the composite
-                    // BufferAttribute version (geomVersionOf, entryGeomDirty). A
-                    // foreign device producer bumps none of those — it writes
-                    // GPU memory the host never sees — so an interop record would
-                    // read "clean" forever, its BLAS would never refit, and the
-                    // ray-traced view (shadows, reflections, GI, lidar) would
-                    // quietly diverge from the rasterized one while the picture
-                    // looked fine. Same reasoning, same answer as the tet path
-                    // pushing pendingTetRebuilds_ every frame regardless.
-                    bool interopDirtyAny = false;
-                    if (!blasCache.empty()) {
-                        std::unordered_set<const BufferGeometry*> interopEnqueued;
-                        // One plain entry: its isVertexInterop, its record's drawRange
-                        // snapshot, and an armed interop's per-frame enqueue. True when it
-                        // tore its mesh's interop down (fixed capacity broken).
-                        const auto plainEntry = [&](size_t i) -> bool {
-                            if (entries[i].isSkinned || entries[i].isDisplaced ||
-                                entries[i].isGrass || entries[i].isTet) return false;
-                            const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
-                            auto cIt = blasCache.find(geomKey);
-                            // Refresh MeshEntry::isVertexInterop in place, every
-                            // frame, for every plain entry — set and clear. This
-                            // is what lets the flag be trusted without
-                            // a structural rebuild behind it: arming interop
-                            // changes no pointer, matrix, material or attribute
-                            // version, so no fingerprint diff can see it, and the
-                            // snapshot fast path reuses last frame's MeshEntry
-                            // objects verbatim. Deriving it here — on the
-                            // canonical entry list, before cullEntriesAgainstFrustum
-                            // and buildIndirectDrawData run later this frame —
-                            // makes it live in both paths and stale in neither.
-                            // BufferGeometry::drawRange is not covered by any
-                            // BufferAttribute version, so a set_draw_range-only
-                            // frame would sail through the DrawInfo skip
-                            // signature with commands built for the OLD range.
-                            // Compare against the record's snapshot here — the
-                            // same always-runs loop that refreshes
-                            // isVertexInterop — and bump drawInputsVersion_ on change:
-                            // new DrawInfo inputs must (EntrySpan contract).
-                            // A non-interop record ALSO gets the geom-dirty
-                            // flags: its BLAS holds the old span, and the
-                            // refresh-op collection below runs the canonical
-                            // fix (drained rebuild for an occasional change,
-                            // graduation to the frame-cb refit for a mesh that
-                            // animates its range every frame). Interop records
-                            // need neither — their unconditional per-frame
-                            // enqueue reads drawRange at record time.
-                            if (cIt != blasCache.end()) {
-                                auto& r0 = *cIt->second;
-                                const auto& dr = geomKey->drawRange;
-                                if (r0.lastDrawStart != dr.start ||
-                                    r0.lastDrawCount != dr.count) {
-                                    r0.lastDrawStart = dr.start;
-                                    r0.lastDrawCount = dr.count;
-                                    ++drawInputsVersion_;
-                                    if (!r0.interop && r0.as != VK_NULL_HANDLE) {
-                                        geomDirtyAny = true;
-                                        entryGeomDirty[i] = true;
-                                    }
-                                }
-                            }
-                            const bool iop = (cIt != blasCache.end() && cIt->second->interop);
-                            entries[i].isVertexInterop = iop;
-                            if (!iop) return false;
-                            auto& rec = *cIt->second;
-
-                            // Interop requires FIXED-CAPACITY geometry: the
-                            // fullRebuild path destroys rec.vertex on any count
-                            // change, and with it the exported allocation a
-                            // foreign API has already imported — an OS handle
-                            // that keeps working while pointing at freed memory.
-                            // Tear the interop down HERE instead, so the exports
-                            // are released deliberately and the application is
-                            // told, rather than losing them inside a rebuild that
-                            // has no idea they existed.
-                            auto* posAttr = entries[i].mesh->geometry()->getAttribute<float>("position");
-                            auto* idxAttr = entries[i].mesh->geometry()->getIndex();
-                            const uint32_t curVtx = posAttr ? static_cast<uint32_t>(posAttr->count()) : 0u;
-                            const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
-                            if (posAttr && (curVtx != rec.vertexCount || curIdx != rec.indexCount)) {
-                                std::cerr << "[VulkanRenderer] vertex interop: geometry changed "
-                                             "topology (" << rec.vertexCount << " -> " << curVtx
-                                          << " verts) - interop needs fixed-capacity geometry, so "
-                                             "it is being DISABLED for this mesh. Allocate for the "
-                                             "maximum triangle count once and write degenerates "
-                                             "for the unused tail.\n";
-                                disableVertexInterop(*entries[i].mesh);
-                                return true;
-                            }
-                            if (!interopEnqueued.insert(geomKey).second) return false;
-
-                            pendingDynamicGeomRefits_.push_back({geomKey, &rec});
-                            rec.lastDirtyFrame = frameSerial_;
-                            rec.dynPrevResyncPending = true;
-                            interopDirtyAny = true;
-                            // The surface deforms every frame, so its pixels'
-                            // temporal history is invalid every frame — same bit
-                            // the tet loop above stamps for the same reason.
-                            const size_t w = i >> 5;
-                            if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
-                            meshMovedBits_[w] |= (1u << (i & 31u));
-                            return false;
-                        };
-                        // Walked per SPAN, not per entry: a span is one mesh's entries (an
-                        // InstancedMesh's instances), so the record lookup and the drawRange
-                        // compare answer the same for all of them, and in an entry walk only
-                        // the span's first entry can act — after it the record's drawRange
-                        // snapshot is current and interopEnqueued is per geometry. The rest
-                        // take the first's isVertexInterop. The entry walk did a blasCache
-                        // hash lookup per instance: 2.0 to 2.4 ms a frame, still or moving,
-                        // at about 100k instances in 4k meshes (pine-forest's orbit,
-                        // scratch/orbitperf). A span whose first entry tore interop down walks
-                        // its rest entry by entry, as before; spans that do not tile the
-                        // entries (the slot editor keeps them contiguous) fall back to the walk.
-                        THREEPP_CPUPROF("scene.6c_interopSpans");
-                        const bool spansTile = !entrySpans_.empty() &&
-                                size_t(entrySpans_.back().first) + entrySpans_.back().count == entries.size();
-                        if (!spansTile) {
-                            for (size_t i = 0; i < entries.size(); ++i) plainEntry(i);
-                        } else {
-                            for (const auto& sp : entrySpans_) {
-                                if (sp.count == 0) continue;
-                                const size_t i0 = sp.first, end = i0 + sp.count;
-                                const auto& e0 = entries[i0];
-                                // deformer flags are per mesh: the span's first entry speaks for it
-                                if (e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isTet) continue;
-                                if (plainEntry(i0)) {
-                                    for (size_t i = i0 + 1; i < end; ++i) plainEntry(i);
-                                    continue;
-                                }
-                                if (sp.count == 1) continue;
-                                const auto cIt = blasCache.find(e0.mesh->geometry().get());
-                                const bool iop = cIt != blasCache.end() && cIt->second->interop;
-                                // The rest hold the first's answer already unless the record's
-                                // interop state moved since the last frame: two reads, not a
-                                // write per entry (a MeshEntry a cache line each, the writes
-                                // alone were 0.6 ms a frame at 167k entries, 2026-11-01).
-                                if (entries[i0 + 1].isVertexInterop != iop || entries[end - 1].isVertexInterop != iop)
-                                    for (size_t i = i0 + 1; i < end; ++i) entries[i].isVertexInterop = iop;
-                            }
-                        }
-                    }
-
-                    if (geomDirtyAny) {
-                        THREEPP_CPUPROF("scene.6d_geomDirtyScan");
-                        // Re-upload vertex data for geometries whose
-                        // BufferAttribute versions changed and rebuild their
-                        // BLAS in-place. If any geometry changed its vertex or
-                        // index count (topology change), we can't reuse the
-                        // old buffers — fall through to the full structural
-                        // rebuild instead.
-                        //
-                        // ensureSceneBuilt runs in render() BEFORE renderFrame
-                        // waits on inFlight[currentFrame], so up to
-                        // kFramesInFlight prior frames may still be reading
-                        // rec.vertex/normal/index via closest_hit's
-                        // GeometryDesc.vertexAddress fetches (and the hybrid
-                        // raster gbuffer pass binds the same buffer as a
-                        // vertex buffer). Memcpying into those buffers
-                        // mid-flight is a device-lost on NVIDIA. Drain
-                        // everything device-wide before mutating shared BLAS
-                        // buffers — skinned / displaced / morphed paths above
-                        // submit on the same queue, so this one wait covers
-                        // them too. Only a record with an auto-LOD chain still
-                        // takes that drain (its level BLASes are freed past it).
-                        // Every other edit, the first included, records its
-                        // upload + refit into the frame cb via
-                        // recordDynamicGeomRefits, ordered behind the in-flight
-                        // frames on the queue: an edit every few frames (a rut
-                        // ribbon written every third frame) used to drain on
-                        // every write, 10 to 17 ms each, because it never made
-                        // three frames in a row. Build the op lists first,
-                        // decide after.
-                        bool topologyChanged = false;
-                        std::unordered_set<const BufferGeometry*> refreshedGeoms;
-                        std::vector<GeomRefreshOp> refreshOps;
-                        std::vector<BlasRecord*> lodChainDoomed;
-                        refreshOps.reserve(entries.size());
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            if (!entryGeomDirty[i]) continue;
-                            if (entries[i].isSkinned)   continue;
-                            if (entries[i].isDisplaced) continue;
-                            if (entries[i].isGrass)     continue;
-
-                            const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
-                            if (refreshedGeoms.count(geomKey)) continue;
-
-                            auto cIt = blasCache.find(geomKey);
-                            if (cIt == blasCache.end()) continue;
-                            auto& rec = *cIt->second;
-                            // Already enqueued unconditionally above, and its
-                            // host attributes are stale by definition — letting
-                            // it fall through here would double-enqueue it and,
-                            // worse, take the host-pack branch that overwrites
-                            // the producer's data with those stale arrays.
-                            if (rec.interop) continue;
-
-                            auto* posAttr = entries[i].mesh->geometry()->getAttribute<float>("position");
-                            auto* idxAttr = entries[i].mesh->geometry()->getIndex();
-                            if (!posAttr) continue;
-
-                            const uint32_t curVtx = static_cast<uint32_t>(posAttr->count());
-                            const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
-                            // A displacementMap record, or one that should now be:
-                            // the in-place refits upload the geometry's own
-                            // positions, so it is rebuilt whole (buildBlasFor
-                            // displaces).
-                            if (rec.dispSig != 0u || displacementSignatureOf(geomKey) != 0u ||
-                                curVtx != rec.vertexCount || curIdx != rec.indexCount ||
-                                !refreshFitsPacking(rec, *entries[i].mesh->geometry())) {
-                                topologyChanged = true;
-                                break;
-                            }
-
-                            // Streak accounting for graduation: a record dirty
-                            // kDynamicGraduationStreak frames in a row is a
-                            // per-frame CPU deformer (Flock's merged birds, a
-                            // rewritten trail), not an occasional edit, and
-                            // keeps a staging ring for the rest of its life
-                            // instead of a staging buffer per edit.
-                            rec.dirtyStreak = (frameSerial_ - rec.lastDirtyFrame <= 1)
-                                    ? rec.dirtyStreak + 1u
-                                    : 1u;
-                            rec.lastDirtyFrame = frameSerial_;
-
-                            auto* nrmAttr = entries[i].mesh->geometry()->getAttribute<float>("normal");
-                            // The frame-cb route needs normals (the same
-                            // requirement refreshGeomBlasBatch enforces) and no
-                            // auto-LOD chain still landing (its build batch in
-                            // flight on the GPU): the drained branch below is the
-                            // only place that one can be freed safely, so that
-                            // record stays there this frame. A landed chain is
-                            // retired below instead. The quiet-window gate in the
-                            // selection pass stops re-enqueues while a mesh
-                            // deforms, but a mesh edited every so often (a rut
-                            // chunk reused from a pool) gets a chain while it
-                            // sits still, and its next edit used to drain.
-                            // A chain still landing (a pooled rut chunk that sat still
-                            // long enough to get one) is handed to its batch to free.
-                            if (nrmAttr && !rec.lodLanding.empty()) detachLandingLod(rec);
-                            const bool frameRoute = nrmAttr && rec.lodLanding.empty();
-                            if (!frameRoute) {
-                                // Diagnostics (THREEPP_VK_DRAW_STATS): which edits drain the device.
-                                static const bool logDrains = vulkan::env::integer("THREEPP_VK_DRAW_STATS").value_or(0) > 0;
-                                static std::unordered_set<const void*> logged;
-                                if (logDrains && logged.insert(geomKey).second)
-                                    std::fprintf(stderr, "[draw-stats] drained edit: mesh '%s', %u verts, normals %s, LOD chain landing %s\n",
-                                                 entries[i].mesh->name.c_str(), rec.vertexCount, nrmAttr ? "yes" : "NO",
-                                                 rec.lodLanding.empty() ? "no" : "YES");
-                            }
-                            if (frameRoute) {
-                                // An in-place vertex rewrite invalidates the chain:
-                                // its level BLASes BAKE positions and its error
-                                // bounds measured the old surface. Retired, not
-                                // destroyed: earlier frames' TLASes may still
-                                // reference a level. Selection already ran this
-                                // frame and may have left en.lodLevel > 0, so the
-                                // TLAS fill must re-read the effective level
-                                // (LOD0 from here, see destroyBlasLodLevels' caller
-                                // below).
-                                if (rec.lodState != BlasRecord::LodState::None) {
-                                    retireBlasLodLevels(rec);
-                                    lodChangedThisFrame_ = true;
-                                }
-                                if (!rec.perFrameDynamic &&
-                                    rec.dirtyStreak >= BlasRecord::kDynamicGraduationStreak) {
-                                    // Graduate: allocate the staging ring, one
-                                    // slot per frame in flight, each holding
-                                    // positions then normals in the buffers'
-                                    // own (possibly packed) formats.
-                                    const VkDeviceSize nrmBytes = (rec.packedMask & kPackedNormal)
-                                            ? VkDeviceSize(rec.vertexCount) * sizeof(uint32_t)
-                                            : VkDeviceSize(nrmAttr->array().size()) * sizeof(float);
-                                    rec.dynStagingSlotBytes = rec.vbBytes + nrmBytes;
-                                    rec.dynStaging = createBuffer(
-                                            ctx->allocator(), ctx->device(),
-                                            rec.dynStagingSlotBytes * kFramesInFlight,
-                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                            VMA_MEMORY_USAGE_AUTO,
-                                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                                    rec.perFrameDynamic = true;
-                                    ++dynGeomStats_.graduated;
-                                    // Settling now happens through the frame cb
-                                    // — the draining host-side resync pass must
-                                    // never touch this record again.
-                                    rec.prevVertexResyncPending = false;
-                                    std::cerr << "[VulkanRenderer] geometry ("
-                                              << rec.vertexCount << " verts) dirty "
-                                              << rec.dirtyStreak
-                                              << " frames in a row - graduated to the "
-                                                 "per-frame dynamic path (staging ring, "
-                                                 "frame-cb refit)\n";
-                                }
-                                // A record still in its static storage (built
-                                // without ALLOW_UPDATE, or compacted) moves to
-                                // updatable storage now, before this frame's TLAS
-                                // fill reads its address. So does a record whose
-                                // draw range has grown past what its structure was
-                                // created for: the refit builds the live count, and
-                                // a marching-cubes surface that gains triangles at
-                                // every rebuild (spot_slam's SLAM surface) used to
-                                // build past the end of its storage, which was
-                                // VK_ERROR_DEVICE_LOST at the next submit or a
-                                // neighbouring vertex buffer drawn as a fan of
-                                // garbage (2026-10-18). moveToUpdatableBlasStorage
-                                // is a no-op for an updatable record that still
-                                // fits. The old pair is retired: earlier frames in
-                                // flight still trace it.
-                                // A record without a structure (a geometry only
-                                // overlay meshes draw) has nothing to move.
-                                if (ctx->rayQuerySupported() && rec.as != VK_NULL_HANDLE &&
-                                    moveToUpdatableBlasStorage(rec, updatableBlasSize(rec, *entries[i].mesh->geometry()),
-                                                               /*retireOld=*/true)) {
-                                    rec.blasBuiltFlags = 0;// the next build is a MODE_BUILD
-                                }
-                                // Settles through the frame cb (dynPrevResyncPending);
-                                // the draining host-side resync pass stays out.
-                                rec.prevVertexResyncPending = false;
-                                rec.dynPrevResyncPending = true;
-                                pendingDynamicGeomRefits_.push_back({geomKey, &rec});
-                            } else {
-                                // An in-place vertex rewrite invalidates any auto-LOD
-                                // chain: the level BLASes BAKE positions (a stale level
-                                // would ray-trace the pre-edit shape) and the chain's
-                                // error bounds measured the old surface. Destroyed
-                                // past the device-wide drain below — in-flight TLASes
-                                // may still reference a level BLAS. lodState=None ⇒
-                                // the selection pass re-enqueues against the new
-                                // geomVersion; selectLodGeom falls back to LOD0 for
-                                // every consumer meanwhile.
-                                if (rec.lodState != BlasRecord::LodState::None)
-                                    lodChainDoomed.push_back(&rec);
-                                refreshOps.push_back({geomKey, &rec});
-                            }
-                            refreshedGeoms.insert(geomKey);
-                        }
-                        if (topologyChanged) {
-                            // Vertex/index count changed — can't reuse BLAS
-                            // buffers. Fall through to the full structural
-                            // rebuild path below, and drop any dynamic ops
-                            // queued this pass: the rebuild destroys + re-admits
-                            // their records from current CPU data (their
-                            // geomVersion is only stamped at record time, so
-                            // the version mismatch guarantees the re-admit).
-                            pendingDynamicGeomRefits_.clear();
-                            goto fullRebuild;
-                        }
-                        if (!refreshOps.empty()) {
-                            THREEPP_CPUPROF("scene.6x_geomRefreshDrain");
-                            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
-                            ++dynGeomStats_.drains;
-                            for (BlasRecord* doomed : lodChainDoomed) {
-                                // lodChangedThisFrame_ must be forced: selection
-                                // already ran this frame and may have left
-                                // en.lodLevel > 0 — the EFFECTIVE level changes
-                                // to 0 right here, and without the flag the
-                                // geomDescs GPU patch would skip while the TLAS
-                                // falls back, leaving a stale per-level index
-                                // address behind.
-                                destroyBlasLodLevels(*doomed);
-                                lodChangedThisFrame_ = true;
-                            }
-                            refreshGeomBlasBatch(refreshOps);
-                            for (const auto& op : refreshOps) geomRefreshedThisFrame.insert(op.geom);
-                        }
-                    }
-
-                    // A rig that stopped this frame: recordSkinnedDeforms
-                    // snapshots vertex -> prevVertex only for pending states,
-                    // so prevVertex still holds the pose before the last step.
-                    // One vertex -> prevVertex copy (recordDynamicGeomRefits,
-                    // the deform.dynGeom pass, which the graph orders before
-                    // deform.skin; a resyncing state is not pending this frame)
-                    // collapses its motion to zero, as for a graduated record.
-                    for (const auto& sp : entrySpans_) {
-                        if (!entries[sp.first].isSkinned) continue;
-                        for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
-                            if (entryBonesDirty[i]) continue;
-                            auto stIt = skinnedMeshStates.find(static_cast<SkinnedMesh*>(entries[i].mesh));
-                            if (stIt == skinnedMeshStates.end()) continue;
-                            SkinnedMeshState& st = *stIt->second;
-                            if (!st.prevResyncPending || !st.blas) continue;
-                            st.prevResyncPending = false;
-                            pendingDynamicPrevResyncs_.push_back(st.blas.get());
-                        }
-                    }
-
-                    // ── prevVertex re-sync ──────────────────────────────────
-                    // A plain mesh updated in place (e.g. a re-rolled terrain)
-                    // keeps prevVertex frozen at its PRE-update positions once it
-                    // stops being geom-dirty: refreshGeomBlasBatch's Phase B only
-                    // runs on the change frame. The G-buffer VS then reads a stale
-                    // inPrevPos every subsequent frame → a constant nonzero motion
-                    // vector on a static surface → the denoiser/TAA reject history
-                    // forever → the mesh stays noisy and visibly shakes. One frame
-                    // after the update settles (the record is no longer refreshed
-                    // this frame) we copy vertex → prevVertex so motion collapses
-                    // back to zero, exactly like initial-build static geometry.
-                    // Skinned/displaced/tet own their own every-frame snapshot and
-                    // never enter refreshGeomBlasBatch, so they are untouched.
-                    {
-                        THREEPP_CPUPROF("scene.6e_resyncScan");
-                        std::vector<BlasRecord*> resyncRecs;
-                        for (auto& [geomKey, recPtr] : blasCache) {
-                            BlasRecord* rec = recPtr.get();
-                            // Graduated records settle through the frame cb — a
-                            // drain here would defeat the whole path. The first
-                            // CLEAN frame after a dirty run records one
-                            // vertex→prevVertex copy in recordDynamicGeomRefits
-                            // and motion collapses to zero, same contract as
-                            // the host-side pass below.
-                            if (rec->perFrameDynamic || rec->dynPrevResyncPending) {
-                                if (rec->dynPrevResyncPending &&
-                                    rec->lastDirtyFrame != frameSerial_) {
-                                    pendingDynamicPrevResyncs_.push_back(rec);
-                                    rec->dynPrevResyncPending = false;
-                                }
-                                continue;
-                            }
-                            if (!rec->prevVertexResyncPending) continue;
-                            // Re-snapshotted this frame → keep its change-frame
-                            // motion; settle on the next clean frame instead.
-                            if (geomRefreshedThisFrame.count(geomKey)) continue;
-                            resyncRecs.push_back(rec);
-                        }
-                        if (!resyncRecs.empty()) {
-                            THREEPP_CPUPROF("scene.6y_prevResyncDrain");
-                            // Same in-flight hazard as the refresh above: prior
-                            // frames may still read prevVertex as a vertex buffer,
-                            // so drain device-wide before overwriting it.
-                            check(vkDeviceWaitIdle(ctx->device()),
-                                  "vkDeviceWaitIdle (pre-prevVertex-resync)");
-                            ++dynGeomStats_.drains;
-                            VkCommandBuffer cb = beginOneShot();
-                            for (BlasRecord* rec : resyncRecs) {
-                                if (rec->prevVertex.handle != VK_NULL_HANDLE && rec->vbBytes > 0) {
-                                    VkBufferCopy region{};
-                                    region.size = rec->vbBytes;
-                                    vkCmdCopyBuffer(cb, rec->vertex.handle,
-                                                    rec->prevVertex.handle, 1, &region);
-                                }
-                                rec->prevVertexResyncPending = false;
-                            }
-                            endAndSubmitOneShot(cb, "prevVertex resync");
-                        }
-                    }
-
-                    // Material patch FIRST, then the TLAS fill: the fill derives each
-                    // instance's ray mask and FORCE_OPAQUE flag from the table, so
-                    // it must read THIS frame's materials. A patched entry whose
-                    // visibility class flipped (a blinker crossing the emitter threshold,
-                    // opacity dropping below 1) sets instClassChanged, which forces the
-                    // fill even on a frame with no motion, and a full build.
-                    bool instClassChanged = false;
-                    // A BLAS compacted since the last fill (compactAsync): every
-                    // instance of it re-referenced, a full build.
-                    if (blasRereferenced_) {
-                        blasRereferenced_ = false;
-                        instClassChanged = true;
-                    }
-                    if (hiddenFlippedThisFrame_ || slotsEditedThisFrame_) {
-                        // Hidden or shown in place: new ray masks (a full TLAS
-                        // build, like any class change), every view's cull and
-                        // draw records, and the emitter walk. A slot edit is the
-                        // same event with instances added or removed.
-                        instClassChanged = true;
-                        ++drawInputsVersion_;
-                        cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
-                    }
-                    // LOD fades: new words re-record the draws; a side of a
-                    // crossfade taking over the shadows changes ray masks,
-                    // which is a class change (a full TLAS build).
-                    {
-                        THREEPP_CPUPROF("scene.6f_lodFades");
-                        const LodFadeChange fc = refreshLodFades(false);
-                        if (fc.words) ++drawInputsVersion_;
-                        if (fc.casters) instClassChanged = true;
-                    }
-                    if (!materialValuesSame) {
-                        THREEPP_CPUPROF("scene.8_matDescPatch");
-                        // Material-values-only update: rebuild MaterialDescs into
-                        // the host-side cache, mark every per-frame slot dirty,
-                        // and let renderFrame flush after the next fence wait.
-                        // Pointers and textures haven't changed, so slot count
-                        // and texture indices stay valid; only the pbr floats
-                        // need to flow through. The old single-buffer path called
-                        // vkDeviceWaitIdle here on every animated-pbr frame —
-                        // stalling the whole device just to memcpy a few KB.
-                        // Multi-buffered: this frame's slot is safe to write
-                        // post-fence; the other slot gets flushed when its turn
-                        // comes around (it's still serving the previous frame's
-                        // in-flight RT trace right now).
-                        // The table is per material: a changed material
-                        // rewrites its record once, and an entry whose instance
-                        // colour changed rewrites the colour in its GeometryDesc.
-                        // Overlay/skipped entries keep record 0.
-                        // TARGETED PATCH: only entries whose material version
-                        // actually bumped (entryMatDirty) get their MaterialDesc
-                        // re-derived. materialFromMesh is a ~25-dynamic_cast walk
-                        // (plus each albedoTexOf/…/occlusionTexOf is another typed
-                        // probe + shared_ptr churn); re-deriving EVERY entry here
-                        // turned a single brake-light / blinker emissive toggle into
-                        // an O(scene) stall — tens of ms once InstancedMesh foliage
-                        // expands the scene to tens of thousands of entries, firing
-                        // several times a second while a blinker ticks. The table
-                        // already holds correct values for every unchanged entry (it
-                        // survives matrix-only frames untouched), and a changed
-                        // material keeps its pointer + textures (a texture swap aborts
-                        // to the full structural rebuild), so its dedup index stays
-                        // valid. Full fallback only if the cache size somehow doesn't
-                        // match (never on the fast path that reaches here).
-                        const bool patchMatDescs = geomDescsCached_.size() == entries.size();
-                        if (!patchMatDescs) {
-                            // Every entry re-derived below into a fresh table;
-                            // every entry's index and every record dirty.
-                            geomDescsCached_.resize(entries.size());
-                            for (GeometryDesc& gd : geomDescsCached_) setGeomMatIdx(gd, 0u);
-                            matTableReset();
-                            markGeomDescsWhole();
-                        }
-                        matTableBeginPass();
-                        // Same dedup as the full-rebuild path below (consulted only on
-                        // the full-rebuild fallback): entries order is identical
-                        // (overlay skip matches), so identical Material* pointers
-                        // produce identical materialAssetIdx values frame-to-frame.
-                        std::unordered_map<const Material*, uint32_t> matAssetMap;
-                        // One-entry memo of the material's desc. A dirty instanced span is
-                        // N consecutive entries sharing one Material, and an
-                        // instance-color edit dirties all of them; without the
-                        // memo each re-runs materialFromMesh + the texture-of
-                        // walk. Patch mode only: materialAssetIdx is taken from
-                        // the entry's current record, so the memoised desc is
-                        // valid for every entry of the same Material.
-                        const Material* memoMat = nullptr;
-                        MaterialDesc memoMd{};
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            const MeshEntry& en = entries[i];
-                            if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc
-                            if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep its record
-                            Mesh* m = en.mesh;
-                            const Material* mat = m->material().get();
-                            if (!(patchMatDescs && memoMat && mat == memoMat)) {
-                                MaterialDesc md = buildMaterialDesc(*m);
-                                if (patchMatDescs) {
-                                    // Material* unchanged → its dedup index is stable.
-                                    md.materialAssetIdx = entryMat(i).materialAssetIdx;
-                                } else {
-                                    auto [matIt, inserted] = matAssetMap.try_emplace(
-                                            mat, static_cast<uint32_t>(matAssetMap.size()));
-                                    md.materialAssetIdx = matIt->second;
-                                }
-                                memoMat = mat;
-                                memoMd  = md;
-                            }
-                            // Compared against the record being replaced; on the
-                            // full fallback that is record 0, so assume a change.
-                            const MaterialDesc& was = entryMat(i);
-                            const MaterialDesc& md = memoMd;
-                            if (!patchMatDescs ||
-                                tlasInstanceFlags(was) != tlasInstanceFlags(md) ||
-                                alphaMaskGroup(was) != alphaMaskGroup(md))
-                                instClassChanged = true;
-                            // The emitter walk's inputs, copied verbatim from the
-                            // same MaterialWithEmissive fields it reads. A change
-                            // re-walks: this is how an entry that BECOMES an
-                            // emitter (and so is in no emitter mask) gets found.
-                            if (!patchMatDescs || was.emissiveIntensity != md.emissiveIntensity ||
-                                was.emissive[0] != md.emissive[0] || was.emissive[1] != md.emissive[1] ||
-                                was.emissive[2] != md.emissive[2])
-                                cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
-                            // The record is rewritten (and its range dirtied) once
-                            // per pass however many entries share it; the entry's
-                            // GeometryDesc when it lands on another record or its
-                            // instance color changed.
-                            setEntryMat(i, matTableSlot(mat, memoMd));
-                            {
-                                GeometryDesc& gd = geomDescsCached_[i];
-                                float was[3];
-                                std::memcpy(was, gd.instanceColor, sizeof(was));
-                                setGeomInstanceColor(gd, en);
-                                if (std::memcmp(was, gd.instanceColor, sizeof(was)) != 0)
-                                    markGeomDescsDirty(static_cast<uint32_t>(i));
-                            }
-                        }
-                        if (!patchMatDescs) markMatDescsWhole();
-                        cacheCullFlags();
-                    }
-                    // Cutout ray distance: after the material patch (it reads
-                    // the material table). A flipped bit changes an instance's
-                    // flags, which is a class change like any other.
-                    THREEPP_CPUPROF_NAMED(profCutout, "scene.8b_cutoutFar");
-                    if (classifyCutoutFar(rayCamPos)) instClassChanged = true;
-                    profCutout.stop();
-                    if (rayShadowChanged) instClassChanged = true;
-                    const bool tlasRowsStale = !matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged;
-                    if (tlasRowsStale && !ctx->rayQuerySupported()) {
-                        // No ray query: no TLAS, so no instances to fill. The
-                        // fill's other duty stays, the GeometryDescs following
-                        // the level an entry draws (see the fill below): only
-                        // when a level or a chain changed (every such change
-                        // raises lodChangedThisFrame_) or a geometry did, and
-                        // only in a span whose LOD state did change.
-                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
-                        if (lodChangedThisFrame_ || geomDirtyAny) for (auto& sp : entrySpans_) {
-                            const MeshEntry& e0 = entries[sp.first];
-                            if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isTet || e0.isMorphed) continue;
-                            const BufferGeometry* geomKey = e0.mesh->geometry().get();
-                            auto it = blasCache.find(geomKey);
-                            if (it == blasCache.end()) continue;
-                            const BlasRecord* rec = it->second.get();
-                            const bool perEntryLod = !rec->lodLevels.empty();
-                            const LodGeomSel lodSel0 = selectLodGeom(*rec, 0);
-                            // What the span's rows are patched from, a word at a time.
-                            uint64_t sig = 1469598103934665603ull;
-                            const auto mixWord = [&sig](uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
-                            mixWord((uint64_t(sp.first) << 32) | sp.count);
-                            mixWord(reinterpret_cast<uintptr_t>(rec));
-                            mixWord(lodSel0.indexAddress);
-                            mixWord(rec->lodLevels.size());
-                            mixWord(perEntryLod ? lodLevelVersion_ : 0u);
-                            if (sig == sp.tlasSig) continue;
-                            sp.tlasSig = sig;
-                            for (uint32_t j = 0; j < sp.count; ++j) {
-                                const size_t i = size_t(sp.first) + j;
-                                if (i >= geomDescsCached_.size()) break;
-                                auto& gd = geomDescsCached_[i];
-                                const auto sel = perEntryLod ? selectLodGeom(*rec, entries[i].lodLevel) : lodSel0;
-                                if (gd.indexAddress != sel.indexAddress || geomFlag(gd, kGeomFlagIndexed) != sel.indexed) {
-                                    gd.indexAddress = sel.indexAddress;
-                                    setGeomFlag(gd, kGeomFlagIndexed, sel.indexed);
-                                    markGeomDescsDirty(static_cast<uint32_t>(i));
-                                }
-                            }
-                        }
-                    } else if (tlasRowsStale) {
-                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
-                        // TLAS refit: needed when instance transforms change
-                        // (matricesSame=false) AND when any skinned BLAS was
-                        // just rebuilt — the TLAS's per-instance wrapped AABB
-                        // is recomputed from the current BLAS extents on
-                        // refit, picking up pose-deformed silhouettes that
-                        // would otherwise be clipped by the stale TLAS AABB.
-                        // BLAS handles + buffer addresses are unchanged so
-                        // geomDescs / matDescs stay valid; we just rewrite the
-                        // tlasInstancesBuffer in place and call MODE_UPDATE.
-                        // EXCEPT auto-LOD: a level switch DOES change which
-                        // BLAS (and which index buffer) an entry's instance
-                        // references — see the plain-geometry branch below
-                        // and the geomDescsCached_ patch after this loop.
-                        // Persistent scratch (swapped with pendingTlasInstances_
-                        // below) so both vectors keep their capacity — a fresh
-                        // ~5 MB allocation per moving frame at 100k instances
-                        // otherwise.
-                        // The array persists across fills (pendingTlasInstances_):
-                        // with the same layout as the last fill, a span whose
-                        // inputs did not change (spanTlasSig) keeps its rows and
-                        // only the others are rewritten in place, and only those
-                        // ranges are uploaded (tlasInstDirty_). A city of static
-                        // pools no longer pays 64 B a row whenever one car moves.
-                        // A span whose rows moved (a count change, a span turning
-                        // GPU-written) and every span after it are rewritten from
-                        // there (tlasAppendFrom); spans whose count has changed
-                        // once go last (EntrySpan::tlasVolatile), so a pool that
-                        // grows and shrinks moves only its fellow movers' rows.
-                        auto& instances = pendingTlasInstances_;
-                        // Stage 5: instanced spans whose instances tlas_gen.comp
-                        // appends after these (the expansion's world matrices).
-                        const bool tlasGenOn = gpuTlasGen_ && gpuInstanceExpand_ && tlasGen_ && instExpand_ &&
-                                               ctx->rayQuerySupported() && !asyncPilot_;
-                        // THREEPP_VK_TLAS_FILL_INPLACE=0: every fill from empty (A/B).
-                        static const bool tlasFillInPlaceOn = vulkan::env::flag("THREEPP_VK_TLAS_FILL_INPLACE", true);
-                        if (tlasRowDirty_.size() != (entries.size() + 31u) / 32u) {
-                            tlasRowDirty_.assign((entries.size() + 31u) / 32u, 0u);
-                            tlasFillValid_ = false;// bits from another layout
-                        }
-                        bool tlasInPlace = tlasFillInPlaceOn && tlasFillValid_ &&
-                                           tlasFillEntryCount_ == entries.size() && tlasFillGenOn_ == tlasGenOn &&
-                                           !gpuDrawGenCheck_ && instances.size() <= entries.size();
-                        // Stable spans first, in entry order, then the volatile ones.
-                        auto& tlasOrder = tlasSpanOrder_;
-                        tlasOrder.clear();
-                        tlasOrder.reserve(entrySpans_.size());
-                        for (uint32_t s = 0; s < entrySpans_.size(); ++s)
-                            if (!entrySpans_[s].tlasVolatile) tlasOrder.push_back(s);
-                        for (uint32_t s = 0; s < entrySpans_.size(); ++s)
-                            if (entrySpans_[s].tlasVolatile) tlasOrder.push_back(s);
-                    tlasFillPass:
-                        if (!tlasInPlace) {
-                            instances.clear();
-                            instances.reserve(entries.size());
-                        }
-                        const bool tlasFromEmpty = !tlasInPlace;
-                        size_t tlasAppendFrom = SIZE_MAX;
-                        size_t tlasCursor = 0;
-                        tlasGenSpans_.clear();
-                        tlasGenLodRows_.clear();
-                        tlasGenWork_ = 0;
-                        if (gpuDrawGenCheck_) tlasGenExpected_.clear();
-                        // instanceCustomIndex == entry index (matches the entries-
-                        // indexed geomDescs/matDescs built in the full rebuild);
-                        // overlay/skipped entries push no instance, exactly as
-                        // their geomDescs/matDescs slots are left default.
-                        //
-                        // Per SPAN: the BLAS resolve, visibility mask and LOD
-                        // eligibility are per-MESH — one lookup per span, not
-                        // one per instance. Per-entry work is the transform
-                        // write (+ per-entry LOD selection only when the span's
-                        // record actually has a chain).
-                        for (const uint32_t tlasSpanIdx : tlasOrder) {
-                            auto& sp = entrySpans_[tlasSpanIdx];
-                            // Its rows at the last fill; reset, so a span that
-                            // leaves below without rows carries none.
-                            const uint32_t prevTlasBase  = sp.tlasInstBase;
-                            const uint32_t prevTlasCount = sp.tlasInstCount;
-                            const uint64_t prevTlasSig   = sp.tlasSig;
-                            sp.tlasInstBase  = ~0u;
-                            sp.tlasInstCount = 0;
-                            sp.tlasSig       = 0;
-                            const MeshEntry& e0 = entries[sp.first];
-                            if (e0.isOverlay) continue;// raster-overlay only
-                            VkGeometryInstanceFlagsKHR spanFlags =
-                                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-                            // A cutout caster's far entries are force-opaque
-                            // (setCutoutRayDistance; the bits are classifyCutoutFar's).
-                            bool spanCutout = false;
-                            const MaterialDesc* cmd = nullptr;
-                            if (sp.first < geomDescsCached_.size()) {
-                                cmd = &entryMat(sp.first);
-                                spanFlags = tlasInstanceFlags(*cmd);
-                                spanCutout = cutoutRayDistance_ > 0.f && cutoutCaster(*cmd);
-                            }
-                            // Same visibility-group rule as the full rebuild,
-                            // from the span's first entry.
-                            const uint8_t spanMask = tlasRayMask(e0, cmd, sp.hidden);
-                            const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
-                                                    e0.isGrass || e0.isTet || e0.isMorphed;
-                            BlasRecord* rec = nullptr;
-                            bool perEntryLod = false;
-                            LodGeomSel lodSel0{};
-                            if (!isDeformer) {
-                                const BufferGeometry* geomKey = e0.mesh->geometry().get();
-                                auto it = blasCache.find(geomKey);
-                                if (it == blasCache.end()) continue;// shouldn't happen on transform-only
-                                rec = it->second.get();
-                                perEntryLod = !rec->lodLevels.empty();
-                                lodSel0 = selectLodGeom(*rec, 0);
-                            }
-                            // Stage 5: one span-level descriptor instead of a
-                            // per-instance fill. The GeometryDesc LOD reconcile
-                            // the loop below does per entry still runs (a chain
-                            // destroyed since leaves a level's index address).
-                            bool sinkTlas = false;
-                            if (tlasGenOn && sp.inst && !sp.isFree && !isDeformer && rec && !spanCutout &&
-                                lodSel0.asAddress != 0) {
-                                vulkan::TlasGen::SpanDesc d{};
-                                d.blasAddress = lodSel0.asAddress;
-                                d.firstEntry  = sp.first;
-                                d.count       = sp.count;
-                                d.workBase    = tlasGenWork_;
-                                d.maskWord    = static_cast<uint32_t>(spanMask) << 24;
-                                d.flagsWord   = static_cast<uint32_t>(spanFlags) << 24;
-                                d.rayShadowDist = sp.rayShadowDist;
-                                d.rayShadowFrom = sp.rayShadowFrom;
-                                std::copy(e0.lodCenter, e0.lodCenter + 3, d.center);
-                                d.radius = e0.lodRadius;
-                                // An auto-LOD chain: each level's BLAS (and the
-                                // fallback past it), as the loop below reads them.
-                                d.lodRowBase  = static_cast<uint32_t>(tlasGenLodRows_.size());
-                                if (perEntryLod) {
-                                    const auto levels = static_cast<uint32_t>(rec->lodLevels.size());
-                                    for (uint32_t k = 1; k <= levels + 1u; ++k)
-                                        tlasGenLodRows_.push_back(selectLodGeom(*rec, static_cast<uint8_t>(k)).asAddress);
-                                    d.lodRowCount = levels + 1u;
-                                }
-                                tlasGenSpans_.push_back(d);
-                                tlasGenWork_ += sp.count;
-                                if (!gpuDrawGenCheck_) {
-                                    for (uint32_t j = 0; j < sp.count; ++j) {
-                                        const size_t i = size_t(sp.first) + j;
-                                        if (i >= geomDescsCached_.size()) break;
-                                        auto& gd = geomDescsCached_[i];
-                                        const auto sel = perEntryLod ? selectLodGeom(*rec, entries[i].lodLevel)
-                                                                     : lodSel0;
-                                        if (gd.indexAddress != sel.indexAddress ||
-                                            geomFlag(gd, kGeomFlagIndexed) != sel.indexed) {
-                                            gd.indexAddress = sel.indexAddress;
-                                            setGeomFlag(gd, kGeomFlagIndexed, sel.indexed);
-                                            markGeomDescsDirty(static_cast<uint32_t>(i));
-                                        }
-                                    }
-                                    continue;
-                                }
-                                sinkTlas = true;// check mode: the loop builds the reference
-                            }
-                            // Deformers are rewritten every fill (their BLAS moves under them).
-                            const uint64_t tlasSig = isDeformer ? 0ull
-                                    : spanTlasSig(sp, spanMask, spanFlags, spanCutout, rec, lodSel0.asAddress, perEntryLod);
-                            if (tlasInPlace && !sinkTlas &&
-                                (prevTlasBase != tlasCursor || (!isDeformer && prevTlasCount != sp.count))) {
-                                // This span's rows moved: it and the rest are written anew from here.
-                                if (prevTlasBase != ~0u && prevTlasCount != sp.count) sp.tlasVolatile = true;
-                                instances.resize(tlasCursor);
-                                tlasInPlace = false;
-                                tlasAppendFrom = tlasCursor;
-                            }
-                            // Same span facts as last fill: only the rows a bit names.
-                            const bool tlasRowsOnly = tlasInPlace && !sinkTlas && tlasSig != 0ull &&
-                                                      tlasSig == prevTlasSig && prevTlasCount == sp.count;
-                            const size_t tlasSpanBase = tlasInPlace ? tlasCursor : instances.size();
-                            size_t tlasWrite = tlasSpanBase;
-                            size_t tlasRunFirst = 0, tlasRunEnd = 0;// rows rewritten, coalesced for the upload
-                            // No bit in the span's words: none of its rows changed.
-                            // A plain span rewritten whole with rows enough to
-                            // share: its rows in chunks (CpuPar.hpp), each from
-                            // its entry alone, the dirty marks after in order.
-                            // The serial loop below is the reference; this
-                            // writes the same bytes to the same rows.
-                            const bool     tlasWhole  = !tlasRowsOnly && !sinkTlas && !isDeformer && rec;
-                            const unsigned tlasChunks = tlasWhole ? vulkan::par::chunksFor(sp.count) : 1u;
-                            if (tlasRowsOnly && !tlasRowsChangedIn(sp.first, sp.count)) tlasWrite += sp.count;
-                            else if (tlasChunks > 1u &&
-                                     (!tlasInPlace || tlasSpanBase + sp.count <= size_t(prevTlasBase) + prevTlasCount)) {
-                                if (!tlasInPlace) instances.resize(tlasSpanBase + sp.count);
-                                auto& dirtyIdx = tlasChunkDirty_;
-                                if (dirtyIdx.size() < tlasChunks) dirtyIdx.resize(tlasChunks);
-                                vulkan::par::run(tlasChunks, [&](unsigned c) {
-                                    auto& dirty = dirtyIdx[c];
-                                    dirty.clear();
-                                    const auto j0 = static_cast<uint32_t>(uint64_t(sp.count) * c / tlasChunks);
-                                    const auto j1 = static_cast<uint32_t>(uint64_t(sp.count) * (c + 1u) / tlasChunks);
-                                    for (uint32_t j = j0; j < j1; ++j) {
-                                        const size_t     i      = size_t(sp.first) + j;
-                                        const MeshEntry& en     = entries[i];
-                                        const auto       lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel) : lodSel0;
-                                        if (i < geomDescsCached_.size()) {
-                                            auto& gd = geomDescsCached_[i];
-                                            if (gd.indexAddress != lodSel.indexAddress ||
-                                                geomFlag(gd, kGeomFlagIndexed) != lodSel.indexed) {
-                                                gd.indexAddress = lodSel.indexAddress;
-                                                setGeomFlag(gd, kGeomFlagIndexed, lodSel.indexed);
-                                                dirty.push_back(static_cast<uint32_t>(i));
-                                            }
-                                        }
-                                        VkAccelerationStructureInstanceKHR& inst = instances[tlasSpanBase + j];
-                                        inst                                     = {};
-                                        copyTlasTransform(inst.transform, en.worldMatrix);
-                                        inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                                        inst.mask = entryRayMask(spanMask, en, !sp.fadeAny || lodFadeCasts(entryLodFade_[i]));
-                                        inst.instanceShaderBindingTableRecordOffset = 0;
-                                        inst.flags = (spanCutout && en.rayFarOpaque)
-                                                             ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
-                                                             : spanFlags;
-                                        inst.accelerationStructureReference = lodSel.asAddress;
-                                    }
-                                });
-                                for (unsigned c = 0; c < tlasChunks; ++c)
-                                    for (const uint32_t i : dirtyIdx[c]) markGeomDescsDirty(i);
-                                if (tlasInPlace) {// one run: every row of the span
-                                    tlasRunFirst = tlasSpanBase;
-                                    tlasRunEnd   = tlasSpanBase + sp.count;
-                                }
-                                tlasWrite = tlasSpanBase + sp.count;
-                            }
-                            else for (uint32_t j = 0; j < sp.count; ++j) {
-                                const size_t i = size_t(sp.first) + j;
-                                if (tlasRowsOnly && (i & 31u) == 0u && j + 32u <= sp.count) {
-                                    // A whole word of rows none of whose bits is set:
-                                    // all 32 kept, as the row test below would.
-                                    const size_t w = i >> 5;
-                                    const uint32_t bits = (w < meshMovedBits_.size() ? meshMovedBits_[w] : 0u) |
-                                                          (w < tlasRowDirty_.size() ? tlasRowDirty_[w] : 0u);
-                                    if (bits == 0u) {
-                                        tlasWrite += 32u;
-                                        j += 31u;
-                                        continue;
-                                    }
-                                }
-                                if (tlasRowsOnly && !tlasRowChanged(i)) {
-                                    ++tlasWrite;
-                                    continue;
-                                }
-                                const MeshEntry& en = entries[i];
-                                VkDeviceAddress blasAddr = 0;
-                                if (en.isSkinned) {
-                                    auto* sm = static_cast<SkinnedMesh*>(en.mesh);
-                                    if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
-                                    auto smIt = skinnedMeshStates.find(sm);
-                                    if (smIt == skinnedMeshStates.end()) continue;
-                                    blasAddr = smIt->second->blas->address;
-                                } else if (en.isDisplaced) {
-                                    auto* dm = static_cast<DisplacedMesh*>(en.mesh);
-                                    auto dmIt = displacedStates.find(dm);
-                                    if (dmIt == displacedStates.end()) continue;
-                                    blasAddr = dmIt->second->blas->address;
-                                } else if (en.isGrass) {
-                                    auto* gm = static_cast<GrassMesh*>(en.mesh);
-                                    auto gIt = grassStates.find(gm);
-                                    if (gIt == grassStates.end()) continue;
-                                    blasAddr = gIt->second->blas->address;
-                                } else if (en.isTet) {
-                                    auto tIt = tetMeshStates.find(en.mesh);
-                                    if (tIt == tetMeshStates.end()) continue;
-                                    blasAddr = tIt->second->blas->address;
-                                } else if (en.isMorphed) {
-                                    auto mIt = morphedMeshStates.find(en.mesh);
-                                    if (mIt == morphedMeshStates.end()) continue;
-                                    blasAddr = mIt->second->blas->address;
-                                } else {
-                                    // RT secondary hits (reflections/GI/lidar/probe
-                                    // update) read GeometryDesc::indexAddress keyed by
-                                    // gl_PrimitiveID from whichever BLAS this instance
-                                    // references — it must track the SAME level, or a
-                                    // hit against a coarser BLAS misindexes the
-                                    // still-LOD0 index buffer. `indexed` rides along: a
-                                    // level of a non-indexed soup record IS an indexed
-                                    // fetch. Reconciled on EVERY fill, not only while
-                                    // the record has a chain: an in-place vertex edit
-                                    // destroys the chain (lodChainDoomed), and the
-                                    // mirror still held the destroyed level's index
-                                    // address and indexed = 1 — every secondary hit on
-                                    // the mesh then fetched its triangles through a
-                                    // FREED index buffer while the raster drew LOD0.
-                                    // A deforming soup that had sat still long enough
-                                    // to get a chain (a film's warm-up renders) was
-                                    // refracted and reflected as crumpled garbage
-                                    // until the next structural rebuild. Two compares
-                                    // per entry; the upload is marked per entry, only
-                                    // when something differs.
-                                    const auto lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel)
-                                                                    : lodSel0;
-                                    blasAddr = lodSel.asAddress;
-                                    if (i < geomDescsCached_.size()) {
-                                        auto& gd = geomDescsCached_[i];
-                                        if (gd.indexAddress != lodSel.indexAddress ||
-                                            geomFlag(gd, kGeomFlagIndexed) != lodSel.indexed) {
-                                            gd.indexAddress = lodSel.indexAddress;
-                                            setGeomFlag(gd, kGeomFlagIndexed, lodSel.indexed);
-                                            markGeomDescsDirty(static_cast<uint32_t>(i));
-                                        }
-                                    }
-                                }
-                                VkAccelerationStructureInstanceKHR inst{};
-                                copyTlasTransform(inst.transform, en.worldMatrix);
-                                inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                                // The side of a LOD crossfade the shadows do not
-                                // take is hit by no ray (lodFadeCasts).
-                                inst.mask = entryRayMask(spanMask, en, !sp.fadeAny || lodFadeCasts(entryLodFade_[i]));
-                                inst.instanceShaderBindingTableRecordOffset = 0;
-                                inst.flags = (spanCutout && en.rayFarOpaque)
-                                                     ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
-                                                     : spanFlags;
-                                inst.accelerationStructureReference = blasAddr;
-                                if (sinkTlas) {
-                                    tlasGenExpected_.push_back(inst);
-                                    continue;
-                                }
-                                if (tlasInPlace) {
-                                    if (tlasWrite >= size_t(prevTlasBase) + prevTlasCount) {
-                                        tlasInPlace = false;
-                                        goto tlasFillPass;
-                                    }
-                                    // Runs a few rows apart upload as one range.
-                                    if (tlasRunEnd > tlasRunFirst && tlasWrite > tlasRunEnd + 32u) {
-                                        for (auto& d : tlasInstDirty_)
-                                            d.mark(static_cast<uint32_t>(tlasRunFirst),
-                                                   static_cast<uint32_t>(tlasRunEnd - tlasRunFirst));
-                                        tlasRunEnd = tlasRunFirst;
-                                    }
-                                    if (tlasRunEnd == tlasRunFirst) tlasRunFirst = tlasWrite;
-                                    instances[tlasWrite++] = inst;
-                                    tlasRunEnd = tlasWrite;
-                                } else {
-                                    instances.push_back(inst);
-                                    ++tlasWrite;
-                                }
-                            }
-                            if (sinkTlas) continue;
-                            if (tlasInPlace) {
-                                if (tlasWrite != size_t(prevTlasBase) + prevTlasCount) {
-                                    tlasInPlace = false;
-                                    goto tlasFillPass;
-                                }
-                                if (tlasRunEnd > tlasRunFirst)
-                                    for (auto& d : tlasInstDirty_)
-                                        d.mark(static_cast<uint32_t>(tlasRunFirst),
-                                               static_cast<uint32_t>(tlasRunEnd - tlasRunFirst));
-                            }
-                            sp.tlasInstBase  = static_cast<uint32_t>(tlasSpanBase);
-                            sp.tlasInstCount = static_cast<uint32_t>(tlasWrite - tlasSpanBase);
-                            sp.tlasSig       = tlasSig;
-                            tlasCursor       = tlasWrite;
-                        }
-                        // Rows left past the last span's (the layout shrank): dropped.
-                        if (tlasInPlace && tlasCursor != instances.size()) instances.resize(tlasCursor);
-                        if (tlasFromEmpty) {
-                            for (auto& d : tlasInstDirty_) d.markWhole();
-                        } else if (tlasAppendFrom != SIZE_MAX && instances.size() > tlasAppendFrom) {
-                            for (auto& d : tlasInstDirty_)
-                                d.mark(static_cast<uint32_t>(tlasAppendFrom),
-                                       static_cast<uint32_t>(instances.size() - tlasAppendFrom));
-                        }
-                        std::fill(tlasRowDirty_.begin(), tlasRowDirty_.end(), 0u);// consumed
-                        tlasFillValid_       = true;
-                        tlasFillSpansVersion_ = spansVersion_;
-                        tlasFillEntryCount_  = entries.size();
-                        tlasFillGenOn_       = tlasGenOn;
-                        ++drawStats_.tlasFills;
-                        drawStats_.tlasRows += instances.size();
-                        if (tlasFromEmpty) {
-                            ++drawStats_.tlasFullFills;
-                            drawStats_.tlasRewritten += instances.size();
-                        } else {
-                            for (const auto& r : tlasInstDirty_[currentFrame].ranges) drawStats_.tlasRewritten += r.second - r.first;
-                        }
-                        if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
-                            // geomDescsCached_ was patched in place above; the
-                            // per-frame-in-flight ring carries it to the GPU
-                            // stall-free — renderFrame flushes THIS frame's
-                            // slot right after its fence signals (before any
-                            // recording that consumes it), the other slot when
-                            // its frame comes around. Same model as the material table;
-                            // this replaced a vkDeviceWaitIdle per switch
-                            // frame, which hitched exactly when the camera
-                            // was moving.
-                            //
-                            // The fill above marks each entry whose level moved
-                            // its index address (markGeomDescsDirty, CPU rows and
-                            // GPU spans alike); a span whose LOD state changed is
-                            // rewritten whole there (spanTlasSig). The whole
-                            // array (15 MB at 237k entries) is no longer sent.
-                        }
-                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
-                        // Stage the refit; recordCommandBuffer records it into the
-                        // frame cb after the deformable BLAS rebuilds (no drain).
-                        // The GPU spans go after the CPU's instances; a new split
-                        // is a full build.
-                        pendingTlasGpuInstances_ = tlasGenWork_;
-                        tlasGenActive_ = tlasGenWork_ > 0u;
-                        uint64_t partition = 0;
-                        if (tlasGenActive_) {
-                            partition = 1469598103934665603ull ^ instances.size();
-                            for (auto& d : tlasGenSpans_) {
-                                d.instBase = static_cast<uint32_t>(instances.size()) + d.workBase;
-                                partition = (partition ^ ((uint64_t(d.firstEntry) << 32) | d.count)) * 1099511628211ull;
-                            }
-                            if (gpuDrawGenCheck_) {
-                                tlasGenExpectedFrame_ = currentFrame;
-                                tlasGenExpectedBase_  = static_cast<uint32_t>(instances.size());
-                            }
-                        }
-                        const bool splitChanged = partition != tlasGenPartition_;
-                        tlasGenPartition_ = partition;
-                        // A class flip rebuilds rather than updates: whether an
-                        // update may change instance flags is not worth betting a
-                        // traversal on, and it only happens on the flip frame.
-                        // A deformer refit (bones, displaced, grass, tet, morph) keeps
-                        // every BLAS handle, so the TLAS is UPDATED; a geometry or LOD
-                        // change re-references BLASes and rebuilds.
-                        pendingTlasFullBuild_ = geomDirtyAny || lodChangedThisFrame_ || instClassChanged || splitChanged;
-                        (void)blasDeformed;
-                        pendingTlasRefit_ = true;
-                    }
-                    // Anything that reached one of the change branches above
-                    // reshapes the DrawInfo/indirect content — invalidate the
-                    // per-view indirect skip caches. A fully quiet frame (the
-                    // common static case) leaves the version untouched.
-                    if (!matricesSame || !materialValuesSame || geomDirtyAny ||
-                        bonesDirtyAny || displacedDirtyAny || grassDirtyAny ||
-                        tetDirtyAny || morphDirtyAny || lodChangedThisFrame_) {
-                        ++drawInputsVersion_;
-                    }
-                    // Update prevSceneFingerprint so later frames compare
-                    // against this frame's state, not stale. (The lean path
-                    // diffed + updated prevSceneFingerprint in place.)
-                    if (!leanOk) prevSceneFingerprint = std::move(currFp);
-                    return;
-                }
-            }
-
-            fullRebuild:
             // The rebuild's phases, siblings under THREEPP_CPU_PHASE_PROFILE
             // (the per-event cost VulkanEntryChurn_test reports, broken down).
             THREEPP_CPUPROF_NAMED(rbDrain, "scene.R0_drainPrune");
@@ -5119,6 +3822,1346 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // Always on: one line when a deformer created by this build landed
             // in system memory (its deform pass then crosses PCIe every frame).
             reportDeformPlacement();
+        }
+
+// The non-structural update: when the scene was built before and the fingerprints
+// line up, classifies the change; with no structural change it queues the deformer
+// refreshes, the geometry and prevVertex refreshes, patches the material table and
+// refits the TLAS in place, and the build is finished.
+// Returns true when the build is finished; false when the full rebuild must run (a
+// structural change, or a geometry whose vertex or index count changed).
+// Needs: every phase above.
+bool VulkanRenderer::Impl::updateSceneInPlace(SceneBuildFrame& sb) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            const auto& dispEpochNow = sb.dispEpochNow;
+            auto& currFp = sb.currFp;
+            const auto& rayCamPos = sb.rayCamPos;
+            const auto& rayShadowChanged = sb.rayShadowChanged;
+            auto& structuralSame = sb.structuralSame;
+            auto& matricesSame = sb.matricesSame;
+            auto& materialValuesSame = sb.materialValuesSame;
+            auto& bonesDirtyAny = sb.bonesDirtyAny;
+            auto& displacedDirtyAny = sb.displacedDirtyAny;
+            auto& grassDirtyAny = sb.grassDirtyAny;
+            auto& tetDirtyAny = sb.tetDirtyAny;
+            auto& geomDirtyAny = sb.geomDirtyAny;
+            auto& morphDirtyAny = sb.morphDirtyAny;
+            auto& entryGeomDirty = sb.entryGeomDirty;
+            auto& entryMatDirty = sb.entryMatDirty;
+            const auto& leanOk = sb.leanOk;
+            auto& entryBonesDirty = sb.entryBonesDirty;
+            auto& entryDisplacedDirty = sb.entryDisplacedDirty;
+            auto& entryGrassDirty = sb.entryGrassDirty;
+            auto& entryMorphDirty = sb.entryMorphDirty;
+            // Continuous-motion fast path: when only the per-mesh matrices
+            // changed (everything else — topology, materials, textures —
+            // matches), refit the TLAS in place and let the deferred shade's
+            // ray-query reproject.
+            // We only have to detect the matrix-only case ahead of time;
+            // motion matrices themselves are computed each frame in
+            // renderFrame so we can defer the host write past the fence wait.
+            // (entries IS lastVisibleEntries_ — cached in place, both paths.)
+            if (sceneBuilt_ && (leanOk || currFp.size() == prevSceneFingerprint.size())) {
+                // Four classes of change:
+                //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
+                //   matrices      — per-mesh world matrices: TLAS refit + bit set.
+                //   materialVals  — pbr floats (KHR_animation_pointer animates colors,
+                //                   roughness, etc): re-upload matDescs in place + bit set.
+                //   geomData      — same BufferGeometry pointer but attribute version
+                //                   bumped (user mutated vertices in-place): re-upload
+                //                   data + in-place BLAS rebuild + TLAS refit. Falls
+                //                   through to structural if vertex/index count changed.
+                // Splitting matters: KHR_animation_pointer changes pbr every frame
+                // without changing any pointer or texture. Lumping it under
+                // structural caused a full rebuild every frame, which reset
+                // the gbuf+sampleIndex globally and froze accumulation
+                // scene-wide.
+                // The LEAN path already filled the change flags in its in-place
+                // diff; only the full path runs the generic compare here.
+                if (!leanOk) {
+                THREEPP_CPUPROF("scene.5c_genericCompare");
+                for (size_t i = 0; i < currFp.size(); ++i) {
+                    const auto& a = currFp[i];
+                    const auto& b = prevSceneFingerprint[i];
+                    if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
+                        // Same addresses, different objects (see MeshFingerprint):
+                        // STRUCTURAL, so the rebuild's liveCheck prune drops the
+                        // dead objects' GPU resources before anything is looked
+                        // up by those addresses again.
+                        a.meshId != b.meshId || a.geomId != b.geomId || a.matId != b.matId ||
+                        // TLAS membership flip (wireframe/overlay toggled) — the
+                        // instance set changed, so a refit would MODE_UPDATE with
+                        // a different instance count than the last build (spec
+                        // violation → corrupt TLAS → traversal hang). Rebuild.
+                        a.overlay != b.overlay || a.tex != b.tex) {
+                        structuralSame = false;
+                        break;
+                    }
+                    const bool xfmChanged   = std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0;
+                    // matVersion catches changes the pbr float-array doesn't —
+                    // notably KHR_texture_transform animation (rotation/offset/
+                    // scale of a texture). PropertyBinding bumps Material::version
+                    // on every setMaterialProperty hit, so this fires whenever
+                    // anything on the material has been touched even if the
+                    // PBR floats themselves didn't move.
+                    const bool matChanged   = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0
+                                              || a.matVersion != b.matVersion;
+                    const bool bonesChanged = entryBonesDirty[i];
+                    const bool dispChanged  = entryDisplacedDirty[i];
+                    const bool grassChanged = entryGrassDirty[i];
+                    const bool geomChanged  = (a.geomVersion != b.geomVersion);
+                    const bool morphChanged = entryMorphDirty[i];
+                    if (xfmChanged) matricesSame = false;
+                    if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
+                    // A material edit that moved its displacementMap (map, scale,
+                    // bias, transform; Material::needsUpdate) re-displaces the
+                    // geometry: the refresh below then rebuilds its record whole.
+                    const bool dispMoved = (matChanged || (dispEpochNow && entries[i].isDisplacementMapped)) &&
+                                           !entries[i].isParticle && displacementChanged(*entries[i].mesh);
+                    if (bonesChanged) bonesDirtyAny = true;
+                    if (dispChanged)  displacedDirtyAny = true;
+                    if (grassChanged) grassDirtyAny = true;
+                    // Particle billboard meshes mutate attributes every frame but
+                    // own no BLAS; never flag them geomDirty (would fire a per-
+                    // frame vkDeviceWaitIdle for a refit that skips them). The
+                    // billboard pass re-uploads their vertex cache itself.
+                    if ((geomChanged || dispMoved) && !entries[i].isParticle) {
+                        geomDirtyAny = true;
+                        entryGeomDirty[i] = true;
+                        entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
+                        // Invalidate the cached boundingBox so the next
+                        // cullEntriesAgainstFrustum recomputes it from the
+                        // current positions. Without this, plain meshes with
+                        // in-place vertex updates (PhysX soft bodies) keep
+                        // the rest-pose AABB and get culled out by the raster
+                        // pass once the body settles outside that stale box —
+                        // gbuffer ends up with sky at those pixels and the
+                        // hybrid deferred shade renders the background through them.
+                        if (auto g = entries[i].mesh->geometry()) {
+                            g->boundingBox.reset();
+                        }
+                    }
+                    if (morphChanged) morphDirtyAny = true;
+                    // All flavors of change invalidate this pixel's history —
+                    // share the same per-mesh bit. Reproject+halve FC for any
+                    // of: matrix shift, pbr shift, pose deformation, ocean
+                    // surface displacement, geometry data mutation, morph blend.
+                    if (xfmChanged || matChanged || bonesChanged || dispChanged || geomChanged || morphChanged) {
+                        const size_t w = i >> 5;
+                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                        meshMovedBits_[w] |= (1u << (i & 31u));
+                    }
+                }
+                // The lean diff invalidates span bounds itself; the generic
+                // compare above only fills per-entry bits — mirror the geom-
+                // dirty invalidation onto the spans (the expansion snapshotted
+                // local bounds BEFORE the edit was detected).
+                if (geomDirtyAny) {
+                    for (auto& sp : entrySpans_) {
+                        if (sp.first < entryGeomDirty.size() && entryGeomDirty[sp.first]) {
+                            sp.localBoundsValid = false;
+                            sp.aabbValid = false; sp.cullPartial = false;
+                            sp.probeChunksValid = 0;
+                        }
+                    }
+                }
+                }
+                // Instance colors live in the entries' GeometryDescs (see
+                // setGeomInstanceColor), but no fingerprint sees them: they are
+                // neither a material version nor a geometry attribute. Poll
+                // the attribute per span and route a change through the
+                // material-values patch. Only consumed when structuralSame; a
+                // structural rebuild re-derives every desc and re-records.
+                for (auto& sp : entrySpans_) {
+                    if (!sp.inst) continue;
+                    const FloatBufferAttribute* col = sp.inst->instanceColor();
+                    const unsigned int colVer = col ? col->version : ~0u;
+                    if (col == sp.instColorAttr && colVer == sp.instColorVersion) continue;
+                    sp.instColorAttr    = col;
+                    sp.instColorVersion = colVer;
+                    materialValuesSame = false;
+                    const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
+                    if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
+                    for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
+                        entryMatDirty[i] = true;
+                        meshMovedBits_[i >> 5] |= (1u << (i & 31u));
+                    }
+                }
+                if (structuralSame) {
+                    if (bonesDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_bonesQueue");
+                        // Re-skin every SkinnedMesh whose pose changed and
+                        // rebuild its BLAS in place. The BLAS handle/address
+                        // stays valid, but the BLAS's wrapping AABB grows when
+                        // a pose pushes vertices outside the previous extents
+                        // — the TLAS caches that AABB at build/refit time, so
+                        // without a TLAS refit rays get culled before they
+                        // reach the BLAS, clipping the silhouette.
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryBonesDirty[i]) continue;
+                            auto* sm = static_cast<SkinnedMesh*>(entries[i].mesh);
+                            auto stIt = skinnedMeshStates.find(sm);
+                            if (stIt == skinnedMeshStates.end()) continue;
+                            refreshSkinnedBlas(*sm, *stIt->second);
+                        }
+                    }
+                    if (displacedDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_displacedQueue");
+                        // Queue each DisplacedMesh water update (FFT chain →
+                        // water_displace.comp → BLAS rebuild in place); the
+                        // chain is recorded into the frame command buffer in
+                        // recordCommandBuffer — NO blocking one-shot submit
+                        // (the old drain stalled the CPU on all in-flight GPU
+                        // work, tens of ms on large scenes). The CPU height-
+                        // field mirror is NOT taken here: this runs before the
+                        // frame's fence wait, while the frames in flight may
+                        // still be copying into the readback — beginDeferredFrame
+                        // mirrors the queued meshes right after vkWaitForFences,
+                        // from the readback slot that fence proves complete.
+                        const float now = static_cast<float>(frameNowSec());
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryDisplacedDirty[i]) continue;
+                            auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
+                            auto stIt = displacedStates.find(dm);
+                            if (stIt == displacedStates.end()) continue;
+                            syncOceanChop(*dm, *stIt->second);
+                            pendingDisplacedDeforms_.emplace_back(dm, stIt->second.get(), now);
+                            ++dm->frameTick;
+                        }
+                    }
+                    if (grassDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_grassQueue");
+                        // Queue each GrassMesh deform; the grass_wind dispatch +
+                        // BLAS refit are recorded into the frame command buffer
+                        // in recordCommandBuffer (no blocking submit), mirroring
+                        // the skinned-mesh path. One mesh = one TLAS instance.
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryGrassDirty[i]) continue;
+                            auto* gm = static_cast<GrassMesh*>(entries[i].mesh);
+                            auto stIt = grassStates.find(gm);
+                            if (stIt == grassStates.end()) continue;
+                            pendingGrassDeforms_.emplace_back(gm, stIt->second.get());
+                            ++gm->frameTick;
+                        }
+                    }
+                    if (morphDirtyAny) {
+                        THREEPP_CPUPROF("scene.6b_morphQueue");
+                        std::unordered_set<Mesh*> refreshed;
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryMorphDirty[i]) continue;
+                            Mesh* m = entries[i].mesh;
+                            if (!refreshed.insert(m).second) continue;
+                            auto mIt = morphedMeshStates.find(m);
+                            if (mIt == morphedMeshStates.end()) continue;
+                            refreshMorphedBlas(*m, *mIt->second);
+                        }
+                    }
+                    // Tet-skinned soft bodies (PhysX) deform every frame — re-upload
+                    // their collision-tet positions, queue the GPU skin + BLAS refit,
+                    // and flag motion for reprojection/TAA like the other deformers.
+                    // At most one refresh per mesh per frame: refreshTetBlas advances
+                    // the tetPos write ring, whose depth only covers the in-flight
+                    // frames if it moves once per submission.
+                    std::unordered_set<Mesh*> tetRefreshed;
+                    for (const auto& sp : entrySpans_) {
+                        if (!entries[sp.first].isTet) continue;
+                        for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
+                            if (!tetRefreshed.insert(entries[i].mesh).second) continue;
+                            auto tIt = tetMeshStates.find(entries[i].mesh);
+                            if (tIt == tetMeshStates.end()) continue;
+                            refreshTetBlas(*entries[i].mesh, *tIt->second);
+                            tetDirtyAny = true;
+                            const size_t w = i >> 5;
+                            if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                            meshMovedBits_[w] |= (1u << (i & 31u));
+                        }
+                    }
+                    // Geometries whose prevVertex was re-snapshotted (to OLD
+                    // positions) this frame. The prevVertex re-sync pass below
+                    // must SKIP these so their legitimate change-frame deformation
+                    // motion survives — they settle on the next clean frame.
+                    std::unordered_set<const BufferGeometry*> geomRefreshedThisFrame;
+
+                    // ── Zero-copy vertex interop: the UNCONDITIONAL enqueue ──
+                    // Everything else on this path is gated on the composite
+                    // BufferAttribute version (geomVersionOf, entryGeomDirty). A
+                    // foreign device producer bumps none of those — it writes
+                    // GPU memory the host never sees — so an interop record would
+                    // read "clean" forever, its BLAS would never refit, and the
+                    // ray-traced view (shadows, reflections, GI, lidar) would
+                    // quietly diverge from the rasterized one while the picture
+                    // looked fine. Same reasoning, same answer as the tet path
+                    // pushing pendingTetRebuilds_ every frame regardless.
+                    bool interopDirtyAny = false;
+                    if (!blasCache.empty()) {
+                        std::unordered_set<const BufferGeometry*> interopEnqueued;
+                        // One plain entry: its isVertexInterop, its record's drawRange
+                        // snapshot, and an armed interop's per-frame enqueue. True when it
+                        // tore its mesh's interop down (fixed capacity broken).
+                        const auto plainEntry = [&](size_t i) -> bool {
+                            if (entries[i].isSkinned || entries[i].isDisplaced ||
+                                entries[i].isGrass || entries[i].isTet) return false;
+                            const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
+                            auto cIt = blasCache.find(geomKey);
+                            // Refresh MeshEntry::isVertexInterop in place, every
+                            // frame, for every plain entry — set and clear. This
+                            // is what lets the flag be trusted without
+                            // a structural rebuild behind it: arming interop
+                            // changes no pointer, matrix, material or attribute
+                            // version, so no fingerprint diff can see it, and the
+                            // snapshot fast path reuses last frame's MeshEntry
+                            // objects verbatim. Deriving it here — on the
+                            // canonical entry list, before cullEntriesAgainstFrustum
+                            // and buildIndirectDrawData run later this frame —
+                            // makes it live in both paths and stale in neither.
+                            // BufferGeometry::drawRange is not covered by any
+                            // BufferAttribute version, so a set_draw_range-only
+                            // frame would sail through the DrawInfo skip
+                            // signature with commands built for the OLD range.
+                            // Compare against the record's snapshot here — the
+                            // same always-runs loop that refreshes
+                            // isVertexInterop — and bump drawInputsVersion_ on change:
+                            // new DrawInfo inputs must (EntrySpan contract).
+                            // A non-interop record ALSO gets the geom-dirty
+                            // flags: its BLAS holds the old span, and the
+                            // refresh-op collection below runs the canonical
+                            // fix (drained rebuild for an occasional change,
+                            // graduation to the frame-cb refit for a mesh that
+                            // animates its range every frame). Interop records
+                            // need neither — their unconditional per-frame
+                            // enqueue reads drawRange at record time.
+                            if (cIt != blasCache.end()) {
+                                auto& r0 = *cIt->second;
+                                const auto& dr = geomKey->drawRange;
+                                if (r0.lastDrawStart != dr.start ||
+                                    r0.lastDrawCount != dr.count) {
+                                    r0.lastDrawStart = dr.start;
+                                    r0.lastDrawCount = dr.count;
+                                    ++drawInputsVersion_;
+                                    if (!r0.interop && r0.as != VK_NULL_HANDLE) {
+                                        geomDirtyAny = true;
+                                        entryGeomDirty[i] = true;
+                                    }
+                                }
+                            }
+                            const bool iop = (cIt != blasCache.end() && cIt->second->interop);
+                            entries[i].isVertexInterop = iop;
+                            if (!iop) return false;
+                            auto& rec = *cIt->second;
+
+                            // Interop requires FIXED-CAPACITY geometry: the
+                            // fullRebuild path destroys rec.vertex on any count
+                            // change, and with it the exported allocation a
+                            // foreign API has already imported — an OS handle
+                            // that keeps working while pointing at freed memory.
+                            // Tear the interop down HERE instead, so the exports
+                            // are released deliberately and the application is
+                            // told, rather than losing them inside a rebuild that
+                            // has no idea they existed.
+                            auto* posAttr = entries[i].mesh->geometry()->getAttribute<float>("position");
+                            auto* idxAttr = entries[i].mesh->geometry()->getIndex();
+                            const uint32_t curVtx = posAttr ? static_cast<uint32_t>(posAttr->count()) : 0u;
+                            const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+                            if (posAttr && (curVtx != rec.vertexCount || curIdx != rec.indexCount)) {
+                                std::cerr << "[VulkanRenderer] vertex interop: geometry changed "
+                                             "topology (" << rec.vertexCount << " -> " << curVtx
+                                          << " verts) - interop needs fixed-capacity geometry, so "
+                                             "it is being DISABLED for this mesh. Allocate for the "
+                                             "maximum triangle count once and write degenerates "
+                                             "for the unused tail.\n";
+                                disableVertexInterop(*entries[i].mesh);
+                                return true;
+                            }
+                            if (!interopEnqueued.insert(geomKey).second) return false;
+
+                            pendingDynamicGeomRefits_.push_back({geomKey, &rec});
+                            rec.lastDirtyFrame = frameSerial_;
+                            rec.dynPrevResyncPending = true;
+                            interopDirtyAny = true;
+                            // The surface deforms every frame, so its pixels'
+                            // temporal history is invalid every frame — same bit
+                            // the tet loop above stamps for the same reason.
+                            const size_t w = i >> 5;
+                            if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                            meshMovedBits_[w] |= (1u << (i & 31u));
+                            return false;
+                        };
+                        // Walked per SPAN, not per entry: a span is one mesh's entries (an
+                        // InstancedMesh's instances), so the record lookup and the drawRange
+                        // compare answer the same for all of them, and in an entry walk only
+                        // the span's first entry can act — after it the record's drawRange
+                        // snapshot is current and interopEnqueued is per geometry. The rest
+                        // take the first's isVertexInterop. The entry walk did a blasCache
+                        // hash lookup per instance: 2.0 to 2.4 ms a frame, still or moving,
+                        // at about 100k instances in 4k meshes (pine-forest's orbit,
+                        // scratch/orbitperf). A span whose first entry tore interop down walks
+                        // its rest entry by entry, as before; spans that do not tile the
+                        // entries (the slot editor keeps them contiguous) fall back to the walk.
+                        THREEPP_CPUPROF("scene.6c_interopSpans");
+                        const bool spansTile = !entrySpans_.empty() &&
+                                size_t(entrySpans_.back().first) + entrySpans_.back().count == entries.size();
+                        if (!spansTile) {
+                            for (size_t i = 0; i < entries.size(); ++i) plainEntry(i);
+                        } else {
+                            for (const auto& sp : entrySpans_) {
+                                if (sp.count == 0) continue;
+                                const size_t i0 = sp.first, end = i0 + sp.count;
+                                const auto& e0 = entries[i0];
+                                // deformer flags are per mesh: the span's first entry speaks for it
+                                if (e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isTet) continue;
+                                if (plainEntry(i0)) {
+                                    for (size_t i = i0 + 1; i < end; ++i) plainEntry(i);
+                                    continue;
+                                }
+                                if (sp.count == 1) continue;
+                                const auto cIt = blasCache.find(e0.mesh->geometry().get());
+                                const bool iop = cIt != blasCache.end() && cIt->second->interop;
+                                // The rest hold the first's answer already unless the record's
+                                // interop state moved since the last frame: two reads, not a
+                                // write per entry (a MeshEntry a cache line each, the writes
+                                // alone were 0.6 ms a frame at 167k entries, 2026-11-01).
+                                if (entries[i0 + 1].isVertexInterop != iop || entries[end - 1].isVertexInterop != iop)
+                                    for (size_t i = i0 + 1; i < end; ++i) entries[i].isVertexInterop = iop;
+                            }
+                        }
+                    }
+
+                    if (geomDirtyAny) {
+                        THREEPP_CPUPROF("scene.6d_geomDirtyScan");
+                        // Re-upload vertex data for geometries whose
+                        // BufferAttribute versions changed and rebuild their
+                        // BLAS in-place. If any geometry changed its vertex or
+                        // index count (topology change), we can't reuse the
+                        // old buffers — fall through to the full structural
+                        // rebuild instead.
+                        //
+                        // ensureSceneBuilt runs in render() BEFORE renderFrame
+                        // waits on inFlight[currentFrame], so up to
+                        // kFramesInFlight prior frames may still be reading
+                        // rec.vertex/normal/index via closest_hit's
+                        // GeometryDesc.vertexAddress fetches (and the hybrid
+                        // raster gbuffer pass binds the same buffer as a
+                        // vertex buffer). Memcpying into those buffers
+                        // mid-flight is a device-lost on NVIDIA. Drain
+                        // everything device-wide before mutating shared BLAS
+                        // buffers — skinned / displaced / morphed paths above
+                        // submit on the same queue, so this one wait covers
+                        // them too. Only a record with an auto-LOD chain still
+                        // takes that drain (its level BLASes are freed past it).
+                        // Every other edit, the first included, records its
+                        // upload + refit into the frame cb via
+                        // recordDynamicGeomRefits, ordered behind the in-flight
+                        // frames on the queue: an edit every few frames (a rut
+                        // ribbon written every third frame) used to drain on
+                        // every write, 10 to 17 ms each, because it never made
+                        // three frames in a row. Build the op lists first,
+                        // decide after.
+                        bool topologyChanged = false;
+                        std::unordered_set<const BufferGeometry*> refreshedGeoms;
+                        std::vector<GeomRefreshOp> refreshOps;
+                        std::vector<BlasRecord*> lodChainDoomed;
+                        refreshOps.reserve(entries.size());
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryGeomDirty[i]) continue;
+                            if (entries[i].isSkinned)   continue;
+                            if (entries[i].isDisplaced) continue;
+                            if (entries[i].isGrass)     continue;
+
+                            const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
+                            if (refreshedGeoms.count(geomKey)) continue;
+
+                            auto cIt = blasCache.find(geomKey);
+                            if (cIt == blasCache.end()) continue;
+                            auto& rec = *cIt->second;
+                            // Already enqueued unconditionally above, and its
+                            // host attributes are stale by definition — letting
+                            // it fall through here would double-enqueue it and,
+                            // worse, take the host-pack branch that overwrites
+                            // the producer's data with those stale arrays.
+                            if (rec.interop) continue;
+
+                            auto* posAttr = entries[i].mesh->geometry()->getAttribute<float>("position");
+                            auto* idxAttr = entries[i].mesh->geometry()->getIndex();
+                            if (!posAttr) continue;
+
+                            const uint32_t curVtx = static_cast<uint32_t>(posAttr->count());
+                            const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+                            // A displacementMap record, or one that should now be:
+                            // the in-place refits upload the geometry's own
+                            // positions, so it is rebuilt whole (buildBlasFor
+                            // displaces).
+                            if (rec.dispSig != 0u || displacementSignatureOf(geomKey) != 0u ||
+                                curVtx != rec.vertexCount || curIdx != rec.indexCount ||
+                                !refreshFitsPacking(rec, *entries[i].mesh->geometry())) {
+                                topologyChanged = true;
+                                break;
+                            }
+
+                            // Streak accounting for graduation: a record dirty
+                            // kDynamicGraduationStreak frames in a row is a
+                            // per-frame CPU deformer (Flock's merged birds, a
+                            // rewritten trail), not an occasional edit, and
+                            // keeps a staging ring for the rest of its life
+                            // instead of a staging buffer per edit.
+                            rec.dirtyStreak = (frameSerial_ - rec.lastDirtyFrame <= 1)
+                                    ? rec.dirtyStreak + 1u
+                                    : 1u;
+                            rec.lastDirtyFrame = frameSerial_;
+
+                            auto* nrmAttr = entries[i].mesh->geometry()->getAttribute<float>("normal");
+                            // The frame-cb route needs normals (the same
+                            // requirement refreshGeomBlasBatch enforces) and no
+                            // auto-LOD chain still landing (its build batch in
+                            // flight on the GPU): the drained branch below is the
+                            // only place that one can be freed safely, so that
+                            // record stays there this frame. A landed chain is
+                            // retired below instead. The quiet-window gate in the
+                            // selection pass stops re-enqueues while a mesh
+                            // deforms, but a mesh edited every so often (a rut
+                            // chunk reused from a pool) gets a chain while it
+                            // sits still, and its next edit used to drain.
+                            // A chain still landing (a pooled rut chunk that sat still
+                            // long enough to get one) is handed to its batch to free.
+                            if (nrmAttr && !rec.lodLanding.empty()) detachLandingLod(rec);
+                            const bool frameRoute = nrmAttr && rec.lodLanding.empty();
+                            if (!frameRoute) {
+                                // Diagnostics (THREEPP_VK_DRAW_STATS): which edits drain the device.
+                                static const bool logDrains = vulkan::env::integer("THREEPP_VK_DRAW_STATS").value_or(0) > 0;
+                                static std::unordered_set<const void*> logged;
+                                if (logDrains && logged.insert(geomKey).second)
+                                    std::fprintf(stderr, "[draw-stats] drained edit: mesh '%s', %u verts, normals %s, LOD chain landing %s\n",
+                                                 entries[i].mesh->name.c_str(), rec.vertexCount, nrmAttr ? "yes" : "NO",
+                                                 rec.lodLanding.empty() ? "no" : "YES");
+                            }
+                            if (frameRoute) {
+                                // An in-place vertex rewrite invalidates the chain:
+                                // its level BLASes BAKE positions and its error
+                                // bounds measured the old surface. Retired, not
+                                // destroyed: earlier frames' TLASes may still
+                                // reference a level. Selection already ran this
+                                // frame and may have left en.lodLevel > 0, so the
+                                // TLAS fill must re-read the effective level
+                                // (LOD0 from here, see destroyBlasLodLevels' caller
+                                // below).
+                                if (rec.lodState != BlasRecord::LodState::None) {
+                                    retireBlasLodLevels(rec);
+                                    lodChangedThisFrame_ = true;
+                                }
+                                if (!rec.perFrameDynamic &&
+                                    rec.dirtyStreak >= BlasRecord::kDynamicGraduationStreak) {
+                                    // Graduate: allocate the staging ring, one
+                                    // slot per frame in flight, each holding
+                                    // positions then normals in the buffers'
+                                    // own (possibly packed) formats.
+                                    const VkDeviceSize nrmBytes = (rec.packedMask & kPackedNormal)
+                                            ? VkDeviceSize(rec.vertexCount) * sizeof(uint32_t)
+                                            : VkDeviceSize(nrmAttr->array().size()) * sizeof(float);
+                                    rec.dynStagingSlotBytes = rec.vbBytes + nrmBytes;
+                                    rec.dynStaging = createBuffer(
+                                            ctx->allocator(), ctx->device(),
+                                            rec.dynStagingSlotBytes * kFramesInFlight,
+                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                            VMA_MEMORY_USAGE_AUTO,
+                                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                                    rec.perFrameDynamic = true;
+                                    ++dynGeomStats_.graduated;
+                                    // Settling now happens through the frame cb
+                                    // — the draining host-side resync pass must
+                                    // never touch this record again.
+                                    rec.prevVertexResyncPending = false;
+                                    std::cerr << "[VulkanRenderer] geometry ("
+                                              << rec.vertexCount << " verts) dirty "
+                                              << rec.dirtyStreak
+                                              << " frames in a row - graduated to the "
+                                                 "per-frame dynamic path (staging ring, "
+                                                 "frame-cb refit)\n";
+                                }
+                                // A record still in its static storage (built
+                                // without ALLOW_UPDATE, or compacted) moves to
+                                // updatable storage now, before this frame's TLAS
+                                // fill reads its address. So does a record whose
+                                // draw range has grown past what its structure was
+                                // created for: the refit builds the live count, and
+                                // a marching-cubes surface that gains triangles at
+                                // every rebuild (spot_slam's SLAM surface) used to
+                                // build past the end of its storage, which was
+                                // VK_ERROR_DEVICE_LOST at the next submit or a
+                                // neighbouring vertex buffer drawn as a fan of
+                                // garbage (2026-10-18). moveToUpdatableBlasStorage
+                                // is a no-op for an updatable record that still
+                                // fits. The old pair is retired: earlier frames in
+                                // flight still trace it.
+                                // A record without a structure (a geometry only
+                                // overlay meshes draw) has nothing to move.
+                                if (ctx->rayQuerySupported() && rec.as != VK_NULL_HANDLE &&
+                                    moveToUpdatableBlasStorage(rec, updatableBlasSize(rec, *entries[i].mesh->geometry()),
+                                                               /*retireOld=*/true)) {
+                                    rec.blasBuiltFlags = 0;// the next build is a MODE_BUILD
+                                }
+                                // Settles through the frame cb (dynPrevResyncPending);
+                                // the draining host-side resync pass stays out.
+                                rec.prevVertexResyncPending = false;
+                                rec.dynPrevResyncPending = true;
+                                pendingDynamicGeomRefits_.push_back({geomKey, &rec});
+                            } else {
+                                // An in-place vertex rewrite invalidates any auto-LOD
+                                // chain: the level BLASes BAKE positions (a stale level
+                                // would ray-trace the pre-edit shape) and the chain's
+                                // error bounds measured the old surface. Destroyed
+                                // past the device-wide drain below — in-flight TLASes
+                                // may still reference a level BLAS. lodState=None ⇒
+                                // the selection pass re-enqueues against the new
+                                // geomVersion; selectLodGeom falls back to LOD0 for
+                                // every consumer meanwhile.
+                                if (rec.lodState != BlasRecord::LodState::None)
+                                    lodChainDoomed.push_back(&rec);
+                                refreshOps.push_back({geomKey, &rec});
+                            }
+                            refreshedGeoms.insert(geomKey);
+                        }
+                        if (topologyChanged) {
+                            // Vertex/index count changed — can't reuse BLAS
+                            // buffers. Fall through to the full structural
+                            // rebuild path below, and drop any dynamic ops
+                            // queued this pass: the rebuild destroys + re-admits
+                            // their records from current CPU data (their
+                            // geomVersion is only stamped at record time, so
+                            // the version mismatch guarantees the re-admit).
+                            pendingDynamicGeomRefits_.clear();
+                            return false;
+                        }
+                        if (!refreshOps.empty()) {
+                            THREEPP_CPUPROF("scene.6x_geomRefreshDrain");
+                            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
+                            ++dynGeomStats_.drains;
+                            for (BlasRecord* doomed : lodChainDoomed) {
+                                // lodChangedThisFrame_ must be forced: selection
+                                // already ran this frame and may have left
+                                // en.lodLevel > 0 — the EFFECTIVE level changes
+                                // to 0 right here, and without the flag the
+                                // geomDescs GPU patch would skip while the TLAS
+                                // falls back, leaving a stale per-level index
+                                // address behind.
+                                destroyBlasLodLevels(*doomed);
+                                lodChangedThisFrame_ = true;
+                            }
+                            refreshGeomBlasBatch(refreshOps);
+                            for (const auto& op : refreshOps) geomRefreshedThisFrame.insert(op.geom);
+                        }
+                    }
+
+                    // A rig that stopped this frame: recordSkinnedDeforms
+                    // snapshots vertex -> prevVertex only for pending states,
+                    // so prevVertex still holds the pose before the last step.
+                    // One vertex -> prevVertex copy (recordDynamicGeomRefits,
+                    // the deform.dynGeom pass, which the graph orders before
+                    // deform.skin; a resyncing state is not pending this frame)
+                    // collapses its motion to zero, as for a graduated record.
+                    for (const auto& sp : entrySpans_) {
+                        if (!entries[sp.first].isSkinned) continue;
+                        for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
+                            if (entryBonesDirty[i]) continue;
+                            auto stIt = skinnedMeshStates.find(static_cast<SkinnedMesh*>(entries[i].mesh));
+                            if (stIt == skinnedMeshStates.end()) continue;
+                            SkinnedMeshState& st = *stIt->second;
+                            if (!st.prevResyncPending || !st.blas) continue;
+                            st.prevResyncPending = false;
+                            pendingDynamicPrevResyncs_.push_back(st.blas.get());
+                        }
+                    }
+
+                    // ── prevVertex re-sync ──────────────────────────────────
+                    // A plain mesh updated in place (e.g. a re-rolled terrain)
+                    // keeps prevVertex frozen at its PRE-update positions once it
+                    // stops being geom-dirty: refreshGeomBlasBatch's Phase B only
+                    // runs on the change frame. The G-buffer VS then reads a stale
+                    // inPrevPos every subsequent frame → a constant nonzero motion
+                    // vector on a static surface → the denoiser/TAA reject history
+                    // forever → the mesh stays noisy and visibly shakes. One frame
+                    // after the update settles (the record is no longer refreshed
+                    // this frame) we copy vertex → prevVertex so motion collapses
+                    // back to zero, exactly like initial-build static geometry.
+                    // Skinned/displaced/tet own their own every-frame snapshot and
+                    // never enter refreshGeomBlasBatch, so they are untouched.
+                    {
+                        THREEPP_CPUPROF("scene.6e_resyncScan");
+                        std::vector<BlasRecord*> resyncRecs;
+                        for (auto& [geomKey, recPtr] : blasCache) {
+                            BlasRecord* rec = recPtr.get();
+                            // Graduated records settle through the frame cb — a
+                            // drain here would defeat the whole path. The first
+                            // CLEAN frame after a dirty run records one
+                            // vertex→prevVertex copy in recordDynamicGeomRefits
+                            // and motion collapses to zero, same contract as
+                            // the host-side pass below.
+                            if (rec->perFrameDynamic || rec->dynPrevResyncPending) {
+                                if (rec->dynPrevResyncPending &&
+                                    rec->lastDirtyFrame != frameSerial_) {
+                                    pendingDynamicPrevResyncs_.push_back(rec);
+                                    rec->dynPrevResyncPending = false;
+                                }
+                                continue;
+                            }
+                            if (!rec->prevVertexResyncPending) continue;
+                            // Re-snapshotted this frame → keep its change-frame
+                            // motion; settle on the next clean frame instead.
+                            if (geomRefreshedThisFrame.count(geomKey)) continue;
+                            resyncRecs.push_back(rec);
+                        }
+                        if (!resyncRecs.empty()) {
+                            THREEPP_CPUPROF("scene.6y_prevResyncDrain");
+                            // Same in-flight hazard as the refresh above: prior
+                            // frames may still read prevVertex as a vertex buffer,
+                            // so drain device-wide before overwriting it.
+                            check(vkDeviceWaitIdle(ctx->device()),
+                                  "vkDeviceWaitIdle (pre-prevVertex-resync)");
+                            ++dynGeomStats_.drains;
+                            VkCommandBuffer cb = beginOneShot();
+                            for (BlasRecord* rec : resyncRecs) {
+                                if (rec->prevVertex.handle != VK_NULL_HANDLE && rec->vbBytes > 0) {
+                                    VkBufferCopy region{};
+                                    region.size = rec->vbBytes;
+                                    vkCmdCopyBuffer(cb, rec->vertex.handle,
+                                                    rec->prevVertex.handle, 1, &region);
+                                }
+                                rec->prevVertexResyncPending = false;
+                            }
+                            endAndSubmitOneShot(cb, "prevVertex resync");
+                        }
+                    }
+
+                    // Material patch FIRST, then the TLAS fill: the fill derives each
+                    // instance's ray mask and FORCE_OPAQUE flag from the table, so
+                    // it must read THIS frame's materials. A patched entry whose
+                    // visibility class flipped (a blinker crossing the emitter threshold,
+                    // opacity dropping below 1) sets instClassChanged, which forces the
+                    // fill even on a frame with no motion, and a full build.
+                    bool instClassChanged = false;
+                    // A BLAS compacted since the last fill (compactAsync): every
+                    // instance of it re-referenced, a full build.
+                    if (blasRereferenced_) {
+                        blasRereferenced_ = false;
+                        instClassChanged = true;
+                    }
+                    if (hiddenFlippedThisFrame_ || slotsEditedThisFrame_) {
+                        // Hidden or shown in place: new ray masks (a full TLAS
+                        // build, like any class change), every view's cull and
+                        // draw records, and the emitter walk. A slot edit is the
+                        // same event with instances added or removed.
+                        instClassChanged = true;
+                        ++drawInputsVersion_;
+                        cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+                    }
+                    // LOD fades: new words re-record the draws; a side of a
+                    // crossfade taking over the shadows changes ray masks,
+                    // which is a class change (a full TLAS build).
+                    {
+                        THREEPP_CPUPROF("scene.6f_lodFades");
+                        const LodFadeChange fc = refreshLodFades(false);
+                        if (fc.words) ++drawInputsVersion_;
+                        if (fc.casters) instClassChanged = true;
+                    }
+                    if (!materialValuesSame) {
+                        THREEPP_CPUPROF("scene.8_matDescPatch");
+                        // Material-values-only update: rebuild MaterialDescs into
+                        // the host-side cache, mark every per-frame slot dirty,
+                        // and let renderFrame flush after the next fence wait.
+                        // Pointers and textures haven't changed, so slot count
+                        // and texture indices stay valid; only the pbr floats
+                        // need to flow through. The old single-buffer path called
+                        // vkDeviceWaitIdle here on every animated-pbr frame —
+                        // stalling the whole device just to memcpy a few KB.
+                        // Multi-buffered: this frame's slot is safe to write
+                        // post-fence; the other slot gets flushed when its turn
+                        // comes around (it's still serving the previous frame's
+                        // in-flight RT trace right now).
+                        // The table is per material: a changed material
+                        // rewrites its record once, and an entry whose instance
+                        // colour changed rewrites the colour in its GeometryDesc.
+                        // Overlay/skipped entries keep record 0.
+                        // TARGETED PATCH: only entries whose material version
+                        // actually bumped (entryMatDirty) get their MaterialDesc
+                        // re-derived. materialFromMesh is a ~25-dynamic_cast walk
+                        // (plus each albedoTexOf/…/occlusionTexOf is another typed
+                        // probe + shared_ptr churn); re-deriving EVERY entry here
+                        // turned a single brake-light / blinker emissive toggle into
+                        // an O(scene) stall — tens of ms once InstancedMesh foliage
+                        // expands the scene to tens of thousands of entries, firing
+                        // several times a second while a blinker ticks. The table
+                        // already holds correct values for every unchanged entry (it
+                        // survives matrix-only frames untouched), and a changed
+                        // material keeps its pointer + textures (a texture swap aborts
+                        // to the full structural rebuild), so its dedup index stays
+                        // valid. Full fallback only if the cache size somehow doesn't
+                        // match (never on the fast path that reaches here).
+                        const bool patchMatDescs = geomDescsCached_.size() == entries.size();
+                        if (!patchMatDescs) {
+                            // Every entry re-derived below into a fresh table;
+                            // every entry's index and every record dirty.
+                            geomDescsCached_.resize(entries.size());
+                            for (GeometryDesc& gd : geomDescsCached_) setGeomMatIdx(gd, 0u);
+                            matTableReset();
+                            markGeomDescsWhole();
+                        }
+                        matTableBeginPass();
+                        // Same dedup as the full-rebuild path below (consulted only on
+                        // the full-rebuild fallback): entries order is identical
+                        // (overlay skip matches), so identical Material* pointers
+                        // produce identical materialAssetIdx values frame-to-frame.
+                        std::unordered_map<const Material*, uint32_t> matAssetMap;
+                        // One-entry memo of the material's desc. A dirty instanced span is
+                        // N consecutive entries sharing one Material, and an
+                        // instance-color edit dirties all of them; without the
+                        // memo each re-runs materialFromMesh + the texture-of
+                        // walk. Patch mode only: materialAssetIdx is taken from
+                        // the entry's current record, so the memoised desc is
+                        // valid for every entry of the same Material.
+                        const Material* memoMat = nullptr;
+                        MaterialDesc memoMd{};
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            const MeshEntry& en = entries[i];
+                            if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc
+                            if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep its record
+                            Mesh* m = en.mesh;
+                            const Material* mat = m->material().get();
+                            if (!(patchMatDescs && memoMat && mat == memoMat)) {
+                                MaterialDesc md = buildMaterialDesc(*m);
+                                if (patchMatDescs) {
+                                    // Material* unchanged → its dedup index is stable.
+                                    md.materialAssetIdx = entryMat(i).materialAssetIdx;
+                                } else {
+                                    auto [matIt, inserted] = matAssetMap.try_emplace(
+                                            mat, static_cast<uint32_t>(matAssetMap.size()));
+                                    md.materialAssetIdx = matIt->second;
+                                }
+                                memoMat = mat;
+                                memoMd  = md;
+                            }
+                            // Compared against the record being replaced; on the
+                            // full fallback that is record 0, so assume a change.
+                            const MaterialDesc& was = entryMat(i);
+                            const MaterialDesc& md = memoMd;
+                            if (!patchMatDescs ||
+                                tlasInstanceFlags(was) != tlasInstanceFlags(md) ||
+                                alphaMaskGroup(was) != alphaMaskGroup(md))
+                                instClassChanged = true;
+                            // The emitter walk's inputs, copied verbatim from the
+                            // same MaterialWithEmissive fields it reads. A change
+                            // re-walks: this is how an entry that BECOMES an
+                            // emitter (and so is in no emitter mask) gets found.
+                            if (!patchMatDescs || was.emissiveIntensity != md.emissiveIntensity ||
+                                was.emissive[0] != md.emissive[0] || was.emissive[1] != md.emissive[1] ||
+                                was.emissive[2] != md.emissive[2])
+                                cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+                            // The record is rewritten (and its range dirtied) once
+                            // per pass however many entries share it; the entry's
+                            // GeometryDesc when it lands on another record or its
+                            // instance color changed.
+                            setEntryMat(i, matTableSlot(mat, memoMd));
+                            {
+                                GeometryDesc& gd = geomDescsCached_[i];
+                                float was[3];
+                                std::memcpy(was, gd.instanceColor, sizeof(was));
+                                setGeomInstanceColor(gd, en);
+                                if (std::memcmp(was, gd.instanceColor, sizeof(was)) != 0)
+                                    markGeomDescsDirty(static_cast<uint32_t>(i));
+                            }
+                        }
+                        if (!patchMatDescs) markMatDescsWhole();
+                        cacheCullFlags();
+                    }
+                    // Cutout ray distance: after the material patch (it reads
+                    // the material table). A flipped bit changes an instance's
+                    // flags, which is a class change like any other.
+                    THREEPP_CPUPROF_NAMED(profCutout, "scene.8b_cutoutFar");
+                    if (classifyCutoutFar(rayCamPos)) instClassChanged = true;
+                    profCutout.stop();
+                    if (rayShadowChanged) instClassChanged = true;
+                    const bool tlasRowsStale = !matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged;
+                    if (tlasRowsStale && !ctx->rayQuerySupported()) {
+                        // No ray query: no TLAS, so no instances to fill. The
+                        // fill's other duty stays, the GeometryDescs following
+                        // the level an entry draws (see the fill below): only
+                        // when a level or a chain changed (every such change
+                        // raises lodChangedThisFrame_) or a geometry did, and
+                        // only in a span whose LOD state did change.
+                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
+                        if (lodChangedThisFrame_ || geomDirtyAny) for (auto& sp : entrySpans_) {
+                            const MeshEntry& e0 = entries[sp.first];
+                            if (e0.isOverlay || e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isTet || e0.isMorphed) continue;
+                            const BufferGeometry* geomKey = e0.mesh->geometry().get();
+                            auto it = blasCache.find(geomKey);
+                            if (it == blasCache.end()) continue;
+                            const BlasRecord* rec = it->second.get();
+                            const bool perEntryLod = !rec->lodLevels.empty();
+                            const LodGeomSel lodSel0 = selectLodGeom(*rec, 0);
+                            // What the span's rows are patched from, a word at a time.
+                            uint64_t sig = 1469598103934665603ull;
+                            const auto mixWord = [&sig](uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
+                            mixWord((uint64_t(sp.first) << 32) | sp.count);
+                            mixWord(reinterpret_cast<uintptr_t>(rec));
+                            mixWord(lodSel0.indexAddress);
+                            mixWord(rec->lodLevels.size());
+                            mixWord(perEntryLod ? lodLevelVersion_ : 0u);
+                            if (sig == sp.tlasSig) continue;
+                            sp.tlasSig = sig;
+                            for (uint32_t j = 0; j < sp.count; ++j) {
+                                const size_t i = size_t(sp.first) + j;
+                                if (i >= geomDescsCached_.size()) break;
+                                auto& gd = geomDescsCached_[i];
+                                const auto sel = perEntryLod ? selectLodGeom(*rec, entries[i].lodLevel) : lodSel0;
+                                if (gd.indexAddress != sel.indexAddress || geomFlag(gd, kGeomFlagIndexed) != sel.indexed) {
+                                    gd.indexAddress = sel.indexAddress;
+                                    setGeomFlag(gd, kGeomFlagIndexed, sel.indexed);
+                                    markGeomDescsDirty(static_cast<uint32_t>(i));
+                                }
+                            }
+                        }
+                    } else if (tlasRowsStale) {
+                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
+                        // TLAS refit: needed when instance transforms change
+                        // (matricesSame=false) AND when any skinned BLAS was
+                        // just rebuilt — the TLAS's per-instance wrapped AABB
+                        // is recomputed from the current BLAS extents on
+                        // refit, picking up pose-deformed silhouettes that
+                        // would otherwise be clipped by the stale TLAS AABB.
+                        // BLAS handles + buffer addresses are unchanged so
+                        // geomDescs / matDescs stay valid; we just rewrite the
+                        // tlasInstancesBuffer in place and call MODE_UPDATE.
+                        // EXCEPT auto-LOD: a level switch DOES change which
+                        // BLAS (and which index buffer) an entry's instance
+                        // references — see the plain-geometry branch below
+                        // and the geomDescsCached_ patch after this loop.
+                        // Persistent scratch (swapped with pendingTlasInstances_
+                        // below) so both vectors keep their capacity — a fresh
+                        // ~5 MB allocation per moving frame at 100k instances
+                        // otherwise.
+                        // The array persists across fills (pendingTlasInstances_):
+                        // with the same layout as the last fill, a span whose
+                        // inputs did not change (spanTlasSig) keeps its rows and
+                        // only the others are rewritten in place, and only those
+                        // ranges are uploaded (tlasInstDirty_). A city of static
+                        // pools no longer pays 64 B a row whenever one car moves.
+                        // A span whose rows moved (a count change, a span turning
+                        // GPU-written) and every span after it are rewritten from
+                        // there (tlasAppendFrom); spans whose count has changed
+                        // once go last (EntrySpan::tlasVolatile), so a pool that
+                        // grows and shrinks moves only its fellow movers' rows.
+                        auto& instances = pendingTlasInstances_;
+                        // Stage 5: instanced spans whose instances tlas_gen.comp
+                        // appends after these (the expansion's world matrices).
+                        const bool tlasGenOn = gpuTlasGen_ && gpuInstanceExpand_ && tlasGen_ && instExpand_ &&
+                                               ctx->rayQuerySupported() && !asyncPilot_;
+                        // THREEPP_VK_TLAS_FILL_INPLACE=0: every fill from empty (A/B).
+                        static const bool tlasFillInPlaceOn = vulkan::env::flag("THREEPP_VK_TLAS_FILL_INPLACE", true);
+                        if (tlasRowDirty_.size() != (entries.size() + 31u) / 32u) {
+                            tlasRowDirty_.assign((entries.size() + 31u) / 32u, 0u);
+                            tlasFillValid_ = false;// bits from another layout
+                        }
+                        bool tlasInPlace = tlasFillInPlaceOn && tlasFillValid_ &&
+                                           tlasFillEntryCount_ == entries.size() && tlasFillGenOn_ == tlasGenOn &&
+                                           !gpuDrawGenCheck_ && instances.size() <= entries.size();
+                        // Stable spans first, in entry order, then the volatile ones.
+                        auto& tlasOrder = tlasSpanOrder_;
+                        tlasOrder.clear();
+                        tlasOrder.reserve(entrySpans_.size());
+                        for (uint32_t s = 0; s < entrySpans_.size(); ++s)
+                            if (!entrySpans_[s].tlasVolatile) tlasOrder.push_back(s);
+                        for (uint32_t s = 0; s < entrySpans_.size(); ++s)
+                            if (entrySpans_[s].tlasVolatile) tlasOrder.push_back(s);
+                    tlasFillPass:
+                        if (!tlasInPlace) {
+                            instances.clear();
+                            instances.reserve(entries.size());
+                        }
+                        const bool tlasFromEmpty = !tlasInPlace;
+                        size_t tlasAppendFrom = SIZE_MAX;
+                        size_t tlasCursor = 0;
+                        tlasGenSpans_.clear();
+                        tlasGenLodRows_.clear();
+                        tlasGenWork_ = 0;
+                        if (gpuDrawGenCheck_) tlasGenExpected_.clear();
+                        // instanceCustomIndex == entry index (matches the entries-
+                        // indexed geomDescs/matDescs built in the full rebuild);
+                        // overlay/skipped entries push no instance, exactly as
+                        // their geomDescs/matDescs slots are left default.
+                        //
+                        // Per SPAN: the BLAS resolve, visibility mask and LOD
+                        // eligibility are per-MESH — one lookup per span, not
+                        // one per instance. Per-entry work is the transform
+                        // write (+ per-entry LOD selection only when the span's
+                        // record actually has a chain).
+                        for (const uint32_t tlasSpanIdx : tlasOrder) {
+                            auto& sp = entrySpans_[tlasSpanIdx];
+                            // Its rows at the last fill; reset, so a span that
+                            // leaves below without rows carries none.
+                            const uint32_t prevTlasBase  = sp.tlasInstBase;
+                            const uint32_t prevTlasCount = sp.tlasInstCount;
+                            const uint64_t prevTlasSig   = sp.tlasSig;
+                            sp.tlasInstBase  = ~0u;
+                            sp.tlasInstCount = 0;
+                            sp.tlasSig       = 0;
+                            const MeshEntry& e0 = entries[sp.first];
+                            if (e0.isOverlay) continue;// raster-overlay only
+                            VkGeometryInstanceFlagsKHR spanFlags =
+                                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                            // A cutout caster's far entries are force-opaque
+                            // (setCutoutRayDistance; the bits are classifyCutoutFar's).
+                            bool spanCutout = false;
+                            const MaterialDesc* cmd = nullptr;
+                            if (sp.first < geomDescsCached_.size()) {
+                                cmd = &entryMat(sp.first);
+                                spanFlags = tlasInstanceFlags(*cmd);
+                                spanCutout = cutoutRayDistance_ > 0.f && cutoutCaster(*cmd);
+                            }
+                            // Same visibility-group rule as the full rebuild,
+                            // from the span's first entry.
+                            const uint8_t spanMask = tlasRayMask(e0, cmd, sp.hidden);
+                            const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
+                                                    e0.isGrass || e0.isTet || e0.isMorphed;
+                            BlasRecord* rec = nullptr;
+                            bool perEntryLod = false;
+                            LodGeomSel lodSel0{};
+                            if (!isDeformer) {
+                                const BufferGeometry* geomKey = e0.mesh->geometry().get();
+                                auto it = blasCache.find(geomKey);
+                                if (it == blasCache.end()) continue;// shouldn't happen on transform-only
+                                rec = it->second.get();
+                                perEntryLod = !rec->lodLevels.empty();
+                                lodSel0 = selectLodGeom(*rec, 0);
+                            }
+                            // Stage 5: one span-level descriptor instead of a
+                            // per-instance fill. The GeometryDesc LOD reconcile
+                            // the loop below does per entry still runs (a chain
+                            // destroyed since leaves a level's index address).
+                            bool sinkTlas = false;
+                            if (tlasGenOn && sp.inst && !sp.isFree && !isDeformer && rec && !spanCutout &&
+                                lodSel0.asAddress != 0) {
+                                vulkan::TlasGen::SpanDesc d{};
+                                d.blasAddress = lodSel0.asAddress;
+                                d.firstEntry  = sp.first;
+                                d.count       = sp.count;
+                                d.workBase    = tlasGenWork_;
+                                d.maskWord    = static_cast<uint32_t>(spanMask) << 24;
+                                d.flagsWord   = static_cast<uint32_t>(spanFlags) << 24;
+                                d.rayShadowDist = sp.rayShadowDist;
+                                d.rayShadowFrom = sp.rayShadowFrom;
+                                std::copy(e0.lodCenter, e0.lodCenter + 3, d.center);
+                                d.radius = e0.lodRadius;
+                                // An auto-LOD chain: each level's BLAS (and the
+                                // fallback past it), as the loop below reads them.
+                                d.lodRowBase  = static_cast<uint32_t>(tlasGenLodRows_.size());
+                                if (perEntryLod) {
+                                    const auto levels = static_cast<uint32_t>(rec->lodLevels.size());
+                                    for (uint32_t k = 1; k <= levels + 1u; ++k)
+                                        tlasGenLodRows_.push_back(selectLodGeom(*rec, static_cast<uint8_t>(k)).asAddress);
+                                    d.lodRowCount = levels + 1u;
+                                }
+                                tlasGenSpans_.push_back(d);
+                                tlasGenWork_ += sp.count;
+                                if (!gpuDrawGenCheck_) {
+                                    for (uint32_t j = 0; j < sp.count; ++j) {
+                                        const size_t i = size_t(sp.first) + j;
+                                        if (i >= geomDescsCached_.size()) break;
+                                        auto& gd = geomDescsCached_[i];
+                                        const auto sel = perEntryLod ? selectLodGeom(*rec, entries[i].lodLevel)
+                                                                     : lodSel0;
+                                        if (gd.indexAddress != sel.indexAddress ||
+                                            geomFlag(gd, kGeomFlagIndexed) != sel.indexed) {
+                                            gd.indexAddress = sel.indexAddress;
+                                            setGeomFlag(gd, kGeomFlagIndexed, sel.indexed);
+                                            markGeomDescsDirty(static_cast<uint32_t>(i));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                sinkTlas = true;// check mode: the loop builds the reference
+                            }
+                            // Deformers are rewritten every fill (their BLAS moves under them).
+                            const uint64_t tlasSig = isDeformer ? 0ull
+                                    : spanTlasSig(sp, spanMask, spanFlags, spanCutout, rec, lodSel0.asAddress, perEntryLod);
+                            if (tlasInPlace && !sinkTlas &&
+                                (prevTlasBase != tlasCursor || (!isDeformer && prevTlasCount != sp.count))) {
+                                // This span's rows moved: it and the rest are written anew from here.
+                                if (prevTlasBase != ~0u && prevTlasCount != sp.count) sp.tlasVolatile = true;
+                                instances.resize(tlasCursor);
+                                tlasInPlace = false;
+                                tlasAppendFrom = tlasCursor;
+                            }
+                            // Same span facts as last fill: only the rows a bit names.
+                            const bool tlasRowsOnly = tlasInPlace && !sinkTlas && tlasSig != 0ull &&
+                                                      tlasSig == prevTlasSig && prevTlasCount == sp.count;
+                            const size_t tlasSpanBase = tlasInPlace ? tlasCursor : instances.size();
+                            size_t tlasWrite = tlasSpanBase;
+                            size_t tlasRunFirst = 0, tlasRunEnd = 0;// rows rewritten, coalesced for the upload
+                            // No bit in the span's words: none of its rows changed.
+                            // A plain span rewritten whole with rows enough to
+                            // share: its rows in chunks (CpuPar.hpp), each from
+                            // its entry alone, the dirty marks after in order.
+                            // The serial loop below is the reference; this
+                            // writes the same bytes to the same rows.
+                            const bool     tlasWhole  = !tlasRowsOnly && !sinkTlas && !isDeformer && rec;
+                            const unsigned tlasChunks = tlasWhole ? vulkan::par::chunksFor(sp.count) : 1u;
+                            if (tlasRowsOnly && !tlasRowsChangedIn(sp.first, sp.count)) tlasWrite += sp.count;
+                            else if (tlasChunks > 1u &&
+                                     (!tlasInPlace || tlasSpanBase + sp.count <= size_t(prevTlasBase) + prevTlasCount)) {
+                                if (!tlasInPlace) instances.resize(tlasSpanBase + sp.count);
+                                auto& dirtyIdx = tlasChunkDirty_;
+                                if (dirtyIdx.size() < tlasChunks) dirtyIdx.resize(tlasChunks);
+                                vulkan::par::run(tlasChunks, [&](unsigned c) {
+                                    auto& dirty = dirtyIdx[c];
+                                    dirty.clear();
+                                    const auto j0 = static_cast<uint32_t>(uint64_t(sp.count) * c / tlasChunks);
+                                    const auto j1 = static_cast<uint32_t>(uint64_t(sp.count) * (c + 1u) / tlasChunks);
+                                    for (uint32_t j = j0; j < j1; ++j) {
+                                        const size_t     i      = size_t(sp.first) + j;
+                                        const MeshEntry& en     = entries[i];
+                                        const auto       lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel) : lodSel0;
+                                        if (i < geomDescsCached_.size()) {
+                                            auto& gd = geomDescsCached_[i];
+                                            if (gd.indexAddress != lodSel.indexAddress ||
+                                                geomFlag(gd, kGeomFlagIndexed) != lodSel.indexed) {
+                                                gd.indexAddress = lodSel.indexAddress;
+                                                setGeomFlag(gd, kGeomFlagIndexed, lodSel.indexed);
+                                                dirty.push_back(static_cast<uint32_t>(i));
+                                            }
+                                        }
+                                        VkAccelerationStructureInstanceKHR& inst = instances[tlasSpanBase + j];
+                                        inst                                     = {};
+                                        copyTlasTransform(inst.transform, en.worldMatrix);
+                                        inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                                        inst.mask = entryRayMask(spanMask, en, !sp.fadeAny || lodFadeCasts(entryLodFade_[i]));
+                                        inst.instanceShaderBindingTableRecordOffset = 0;
+                                        inst.flags = (spanCutout && en.rayFarOpaque)
+                                                             ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
+                                                             : spanFlags;
+                                        inst.accelerationStructureReference = lodSel.asAddress;
+                                    }
+                                });
+                                for (unsigned c = 0; c < tlasChunks; ++c)
+                                    for (const uint32_t i : dirtyIdx[c]) markGeomDescsDirty(i);
+                                if (tlasInPlace) {// one run: every row of the span
+                                    tlasRunFirst = tlasSpanBase;
+                                    tlasRunEnd   = tlasSpanBase + sp.count;
+                                }
+                                tlasWrite = tlasSpanBase + sp.count;
+                            }
+                            else for (uint32_t j = 0; j < sp.count; ++j) {
+                                const size_t i = size_t(sp.first) + j;
+                                if (tlasRowsOnly && (i & 31u) == 0u && j + 32u <= sp.count) {
+                                    // A whole word of rows none of whose bits is set:
+                                    // all 32 kept, as the row test below would.
+                                    const size_t w = i >> 5;
+                                    const uint32_t bits = (w < meshMovedBits_.size() ? meshMovedBits_[w] : 0u) |
+                                                          (w < tlasRowDirty_.size() ? tlasRowDirty_[w] : 0u);
+                                    if (bits == 0u) {
+                                        tlasWrite += 32u;
+                                        j += 31u;
+                                        continue;
+                                    }
+                                }
+                                if (tlasRowsOnly && !tlasRowChanged(i)) {
+                                    ++tlasWrite;
+                                    continue;
+                                }
+                                const MeshEntry& en = entries[i];
+                                VkDeviceAddress blasAddr = 0;
+                                if (en.isSkinned) {
+                                    auto* sm = static_cast<SkinnedMesh*>(en.mesh);
+                                    if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
+                                    auto smIt = skinnedMeshStates.find(sm);
+                                    if (smIt == skinnedMeshStates.end()) continue;
+                                    blasAddr = smIt->second->blas->address;
+                                } else if (en.isDisplaced) {
+                                    auto* dm = static_cast<DisplacedMesh*>(en.mesh);
+                                    auto dmIt = displacedStates.find(dm);
+                                    if (dmIt == displacedStates.end()) continue;
+                                    blasAddr = dmIt->second->blas->address;
+                                } else if (en.isGrass) {
+                                    auto* gm = static_cast<GrassMesh*>(en.mesh);
+                                    auto gIt = grassStates.find(gm);
+                                    if (gIt == grassStates.end()) continue;
+                                    blasAddr = gIt->second->blas->address;
+                                } else if (en.isTet) {
+                                    auto tIt = tetMeshStates.find(en.mesh);
+                                    if (tIt == tetMeshStates.end()) continue;
+                                    blasAddr = tIt->second->blas->address;
+                                } else if (en.isMorphed) {
+                                    auto mIt = morphedMeshStates.find(en.mesh);
+                                    if (mIt == morphedMeshStates.end()) continue;
+                                    blasAddr = mIt->second->blas->address;
+                                } else {
+                                    // RT secondary hits (reflections/GI/lidar/probe
+                                    // update) read GeometryDesc::indexAddress keyed by
+                                    // gl_PrimitiveID from whichever BLAS this instance
+                                    // references — it must track the SAME level, or a
+                                    // hit against a coarser BLAS misindexes the
+                                    // still-LOD0 index buffer. `indexed` rides along: a
+                                    // level of a non-indexed soup record IS an indexed
+                                    // fetch. Reconciled on EVERY fill, not only while
+                                    // the record has a chain: an in-place vertex edit
+                                    // destroys the chain (lodChainDoomed), and the
+                                    // mirror still held the destroyed level's index
+                                    // address and indexed = 1 — every secondary hit on
+                                    // the mesh then fetched its triangles through a
+                                    // FREED index buffer while the raster drew LOD0.
+                                    // A deforming soup that had sat still long enough
+                                    // to get a chain (a film's warm-up renders) was
+                                    // refracted and reflected as crumpled garbage
+                                    // until the next structural rebuild. Two compares
+                                    // per entry; the upload is marked per entry, only
+                                    // when something differs.
+                                    const auto lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel)
+                                                                    : lodSel0;
+                                    blasAddr = lodSel.asAddress;
+                                    if (i < geomDescsCached_.size()) {
+                                        auto& gd = geomDescsCached_[i];
+                                        if (gd.indexAddress != lodSel.indexAddress ||
+                                            geomFlag(gd, kGeomFlagIndexed) != lodSel.indexed) {
+                                            gd.indexAddress = lodSel.indexAddress;
+                                            setGeomFlag(gd, kGeomFlagIndexed, lodSel.indexed);
+                                            markGeomDescsDirty(static_cast<uint32_t>(i));
+                                        }
+                                    }
+                                }
+                                VkAccelerationStructureInstanceKHR inst{};
+                                copyTlasTransform(inst.transform, en.worldMatrix);
+                                inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                                // The side of a LOD crossfade the shadows do not
+                                // take is hit by no ray (lodFadeCasts).
+                                inst.mask = entryRayMask(spanMask, en, !sp.fadeAny || lodFadeCasts(entryLodFade_[i]));
+                                inst.instanceShaderBindingTableRecordOffset = 0;
+                                inst.flags = (spanCutout && en.rayFarOpaque)
+                                                     ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
+                                                     : spanFlags;
+                                inst.accelerationStructureReference = blasAddr;
+                                if (sinkTlas) {
+                                    tlasGenExpected_.push_back(inst);
+                                    continue;
+                                }
+                                if (tlasInPlace) {
+                                    if (tlasWrite >= size_t(prevTlasBase) + prevTlasCount) {
+                                        tlasInPlace = false;
+                                        goto tlasFillPass;
+                                    }
+                                    // Runs a few rows apart upload as one range.
+                                    if (tlasRunEnd > tlasRunFirst && tlasWrite > tlasRunEnd + 32u) {
+                                        for (auto& d : tlasInstDirty_)
+                                            d.mark(static_cast<uint32_t>(tlasRunFirst),
+                                                   static_cast<uint32_t>(tlasRunEnd - tlasRunFirst));
+                                        tlasRunEnd = tlasRunFirst;
+                                    }
+                                    if (tlasRunEnd == tlasRunFirst) tlasRunFirst = tlasWrite;
+                                    instances[tlasWrite++] = inst;
+                                    tlasRunEnd = tlasWrite;
+                                } else {
+                                    instances.push_back(inst);
+                                    ++tlasWrite;
+                                }
+                            }
+                            if (sinkTlas) continue;
+                            if (tlasInPlace) {
+                                if (tlasWrite != size_t(prevTlasBase) + prevTlasCount) {
+                                    tlasInPlace = false;
+                                    goto tlasFillPass;
+                                }
+                                if (tlasRunEnd > tlasRunFirst)
+                                    for (auto& d : tlasInstDirty_)
+                                        d.mark(static_cast<uint32_t>(tlasRunFirst),
+                                               static_cast<uint32_t>(tlasRunEnd - tlasRunFirst));
+                            }
+                            sp.tlasInstBase  = static_cast<uint32_t>(tlasSpanBase);
+                            sp.tlasInstCount = static_cast<uint32_t>(tlasWrite - tlasSpanBase);
+                            sp.tlasSig       = tlasSig;
+                            tlasCursor       = tlasWrite;
+                        }
+                        // Rows left past the last span's (the layout shrank): dropped.
+                        if (tlasInPlace && tlasCursor != instances.size()) instances.resize(tlasCursor);
+                        if (tlasFromEmpty) {
+                            for (auto& d : tlasInstDirty_) d.markWhole();
+                        } else if (tlasAppendFrom != SIZE_MAX && instances.size() > tlasAppendFrom) {
+                            for (auto& d : tlasInstDirty_)
+                                d.mark(static_cast<uint32_t>(tlasAppendFrom),
+                                       static_cast<uint32_t>(instances.size() - tlasAppendFrom));
+                        }
+                        std::fill(tlasRowDirty_.begin(), tlasRowDirty_.end(), 0u);// consumed
+                        tlasFillValid_       = true;
+                        tlasFillSpansVersion_ = spansVersion_;
+                        tlasFillEntryCount_  = entries.size();
+                        tlasFillGenOn_       = tlasGenOn;
+                        ++drawStats_.tlasFills;
+                        drawStats_.tlasRows += instances.size();
+                        if (tlasFromEmpty) {
+                            ++drawStats_.tlasFullFills;
+                            drawStats_.tlasRewritten += instances.size();
+                        } else {
+                            for (const auto& r : tlasInstDirty_[currentFrame].ranges) drawStats_.tlasRewritten += r.second - r.first;
+                        }
+                        if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
+                            // geomDescsCached_ was patched in place above; the
+                            // per-frame-in-flight ring carries it to the GPU
+                            // stall-free — renderFrame flushes THIS frame's
+                            // slot right after its fence signals (before any
+                            // recording that consumes it), the other slot when
+                            // its frame comes around. Same model as the material table;
+                            // this replaced a vkDeviceWaitIdle per switch
+                            // frame, which hitched exactly when the camera
+                            // was moving.
+                            //
+                            // The fill above marks each entry whose level moved
+                            // its index address (markGeomDescsDirty, CPU rows and
+                            // GPU spans alike); a span whose LOD state changed is
+                            // rewritten whole there (spanTlasSig). The whole
+                            // array (15 MB at 237k entries) is no longer sent.
+                        }
+                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
+                        // Stage the refit; recordCommandBuffer records it into the
+                        // frame cb after the deformable BLAS rebuilds (no drain).
+                        // The GPU spans go after the CPU's instances; a new split
+                        // is a full build.
+                        pendingTlasGpuInstances_ = tlasGenWork_;
+                        tlasGenActive_ = tlasGenWork_ > 0u;
+                        uint64_t partition = 0;
+                        if (tlasGenActive_) {
+                            partition = 1469598103934665603ull ^ instances.size();
+                            for (auto& d : tlasGenSpans_) {
+                                d.instBase = static_cast<uint32_t>(instances.size()) + d.workBase;
+                                partition = (partition ^ ((uint64_t(d.firstEntry) << 32) | d.count)) * 1099511628211ull;
+                            }
+                            if (gpuDrawGenCheck_) {
+                                tlasGenExpectedFrame_ = currentFrame;
+                                tlasGenExpectedBase_  = static_cast<uint32_t>(instances.size());
+                            }
+                        }
+                        const bool splitChanged = partition != tlasGenPartition_;
+                        tlasGenPartition_ = partition;
+                        // A class flip rebuilds rather than updates: whether an
+                        // update may change instance flags is not worth betting a
+                        // traversal on, and it only happens on the flip frame.
+                        // A deformer refit (bones, displaced, grass, tet, morph) keeps
+                        // every BLAS handle, so the TLAS is UPDATED; a geometry or LOD
+                        // change re-references BLASes and rebuilds.
+                        pendingTlasFullBuild_ = geomDirtyAny || lodChangedThisFrame_ || instClassChanged || splitChanged;
+                        (void)blasDeformed;
+                        pendingTlasRefit_ = true;
+                    }
+                    // Anything that reached one of the change branches above
+                    // reshapes the DrawInfo/indirect content — invalidate the
+                    // per-view indirect skip caches. A fully quiet frame (the
+                    // common static case) leaves the version untouched.
+                    if (!matricesSame || !materialValuesSame || geomDirtyAny ||
+                        bonesDirtyAny || displacedDirtyAny || grassDirtyAny ||
+                        tetDirtyAny || morphDirtyAny || lodChangedThisFrame_) {
+                        ++drawInputsVersion_;
+                    }
+                    // Update prevSceneFingerprint so later frames compare
+                    // against this frame's state, not stale. (The lean path
+                    // diffed + updated prevSceneFingerprint in place.)
+                    if (!leanOk) prevSceneFingerprint = std::move(currFp);
+                    return true;
+                }
+            }
+            return false;
         }
 
 VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const MeshEntry& en, const BlasRecord& rec,

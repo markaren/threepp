@@ -2592,6 +2592,15 @@ namespace threepp {
         // every descriptor set without re-allocating from the pool.
         void ensureSceneBuilt(Object3D& scene, Camera& camera);
 
+        // ── ensureSceneBuilt's phases (VulkanCoreScene.cpp), in call order ──
+        // ensureSceneBuilt is a driver over these; each holds the code its phase
+        // ran inside it, unchanged. The locals they share are one SceneBuildFrame
+        // (SceneBuildFrame.hpp) the driver owns. A bool phase returns true when the
+        // build is finished (updateSceneInPlace) or, for refreshDirtyGeometry, when
+        // updateSceneInPlace must fall through to the full rebuild.
+        struct SceneBuildFrame;
+        bool updateSceneInPlace(SceneBuildFrame& sb);
+
         void createCameraUbos();
 
         // Grow emissiveTriBuffers[frame] in-place if the current frame's
