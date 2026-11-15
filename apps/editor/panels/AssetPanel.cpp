@@ -206,7 +206,8 @@ void EditorApp::drawConsoleTab() {
         ImGui::PushTextWrapPos(0.f);
         for (std::size_t i = 0; i < console_.size(); ++i) {
             const auto& line = console_[i];
-            const bool bad = line.rfind("warning", 0) == 0 || line.find("failed") != std::string::npos;
+            const bool bad = line.rfind("warning", 0) == 0 || line.rfind("error", 0) == 0 ||
+                             line.find("failed") != std::string::npos;
             ImGui::PushID(static_cast<int>(i));
             if (bad) {
                 ImGui::TextColored(theme::warning(), "%s", line.c_str());

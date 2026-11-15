@@ -16,6 +16,7 @@
 #define THREEPP_EDITOR_EDITORAPP_HPP
 
 #include "FileBrowser.hpp"
+#include "LibraryLog.hpp"
 #include "VulkanViewPane.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -1044,6 +1045,8 @@ namespace threepp::editor {
         // --- state ---------------------------------------------------------
         Options options_;
 
+        // Before the canvas and the renderer: see LibraryLog.hpp.
+        LibraryLog libraryLog_;
         Canvas canvas_;
         std::unique_ptr<Renderer> renderer_;
         // Two cameras, one viewport: only one is ever rendered with, and every

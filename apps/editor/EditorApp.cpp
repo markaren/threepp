@@ -391,6 +391,10 @@ EditorApp::EditorApp(const Options& options)
       camera_(55.f, canvas_.aspect(), 0.05f, 5000.f),
       ortho_(-1.f, 1.f, 1.f, -1.f, 0.05f, 10000.f) {
 
+    // What the canvas and the renderer logged while they were constructed,
+    // ahead of the editor's own first lines.
+    for (const auto& line : libraryLog_.take()) log(line);
+
     renderer_->shadowMap().enabled = true;
     renderer_->shadowMap().type = ShadowMap::PFC;
     renderer_->toneMapping = ToneMapping::ACESFilmic;
@@ -933,6 +937,9 @@ int EditorApp::run() {
 }
 
 void EditorApp::frame(float dt) {
+
+    // What the library logged since the last frame, on any thread.
+    for (const auto& line : libraryLog_.take()) log(line);
 
     // Before the sessions step, so this frame's step drives on this frame's keys.
     updateVehicleTeleop(dt);
