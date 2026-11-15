@@ -12,11 +12,11 @@
 // cells (half and half), over grey ground under a uniform white sky, no lights:
 // what the ground under the roof receives is indirect light alone. Read off the
 // picture, the ground under the roof against the open ground far from it:
-//   default  the roof is closed to the indirect rays, the ground under it dark
+//   knob on  the roof is closed to the indirect rays, the ground under it dark
 //            (measured 0.15 of the open ground on an RTX 5080)
-//   knob off the ground under it reads about the roof's open share of the open
-//            ground, and well over the default (0.53: the holes plus the bounce
-//            off the solid cells' undersides)
+//   default  (knob off) the ground under it reads about the roof's open share
+//            of the open ground, and well over the knob on (0.53: the holes
+//            plus the bounce off the solid cells' undersides)
 // The open ground itself must not move between the two.
 //
 // Plain exit-code program, not Catch2 — same shape as the other Vulkan tests
@@ -168,7 +168,7 @@ int main() {
         if (!ok) ++failures;
     };
 
-    check("indirect cutouts default to opaque", renderer.indirectOpaqueCutouts());
+    check("indirect cutouts default to alpha-tested", !renderer.indirectOpaqueCutouts());
 
     struct Arm {
         bool opaque;
@@ -203,9 +203,9 @@ int main() {
         const double r1 = arms[1].under / std::max(arms[1].open, 1e-6);
         check("the open ground is the same in both (within 8 %)",
               std::fabs(arms[1].open - arms[0].open) <= 0.08 * std::max(arms[0].open, 1e-6));
-        check("default: the roof is closed to the indirect rays (under/open < 0.45)", r0 < 0.45);
+        check("knob on: the roof is closed to the indirect rays (under/open < 0.45)", r0 < 0.45);
         check("knob off: the open share of the sky comes through (under/open 0.30..0.80)", r1 > 0.30 && r1 < 0.80);
-        check("knob off: at least 1.4x the default under the roof", r1 >= 1.4 * r0);
+        check("knob off: at least 1.4x the knob on under the roof", r1 >= 1.4 * r0);
         std::printf("indirect cutouts: %d failure(s)\n", failures);
         std::exit(failures == 0 ? 0 : 1);
     });

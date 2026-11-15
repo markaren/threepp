@@ -2165,15 +2165,17 @@ namespace threepp {
         void setFogShadowOpaqueCutouts(bool enabled);
         [[nodiscard]] bool fogShadowOpaqueCutouts() const;
 
-        // The indirect rays and alpha-tested cutouts. ON by default, the GI
-        // bounce, the probe sweep and the ambient-occlusion rays take the first
-        // cutout card they meet as a hit, transparent texel or not: under a card
-        // tree's crown they see a closed roof (no sky, no bounce from the lit
-        // leaves above, black occlusion), where the surface shadows, the
-        // reflections and the path tracer alpha-test every card. Off, those
-        // rays pass a card's transparent texels inside their traversal, as the
-        // shadow ray does, up to kIndirectCutoutPassMax (8) of them, and pay the
-        // material read, UV fetch and texture sample per texel passed.
+        // The indirect rays and alpha-tested cutouts. OFF by default: the GI
+        // bounce, the probe sweep and the ambient-occlusion rays pass a cutout's
+        // transparent texels inside their traversal, as the shadow ray, the
+        // reflections and the path tracer do, up to kIndirectCutoutPassMax (8)
+        // of them, and pay the material read, UV fetch and texture sample per
+        // texel passed (a miss being cheaper than a hit, a canopy's shade pass
+        // came out faster). On, they take the first cutout they meet as a hit,
+        // transparent texel or not: under a card tree's crown a closed roof (no
+        // sky, no bounce from the lit leaves above, black occlusion), and round
+        // a decal or a cut-out sign the whole quad's square, darkened and tinted
+        // by the texels the camera does not see.
         void setIndirectOpaqueCutouts(bool enabled);
         [[nodiscard]] bool indirectOpaqueCutouts() const;
 

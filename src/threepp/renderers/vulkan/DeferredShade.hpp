@@ -321,10 +321,11 @@ namespace threepp::vulkan {
             // ...for shading points at least this far from the eye (flags
             // bits 20-27, in 4 m steps, so 1020 m at most); 0 = everywhere.
             float cutoutRayCapFrom = 0.f;
-            // setIndirectOpaqueCutouts (flags bit 31 SET = the test is on): the
-            // GI bounce and the AO rays alpha-test a cutout card's texels
-            // instead of taking the first card they meet as the hit.
-            bool indirectOpaqueCutouts = true;
+            // setIndirectOpaqueCutouts (flags bit 31 SET when this is false):
+            // the GI bounce and the AO rays take the first cutout they meet
+            // as the hit instead of alpha-testing its texels. The renderer's
+            // default is off (LightingState); this field is filled every frame.
+            bool indirectOpaqueCutouts = false;
             // Float-bits of the pre-exposure baked into every sceneHdr store
             // (physical camera keeps 100k lux in fp16). 0x3F800000 = legacy 1.
             uint32_t preExpBits = 0x3F800000u;

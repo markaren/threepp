@@ -149,7 +149,7 @@ namespace threepp::vulkan::impl {
         // per-frame flicker.
         bool  deferredAO_ = true;
 
-        bool  indirectOpaqueCutouts_  = true; // setIndirectOpaqueCutouts (shade flags bit 31 clear, probe flags bit 3 clear); off = the GI, probe and AO rays alpha-test cutouts
+        bool  indirectOpaqueCutouts_  = false; // setIndirectOpaqueCutouts (shade flags bit 31 clear, probe flags bit 3 clear when on); off (the default) = the GI, probe and AO rays alpha-test cutouts
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 

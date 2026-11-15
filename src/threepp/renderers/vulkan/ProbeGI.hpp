@@ -238,10 +238,13 @@ namespace threepp::vulkan {
         // barrier before and the probe-write→shade-read barrier after.
         // fastBlend: the scene's lighting just stepped (a light switched);
         // this update's probes take the fast blend unconditionally.
+        // cutoutTest: the probe rays alpha-test cutouts (flags bit 3), the
+        // renderer's !indirectOpaqueCutouts; no default here, the renderer's
+        // knob is the one place that decides it.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t emissiveCount, float emissiveTotalPower,
-                            bool shadows, uint32_t envMipCount, bool fastBlend = false,
-                            bool cutoutTest = false);
+                            bool shadows, uint32_t envMipCount, bool fastBlend,
+                            bool cutoutTest);
 
         // For DeferredShade's descriptor write (bindings 36/37/54).
         // Render-graph declaration of recordDispatch: its descriptor set as
