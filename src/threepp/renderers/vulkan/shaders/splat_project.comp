@@ -123,9 +123,15 @@ void main() {
     // View-direction-dependent colour, evaluated ONCE per splat rather than
     // once per covered pixel — the single biggest reason a tile rasterizer
     // beats a quad rasterizer on a degree-3 cloud.
+    //
+    // The coefficients were fitted in the cloud's OWN frame, so the direction
+    // is turned into it: a world-space direction is right only while the node
+    // has no rotation, and every imported scan carries the half turn about X
+    // that stands a COLMAP capture upright, which flips the sign of every SH
+    // term odd in y and z (a rover trained in-house lost 3.4 dB to it).
     const vec3 meanWorld = (ubo.model * vec4(meanLocal, 1.0)).xyz;
-    const vec3 dir = ortho ? normalize(ubo.camFwdWs.xyz)
-                           : normalize(meanWorld - ubo.camPosWs.xyz);
+    const vec3 dirWs = ortho ? ubo.camFwdWs.xyz : meanWorld - ubo.camPosWs.xyz;
+    const vec3 dir = normalize(inverse(mat3(ubo.model)) * dirWs);
     const vec3 shRgb = splatShColor(i, dir);
 
     vec3 color;

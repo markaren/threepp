@@ -645,6 +645,85 @@ int main(int argc, char** argv) {
         report(renderer.splatVolumeBytes() == 0, "and that volume is freed too");
     }
 
+    // ── 6. a turned node: the SH colour is looked up in the cloud's own frame ─
+    // Every imported scan carries a half turn about X on its node (a COLMAP
+    // capture is +Y down). The SH coefficients belong to the cloud's frame, so
+    // the view direction has to be turned into it first; looked up in world
+    // space, every term odd in y and z changed sign. The check: the same splats
+    // turned on the NODE and turned in the DATA (centres, rotations and SH all
+    // carried exactly through the half turn) are the same picture. The control,
+    // so the check can fail: the data turned without its SH is a different one.
+    {
+        SplatGenerator::Options o;
+        o.count = 4000;
+        o.seed = 777u;
+        o.shDegree = 3;
+        o.extent.set(3.f, 1.6f, 2.f);
+        o.minScale = 0.05f;
+        o.maxScale = 0.12f;
+        o.minOpacity = 0.5f;
+        o.maxOpacity = 0.95f;
+        o.higherOrderAmplitude = 0.8f;
+        const SplatData base = SplatGenerator::generate(o);
+
+        // (x, y, z) -> (x, -y, -z); a rotation q becomes Rx(pi) * q, which for
+        // threepp's (x, y, z, w) is (w, -z, y, -x); and the colour seen along d
+        // must be what the turned splat shows along (dx, -dy, -dz), so the SH
+        // terms odd in (y, z) change sign (the 3DGS basis order, l = 1..3).
+        static constexpr float kSign[15] = {-1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1, -1, 1};
+        auto turned = [&](bool withSh) {
+            SplatData d = base;
+            const int nc = d.coeffCount();
+            for (size_t i = 0; i < d.count(); ++i) {
+                d.means[i].set(d.means[i].x, -d.means[i].y, -d.means[i].z);
+                const SplatQuat q = d.rotations[i];
+                d.rotations[i] = SplatQuat(q.w, -q.z, q.y, -q.x);
+                if (!withSh) continue;
+                for (int c = 1; c < nc; ++c)
+                    for (int ch = 0; ch < 3; ++ch) d.sh[(i * nc + c) * 3 + ch] *= kSign[c - 1];
+            }
+            return d;
+        };
+
+        auto turnedScene = Scene::create();
+        turnedScene->background = Color(0x0f0f14);
+        auto shoot = [&](const std::shared_ptr<SplatCloud>& c) {
+            turnedScene->add(c);
+            for (int i = 0; i < 60; ++i) renderer.render(*turnedScene, *camera);
+            auto px = renderer.readRGBPixels();
+            turnedScene->remove(*c);
+            return px;
+        };
+        auto compare = [](const std::vector<unsigned char>& p, const std::vector<unsigned char>& q,
+                          int& maxDelta) {
+            double se = 0.0;
+            maxDelta = 0;
+            for (size_t i = 0; i < p.size(); ++i) {
+                const int dlt = std::abs(int(p[i]) - int(q[i]));
+                se += double(dlt) * dlt;
+                maxDelta = std::max(maxDelta, dlt);
+            }
+            const double mse = se / double(p.size());
+            return mse > 0.0 ? 10.0 * std::log10(255.0 * 255.0 / mse) : 99.0;
+        };
+
+        auto onNode = SplatCloud::create(SplatData(base));
+        onNode->rotation.x = math::PI;
+        const auto nodePx = shoot(onNode);
+        const auto dataPx = shoot(SplatCloud::create(turned(true)));
+        const auto noShPx = shoot(SplatCloud::create(turned(false)));
+
+        int dSame = 0, dControl = 0;
+        const double same = compare(nodePx, dataPx, dSame);
+        const double control = compare(nodePx, noShPx, dControl);
+        std::printf("       turned on the node vs in the data: PSNR %.2f dB maxDelta %d;"
+                    " vs the data turned without its SH: %.2f dB maxDelta %d\n",
+                    same, dSame, control, dControl);
+        report(countLit(nodePx, 0, kW) > 2000, "the turned cloud is on screen");
+        report(same >= 45.0, "a cloud turned on its node shows the colours of the same splats turned in the data");
+        report(control < same - 10.0, "and the check can fail: without its SH the turned data is another picture");
+    }
+
     std::printf(failures == 0 ? "\nALL CHECKS PASSED\n" : "\n%d CHECK(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

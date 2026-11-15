@@ -120,7 +120,7 @@ layout(set = 0, binding = 0, scalar) uniform SplatUbo {
     mat4  modelView;  // cloud local -> view
     mat4  proj;       // view -> clip, GL convention (NDC z in [-1,1], y UP), JITTERED
     mat4  projInv;    // clip -> view, REVERSE-Z — the one gbufDepth was written with
-    mat4  model;      // cloud local -> world (SH view direction)
+    mat4  model;      // cloud local -> world (its inverse turns the SH view direction local)
     // View space -> PREVIOUS frame's unjittered clip, in one matrix (the host
     // composes TaaResolve's own sky-reprojection with this frame's projection,
     // so the splat motion vectors are built from exactly the matrices the

@@ -377,8 +377,10 @@ void main() {
 
     vOpacity = opacity;
 
+    // The SH coefficients live in the cloud's own frame: turn the view direction
+    // into it (an imported scan carries a half turn about X on its node).
     vec3 meanWorld = (modelMatrix * vec4(meanLocal, 1.0)).xyz;
-    vColor = shColor(splat, normalize(meanWorld - cameraPosition));
+    vColor = shColor(splat, normalize(inverse(mat3(modelMatrix)) * (meanWorld - cameraPosition)));
 }
 )";
 
