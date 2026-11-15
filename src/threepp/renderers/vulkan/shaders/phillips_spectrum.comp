@@ -23,18 +23,17 @@
 // the sea a coastal boat actually sails in. fetch = 0 is bit-identical to
 // the plain Phillips spectrum.
 //
-// `spread` picks the directional distribution D(theta) that shares the
-// energy of each wavenumber ring out over directions. 0 = the historical
-// symmetric cos^2(theta): as much energy against the wind as with it, which
-// draws standing, sloshing short crests. 1 = the measured distribution of
-// Donelan, Hamilton & Hui (1985) with Banner's (1990) high-frequency form:
-// narrow and downwind at the spectral peak, broader for the short waves,
-// with a little counter-wind energy there. Both integrate to the same value
-// over the circle, so in the continuum the omnidirectional spectrum and the
-// significant wave height do not change, only where the energy points. On
-// the discrete grids Hs agrees within about 10%, angle-dependent where the
-// peak sits near a tile's fundamental (the narrow lobe lands on few modes).
-// windTheta is the direction the wind blows toward.
+// The directional distribution D(theta) that shares the energy of each
+// wavenumber ring out over directions is the measured one of Donelan,
+// Hamilton & Hui (1985) with Banner's (1990) high-frequency form: narrow and
+// downwind at the spectral peak, broader for the short waves, with a little
+// counter-wind energy there, so the sea runs WITH the wind (89 to 99 % of the
+// energy of the 20-128 m waves travels downwind at 10 to 18 m/s). It
+// integrates to pi over the circle, as the symmetric cos^2(theta) it replaced
+// did (that one sent as much energy against the wind as with it and drew a
+// standing, sloshing sea), so the omnidirectional spectrum and the
+// significant wave height are those of the Pierson-Moskowitz / JONSWAP form
+// below. windTheta is the direction the wind blows toward.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -53,7 +52,6 @@ layout(push_constant) uniform Params {
     float kMin;
     float kMax;
     float fetch;
-    uint  spread;// 0 = symmetric cos^2 (historical), 1 = Donelan-Banner sech^2
     // Optional swell system, added on top of the wind sea (cascade 0 only;
     // swellScale = 0 elsewhere and when there is no swell). swellScale is
     // computed on the host (PhillipsSpectrum::swellScale) so that the swell's
@@ -83,8 +81,8 @@ const float PI = 3.14159265358979;
 // for computer graphics", DigiPro.) The branches meet within 1% at 0.56,
 // 0.95 and 1.6. On (-pi, pi] the sech^2 integrates to tanh(beta pi), so
 // dividing by it makes D integrate to exactly 1; the factor pi is the
-// integral of the historical cos^2 over the circle, so the returned weight
-// keeps the omnidirectional spectrum (and Hs) of the cos^2 path.
+// normalisation the rest of the chain is calibrated to (the "Hs fix, level"
+// below), so the returned weight keeps the omnidirectional spectrum and Hs.
 float donelanBannerWeight(float cosTheta, float wOverWp) {
     float beta;
     if (wOverWp < 0.56) {
@@ -207,20 +205,18 @@ float phillips2D(vec2 k) {
     const float k2 = dot(k, k);
     const float kL2 = k2 * L * L;
     const float k4 = k2 * k2;
-    float kw = dot(normalize(k), windDir);
-    if (P.spread != 0u) {
-        // The amplitude stored at k runs toward -k: dynamic_spectrum.comp
-        // evolves it as h0(k) e^{+i w t} and the IFFT sums it as e^{+i k.x},
-        // so its phase k.x + w t is constant along x moving opposite k. The
-        // downwind angle is therefore measured from -k, so the energy ends
-        // up in waves that run WITH the wind.
-        // Peak frequency: the same PM / JONSWAP peak kp = 0.894 / L as the
-        // gamma branch below (L already carries the fetch scaling).
+    // The directional weight. The amplitude stored at k runs toward -k:
+    // dynamic_spectrum.comp evolves it as h0(k) e^{+i w t} and the IFFT sums
+    // it as e^{+i k.x}, so its phase k.x + w t is constant along x moving
+    // opposite k. The downwind angle is therefore measured from -k, so the
+    // energy ends up in waves that run WITH the wind.
+    // Peak frequency: the same PM / JONSWAP peak kp = 0.894 / L as the gamma
+    // branch below (L already carries the fetch scaling).
+    float kw;
+    {
         const float w  = sqrt(g * sqrt(k2));
         const float wp = sqrt(g * 0.894 / L);
-        kw = donelanBannerWeight(-kw, w / wp);
-    } else {
-        kw *= kw;
+        kw = donelanBannerWeight(-dot(normalize(k), windDir), w / wp);
     }
     const float l = P.smallWaveLengthCutoff;
     float p = Aeff * exp(-1.0 / kL2) * kw * exp(-k2 * l * l) / k4;

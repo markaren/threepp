@@ -62,7 +62,6 @@ namespace threepp::water {
             float    kMin = 0.0f;
             float    kMax = 0.0f;     // 0 = no upper bound
             float    fetch = 0.0f;    // m of upwind open water; 0 = fully developed (plain Phillips)
-            uint32_t spread = 0;      // 0 = symmetric cos^2, 1 = Donelan-Banner sech^2 (see the shader)
             // Optional swell system (see swellShape in the shader). Height 0 = none.
             float    swellHeight = 0.0f;  // significant height, m
             float    swellPeriod = 12.0f; // peak period Tp, s
@@ -73,7 +72,7 @@ namespace threepp::water {
             bool     shortWaveSpectrum = false;
         };
 
-        // Push-constant block of phillips_spectrum.comp (std430, 56 bytes).
+        // Push-constant block of phillips_spectrum.comp (std430, 52 bytes).
         struct PushParams {
             uint32_t textureSize;
             float    tileSize;
@@ -83,7 +82,6 @@ namespace threepp::water {
             float    kMin;
             float    kMax;
             float    fetch;
-            uint32_t spread;
             float    swellScale;
             float    swellPeriod;
             float    swellTheta;
@@ -108,7 +106,7 @@ namespace threepp::water {
         // sea state morphs smoothly. The params are push constants recorded
         // into the command buffer, so a frame in flight never sees the
         // change meant for the next one.
-        void updateSeaState(float windTheta, float windSpeed, float fetch, uint32_t spread);
+        void updateSeaState(float windTheta, float windSpeed, float fetch);
 
         // Live swell change; the next recordCompute regenerates h0 with it.
         void updateSwell(float height, float period, float theta, float spread);

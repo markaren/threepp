@@ -37,9 +37,9 @@
 //   --short-spectrum 0|1  Params::shortWaveSpectrum, Elfouhaily et al. (1997)'s short waves
 //   --sharpness S      Params::crestSharpness, crests pinched into ridges (a look control; needs cwm)
 //   --crests           the physical-crests set in one flag: cwm,
-//                      bound waves, breaking crests, chop normals and the
-//                      measured spreading all on (each flag above, given
-//                      after it or not, still sets its own switch)
+//                      bound waves and breaking crests all on (each flag
+//                      above, given after it or not, still sets its own
+//                      switch)
 //   --pinned           1/60 s sim-time steps on a pinned renderer clock, so
 //                      captures with the same sea flags show the same waves
 // Validation hooks:
@@ -215,7 +215,6 @@ int main(int argc, char** argv) {
     if (crests) {
         auto& p = ocean->params;
         p.cwm = p.boundWaves = p.breakingCrests = true;
-        p.measuredSpreading = true;
     }
     if (cwm >= 0) ocean->params.cwm = cwm != 0;
     if (bound >= 0) ocean->params.boundWaves = bound != 0;
@@ -223,10 +222,8 @@ int main(int argc, char** argv) {
     if (waveRefl >= 0) ocean->params.waveReflections = waveRefl != 0;
     if (shortSpectrum >= 0) ocean->params.shortWaveSpectrum = shortSpectrum != 0;
     if (sharpness >= 0.f) ocean->params.crestSharpness = sharpness;
-    std::printf("wave model: cwm %d, bound waves %d, breaking crests %d, measured spreading %d "
-                "(with environment overrides)\n",
-                int(ocean->cwmOn()), int(ocean->boundWavesOn()), int(ocean->breakingCrestsOn()),
-                int(ocean->params.measuredSpreading));
+    std::printf("wave model: cwm %d, bound waves %d, breaking crests %d (with environment overrides)\n",
+                int(ocean->cwmOn()), int(ocean->boundWavesOn()), int(ocean->breakingCrestsOn()));
     scene.add(ocean);
 
     // Live wind control — setWind() takes effect next frame; the sea morphs

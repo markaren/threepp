@@ -10,35 +10,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <limits>
 #include <stdexcept>
 
-#include "threepp/utils/Log.hpp"
-
 namespace threepp {
-
-    namespace {
-        constinit log::Category kLog{"core.ocean"};
-
-        // An ocean look switch's environment variable: exactly "0" is off,
-        // "1", "on" or "true" is on; unset keeps `fallback`, and anything
-        // else keeps it too, with a warning.
-        bool envSwitch(const char* name, bool fallback) {
-            const char* v = std::getenv(name);
-            if (!v || !*v) return fallback;
-            if (std::strcmp(v, "0") == 0) return false;
-            if (std::strcmp(v, "1") == 0 || std::strcmp(v, "on") == 0 || std::strcmp(v, "true") == 0) return true;
-            THREEPP_LOGF(kLog, Warn, "%s=%s is not understood (0 is off; 1, on or true is on); it stays %s",
-                         name, v, fallback ? "on" : "off");
-            return fallback;
-        }
-    }// namespace
-
-    bool defaultMeasuredSpreading() {
-        static const bool value = envSwitch("THREEPP_OCEAN_SPREAD", false);
-        return value;
-    }
 
     DisplacedMesh::DisplacedMesh(const std::shared_ptr<BufferGeometry>& geometry,
                                  const std::shared_ptr<Material>& material)

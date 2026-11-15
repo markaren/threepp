@@ -673,8 +673,8 @@ namespace {
 int main(int argc, char** argv) {
 
     // --shot <name.png> [--frames N] [--pinned] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
-    // [--chop <lambda>] [--chop-normals 0|1] [--spread 0|1] [--swell <Hs m>,<Tp s>]
-    // [--press <key>@<frame>[,<key>@<frame>...]]  (N, L or K, as if pressed then) [--wake old|new]
+    // [--chop <lambda>] [--chop-normals 0|1] [--swell <Hs m>,<Tp s>]
+    // [--press <key>@<frame>[,<key>@<frame>...]]  (N or K, as if pressed then) [--wake old|new]
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -685,7 +685,6 @@ int main(int argc, char** argv) {
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     bool pinnedClock = false;// --pinned: fixed 1/60 s steps on a pinned renderer clock (replayable captures)
     float chopOverride = -1.f;// --chop <lambda>: the ocean's choppiness for this run (look A/Bs)
-    int   spreadArg = -1;     // --spread 0|1: Params::measuredSpreading for this run
     float swellHs = 0.f, swellTp = 12.f;// --swell Hs,Tp: a swell 45 deg off the wind, as K adds
     // --press N@60,N@120: the water switches' keys pressed at those capture
     // frames, so a headless run exercises the live toggle path.
@@ -706,7 +705,6 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
         else if (std::strcmp(argv[i], "--pinned") == 0) pinnedClock = true;
         else if (std::strcmp(argv[i], "--chop") == 0 && i + 1 < argc) chopOverride = static_cast<float>(std::atof(argv[++i]));
-        else if (std::strcmp(argv[i], "--spread") == 0 && i + 1 < argc) spreadArg = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--swell") == 0 && i + 1 < argc) std::sscanf(argv[++i], "%f,%f", &swellHs, &swellTp);
         else if (std::strcmp(argv[i], "--press") == 0 && i + 1 < argc) {
             std::string list = argv[++i];
@@ -791,7 +789,6 @@ int main(int argc, char** argv) {
     oceanOpts.windSpeed  = shotClose ? 3.5f : 10.0f;
     auto ocean = Ocean::create(oceanOpts);
     if (chopOverride >= 0.f) ocean->params.choppiness = chopOverride;
-    if (spreadArg >= 0) ocean->params.measuredSpreading = spreadArg != 0;
     if (swellHs > 0.f) {
         ocean->params.swellHeight = swellHs;
         ocean->params.swellPeriod = swellTp;
@@ -1505,12 +1502,9 @@ int main(int argc, char** argv) {
     // The water look switches, each a live A/B of one change, all off by
     // default (Lars judges each in motion). Their keys are free in this demo:
     // W A S D and the arrows steer, C cycles the camera, F12 saves a frame.
-    //   L  measured directional spreading (Params::measuredSpreading): waves
-    //      run downwind in long crests instead of the symmetric cos^2
     //   K  a swell under the wind sea: 1 m significant height, 12 s period
     //      (225 m crests), 45 degrees off the wind, s = 50
-    // THREEPP_OCEAN_SPREAD=1 starts with the spreading on. Every toggle prints
-    // both states.
+    // Every toggle prints the state.
     auto printWaterSwitches = [&] {
         const auto& p = ocean->params;
         char swell[64];
@@ -1518,16 +1512,13 @@ int main(int argc, char** argv) {
             std::snprintf(swell, sizeof(swell), "%.2f m, %.1f s", double(p.swellHeight), double(p.swellPeriod));
         else
             std::snprintf(swell, sizeof(swell), "off");
-        std::printf("[vulkan_ocean] water: spreading %s (L), swell %s (K)\n",
-                    p.measuredSpreading ? "measured Donelan-Banner" : "symmetric cos^2", swell);
+        std::printf("[vulkan_ocean] water: swell %s (K)\n", swell);
         std::fflush(stdout);
     };
     printWaterSwitches();
     auto pressWaterKey = [&](char key) {
         auto& p = ocean->params;
-        if (key == 'L') {
-            p.measuredSpreading = !p.measuredSpreading;
-        } else if (key == 'K') {
+        if (key == 'K') {
             p.swellHeight = p.swellHeight > 0.f ? 0.f : 1.0f;
             p.swellPeriod = 12.f;
             p.swellTheta  = p.windTheta - 0.785f;
@@ -1539,7 +1530,6 @@ int main(int argc, char** argv) {
     };
     KeyAdapter waterKeys(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::N) pressWaterKey('N');
-        else if (ev.key == Key::L) pressWaterKey('L');
         else if (ev.key == Key::K && !hasWakeField) pressWaterKey('K');
     });
     canvas.addKeyListener(waterKeys);
@@ -1741,7 +1731,6 @@ int main(int argc, char** argv) {
         if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f")) {
             ocean->params.choppiness = choppiness;
         }
-        ImGui::Checkbox("Measured spreading (L)", &ocean->params.measuredSpreading);
         ImGui::SliderFloat("Swell Hs (K)", &ocean->params.swellHeight, 0.f, 3.f, "%.2f m");
         // 9.5-17.5 s: the band cascade 0 carries on this 1 km ocean (its
         // peak must sit between the 127 m tile and two modes of the 1 km one).

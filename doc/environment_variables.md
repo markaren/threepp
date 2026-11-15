@@ -241,7 +241,6 @@ starting with `0` forces the feature off for every ocean, anything else forces i
 | `THREEPP_OCEAN_WAVE_REFLECTIONS` | flag (tri-state) | the mesh's `Params::waveReflections` (false) | Forces a reflection ray that meets another wave to shade it as water (instead of whatever lies beyond) on or off. | once | |
 | `THREEPP_OCEAN_SHORT_WAVE_SPECTRUM` | flag (tri-state) | the mesh's `Params::shortWaveSpectrum` (false) | Forces the short-wave (gravity-capillary) tail of the spectrum on or off. | once | |
 | `THREEPP_OCEAN_HULL_CONTACT` | flag (tri-state) | the mesh's `Params::hullContact` (false) | Forces hull contact (the sea meets a vessel's side instead of easing onto her waterline plane) on or off. | once | |
-| `THREEPP_OCEAN_SPREAD` | string (`0`; `1`, `on` or `true`) | false | Sets the default of `Params::measuredSpreading`, the measured directional spreading of the wave spectrum; other values print a warning and keep false. | once | |
 | `THREEPP_OCEAN_CREST_SHARPNESS` | number (`atof`) | unset or negative: the mesh's `Params::crestSharpness` | Forces the crest sharpness for every ocean, clamped to 0..4; it applies only while the choppy-wave model is on. | once | |
 | `THREEPP_OCEAN_FFT` | string (`shared` or `butterfly`) | `shared` | Default IFFT path for every ocean FFT: the one-dispatch shared-memory path or the butterfly passes; other values print a warning and use `shared`. | once | A/B hatch |
 | `THREEPP_OCEAN_FOAM_INTERVAL` | integer | 2 | Runs the foam accumulator every Nth frame (at least 1). | once | |

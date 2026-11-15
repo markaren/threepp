@@ -2306,14 +2306,6 @@ class DisplacedMesh(Mesh):
         def foam_amount(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
-        def measured_spreading(self) -> bool:
-            """
-            True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with long crests at the peak. False (default) = the old symmetric cos^2 (as much energy upwind as downwind). Hs agrees within about 10% on the cascade grids. Live-tunable; THREEPP_OCEAN_SPREAD=1 makes True the default.
-            """
-        @measured_spreading.setter
-        def measured_spreading(self, arg0: bool) -> None:
-            ...
-        @property
         def short_wave_spectrum(self) -> bool:
             """
             The measured short-wave spectrum (default False, the Phillips tail alone): adds Elfouhaily et al.'s (1997) wind-dependent short waves, so the sea's slopes reach Cox and Munk's at the wind it is given. Covers the part no texel holds. Read when the renderer first sees the ocean: set it before the first frame. THREEPP_OCEAN_SHORT_WAVE_SPECTRUM=1/0 overrides it.
@@ -2428,7 +2420,7 @@ class DisplacedMesh(Mesh):
         @property
         def wind_theta(self) -> float:
             """
-            Direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X); with measured_spreading the waves run that way.
+            Direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X); the waves run that way (the measured Donelan-Hamilton-Hui / Banner spreading).
             """
         @wind_theta.setter
         def wind_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:

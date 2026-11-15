@@ -411,7 +411,6 @@ namespace threepp::water {
         p.kMin            = settings_.kMin;
         p.kMax            = settings_.kMax;
         p.fetch           = settings_.fetch;
-        p.spread          = settings_.spread;
         p.swellScale      = swellScale(settings_);
         p.swellPeriod     = settings_.swellPeriod;
         p.swellTheta      = settings_.swellTheta;
@@ -424,11 +423,10 @@ namespace threepp::water {
         cmdShaderRWBarrier(cb, h0_.image);
     }
 
-    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch, uint32_t spread) {
+    void PhillipsSpectrum::updateSeaState(float windTheta, float windSpeed, float fetch) {
         settings_.windTheta = windTheta;
         settings_.windSpeed = windSpeed;
         settings_.fetch     = fetch;
-        settings_.spread    = spread;
     }
 
     void PhillipsSpectrum::updateSwell(float height, float period, float theta, float spread) {
@@ -605,14 +603,10 @@ namespace threepp::water {
             }
             const float kL2 = k2 * L * L;
             const float kn = std::sqrt(k2);
-            float kw = (kx * std::cos(S.windTheta) + kz * std::sin(S.windTheta)) / kn;
-            if (S.spread != 0u) {
-                // Measured spreading, from -k as in the shader.
-                const float wp = std::sqrt(g * 0.894f / L);
-                kw = donelanBannerWeightCpu(-kw, std::sqrt(g * kn) / wp);
-            } else {
-                kw *= kw;
-            }
+            // Measured spreading, from -k as in the shader.
+            const float wp = std::sqrt(g * 0.894f / L);
+            const float kw = donelanBannerWeightCpu(-(kx * std::cos(S.windTheta) + kz * std::sin(S.windTheta)) / kn,
+                                                    std::sqrt(g * kn) / wp);
             float p = Aeff * std::exp(-1.f / kL2) * kw * std::exp(-k2 * l * l) / (k2 * k2);
             if (gamma > 1.f) {
                 const float w = std::sqrt(g * kn);

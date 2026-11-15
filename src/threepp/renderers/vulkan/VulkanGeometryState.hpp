@@ -642,7 +642,6 @@ namespace threepp::vulkan::impl {
         float shortWaveBankedMss = 0.f;
         bool  shortWaveBankValid = false;
         bool  crestUvTagged    = false;// the UV buffer holds breaking crests' (eps, -1) or crest foam's disp.xz
-        bool  appliedMeasuredSpreading = false;
         float appliedSwell[4] = {0.f, 0.f, 0.f, 0.f};// height, period, theta, spread
         water::OceanImage scratchA;          // RG32F IFFT scratch, shared across cascades (sequential dispatch); null when every cascade's IFFT is on the shared path
         VkDescriptorSet displaceDS = VK_NULL_HANDLE;

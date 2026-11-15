@@ -178,7 +178,7 @@ namespace threepp_py {
                 .def_readwrite("tile_size_2", &DisplacedMesh::Params::tileSize2, "Cascade-2 tile (m); 0 disables.")
                 .def_readwrite("wind_theta", &DisplacedMesh::Params::windTheta,
                                "Direction the wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward +X); "
-                               "with measured_spreading the waves run that way.")
+                               "the waves run that way (the measured Donelan-Hamilton-Hui / Banner spreading).")
                 .def_readwrite("wind_speed", &DisplacedMesh::Params::windSpeed,
                                "Wind speed (m/s); the dominant wave-height lever (Phillips amplitude ~ V^4).")
                 .def_readwrite("fetch", &DisplacedMesh::Params::fetch,
@@ -206,11 +206,6 @@ namespace threepp_py {
                                "The water's mirror ray shades the wave it meets as water instead of passing "
                                "through it to the seabed (default False): no dark slits along steep crests. "
                                "Live-tunable; THREEPP_OCEAN_WAVE_REFLECTIONS=1/0 overrides it.")
-                .def_readwrite("measured_spreading", &DisplacedMesh::Params::measuredSpreading,
-                               "True = Donelan-Hamilton-Hui / Banner directional spreading: waves run downwind with "
-                               "long crests at the peak. False (default) = the old symmetric cos^2 (as much energy "
-                               "upwind as downwind). Hs agrees within about 10% on the cascade grids. Live-tunable; "
-                               "THREEPP_OCEAN_SPREAD=1 makes True the default.")
                 .def_readwrite("swell_height", &DisplacedMesh::Params::swellHeight,
                                "Significant height (m) of an optional swell added to the wind sea; 0 = none. "
                                "Drawn on cascade 0 only: its peak wavelength must lie between tile_size_1 and "

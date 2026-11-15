@@ -29,11 +29,6 @@
 
 namespace threepp {
 
-    // Default of DisplacedMesh::Params::measuredSpreading: false unless the
-    // environment sets THREEPP_OCEAN_SPREAD to 1, on or true; 0 is off (read
-    // once per process).
-    bool defaultMeasuredSpreading();
-
     class DisplacedMesh : public Mesh {
 
     public:
@@ -47,10 +42,10 @@ namespace threepp {
             // Wind direction and strength (m/s). windTheta is the direction
             // the wind blows TOWARD, in radians in the world XZ plane:
             // (cos windTheta, sin windTheta), 0 = toward +X, pi/2 = toward +Z.
-            // With measuredSpreading the waves run that way (downwind); with
-            // the symmetric cos^2 only the crest axis follows it, so toward
-            // and from drew the same sea. Speed sets the overall amplitude
-            // via the Phillips spectrum.
+            // The waves run that way: the spectrum's directional spreading is
+            // the measured one (see "What every ocean is" below), so windTheta
+            // is the direction the sea is seen to travel. Speed sets the
+            // overall amplitude via the Phillips spectrum.
             float windTheta = 0.0f;
             float windSpeed = 12.0f;
 
@@ -71,7 +66,12 @@ namespace threepp {
 
             // What every ocean is, with no switch (each was one once): the
             // spectrum at Pierson and Moskowitz's own constants, so the
-            // significant height is 0.21 U^2 / g; normals of the surface the
+            // significant height is 0.21 U^2 / g; its energy spread over
+            // directions as Donelan, Hamilton and Hui (1985) and Banner (1990)
+            // measured it, a narrow fan downwind at the spectral peak that
+            // widens for the short waves, so the sea travels with the wind
+            // (the symmetric cos^2 it replaced sent as much energy upwind and
+            // drew a standing slosh); normals of the surface the
             // choppy displacement draws, the finest cascade's slope from its
             // moment chain; the 3 to 9 m waves as geometry; and whitecaps
             // that are crest foam: laid where the drawn surface nears a fold,
@@ -176,23 +176,6 @@ namespace threepp {
             // THREEPP_OCEAN_CREST_SHARPNESS = <s> forces it for every ocean.
             // Live-tunable.
             float crestSharpness = 0.f;
-
-            // Directional spreading of the wave energy. true = the measured
-            // distribution of Donelan, Hamilton & Hui (1985) with Banner's
-            // (1990) short-wave form: near the spectral peak the energy
-            // runs in a narrow fan downwind (long crests travelling with the
-            // wind), the short waves spread wider, and a little energy runs
-            // against the wind. false (the default) = the historical
-            // symmetric cos^2, as much energy upwind as downwind (standing,
-            // short-crested slosh). Both carry the same energy per
-            // wavelength in the continuum; on the cascades' discrete grids
-            // the significant wave height agrees within about 10%, and
-            // depends on the wind angle where the spectral peak sits near a
-            // tile's fundamental, because the narrow lobe then falls on a
-            // handful of modes. Live-tunable like windSpeed: the renderer
-            // regenerates the spectra. THREEPP_OCEAN_SPREAD=1 makes true the
-            // default.
-            bool measuredSpreading = defaultMeasuredSpreading();
 
             // Optional swell: a second, narrow wave system from a distant
             // storm, added to the wind sea with its own height, period and
