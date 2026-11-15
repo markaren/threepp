@@ -425,8 +425,8 @@ class SpotRecoveryEnv(VecTask):
         if self.w_prog > 0 or self.up_slope > 0:
             self._phi_prev.copy_(self._phi)
             self._phi.copy_(self._potential(q))
-        # gave up: down and nearly motionless for GIVEUP_TICKS in a row after the limp settle ("it kinda just gives up",
-        # Lars watching the pilot policy in spot_slam, 2026-09-13). A metric only: nothing here feeds obs or reward.
+        # gave up: down and nearly motionless for GIVEUP_TICKS in a row after the limp settle (what the pilot policy was
+        # seen to do in spot_slam, 2026-09-13). A metric only: nothing here feeds obs or reward.
         still = (self.up < DOWN_UP) & (jv.abs().mean(dim=1) < GIVEUP_JV) & (self.steps > self.limp_ticks)
         self.still_run.copy_(torch.where(still, self.still_run + 1, 0))
         self.gave_up.copy_(self.gave_up | (self.still_run >= GIVEUP_TICKS))

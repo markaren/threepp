@@ -1500,7 +1500,7 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(waveModelKey);
     // The water look switches, each a live A/B of one change, all off by
-    // default (Lars judges each in motion). Their keys are free in this demo:
+    // default (each is judged in motion). Their keys are free in this demo:
     // W A S D and the arrows steer, C cycles the camera, F12 saves a frame.
     //   K  a swell under the wind sea: 1 m significant height, 12 s period
     //      (225 m crests), 45 degrees off the wind, s = 50

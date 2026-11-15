@@ -227,7 +227,7 @@ void main() {
         const float alpha     = rough * rough;
         // The footprint only NARROWS the gloss: rough * 16 stays the ceiling.
         // Past it the lobe is physically wider (a 0.05 chrome mirroring a
-        // neon tube three metres away), but that is the width Lars judged,
+        // neon tube three metres away), but that is the width judged by eye,
         // and a lamp's mirrored image softened to a smudge under the full
         // model while everything near sharpened; the ceiling keeps the lamps.
         const float footSigma = hitW < 0.0 ? rough * 16.0

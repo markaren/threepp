@@ -46,7 +46,7 @@ from spot_feet import cpu_foot_tips
 # jittered PUSH_JITTER_DEG. F = SHOVE: SHOVE_DV through the base's centre of mass; training shoves top out at 2 m/s, so the
 # walking policy should usually ride it out. G = TRIP: TRIP_DV at TRIP_HEIGHT above the base's centre of mass (the top of
 # the body), the smallest push that tips a standing Spot over reliably (--trip-probe); --knock-at uses the trip. The old F
-# was 150 N·s 0.3 m above the base, ~5 m/s on 28 kg: "it's like a tornado" (Lars, 2026-09-14).
+# was 150 N·s 0.3 m above the base, ~5 m/s on 28 kg: far more violent than any push it was meant to stand for.
 RECOVER_UP = 0.5
 RECOVER_SETTLE = 25          # 0.5 s at 50 Hz
 SHOVE_DV = 2.0               # m/s

@@ -872,10 +872,9 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // attenuation colour, so it follows whatever sea the scene has made: the
     // light has been down through the water and back, which is that colour
     // taken twice and a half (a grey-green sea gives a teal wash). LOOK
-    // constants (Lars, 2026-11-12, on the storm scene's hull wash: "love the
-    // teal one"): the bubbles turn back half the light, nine tenths of it in
-    // the water's hue, and hide the deep water 2.5 times as fast as the air
-    // thickens.
+    // constants, chosen by eye on the storm scene's hull wash (2026-11-12):
+    // the bubbles turn back half the light, nine tenths of it in the water's
+    // hue, and hide the deep water 2.5 times as fast as the air thickens.
     if (!below && gWake.g > 2e-3) {
         vec3 hue = max(pm.attenuationColor, vec3(1e-4));
         hue = mix(vec3(1.0), pow(hue / max(max(hue.r, hue.g), hue.b), vec3(2.5)), 0.9);
@@ -1155,8 +1154,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 // little over half the pattern), which gathers the foam into
                 // masses metres across with open water between. By the wash's
                 // share of the foam here, so a whitecap keeps its own look and
-                // the two join without a seam. LOOK constants (Lars,
-                // 2026-11-12: of four settings, "the mid one was the best").
+                // the two join without a seam. LOOK constants, the middle of
+                // four settings compared by eye (2026-11-12).
                 {
                     const float T  = 24.0;
                     const vec2  rC = vec2(0.8253356, 0.5646425);// cos, sin of 0.6 rad
@@ -1172,10 +1171,9 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             }
             const float excess = nUse - (1.0 - foamF);
             // Foam on open water is a layer of bubbles a few deep, not a
-            // lid: the water shows through it. LOOK constants (Lars,
-            // 2026-11-10: "foam should have opacity and not so white"): a
-            // third opaque where it is thinnest, three quarters where a
-            // crest has just broken.
+            // lid: the water shows through it, and it is less white than a
+            // closed sheet. LOOK constants (2026-11-10): a third opaque where
+            // it is thinnest, three quarters where a crest has just broken.
             float layer = mix(0.35, 0.75, clamp(foamF, 0.0, 1.0));
             // A crest's foam AGES. While the crest breaks it is a thick white
             // mass of bubbles on the crest; the crest then runs on and leaves
@@ -1184,9 +1182,9 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // sea's white lay in the troughs. So the fresh part is nearly
             // closed, and what is left behind stays white but SHRINKS (the
             // photo's holes open as F falls, above) and goes TRANSPARENT with
-            // it, as F squared: gone well before F is. LOOK constants (Lars,
-            // 2026-11-11: "it needs to shrink and go transparent, not just
-            // grey out").
+            // it, as F squared: gone well before F is. Foam that only greys
+            // as it ages reads wrong; it has to shrink and clear. LOOK
+            // constants (2026-11-11).
             {
                 const float fresh = clamp(foamFresh, 0.0, 1.0);
                 const float left  = clamp(crestF, 0.0, 1.0);
