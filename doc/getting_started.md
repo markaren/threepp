@@ -851,6 +851,8 @@ and `extras/environments/RoomEnvironment`.
 - **Python bindings** (`pip install threepp` from PyPI, or build them with `-DTHREEPP_WITH_PYTHON=ON`) —
   the same scene graph from Python, rendering into NumPy arrays; [python/README.md](../python/README.md)
   is the guide.
+- **Environment variables**: the `THREEPP_*` variables the library reads at run time (diagnostics,
+  A/B switches and startup overrides) are listed in [environment_variables.md](environment_variables.md).
 
 **Curves and shapes** — `extras/core/` (`Curve`, `Path`, `Shape`, `Font`) and `extras/curves/`
 (Catmull-Rom, Bézier, spline), feeding `ExtrudeGeometry`, `TubeGeometry`, `LatheGeometry`,
