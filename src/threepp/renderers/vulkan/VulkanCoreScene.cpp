@@ -4527,9 +4527,17 @@ void VulkanRenderer::Impl::refitTlasInPlace(SceneBuildFrame& sb) {
 // remaps the per-entry history by identity and grows the entry-indexed buffers.
 // Needs: every phase above; updateSceneInPlace did not finish the build.
 void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
-            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
-            auto& currFp = sb.currFp;
-            const auto& rayCamPos = sb.rayCamPos;
+            pruneDeadSceneResources();
+            admitRebuildEntries(sb, camera);
+            buildRebuildTlas(sb);
+            uploadRebuildDescs(sb);
+            remapEntryHistory(sb);
+            resizeEntryBuffers(sb);
+        }
+
+// R0: the device drain and the teardown of the old TLAS and desc buffers, then the
+// prune of every cache entry whose object is gone.
+void VulkanRenderer::Impl::pruneDeadSceneResources() {
             // The rebuild's phases, siblings under THREEPP_CPU_PHASE_PROFILE
             // (the per-event cost VulkanEntryChurn_test reports, broken down).
             THREEPP_CPUPROF_NAMED(rbDrain, "scene.R0_drainPrune");
@@ -4787,6 +4795,17 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             }
 
             rbDrain.stop();
+        }
+
+// R1: sizes the slot pool, then admits every entry: its BLAS record (deformer states
+// included), its TLAS instance, GeometryDesc and material record.
+// Needs: sb.rayCamPos. Leaves: sb.instances, sb.geomDescs, sb.matAssetMap.
+void VulkanRenderer::Impl::admitRebuildEntries(SceneBuildFrame& sb, Camera& camera) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            const auto& rayCamPos = sb.rayCamPos;
+            auto& instances = sb.instances;
+            auto& geomDescs = sb.geomDescs;
+            auto& matAssetMap = sb.matAssetMap;
             THREEPP_CPUPROF_NAMED(rbLoop, "scene.R1_entryLoop");
             // The slot pool the edits until the next structural rebuild write
             // into (VulkanCoreSlots.cpp): every entry-indexed GPU buffer this
@@ -4795,7 +4814,6 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             // materials instead (below).
             slotCapacity_ = std::max<uint32_t>({1024u, static_cast<uint32_t>(entries.size() + entries.size() / 2u),
                                                 reservedSlots_});
-            std::vector<VkAccelerationStructureInstanceKHR> instances;
             instances.reserve(entries.size());
             // geomDescs are ENTRIES-indexed: one slot per entry, with
             // overlay/skipped entries left default (material record 0, the
@@ -4809,7 +4827,7 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             // mesh after the skip.)
             // Dummy slots are never referenced: skipped entries get no TLAS
             // instance and are not drawn in the gbuffer (both skip on isOverlay).
-            std::vector<GeometryDesc> geomDescs(entries.size());
+            geomDescs.resize(entries.size());
             // The material table afresh, in entry order: a rebuild compacts it.
             matTableReset();
             matTableBuilding_ = true;
@@ -4827,7 +4845,6 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             // reproject gate can accept their cross-mesh taps (tiled walls
             // etc.). The map grows by ~one entry per UNIQUE Material in the
             // scene — well below entries.size() in typical content.
-            std::unordered_map<const Material*, uint32_t> matAssetMap;
 
             // Per-Material MaterialDesc memo. materialFromMesh + the nine
             // texture-of lookups are a ~24-dynamic_cast/entry walk that is a
@@ -5195,6 +5212,13 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             // resident, so buildTlas below can reference the fresh BLAS.
             matTableBuilding_ = false;
             rbLoop.stop();
+        }
+
+// R2 + R3: flushes the admit batch, remaps compacted BLAS addresses and builds the
+// TLAS from the instances.
+// Needs: sb.instances.
+void VulkanRenderer::Impl::buildRebuildTlas(SceneBuildFrame& sb) {
+            auto& instances = sb.instances;
             THREEPP_CPUPROF_NAMED(rbFlush, "scene.R2_batchFlush");
             flushOneShotBatch();
             // Records compacted by the batch flushes in this pass were pushed
@@ -5204,6 +5228,14 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             THREEPP_CPUPROF_NAMED(rbTlas, "scene.R3_buildTlas");
             buildTlas(instances);
             rbTlas.stop();
+        }
+
+// R4: uploads the geometry and material desc tables to every frame slot and keeps
+// the host mirrors, the slot path's asset numbering and the instance colours.
+// Needs: sb.geomDescs, sb.matAssetMap.
+void VulkanRenderer::Impl::uploadRebuildDescs(SceneBuildFrame& sb) {
+            const auto& geomDescs = sb.geomDescs;
+            const auto& matAssetMap = sb.matAssetMap;
             THREEPP_CPUPROF_NAMED(rbDescs, "scene.R4_descUpload");
             // Every per-frame GeometryDesc slot seeded fresh — same ring
             // model as the matDescs loop below; the lean auto-LOD patch
@@ -5282,6 +5314,14 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             // match ambiguous — not expected, every entry is its own TLAS
             // slot — so that lone case falls back to the old global reset.
             rbDescs.stop();
+        }
+
+// R5: the motion state seeded, the moved-sticky countdowns and prev-world matrices
+// remapped by entry identity (or reset on a first build or an ambiguous match).
+// Needs: sb.currFp.
+void VulkanRenderer::Impl::remapEntryHistory(SceneBuildFrame& sb) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            auto& currFp = sb.currFp;
             THREEPP_CPUPROF_NAMED(rbRemap, "scene.R5_identityRemap");
             std::vector<std::array<float, 16>> oldPrevWorld = std::move(prevWorldByEntry_);
             std::vector<uint8_t> oldPrevValid = std::move(prevWorldValidByEntry_);
@@ -5346,6 +5386,14 @@ void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
             // entries.size() matrices, so the instance-count sizing overflowed
             // the host buffer too.
             rbRemap.stop();
+        }
+
+// R6: grows the motion and moved-bit buffers to the slot pool, rewrites every view's
+// descriptors and commits the new fingerprints.
+// Needs: sb.currFp.
+void VulkanRenderer::Impl::resizeEntryBuffers(SceneBuildFrame& sb) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            auto& currFp = sb.currFp;
             THREEPP_CPUPROF_NAMED(rbViews, "scene.R6_capacityDescriptors");
             const uint32_t motionSlots    = static_cast<uint32_t>(entries.size());
             const uint32_t neededBitWords = std::max<uint32_t>((motionSlots + 31u) / 32u, 1u);

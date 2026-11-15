@@ -2622,6 +2622,12 @@ namespace threepp {
         void patchMaterialDescs(SceneBuildFrame& sb);
         void refitTlasInPlace(SceneBuildFrame& sb);
         void rebuildScene(SceneBuildFrame& sb, Camera& camera);
+        void pruneDeadSceneResources();
+        void admitRebuildEntries(SceneBuildFrame& sb, Camera& camera);
+        void buildRebuildTlas(SceneBuildFrame& sb);
+        void uploadRebuildDescs(SceneBuildFrame& sb);
+        void remapEntryHistory(SceneBuildFrame& sb);
+        void resizeEntryBuffers(SceneBuildFrame& sb);
 
         void createCameraUbos();
 

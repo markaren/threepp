@@ -139,6 +139,28 @@ namespace threepp {
         // opacity dropping below 1) sets instClassChanged, which forces the
         // fill even on a frame with no motion, and a full build.
         bool instClassChanged = false;
+        std::vector<VkAccelerationStructureInstanceKHR> instances;
+
+        // geomDescs are ENTRIES-indexed: one slot per entry, with
+        // overlay/skipped entries left default (material record 0, the
+        // all-zero desc, as their per-entry MaterialDesc used to be). This makes
+        // gl_InstanceCustomIndexEXT == the entry index, so the raster gbuffer
+        // id, RT gbuffer id, motionMat and meshMovedBits all live in ONE index
+        // space. (Previously these were filtered/contiguous, so any overlay or
+        // skipped entry shifted the filtered index away from the entry index —
+        // corrupting gbuffer.frag's material/normal-map lookup and the
+        // deferred shade's motionMat[] / isMeshMoved() reads for every
+        // mesh after the skip.)
+        // Dummy slots are never referenced: skipped entries get no TLAS
+        // instance and are not drawn in the gbuffer (both skip on isOverlay).
+        std::vector<GeometryDesc> geomDescs;
+
+        // Material-asset dedup. Meshes sharing one Material C++ pointer
+        // get the same matAssetIdx so the deferred shade's bilinear
+        // reproject gate can accept their cross-mesh taps (tiled walls
+        // etc.). The map grows by ~one entry per UNIQUE Material in the
+        // scene — well below entries.size() in typical content.
+        std::unordered_map<const Material*, uint32_t> matAssetMap;
     };
 
 }// namespace threepp
