@@ -9,7 +9,7 @@ import os
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cloth', 'ClothMesh', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cloth', 'ClothMesh', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'LogLevel', 'LogRecord', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'capture_log', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'set_log_level', 'set_log_levels', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'take_log', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AcousticMaterial:
     """
     Backscatter per unit area: Lambert mu cos^2 plus a Kirchhoff facet glint.
@@ -6101,6 +6101,79 @@ class LineCurve3(Curve3):
         ...
 class LineSegments(Line):
     def __init__(self, geometry: BufferGeometry = None, material: typing.Any = None) -> None:
+        ...
+class LogLevel:
+    """
+    Severity of a threepp log message, and the threshold of a category.
+    
+    Members:
+    
+      Trace
+    
+      Debug
+    
+      Info
+    
+      Warn
+    
+      Error
+    
+      Off
+    """
+    Debug: typing.ClassVar[LogLevel]  # value = <LogLevel.Debug: 1>
+    Error: typing.ClassVar[LogLevel]  # value = <LogLevel.Error: 4>
+    Info: typing.ClassVar[LogLevel]  # value = <LogLevel.Info: 2>
+    Off: typing.ClassVar[LogLevel]  # value = <LogLevel.Off: 5>
+    Trace: typing.ClassVar[LogLevel]  # value = <LogLevel.Trace: 0>
+    Warn: typing.ClassVar[LogLevel]  # value = <LogLevel.Warn: 3>
+    __members__: typing.ClassVar[dict[str, LogLevel]]  # value = {'Trace': <LogLevel.Trace: 0>, 'Debug': <LogLevel.Debug: 1>, 'Info': <LogLevel.Info: 2>, 'Warn': <LogLevel.Warn: 3>, 'Error': <LogLevel.Error: 4>, 'Off': <LogLevel.Off: 5>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class LogRecord:
+    """
+    One captured log message.
+    """
+    def __repr__(self) -> str:
+        ...
+    @property
+    def category(self) -> str:
+        """
+        Dotted source name, e.g. 'vulkan.overlay'.
+        """
+    @property
+    def frame(self) -> int:
+        """
+        Renderer frame number when it was logged.
+        """
+    @property
+    def level(self) -> LogLevel:
+        ...
+    @property
+    def message(self) -> str:
         ...
 class Loop:
     """
@@ -13859,7 +13932,7 @@ class VulkanRenderer:
     @property
     def indirect_opaque_cutouts(self) -> bool:
         """
-        The indirect rays and alpha-tested cutouts. True (the default): the GI bounce, the probe sweep and the ambient-occlusion rays take the first cutout card they meet as a hit, transparent texel or not, so under a card tree's crown they see a closed roof (no sky, no bounce from the lit leaves above, black occlusion), where the surface shadows, the reflections and the path tracer alpha-test every card. False: those rays pass a card's transparent texels inside their traversal, as the shadow ray does, up to 8 of them, and pay a material read, a UV fetch and a texture sample per texel passed.
+        The indirect rays and alpha-tested cutouts. False (the default): the GI bounce, the probe sweep and the ambient-occlusion rays pass a cutout's transparent texels inside their traversal, as the shadow ray, the reflections and the path tracer do, up to 8 of them, and pay a material read, a UV fetch and a texture sample per texel passed. True: they take the first cutout they meet as a hit, transparent texel or not, so under a card tree's crown they see a closed roof (no sky, no bounce from the lit leaves above, black occlusion) and a decal or cut-out sign darkens its whole square.
         """
     @indirect_opaque_cutouts.setter
     def indirect_opaque_cutouts(self, arg1: bool) -> None:
@@ -14281,6 +14354,10 @@ def bake_surface(renderer: typing.Any, cloud: SplatCloud, voxel_size: typing.Sup
     
     An empty result is diagnosed from .stats: see its docstring.
     """
+def capture_log(enabled: bool = True, echo: bool = False) -> None:
+    """
+    Queue log messages for take_log() instead of writing them to stderr; `echo` keeps the stderr line as well. capture_log(False) restores the stderr output. Records already queued stay until taken.
+    """
 def clamp(value: typing.SupportsFloat | typing.SupportsIndex, low: typing.SupportsFloat | typing.SupportsIndex, high: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
 def damp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, lambda_: typing.SupportsFloat | typing.SupportsIndex, dt: typing.SupportsFloat | typing.SupportsIndex) -> float:
@@ -14383,6 +14460,14 @@ def select_lod(cloud: SplatCloud, camera: Camera, viewport_height_px: typing.Sup
     
     Call once per frame, before render(), with the RENDER resolution's height. The cloud carries its own hysteresis state (per node on the per-node path), so nothing has to be kept on the Python side. A cloud with no LOD table is left alone and 0 comes back.
     """
+def set_log_level(category: str, level: LogLevel) -> None:
+    """
+    Threshold for `category` and every category below it ('vulkan' covers 'vulkan.overlay'; '*' covers all). Messages under the threshold are not produced. The default is Info. The THREEPP_LOG environment variable, when set, wins over this call.
+    """
+def set_log_levels(spec: str) -> bool:
+    """
+    Several thresholds at once, in the THREEPP_LOG form: 'vulkan.probe:debug,core:warn'. Returns False if an entry was not understood (the others still apply).
+    """
 def simplify_geometry(geometry: BufferGeometry, ratio: typing.SupportsFloat | typing.SupportsIndex, error: typing.SupportsFloat | typing.SupportsIndex = 0.009999999776482582) -> BufferGeometry:
     ...
 def sonar_ray_directions(model: SonarModel) -> numpy.typing.NDArray[numpy.float32]:
@@ -14392,6 +14477,10 @@ def sonar_ray_directions(model: SonarModel) -> numpy.typing.NDArray[numpy.float3
 def splat_points_to_field(points: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], cell_size: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex, max_nodes: typing.SupportsInt | typing.SupportsIndex = 8000000) -> ScalarField:
     """
     Build a union-of-balls scalar field from an (N,3) point array.
+    """
+def take_log() -> list[LogRecord]:
+    """
+    The messages captured since the last call, oldest first, as LogRecord objects. The queue keeps the newest 4096.
     """
 def terrain_from_json(json: str, params: TerrainParams) -> bool:
     """

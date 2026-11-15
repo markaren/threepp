@@ -55,6 +55,7 @@ PYBIND11_MODULE(threepp, m) {
     // Order matters: types must be registered before others reference them as
     // arguments/return values (math before everything; core Object3D before
     // objects/cameras/lights; geometries+materials before objects).
+    tp::init_log(m);
     tp::init_math(m);
     tp::init_textures(m);// before materials: their map slots reference Texture
     tp::init_core(m);

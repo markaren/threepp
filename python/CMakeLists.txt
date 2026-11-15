@@ -16,6 +16,7 @@ FetchContent_MakeAvailable(pybind11)
 # readability).
 pybind11_add_module(threepp_py
         src/bindings.cpp
+        src/bind_log.cpp
         src/bind_math.cpp
         src/bind_textures.cpp
         src/bind_core.cpp

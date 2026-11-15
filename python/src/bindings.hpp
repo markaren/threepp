@@ -140,6 +140,7 @@ namespace threepp_py {
     // the reader.
     void set_user_data_string(threepp::Object3D& o, const std::string& key, const std::string& value);
 
+    void init_log(py::module_& m);// LogLevel, set_log_level(s), capture_log, take_log
     void init_math(py::module_& m);
     void init_textures(py::module_& m);
     void init_core(py::module_& m);
