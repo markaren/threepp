@@ -580,7 +580,7 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
             // a warning rather than killing the whole renderer.
             for (size_t i = 0; i < positions.size(); ++i) {
                 if (!std::isfinite(positions[i])) {
-                    THREEPP_LOG(vulkan::kLogGeometry, Warn) << "buildBlasFor: skipping a geometry: "
+                    THREEPP_LOG(vulkan::kLogGeometry, Warn) << "a geometry is not drawn: "
                               << "position[" << i << "] is non-finite ("
                               << positions[i] << "), vertexCount=" << vertexCount;
                     return false;
@@ -590,7 +590,7 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
                 const auto& indices = idxAttr->array();
                 for (size_t i = 0; i < indices.size(); ++i) {
                     if (indices[i] >= vertexCount) {
-                        THREEPP_LOG(vulkan::kLogGeometry, Warn) << "buildBlasFor: skipping a geometry: "
+                        THREEPP_LOG(vulkan::kLogGeometry, Warn) << "a geometry is not drawn: "
                                   << "index[" << i << "]=" << indices[i]
                                   << " >= vertexCount=" << vertexCount;
                         return false;
@@ -807,7 +807,7 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
             if (rtIndices && rtIndices->size() >= 3u) {
                 for (const uint32_t v : *rtIndices) {
                     if (v >= vertexCount) {
-                        THREEPP_LOG(vulkan::kLogGeometry, Warn) << "buildBlasFor: proxy index " << v
+                        THREEPP_LOG(vulkan::kLogGeometry, Warn) << "trace proxy index " << v
                                   << " >= vertexCount=" << vertexCount << ", proxy ignored";
                         rtIndices = nullptr;
                         break;
@@ -2443,7 +2443,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 const auto& p = posAttr->array();
                 for (size_t i = 0; i < p.size(); ++i) {
                     if (!std::isfinite(p[i])) {
-                        THREEPP_LOG_ONCE(vulkan::kLogGeometry, Warn) << "refreshGeomBlasBatch: skipping a geometry: "
+                        THREEPP_LOG_ONCE(vulkan::kLogGeometry, Warn) << "a changed geometry keeps its old acceleration structure: "
                                                                      << "position[" << i << "] is non-finite (" << p[i] << ")";
                         ok = false;
                         break;
@@ -2778,7 +2778,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 const auto& p = posAttr->array();
                 for (size_t i = 0; i < p.size(); ++i) {
                     if (!std::isfinite(p[i])) {
-                        THREEPP_LOG_ONCE(vulkan::kLogGeometry, Warn) << "recordDynamicGeomRefits: skipping a geometry: "
+                        THREEPP_LOG_ONCE(vulkan::kLogGeometry, Warn) << "a deforming geometry keeps its old acceleration structure: "
                                                                      << "position[" << i << "] is non-finite (" << p[i] << ")";
                         ok = false;
                         break;

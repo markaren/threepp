@@ -1095,7 +1095,7 @@ namespace threepp::vulkan {
             }
             if (wanted > kMaxEntries) {
                 budgetCapped_ = true;
-                THREEPP_LOG(kLogSplat, Warn) << "SplatPass: this frame's tile expansion wants "
+                THREEPP_LOG(kLogSplat, Warn) << "this frame's tile expansion wants "
                           << wanted << " (splat, tile) pairs, past the " << kMaxEntries
                           << " ceiling (" << (kMaxEntryBytes >> 20)
                           << " MB of sort buffers). Frames will be TRUNCATED, with splats "
@@ -1130,7 +1130,7 @@ namespace threepp::vulkan {
             for (const auto& e : clouds) {
                 if (!e.cloud || resident_.count(e.cloud)) continue;
                 if (freeSlots_.empty() && slotsUsed_ >= kMaxClouds) {
-                    THREEPP_LOG_ONCE(kLogSplat, Warn) << "SplatPass: more than " << kMaxClouds
+                    THREEPP_LOG_ONCE(kLogSplat, Warn) << "more than " << kMaxClouds
                               << " splat clouds in one scene; the extra ones are not drawn";
                     break;
                 }
@@ -1175,7 +1175,7 @@ namespace threepp::vulkan {
                 // leaves whoever saw them with no explanation. Sizing a cloud
                 // for the first time is not that and says nothing.
                 if (grewOnOverflow)
-                    THREEPP_LOG(kLogSplat, Warn) << "SplatPass: tile expansion budget "
+                    THREEPP_LOG(kLogSplat, Warn) << "tile expansion budget "
                               << entryBudget_ << " -> " << needEntries
                               << " (splat, tile) pairs after a truncated frame";
                 allocateScratch(needSplats, needEntries);

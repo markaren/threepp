@@ -98,7 +98,7 @@
 //   RG_PROBE_DUMP=<dir>    probe_sh.bin and probe_depth.bin (the probe GI
 //                          stores) after the last frame
 //   RG_SERIALIZE=1         idle the device after every frame (a readback)
-//   THREEPP_LOG=vulkan.rendergraph:debug   print the frame graph (passes, barriers) to stderr
+//   THREEPP_LOG=vulkan.rendergraph:trace   print the frame graph (passes, barriers) to stderr
 //                          whenever its shape changes
 //   THREEPP_VK_NO_ALIAS=1  every transient image gets its own allocation.
 //                          readSceneHdrDebug returns false for a pooled

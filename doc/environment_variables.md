@@ -84,7 +84,7 @@ These variables were replaced by categories and are no longer read:
 `THREEPP_VULKAN_SLOTS_LOG` (`vulkan.scene:debug`), `THREEPP_VK_SHADOW_CACHE_DEBUG`
 (`vulkan.shadow:trace`), `THREEPP_VK_STARTUP_TIMING` (`vulkan.startup:debug`),
 `THREEPP_VK_EXIT_TIMING` (`vulkan.exit:debug`), `THREEPP_VK_TRACE_ACQUIRE`
-(`vulkan.frame:trace`) and `THREEPP_RG_DUMP` (`vulkan.rendergraph:debug`).
+(`vulkan.frame:trace`) and `THREEPP_RG_DUMP` (`vulkan.rendergraph:trace`).
 
 ## Window, context and device
 

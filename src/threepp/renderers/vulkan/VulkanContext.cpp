@@ -902,8 +902,6 @@ namespace threepp::vulkan {
                 vkGetPhysicalDeviceFeatures2(physicalDevice_, &feat2);
                 rayQuerySupported_ = rqFeat.rayQuery == VK_TRUE;
             }
-            THREEPP_LOG(kLogDevice, Debug) << "ray query (VK_KHR_ray_query): "
-                                           << (rayQuerySupported_ ? "enabled" : "unavailable");
             if (!rayQuerySupported_) rayTracingEnabled_ = false;
         }
         if (forcedOff) {
@@ -931,8 +929,6 @@ namespace threepp::vulkan {
 #else
             externalMemorySupported_ = hasExtension(exts, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
 #endif
-            THREEPP_LOG(kLogDevice, Debug) << "external memory export: "
-                                           << (externalMemorySupported_ ? "enabled" : "unavailable");
 
             // Diagnostic only, and opt-in: capturing statistics changes how
             // pipelines are compiled, so it must never be on by default.

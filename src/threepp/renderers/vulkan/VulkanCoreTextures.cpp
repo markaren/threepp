@@ -86,7 +86,6 @@ void VulkanRenderer::Impl::createTextureSampler() {
             // setTextureAnisotropy — 0 = auto policy, 1..16 forces a level).
             if (const auto a = vulkan::env::number("THREEPP_VK_ANISO")) {
                 textureAnisoOverride_ = std::clamp(static_cast<float>(*a), 0.0f, maxAniso);
-                THREEPP_LOG(vulkan::kLogTexture, Debug) << "textureAnisotropy override = " << textureAnisoOverride_;
             }
         }
 

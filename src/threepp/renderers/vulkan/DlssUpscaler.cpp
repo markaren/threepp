@@ -668,7 +668,6 @@ namespace threepp::vulkan {
         if (featureRR_) {
             NVSDK_NGX_VULKAN_ReleaseFeature(featureRR_);
             featureRR_ = nullptr;
-            THREEPP_LOGF(kLogUpscale, Debug, "DLSS Ray Reconstruction feature released");
         }
         rrRenderW_ = rrRenderH_ = 0;
         rrEvalFails_ = 0;
