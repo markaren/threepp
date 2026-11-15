@@ -52,6 +52,28 @@ Categories (`THREEPP_LOG=<category>:debug` shows a category's diagnostics):
 | `core.ocean` | the ocean look switches of `DisplacedMesh` |
 | `core.raycaster` | `Raycaster::setFromCamera` |
 | `core.string` | number parsing |
+| `extras.sitl` | the ArduPilot SITL bridge: dropped packets, SITL resets |
+| `gl.program` | shader compile and link logs (error), link warnings, unsupported color spaces and tone mappings |
+| `gl.texture` | textures that cannot be uploaded, texture unit overflow, incomplete framebuffers |
+| `gl.uniform` | uniform values the renderer cannot set |
+| `gl.state` | blend modes it does not know |
+| `gl.shadow` | shadow map types and lights that cannot cast shadows |
+| `gl.renderer` | unknown draw modes, `writeFramebuffer` folders |
+| `gl.postprocessing` | post-processing passes |
+| `loader.gltf` | glTF: files that do not load, skipped primitives, unsupported material extensions; each light it loads hidden (debug) |
+| `loader.obj` | OBJ: lines it does not understand, dropped faces and uvs |
+| `loader.stl` | STL |
+| `loader.collada` | Collada: no visual scene, skins whose joints are missing |
+| `loader.usd` | USD: loading, conversion, packages and fetched URLs |
+| `loader.exr` | OpenEXR: why an image does not decode |
+| `loader.dds` | DDS: why a texture does not load, truncated mip levels |
+| `loader.rgbe` | Radiance HDR |
+| `loader.image` | `TextureLoader`, `CubeTextureLoader` and `ImageLoader` (WebP, TIFF) |
+| `loader.font` | fonts |
+| `loader.svg` | SVG path commands and fill rules it does not support |
+| `loader.urdf` | URDF and xacro: missing geometry loaders, duplicate link elements, xacro warnings and errors |
+| `loader.object` | the JSON scene loader and exporter: the messages `warnings()` also returns, files that do not open |
+| `loader.model` | `ModelLoader` and background loads (`AsyncGroup`) |
 | `vulkan.validation` | validation layer errors and warnings, strict-validation verdicts |
 | `vulkan.device` | the GPU, ray tracing, surface, swapchain and present mode (extension notes at debug) |
 | `vulkan.pipeline_cache` | pipeline cache load and save (debug) |
