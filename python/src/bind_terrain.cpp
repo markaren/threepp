@@ -279,6 +279,14 @@ namespace threepp_py {
                 .def("update", [](GeoScene& g, const std::array<float, 3>& p) {
                          g.update(Vector3(p[0], p[1], p[2]));
                      }, py::arg("pos"))
+                .def("update", [](GeoScene& g, const Vector3& p, const std::vector<Vector3>& sensors) {
+                         g.update(p, sensors);
+                     }, py::arg("pos"), py::arg("sensors"),
+                     "The same for a scene that sensors read as well as the camera: `sensors` are the "
+                     "world positions of sensor rigs (a sonar under a boat, a lidar on a rover). A terrain "
+                     "tile is as fine as the closest of the camera and the sensors needs; scatter and the "
+                     "streamed forest and cars follow the camera alone. A ray-traced sensor reads the tiles "
+                     "the renderer holds, so without this a sensor far from the camera sees coarse terrain.")
                 .def("height_at", &GeoScene::heightAt, py::arg("x"), py::arg("z"),
                      "Terrain height (m) at a world XZ — DEM + road carve + relief + bathymetry.")
                 .def_property_readonly("pack_world_size", &GeoScene::packWorldSize)

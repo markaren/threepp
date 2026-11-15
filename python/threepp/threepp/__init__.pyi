@@ -4212,6 +4212,11 @@ class GeoScene(Group):
     @typing.overload
     def update(self, pos: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"]) -> None:
         ...
+    @typing.overload
+    def update(self, pos: Vector3, sensors: collections.abc.Sequence[Vector3]) -> None:
+        """
+        The same for a scene that sensors read as well as the camera: `sensors` are the world positions of sensor rigs (a sonar under a boat, a lidar on a rover). A terrain tile is as fine as the closest of the camera and the sensors needs; scatter and the streamed forest and cars follow the camera alone. A ray-traced sensor reads the tiles the renderer holds, so without this a sensor far from the camera sees coarse terrain.
+        """
     @property
     def attribution(self) -> str:
         ...

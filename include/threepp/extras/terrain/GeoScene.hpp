@@ -257,8 +257,22 @@ namespace threepp::terrain {
         // Once per frame, with the ACTIVE camera's position: tile LOD refine /
         // merge + near-field scatter. (The forest is a tree of threepp LOD
         // nodes; the renderer updates those itself.)
-        void update(const Vector3& camPos) {
-            if (tiles_) tiles_->update(camPos);
+        void update(const Vector3& camPos) { update(camPos, {}); }
+
+        // The same for a scene that sensors read as well as the camera (a
+        // sonar under a boat, a lidar on a rover): a terrain tile is as fine
+        // as the closest of the camera and `sensors` needs. A ray-traced
+        // sensor reads the tiles the renderer holds, so with the camera
+        // parked a kilometre off a sonar looked at coarse tiles, and the
+        // border between two of them crossed its fan as a bright straight line.
+        // Scatter, the streamed forest and cars and the road ribbon are for
+        // the eye: they follow the camera alone.
+        void update(const Vector3& camPos, const std::vector<Vector3>& sensors) {
+            if (tiles_) {
+                viewpoints_.assign(1, camPos);
+                viewpoints_.insert(viewpoints_.end(), sensors.begin(), sensors.end());
+                tiles_->update(viewpoints_);
+            }
             if (scatter_) scatter_->update(camPos);
             // Streamed content follows the LIVE camera. A ROI fixed at load
             // time is a still-frame trick: fly two kilometres and the town is
@@ -963,6 +977,7 @@ namespace threepp::terrain {
         TerrainProvider prov_;
         TerrainBandSet bandSet_;
         std::shared_ptr<TileTerrain> tiles_;
+        std::vector<Vector3> viewpoints_;// update()'s camera + sensors, kept for its capacity
         std::shared_ptr<TerrainScatter> scatter_;
         // Both streamers' builders capture `this` and read pack_ / prov_, so
         // they must be destroyed BEFORE those — declaring them here, after the

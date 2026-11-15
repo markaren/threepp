@@ -182,8 +182,8 @@ print(f"terrain: {os.path.basename(PACK)} {GEO.pack_world_size:.0f} m loaded in 
 print(GEO.attribution)
 
 
-def settle_terrain(pos, budget_s=180.0):
-    """Let the terrain tiles stream in around `pos`; returns the seconds it took.
+def settle_terrain(pos, sensors, budget_s=180.0):
+    """Let the terrain tiles stream in around the camera at `pos` and the `sensors`; returns the seconds it took.
     GeoScene starts from 2 km tiles and refines a level at a time on worker
     threads. A 12 s shot started at once still has a 5 m lattice around the boat
     at its end, on which a quay wall is a ramp reaching the sea a few metres out,
@@ -191,7 +191,7 @@ def settle_terrain(pos, budget_s=180.0):
     t0 = time.perf_counter()
     last, still = None, 0
     while time.perf_counter() - t0 < budget_s:
-        GEO.update(pos)
+        GEO.update(pos, sensors)
         st = GEO.stats
         still = still + 1 if st["baking"] == 0 and st["tiles"] == last else 0
         last = st["tiles"]
@@ -425,27 +425,30 @@ if RAIN:
 #  The loop: the depth contour along the town's waterfront, back along the south shore
 # --------------------------------------------------------------------------- #
 def contour(xs, z_from, z_to, step):
-    """For each x, the first z (walking from the shore) where the seabed passes the contour depth."""
+    """For each x, walking from the fairway toward the shore: the last z where the seabed is
+    below the contour depth. Met from the shore, the first deep water can lie behind a mole
+    (the inner basin at x 260 to 420, behind the one that runs out to x 375, z 400), and the
+    route then went straight through the mole to reach it: the boat started inside its quay."""
     pts = []
     for x in xs:
         z = z_from
-        while (z < z_to) if step > 0 else (z > z_to):
-            if GEO.height_at(float(x), float(z)) < -CONTOUR_DEPTH:
-                pts.append((float(x), float(z)))
-                break
+        if GEO.height_at(float(x), float(z)) >= -CONTOUR_DEPTH:
+            continue                          # no deep fairway at this x
+        while ((z + step < z_to) if step > 0 else (z + step > z_to)) \
+                and GEO.height_at(float(x), float(z + step)) < -CONTOUR_DEPTH:
             z += step
+        pts.append((float(x), float(z)))
     return pts
 
 
-north = contour(np.arange(-200.0, 1001.0, 20.0), 150.0, 700.0, 2.0)
-south = contour(np.arange(1000.0, -201.0, -20.0), 1250.0, 800.0, -2.0)
+north = contour(np.arange(-200.0, 1001.0, 20.0), 700.0, 150.0, -2.0)
+south = contour(np.arange(1000.0, -201.0, -20.0), 800.0, 1250.0, 2.0)
 LOOP = np.array(north + south, float)
 k = np.ones(5) / 5.0                      # smooth the contour a little: it follows a 2 m DTM
 LOOP = np.stack([np.convolve(np.pad(LOOP[:, i], 2, mode="wrap"), k, mode="valid") for i in range(2)], 1)
 seg = np.linalg.norm(np.diff(np.vstack([LOOP, LOOP[:1]]), axis=0), axis=1)
 LOOP_S = np.concatenate([[0.0], np.cumsum(seg)])
 LOOP_LEN = float(LOOP_S[-1])
-print(f"loop: {len(LOOP)} points along the {CONTOUR_DEPTH:.0f} m contour, {LOOP_LEN:.0f} m round")
 
 
 def loop_point(s):
@@ -454,6 +457,13 @@ def loop_point(s):
     a, b = LOOP[i % len(LOOP)], LOOP[(i + 1) % len(LOOP)]
     f = (s - LOOP_S[i]) / max(1e-6, LOOP_S[i + 1] - LOOP_S[i])
     return a + f * (b - a)
+
+
+# The smoothed route is checked against the seabed itself: a contour followed x by x says
+# nothing about what lies between two of its points.
+_least = -max(GEO.height_at(*map(float, loop_point(s))) for s in np.arange(0.0, LOOP_LEN, 2.0))
+print(f"loop: {len(LOOP)} points along the {CONTOUR_DEPTH:.0f} m contour, {LOOP_LEN:.0f} m round, "
+      f"never less than {_least:.1f} m of water under it")
 
 
 def nearest_s(p):
@@ -739,6 +749,13 @@ def chase_camera(dt, first=False):
     camera.look_at(tp.Vector3(float(ahead[0]), 0.5, float(ahead[2])))
 
 
+def boat_at():
+    """Where the terrain must be as fine as at the camera: her sonar and radar trace the tiles
+    the renderer holds. With the camera a kilometre off (--eye) the seabed under her was
+    coarse tiles, and the border between two of them crossed the sonar's fan as a bright line."""
+    return tp.Vector3(float(hull.p[0]), float(hull.p[1]), float(hull.p[2]))
+
+
 def follow_camera():
     """Interactive: keep the orbit target on her without stealing the user's orbit."""
     global _anchor
@@ -793,7 +810,7 @@ def step(dt):
     for bb, q in BUOYS:
         h = ocean.sample_height(float(q[0]), float(q[1]))
         bb.position.set(float(q[0]), h - 0.35, float(q[1]))
-    GEO.update(camera.position)
+    GEO.update(camera.position, [boat_at()])
     if RAIN:
         weather_frame(t, dt)
 
@@ -1037,7 +1054,7 @@ if HEADLESS:
     fps = 30
     step(1.0 / fps)
     chase_camera(1.0 / fps, first=True)
-    print(f"terrain: settled around the start in {settle_terrain(camera.position):.1f} s ({GEO.stats['tiles']} tiles)")
+    print(f"terrain: settled around the start in {settle_terrain(camera.position, [boat_at()]):.1f} s ({GEO.stats['tiles']} tiles)")
     n = int(round(SHOT_T * fps))
     for i in range(n):
         renderer.render(scene, camera)
