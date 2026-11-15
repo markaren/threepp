@@ -26,6 +26,8 @@ examples/usv/otterx_hydro.json
 # Generated from otter_spec.json by examples/usv/build_otter_blender.py (headless Blender)
 examples/usv/otter.glb
 examples/usv/otter_hydro.json
+# Stills of the --rain look from examples/usv/usv_radar_sonar.py (--shot ... --out out_rain/...)
+examples/usv/out_rain/
 # Generated from x8_spec.json by examples/uav/build_x8_blender.py (headless Blender)
 examples/uav/x8.glb
 # Generated from m350_spec.json by examples/uav/build_m350_blender.py (headless Blender), and its stills
