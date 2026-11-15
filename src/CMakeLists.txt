@@ -899,6 +899,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/MaterialState.hpp"
             "threepp/renderers/vulkan/state/ExposureState.hpp"
             "threepp/renderers/vulkan/state/ShadowState.hpp"
+            "threepp/renderers/vulkan/state/RenderGraphState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
