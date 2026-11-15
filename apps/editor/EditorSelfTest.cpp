@@ -9691,11 +9691,26 @@ int EditorApp::runSelfTest() {
 
         const auto empty = renderer_->readRGBPixels();
 
+        // Only the middle of the window, where the cloud is: the readback is
+        // the whole window, and the Console prints what the splat pass logs
+        // while the clouds come and go, which is not a ghost. The band keeps
+        // clear of the side panels and of the bottom panel whichever way up
+        // the rows are.
+        const auto winSize = canvas_.size();
+        const int winW = winSize.width(), winH = winSize.height();
+        const int x0 = winW * 3 / 20, x1 = winW * 17 / 20, y0 = winH * 3 / 10, y1 = winH * 7 / 10;
+        const std::size_t regionBytes = static_cast<std::size_t>(x1 - x0) * (y1 - y0) * 3;
         auto countMoved = [&](const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
             std::size_t moved = 0;
-            const std::size_t n = std::min(a.size(), b.size());
-            for (std::size_t i = 0; i < n; ++i)
-                if (std::abs(static_cast<int>(b[i]) - static_cast<int>(a[i])) > 16) ++moved;
+            const std::size_t need = static_cast<std::size_t>(winW) * winH * 3;
+            if (a.size() < need || b.size() < need) return regionBytes;// no picture: everything moved
+            for (int y = y0; y < y1; ++y) {
+                for (std::size_t i = (static_cast<std::size_t>(y) * winW + x0) * 3,
+                                 e = (static_cast<std::size_t>(y) * winW + x1) * 3;
+                     i < e; ++i) {
+                    if (std::abs(static_cast<int>(b[i]) - static_cast<int>(a[i])) > 16) ++moved;
+                }
+            }
             return moved;
         };
 
@@ -9713,7 +9728,7 @@ int EditorApp::runSelfTest() {
 
             const auto drawn = renderer_->readRGBPixels();
             const auto moved = countMoved(empty, drawn);
-            check(moved > empty.size() / 500,
+            check(moved > regionBytes / 500,
                   ("delete/import cycle " + std::to_string(cycle) + ": the new cloud draws").c_str());
 
             selectObject(cloud.get());
@@ -9722,7 +9737,7 @@ int EditorApp::runSelfTest() {
             stepFixed(4);
 
             const auto gone = renderer_->readRGBPixels();
-            check(countMoved(empty, gone) < empty.size() / 500,
+            check(countMoved(empty, gone) < regionBytes / 500,
                   ("delete/import cycle " + std::to_string(cycle) +
                    ": and deleting it really clears the frame — a ghost here means "
                    "the pass is drawing a resident copy of a cloud the scene no longer has")
