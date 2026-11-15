@@ -7,6 +7,7 @@
 #include "VulkanImplCommon.hpp"
 #include "EnvKnob.hpp"
 #include "StartupTiming.hpp"
+#include "VulkanLog.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -137,14 +138,13 @@ namespace threepp::vulkan {
             const auto errs  = gValidationErrors.load();
             const auto warns = gValidationWarnings.load();
             if (errs == 0) {
-                std::cerr << "[VulkanContext] strict validation: clean ("
-                          << warns << " warning(s))\n";
+                THREEPP_LOG(kLogValidation, Info) << "strict validation: clean (" << warns << " warning(s))";
                 return;
             }
-            std::cerr << "[VulkanContext] strict validation FAILED: " << errs
-                      << " validation error(s), " << warns << " warning(s). "
-                      << "Exiting " << kStrictValidationExitCode
-                      << " (THREEPP_VULKAN_STRICT_VALIDATION is set).\n";
+            THREEPP_LOG(kLogValidation, Error) << "strict validation FAILED: " << errs
+                                               << " validation error(s), " << warns << " warning(s). "
+                                               << "Exiting " << kStrictValidationExitCode
+                                               << " (THREEPP_VULKAN_STRICT_VALIDATION is set).";
             std::cerr.flush();
             std::cout.flush();
             // _Exit, not exit: this IS an atexit handler, so exit() here would
@@ -195,8 +195,11 @@ namespace threepp::vulkan {
                 } else {
                     gValidationWarnings.fetch_add(1, std::memory_order_relaxed);
                 }
-                std::cerr << "[Vulkan] " << (isSpecViolation ? "ERROR: " : "WARNING: ")
-                          << data->pMessage << "\n";
+                if (isSpecViolation) {
+                    THREEPP_LOG(kLogValidation, Error) << data->pMessage;
+                } else {
+                    THREEPP_LOG(kLogValidation, Warn) << data->pMessage;
+                }
             }
             return VK_FALSE;
         }
@@ -270,8 +273,8 @@ namespace threepp::vulkan {
                 // clamp, a 3840x2160 headless canvas got 3840x1181).
                 hiddenWindowFallback = true;
                 offscreen_           = true;
-                std::cerr << "[VulkanContext] VK_EXT_headless_surface not available; "
-                             "headless canvas renders into offscreen images.\n";
+                THREEPP_LOG(kLogDevice, Debug) << "VK_EXT_headless_surface is not available; "
+                                                  "the headless canvas renders into offscreen images";
             } else {
                 throw std::runtime_error(
                         "[VulkanContext] headless mode needs VK_EXT_headless_surface, "
@@ -334,8 +337,8 @@ namespace threepp::vulkan {
         } else if (preferHeadlessSurface) {
             presentSuppressed_ = env::flag("THREEPP_VULKAN_SUPPRESS_PRESENT", hiddenWindowFallback);
             if (presentSuppressed_) {
-                std::cout << "[VulkanContext] presents suppressed (headless canvas): the frame "
-                             "loop pins one swapchain image per in-flight slot\n";
+                THREEPP_LOG(kLogDevice, Debug) << "presents suppressed (headless canvas): the frame "
+                                                  "loop pins one swapchain image per in-flight slot";
             }
         }
 
@@ -357,8 +360,7 @@ namespace threepp::vulkan {
         wantValidation = env::flag("THREEPP_VULKAN_VALIDATION", wantValidation);
         const bool enableValidation = wantValidation && hasInstanceLayer(kValidationLayer);
         if (wantValidation && !enableValidation) {
-            std::cerr << "[VulkanContext] " << kValidationLayer
-                      << " not found; running without validation.\n";
+            THREEPP_LOG(kLogValidation, Warn) << kValidationLayer << " is not installed; running without validation";
         }
         rayTracingEnabled_ = enableRayTracing;
 
@@ -377,13 +379,12 @@ namespace threepp::vulkan {
             if (env::flag("THREEPP_VULKAN_STRICT_VALIDATION")) {
                 static std::once_flag once;
                 std::call_once(once, [] { std::atexit(strictValidationExitCheck); });
-                std::cerr << "[VulkanContext] strict validation armed: any validation error "
-                             "exits "
-                          << kStrictValidationExitCode << " at termination.\n";
+                THREEPP_LOG(kLogValidation, Info) << "strict validation armed: any validation error exits "
+                                                  << kStrictValidationExitCode << " at termination";
             }
         } else if (env::flag("THREEPP_VULKAN_STRICT_VALIDATION")) {
-            std::cerr << "[VulkanContext] THREEPP_VULKAN_STRICT_VALIDATION is set but the "
-                         "validation layer is not active — nothing is being checked.\n";
+            THREEPP_LOG(kLogValidation, Warn) << "THREEPP_VULKAN_STRICT_VALIDATION is set, but the validation layer "
+                                                 "is not active, so nothing is checked";
         }
         createSurface();
         startupMark("context: surface");
@@ -405,16 +406,15 @@ namespace threepp::vulkan {
 
         destroySwapchainResources();
 
-        // THREEPP_VK_EXIT_TIMING=1: the same per-section timing the renderer's
-        // destructor prints, for the device and instance teardown.
-        const bool exitTiming = env::flag("THREEPP_VK_EXIT_TIMING");
+        // THREEPP_LOG=vulkan.exit:debug: the same per-section timing the
+        // renderer's destructor prints, for the device and instance teardown.
+        const bool exitTiming = kLogExit.enabled(log::Level::Debug);
         auto last = std::chrono::steady_clock::now();
         auto mark = [&](const char* what) {
             if (!exitTiming) return;
             const auto now = std::chrono::steady_clock::now();
-            std::cout << "[vk-exit] context: " << what << " "
-                      << std::chrono::duration<double, std::milli>(now - last).count()
-                      << " ms" << std::endl;
+            THREEPP_LOG(kLogExit, Debug) << "context: " << what << " "
+                                         << std::chrono::duration<double, std::milli>(now - last).count() << " ms";
             last = now;
         };
         if (allocator_ != VK_NULL_HANDLE) vmaDestroyAllocator(allocator_);
@@ -436,9 +436,9 @@ namespace threepp::vulkan {
         // so nothing is lost; mid-process teardown (the test suite, a second
         // renderer in one script) still destroys properly. The whole wait is
         // inside vkDestroyDevice: process teardown, DLL detach included, does
-        // not pay it. THREEPP_VK_EXIT_TIMING=1 shows it as "context: device".
+        // not pay it. THREEPP_LOG=vulkan.exit:debug shows it as "context: device".
         if (leaveDeviceAtExit_ || processExiting()) {
-            if (exitTiming) std::cout << "[vk-exit] context: device left to process exit" << std::endl;
+            THREEPP_LOG(kLogExit, Debug) << "context: device left to process exit";
             return;
         }
         if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
@@ -621,13 +621,12 @@ namespace threepp::vulkan {
         // file does not exist yet, and the first check should write it.
         savedPipelineCacheBytes_ = (usable && source == path) ? initial.size() : 0;
         pipelineCacheWarm_ = usable && pipelineCache_ != VK_NULL_HANDLE;
-        std::cout << "[VulkanContext] pipeline cache: "
-                  << (usable ? "WARM - loaded " : compact ? "COMPACT - dropping " : "COLD - ignoring ")
-                  << initial.size() << " bytes from " << source.string()
-                  << (usable    ? " (pipelines reused)"
-                      : compact ? " (over the cap; rewriting only what this run uses)"
-                                : " (recompiling all pipelines)")
-                  << std::endl;
+        THREEPP_LOG(kLogPipelineCache, Debug)
+                << (usable ? "warm: loaded " : compact ? "compacting: dropped " : "cold: ignored ")
+                << initial.size() << " bytes from " << source.string()
+                << (usable    ? " (pipelines reused)"
+                    : compact ? " (over the 64 MB cap; this run writes back only what it uses)"
+                              : " (no matching cache; pipelines compile)");
     }
 
     void VulkanContext::savePipelineCache() {
@@ -689,8 +688,7 @@ namespace threepp::vulkan {
             std::filesystem::remove(tmp, rmEc);
             return;
         }
-        std::cout << "[VulkanContext] pipeline cache: saved " << sz
-                  << " bytes to " << path.string() << std::endl;
+        THREEPP_LOG(kLogPipelineCache, Debug) << "saved " << sz << " bytes to " << path.string();
         savedPipelineCacheBytes_ = sz;
     }
 
@@ -799,7 +797,7 @@ namespace threepp::vulkan {
             VkHeadlessSurfaceCreateInfoEXT ci{};
             ci.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
             check(fn(instance_, &ci, nullptr, &surface_), "vkCreateHeadlessSurfaceEXT");
-            std::cerr << "[VulkanContext] surface: headless (VK_EXT_headless_surface)\n";
+            THREEPP_LOG(kLogDevice, Debug) << "surface: headless (VK_EXT_headless_surface)";
             return;
         }
         check(glfwCreateWindowSurface(instance_, window_, nullptr, &surface_),
@@ -866,7 +864,7 @@ namespace threepp::vulkan {
 
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physicalDevice_, &props);
-        std::cerr << "[VulkanContext] picked GPU: " << props.deviceName << "\n";
+        THREEPP_LOG(kLogDevice, Info) << "GPU: " << props.deviceName;
 
         if (rayTracingEnabled_) {
             const auto pickedExts = deviceExtensions(physicalDevice_);
@@ -904,19 +902,20 @@ namespace threepp::vulkan {
                 vkGetPhysicalDeviceFeatures2(physicalDevice_, &feat2);
                 rayQuerySupported_ = rqFeat.rayQuery == VK_TRUE;
             }
-            std::cerr << "[VulkanContext] ray query (VK_KHR_ray_query): "
-                      << (rayQuerySupported_ ? "enabled" : "unavailable") << "\n";
+            THREEPP_LOG(kLogDevice, Debug) << "ray query (VK_KHR_ray_query): "
+                                           << (rayQuerySupported_ ? "enabled" : "unavailable");
             if (!rayQuerySupported_) rayTracingEnabled_ = false;
         }
         if (forcedOff) {
-            std::cerr << "[VulkanContext] ray tracing: forced off (THREEPP_VULKAN_NO_RT)\n";
+            THREEPP_LOG(kLogDevice, Info) << "ray tracing: forced off (THREEPP_VULKAN_NO_RT)";
         } else if (!rayTracingEnabled_) {
-            std::cerr << "[VulkanContext] ray tracing: unavailable on " << props.deviceName
-                      << "; shadows, traced GI and reflections are off\n";
 #ifdef __APPLE__
-            std::cerr << "[VulkanContext] MoltenVK implements none of the KHR ray-tracing "
-                         "extensions, so the Vulkan backend runs without them on macOS.\n";
+            constexpr const char* why = " (MoltenVK implements none of the KHR ray-tracing extensions)";
+#else
+            constexpr const char* why = "";
 #endif
+            THREEPP_LOG(kLogDevice, Info) << "ray tracing: unavailable on " << props.deviceName << why
+                                          << "; ray-traced shadows, GI and reflections are off";
         }
 
         // Probe for exportable external memory (the platform handle extension;
@@ -932,17 +931,19 @@ namespace threepp::vulkan {
 #else
             externalMemorySupported_ = hasExtension(exts, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
 #endif
-            std::cerr << "[VulkanContext] external memory export: "
-                      << (externalMemorySupported_ ? "enabled" : "unavailable") << "\n";
+            THREEPP_LOG(kLogDevice, Debug) << "external memory export: "
+                                           << (externalMemorySupported_ ? "enabled" : "unavailable");
 
             // Diagnostic only, and opt-in: capturing statistics changes how
             // pipelines are compiled, so it must never be on by default.
             if (env::flag("THREEPP_VULKAN_PIPELINE_STATS")) {
                 pipelineStatsEnabled_ = hasExtension(exts, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
-                std::cerr << "[VulkanContext] pipeline statistics: "
-                          << (pipelineStatsEnabled_ ? "ENABLED (diagnostic)"
-                                                    : "requested but VK_KHR_pipeline_executable_properties unavailable")
-                          << "\n";
+                if (pipelineStatsEnabled_) {
+                    THREEPP_LOG(kLogPipelineStats, Info) << "pipeline statistics: on (diagnostic)";
+                } else {
+                    THREEPP_LOG(kLogPipelineStats, Warn) << "THREEPP_VULKAN_PIPELINE_STATS is set, but this device has no "
+                                                            "VK_KHR_pipeline_executable_properties; no statistics";
+                }
             }
         }
 
@@ -994,12 +995,12 @@ namespace threepp::vulkan {
             if (queueFamilies_.compute != queueFamilies_.graphics && queueFamilies_.compute != UINT32_MAX) {
                 setConcurrentSharingFamilies(queueFamilies_.graphics, queueFamilies_.compute);
             }
-            std::cerr << "[VulkanContext] async compute pilot =" << asyncComputePilotMode()
-                      << ": compute family " << queueFamilies_.compute << ", graphics family "
-                      << queueFamilies_.graphics
-                      << (asyncComputeQueue()               ? " (separate queue)\n"
-                          : asyncComputePilotMode() == 2    ? " (control: CONCURRENT resources, one queue)\n"
-                                                            : " (same queue: the pilot is off)\n");
+            THREEPP_LOG(kLogDevice, Info) << "async compute pilot " << asyncComputePilotMode()
+                                          << ": compute family " << queueFamilies_.compute << ", graphics family "
+                                          << queueFamilies_.graphics
+                                          << (asyncComputeQueue()            ? " (separate queue)"
+                                              : asyncComputePilotMode() == 2 ? " (control: CONCURRENT resources, one queue)"
+                                                                             : " (same queue: the pilot is off)");
         }
     }
 
@@ -1357,21 +1358,21 @@ namespace threepp::vulkan {
             for (auto& s : stats) s.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR;
             getStats(device_, &ei, &nStats, stats.data());
 
-            std::cerr << "[pipeline-stats] " << label << " / " << execs[i].name << ":\n";
+            THREEPP_LOG(kLogPipelineStats, Info) << label << " / " << execs[i].name << ":";
             for (const auto& s : stats) {
-                std::cerr << "    " << s.name << " = ";
+                log::Line line(kLogPipelineStats, log::Level::Info);
+                line << "    " << s.name << " = ";
                 switch (s.format) {
                     case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
-                        std::cerr << (s.value.b32 ? "true" : "false"); break;
+                        line << (s.value.b32 ? "true" : "false"); break;
                     case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
-                        std::cerr << s.value.i64; break;
+                        line << s.value.i64; break;
                     case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
-                        std::cerr << s.value.u64; break;
+                        line << s.value.u64; break;
                     case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_FLOAT64_KHR:
-                        std::cerr << s.value.f64; break;
-                    default: std::cerr << "?"; break;
+                        line << s.value.f64; break;
+                    default: line << "?"; break;
                 }
-                std::cerr << "\n";
             }
         }
     }
@@ -1480,8 +1481,8 @@ namespace threepp::vulkan {
             }
             if (ww > 0 && wh > 0 && (static_cast<uint32_t>(ww) != extent.width ||
                                      static_cast<uint32_t>(wh) != extent.height)) {
-                std::cout << "[VulkanContext] headless canvas renders " << extent.width << "x" << extent.height
-                          << " offscreen (its hidden window got " << ww << "x" << wh << ")\n";
+                THREEPP_LOG(kLogDevice, Debug) << "headless canvas renders " << extent.width << "x" << extent.height
+                                               << " offscreen (its hidden window got " << ww << "x" << wh << ")";
             }
             return;
         }
@@ -1508,8 +1509,9 @@ namespace threepp::vulkan {
             // swapchain image. No known desktop ICD omits BGRA8_UNORM, but if
             // one ever does, swapped channels should be diagnosable from the
             // log rather than from staring at pink screenshots.
-            std::cerr << "[VulkanContext] surface does not offer B8G8R8A8_UNORM; using format "
-                      << chosenFmt.format << " - CPU readbacks assume BGRA byte order\n";
+            THREEPP_LOG(kLogDevice, Warn) << "the surface does not offer B8G8R8A8_UNORM; using VkFormat "
+                                          << chosenFmt.format << ". CPU readbacks assume BGRA byte order, "
+                                             "so their channels may come out swapped";
         }
 
         uint32_t pmN = 0;
@@ -1532,11 +1534,10 @@ namespace threepp::vulkan {
             if (hasMailbox) chosenMode = VK_PRESENT_MODE_MAILBOX_KHR;
             else if (hasImmediate) chosenMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
         }
-        std::cout << "[VulkanContext] present mode: "
-                  << (chosenMode == VK_PRESENT_MODE_FIFO_KHR      ? "FIFO (vsync)"
-                      : chosenMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX"
-                                                                  : "IMMEDIATE")
-                  << "\n";
+        THREEPP_LOG(kLogDevice, Debug) << "present mode: "
+                                       << (chosenMode == VK_PRESENT_MODE_FIFO_KHR      ? "FIFO (vsync)"
+                                           : chosenMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX"
+                                                                                       : "IMMEDIATE");
 
         VkExtent2D extent = caps.currentExtent;
         if (headlessSurface_ && requestedExtent_.width > 0 && requestedExtent_.height > 0) {
@@ -1545,9 +1546,8 @@ namespace threepp::vulkan {
             extent.width  = std::clamp(requestedExtent_.width, caps.minImageExtent.width, caps.maxImageExtent.width);
             extent.height = std::clamp(requestedExtent_.height, caps.minImageExtent.height, caps.maxImageExtent.height);
             if (extent.width != requestedExtent_.width || extent.height != requestedExtent_.height) {
-                std::cerr << "[VulkanContext] headless surface clamps the requested " << requestedExtent_.width
-                          << "x" << requestedExtent_.height << " to " << extent.width << "x" << extent.height
-                          << "\n";
+                THREEPP_LOG(kLogDevice, Warn) << "the headless surface clamps the requested " << requestedExtent_.width
+                                              << "x" << requestedExtent_.height << " to " << extent.width << "x" << extent.height;
             }
         } else if (extent.width == UINT32_MAX || headlessSurface_) {
             // No window defines the extent, so the canvas window size does.

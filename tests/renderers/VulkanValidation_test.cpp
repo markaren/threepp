@@ -537,7 +537,7 @@ int main() {
     bool failed = false;
     if (errors != 0) {
         std::printf("\nFAILED: the validation layer reported %u error(s). The messages are above,\n"
-                    "        each prefixed \"[Vulkan] ERROR:\"; the phase table names which\n"
+                    "        each prefixed \"[vulkan.validation] error:\"; the phase table names which\n"
                     "        reconfiguration provoked them.\n",
                     errors);
         failed = true;

@@ -22,6 +22,7 @@
 #include "vulkan/VulkanCoreImpl.hpp"
 
 #include "vulkan/VulkanCpuPhaseProf.hpp"
+#include "vulkan/VulkanLog.hpp"
 
 #include "threepp/extras/DataUtils.hpp"
 
@@ -558,15 +559,11 @@ namespace threepp {
         if (core()->frameEndedByReadback_ &&
             (camera.is<OrthographicCamera>() ||
              (core()->scissorTest && core()->scissor.z >= 1.f && core()->scissor.w >= 1.f))) {
-            static bool warned = false;
-            if (!warned) {
-                warned = true;
-                std::cerr << "[VulkanRenderer] render() of an overlay pass (HUD camera or "
-                             "scissored pane) after readRGBPixels() / writeFramebuffer() in the "
-                             "same frame: the readback finished the frame to read it, so there is "
-                             "nothing left to draw onto and the pass was skipped. Render it "
-                             "before the readback. Printed once.\n";
-            }
+            THREEPP_LOG_ONCE(vulkan::kLogOverlay, Warn)
+                    << "render() of an overlay pass (HUD camera or scissored pane) after "
+                       "readRGBPixels() / writeFramebuffer() in the same frame is skipped: the "
+                       "readback finished the frame, so there is nothing left to draw onto. "
+                       "Render it before the readback.";
             return;
         }
 
@@ -733,13 +730,8 @@ namespace threepp {
     // goes through setRenderScale, the one supported lever.
     float VulkanRenderer::getTargetPixelRatio() const { return 1.f; }
     void VulkanRenderer::setPixelRatio(float) {
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            std::cerr << "[VulkanRenderer] setPixelRatio: unsupported (the swapchain is "
-                         "native-pixel; use setRenderScale for resolution scaling) - "
-                         "call ignored\n";
-        }
+        THREEPP_LOG_ONCE(vulkan::kLogRenderer, Warn)
+                << "setPixelRatio is ignored: the swapchain is native-pixel; use setRenderScale for resolution scaling";
     }
 
     void VulkanRenderer::setViewport(const Vector4& v) { core()->viewport = v; }
@@ -764,12 +756,8 @@ namespace threepp {
     void VulkanRenderer::setClearAlpha(float a) { core()->clearAlpha = a; }
 
     void VulkanRenderer::clear(bool, bool, bool) {
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            std::cerr << "[VulkanRenderer] clear(): unsupported - the deferred pipeline "
-                         "rewrites every attachment each render(); call ignored\n";
-        }
+        THREEPP_LOG_ONCE(vulkan::kLogRenderer, Warn)
+                << "clear() is ignored: the deferred pipeline rewrites every attachment in each render()";
     }
 
     // nullptr = "rendering to the default framebuffer" in three.js semantics —
@@ -777,13 +765,9 @@ namespace threepp {
     RenderTarget* VulkanRenderer::getRenderTarget() { return nullptr; }
     void VulkanRenderer::setRenderTarget(RenderTarget* renderTarget, int, int) {
         if (!renderTarget) return;// null = default framebuffer — already the only mode
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            std::cerr << "[VulkanRenderer] setRenderTarget(): offscreen render targets are "
-                         "unsupported (swapchain-only renderer); call ignored - use "
-                         "readGBufferAOV/readRGBPixels for capture\n";
-        }
+        THREEPP_LOG_ONCE(vulkan::kLogRenderer, Warn)
+                << "setRenderTarget() is ignored: this renderer has no offscreen render targets; "
+                   "use readGBufferAOV or readRGBPixels to capture";
     }
 
     void VulkanRenderer::writeFramebuffer(const std::filesystem::path& filename) {
@@ -2802,8 +2786,8 @@ namespace threepp {
 
     void VulkanRenderer::setProbeGI(bool enabled) {
         if (enabled && !pimpl_->ctx->rayQuerySupported()) {
-            std::cerr << "[VulkanRenderer] setProbeGI(true) ignored: the probe update traces rays, "
-                         "and this device has no ray query\n";
+            THREEPP_LOG(vulkan::kLogRenderer, Warn) << "setProbeGI(true) is ignored: the probe update traces rays, "
+                                                       "and this device has no ray query";
             return;
         }
         if (pimpl_->probeGIEnabled_ == enabled) return;
@@ -3302,11 +3286,9 @@ namespace threepp {
     }
 
     void VulkanRenderer::setShadowMode(ShadowMode mode) {
-        static bool told = false;
-        if (mode == ShadowMode::RayTraced && !rayTracingSupported() && !told) {
-            told = true;
-            std::fprintf(stderr, "[VulkanRenderer] shadow mode RayTraced needs ray tracing, which this device "
-                                 "lacks: running ShadowMaps\n");
+        if (mode == ShadowMode::RayTraced && !rayTracingSupported()) {
+            THREEPP_LOG_ONCE(vulkan::kLogShadow, Warn)
+                    << "shadow mode RayTraced needs ray tracing, which this device lacks; shadow maps are used instead";
         }
         pimpl_->shadowModeReq_ = mode;
     }
