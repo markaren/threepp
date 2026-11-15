@@ -1502,6 +1502,16 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
 // Main record entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
+void OverlayPass::beginFrame(uint32_t frame) {
+    spriteSetsUsed_ = 0;
+    // Nothing to free before the first overlay of the program made the pools.
+    if (frame >= spriteDescPools_.size() || spriteDescPools_[frame] == VK_NULL_HANDLE) return;
+    // Safe because the caller has waited on this slot's fence: the sets of
+    // the slot's last frame are bound on no command buffer in flight.
+    check(vkResetDescriptorPool(ctx_.device(), spriteDescPools_[frame], 0),
+          "vkResetDescriptorPool(sprite)");
+}
+
 void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
                           Object3D& scene, const std::vector<Sprite*>& sprites,
                           Camera& camera, bool screenSpaceOnly,
@@ -1573,14 +1583,6 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             }
         }
     }
-
-    // Reset the per-frame descriptor pool before allocating this
-    // frame's sprite sets. Safe because the inFlight fence wait
-    // at frame start already guarantees the prior frame's sets
-    // aren't bound on any in-flight cmd buffer.
-    check(vkResetDescriptorPool(ctx_.device(),
-                                spriteDescPools_[frame], 0),
-          "vkResetDescriptorPool(sprite)");
 
     // Collect visible sprites, from the renderer's census of the scene: hidden
     // subtrees are out the same way the deferred scene walk leaves them out,
@@ -1729,12 +1731,15 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // pane must show background, not whatever the frame put there before.
     if (!litPane &&
         draws.empty() && lineDraws.empty() && meshDraws.empty() && pointDraws.empty()) return;
-    if (draws.size() > kMaxSpritesPerFrame) {
-        std::cerr << "[VulkanRenderer] HUD sprite count " << draws.size()
+    // The frame's record() calls share the slot's pool (see beginFrame).
+    const uint32_t spriteSetsLeft = kMaxSpritesPerFrame - spriteSetsUsed_;
+    if (draws.size() > spriteSetsLeft) {
+        std::cerr << "[VulkanRenderer] HUD sprite count " << (spriteSetsUsed_ + draws.size())
                   << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
                   << "; extras dropped\n";
-        draws.resize(kMaxSpritesPerFrame);
+        draws.resize(spriteSetsLeft);
     }
+    spriteSetsUsed_ += static_cast<uint32_t>(draws.size());
 
     // Draw order of the flat fills and the sprites, as GLRenderer orders the
     // same scene: its opaque list, then its transparent one (where a Sprite

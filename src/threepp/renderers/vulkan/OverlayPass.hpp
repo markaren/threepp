@@ -99,6 +99,13 @@ namespace threepp::vulkan {
         // matches what GL's forward path does for a scissored render()).
         // Lines / Points / Sprites / normal-less meshes composite on top
         // through the flat path as before.
+        // Once per frame, after frame slot `frame`'s fence and before the first
+        // record() into it: frees the sprite sets that slot's last frame drew
+        // with. A frame calls record() more than once (the screen-space
+        // sprites, a HUD scene, a pane), all into one command buffer, so the
+        // sets of an earlier call must outlive the later ones.
+        void beginFrame(uint32_t frame);
+
         void record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
                     Object3D& scene, const std::vector<Sprite*>& sprites,
                     Camera& camera, bool screenSpaceOnly,
@@ -252,8 +259,11 @@ namespace threepp::vulkan {
         VkPipelineLayout paneSkyPipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline       paneSkyPipeline_       = VK_NULL_HANDLE;
 
-        // Per-frame descriptor pools reset at the top of each record() call.
+        // Per-frame descriptor pools, reset by beginFrame(); every record() of
+        // the frame allocates from the slot's pool, kMaxSpritesPerFrame sets
+        // between them (spriteSetsUsed_ counts the frame's so far).
         std::vector<VkDescriptorPool> spriteDescPools_;
+        uint32_t                      spriteSetsUsed_ = 0;
 
         // Texture + geometry caches
         std::unordered_map<const Texture*,        SpriteAtlasRec> spriteAtlasCache_;

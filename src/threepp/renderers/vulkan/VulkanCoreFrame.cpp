@@ -1385,6 +1385,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("frame.3a_cbBegin");
                 vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
                 beginCommandRecording(cmdBuffers[currentFrame]);
+                overlayPass_->beginFrame(currentFrame);
                 // The Sky's bake, when refreshEnvTextureFromScene marked one:
                 // mip 0 and the prefiltered mips of the env image, rewritten
                 // in place ahead of every pass of this frame that samples it
@@ -1571,6 +1572,7 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
             VkCommandBuffer cb = cmdBuffers[currentFrame];
             beginCommandRecording(cb);
+            overlayPass_->beginFrame(currentFrame);
 
             // UNDEFINED → TRANSFER_DST, vkCmdClearColorImage, TRANSFER_DST → GENERAL.
             const VkImage img = ctx->swapchainImages()[imageIndex];
