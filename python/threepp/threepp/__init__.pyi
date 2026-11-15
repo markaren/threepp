@@ -2188,14 +2188,6 @@ class DisplacedMesh(Mesh):
         def half_beam(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
-        def stern_beam(self) -> float:
-            """
-            The share of her beam the footprint keeps at her stern (default 0.75; about 0.95 for a square transom as wide as she is).
-            """
-        @stern_beam.setter
-        def stern_beam(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
         def half_length(self) -> float:
             """
             Half the vessel's length (m). 0 DISABLES hull exclusion and the wake.
@@ -2226,6 +2218,14 @@ class DisplacedMesh(Mesh):
             """
         @sin_yaw.setter
         def sin_yaw(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def stern_beam(self) -> float:
+            """
+            The share of her beam the footprint keeps at her stern (default 0.75; about 0.95 for a square transom as wide as she is).
+            """
+        @stern_beam.setter
+        def stern_beam(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
     class MeshWarp:
         @property
@@ -2503,14 +2503,6 @@ class DisplacedMesh(Mesh):
         def aeration_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
-        def lace(self) -> float:
-            """
-            The foam level (share of the surface covered) that water full of air carries: a race or a boil wears a lace of foam, and its air is drawn in plumes under it. 0 = the film alone over an even haze. Default 0.5. Read every frame.
-            """
-        @lace.setter
-        def lace(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
         def albedo(self) -> float:
             """
             Scales the light the film and the bubbles turn back; 1 = as the water shade has them (the default). Read every frame. A scene whose camera opens wide at night turns it down: under a moon, or the night sky's own light, a race is otherwise a pale band on a sea that mirrors a dark sky.
@@ -2541,6 +2533,14 @@ class DisplacedMesh(Mesh):
             """
         @foam_thinning.setter
         def foam_thinning(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lace(self) -> float:
+            """
+            The foam level (share of the surface covered) that water full of air carries: a race or a boil wears a lace of foam, and its air is drawn in plumes under it. 0 = the film alone over an even haze. Default 0.5. Read every frame.
+            """
+        @lace.setter
+        def lace(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def lane_life(self) -> float:
@@ -2760,6 +2760,10 @@ class DisplacedMesh(Mesh):
         """
         Age every trail sample by dt, drop anything older than max_age, and keep at most max_samples (newest). Returns the surviving count. Call once per frame.
         """
+    def clear_external_cascade(self, cascade: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Give the cascade back to its spectrum and inverse FFT.
+        """
     def clear_foam_disturbances(self) -> None:
         ...
     def clear_wake(self) -> None:
@@ -2768,10 +2772,6 @@ class DisplacedMesh(Mesh):
         """
     def clear_wake_sources(self) -> None:
         ...
-    def clear_external_cascade(self, cascade: typing.SupportsInt | typing.SupportsIndex) -> None:
-        """
-        Give the cascade back to its spectrum and inverse FFT.
-        """
     def clear_wave_climate(self) -> None:
         """
         Drop the wave climate map: one sea everywhere again.
@@ -5029,9 +5029,9 @@ class InstancedMesh(Mesh):
         """
         Fades for instances offset .. offset+N-1 in one call (Mesh.set_fade per instance). fades is a numpy array of shape (N,), values in [0, 1]; complement a bool for the whole run or a bool array of shape (N,). Marks the fades for upload. Raises ValueError on a bad shape or offset + N past the instance capacity.
         """
-    def set_matrices(self, matrices: numpy.ndarray, offset: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+    def set_matrices(self, matrices: numpy.ndarray, offset: typing.SupportsInt | typing.SupportsIndex = 0, placed: bool = False) -> None:
         """
-        Write N instance matrices in one call: instances offset .. offset+N-1. matrices is a float32/float64 numpy array, shape (N, 16) in Matrix4.elements order (column-major, what get_matrix_at(i).elements() holds) or (N, 4, 4) conventional row-major M[row, col] (transposed on copy). Marks the instance matrix for re-upload, which set_matrix_at does not. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.
+        Write N instance matrices in one call: instances offset .. offset+N-1. matrices is a float32/float64 numpy array, shape (N, 16) in Matrix4.elements order (column-major, what get_matrix_at(i).elements() holds) or (N, 4, 4) conventional row-major M[row, col] (transposed on copy). Marks the instance matrix for re-upload, which set_matrix_at does not, and records the rows written so a renderer refreshes only those. placed=True: these rows now hold other objects than before (a pool's slots handed on, or parked out of sight), not moved ones: no motion vectors, no moving-object history resets for them. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.
         """
     def set_matrix_at(self, index: typing.SupportsInt | typing.SupportsIndex, matrix: Matrix4) -> None:
         ...
@@ -5756,6 +5756,14 @@ class LidarParams:
         ...
     @min_range.setter
     def min_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def optical_media(self) -> bool:
+        """
+        True (default) for light: the trace goes through the scene's fog and every ParticleField density volume. False for rays that are not light (a radar, a sonar): those media are skipped; the dedicated medium still applies.
+        """
+    @optical_media.setter
+    def optical_media(self, arg0: bool) -> None:
         ...
     @property
     def paired_clean_trace(self) -> bool:
@@ -7367,6 +7375,14 @@ class MeshStandardMaterial(Material):
         """
         One band's repeating set. albedo: LINEAR RGBA, RGB a 0.5-neutral overlay of the macro colour, A the material's height (0.5 = neutral) for the height blend. normal_rough: LINEAR RGBA, RGB a tangent-space normal (0.5 = flat), A a roughness modulation (0.5 = neutral). repeat: repeats per world metre. roughness: the band's base roughness, which replaces the material's where the band covers.
         """
+    def set_terrain_band_far_tint(self, band: typing.SupportsInt | typing.SupportsIndex, r: typing.SupportsFloat | typing.SupportsIndex, g: typing.SupportsFloat | typing.SupportsIndex, b: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        The linear rgb multiply band 0..3's share of the ground's albedo takes far from the eye: the colour that band's vegetation gives the ground from a distance, over the ground's own. (1, 1, 1) leaves the band as it is. Read with terrain_far_start and terrain_far_end.
+        """
+    def terrain_band_far_tint(self, band: typing.SupportsInt | typing.SupportsIndex) -> tuple[float, float, float]:
+        """
+        Band 0..3's far tint as (r, g, b).
+        """
     @property
     def alpha_test(self) -> float:
         ...
@@ -7518,6 +7534,22 @@ class MeshStandardMaterial(Material):
         """
     @terrain_band_strength.setter
     def terrain_band_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terrain_far_end(self) -> float:
+        """
+        Metres from the camera where the far tints are in full. At or under terrain_far_start (the default, 0 and 0) there is no far tint.
+        """
+    @terrain_far_end.setter
+    def terrain_far_end(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terrain_far_start(self) -> float:
+        """
+        Metres from the camera where the bands' far tints begin.
+        """
+    @terrain_far_start.setter
+    def terrain_far_start(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def terrain_height_blend(self) -> float:
