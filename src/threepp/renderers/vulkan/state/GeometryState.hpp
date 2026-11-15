@@ -4,7 +4,8 @@
 //
 // The members, their comments and their relative order are as they were in Impl;
 // Impl's methods and the VulkanCore*.cpp TUs reach them unqualified, as before.
-#pragma once
+#ifndef THREEPP_VULKAN_STATE_GEOMETRYSTATE_HPP
+#define THREEPP_VULKAN_STATE_GEOMETRYSTATE_HPP
 
 #include "StateCommon.hpp"
 
@@ -152,3 +153,5 @@ namespace threepp::vulkan::impl {
     };
 
 }// namespace threepp::vulkan::impl
+
+#endif// THREEPP_VULKAN_STATE_GEOMETRYSTATE_HPP

@@ -3,7 +3,8 @@
 // The headers the state groups' member types come from. The same list
 // VulkanCoreImpl.hpp includes (it includes this one first), spelled from this
 // folder, so each state header compiles on its own.
-#pragma once
+#ifndef THREEPP_VULKAN_STATE_STATECOMMON_HPP
+#define THREEPP_VULKAN_STATE_STATECOMMON_HPP
 
 #include "../CpuPar.hpp"
 #include "../EnvKnob.hpp"
@@ -191,3 +192,5 @@ namespace threepp::vulkan::impl {
         };
 
 }// namespace threepp::vulkan::impl
+
+#endif// THREEPP_VULKAN_STATE_STATECOMMON_HPP
