@@ -204,11 +204,9 @@ const VulkanRenderer::Impl::DisplacementSpec* VulkanRenderer::Impl::noteDisplace
             spec.owner = &m;
             spec.ownerId = m.id;
             auto& slot = geomDisplacement_[g];
-            static bool warned = false;
-            if (!warned && slot.signature != 0u && slot.signature != spec.signature && slot.geom.lock().get() == g) {
-                std::cerr << "[VulkanRenderer] one geometry drawn with two different displacementMaps: "
-                             "the last mesh walked displaces it for both" << std::endl;
-                warned = true;
+            if (slot.signature != 0u && slot.signature != spec.signature && slot.geom.lock().get() == g) {
+                THREEPP_LOG_ONCE(vulkan::kLogDisplacement, Warn) << "one geometry is drawn with two different displacementMaps; "
+                                                                    "the last mesh walked displaces it for both";
             }
             slot = std::move(spec);
             return &slot;
@@ -1054,7 +1052,7 @@ void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
             walkSceneGraph(scene, true, false, visit, post);
             uint64_t bad = 0;
             const auto mismatch = [&](const char* what, size_t k) {
-                if (bad++ < 8) std::fprintf(stderr, "[VulkanRenderer] slot delta differs from a full walk: %s %zu\n", what, k);
+                if (bad++ < 8) THREEPP_LOGF(vulkan::kLogScene, Warn, "slot delta differs from a full walk: %s %zu", what, k);
             };
             if (snap.size() != sceneSnapshot_.size()) mismatch("node count", snap.size());
             for (size_t k = 0; k < std::min(snap.size(), sceneSnapshot_.size()); ++k) {
@@ -1069,9 +1067,8 @@ void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
                     (a.flags & mask) != (b.flags & mask) || a.geom != b.geom || a.mat != b.mat ||
                     a.instCount != b.instCount || a.ver != b.ver || a.parentIdx != b.parentIdx) {
                     if (bad < 8)
-                        std::fprintf(stderr,
-                                     "[VulkanRenderer]   node %zu: obj %d flags %x/%x ver %llu/%llu parent %d/%d "
-                                     "end %u/%u span %d/%d\n",
+                        THREEPP_LOGF(vulkan::kLogScene, Warn, "  node %zu: obj %d flags %x/%x ver %llu/%llu parent %d/%d "
+                                     "end %u/%u span %d/%d",
                                      k, int(a.obj == b.obj), a.flags, b.flags, static_cast<unsigned long long>(a.ver),
                                      static_cast<unsigned long long>(b.ver), a.parentIdx, b.parentIdx, a.subtreeEnd,
                                      b.subtreeEnd, a.spanIndex, b.spanIndex);
@@ -2237,7 +2234,7 @@ void VulkanRenderer::Impl::expandSceneEntries(Object3D& scene, Camera& camera) {
                 walkSceneGraph(scene, true, false, visitRecord, postRecord);
                 uint64_t bad = 0;
                 const auto mismatch = [&](const char* what, size_t k) {
-                    if (bad++ < 8) std::fprintf(stderr, "[VulkanRenderer] walk reuse differs: %s %zu\n", what, k);
+                    if (bad++ < 8) THREEPP_LOGF(vulkan::kLogScene, Warn, "walk reuse differs: %s %zu", what, k);
                 };
                 // Field by field: copies leave padding undefined, and a span
                 // carries vectors.
@@ -2528,8 +2525,8 @@ void VulkanRenderer::Impl::selectAutoLodLevels(Camera& camera) {
                                         ? BlasRecord::LodState::Queued
                                         : BlasRecord::LodState::Failed;
                             } else if (!lodBudgetWarned_) {
-                                std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached - "
-                                             "no further chains will be generated this session\n";
+                                THREEPP_LOG(vulkan::kLogGeometry, Warn) << "auto-LOD: the 256 MiB budget is reached; no further "
+                                                                           "chains are generated this session";
                                 lodBudgetWarned_ = true;
                             }
                         }
@@ -3000,12 +2997,8 @@ void VulkanRenderer::Impl::scanDeformers(SceneBuildFrame& sb, Camera& camera) {
                 if (entries[sp.first].isMorphed && entries[sp.first].isSkinned) {
                     // skinning.comp reads no morph deltas, so the bone path
                     // drops the targets: say so rather than render bind shape.
-                    static bool warned = false;
-                    if (!warned) {
-                        warned = true;
-                        std::cerr << "[VulkanRenderer] morph targets on a skinned mesh are not applied "
-                                     "by the Vulkan renderer (skinning only).\n";
-                    }
+                    THREEPP_LOG_ONCE(vulkan::kLogScene, Warn) << "morph targets on a skinned mesh are not applied "
+                                                                 "by the Vulkan renderer (skinning only)";
                 }
                 if (!entries[sp.first].isMorphed || entries[sp.first].isSkinned) continue;
                 for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
@@ -3478,12 +3471,12 @@ void VulkanRenderer::Impl::enqueueVertexInterop(SceneBuildFrame& sb) {
                     const uint32_t curVtx = posAttr ? static_cast<uint32_t>(posAttr->count()) : 0u;
                     const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
                     if (posAttr && (curVtx != rec.vertexCount || curIdx != rec.indexCount)) {
-                        std::cerr << "[VulkanRenderer] vertex interop: geometry changed "
+                        THREEPP_LOG(vulkan::kLogInterop, Warn) << "vertex interop: geometry changed "
                                      "topology (" << rec.vertexCount << " -> " << curVtx
                                   << " verts) - interop needs fixed-capacity geometry, so "
                                      "it is being DISABLED for this mesh. Allocate for the "
                                      "maximum triangle count once and write degenerates "
-                                     "for the unused tail.\n";
+                                     "for the unused tail.";
                         disableVertexInterop(*entries[i].mesh);
                         return true;
                     }
@@ -3655,7 +3648,7 @@ bool VulkanRenderer::Impl::refreshDirtyGeometry(SceneBuildFrame& sb) {
                         static const bool logDrains = vulkan::env::integer("THREEPP_VK_DRAW_STATS").value_or(0) > 0;
                         static std::unordered_set<const void*> logged;
                         if (logDrains && logged.insert(geomKey).second)
-                            std::fprintf(stderr, "[draw-stats] drained edit: mesh '%s', %u verts, normals %s, LOD chain landing %s\n",
+                            THREEPP_LOGF(vulkan::kLogDrawStats, Info, "drained edit: mesh '%s', %u verts, normals %s, LOD chain landing %s",
                                          entries[i].mesh->name.c_str(), rec.vertexCount, nrmAttr ? "yes" : "NO",
                                          rec.lodLanding.empty() ? "no" : "YES");
                     }
@@ -3695,12 +3688,12 @@ bool VulkanRenderer::Impl::refreshDirtyGeometry(SceneBuildFrame& sb) {
                             // — the draining host-side resync pass must
                             // never touch this record again.
                             rec.prevVertexResyncPending = false;
-                            std::cerr << "[VulkanRenderer] geometry ("
+                            THREEPP_LOG(vulkan::kLogGeometry, Debug) << "geometry ("
                                       << rec.vertexCount << " verts) dirty "
                                       << rec.dirtyStreak
                                       << " frames in a row - graduated to the "
                                          "per-frame dynamic path (staging ring, "
-                                         "frame-cb refit)\n";
+                                         "frame-cb refit)";
                         }
                         // A record still in its static storage (built
                         // without ALLOW_UPDATE, or compacted) moves to
@@ -5085,12 +5078,12 @@ void VulkanRenderer::Impl::admitRebuildEntries(SceneBuildFrame& sb, Camera& came
                                     // released behind disableVertexInterop's drain
                                     // and the application is told — then evict as
                                     // for any other geometry change.
-                                    std::cerr << "[VulkanRenderer] vertex interop: geometry "
+                                    THREEPP_LOG(vulkan::kLogInterop, Warn) << "vertex interop: geometry "
                                                  "attributes changed shape under an armed interop "
                                                  "registration - interop is being DISABLED for "
                                                  "this mesh. Edit only the CONTENTS of side "
                                                  "attributes (color/uv/index) while interop is "
-                                                 "armed.\n";
+                                                 "armed.";
                                     disableVertexInterop(*m);
                                     pendingDynamicGeomRefits_.erase(
                                             std::remove_if(pendingDynamicGeomRefits_.begin(),

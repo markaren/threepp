@@ -35,8 +35,8 @@ namespace threepp {
         if (v == "sm") return VulkanRenderer::ShadowMode::ShadowMaps;
         if (v == "off") return VulkanRenderer::ShadowMode::Off;
         if (v != "auto") {
-            std::fprintf(stderr, "[VulkanRenderer] THREEPP_VK_SHADOW_MODE=%s: expected auto, rt, sm or off; "
-                                 "using auto\n", e);
+            THREEPP_LOGF(vulkan::kLogShadow, Warn, "THREEPP_VK_SHADOW_MODE=%s: expected auto, rt, sm or off; "
+                                 "using auto", e);
         }
         return VulkanRenderer::ShadowMode::Auto;
     }
@@ -459,7 +459,7 @@ namespace threepp {
             if (h != shadowStaticHashPrev_) {
                 shadowStaticHashPrev_ = h;
                 ++shadowStaticGen_;
-                if (shadowCacheDebug_) {
+                if (vulkan::kLogShadow.enabled(log::Level::Debug)) {
                     const size_t n = lastVisibleEntries_.size();
                     size_t hidden = 0, dyn = 0, flips = 0;
                     std::string first;
@@ -480,7 +480,7 @@ namespace threepp {
                             ++flips;
                         }
                     }
-                    std::fprintf(stderr, "[shadowCache] gen %llu: entries %zu (prev %zu), hidden spans %zu, dynamic %zu, flips %zu:%s\n",
+                    THREEPP_LOGF(vulkan::kLogShadow, Debug, "gen %llu: entries %zu (prev %zu), hidden spans %zu, dynamic %zu, flips %zu:%s",
                                  static_cast<unsigned long long>(shadowStaticGen_), n, shadowDynPrev_.size(), hidden, dyn, flips, first.c_str());
                     shadowDynPrev_ = std::move(cur);
                 }
@@ -615,8 +615,8 @@ namespace threepp {
                 }
                 const bool reuse = cacheable && cc.valid && genOk && sunOk && boxIn;
                 if (staleTolerant && cacheable && !reuse) cascadeRedrawn = true;
-                if (shadowCacheDebug_ && cacheable && !reuse) {
-                    std::fprintf(stderr, "[shadowCache] cascade %u rebuilt:%s%s%s%s slice r %.2f, box r %.2f\n", i,
+                if (cacheable && !reuse) {
+                    THREEPP_LOGF(vulkan::kLogShadow, Trace, "cascade %u rebuilt:%s%s%s%s slice r %.2f, box r %.2f", i,
                                  cc.valid ? "" : " invalid",
                                  cc.valid && !genOk ? (staleTolerant ? " stale" : " casters") : "",
                                  cc.valid && !sunOk ? " sun" : "", cc.valid && !boxIn ? " box" : "",
@@ -832,7 +832,7 @@ namespace threepp {
         }
         u.spotCount  = sz.spots;
         u.pointCount = sz.points;
-        if (shadowCacheDebug_) {
+        if (vulkan::kLogShadow.enabled(log::Level::Trace)) {
             size_t cached = 0, rebuilt = 0, drawn = 0, skipped = 0;
             for (const auto& l : smp.layers) {
                 if (l.skip) ++skipped;
@@ -840,7 +840,7 @@ namespace threepp {
                 else if (l.mode == vulkan::ShadowMapPass::Mode::Rebuild) ++rebuilt;
                 else ++drawn;
             }
-            std::fprintf(stderr, "[shadowCache] frame: layers cached %zu rebuilt %zu drawn %zu skipped %zu\n", cached, rebuilt, drawn, skipped);
+            THREEPP_LOGF(vulkan::kLogShadow, Trace, "frame: layers cached %zu rebuilt %zu drawn %zu skipped %zu", cached, rebuilt, drawn, skipped);
         }
 
         // Raster side: a small slope-scaled bias away from the light (reverse-

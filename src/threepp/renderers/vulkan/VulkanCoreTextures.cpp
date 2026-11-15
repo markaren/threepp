@@ -86,7 +86,7 @@ void VulkanRenderer::Impl::createTextureSampler() {
             // setTextureAnisotropy — 0 = auto policy, 1..16 forces a level).
             if (const auto a = vulkan::env::number("THREEPP_VK_ANISO")) {
                 textureAnisoOverride_ = std::clamp(static_cast<float>(*a), 0.0f, maxAniso);
-                std::cout << "textureAnisotropy override = " << textureAnisoOverride_ << "\n";
+                THREEPP_LOG(vulkan::kLogTexture, Debug) << "textureAnisotropy override = " << textureAnisoOverride_;
             }
         }
 
@@ -162,17 +162,14 @@ int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Textur
                 // The G-buffer carries a second UV set ("uv2") for the aoMap
                 // only; any other map's Texture.channel (glTF TEXCOORD_1) is
                 // not honoured here.
-                static bool warned = false;
-                if (!warned) {
-                    warned = true;
-                    std::cerr << "[VulkanRenderer] a material map has Texture.channel = " << tex->channel
-                              << ": the Vulkan renderer samples every map but the aoMap with UV set 0.\n";
-                }
+                THREEPP_LOG_ONCE(vulkan::kLogTexture, Warn) << "a material map has Texture.channel = " << tex->channel
+                                                            << "; the Vulkan renderer samples every map but the aoMap "
+                                                               "with UV set 0";
             }
             if (freeTextureSlots.empty() && materialTextures.size() >= kMaxMaterialTextures) {
                 ++tlasStats_.textureSlotFallbacks;
-                std::cerr << "[VulkanRenderer] material texture slots exhausted ("
-                          << kMaxMaterialTextures << "); using -1 fallback\n";
+                THREEPP_LOG_ONCE(vulkan::kLogTexture, Warn) << "all " << kMaxMaterialTextures
+                                                            << " material texture slots are in use; further maps are not bound";
                 return -1;
             }
             Image2D out{};
@@ -656,15 +653,16 @@ bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
             // LDR backgrounds are not handled — fall through to default.
             const auto& image = tex->image();
             if (tex->type != Type::Float) {
-                std::cerr << "[VulkanRenderer] env texture is not float HDR; "
-                             "ignoring (HDR equirect only)" << std::endl;
+                THREEPP_LOG(vulkan::kLogTexture, Warn) << "the environment texture is not float HDR and is ignored "
+                                                          "(only HDR equirect maps are supported)";
                 return false;
             }
             const auto& src = image.data<float>();
             const uint32_t w = image.width();
             const uint32_t h = image.height();
             if (w == 0 || h == 0 || src.size() < 4u * w * h) {
-                std::cerr << "[VulkanRenderer] env texture has unexpected size; ignoring" << std::endl;
+                THREEPP_LOG(vulkan::kLogTexture, Warn) << "the environment texture is " << w << "x" << h << " with "
+                                                       << src.size() << " floats, too few for RGBA; it is ignored";
                 return false;
             }
 
@@ -819,8 +817,8 @@ VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::prepareMateria
             // thing. SplatCloud, the only half-float DataTexture in the tree,
             // is GL-only.
             if (img.isHalfFloat()) {
-                std::cerr << "[VulkanRenderer] half-float DataTexture is not supported yet ("
-                          << w << "x" << h << "); ignoring\n";
+                THREEPP_LOG(vulkan::kLogTexture, Warn) << "a half-float DataTexture (" << w << "x" << h
+                                                       << ") is not supported yet; it is ignored";
                 return {};
             }
 
@@ -888,9 +886,9 @@ VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::prepareMateria
                         static_cast<int>(h),
                         *img.compressedFormat);
                 if (bcnRgba.empty()) {
-                    std::cerr << "[VulkanRenderer] unsupported compressed format 0x"
+                    THREEPP_LOG(vulkan::kLogTexture, Warn) << "material texture skipped: unsupported compressed format 0x"
                               << std::hex << *img.compressedFormat << std::dec
-                              << " for material tex (" << w << "x" << h << ")\n";
+                              << " for material tex (" << w << "x" << h << ")";
                     return {};
                 }
                 srcPtr = bcnRgba.data();
@@ -900,14 +898,14 @@ VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::prepareMateria
                 try {
                     auto& src = img.data<unsigned char>();
                     if (src.size() % pixels != 0) {
-                        std::cerr << "[VulkanRenderer] unsupported pixel layout for material tex ("
-                                  << src.size() << " bytes for " << w << "x" << h << ")\n";
+                        THREEPP_LOG(vulkan::kLogTexture, Warn) << "material texture skipped: unsupported pixel layout ("
+                                  << src.size() << " bytes for " << w << "x" << h << ")";
                         return {};
                     }
                     channels = static_cast<int>(src.size() / pixels);
                     if (channels < 1 || channels > 4) {
-                        std::cerr << "[VulkanRenderer] unsupported channel count " << channels
-                                  << " for material tex (" << w << "x" << h << ")\n";
+                        THREEPP_LOG(vulkan::kLogTexture, Warn) << "material texture skipped: unsupported channel count " << channels
+                                  << " (" << w << "x" << h << ")";
                         return {};
                     }
                     srcPtr = src.data();
@@ -921,15 +919,14 @@ VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::prepareMateria
                     // expressed via material scalars instead.
                     auto& srcF = img.data<float>();
                     if (srcF.size() % pixels != 0) {
-                        std::cerr << "[VulkanRenderer] unsupported float-pixel layout for material tex ("
+                        THREEPP_LOG(vulkan::kLogTexture, Warn) << "material texture skipped: unsupported float pixel layout ("
                                   << srcF.size() * sizeof(float) << " bytes for "
-                                  << w << "x" << h << ")\n";
+                                  << w << "x" << h << ")";
                         return {};
                     }
                     const int fch = static_cast<int>(srcF.size() / pixels);
                     if (fch < 1 || fch > 4) {
-                        std::cerr << "[VulkanRenderer] unsupported float channel count " << fch
-                                  << " for material tex\n";
+                        THREEPP_LOG(vulkan::kLogTexture, Warn) << "material texture skipped: unsupported float channel count " << fch;
                         return {};
                     }
                     rgba.resize(pixels * 4);

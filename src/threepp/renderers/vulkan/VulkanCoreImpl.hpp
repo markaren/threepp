@@ -1319,9 +1319,8 @@ namespace threepp {
             dlssResetNext_ = true;
             if (view().taa_) view().taa_->invalidateHistory();
             if (enabled && dlssActive_ && dlss_ && !dlss_->rayReconstructionAvailable()) {
-                std::fprintf(stderr,
-                             "[threepp] DLSS Ray Reconstruction requested, but NGX reports it unavailable "
-                             "(nvngx_dlssd.dll missing, or the GPU/driver refused it); SR runs.\n");
+                THREEPP_LOGF(vulkan::kLogUpscale, Warn, "DLSS Ray Reconstruction is requested, but NGX reports it unavailable "
+                                                        "(nvngx_dlssd.dll missing, or the GPU or driver refused it); DLSS SR runs");
             }
 #else
             (void) enabled;
@@ -4146,7 +4145,7 @@ namespace threepp {
         void applyViewRecordState(const ViewRecordState& s);
         // The "view" pass that applies viewRecordStates_[index] at record time.
         void addViewEnterPass(vulkan::rg::RenderGraph& g, size_t index);
-        // Execute a graph; with THREEPP_RG_DUMP=1 also print its passes and
+        // Execute a graph; with THREEPP_LOG=vulkan.rendergraph:debug also print its passes and
         // barriers to stderr whenever they differ from what was last printed
         // under the same name (a pass appearing, a layout changing).
         void executeGraph(VkCommandBuffer cb, vulkan::rg::RenderGraph& graph, const char* name) {
@@ -4167,17 +4166,22 @@ namespace threepp {
             for (auto& e : graph.diagnostics()) {
                 ++rgDiagnosticCount_;
                 if (rgDiagnosticsReported_.insert(e).second) {
-                    std::fprintf(stderr, "[RenderGraph] '%s': %s\n", name, e.c_str());
+                    THREEPP_LOGF(vulkan::kLogRenderGraph, Warn, "'%s': %s", name, e.c_str());
                     rgDiagnostics_.push_back(std::move(e));
                 }
             }
-            static const bool dump = vulkan::env::flag("THREEPP_RG_DUMP");
-            if (!dump) return;
+            if (!vulkan::kLogRenderGraph.enabled(log::Level::Debug)) return;
             std::string text = graph.dump();
             auto& last = rgDumped_[name];
             if (text == last) return;
-            std::fprintf(stderr, "[RenderGraph] graph '%s' (frame serial %llu):\n%s", name,
-                         static_cast<unsigned long long>(frameSerial_), text.c_str());
+            // One record per line of the dump.
+            THREEPP_LOGF(vulkan::kLogRenderGraph, Debug, "graph '%s' (frame serial %llu):", name,
+                         static_cast<unsigned long long>(frameSerial_));
+            for (size_t b = 0; b < text.size();) {
+                const size_t e = std::min(text.find('\n', b), text.size());
+                THREEPP_LOG(vulkan::kLogRenderGraph, Debug) << std::string_view(text).substr(b, e - b);
+                b = e + 1;
+            }
             last = std::move(text);
         }
         // The primary's tail as graph passes: the field transmittance prepass,

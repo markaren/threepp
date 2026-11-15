@@ -149,9 +149,8 @@ void VulkanRenderer::Impl::noteDeformPlacement(const Buffer& b) {
 
 void VulkanRenderer::Impl::reportDeformPlacement() {
             if (deformHostBytes_ == 0) return;
-            std::fprintf(stderr,
-                         "[VulkanRenderer] %.1f MB of deforming geometry landed in system memory "
-                         "(device memory or the BAR window is full); deform passes cross PCIe\n",
+            THREEPP_LOGF(vulkan::kLogGeometry, Warn, "%.1f MB of deforming geometry landed in system memory "
+                                                     "(device memory or the BAR window is full); deform passes cross PCIe",
                          static_cast<double>(deformHostBytes_) / (1024.0 * 1024.0));
             deformHostBytes_ = 0;
         }
@@ -344,12 +343,8 @@ bool VulkanRenderer::Impl::displacePositions(const BufferGeometry& geom, const D
             // modes and, as a vertex-stage fetch reads it, at level 0: the
             // texel itself under a Nearest magFilter, bilinear otherwise.
             // Image row 0 is v = 0, as the shaders and GL sample it.
-            static bool warned = false;
             const auto fail = [](const char* why) {
-                if (!warned) {
-                    std::cerr << "[VulkanRenderer] displacementMap ignored: " << why << std::endl;
-                    warned = true;
-                }
+                THREEPP_LOG_ONCE(vulkan::kLogDisplacement, Warn) << "a displacementMap is ignored: " << why;
                 return false;
             };
             const auto* posAttr = geom.getAttribute<float>("position");
@@ -460,13 +455,9 @@ std::shared_ptr<BufferGeometry> VulkanRenderer::Impl::refineForDisplacement(cons
             const vulkan::ScreenEdgeTest& split = d.edge;
             const auto stats = vulkan::refineByEdges(indices, attrs, split);
             if (stats.hitBudget) {
-                static bool warned = false;
-                if (!warned) {
-                    std::cerr << "[VulkanRenderer] displacementMap refinement stopped at its triangle budget ("
-                              << stats.triangles << "): raise displacement_pixel_edge or displacement_min_edge"
-                              << std::endl;
-                    warned = true;
-                }
+                THREEPP_LOG_ONCE(vulkan::kLogDisplacement, Warn)
+                        << "displacementMap refinement stopped at its triangle budget (" << stats.triangles
+                        << "); raise displacement_pixel_edge or displacement_min_edge";
             }
             if (stats.passes == 0) return nullptr;
 
@@ -501,7 +492,6 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 disp = &dit->second;
             // ...and, when it refines, the record is built from the refined
             // copy, stamped with the versions of the geometry it stands for.
-            static const bool dispLog = vulkan::env::flag("THREEPP_DISP_LOG");
             const auto t0 = std::chrono::steady_clock::now();
             const auto refined = disp ? refineForDisplacement(geom, *disp) : nullptr;
             const auto t1 = std::chrono::steady_clock::now();
@@ -514,13 +504,13 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             const auto t2 = std::chrono::steady_clock::now();
             auto rec = finishBlas(src, p);
             if (rec && refined) stampVersions(*rec, geom);
-            if (disp && dispLog) {
+            if (disp && vulkan::kLogDisplacement.enabled(log::Level::Debug)) {
                 const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
                 const auto tris = [](const BufferGeometry& g) {
                     const auto* i = g.getIndex();
                     return i ? i->count() / 3 : g.getAttribute("position")->count() / 3;
                 };
-                std::fprintf(stderr, "[disp] %d -> %d triangles: refine %.1f ms, displace + upload prep %.1f ms\n",
+                THREEPP_LOGF(vulkan::kLogDisplacement, Debug, "%d -> %d triangles: refine %.1f ms, displace + upload prep %.1f ms",
                              tris(geom), tris(src), ms(t0, t1), ms(t1, t2));
             }
             return rec;
@@ -590,9 +580,9 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
             // a warning rather than killing the whole renderer.
             for (size_t i = 0; i < positions.size(); ++i) {
                 if (!std::isfinite(positions[i])) {
-                    std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry - "
+                    THREEPP_LOG(vulkan::kLogGeometry, Warn) << "buildBlasFor: skipping a geometry: "
                               << "position[" << i << "] is non-finite ("
-                              << positions[i] << "), vertexCount=" << vertexCount << '\n';
+                              << positions[i] << "), vertexCount=" << vertexCount;
                     return false;
                 }
             }
@@ -600,9 +590,9 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
                 const auto& indices = idxAttr->array();
                 for (size_t i = 0; i < indices.size(); ++i) {
                     if (indices[i] >= vertexCount) {
-                        std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry - "
+                        THREEPP_LOG(vulkan::kLogGeometry, Warn) << "buildBlasFor: skipping a geometry: "
                                   << "index[" << i << "]=" << indices[i]
-                                  << " >= vertexCount=" << vertexCount << '\n';
+                                  << " >= vertexCount=" << vertexCount;
                         return false;
                     }
                 }
@@ -817,8 +807,8 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
             if (rtIndices && rtIndices->size() >= 3u) {
                 for (const uint32_t v : *rtIndices) {
                     if (v >= vertexCount) {
-                        std::cerr << "[VulkanRenderer] buildBlasFor: proxy index " << v
-                                  << " >= vertexCount=" << vertexCount << ", proxy ignored\n";
+                        THREEPP_LOG(vulkan::kLogGeometry, Warn) << "buildBlasFor: proxy index " << v
+                                  << " >= vertexCount=" << vertexCount << ", proxy ignored";
                         rtIndices = nullptr;
                         break;
                     }
@@ -1582,8 +1572,8 @@ void VulkanRenderer::Impl::drainLodResults() {
                     // didn't fit are simply never selectable.
                     if (lodIndexBytes_ + lodBlasBytes_ >= kLodByteBudget) {
                         if (!lodBudgetWarned_) {
-                            std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached - "
-                                         "truncating chains; no further levels will be built this session\n";
+                            THREEPP_LOG(vulkan::kLogGeometry, Warn) << "auto-LOD: the 256 MiB budget is reached; chains are "
+                                                                       "truncated and no further levels are built this session";
                             lodBudgetWarned_ = true;
                         }
                         break;
@@ -2086,8 +2076,8 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                 flushRetireQueue();// device idle ⇒ reclaim now, don't carry across
                 auto fresh = buildBlasFor(*geomSp, /*allowPacked=*/true, /*updatable=*/false);// mark forces false
                 if (!fresh) {
-                    std::cerr << "[VulkanRenderer] enableVertexInterop: unpacked rebuild of the "
-                                 "geometry failed - the mesh keeps its CPU attribute path.\n";
+                    THREEPP_LOG(vulkan::kLogInterop, Warn) << "enableVertexInterop: the unpacked rebuild of the "
+                                                              "geometry failed; the mesh keeps its CPU attribute path";
                     return {};
                 }
                 fresh->liveCheck = geomSp;
@@ -2208,8 +2198,8 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
             } catch (const std::exception& e) {
                 vulkan::destroyExternalBuffer(ctx->device(), rec.posExt);
                 vulkan::destroyExternalBuffer(ctx->device(), rec.nrmExt);
-                std::cerr << "[VulkanRenderer] enableVertexInterop: export failed (" << e.what()
-                          << ") - the mesh keeps its CPU attribute path.\n";
+                THREEPP_LOG(vulkan::kLogInterop, Warn) << "enableVertexInterop: export failed (" << e.what()
+                                                       << "); the mesh keeps its CPU attribute path";
                 return {};
             }
 
@@ -2218,9 +2208,9 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                     vertexSanitize_ = std::make_unique<vulkan::VertexSanitizePipeline>(*ctx);
                 rec.sanitizeDS = vertexSanitize_->allocateRecordDescriptorSet(rec.posExt.handle);
                 if (rec.sanitizeDS == VK_NULL_HANDLE) {
-                    std::cerr << "[VulkanRenderer] enableVertexInterop: sanitize descriptor pool "
-                                 "exhausted (VertexSanitizePipeline::kMaxRecords) - this mesh runs "
-                                 "interop WITHOUT the finiteness guard.\n";
+                    THREEPP_LOG(vulkan::kLogInterop, Warn) << "enableVertexInterop: the sanitize descriptor pool is "
+                                                              "exhausted (VertexSanitizePipeline::kMaxRecords); this mesh runs "
+                                                              "interop WITHOUT the finiteness guard";
                 }
             }
             rec.interopValidate = validate && rec.sanitizeDS != VK_NULL_HANDLE;
@@ -2259,10 +2249,10 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
             // never gets folded in. The flag is instead refreshed IN PLACE every
             // frame by that same enqueue loop in VulkanCoreScene.cpp, which is
             // both cheaper and impossible to leave stale.
-            std::cerr << "[VulkanRenderer] vertex interop armed on a " << rec.vertexCount
+            THREEPP_LOG(vulkan::kLogInterop, Debug) << "vertex interop armed on a " << rec.vertexCount
                       << "-vertex geometry (" << rec.vertex.size << " + " << rec.normal.size
                       << " bytes exported, sanitize "
-                      << (rec.interopValidate ? "on" : "off") << ")\n";
+                      << (rec.interopValidate ? "on" : "off") << ")";
 
             return {vulkan::takeOsHandle(ctx->device(), rec.posExt),
                     static_cast<size_t>(rec.posExt.size),
@@ -2453,8 +2443,8 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 const auto& p = posAttr->array();
                 for (size_t i = 0; i < p.size(); ++i) {
                     if (!std::isfinite(p[i])) {
-                        std::cerr << "[VulkanRenderer] refreshGeomBlasBatch: skipping geom - "
-                                  << "position[" << i << "] is non-finite (" << p[i] << ")\n";
+                        THREEPP_LOG_ONCE(vulkan::kLogGeometry, Warn) << "refreshGeomBlasBatch: skipping a geometry: "
+                                                                     << "position[" << i << "] is non-finite (" << p[i] << ")";
                         ok = false;
                         break;
                     }
@@ -2788,8 +2778,8 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 const auto& p = posAttr->array();
                 for (size_t i = 0; i < p.size(); ++i) {
                     if (!std::isfinite(p[i])) {
-                        std::cerr << "[VulkanRenderer] recordDynamicGeomRefits: skipping geom - "
-                                  << "position[" << i << "] is non-finite (" << p[i] << ")\n";
+                        THREEPP_LOG_ONCE(vulkan::kLogGeometry, Warn) << "recordDynamicGeomRefits: skipping a geometry: "
+                                                                     << "position[" << i << "] is non-finite (" << p[i] << ")";
                         ok = false;
                         break;
                     }
@@ -3179,14 +3169,14 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                         fastBuildFits = s.accelerationStructureSize <= rec.storage.size;
                         if (!fastBuildFits && !rec.fastBuildDeniedWarned) {
                             rec.fastBuildDeniedWarned = true;
-                            std::cerr << "[VulkanRenderer] interop BLAS refit: FAST_BUILD needs "
+                            THREEPP_LOG(vulkan::kLogInterop, Debug) << "interop BLAS refit: FAST_BUILD needs "
                                       << s.accelerationStructureSize << " B but storage is "
                                       << rec.storage.size << " B ("
                                       << (rec.storageFitsFastBuild
-                                          ? "max-of-lineages sized at creation - the driver's "
+                                          ? "max-of-lineages sized at creation; the driver's "
                                             "answer moved between creation and refit"
                                           : "storage predates the max-of-lineages sizing")
-                                      << ") - this record keeps the FAST_TRACE lineage.\n";
+                                      << "); this record keeps the FAST_TRACE lineage";
                         }
                     }
                     const VkBuildAccelerationStructureFlagsKHR wantFlags =
@@ -4676,9 +4666,9 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             // structural upstream, so this firing means some path slipped
             // through: promote to a full in-place build rather than corrupt.
             if (!fullBuild && instanceCount != tlasBuiltInstanceCount_) {
-                std::cerr << "[VulkanRenderer] TLAS refit count " << instanceCount
+                THREEPP_LOG(vulkan::kLogGeometry, Warn) << "TLAS refit count " << instanceCount
                           << " != built count " << tlasBuiltInstanceCount_
-                          << "; promoting to full build\n";
+                          << "; promoting to full build";
                 fullBuild = true;
             }
 
@@ -4690,9 +4680,9 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
                 // Instance buffers are sized by the last structural buildTlas;
                 // writing past them corrupts whatever VMA placed next. A stale
                 // TLAS for one frame is invisible next to that.
-                std::cerr << "[VulkanRenderer] TLAS refit skipped: instance data "
+                THREEPP_LOG(vulkan::kLogGeometry, Warn) << "TLAS refit skipped: instance data "
                           << instBytes << " B exceeds staged buffer "
-                          << instBuf.size << " B\n";
+                          << instBuf.size << " B";
                 return;
             }
             // 64 B/instance, straight into the buffer the AS builder reads as its
@@ -4783,9 +4773,9 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             // the fresh build wouldn't fit — one stale-TLAS frame, not a
             // heap stomp; the structural path re-sizes on its next pass.
             if (fullBuild && sizes.accelerationStructureSize > tlasBuffer.size) {
-                std::cerr << "[VulkanRenderer] TLAS refit skipped: full build needs "
+                THREEPP_LOG(vulkan::kLogGeometry, Warn) << "TLAS refit skipped: full build needs "
                           << sizes.accelerationStructureSize << " B, storage is "
-                          << tlasBuffer.size << " B\n";
+                          << tlasBuffer.size << " B";
                 return;
             }
 
@@ -4934,13 +4924,9 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             auto* skinIdxAttr = sm.geometry()->getAttribute<float>("skinIndex");
             auto* skinWAttr   = sm.geometry()->getAttribute<float>("skinWeight");
             if (!nrmAttr && sm.geometry()->hasAttribute("normal")) {
-                static bool warned = false;
-                if (!warned) {
-                    warned = true;
-                    std::cerr << "[VulkanRenderer] skinned mesh has a non-float 'normal' "
-                                 "attribute - deforming geometry must keep float attributes "
-                                 "(do not compressAttributes() skinned meshes). Skipping.\n";
-                }
+                THREEPP_LOG_ONCE(vulkan::kLogGeometry, Warn)
+                        << "a skinned mesh has a non-float 'normal' attribute, so its normals are not skinned; "
+                           "deforming geometry must keep float attributes (do not compressAttributes() a skinned mesh)";
             }
             if (!posAttr || !nrmAttr || !skinIdxAttr || !skinWAttr) return nullptr;
             if (!sm.skeleton || sm.skeleton->bones.empty()) return nullptr;
@@ -5607,9 +5593,8 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 // foamRes is ambiguous — an unattached 1024-vs-2048 assumption
                 // manufactured a phantom 3.4x per-texel anomaly once already.
                 if (vulkan::cpuprof::Registry::get().on) {
-                    std::fprintf(stderr,
-                                 "[foam] foamRes=%u tileSize0=%.1f texelTarget=%.2f "
-                                 "-> %.2f m/texel, %.2fM texels\n",
+                    THREEPP_LOGF(vulkan::kLogCpuProf, Info, "foamRes=%u tileSize0=%.1f texelTarget=%.2f "
+                                 "-> %.2f m/texel, %.2fM texels",
                                  foamRes, double(dm.params.tileSize0), double(kFoamTexelTarget),
                                  double(dm.params.tileSize0) / double(foamRes),
                                  double(foamRes) * double(foamRes) / 1.0e6);

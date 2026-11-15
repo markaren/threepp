@@ -36,9 +36,9 @@ namespace threepp::vulkan::impl {
         // shadowStaticMutex_, as views can fit at once.
         uint64_t   shadowStaticHashPrev_ = 0, shadowStaticGen_ = 1;
         std::mutex shadowStaticMutex_;
-        // THREEPP_VK_SHADOW_CACHE_DEBUG=1: a line per generation step (what
-        // flipped) and per frame (layers cached / rebuilt / drawn / skipped).
-        bool                 shadowCacheDebug_ = vulkan::env::flag("THREEPP_VK_SHADOW_CACHE_DEBUG");
+        // THREEPP_LOG=vulkan.shadow:debug prints a line per generation step
+        // (what flipped; this is the previous step's dynamic flags), and
+        // vulkan.shadow:trace adds per frame layers cached / rebuilt / drawn / skipped.
         std::vector<uint8_t> shadowDynPrev_;
 
         // setShadowCacheStaleFrames: 0 (default) redraws a cascade whenever
