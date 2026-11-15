@@ -226,6 +226,100 @@ namespace threepp {
         constexpr uint32_t kFramesInFlight = vulkan::impl::kFramesInFlight;
     }// namespace
 
+    // ── State groups ─────────────────────────────────────────────────────
+    // Impl's data members live in the state structs listed here, one header each
+    // under vulkan/state/ (namespace vulkan::impl); Impl inherits them, so
+    // its methods and the VulkanCore*.cpp TUs name every member unqualified.
+    // The base order is the members' original declaration order where it
+    // matters: bases are constructed first to last, before Impl's own
+    // members, and destroyed last to first, after them, so a group that owns a pass or a
+    // thread sits where that owner used to be declared (ctx in CoreState
+    // outlives everything). Keep it that way when adding a member: an owner
+    // of device objects goes in the group, and at the place, its lifetime
+    // needs. Impl itself keeps the methods and the few members whose
+    // initializers call its static methods (the shadow settings).
+    //
+    //   CoreState.hpp             the canvas and its size, the clear colour, viewport, scissor and
+    //                             split-screen pane, and the Vulkan context with the frame-local
+    //                             transient memory pools everything else allocates from
+    //   GeometryState.hpp         per-geometry GPU records (the BLAS cache) and the deformable meshes'
+    //                             states (skinned, tet, morphed, displaced, grass) with the shared
+    //                             compute pipelines that deform them, plus the displacement-map specs
+    //   TlasState.hpp             the top-level acceleration structure: its buffers, refit scratch,
+    //                             instance staging and dirty rows, and the per-entry ray-flag
+    //                             classification (cutout and ray-shadow distance)
+    //   EnvironmentState.hpp      the environment map and what feeds it: background colour, the baked
+    //                             Preetham sky, the prefiltered env and its extracted sun, the scene's
+    //                             env knobs and the env-sun policy
+    //   OceanState.hpp            the ocean surface bindings the shade reads: fine height and foam
+    //                             fields, crest foam, climate, wake and ripple views, and the foam
+    //                             detail and crest-pattern images
+    //   LodState.hpp              auto-LOD: the background worker thread and its job and result queues,
+    //                             the level budget, the landing batches, and the per-entry LOD fade and
+    //                             level buffers
+    //   SceneState.hpp            the scene walk's snapshot and delta, and the entry list it produces:
+    //                             spans, slots, admission, per-entry moved/placed bits, motion matrices
+    //                             and stable ids
+    //   SensorState.hpp           the lidar scanner and the event camera (its detector, luma buffer and
+    //                             shade pipeline), and the per-scene opt-in for sensor-only surfaces
+    //   RasterState.hpp           the G-buffer raster: its render passes, pipelines and layouts (single-
+    //                             and multisampled), the MSAA resolve and dummies, the G-buffer sampler
+    //                             and the material-raster toggles
+    //   DeformState.hpp           GPU deformation recorded into the frame: the skinning and tet-skinning
+    //                             pipelines and the per-frame deform, refit and resync queues
+    //   ViewState.hpp             the views (the primary and the secondaries), the current view, the
+    //                             primary's frame-prep output, pending view changes and the view
+    //                             composites
+    //   FieldBillboardState.hpp   ParticleField billboards: the billboard pipeline layout and the sun
+    //                             snapshot, the glow pass, the HDR layer and its pipelines, and the
+    //                             soft-depth pass
+    //   PostChainState.hpp        the upscalers (FSR, DLSS with Ray Reconstruction), TAA, the render
+    //                             scale, and the post knobs: depth of field, bloom, sharpen, motion blur
+    //   SplatState.hpp            Gaussian splats: the splat pass, this frame's visible and parked
+    //                             clouds, the depth stamp, the splat volume (reflection) table and the
+    //                             depth AOV mode
+    //   LensState.hpp             the camera sensor image: the sensor pass, lens distortion and sensor
+    //                             noise, and the lens rig (its face cameras and views)
+    //   AtmosphereState.hpp       the participating media: air fog and its march, underwater murk, the
+    //                             medium, clouds, height fog, the deferred volumetric fog knobs and the
+    //                             rotor downwash
+    //   LightingState.hpp         what the deferred shade lights with: the lights UBO and clusters, the
+    //                             emissive triangles and their cache, the sun's size and softness, and
+    //                             the shade toggles (AO, ReSTIR DI, denoise, firefly clamp)
+    //   GIState.hpp               global illumination: the probe GI and path tracer passes and the probe
+    //                             grid's camera, light signature and fast-blend state
+    //   OcclusionState.hpp        occlusion culling: the cull pass and its Hi-Z pyramid, the occlusion
+    //                             render passes, and the per-mesh cull-bit ranges
+    //   ParticleState.hpp         particles: ParticleSystem billboards (pipelines, textures, lit-
+    //                             particle buffers), world-space sprites, and the ParticleField pass
+    //                             with its density volume
+    //   GpuDrivenState.hpp        GPU-driven work generation: instance expansion, the draw generator and
+    //                             the TLAS generator, with their spans, work counts and self-checks
+    //   DebugState.hpp            diagnostics and stats: GPU timings, draw/dynamic-geometry/TLAS stats,
+    //                             ray counts, the hybrid debug views and their resolve pipeline
+    //   OverlayState.hpp          the post-TAA overlay: the overlay pass, its pipelines (lines, points,
+    //                             meshes, depth prepass and import, MSAA inject), overlay fog, colour
+    //                             grade, and the line and morphed-point geometry caches
+    //   FrameLoopState.hpp        the frame loop: swapchain images, command pool and buffers, semaphores
+    //                             and fences, the frame state machine and clocks, the retire queue, the
+    //                             overlay callback, the deferred-apply requests, and the frame outputs
+    //                             (scene capture, frame interop)
+    //   UploadState.hpp           one-shot submits and async work: the one-shot batch, async one-shots,
+    //                             BLAS compaction and its retired storage, and the async grass prep
+    //   IndirectDrawState.hpp     the indirect draw builder's state: the per-span draw cache and its
+    //                             mutex, the scene build serial, and the stable, instance and class ids
+    //                             it assigns
+    //   MaterialState.hpp         materials and textures: the material and geometry descriptor tables
+    //                             with their dirty ranges, the deduplicated material table, the bindless
+    //                             texture array, its samplers and the async texture prep
+    //   ExposureState.hpp         exposure and tone mapping: the tone-mapping operator, the physical
+    //                             camera and photometric light units, the pre-exposure history, white
+    //                             balance, and auto exposure
+    //   ShadowState.hpp           shadow maps: the distance, the dummy bindings, the static-caster
+    //                             cache, the shadow pipelines and the sun and lamp slot assignments
+    //   RenderGraphState.hpp      recording: the frame and compute render graphs, the async-compute
+    //                             pilot, the per-view record states, CPU-parallel recording (record-
+    //                             apart buffers, the secondary views' prep) and the graph diagnostics
     struct VulkanRenderer::Impl : vulkan::impl::CoreState,
                                   vulkan::impl::GeometryState,
                                   vulkan::impl::TlasState,
