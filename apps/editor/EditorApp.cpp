@@ -98,6 +98,9 @@
 // in the static build, from the glfw library threepp links publicly when it is
 // a DLL) and the signature is a plain C entry point taking an opaque handle.
 extern "C" void glfwSetWindowTitle(void* window, const char* title);
+// The same, for carrying a maximized window across a backend restart.
+extern "C" int glfwGetWindowAttrib(void* window, int attrib);
+extern "C" void glfwMaximizeWindow(void* window);
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -201,6 +204,31 @@ namespace {
         if (options.bench <= 0) return true;
         const char* keep = std::getenv("THREEPP_BENCH_VSYNC");
         return keep && *keep && *keep != '0';
+    }
+
+    // GLFW_MAXIMIZED, for the declaration above.
+    constexpr int kGlfwMaximized = 0x00020008;
+
+    Canvas::Parameters canvasParameters(const EditorApp::Options& options) {
+
+        auto params = Canvas::Parameters()
+                              .title("threepp editor")
+                              .size(kDefaultWidth, kDefaultHeight)
+                              .antialiasing(4)
+                              // A timed pass measures the RENDERER. With vsync on, the
+                              // swapchain is FIFO and every frame time is quantized to
+                              // the refresh interval, which measures the monitor.
+                              .vsync(benchWantsVsync(options))
+                              .exitOnKeyEscape(false);
+        // A backend restart comes back in the window it left. A maximized one
+        // is maximized again once it exists, from the default size, so that
+        // un-maximizing still lands somewhere sensible.
+        if (const auto& resume = options.resume; resume && !resume->maximized &&
+                                                  resume->windowSize.first > 0 && resume->windowSize.second > 0) {
+            params.size(resume->windowSize.first, resume->windowSize.second)
+                    .position(resume->windowPosition.first, resume->windowPosition.second);
+        }
+        return params;
     }
 
     bool isDescription(const std::filesystem::path& path) {
@@ -378,15 +406,7 @@ namespace {
 
 EditorApp::EditorApp(const Options& options)
     : options_(options),
-      canvas_(Canvas::Parameters()
-                      .title("threepp editor")
-                      .size(kDefaultWidth, kDefaultHeight)
-                      .antialiasing(4)
-                      // A timed pass measures the RENDERER. With vsync on, the
-                      // swapchain is FIFO and every frame time is quantized to
-                      // the refresh interval, which measures the monitor.
-                      .vsync(benchWantsVsync(options))
-                      .exitOnKeyEscape(false)),
+      canvas_(canvasParameters(options)),
       renderer_(makeRenderer(canvas_, options.vulkan)),
       camera_(55.f, canvas_.aspect(), 0.05f, 5000.f),
       ortho_(-1.f, 1.f, 1.f, -1.f, 0.05f, 10000.f) {
@@ -394,6 +414,8 @@ EditorApp::EditorApp(const Options& options)
     // What the canvas and the renderer logged while they were constructed,
     // ahead of the editor's own first lines.
     for (const auto& line : libraryLog_.take()) log(line);
+
+    if (options_.resume && options_.resume->maximized) glfwMaximizeWindow(canvas_.windowPtr());
 
     renderer_->shadowMap().enabled = true;
     renderer_->shadowMap().type = ShadowMap::PFC;
@@ -849,7 +871,25 @@ EditorApp::EditorApp(const Options& options)
     // After the document, so it lights whatever ended up open — and before Play, so a
     // --screenshot run is lit by the time it shoots.
     if (!options_.environment.empty()) {
-        setEnvironment(options_.environment, /*alsoBackground*/ true);
+        setEnvironment(options_.environment,
+                       /*alsoBackground*/ !options_.resume || options_.resume->environmentAsBackground);
+    }
+
+    if (options_.resume) {
+        const auto& resume = *options_.resume;
+        // The camera where it was, whatever vantage the document authors: the
+        // point of the restart is the same picture on the other renderer.
+        setOrthographic(false);
+        setViewPreset(ViewPreset::User);
+        camera_.position.copy(resume.position);
+        orbit_->target.copy(resume.target);
+        camera_.lookAt(resume.target);
+        setOrthographic(resume.orthographic);
+        if (resume.preset != ViewPreset::User) setViewPreset(resume.preset);
+        // The guard ran before the restart, so the document left clean, and
+        // putting the environment back is not an edit of it.
+        document_.setDirty(false);
+        if (!resume.notice.empty()) log(resume.notice);
     }
 
     log("threepp editor ready");
@@ -1022,6 +1062,61 @@ void EditorApp::updateWindowTitle() {
     glfwSetWindowTitle(canvas_.windowPtr(), title.c_str());
 }
 
+bool EditorApp::usingVulkan() const {
+
+#ifdef THREEPP_WITH_VULKAN
+    return dynamic_cast<const VulkanRenderer*>(renderer_.get()) != nullptr;
+#else
+    return false;
+#endif
+}
+
+void EditorApp::restartOnBackend(bool vulkan) {
+
+    // Play runs on a snapshot; the restart would reopen the authored document
+    // and silently end the session. Stop first, as for Open.
+    if (rejectWhilePlaying("Switch Backend")) return;
+
+    Options next = options_;
+    next.vulkan = vulkan;
+    next.play = false;
+
+    // The document comes back from where it lives. The guard has run, so there
+    // is nothing in memory that is not there too.
+    next.openOnStart.clear();
+    next.example.clear();
+    if (document_.hasPath()) {
+        next.openOnStart = document_.path();
+    } else if (!exampleSlug_.empty()) {
+        next.example = exampleSlug_;
+    }
+
+    Options::Resume resume;
+
+    next.environment.clear();
+    const auto& scene = document_.scene();
+    if (const auto texture = environmentTexture_.lock(); texture && scene.environment == texture) {
+        next.environment = environmentPath_;
+        resume.environmentAsBackground = scene.background.isTexture() && scene.background.texture() == texture;
+    }
+
+    resume.orthographic = orthographic_;
+    resume.preset = viewPreset_;
+    resume.position = orthographic_ ? perspectivePositionForOrtho() : camera_.position;
+    resume.target = orbit_->target;
+
+    resume.maximized = glfwGetWindowAttrib(canvas_.windowPtr(), kGlfwMaximized) != 0;
+    const auto size = canvas_.size();
+    resume.windowSize = {size.width(), size.height()};
+    resume.windowPosition = canvas_.position();
+
+    next.resume = std::move(resume);
+    restart_ = std::move(next);
+
+    log(std::string("restarting on ") + (vulkan ? "Vulkan" : "OpenGL"));
+    canvas_.close();
+}
+
 void EditorApp::drawUi() {
 
     theme::apply(contentScale_);
@@ -1191,6 +1286,7 @@ void EditorApp::drawUi() {
             case PendingAction::OpenPath: openScene(pendingPath_); break;
             case PendingAction::OpenExample: openExample(pendingExample_); break;
             case PendingAction::Quit: canvas_.close(); break;
+            case PendingAction::Restart: restartOnBackend(pendingRestartVulkan_); break;
             case PendingAction::None: break;
         }
     }
@@ -1300,6 +1396,7 @@ void EditorApp::newScene() {
     // where it goes back to following whatever camera the scene brings.
     dockCamera_.reset();
     document_.newScene();
+    exampleSlug_.clear();
     buildTemplateScene();
     // A new document is a document: it renders the way the editor starts,
     // whatever the one before it had dialled in.
@@ -1368,6 +1465,7 @@ void EditorApp::openScene(const std::filesystem::path& path) {
     // Only now, on the way in: a failed open leaves the document (and so the
     // dock) exactly as it was.
     dockCamera_.reset();
+    exampleSlug_.clear();
     commands_.clear();
     logWarnings();
     // Where this document asks to be seen from, if it says. A file that says
@@ -1401,6 +1499,7 @@ void EditorApp::openExample(const std::string& slug) {
         return;
     }
     dockCamera_.reset();
+    exampleSlug_ = slug;
     commands_.clear();
     logWarnings();
     // Untitled and clean: it came from the binary, not from a file, so Save
@@ -2067,6 +2166,8 @@ void EditorApp::setEnvironment(const std::filesystem::path& path, bool alsoBackg
     auto& scene = document_.scene();
     scene.environment = texture;
     if (alsoBackground) scene.background = Background(texture);
+    environmentPath_ = path;
+    environmentTexture_ = texture;
     document_.setDirty(true);
     settings_.environmentDir = path.parent_path().string();
     log("environment set from " + path.filename().string());
@@ -3854,21 +3955,28 @@ void EditorApp::setOrthographic(bool ortho) {
         }
         ortho_.lookAt(target);
     } else {
-        // And back: the distance that reproduces the ortho frustum height under
-        // the perspective fov.
-        const float height = (ortho_.top - ortho_.bottom) / std::max(ortho_.zoom, 1e-4f);
-        const float distance = std::max(height * 0.5f / halfFovTan, 0.01f);
-        Vector3 direction;
-        direction.subVectors(ortho_.position, target);
-        if (direction.length() < 1e-4f) direction.set(0, 0, 1);
         camera_.up.copy(ortho_.up);
-        camera_.position.copy(target).addScaledVector(direction.normalize(), distance);
+        camera_.position.copy(perspectivePositionForOrtho());
         camera_.lookAt(target);
     }
 
     orthographic_ = ortho;
     bindViewportControls();
     updateGridPlacement();
+}
+
+Vector3 EditorApp::perspectivePositionForOrtho() const {
+
+    const Vector3 target = orbit_->target;
+    const float halfFovTan = std::tan(math::degToRad(camera_.fov) * 0.5f);
+    const float height = (ortho_.top - ortho_.bottom) / std::max(ortho_.zoom, 1e-4f);
+    const float distance = std::max(height * 0.5f / halfFovTan, 0.01f);
+    Vector3 direction;
+    direction.subVectors(ortho_.position, target);
+    if (direction.length() < 1e-4f) direction.set(0, 0, 1);
+    Vector3 position;
+    position.copy(target).addScaledVector(direction.normalize(), distance);
+    return position;
 }
 
 void EditorApp::setViewPreset(ViewPreset preset) {

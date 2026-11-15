@@ -62,6 +62,7 @@
 #include <vector>
 
 class ImguiContext;
+class RendererSettings;
 
 namespace threepp {
 
@@ -119,6 +120,19 @@ namespace threepp::editor {
     class EditorApp {
 
     public:
+        // The standard editor viewpoints. `User` is any freely orbited angle;
+        // the other six are the axis-aligned views every 3D editor puts on the
+        // numpad. Public because it names the argument of setViewPreset().
+        enum class ViewPreset {
+            User,
+            Front,
+            Back,
+            Left,
+            Right,
+            Top,
+            Bottom
+        };
+
         struct Options {
             bool vulkan = false;
             std::filesystem::path openOnStart;
@@ -186,19 +200,29 @@ namespace threepp::editor {
             // instead of running interactively. Implies vsync OFF — a
             // present-capped frame time measures the display, not the renderer.
             int bench = 0;
-        };
 
-        // The standard editor viewpoints. `User` is any freely orbited angle;
-        // the other six are the axis-aligned views every 3D editor puts on the
-        // numpad. Public because it names the argument of setViewPreset().
-        enum class ViewPreset {
-            User,
-            Front,
-            Back,
-            Left,
-            Right,
-            Top,
-            Bottom
+            // Never from the command line: filled in when View > Backend
+            // closes this editor to bring it back on the other renderer. What
+            // the editor was showing when it went down, so the next one opens
+            // on the same picture in the same window. The document itself
+            // travels as openOnStart / example, the environment as environment.
+            struct Resume {
+                // A perspective placement; an axis view is re-entered from it.
+                Vector3 position;
+                Vector3 target;
+                bool orthographic = false;
+                ViewPreset preset = ViewPreset::User;
+                // Outer window placement; ignored when maximized.
+                std::pair<int, int> windowSize{0, 0};
+                std::pair<int, int> windowPosition{0, 0};
+                bool maximized = false;
+                // Whether `environment` was the background as well as the lighting.
+                bool environmentAsBackground = true;
+                // For the Console, once the editor is up: why it came back on a
+                // backend other than the one asked for.
+                std::string notice;
+            };
+            std::optional<Resume> resume;
         };
 
         // "px,py,pz@tx,ty,tz" -> two points. The format a document's
@@ -216,6 +240,13 @@ namespace threepp::editor {
 
         // Runs until the window closes. Returns a process exit code.
         int run();
+
+        // Set when the window closed because View > Backend asked for the
+        // editor back on the other renderer: the options to build the next
+        // EditorApp from (main() does). A backend is chosen once, by the canvas
+        // and renderer this object is built around, so switching it means
+        // building the editor again.
+        [[nodiscard]] const std::optional<Options>& restartRequest() const { return restart_; }
 
     private:
         // --- frame ---------------------------------------------------------
@@ -814,6 +845,10 @@ namespace threepp::editor {
         // the reverse on the way back.
         void setOrthographic(bool ortho);
         [[nodiscard]] bool orthographic() const { return orthographic_; }
+        // Where the perspective camera stands to frame what the ortho view
+        // frames: the same side of the target, at the distance whose frustum
+        // height under the perspective fov matches the ortho one.
+        [[nodiscard]] Vector3 perspectivePositionForOrtho() const;
         // Points the view down a world axis without changing what it looks at.
         // `User` only clears the label — an axis view is not a mode, it is a
         // place the camera happens to be standing.
@@ -1533,9 +1568,13 @@ namespace threepp::editor {
             Open,
             OpenPath,
             OpenExample,
-            Quit
+            Quit,
+            // View > Backend: close and come back on the other renderer.
+            Restart
         };
         PendingAction pendingAction_ = PendingAction::None;
+        // Which backend that Restart is for.
+        bool pendingRestartVulkan_ = false;
         std::filesystem::path pendingPath_;
         // Which shipped example File ▸ Open Example picked, held across the
         // unsaved-changes modal exactly as pendingPath_ is.
@@ -1568,6 +1607,26 @@ namespace threepp::editor {
         float fps_ = 0.f;
         std::size_t objectCount_ = 0;
         std::string lastWindowTitle_;
+
+        // --- backend restart (View > Backend) -------------------------------
+        // Closes the window with restart_ set: the guard has already run, so
+        // the document is clean and comes back from its file or its example.
+        void restartOnBackend(bool vulkan);
+        [[nodiscard]] bool usingVulkan() const;
+        std::optional<Options> restart_;
+        // The example the open document came from, while it has no file of its
+        // own: a restart reopens it by slug.
+        std::string exampleSlug_;
+        // The last environment File > Set Environment loaded. A document cannot
+        // carry a float environment, so a restart passes the path along, but
+        // only while the scene is still lit by that texture.
+        std::filesystem::path environmentPath_;
+        std::weak_ptr<Texture> environmentTexture_;
+        // Bound to renderer_, so it belongs to this instance: a function-local
+        // static would outlive a restart still pointing at the old renderer.
+        // shared_ptr because the type is only complete in MenuBar.cpp.
+        std::shared_ptr<::RendererSettings> rendererSettings_;
+
         // Edit-mode animation preview state.
         struct AnimPreview {
             Object3D* root = nullptr;

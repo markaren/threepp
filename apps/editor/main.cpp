@@ -5,6 +5,7 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -90,7 +91,8 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(argument, "--help") == 0 || std::strcmp(argument, "-h") == 0) {
             std::cout << "threepp editor\n"
                       << "  usage: threepp_editor [options] [scene.json]\n"
-                      << "  --vulkan         use the Vulkan backend (OpenGL is the default)\n"
+                      << "  --vulkan         use the Vulkan backend (OpenGL is the default;\n"
+                      << "                   View > Backend switches while running)\n"
                       << "  --frames=N       render N frames and exit (smoke testing)\n"
                       << "  --play           press Play as soon as the scene is open\n"
                       << "  --selftest       drive the editor through its acceptance passes,\n"
@@ -126,11 +128,44 @@ int main(int argc, char** argv) {
         }
     }
 
-    try {
-        threepp::editor::EditorApp app(options);
-        return app.run();
-    } catch (const std::exception& e) {
-        std::cerr << "threepp editor: " << e.what() << std::endl;
-        return 1;
+    // View > Backend closes the editor and asks for it back on the other
+    // renderer. A new EditorApp in this process rather than a relaunch, so the
+    // console or debugger the editor was started from stays attached. The old
+    // one is destroyed first: its window and renderer go before the next are
+    // built.
+    bool restarted = false;
+    for (;;) {
+        std::unique_ptr<threepp::editor::EditorApp> app;
+        try {
+            app = std::make_unique<threepp::editor::EditorApp>(options);
+        } catch (const std::exception& e) {
+            std::cerr << "threepp editor: " << e.what() << std::endl;
+            if (!restarted) return 1;
+            // The backend asked for will not come up here (no Vulkan driver,
+            // no capable GPU). The one the editor was just running on did, so
+            // go back to it rather than leave nothing open.
+            const char* asked = options.vulkan ? "Vulkan" : "OpenGL";
+            options.vulkan = !options.vulkan;
+            restarted = false;
+            if (options.resume) {
+                options.resume->notice = std::string(asked) + " did not start: " + e.what() +
+                                         " - back on " + (options.vulkan ? "Vulkan" : "OpenGL");
+            }
+            continue;
+        }
+
+        int code = 0;
+        try {
+            code = app->run();
+        } catch (const std::exception& e) {
+            std::cerr << "threepp editor: " << e.what() << std::endl;
+            return 1;
+        }
+
+        auto next = app->restartRequest();
+        app.reset();
+        if (!next) return code;
+        options = std::move(*next);
+        restarted = true;
     }
 }

@@ -18,7 +18,8 @@ using namespace threepp::editor;
 void EditorApp::drawMenuBar() {
 
     // The renderer-settings panel is the one piece of editor UI that already
-    // existed in threepp — reused wholesale rather than reimplemented.
+    // existed in threepp — reused wholesale rather than reimplemented. Whether
+    // it is open is static on purpose: it stays open across a backend restart.
     static bool showRendererSettings = false;
     static bool showShortcuts = false;
 
@@ -262,6 +263,29 @@ void EditorApp::drawMenuBar() {
             ImGui::MenuItem("Bottom Panel", nullptr, &bottomPanelOpen_);
             ImGui::Separator();
             ImGui::MenuItem("Renderer Settings", nullptr, &showRendererSettings);
+            // A backend is chosen once, by the window and renderer the editor is
+            // built around, so picking the other one restarts the editor: the
+            // unsaved-changes guard runs, then the document comes back from its
+            // file with the camera and the window where they were.
+            if (ImGui::BeginMenu("Backend")) {
+                const bool vulkan = usingVulkan();
+                if (ImGui::MenuItem("OpenGL", vulkan ? "restarts" : nullptr, !vulkan, editable) && vulkan) {
+                    pendingRestartVulkan_ = false;
+                    pendingAction_ = PendingAction::Restart;
+                }
+#ifdef THREEPP_WITH_VULKAN
+                if (ImGui::MenuItem("Vulkan", vulkan ? nullptr : "restarts", vulkan, editable) && !vulkan) {
+                    pendingRestartVulkan_ = true;
+                    pendingAction_ = PendingAction::Restart;
+                }
+#else
+                ImGui::MenuItem("Vulkan", nullptr, false, false);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::SetTooltip("This build has no Vulkan backend (THREEPP_WITH_VULKAN is off).");
+                }
+#endif
+                ImGui::EndMenu();
+            }
 
             ImGui::EndMenu();
         }
@@ -285,13 +309,13 @@ void EditorApp::drawMenuBar() {
     if (showRendererSettings) {
         // Free-floating (the only such window): it is a transient inspection
         // tool, not part of the fixed layout.
-        static RendererSettings settings(*renderer_);
+        if (!rendererSettings_) rendererSettings_ = std::make_shared<RendererSettings>(*renderer_);
         ImGui::SetNextWindowSize({360 * contentScale_, 0}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos({ImGui::GetMainViewport()->Size.x - 380 * contentScale_,
                                  menuHeight_ + 20 * contentScale_},
                                 ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Renderer Settings", &showRendererSettings)) {
-            settings.drawContent();
+            rendererSettings_->drawContent();
         }
         ImGui::End();
     }

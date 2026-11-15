@@ -39,6 +39,12 @@ void EditorApp::drawStatusBar() {
         ImGui::SameLine();
         ImGui::TextColored(theme::muted(), "|");
 
+        // Which renderer that frame rate is for (View > Backend switches).
+        ImGui::SameLine();
+        ImGui::TextUnformatted(usingVulkan() ? "Vulkan" : "OpenGL");
+        ImGui::SameLine();
+        ImGui::TextColored(theme::muted(), "|");
+
         ImGui::SameLine();
         ImGui::Text("%zu objects", objectCount_);
         ImGui::SameLine();
