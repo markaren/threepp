@@ -159,8 +159,12 @@ namespace threepp::log {
         std::atomic<uint64_t> gFrame{0};
 
         Registry& registry() {
-            static Registry r;// first use, never during static initialisation of a Category
-            return r;
+            // Built on first use, never during static initialisation of a
+            // Category, and never destroyed: destructors and atexit handlers
+            // that run late in process exit (a renderer torn down by a static,
+            // the strict-validation verdict) can still log.
+            static Registry* r = new Registry;
+            return *r;
         }
 
         // Caller holds the registry mutex.
