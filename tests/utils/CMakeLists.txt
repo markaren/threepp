@@ -1,6 +1,7 @@
 
 add_test_executable(AttributeCompression_test)
 add_test_executable(BVH_test)
+add_test_executable(Log_test)
 add_test_executable(StringUtils_test)
 add_test_executable(TaskManager_test)
 add_test_executable(ZipWriter_test)
