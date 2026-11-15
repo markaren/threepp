@@ -85,7 +85,7 @@ Categories (`THREEPP_LOG=<category>:debug` shows a category's diagnostics):
 | `vulkan.overlay` | HUD and 2D overlay passes |
 | `vulkan.upscale` | DLSS, FSR and NGX (`THREEPP_DLSS_LOG`) |
 | `vulkan.shade` | deferred shade variants and their compile times |
-| `vulkan.rendergraph` | render graph diagnostics; each graph's passes when it changes (debug) |
+| `vulkan.rendergraph` | render graph diagnostics; each graph's passes when it changes (trace) |
 | `vulkan.memory` | `THREEPP_VK_MEMDUMP` reports, transient pools |
 | `vulkan.geometry` | BLAS and TLAS builds, auto-LOD, skinning, deforming geometry |
 | `vulkan.displacement` | displacementMap refinement; each refined geometry's time (debug) |
