@@ -895,6 +895,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/state/OverlayState.hpp"
             "threepp/renderers/vulkan/state/FrameLoopState.hpp"
             "threepp/renderers/vulkan/state/UploadState.hpp"
+            "threepp/renderers/vulkan/state/IndirectDrawState.hpp"
             "threepp/renderers/vulkan/RenderGraph.hpp"
             "threepp/renderers/vulkan/AliasPacker.hpp"
             "threepp/renderers/vulkan/EdgeRefine.hpp"
