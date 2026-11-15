@@ -2600,6 +2600,7 @@ namespace threepp {
         // updateSceneInPlace must fall through to the full rebuild.
         struct SceneBuildFrame;
         bool updateSceneInPlace(SceneBuildFrame& sb);
+        void rebuildScene(SceneBuildFrame& sb, Camera& camera);
 
         void createCameraUbos();
 

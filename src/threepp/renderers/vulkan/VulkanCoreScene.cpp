@@ -2961,867 +2961,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             }
             if (updateSceneInPlace(sb)) return;
 
-            // The rebuild's phases, siblings under THREEPP_CPU_PHASE_PROFILE
-            // (the per-event cost VulkanEntryChurn_test reports, broken down).
-            THREEPP_CPUPROF_NAMED(rbDrain, "scene.R0_drainPrune");
-            // Structural change — invalidate the emissive-tri cache so next
-            // frame's buildAndUploadEmissiveTris does a full walk regardless
-            // of whether entries.size() happens to match.
-            cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
-
-            // Tear down anything in-flight references the old AS / scene-desc
-            // buffers via a descriptor set. vkDeviceWaitIdle is the simplest
-            // safe choice here; rebuilds are rare so the stall is acceptable.
-            //
-            // NOTE (retire-queue migration): this drain was deliberately LEFT as
-            // a full device wait. Unlike the per-resource swaps that moved to the
-            // frame-serial retire queue (material/env textures, particle + sprite
-            // caches), the structural teardown below frees EIGHT heterogeneous
-            // resource classes as one unit — raw VkImageView + vmaDestroyImage
-            // pairs (scratchA/foamImage), Win32 external buffers, descriptor-set
-            // pool frees, and the bindless texture-SLOT reclamation
-            // (freeTextureSlots / retiredTextureSlots_) which may REUSE a freed
-            // slot within this same rebuild. The retire queue models only
-            // Buffer/Image2D/AS, and the drain can't be partially lifted, so a
-            // drain-free rebuild needs deeper restructuring. Kept as waitIdle.
-            if (sceneBuilt_) {
-                vkDeviceWaitIdle(ctx->device());
-                // Device idle ⇒ reclaim anything the frame-serial queue is
-                // holding (e.g. material textures retired earlier this frame)
-                // rather than carry it across the rebuild. Safe: fully drained.
-                flushRetireQueue();
-                reapAsyncOneShots(/*deviceIdle=*/true);
-                if (tlas) {
-                    ctx->rt().destroyAccelerationStructure(ctx->device(), tlas, nullptr);
-                    tlas = VK_NULL_HANDLE;
-                }
-                destroyBuffer(ctx->allocator(), tlasBuffer);
-                for (auto& b : tlasInstancesBuffers) { destroyBuffer(ctx->allocator(), b); b = {}; }
-                for (auto& b : geometryDescsBuffers) {
-                    destroyBuffer(ctx->allocator(), b);
-                    b = {};
-                }
-                for (auto& b : materialDescsBuffers) {
-                    destroyBuffer(ctx->allocator(), b);
-                    b = {};
-                }
-                tlasBuffer = {};
-
-                // Prune stale cache entries whose underlying objects have been
-                // destroyed (typical on model swap). Keeping them risks an
-                // address-collision: a fresh BufferGeometry / Texture allocated
-                // at the same C++ address would silently match the old cache
-                // entry and reuse the wrong GPU resource.
-                for (auto it = blasCache.begin(); it != blasCache.end(); ) {
-                    if (it->second->liveCheck.expired()) {
-                        auto& rec = it->second;
-                        // destroyBlasRecord, not a hand-rolled subset — this copy
-                        // had already drifted (it missed dynStaging) and would
-                        // have leaked the interop exports too. The LOD chain is
-                        // still freed separately: blasCache is its only owner and
-                        // destroyBlasLodLevels keeps the lodBlasBytes_ accounting.
-                        destroyBlasLodLevels(*rec);
-                        destroyBlasRecord(*rec);
-                        // Drop the force-unpacked mark with the geometry it names.
-                        // Same address-collision hazard this whole prune exists
-                        // for: the allocator can hand a fresh BufferGeometry the
-                        // dead one's address, and a stale mark would then quietly
-                        // un-pack an unrelated mesh.
-                        forceUnpackedGeoms_.erase(it->first);
-                        worldStaticGeoms_.erase(it->first);// same hazard, same fix
-                        it = blasCache.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                // Displacement specs of dead geometries go too (the spec holds
-                // its map alive); a live geometry's is looked up through the
-                // same weak test (displacementSignatureOf, buildBlasFor).
-                for (auto it = geomDisplacement_.begin(); it != geomDisplacement_.end();) {
-                    if (it->second.geom.expired()) it = geomDisplacement_.erase(it);
-                    else ++it;
-                }
-                // The per-mesh deform states go with their geometry OR their
-                // mesh (MeshOwner): a freed clone's state, keyed by an address
-                // the allocator may hand the next mesh, while the template
-                // keeps the shared geometry alive.
-                for (auto it = skinnedMeshStates.begin(); it != skinnedMeshStates.end(); ) {
-                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
-                        destroyBuffer(ctx->allocator(), it->second->baseVertex);
-                        destroyBuffer(ctx->allocator(), it->second->baseNormal);
-                        destroyBuffer(ctx->allocator(), it->second->skinIndex);
-                        destroyBuffer(ctx->allocator(), it->second->skinWeight);
-                        for (auto& slot : it->second->boneMatrices) {
-                            destroyBuffer(ctx->allocator(), slot);
-                        }
-                        destroyBuffer(ctx->allocator(), it->second->blasScratch);
-                        // destroyBlasRecord, not a hand-rolled subset — the
-                        // manual copy here missed rec->color + rec->blasScratch.
-                        if (it->second->blas) destroyBlasRecord(*it->second->blas);
-                        // Return every ring slot's descriptor set to the pool,
-                        // else they leak across remove/re-add cycles and the
-                        // next allocateMeshDescriptorSet eventually hits
-                        // VK_ERROR_OUT_OF_POOL_MEMORY.
-                        for (auto& ds : it->second->skinDescSet) {
-                            if (ds == VK_NULL_HANDLE) continue;
-                            skinning_->freeMeshDescriptorSet(ds);
-                            ds = VK_NULL_HANDLE;
-                        }
-                        it = skinnedMeshStates.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                for (auto it = tetMeshStates.begin(); it != tetMeshStates.end(); ) {
-                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
-                        destroyBuffer(ctx->allocator(), it->second->tetIndex);
-                        destroyBuffer(ctx->allocator(), it->second->tetWeight);
-                        destroyBuffer(ctx->allocator(), it->second->baseNormal);
-                        destroyBuffer(ctx->allocator(), it->second->restInv0);
-                        destroyBuffer(ctx->allocator(), it->second->restInv1);
-                        destroyBuffer(ctx->allocator(), it->second->restInv2);
-                        for (auto& slot : it->second->tetPos) destroyBuffer(ctx->allocator(), slot);
-                        vulkan::destroyExternalBuffer(ctx->device(), it->second->tetPosExt);
-                        destroyBuffer(ctx->allocator(), it->second->blasScratch);
-                        // destroyBlasRecord, not a hand-rolled subset — the
-                        // manual copy here missed rec->color + rec->blasScratch.
-                        if (it->second->blas) destroyBlasRecord(*it->second->blas);
-                        for (auto& ds : it->second->tetDescSet) {
-                            if (ds == VK_NULL_HANDLE) continue;
-                            tetSkinning_->freeMeshDescriptorSet(ds);
-                            ds = VK_NULL_HANDLE;
-                        }
-                        it = tetMeshStates.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                for (auto it = displacedStates.begin(); it != displacedStates.end(); ) {
-                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
-                        auto& st = it->second;
-                        // The deferred-shade inputs (bindings 13/14) cache this
-                        // state's fine-cascade height + foam views, set once in
-                        // ensureDisplacedState. Those images die with the state,
-                        // so the cache must fall back to the dummies before the
-                        // all-slots descriptor rewrite later in this build —
-                        // otherwise it writes destroyed VkImageViews into live
-                        // sets (VUID 02996), and the ICD dereferencing the dead
-                        // handle is the load-dependent access violation.
-                        for (const auto& c : st->cascades) {
-                            if (c.dyn && c.dyn->ht().view == oceanFineHeightView) {
-                                oceanFineHeightView = oceanFineHeightDummy.view;
-                                oceanFineTileSize   = 0.0f;
-                            }
-                        }
-                        // The chop normals' moment chain stood in for the
-                        // height view, with its own sampler.
-                        if (st->chopMoments && st->chopMoments->sampledView() == oceanFineHeightView) {
-                            oceanFineHeightView    = oceanFineHeightDummy.view;
-                            oceanFineHeightSampler = oceanFineHeightDummy.sampler;
-                            oceanFineTileSize      = 0.0f;
-                            oceanChopNormals       = false;
-                        }
-                        if (st->foamImage.view == oceanFoamView) {
-                            oceanFoamView     = oceanFoamDummy.view;
-                            oceanFoamTileSize = 0.0f;
-                        }
-                        // Crest foam's texture (binding 91), the same way.
-                        if (st->crestFoam && st->crestFoam->sampledView() == oceanCrestFoamView) {
-                            oceanCrestFoamView    = oceanFoamDummy.view;
-                            oceanCrestFoamSampler = oceanFoamDummy.sampler;
-                            oceanCrestFoam        = false;
-                        }
-                        // The wave climate's map (binding 93), the same way.
-                        if (st->climateImage.view != VK_NULL_HANDLE) {
-                            if (st->climateImage.view == oceanClimateView) {
-                                oceanClimateView    = oceanFoamDummy.view;
-                                oceanClimateSampler = oceanFoamDummy.sampler;
-                                oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
-                                oceanClimate        = 0u;
-                            }
-                            destroyImage2D(ctx->allocator(), ctx->device(), st->climateImage);
-                        }
-                        oceanWaveReflections = false;// the next ocean's sync sets it again
-                        if (st->wake) {
-                            if (st->wake->stateView() == oceanWakeView) oceanWakeView = wakeField_->dummyView();
-                            if (st->wake->rippleView() == oceanRippleView) oceanRippleView = wakeField_->dummyView();
-                            wakeField_->destroyState(*st->wake);
-                        }
-                        if (st->blas) destroyBlasRecord(*st->blas);
-                        if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
-                        if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
-                        if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->foamImage.view, nullptr);
-                        if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
-                        // Host-side state buffers — same set the renderer
-                        // teardown destroys; missing them here leaked the
-                        // readback trio + foam/wake SSBOs on every scene
-                        // switch that removed an ocean (VUID 05137).
-                        for (auto& ring : st->heightReadback)
-                            for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
-                        for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
-                        destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
-                        for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
-                        // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
-                        // run on unique_ptr reset.
-                        it = displacedStates.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                // destroyBlasRecord, not a list of its buffers: the list here
-                // missed the refit scratch, the colour and the RT index, so every
-                // field or morphed mesh the rebuild dropped leaked them.
-                for (auto it = grassStates.begin(); it != grassStates.end(); ) {
-                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
-                        auto& st = it->second;
-                        if (st->blas) destroyBlasRecord(*st->blas);
-                        destroyBuffer(ctx->allocator(), st->restPos);
-                        destroyBuffer(ctx->allocator(), st->heightFrac);
-                        it = grassStates.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                for (auto it = morphedMeshStates.begin(); it != morphedMeshStates.end(); ) {
-                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
-                        if (auto& rec = it->second->blas) destroyBlasRecord(*rec);
-                        it = morphedMeshStates.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                for (auto it = textureCache.begin(); it != textureCache.end(); ) {
-                    if (it->second.ref.expired()) {
-                        const uint32_t slot = it->second.slot;
-                        if (slot < materialTextures.size()) {
-                            destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[slot]);
-                            materialTextures[slot] = {};
-                            freeTextureSlots.push_back(slot);
-                        }
-                        it = textureCache.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                // Slots retired by ensureMaterialTexture's stale-hit guard: the
-                // cache entry is already gone (so the loop above can't see
-                // them); destroy the orphaned images here — same drained
-                // context — and return the slots to the free list.
-                for (const uint32_t slot : retiredTextureSlots_) {
-                    if (slot < materialTextures.size() && materialTextures[slot].view) {
-                        destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[slot]);
-                        materialTextures[slot] = {};
-                        freeTextureSlots.push_back(slot);
-                    }
-                }
-                retiredTextureSlots_.clear();
-            }
-
-            rbDrain.stop();
-            THREEPP_CPUPROF_NAMED(rbLoop, "scene.R1_entryLoop");
-            // The slot pool the edits until the next structural rebuild write
-            // into (VulkanCoreSlots.cpp): every entry-indexed GPU buffer this
-            // build makes is sized for it. 1.5x and not 2x: three ring slots
-            // of every entry-indexed array. The material table is sized by
-            // materials instead (below).
-            slotCapacity_ = std::max<uint32_t>({1024u, static_cast<uint32_t>(entries.size() + entries.size() / 2u),
-                                                reservedSlots_});
-            std::vector<VkAccelerationStructureInstanceKHR> instances;
-            instances.reserve(entries.size());
-            // geomDescs are ENTRIES-indexed: one slot per entry, with
-            // overlay/skipped entries left default (material record 0, the
-            // all-zero desc, as their per-entry MaterialDesc used to be). This makes
-            // gl_InstanceCustomIndexEXT == the entry index, so the raster gbuffer
-            // id, RT gbuffer id, motionMat and meshMovedBits all live in ONE index
-            // space. (Previously these were filtered/contiguous, so any overlay or
-            // skipped entry shifted the filtered index away from the entry index —
-            // corrupting gbuffer.frag's material/normal-map lookup and the
-            // deferred shade's motionMat[] / isMeshMoved() reads for every
-            // mesh after the skip.)
-            // Dummy slots are never referenced: skipped entries get no TLAS
-            // instance and are not drawn in the gbuffer (both skip on isOverlay).
-            std::vector<GeometryDesc> geomDescs(entries.size());
-            // The material table afresh, in entry order: a rebuild compacts it.
-            matTableReset();
-            matTableBuilding_ = true;
-            // Same index space, same lifetime — see entryStableIds_. Filled in
-            // the geomDescs loop below so a skipped/overlay entry keeps the 0
-            // its dummy slot already means.
-            entryStableIds_.assign(entries.size(), 0u);
-            stableIdsPending_ = true;
-            // LOD fade words for the new entry order, before the instance loop
-            // below derives the ray masks from them.
-            refreshLodFades(true);
-
-            // Material-asset dedup. Meshes sharing one Material C++ pointer
-            // get the same matAssetIdx so the deferred shade's bilinear
-            // reproject gate can accept their cross-mesh taps (tiled walls
-            // etc.). The map grows by ~one entry per UNIQUE Material in the
-            // scene — well below entries.size() in typical content.
-            std::unordered_map<const Material*, uint32_t> matAssetMap;
-
-            // Per-Material MaterialDesc memo. materialFromMesh + the nine
-            // texture-of lookups are a ~24-dynamic_cast/entry walk that is a
-            // PURE function of the mesh's Material* (nothing mesh- or instance-
-            // specific), yet this loop runs once per TLAS instance. Instanced
-            // vegetation multiplies one material across hundreds of entries, so
-            // a structural rebuild used to re-derive ~4400 identical descs. Cache
-            // the fully-resolved desc (asset idx + bindless texture indices + UV
-            // transforms — all Material*-invariant within a rebuild) and reuse
-            // it for every later instance of the same material. The first miss
-            // still runs ensureMaterialTexture so the bindless slot is allocated;
-            // later hits reuse the slot index it returned.
-            std::unordered_map<const Material*, MaterialDesc> matDescMemo;
-
-            // Admit every new static geometry (BLAS build) + albedo texture
-            // upload through ONE batched submit instead of a queue drain apiece
-            // — a burst of tile splits otherwise serialises a dozen
-            // vkQueueWaitIdles into this frame. Batching is (re-)armed at the top
-            // of every iteration and flushed just before each deformer branch
-            // (whose FFT/skin/wind refit submits its own readback-bearing command
-            // buffers that must run immediately) and once more before buildTlas.
-            // The geometries some traced entry draws this build. A geometry
-            // drawn only by overlay meshes (a wireframe, an overlay-layer
-            // panel, a UI blend) gets a record without an acceleration
-            // structure below: no ray meets an overlay, it is never a TLAS
-            // instance, so its structure was build time at admission, a refit
-            // per edit and device memory for nothing — spot_slam's wireframe
-            // marching-cubes surface, 600k vertices rebuilt every 3 s, until
-            // 2026-10-18. One insert per mesh, not per instance: an
-            // InstancedMesh's entries are contiguous.
-            std::unordered_set<const BufferGeometry*> tracedGeoms;
-            for (size_t i = 0; i < entries.size(); ++i) {
-                const MeshEntry& e0 = entries[i];
-                if (e0.isOverlay || !e0.mesh) continue;
-                if (i > 0 && entries[i - 1].mesh == e0.mesh) continue;
-                tracedGeoms.insert(e0.mesh->geometry().get());
-            }
-
-            for (size_t i = 0; i < entries.size(); ++i) {
-                beginOneShotBatch();// (re)arm; idempotent if a batch is already open
-                const MeshEntry& en = entries[i];
-                Mesh* m = en.mesh;
-                // Particle billboard meshes own their vertex buffers in the
-                // dedicated billboard pass — they need no BLAS and never enter
-                // the TLAS. Skip before the geometry-keyed build so we don't
-                // allocate (or per-frame refit) an AS for them.
-                if (en.isParticle) continue;
-                // A free slot (VulkanCoreSlots.cpp): no record, no instance,
-                // the default descs.
-                if (slotTombstone_ && m == slotTombstone_.get()) continue;
-                const BufferGeometry* geomKey = m->geometry().get();
-
-                // The ParticleField MeshRepr proxy is nobody's Mesh geometry —
-                // the field carries the zero-area placeholder as its own — so
-                // nothing else in this walk would ever upload it, and the
-                // particle raster pass pulls its vertices bindlessly. Cached
-                // and evicted exactly like any other static geometry; the
-                // field's OWN entry keeps the placeholder, which is what keeps
-                // its BLAS and TLAS instance harmless (phase 1 particles do not
-                // cast traced shadows — that is the §4 AABB BLAS).
-                if (en.isParticleField) {
-                    ensureCachedBlas(static_cast<ParticleField*>(m)->meshRepr().geometry);
-                }
-
-                // Deformer BLAS priming (skinned skin compute, ocean FFT
-                // displace, grass wind refit) submits its own command buffers
-                // with barriers/readbacks that must execute now — never fold
-                // them into the tile-admit batch. Flush what's queued; the next
-                // iteration re-arms for the following static entries.
-                if (en.isSkinned || en.isDisplaced || en.isGrass || en.isTet || en.isMorphed) {
-                    flushOneShotBatch();
-                }
-
-                // Skinned meshes get a per-instance deformed BLAS rather than
-                // sharing the geometry-keyed cache. Two SkinnedMeshes loaded
-                // from the same glTF can share BufferGeometry but never share
-                // a pose, so they must not share a BLAS. DisplacedMesh follows
-                // the same per-instance BLAS rule (each ocean mesh has its
-                // own FFT cascade and its own continuously-rewritten vertex
-                // buffer).
-                BlasRecord* recPtr = nullptr;
-                auto* sm = en.isSkinned ? static_cast<SkinnedMesh*>(m) : nullptr;
-                if (sm && sm->skeleton && !sm->skeleton->bones.empty()) {
-                    auto* st = ensureSkinnedBlas(*sm);
-                    if (!st) continue;
-                    recPtr = st->blas.get();
-                } else if (en.isDisplaced) {
-                    auto* dm = static_cast<DisplacedMesh*>(m);
-                    const bool existed = displacedStates.count(dm) > 0;
-                    auto* st = ensureDisplacedState(*dm);
-                    if (!st) continue;
-                    recPtr = st->blas.get();
-                    if (existed) {
-                        // Existing ocean on a structural rebuild: refresh through
-                        // the FRAME command buffer (no blocking one-shot), exactly
-                        // as the non-structural deformer path does — a full FFT +
-                        // BLAS refit as a synchronous one-shot stalls the CPU on
-                        // every tile swap. The BLAS keeps last frame's displaced
-                        // content for this frame's TLAS (imperceptible for water);
-                        // recordCommandBuffer refits it before the shade trace,
-                        // and beginDeferredFrame mirrors the height field after
-                        // the fence wait, as on the per-frame path.
-                        syncOceanChop(*dm, *st);
-                        pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(frameNowSec()));
-                        ++dm->frameTick;
-                    } else {
-                        // First creation: prime synchronously so the very first
-                        // TLAS build + ray-trace see the displaced surface, not
-                        // the rest grid.
-                        refreshDisplacedBlas(*dm, *st, static_cast<float>(frameNowSec()));
-                    }
-                } else if (en.isGrass) {
-                    auto* gm = static_cast<GrassMesh*>(m);
-                    // A state built for a geometry the field no longer draws (a
-                    // swap, the old geometry alive elsewhere): behind this
-                    // rebuild's device wait, freed and built again.
-                    if (const auto sIt = grassStates.find(gm);
-                        sIt != grassStates.end() && sIt->second->liveCheck.lock() != gm->geometry()) {
-                        if (sIt->second->blas) destroyBlasRecord(*sIt->second->blas);
-                        destroyBuffer(ctx->allocator(), sIt->second->restPos);
-                        destroyBuffer(ctx->allocator(), sIt->second->heightFrac);
-                        grassStates.erase(sIt);
-                    }
-                    const bool existed = grassStates.count(gm) > 0;
-                    auto* st = ensureGrassState(*gm);
-                    if (!st) continue;
-                    recPtr = st->blas.get();
-                    if (existed) {
-                        // Existing grass: defer the wind refit to the frame cb
-                        // (same rationale as the ocean above) — but honour the
-                        // distance-gated freeze so a structural rebuild triggered
-                        // by unrelated scene churn (e.g. terrain LOD tile swaps as
-                        // the camera roams the valley) doesn't wake every frozen
-                        // far field. recPtr already keeps the field in the TLAS.
-                        // A hidden field takes none (grassWantsDeform).
-                        const auto& cw = camera.matrixWorld->elements;
-                        const Vector3 camPos(cw[12], cw[13], cw[14]);
-                        if (grassWantsDeform(*st, en.hidden, grassShouldAnimate(en, camPos))) {
-                            pendingGrassDeforms_.emplace_back(gm, st);
-                            ++gm->frameTick;
-                        }
-                    } else {
-                        // Prime the BLAS with the first wind pose before the first trace.
-                        refreshGrassBlas(*gm, *st, static_cast<float>(frameNowSec()));
-                    }
-                } else if (en.isTet) {
-                    auto* st = ensureTetBlas(*m);
-                    if (!st) continue;
-                    recPtr = st->blas.get();
-                } else if (en.isMorphed) {
-                    auto* st = ensureMorphedBlas(*m);
-                    if (!st) continue;
-                    recPtr = st->blas.get();
-                } else {
-                    const bool traced = ctx->rayQuerySupported() && tracedGeoms.count(geomKey) != 0;
-                    auto it = blasCache.find(geomKey);
-                    if (it != blasCache.end()) {
-                        const unsigned int curVer = geomVersionOf(*m->geometry());
-                        // A geometry marked for the unpacked rebuild whose record
-                        // is still packed. Belt and braces: enableVertexInterop
-                        // rebuilds inline behind a drain, so in practice a marked
-                        // geometry is already unpacked by the time it gets here.
-                        // This catches any future path that manages to build a
-                        // packed record for a marked geometry anyway — the
-                        // failure mode it prevents (a producer writing float xyz
-                        // into an snorm16x4 normal buffer) is silent garbage, not
-                        // a crash, so it is worth one integer test per rebuild.
-                        // Self-clearing: the replacement has packedMask == 0.
-                        const bool packedMismatch =
-                                (it->second->packedMask != 0u) &&
-                                forceUnpackedGeoms_.count(geomKey) != 0;
-                        // Displaced by another displacementMap spec than now (or
-                        // newly, or no longer): the same evict-and-rebuild.
-                        const bool dispMismatch = it->second->dispSig != displacementSignatureOf(geomKey);
-                        if (it->second->geomVersion != curVer || packedMismatch || dispMismatch) {
-                            auto& old = it->second;
-                            if (old->interop) {
-                                // A CPU edit to a SIDE attribute (color / uv /
-                                // index contents — counts are fixed: the interop
-                                // enqueue loop above tears interop down on any
-                                // count change before this runs) bumped the
-                                // composite version under an armed interop
-                                // registration. Legitimate: the producer owns
-                                // position/normal, the CPU still owns the rest.
-                                // Evicting here would be three bugs at once —
-                                // free exports a foreign API holds imports of,
-                                // leave pendingDynamicGeomRefits_ (filled
-                                // earlier this pass) dangling at the freed
-                                // record, and rebuild from host position arrays
-                                // that are stale by contract, freezing the mesh
-                                // at whatever the CPU last saw. Transplant
-                                // instead: build the replacement from host data
-                                // (which is exactly how the fresh color/uv/index
-                                // contents get uploaded), move the interop
-                                // machinery across, and re-point the pending
-                                // refit — this same frame's recorded refit then
-                                // overwrites vertex/normal from the exports, so
-                                // the stale host positions are never presented.
-                                auto fresh = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false);
-                                // >=, not ==: createExternalBuffer reports the
-                                // ALLOCATION size, which the allocator pads up
-                                // (30752 for a 30744-byte request), so equality
-                                // spuriously fails for any vertex count whose
-                                // byte size is not 16-aligned. The requirement
-                                // is only that the export can source the full
-                                // head-of-frame copy into the new buffers.
-                                const bool fits = fresh &&
-                                        fresh->vertexCount == old->vertexCount &&
-                                        fresh->indexCount == old->indexCount &&
-                                        fresh->vertex.size <= old->posExt.size &&
-                                        fresh->normal.size <= old->nrmExt.size;
-                                if (fits) {
-                                    fresh->liveCheck = m->geometry();
-                                    fresh->posExt = old->posExt;
-                                    old->posExt = {};
-                                    fresh->nrmExt = old->nrmExt;
-                                    old->nrmExt = {};
-                                    fresh->externalCopy = std::move(old->externalCopy);
-                                    old->externalCopy = nullptr;
-                                    fresh->sanitizeDS = old->sanitizeDS;
-                                    old->sanitizeDS = VK_NULL_HANDLE;
-                                    fresh->interopValidate = old->interopValidate;
-                                    fresh->interop = true;
-                                    old->interop = false;
-                                    fresh->perFrameDynamic = true;
-                                    destroyBlasLodLevels(*old);
-                                    destroyBlasRecord(*old);// interop fields cleared above
-                                    BlasRecord* freshPtr = fresh.get();
-                                    it->second = std::move(fresh);
-                                    for (auto& op : pendingDynamicGeomRefits_) {
-                                        if (op.geom == geomKey) op.rec = freshPtr;
-                                    }
-                                    recPtr = freshPtr;
-                                } else {
-                                    // Cannot transplant (an attribute appeared or
-                                    // vanished, changing the buffer set). Tear the
-                                    // interop down DELIBERATELY — the exports are
-                                    // released behind disableVertexInterop's drain
-                                    // and the application is told — then evict as
-                                    // for any other geometry change.
-                                    std::cerr << "[VulkanRenderer] vertex interop: geometry "
-                                                 "attributes changed shape under an armed interop "
-                                                 "registration - interop is being DISABLED for "
-                                                 "this mesh. Edit only the CONTENTS of side "
-                                                 "attributes (color/uv/index) while interop is "
-                                                 "armed.\n";
-                                    disableVertexInterop(*m);
-                                    pendingDynamicGeomRefits_.erase(
-                                            std::remove_if(pendingDynamicGeomRefits_.begin(),
-                                                           pendingDynamicGeomRefits_.end(),
-                                                           [&](const auto& op) { return op.geom == geomKey; }),
-                                            pendingDynamicGeomRefits_.end());
-                                    destroyBlasLodLevels(*old);
-                                    destroyBlasRecord(*old);
-                                    blasCache.erase(it);
-                                    it = blasCache.end();
-                                }
-                            } else {
-                            // Topology/positions changed under this geometry
-                            // pointer — any existing LOD chain simplified the
-                            // OLD data and no longer matches. Destroy it; the
-                            // fresh BlasRecord created below starts at
-                            // LodState::None and the selection pass re-
-                            // enqueues a new chain next time it's eligible.
-                            destroyBlasLodLevels(*old);
-                            destroyBlasRecord(*old);
-                            blasCache.erase(it);
-                            // erase() returns the next bucket entry, not end().
-                            // Force a fresh lookup so the "missing → build" branch
-                            // below fires; otherwise recPtr binds to a sibling
-                            // cache entry (different mesh's BLAS) and the TLAS
-                            // instance ends up referencing the wrong AS.
-                            it = blasCache.end();
-                            }
-                        }
-                    }
-                    // A record built without a structure — its geometry was
-                    // drawn only by overlay meshes then — that a traced mesh
-                    // now shares (a solid mesh added beside its own wireframe):
-                    // rebuilt with one, before the instance below reads its
-                    // address. An interop record always has one.
-                    if (it != blasCache.end() && traced && it->second->as == VK_NULL_HANDLE &&
-                        !it->second->interop) {
-                        destroyBlasLodLevels(*it->second);
-                        destroyBlasRecord(*it->second);
-                        blasCache.erase(it);
-                        it = blasCache.end();
-                    }
-                    if (it == blasCache.end()) {
-                        auto rec = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false,
-                                                nullptr, VertexWriter::Host, traced);
-                        if (!rec) continue;// degenerate / unsupported geometry
-                        rec->liveCheck = m->geometry();
-                        it = blasCache.emplace(geomKey, std::move(rec)).first;
-                    }
-                    recPtr = it->second.get();
-                }
-
-                // Overlay meshes need a BlasRecord (the raster overlay pass
-                // binds its vertex buffer) but no acceleration structure, and
-                // must not appear in the TLAS or GeometryDesc/MaterialDesc
-                // arrays — the traced/rasterized scene must not see them.
-                if (en.isOverlay) continue;
-
-                VkAccelerationStructureInstanceKHR inst{};
-                copyTlasTransform(inst.transform, en.worldMatrix);
-                inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                inst.mask = kRayMaskOpaque;// placeholder; set to Opaque/Alpha once md is built below
-                inst.instanceShaderBindingTableRecordOffset = 0;
-                inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;// + FORCE_OPAQUE below
-                // en.lodLevel==0 for every deformer/exempt entry (auto-LOD
-                // selection above only ever sets it on plain cached
-                // geometry), so this passthrough is a no-op for them —
-                // recPtr may point at a SkinnedMeshState/DisplacedMeshState/
-                // etc.'s own BlasRecord, which selectLodGeom treats
-                // identically to a LOD0 blasCache record.
-                const auto lodSel = selectLodGeom(*recPtr, en.lodLevel);
-                inst.accelerationStructureReference = lodSel.asAddress;
-                instances.push_back(inst);
-
-                const GeometryDesc gdesc = buildGeometryDesc(en, *recPtr, lodSel);
-                geomDescs[i] = gdesc;
-                // Read-only: assignment of auto ids stays in the indirect draw
-                // builder so this cannot renumber what the Ids AOV reports.
-                entryStableIds_[i] = stableIdIfAssigned(*en.mesh);
-
-                const Material* matKey = m->material().get();
-                auto memoIt = matDescMemo.find(matKey);
-                if (memoIt == matDescMemo.end()) {
-                    MaterialDesc md0 = buildMaterialDesc(*m);
-                    {
-                        auto [matIt, inserted] = matAssetMap.try_emplace(
-                                matKey, static_cast<uint32_t>(matAssetMap.size()));
-                        md0.materialAssetIdx = matIt->second;
-                    }
-                    memoIt = matDescMemo.emplace(matKey, md0).first;
-                }
-                // The memo holds the material's desc, which is its table
-                // record; the entry's instance color is in its GeometryDesc.
-                const uint32_t matIdx = matTableSlot(matKey, memoIt->second);
-                setGeomMatIdx(geomDescs[i], matIdx);
-                matTableRef(matIdx);// geomDescs becomes geomDescsCached_ below
-                const MaterialDesc& md = matTable_[matIdx];
-                // Visibility group (tlasRayMask); a shown entry on the other
-                // side of a LOD crossfade is hit by no ray.
-                if (!instances.empty()) {
-                    instances.back().mask = entryRayMask(tlasRayMask(en, &md, en.hidden), en,
-                                                         lodFadeCasts(entryLodFade_[i]));
-                    instances.back().flags = tlasInstanceFlags(md);
-                    // Cutout ray distance: the same bit classifyCutoutFar
-                    // derives on lean frames, for this frame's camera.
-                    const bool beyond = cutoutRayDistance_ > 0.f && cutoutCaster(md) &&
-                                        entryBeyond(en, rayCamPos, cutoutRayDistance_);
-                    entries[i].rayFarOpaque = beyond;
-                    if (beyond) instances.back().flags |= VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
-                }
-            }
-            cutoutRayClassified_    = true;
-            cutoutRayClassifiedFor_ = cutoutRayDistance_;
-            std::copy(rayCamPos, rayCamPos + 3, cutoutRayCamPos_);
-
-            // Submit the whole tile-admit batch once (BLAS builds + prevVertex
-            // seeds + texture staging/blits), waiting a single time. After this
-            // returns every new BLAS is built and every new albedo texture is
-            // resident, so buildTlas below can reference the fresh BLAS.
-            matTableBuilding_ = false;
-            rbLoop.stop();
-            THREEPP_CPUPROF_NAMED(rbFlush, "scene.R2_batchFlush");
-            flushOneShotBatch();
-            // Records compacted by the batch flushes in this pass were pushed
-            // above with their build-size addresses.
-            applyBlasCompactionRemap(instances);
-            rbFlush.stop();
-            THREEPP_CPUPROF_NAMED(rbTlas, "scene.R3_buildTlas");
-            buildTlas(instances);
-            rbTlas.stop();
-            THREEPP_CPUPROF_NAMED(rbDescs, "scene.R4_descUpload");
-            // Every per-frame GeometryDesc slot seeded fresh — same ring
-            // model as the matDescs loop below; the lean auto-LOD patch
-            // flips geomDescsDirty_ and flushGeometryDescsIfDirty carries
-            // deltas per slot from then on.
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                uploadDescBuffer(geometryDescsBuffers[f], geomDescs, slotCapacity_);
-            }
-            // Every slot now holds the fresh array, so no slot owes anything —
-            // including any range marked earlier in this same frame, which this
-            // upload has just superseded.
-            for (auto& d : geomDescsDirty_) d.clear();
-            // Host mirror for the lean-path auto-LOD patch above. geomDescs
-            // just built already reflects each entry's CURRENT en.lodLevel
-            // (the selection pass runs before this heavy rebuild, so an
-            // entry whose geometry/BLAS wasn't touched by this particular
-            // rebuild can still carry a >0 level from before) — this is
-            // just the persistent copy the lean path patches in place.
-            geomDescsCached_ = geomDescs;
-            // Seed every per-frame slot with the fresh table so the first few
-            // frames don't try to flush against a half-initialised ring.
-            // matTable_ stays the host-side authoritative copy the hot-path
-            // flush carries deltas from. Sized by materials, with room for
-            // the slot path's new ones before it has to grow.
-            matTableCapacity_ = std::max<uint32_t>(256u, 2u * static_cast<uint32_t>(matTable_.size()));
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                uploadDescBuffer(materialDescsBuffers[f], matTable_, matTableCapacity_);
-            }
-            for (auto& d : matDescsDirty_) d.clear();
-            cacheCullFlags();
-            // The asset numbering the slot path continues (slotMaterialAssetIdx).
-            slotMatAssetIdx_.clear();
-            for (const auto& [mat, idx] : matAssetMap) slotMatAssetIdx_[mat] = {mat ? mat->id : 0u, idx};
-            slotNextMatAssetIdx_ = static_cast<uint32_t>(matAssetMap.size());
-            // The table just folded in every span's current instance colors.
-            for (auto& sp : entrySpans_) {
-                if (!sp.inst) continue;
-                sp.instColorAttr    = sp.inst->instanceColor();
-                sp.instColorVersion = sp.instColorAttr ? sp.instColorAttr->version : ~0u;
-            }
-
-            // Topology rebuild vs temporal history. Nothing consumed ACROSS
-            // frames keys on the entry order any more: the reproject guards
-            // compare the STABLE per-object id (ids .y) and read the prev
-            // texel's own moved bit (ids .z, kInstFlagMoving) instead of
-            // dereferencing geoms[prev ids .x], the ReSTIR reservoirs store
-            // world-space light samples (position + type, never an index),
-            // and the prev-world motion references are identity-remapped
-            // below alongside meshMovedSticky_. The
-            // per-pixel depth/normal gates then cold-start exactly the pixels
-            // whose surface really changed. So neither an APPEND (spawned
-            // PhysX body, grown ParticleSystem) nor a mid-list REMOVAL /
-            // REORDER (a terrain tile split/merge swaps the parent for its
-            // children every few frames for seconds at a stretch) needs a
-            // global reset. The old positional stable-prefix check fell back
-            // to clearGbufImages + sampleIndex=0 + prevWorldMats.clear() on
-            // every removal — restarting the whole scene's accumulation AND
-            // the RNG sample stream a few frames apart for the entire
-            // streaming burst, which read as white shimmer on high-contrast
-            // edges under DLSS/TAA.
-            //
-            // What still keys positionally is HOST state that outlives the
-            // frame, so remap it by identity instead of resetting:
-            //   meshMovedSticky_ — a removed entry's "recently moved"
-            //     countdown must not land on an unrelated survivor (a stale
-            //     moving label makes the trailing-edge guards reject history
-            //     at every silhouette for 30 frames — edge shimmer).
-            //   prevWorldByEntry_ — remap by the same identity so a surviving
-            //     entry keeps its motion reference (a reset fakes identity
-            //     motion scene-wide for a frame); removed entries' slots are
-            //     simply dropped with the old index space.
-            // (meshMovedBits_ is refilled in CURRENT index space every
-            // ensureSceneBuilt pass, so it needs no remap.)
-            //
-            // A duplicate (mesh, instanceIndex) key would make the identity
-            // match ambiguous — not expected, every entry is its own TLAS
-            // slot — so that lone case falls back to the old global reset.
-            rbDescs.stop();
-            THREEPP_CPUPROF_NAMED(rbRemap, "scene.R5_identityRemap");
-            std::vector<std::array<float, 16>> oldPrevWorld = std::move(prevWorldByEntry_);
-            std::vector<uint8_t> oldPrevValid = std::move(prevWorldValidByEntry_);
-            seedMotionState(entries);// identity motion + prev=current for every slot
-            bool identityOk = sceneBuilt_;
-            if (identityOk) {
-                std::unordered_map<EntryKey, size_t, EntryKeyHash> oldIdx;
-                oldIdx.reserve(prevSceneFingerprint.size());
-                for (size_t i = 0; i < prevSceneFingerprint.size() && identityOk; ++i) {
-                    const auto& p = prevSceneFingerprint[i];
-                    // A free slot (VulkanCoreSlots.cpp) names the tombstone,
-                    // every one of them at instance 0: no history to carry,
-                    // and not an ambiguous match.
-                    if (slotTombstone_ && p.mesh == slotTombstone_.get()) continue;
-                    identityOk = oldIdx.try_emplace(
-                            EntryKey{static_cast<const Mesh*>(p.mesh), p.instanceIndex}, i).second;
-                }
-                if (identityOk) {
-                    std::vector<uint32_t> remappedSticky(currFp.size(), 0u);
-                    for (size_t i = 0; i < currFp.size(); ++i) {
-                        const auto it = oldIdx.find(
-                                EntryKey{static_cast<const Mesh*>(currFp[i].mesh), currFp[i].instanceIndex});
-                        if (it == oldIdx.end()) continue;// new entry — no history
-                        if (it->second < meshMovedSticky_.size())
-                            remappedSticky[i] = meshMovedSticky_[it->second];
-                        if (it->second < oldPrevWorld.size() && oldPrevValid[it->second] &&
-                            i < prevWorldByEntry_.size()) {
-                            prevWorldByEntry_[i] = oldPrevWorld[it->second];
-                        }
-                        oldIdx.erase(it);// leftovers = removed entries (slots dropped)
-                    }
-                    meshMovedSticky_.swap(remappedSticky);
-                    stickyActiveCount_ = 0;
-                    for (uint32_t v : meshMovedSticky_)
-                        if (v > 0u) ++stickyActiveCount_;
-                }
-            }
-            if (!identityOk) {
-                // First build (nothing to preserve) or an ambiguous match.
-                // We're already past vkDeviceWaitIdle so the clear is synchronous.
-                clearGbufImages();
-                sampleIndex = 0;
-                meshMovedSticky_.clear();
-                stickyActiveCount_ = 0;
-            }
-
-            // Grow motion-mat + mesh-moved-bits buffers if the new instance
-            // count exceeds the current capacity. The descriptor write below
-            // (or the initial allocate, on first build) will pick up the new
-            // buffer handles.
-            // motionMat[] and meshMovedBits[] are indexed by ENTRY index
-            // (== instanceCustomIndex == the meshID the gbuffer writes; see the
-            // geomDescs/matDescs "ONE index space" note above), NOT by the
-            // compact TLAS instance count. Size them to entries.size(): when
-            // leading entries are overlay (e.g. wireframe PointLightHelpers
-            // added to the scene before the traced/rasterized meshes), those
-            // meshes land at entry indices >= instances.size(), so a buffer
-            // sized to the instance count is read out of bounds in the
-            // shader — a GPU fault that surfaces at the next AS one-shot
-            // fence wait (looks like a "tblas refit" crash).
-            // computeAndUploadMotionMatrices uploads
-            // entries.size() matrices, so the instance-count sizing overflowed
-            // the host buffer too.
-            rbRemap.stop();
-            THREEPP_CPUPROF_NAMED(rbViews, "scene.R6_capacityDescriptors");
-            const uint32_t motionSlots    = static_cast<uint32_t>(entries.size());
-            const uint32_t neededBitWords = std::max<uint32_t>((motionSlots + 31u) / 32u, 1u);
-            // The buffers hold the slot pool, the host arrays the entries.
-            const uint32_t poolSlots = std::max(motionSlots, slotCapacity_);
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                ensureMotionMatCapacity(f, std::max<uint32_t>(poolSlots, 1u));
-                ensureMeshMovedBitsCapacity(f, std::max<uint32_t>((poolSlots + 31u) / 32u, 1u));
-            }
-            meshMovedBits_.resize(neededBitWords, 0u);
-
-            // Re-point the deferred shade's descriptor set at the (re)built
-            // scene resources — TLAS, geom/material descs, the bindless
-            // material-texture array and the emissive-tri buffer. A rebuild
-            // freed and recreated those, so the set would otherwise dangle.
-            //
-            // Every view: the scene is shared, so a rebuild invalidates every
-            // view's set, not just the one that happens to be current. An
-            // editor rebuilds on nearly every edit, which is where leaving the
-            // secondaries out shows up first.
-            forEachLiveView([&] { rewriteDeferredDescriptors(); });
-            // The (re)build above rebound the bindless texture array. The
-            // raster descriptor's binding 3 mirrors that same table, so
-            // invalidate its per-slot cache — each frame slot then re-writes
-            // binding 3 on its next uploadRasterCameraUbo. Per view: the flag
-            // guards per-view sets, and addSecondaryViewPasses calls
-            // uploadRasterCameraUbo once per view per frame, so each view
-            // heals its own slot.
-            for (auto& v : views_) { v->rasterMatTexValid_.fill(0); v->shadowMatTexValid_.fill(0); }
-            prevSceneFingerprint = std::move(currFp);
-            sceneBuilt_ = true;
-            ++drawInputsVersion_;// structural rebuild — every draw record is new
-            ++tlasStats_.structuralRebuilds;
-
-            // Companion to the post-init dump: with the scene's BLASes +
-            // geometry buffers now resident, allocationBytes − the post-init
-            // baseline is the scene's true device cost (the OS-level per-
-            // process counter only moves in VMA block granularity, so it
-            // under-reports buffer-level savings such as packed attributes).
-            if (vulkan::env::flag("THREEPP_VK_MEMDUMP")) {
-                dumpMemoryStats("scene-built");
-            }
-            // Always on: one line when a deformer created by this build landed
-            // in system memory (its deform pass then crosses PCIe every frame).
-            reportDeformPlacement();
+            rebuildScene(sb, camera);
         }
 
 // The non-structural update: when the scene was built before and the fingerprints
@@ -5162,6 +4302,877 @@ bool VulkanRenderer::Impl::updateSceneInPlace(SceneBuildFrame& sb) {
                 }
             }
             return false;
+        }
+
+// The structural rebuild: drains the device and prunes dead resources, admits every
+// entry (BLAS records, descs, instances), builds the TLAS, uploads the desc tables,
+// remaps the per-entry history by identity and grows the entry-indexed buffers.
+// Needs: every phase above; updateSceneInPlace did not finish the build.
+void VulkanRenderer::Impl::rebuildScene(SceneBuildFrame& sb, Camera& camera) {
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            auto& currFp = sb.currFp;
+            const auto& rayCamPos = sb.rayCamPos;
+            // The rebuild's phases, siblings under THREEPP_CPU_PHASE_PROFILE
+            // (the per-event cost VulkanEntryChurn_test reports, broken down).
+            THREEPP_CPUPROF_NAMED(rbDrain, "scene.R0_drainPrune");
+            // Structural change — invalidate the emissive-tri cache so next
+            // frame's buildAndUploadEmissiveTris does a full walk regardless
+            // of whether entries.size() happens to match.
+            cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+
+            // Tear down anything in-flight references the old AS / scene-desc
+            // buffers via a descriptor set. vkDeviceWaitIdle is the simplest
+            // safe choice here; rebuilds are rare so the stall is acceptable.
+            //
+            // NOTE (retire-queue migration): this drain was deliberately LEFT as
+            // a full device wait. Unlike the per-resource swaps that moved to the
+            // frame-serial retire queue (material/env textures, particle + sprite
+            // caches), the structural teardown below frees EIGHT heterogeneous
+            // resource classes as one unit — raw VkImageView + vmaDestroyImage
+            // pairs (scratchA/foamImage), Win32 external buffers, descriptor-set
+            // pool frees, and the bindless texture-SLOT reclamation
+            // (freeTextureSlots / retiredTextureSlots_) which may REUSE a freed
+            // slot within this same rebuild. The retire queue models only
+            // Buffer/Image2D/AS, and the drain can't be partially lifted, so a
+            // drain-free rebuild needs deeper restructuring. Kept as waitIdle.
+            if (sceneBuilt_) {
+                vkDeviceWaitIdle(ctx->device());
+                // Device idle ⇒ reclaim anything the frame-serial queue is
+                // holding (e.g. material textures retired earlier this frame)
+                // rather than carry it across the rebuild. Safe: fully drained.
+                flushRetireQueue();
+                reapAsyncOneShots(/*deviceIdle=*/true);
+                if (tlas) {
+                    ctx->rt().destroyAccelerationStructure(ctx->device(), tlas, nullptr);
+                    tlas = VK_NULL_HANDLE;
+                }
+                destroyBuffer(ctx->allocator(), tlasBuffer);
+                for (auto& b : tlasInstancesBuffers) { destroyBuffer(ctx->allocator(), b); b = {}; }
+                for (auto& b : geometryDescsBuffers) {
+                    destroyBuffer(ctx->allocator(), b);
+                    b = {};
+                }
+                for (auto& b : materialDescsBuffers) {
+                    destroyBuffer(ctx->allocator(), b);
+                    b = {};
+                }
+                tlasBuffer = {};
+
+                // Prune stale cache entries whose underlying objects have been
+                // destroyed (typical on model swap). Keeping them risks an
+                // address-collision: a fresh BufferGeometry / Texture allocated
+                // at the same C++ address would silently match the old cache
+                // entry and reuse the wrong GPU resource.
+                for (auto it = blasCache.begin(); it != blasCache.end(); ) {
+                    if (it->second->liveCheck.expired()) {
+                        auto& rec = it->second;
+                        // destroyBlasRecord, not a hand-rolled subset — this copy
+                        // had already drifted (it missed dynStaging) and would
+                        // have leaked the interop exports too. The LOD chain is
+                        // still freed separately: blasCache is its only owner and
+                        // destroyBlasLodLevels keeps the lodBlasBytes_ accounting.
+                        destroyBlasLodLevels(*rec);
+                        destroyBlasRecord(*rec);
+                        // Drop the force-unpacked mark with the geometry it names.
+                        // Same address-collision hazard this whole prune exists
+                        // for: the allocator can hand a fresh BufferGeometry the
+                        // dead one's address, and a stale mark would then quietly
+                        // un-pack an unrelated mesh.
+                        forceUnpackedGeoms_.erase(it->first);
+                        worldStaticGeoms_.erase(it->first);// same hazard, same fix
+                        it = blasCache.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                // Displacement specs of dead geometries go too (the spec holds
+                // its map alive); a live geometry's is looked up through the
+                // same weak test (displacementSignatureOf, buildBlasFor).
+                for (auto it = geomDisplacement_.begin(); it != geomDisplacement_.end();) {
+                    if (it->second.geom.expired()) it = geomDisplacement_.erase(it);
+                    else ++it;
+                }
+                // The per-mesh deform states go with their geometry OR their
+                // mesh (MeshOwner): a freed clone's state, keyed by an address
+                // the allocator may hand the next mesh, while the template
+                // keeps the shared geometry alive.
+                for (auto it = skinnedMeshStates.begin(); it != skinnedMeshStates.end(); ) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
+                        destroyBuffer(ctx->allocator(), it->second->baseVertex);
+                        destroyBuffer(ctx->allocator(), it->second->baseNormal);
+                        destroyBuffer(ctx->allocator(), it->second->skinIndex);
+                        destroyBuffer(ctx->allocator(), it->second->skinWeight);
+                        for (auto& slot : it->second->boneMatrices) {
+                            destroyBuffer(ctx->allocator(), slot);
+                        }
+                        destroyBuffer(ctx->allocator(), it->second->blasScratch);
+                        // destroyBlasRecord, not a hand-rolled subset — the
+                        // manual copy here missed rec->color + rec->blasScratch.
+                        if (it->second->blas) destroyBlasRecord(*it->second->blas);
+                        // Return every ring slot's descriptor set to the pool,
+                        // else they leak across remove/re-add cycles and the
+                        // next allocateMeshDescriptorSet eventually hits
+                        // VK_ERROR_OUT_OF_POOL_MEMORY.
+                        for (auto& ds : it->second->skinDescSet) {
+                            if (ds == VK_NULL_HANDLE) continue;
+                            skinning_->freeMeshDescriptorSet(ds);
+                            ds = VK_NULL_HANDLE;
+                        }
+                        it = skinnedMeshStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                for (auto it = tetMeshStates.begin(); it != tetMeshStates.end(); ) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
+                        destroyBuffer(ctx->allocator(), it->second->tetIndex);
+                        destroyBuffer(ctx->allocator(), it->second->tetWeight);
+                        destroyBuffer(ctx->allocator(), it->second->baseNormal);
+                        destroyBuffer(ctx->allocator(), it->second->restInv0);
+                        destroyBuffer(ctx->allocator(), it->second->restInv1);
+                        destroyBuffer(ctx->allocator(), it->second->restInv2);
+                        for (auto& slot : it->second->tetPos) destroyBuffer(ctx->allocator(), slot);
+                        vulkan::destroyExternalBuffer(ctx->device(), it->second->tetPosExt);
+                        destroyBuffer(ctx->allocator(), it->second->blasScratch);
+                        // destroyBlasRecord, not a hand-rolled subset — the
+                        // manual copy here missed rec->color + rec->blasScratch.
+                        if (it->second->blas) destroyBlasRecord(*it->second->blas);
+                        for (auto& ds : it->second->tetDescSet) {
+                            if (ds == VK_NULL_HANDLE) continue;
+                            tetSkinning_->freeMeshDescriptorSet(ds);
+                            ds = VK_NULL_HANDLE;
+                        }
+                        it = tetMeshStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                for (auto it = displacedStates.begin(); it != displacedStates.end(); ) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
+                        auto& st = it->second;
+                        // The deferred-shade inputs (bindings 13/14) cache this
+                        // state's fine-cascade height + foam views, set once in
+                        // ensureDisplacedState. Those images die with the state,
+                        // so the cache must fall back to the dummies before the
+                        // all-slots descriptor rewrite later in this build —
+                        // otherwise it writes destroyed VkImageViews into live
+                        // sets (VUID 02996), and the ICD dereferencing the dead
+                        // handle is the load-dependent access violation.
+                        for (const auto& c : st->cascades) {
+                            if (c.dyn && c.dyn->ht().view == oceanFineHeightView) {
+                                oceanFineHeightView = oceanFineHeightDummy.view;
+                                oceanFineTileSize   = 0.0f;
+                            }
+                        }
+                        // The chop normals' moment chain stood in for the
+                        // height view, with its own sampler.
+                        if (st->chopMoments && st->chopMoments->sampledView() == oceanFineHeightView) {
+                            oceanFineHeightView    = oceanFineHeightDummy.view;
+                            oceanFineHeightSampler = oceanFineHeightDummy.sampler;
+                            oceanFineTileSize      = 0.0f;
+                            oceanChopNormals       = false;
+                        }
+                        if (st->foamImage.view == oceanFoamView) {
+                            oceanFoamView     = oceanFoamDummy.view;
+                            oceanFoamTileSize = 0.0f;
+                        }
+                        // Crest foam's texture (binding 91), the same way.
+                        if (st->crestFoam && st->crestFoam->sampledView() == oceanCrestFoamView) {
+                            oceanCrestFoamView    = oceanFoamDummy.view;
+                            oceanCrestFoamSampler = oceanFoamDummy.sampler;
+                            oceanCrestFoam        = false;
+                        }
+                        // The wave climate's map (binding 93), the same way.
+                        if (st->climateImage.view != VK_NULL_HANDLE) {
+                            if (st->climateImage.view == oceanClimateView) {
+                                oceanClimateView    = oceanFoamDummy.view;
+                                oceanClimateSampler = oceanFoamDummy.sampler;
+                                oceanClimateLayout  = VK_IMAGE_LAYOUT_GENERAL;
+                                oceanClimate        = 0u;
+                            }
+                            destroyImage2D(ctx->allocator(), ctx->device(), st->climateImage);
+                        }
+                        oceanWaveReflections = false;// the next ocean's sync sets it again
+                        if (st->wake) {
+                            if (st->wake->stateView() == oceanWakeView) oceanWakeView = wakeField_->dummyView();
+                            if (st->wake->rippleView() == oceanRippleView) oceanRippleView = wakeField_->dummyView();
+                            wakeField_->destroyState(*st->wake);
+                        }
+                        if (st->blas) destroyBlasRecord(*st->blas);
+                        if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
+                        if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
+                        if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->foamImage.view, nullptr);
+                        if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
+                        // Host-side state buffers — same set the renderer
+                        // teardown destroys; missing them here leaked the
+                        // readback trio + foam/wake SSBOs on every scene
+                        // switch that removed an ocean (VUID 05137).
+                        for (auto& ring : st->heightReadback)
+                            for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
+                        for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
+                        destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
+                        for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
+                        // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
+                        // run on unique_ptr reset.
+                        it = displacedStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                // destroyBlasRecord, not a list of its buffers: the list here
+                // missed the refit scratch, the colour and the RT index, so every
+                // field or morphed mesh the rebuild dropped leaked them.
+                for (auto it = grassStates.begin(); it != grassStates.end(); ) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
+                        auto& st = it->second;
+                        if (st->blas) destroyBlasRecord(*st->blas);
+                        destroyBuffer(ctx->allocator(), st->restPos);
+                        destroyBuffer(ctx->allocator(), st->heightFrac);
+                        it = grassStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                for (auto it = morphedMeshStates.begin(); it != morphedMeshStates.end(); ) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
+                        if (auto& rec = it->second->blas) destroyBlasRecord(*rec);
+                        it = morphedMeshStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                for (auto it = textureCache.begin(); it != textureCache.end(); ) {
+                    if (it->second.ref.expired()) {
+                        const uint32_t slot = it->second.slot;
+                        if (slot < materialTextures.size()) {
+                            destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[slot]);
+                            materialTextures[slot] = {};
+                            freeTextureSlots.push_back(slot);
+                        }
+                        it = textureCache.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                // Slots retired by ensureMaterialTexture's stale-hit guard: the
+                // cache entry is already gone (so the loop above can't see
+                // them); destroy the orphaned images here — same drained
+                // context — and return the slots to the free list.
+                for (const uint32_t slot : retiredTextureSlots_) {
+                    if (slot < materialTextures.size() && materialTextures[slot].view) {
+                        destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[slot]);
+                        materialTextures[slot] = {};
+                        freeTextureSlots.push_back(slot);
+                    }
+                }
+                retiredTextureSlots_.clear();
+            }
+
+            rbDrain.stop();
+            THREEPP_CPUPROF_NAMED(rbLoop, "scene.R1_entryLoop");
+            // The slot pool the edits until the next structural rebuild write
+            // into (VulkanCoreSlots.cpp): every entry-indexed GPU buffer this
+            // build makes is sized for it. 1.5x and not 2x: three ring slots
+            // of every entry-indexed array. The material table is sized by
+            // materials instead (below).
+            slotCapacity_ = std::max<uint32_t>({1024u, static_cast<uint32_t>(entries.size() + entries.size() / 2u),
+                                                reservedSlots_});
+            std::vector<VkAccelerationStructureInstanceKHR> instances;
+            instances.reserve(entries.size());
+            // geomDescs are ENTRIES-indexed: one slot per entry, with
+            // overlay/skipped entries left default (material record 0, the
+            // all-zero desc, as their per-entry MaterialDesc used to be). This makes
+            // gl_InstanceCustomIndexEXT == the entry index, so the raster gbuffer
+            // id, RT gbuffer id, motionMat and meshMovedBits all live in ONE index
+            // space. (Previously these were filtered/contiguous, so any overlay or
+            // skipped entry shifted the filtered index away from the entry index —
+            // corrupting gbuffer.frag's material/normal-map lookup and the
+            // deferred shade's motionMat[] / isMeshMoved() reads for every
+            // mesh after the skip.)
+            // Dummy slots are never referenced: skipped entries get no TLAS
+            // instance and are not drawn in the gbuffer (both skip on isOverlay).
+            std::vector<GeometryDesc> geomDescs(entries.size());
+            // The material table afresh, in entry order: a rebuild compacts it.
+            matTableReset();
+            matTableBuilding_ = true;
+            // Same index space, same lifetime — see entryStableIds_. Filled in
+            // the geomDescs loop below so a skipped/overlay entry keeps the 0
+            // its dummy slot already means.
+            entryStableIds_.assign(entries.size(), 0u);
+            stableIdsPending_ = true;
+            // LOD fade words for the new entry order, before the instance loop
+            // below derives the ray masks from them.
+            refreshLodFades(true);
+
+            // Material-asset dedup. Meshes sharing one Material C++ pointer
+            // get the same matAssetIdx so the deferred shade's bilinear
+            // reproject gate can accept their cross-mesh taps (tiled walls
+            // etc.). The map grows by ~one entry per UNIQUE Material in the
+            // scene — well below entries.size() in typical content.
+            std::unordered_map<const Material*, uint32_t> matAssetMap;
+
+            // Per-Material MaterialDesc memo. materialFromMesh + the nine
+            // texture-of lookups are a ~24-dynamic_cast/entry walk that is a
+            // PURE function of the mesh's Material* (nothing mesh- or instance-
+            // specific), yet this loop runs once per TLAS instance. Instanced
+            // vegetation multiplies one material across hundreds of entries, so
+            // a structural rebuild used to re-derive ~4400 identical descs. Cache
+            // the fully-resolved desc (asset idx + bindless texture indices + UV
+            // transforms — all Material*-invariant within a rebuild) and reuse
+            // it for every later instance of the same material. The first miss
+            // still runs ensureMaterialTexture so the bindless slot is allocated;
+            // later hits reuse the slot index it returned.
+            std::unordered_map<const Material*, MaterialDesc> matDescMemo;
+
+            // Admit every new static geometry (BLAS build) + albedo texture
+            // upload through ONE batched submit instead of a queue drain apiece
+            // — a burst of tile splits otherwise serialises a dozen
+            // vkQueueWaitIdles into this frame. Batching is (re-)armed at the top
+            // of every iteration and flushed just before each deformer branch
+            // (whose FFT/skin/wind refit submits its own readback-bearing command
+            // buffers that must run immediately) and once more before buildTlas.
+            // The geometries some traced entry draws this build. A geometry
+            // drawn only by overlay meshes (a wireframe, an overlay-layer
+            // panel, a UI blend) gets a record without an acceleration
+            // structure below: no ray meets an overlay, it is never a TLAS
+            // instance, so its structure was build time at admission, a refit
+            // per edit and device memory for nothing — spot_slam's wireframe
+            // marching-cubes surface, 600k vertices rebuilt every 3 s, until
+            // 2026-10-18. One insert per mesh, not per instance: an
+            // InstancedMesh's entries are contiguous.
+            std::unordered_set<const BufferGeometry*> tracedGeoms;
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const MeshEntry& e0 = entries[i];
+                if (e0.isOverlay || !e0.mesh) continue;
+                if (i > 0 && entries[i - 1].mesh == e0.mesh) continue;
+                tracedGeoms.insert(e0.mesh->geometry().get());
+            }
+
+            for (size_t i = 0; i < entries.size(); ++i) {
+                beginOneShotBatch();// (re)arm; idempotent if a batch is already open
+                const MeshEntry& en = entries[i];
+                Mesh* m = en.mesh;
+                // Particle billboard meshes own their vertex buffers in the
+                // dedicated billboard pass — they need no BLAS and never enter
+                // the TLAS. Skip before the geometry-keyed build so we don't
+                // allocate (or per-frame refit) an AS for them.
+                if (en.isParticle) continue;
+                // A free slot (VulkanCoreSlots.cpp): no record, no instance,
+                // the default descs.
+                if (slotTombstone_ && m == slotTombstone_.get()) continue;
+                const BufferGeometry* geomKey = m->geometry().get();
+
+                // The ParticleField MeshRepr proxy is nobody's Mesh geometry —
+                // the field carries the zero-area placeholder as its own — so
+                // nothing else in this walk would ever upload it, and the
+                // particle raster pass pulls its vertices bindlessly. Cached
+                // and evicted exactly like any other static geometry; the
+                // field's OWN entry keeps the placeholder, which is what keeps
+                // its BLAS and TLAS instance harmless (phase 1 particles do not
+                // cast traced shadows — that is the §4 AABB BLAS).
+                if (en.isParticleField) {
+                    ensureCachedBlas(static_cast<ParticleField*>(m)->meshRepr().geometry);
+                }
+
+                // Deformer BLAS priming (skinned skin compute, ocean FFT
+                // displace, grass wind refit) submits its own command buffers
+                // with barriers/readbacks that must execute now — never fold
+                // them into the tile-admit batch. Flush what's queued; the next
+                // iteration re-arms for the following static entries.
+                if (en.isSkinned || en.isDisplaced || en.isGrass || en.isTet || en.isMorphed) {
+                    flushOneShotBatch();
+                }
+
+                // Skinned meshes get a per-instance deformed BLAS rather than
+                // sharing the geometry-keyed cache. Two SkinnedMeshes loaded
+                // from the same glTF can share BufferGeometry but never share
+                // a pose, so they must not share a BLAS. DisplacedMesh follows
+                // the same per-instance BLAS rule (each ocean mesh has its
+                // own FFT cascade and its own continuously-rewritten vertex
+                // buffer).
+                BlasRecord* recPtr = nullptr;
+                auto* sm = en.isSkinned ? static_cast<SkinnedMesh*>(m) : nullptr;
+                if (sm && sm->skeleton && !sm->skeleton->bones.empty()) {
+                    auto* st = ensureSkinnedBlas(*sm);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                } else if (en.isDisplaced) {
+                    auto* dm = static_cast<DisplacedMesh*>(m);
+                    const bool existed = displacedStates.count(dm) > 0;
+                    auto* st = ensureDisplacedState(*dm);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                    if (existed) {
+                        // Existing ocean on a structural rebuild: refresh through
+                        // the FRAME command buffer (no blocking one-shot), exactly
+                        // as the non-structural deformer path does — a full FFT +
+                        // BLAS refit as a synchronous one-shot stalls the CPU on
+                        // every tile swap. The BLAS keeps last frame's displaced
+                        // content for this frame's TLAS (imperceptible for water);
+                        // recordCommandBuffer refits it before the shade trace,
+                        // and beginDeferredFrame mirrors the height field after
+                        // the fence wait, as on the per-frame path.
+                        syncOceanChop(*dm, *st);
+                        pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(frameNowSec()));
+                        ++dm->frameTick;
+                    } else {
+                        // First creation: prime synchronously so the very first
+                        // TLAS build + ray-trace see the displaced surface, not
+                        // the rest grid.
+                        refreshDisplacedBlas(*dm, *st, static_cast<float>(frameNowSec()));
+                    }
+                } else if (en.isGrass) {
+                    auto* gm = static_cast<GrassMesh*>(m);
+                    // A state built for a geometry the field no longer draws (a
+                    // swap, the old geometry alive elsewhere): behind this
+                    // rebuild's device wait, freed and built again.
+                    if (const auto sIt = grassStates.find(gm);
+                        sIt != grassStates.end() && sIt->second->liveCheck.lock() != gm->geometry()) {
+                        if (sIt->second->blas) destroyBlasRecord(*sIt->second->blas);
+                        destroyBuffer(ctx->allocator(), sIt->second->restPos);
+                        destroyBuffer(ctx->allocator(), sIt->second->heightFrac);
+                        grassStates.erase(sIt);
+                    }
+                    const bool existed = grassStates.count(gm) > 0;
+                    auto* st = ensureGrassState(*gm);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                    if (existed) {
+                        // Existing grass: defer the wind refit to the frame cb
+                        // (same rationale as the ocean above) — but honour the
+                        // distance-gated freeze so a structural rebuild triggered
+                        // by unrelated scene churn (e.g. terrain LOD tile swaps as
+                        // the camera roams the valley) doesn't wake every frozen
+                        // far field. recPtr already keeps the field in the TLAS.
+                        // A hidden field takes none (grassWantsDeform).
+                        const auto& cw = camera.matrixWorld->elements;
+                        const Vector3 camPos(cw[12], cw[13], cw[14]);
+                        if (grassWantsDeform(*st, en.hidden, grassShouldAnimate(en, camPos))) {
+                            pendingGrassDeforms_.emplace_back(gm, st);
+                            ++gm->frameTick;
+                        }
+                    } else {
+                        // Prime the BLAS with the first wind pose before the first trace.
+                        refreshGrassBlas(*gm, *st, static_cast<float>(frameNowSec()));
+                    }
+                } else if (en.isTet) {
+                    auto* st = ensureTetBlas(*m);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                } else if (en.isMorphed) {
+                    auto* st = ensureMorphedBlas(*m);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                } else {
+                    const bool traced = ctx->rayQuerySupported() && tracedGeoms.count(geomKey) != 0;
+                    auto it = blasCache.find(geomKey);
+                    if (it != blasCache.end()) {
+                        const unsigned int curVer = geomVersionOf(*m->geometry());
+                        // A geometry marked for the unpacked rebuild whose record
+                        // is still packed. Belt and braces: enableVertexInterop
+                        // rebuilds inline behind a drain, so in practice a marked
+                        // geometry is already unpacked by the time it gets here.
+                        // This catches any future path that manages to build a
+                        // packed record for a marked geometry anyway — the
+                        // failure mode it prevents (a producer writing float xyz
+                        // into an snorm16x4 normal buffer) is silent garbage, not
+                        // a crash, so it is worth one integer test per rebuild.
+                        // Self-clearing: the replacement has packedMask == 0.
+                        const bool packedMismatch =
+                                (it->second->packedMask != 0u) &&
+                                forceUnpackedGeoms_.count(geomKey) != 0;
+                        // Displaced by another displacementMap spec than now (or
+                        // newly, or no longer): the same evict-and-rebuild.
+                        const bool dispMismatch = it->second->dispSig != displacementSignatureOf(geomKey);
+                        if (it->second->geomVersion != curVer || packedMismatch || dispMismatch) {
+                            auto& old = it->second;
+                            if (old->interop) {
+                                // A CPU edit to a SIDE attribute (color / uv /
+                                // index contents — counts are fixed: the interop
+                                // enqueue loop above tears interop down on any
+                                // count change before this runs) bumped the
+                                // composite version under an armed interop
+                                // registration. Legitimate: the producer owns
+                                // position/normal, the CPU still owns the rest.
+                                // Evicting here would be three bugs at once —
+                                // free exports a foreign API holds imports of,
+                                // leave pendingDynamicGeomRefits_ (filled
+                                // earlier this pass) dangling at the freed
+                                // record, and rebuild from host position arrays
+                                // that are stale by contract, freezing the mesh
+                                // at whatever the CPU last saw. Transplant
+                                // instead: build the replacement from host data
+                                // (which is exactly how the fresh color/uv/index
+                                // contents get uploaded), move the interop
+                                // machinery across, and re-point the pending
+                                // refit — this same frame's recorded refit then
+                                // overwrites vertex/normal from the exports, so
+                                // the stale host positions are never presented.
+                                auto fresh = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false);
+                                // >=, not ==: createExternalBuffer reports the
+                                // ALLOCATION size, which the allocator pads up
+                                // (30752 for a 30744-byte request), so equality
+                                // spuriously fails for any vertex count whose
+                                // byte size is not 16-aligned. The requirement
+                                // is only that the export can source the full
+                                // head-of-frame copy into the new buffers.
+                                const bool fits = fresh &&
+                                        fresh->vertexCount == old->vertexCount &&
+                                        fresh->indexCount == old->indexCount &&
+                                        fresh->vertex.size <= old->posExt.size &&
+                                        fresh->normal.size <= old->nrmExt.size;
+                                if (fits) {
+                                    fresh->liveCheck = m->geometry();
+                                    fresh->posExt = old->posExt;
+                                    old->posExt = {};
+                                    fresh->nrmExt = old->nrmExt;
+                                    old->nrmExt = {};
+                                    fresh->externalCopy = std::move(old->externalCopy);
+                                    old->externalCopy = nullptr;
+                                    fresh->sanitizeDS = old->sanitizeDS;
+                                    old->sanitizeDS = VK_NULL_HANDLE;
+                                    fresh->interopValidate = old->interopValidate;
+                                    fresh->interop = true;
+                                    old->interop = false;
+                                    fresh->perFrameDynamic = true;
+                                    destroyBlasLodLevels(*old);
+                                    destroyBlasRecord(*old);// interop fields cleared above
+                                    BlasRecord* freshPtr = fresh.get();
+                                    it->second = std::move(fresh);
+                                    for (auto& op : pendingDynamicGeomRefits_) {
+                                        if (op.geom == geomKey) op.rec = freshPtr;
+                                    }
+                                    recPtr = freshPtr;
+                                } else {
+                                    // Cannot transplant (an attribute appeared or
+                                    // vanished, changing the buffer set). Tear the
+                                    // interop down DELIBERATELY — the exports are
+                                    // released behind disableVertexInterop's drain
+                                    // and the application is told — then evict as
+                                    // for any other geometry change.
+                                    std::cerr << "[VulkanRenderer] vertex interop: geometry "
+                                                 "attributes changed shape under an armed interop "
+                                                 "registration - interop is being DISABLED for "
+                                                 "this mesh. Edit only the CONTENTS of side "
+                                                 "attributes (color/uv/index) while interop is "
+                                                 "armed.\n";
+                                    disableVertexInterop(*m);
+                                    pendingDynamicGeomRefits_.erase(
+                                            std::remove_if(pendingDynamicGeomRefits_.begin(),
+                                                           pendingDynamicGeomRefits_.end(),
+                                                           [&](const auto& op) { return op.geom == geomKey; }),
+                                            pendingDynamicGeomRefits_.end());
+                                    destroyBlasLodLevels(*old);
+                                    destroyBlasRecord(*old);
+                                    blasCache.erase(it);
+                                    it = blasCache.end();
+                                }
+                            } else {
+                            // Topology/positions changed under this geometry
+                            // pointer — any existing LOD chain simplified the
+                            // OLD data and no longer matches. Destroy it; the
+                            // fresh BlasRecord created below starts at
+                            // LodState::None and the selection pass re-
+                            // enqueues a new chain next time it's eligible.
+                            destroyBlasLodLevels(*old);
+                            destroyBlasRecord(*old);
+                            blasCache.erase(it);
+                            // erase() returns the next bucket entry, not end().
+                            // Force a fresh lookup so the "missing → build" branch
+                            // below fires; otherwise recPtr binds to a sibling
+                            // cache entry (different mesh's BLAS) and the TLAS
+                            // instance ends up referencing the wrong AS.
+                            it = blasCache.end();
+                            }
+                        }
+                    }
+                    // A record built without a structure — its geometry was
+                    // drawn only by overlay meshes then — that a traced mesh
+                    // now shares (a solid mesh added beside its own wireframe):
+                    // rebuilt with one, before the instance below reads its
+                    // address. An interop record always has one.
+                    if (it != blasCache.end() && traced && it->second->as == VK_NULL_HANDLE &&
+                        !it->second->interop) {
+                        destroyBlasLodLevels(*it->second);
+                        destroyBlasRecord(*it->second);
+                        blasCache.erase(it);
+                        it = blasCache.end();
+                    }
+                    if (it == blasCache.end()) {
+                        auto rec = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false,
+                                                nullptr, VertexWriter::Host, traced);
+                        if (!rec) continue;// degenerate / unsupported geometry
+                        rec->liveCheck = m->geometry();
+                        it = blasCache.emplace(geomKey, std::move(rec)).first;
+                    }
+                    recPtr = it->second.get();
+                }
+
+                // Overlay meshes need a BlasRecord (the raster overlay pass
+                // binds its vertex buffer) but no acceleration structure, and
+                // must not appear in the TLAS or GeometryDesc/MaterialDesc
+                // arrays — the traced/rasterized scene must not see them.
+                if (en.isOverlay) continue;
+
+                VkAccelerationStructureInstanceKHR inst{};
+                copyTlasTransform(inst.transform, en.worldMatrix);
+                inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                inst.mask = kRayMaskOpaque;// placeholder; set to Opaque/Alpha once md is built below
+                inst.instanceShaderBindingTableRecordOffset = 0;
+                inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;// + FORCE_OPAQUE below
+                // en.lodLevel==0 for every deformer/exempt entry (auto-LOD
+                // selection above only ever sets it on plain cached
+                // geometry), so this passthrough is a no-op for them —
+                // recPtr may point at a SkinnedMeshState/DisplacedMeshState/
+                // etc.'s own BlasRecord, which selectLodGeom treats
+                // identically to a LOD0 blasCache record.
+                const auto lodSel = selectLodGeom(*recPtr, en.lodLevel);
+                inst.accelerationStructureReference = lodSel.asAddress;
+                instances.push_back(inst);
+
+                const GeometryDesc gdesc = buildGeometryDesc(en, *recPtr, lodSel);
+                geomDescs[i] = gdesc;
+                // Read-only: assignment of auto ids stays in the indirect draw
+                // builder so this cannot renumber what the Ids AOV reports.
+                entryStableIds_[i] = stableIdIfAssigned(*en.mesh);
+
+                const Material* matKey = m->material().get();
+                auto memoIt = matDescMemo.find(matKey);
+                if (memoIt == matDescMemo.end()) {
+                    MaterialDesc md0 = buildMaterialDesc(*m);
+                    {
+                        auto [matIt, inserted] = matAssetMap.try_emplace(
+                                matKey, static_cast<uint32_t>(matAssetMap.size()));
+                        md0.materialAssetIdx = matIt->second;
+                    }
+                    memoIt = matDescMemo.emplace(matKey, md0).first;
+                }
+                // The memo holds the material's desc, which is its table
+                // record; the entry's instance color is in its GeometryDesc.
+                const uint32_t matIdx = matTableSlot(matKey, memoIt->second);
+                setGeomMatIdx(geomDescs[i], matIdx);
+                matTableRef(matIdx);// geomDescs becomes geomDescsCached_ below
+                const MaterialDesc& md = matTable_[matIdx];
+                // Visibility group (tlasRayMask); a shown entry on the other
+                // side of a LOD crossfade is hit by no ray.
+                if (!instances.empty()) {
+                    instances.back().mask = entryRayMask(tlasRayMask(en, &md, en.hidden), en,
+                                                         lodFadeCasts(entryLodFade_[i]));
+                    instances.back().flags = tlasInstanceFlags(md);
+                    // Cutout ray distance: the same bit classifyCutoutFar
+                    // derives on lean frames, for this frame's camera.
+                    const bool beyond = cutoutRayDistance_ > 0.f && cutoutCaster(md) &&
+                                        entryBeyond(en, rayCamPos, cutoutRayDistance_);
+                    entries[i].rayFarOpaque = beyond;
+                    if (beyond) instances.back().flags |= VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
+                }
+            }
+            cutoutRayClassified_    = true;
+            cutoutRayClassifiedFor_ = cutoutRayDistance_;
+            std::copy(rayCamPos, rayCamPos + 3, cutoutRayCamPos_);
+
+            // Submit the whole tile-admit batch once (BLAS builds + prevVertex
+            // seeds + texture staging/blits), waiting a single time. After this
+            // returns every new BLAS is built and every new albedo texture is
+            // resident, so buildTlas below can reference the fresh BLAS.
+            matTableBuilding_ = false;
+            rbLoop.stop();
+            THREEPP_CPUPROF_NAMED(rbFlush, "scene.R2_batchFlush");
+            flushOneShotBatch();
+            // Records compacted by the batch flushes in this pass were pushed
+            // above with their build-size addresses.
+            applyBlasCompactionRemap(instances);
+            rbFlush.stop();
+            THREEPP_CPUPROF_NAMED(rbTlas, "scene.R3_buildTlas");
+            buildTlas(instances);
+            rbTlas.stop();
+            THREEPP_CPUPROF_NAMED(rbDescs, "scene.R4_descUpload");
+            // Every per-frame GeometryDesc slot seeded fresh — same ring
+            // model as the matDescs loop below; the lean auto-LOD patch
+            // flips geomDescsDirty_ and flushGeometryDescsIfDirty carries
+            // deltas per slot from then on.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                uploadDescBuffer(geometryDescsBuffers[f], geomDescs, slotCapacity_);
+            }
+            // Every slot now holds the fresh array, so no slot owes anything —
+            // including any range marked earlier in this same frame, which this
+            // upload has just superseded.
+            for (auto& d : geomDescsDirty_) d.clear();
+            // Host mirror for the lean-path auto-LOD patch above. geomDescs
+            // just built already reflects each entry's CURRENT en.lodLevel
+            // (the selection pass runs before this heavy rebuild, so an
+            // entry whose geometry/BLAS wasn't touched by this particular
+            // rebuild can still carry a >0 level from before) — this is
+            // just the persistent copy the lean path patches in place.
+            geomDescsCached_ = geomDescs;
+            // Seed every per-frame slot with the fresh table so the first few
+            // frames don't try to flush against a half-initialised ring.
+            // matTable_ stays the host-side authoritative copy the hot-path
+            // flush carries deltas from. Sized by materials, with room for
+            // the slot path's new ones before it has to grow.
+            matTableCapacity_ = std::max<uint32_t>(256u, 2u * static_cast<uint32_t>(matTable_.size()));
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                uploadDescBuffer(materialDescsBuffers[f], matTable_, matTableCapacity_);
+            }
+            for (auto& d : matDescsDirty_) d.clear();
+            cacheCullFlags();
+            // The asset numbering the slot path continues (slotMaterialAssetIdx).
+            slotMatAssetIdx_.clear();
+            for (const auto& [mat, idx] : matAssetMap) slotMatAssetIdx_[mat] = {mat ? mat->id : 0u, idx};
+            slotNextMatAssetIdx_ = static_cast<uint32_t>(matAssetMap.size());
+            // The table just folded in every span's current instance colors.
+            for (auto& sp : entrySpans_) {
+                if (!sp.inst) continue;
+                sp.instColorAttr    = sp.inst->instanceColor();
+                sp.instColorVersion = sp.instColorAttr ? sp.instColorAttr->version : ~0u;
+            }
+
+            // Topology rebuild vs temporal history. Nothing consumed ACROSS
+            // frames keys on the entry order any more: the reproject guards
+            // compare the STABLE per-object id (ids .y) and read the prev
+            // texel's own moved bit (ids .z, kInstFlagMoving) instead of
+            // dereferencing geoms[prev ids .x], the ReSTIR reservoirs store
+            // world-space light samples (position + type, never an index),
+            // and the prev-world motion references are identity-remapped
+            // below alongside meshMovedSticky_. The
+            // per-pixel depth/normal gates then cold-start exactly the pixels
+            // whose surface really changed. So neither an APPEND (spawned
+            // PhysX body, grown ParticleSystem) nor a mid-list REMOVAL /
+            // REORDER (a terrain tile split/merge swaps the parent for its
+            // children every few frames for seconds at a stretch) needs a
+            // global reset. The old positional stable-prefix check fell back
+            // to clearGbufImages + sampleIndex=0 + prevWorldMats.clear() on
+            // every removal — restarting the whole scene's accumulation AND
+            // the RNG sample stream a few frames apart for the entire
+            // streaming burst, which read as white shimmer on high-contrast
+            // edges under DLSS/TAA.
+            //
+            // What still keys positionally is HOST state that outlives the
+            // frame, so remap it by identity instead of resetting:
+            //   meshMovedSticky_ — a removed entry's "recently moved"
+            //     countdown must not land on an unrelated survivor (a stale
+            //     moving label makes the trailing-edge guards reject history
+            //     at every silhouette for 30 frames — edge shimmer).
+            //   prevWorldByEntry_ — remap by the same identity so a surviving
+            //     entry keeps its motion reference (a reset fakes identity
+            //     motion scene-wide for a frame); removed entries' slots are
+            //     simply dropped with the old index space.
+            // (meshMovedBits_ is refilled in CURRENT index space every
+            // ensureSceneBuilt pass, so it needs no remap.)
+            //
+            // A duplicate (mesh, instanceIndex) key would make the identity
+            // match ambiguous — not expected, every entry is its own TLAS
+            // slot — so that lone case falls back to the old global reset.
+            rbDescs.stop();
+            THREEPP_CPUPROF_NAMED(rbRemap, "scene.R5_identityRemap");
+            std::vector<std::array<float, 16>> oldPrevWorld = std::move(prevWorldByEntry_);
+            std::vector<uint8_t> oldPrevValid = std::move(prevWorldValidByEntry_);
+            seedMotionState(entries);// identity motion + prev=current for every slot
+            bool identityOk = sceneBuilt_;
+            if (identityOk) {
+                std::unordered_map<EntryKey, size_t, EntryKeyHash> oldIdx;
+                oldIdx.reserve(prevSceneFingerprint.size());
+                for (size_t i = 0; i < prevSceneFingerprint.size() && identityOk; ++i) {
+                    const auto& p = prevSceneFingerprint[i];
+                    // A free slot (VulkanCoreSlots.cpp) names the tombstone,
+                    // every one of them at instance 0: no history to carry,
+                    // and not an ambiguous match.
+                    if (slotTombstone_ && p.mesh == slotTombstone_.get()) continue;
+                    identityOk = oldIdx.try_emplace(
+                            EntryKey{static_cast<const Mesh*>(p.mesh), p.instanceIndex}, i).second;
+                }
+                if (identityOk) {
+                    std::vector<uint32_t> remappedSticky(currFp.size(), 0u);
+                    for (size_t i = 0; i < currFp.size(); ++i) {
+                        const auto it = oldIdx.find(
+                                EntryKey{static_cast<const Mesh*>(currFp[i].mesh), currFp[i].instanceIndex});
+                        if (it == oldIdx.end()) continue;// new entry — no history
+                        if (it->second < meshMovedSticky_.size())
+                            remappedSticky[i] = meshMovedSticky_[it->second];
+                        if (it->second < oldPrevWorld.size() && oldPrevValid[it->second] &&
+                            i < prevWorldByEntry_.size()) {
+                            prevWorldByEntry_[i] = oldPrevWorld[it->second];
+                        }
+                        oldIdx.erase(it);// leftovers = removed entries (slots dropped)
+                    }
+                    meshMovedSticky_.swap(remappedSticky);
+                    stickyActiveCount_ = 0;
+                    for (uint32_t v : meshMovedSticky_)
+                        if (v > 0u) ++stickyActiveCount_;
+                }
+            }
+            if (!identityOk) {
+                // First build (nothing to preserve) or an ambiguous match.
+                // We're already past vkDeviceWaitIdle so the clear is synchronous.
+                clearGbufImages();
+                sampleIndex = 0;
+                meshMovedSticky_.clear();
+                stickyActiveCount_ = 0;
+            }
+
+            // Grow motion-mat + mesh-moved-bits buffers if the new instance
+            // count exceeds the current capacity. The descriptor write below
+            // (or the initial allocate, on first build) will pick up the new
+            // buffer handles.
+            // motionMat[] and meshMovedBits[] are indexed by ENTRY index
+            // (== instanceCustomIndex == the meshID the gbuffer writes; see the
+            // geomDescs/matDescs "ONE index space" note above), NOT by the
+            // compact TLAS instance count. Size them to entries.size(): when
+            // leading entries are overlay (e.g. wireframe PointLightHelpers
+            // added to the scene before the traced/rasterized meshes), those
+            // meshes land at entry indices >= instances.size(), so a buffer
+            // sized to the instance count is read out of bounds in the
+            // shader — a GPU fault that surfaces at the next AS one-shot
+            // fence wait (looks like a "tblas refit" crash).
+            // computeAndUploadMotionMatrices uploads
+            // entries.size() matrices, so the instance-count sizing overflowed
+            // the host buffer too.
+            rbRemap.stop();
+            THREEPP_CPUPROF_NAMED(rbViews, "scene.R6_capacityDescriptors");
+            const uint32_t motionSlots    = static_cast<uint32_t>(entries.size());
+            const uint32_t neededBitWords = std::max<uint32_t>((motionSlots + 31u) / 32u, 1u);
+            // The buffers hold the slot pool, the host arrays the entries.
+            const uint32_t poolSlots = std::max(motionSlots, slotCapacity_);
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                ensureMotionMatCapacity(f, std::max<uint32_t>(poolSlots, 1u));
+                ensureMeshMovedBitsCapacity(f, std::max<uint32_t>((poolSlots + 31u) / 32u, 1u));
+            }
+            meshMovedBits_.resize(neededBitWords, 0u);
+
+            // Re-point the deferred shade's descriptor set at the (re)built
+            // scene resources — TLAS, geom/material descs, the bindless
+            // material-texture array and the emissive-tri buffer. A rebuild
+            // freed and recreated those, so the set would otherwise dangle.
+            //
+            // Every view: the scene is shared, so a rebuild invalidates every
+            // view's set, not just the one that happens to be current. An
+            // editor rebuilds on nearly every edit, which is where leaving the
+            // secondaries out shows up first.
+            forEachLiveView([&] { rewriteDeferredDescriptors(); });
+            // The (re)build above rebound the bindless texture array. The
+            // raster descriptor's binding 3 mirrors that same table, so
+            // invalidate its per-slot cache — each frame slot then re-writes
+            // binding 3 on its next uploadRasterCameraUbo. Per view: the flag
+            // guards per-view sets, and addSecondaryViewPasses calls
+            // uploadRasterCameraUbo once per view per frame, so each view
+            // heals its own slot.
+            for (auto& v : views_) { v->rasterMatTexValid_.fill(0); v->shadowMatTexValid_.fill(0); }
+            prevSceneFingerprint = std::move(currFp);
+            sceneBuilt_ = true;
+            ++drawInputsVersion_;// structural rebuild — every draw record is new
+            ++tlasStats_.structuralRebuilds;
+
+            // Companion to the post-init dump: with the scene's BLASes +
+            // geometry buffers now resident, allocationBytes − the post-init
+            // baseline is the scene's true device cost (the OS-level per-
+            // process counter only moves in VMA block granularity, so it
+            // under-reports buffer-level savings such as packed attributes).
+            if (vulkan::env::flag("THREEPP_VK_MEMDUMP")) {
+                dumpMemoryStats("scene-built");
+            }
+            // Always on: one line when a deformer created by this build landed
+            // in system memory (its deform pass then crosses PCIe every frame).
+            reportDeformPlacement();
         }
 
 VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const MeshEntry& en, const BlasRecord& rec,
