@@ -113,6 +113,32 @@ namespace threepp {
         // the getMorphAttributes hash lookup + SkinnedMesh dynamic_cast
         // used to run for every entry every frame.
         std::vector<bool> entryMorphDirty;
+
+        // Geometries whose prevVertex was re-snapshotted (to OLD
+        // positions) this frame. The prevVertex re-sync pass below
+        // must SKIP these so their legitimate change-frame deformation
+        // motion survives — they settle on the next clean frame.
+        std::unordered_set<const BufferGeometry*> geomRefreshedThisFrame;
+
+        // ── Zero-copy vertex interop: the UNCONDITIONAL enqueue ──
+        // Everything else on this path is gated on the composite
+        // BufferAttribute version (geomVersionOf, entryGeomDirty). A
+        // foreign device producer bumps none of those — it writes
+        // GPU memory the host never sees — so an interop record would
+        // read "clean" forever, its BLAS would never refit, and the
+        // ray-traced view (shadows, reflections, GI, lidar) would
+        // quietly diverge from the rasterized one while the picture
+        // looked fine. Same reasoning, same answer as the tet path
+        // pushing pendingTetRebuilds_ every frame regardless.
+        bool interopDirtyAny = false;
+
+        // Material patch FIRST, then the TLAS fill: the fill derives each
+        // instance's ray mask and FORCE_OPAQUE flag from the table, so
+        // it must read THIS frame's materials. A patched entry whose
+        // visibility class flipped (a blinker crossing the emitter threshold,
+        // opacity dropping below 1) sets instClassChanged, which forces the
+        // fill even on a frame with no motion, and a full build.
+        bool instClassChanged = false;
     };
 
 }// namespace threepp

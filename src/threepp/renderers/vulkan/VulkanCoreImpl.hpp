@@ -2610,6 +2610,17 @@ namespace threepp {
         void fingerprintEntries(SceneBuildFrame& sb);
         void scanDeformers(SceneBuildFrame& sb, Camera& camera);
         bool updateSceneInPlace(SceneBuildFrame& sb);
+        void compareFingerprints(SceneBuildFrame& sb);
+        void pollInstanceColors(SceneBuildFrame& sb);
+        void queueDeformerRefits(SceneBuildFrame& sb);
+        void refreshTetMeshes(SceneBuildFrame& sb);
+        void enqueueVertexInterop(SceneBuildFrame& sb);
+        bool refreshDirtyGeometry(SceneBuildFrame& sb);
+        void queueSkinnedPrevResyncs(SceneBuildFrame& sb);
+        void resyncPrevVertices(SceneBuildFrame& sb);
+        void collectInstanceClassChanges(SceneBuildFrame& sb);
+        void patchMaterialDescs(SceneBuildFrame& sb);
+        void refitTlasInPlace(SceneBuildFrame& sb);
         void rebuildScene(SceneBuildFrame& sb, Camera& camera);
 
         void createCameraUbos();
