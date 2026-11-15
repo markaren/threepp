@@ -20,7 +20,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
+#include "threepp/renderers/gl/GLLog.hpp"
 #include <string>
 
 using namespace threepp;
@@ -490,7 +490,7 @@ void GTAOPass::render(GLRenderer& renderer, RenderTarget* writeBuffer, RenderTar
             break;
 
         default:
-            std::cerr << "THREE.GTAOPass: Unknown output type." << std::endl;
+            THREEPP_LOG_ONCE(gl::kLogPostProcessing, Warn) << "GTAOPass output " << static_cast<int>(output) << " is unknown; the pass writes nothing";
     }
 }
 

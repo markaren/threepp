@@ -18,6 +18,7 @@
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
+#include "threepp/renderers/gl/GLLog.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "threepp/renderers/common/EnvSunExtract.hpp"
@@ -1846,7 +1847,7 @@ struct GLRenderer::Impl {
             std::error_code ec;
             create_directories(filename.parent_path(), ec);
             if (ec) {
-                std::cerr << "Error creating directories: " << ec.message() << '\n';
+                THREEPP_LOG(gl::kLogRenderer, Error) << "Cannot create the folder " << filename.parent_path().string() << ": " << ec.message();
             }
         }
         bool sucess = false;

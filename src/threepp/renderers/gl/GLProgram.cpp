@@ -12,7 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+#include "threepp/renderers/gl/GLLog.hpp"
 #include <list>
 #include <vector>
 
@@ -60,7 +60,8 @@ namespace {
             case ColorSpace::LogLuv:
                 return {"LogLuv", "( value )"};
             default:
-                std::cerr << "THREE.GLProgram: Unsupported encoding:" << as_integer(encoding) << std::endl;
+                THREEPP_LOG(kLogProgram, Warn) << "Color space " << as_integer(encoding)
+                                               << " is not supported here; the shader reads the value as linear";
                 return {"Linear", "( value )"};
         }
     }
@@ -131,7 +132,8 @@ namespace {
                 break;
 
             default:
-                std::cerr << "THREE.GLProgram: Unsupported toneMapping " << std::endl;
+                THREEPP_LOG(kLogProgram, Warn) << "Tone mapping " << as_integer(toneMapping)
+                                               << " is not supported; the shader uses linear tone mapping";
                 toneMappingName = "Linear";
         }
 
@@ -765,7 +767,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
         // leaves the log empty — so a shader that did not compile produced a
         // program that silently drew nothing, with no way to find out why.
         // r129 checks COMPILE_STATUS per shader and LINK_STATUS for the program.
-        const auto reportShader = [](GLuint shader, const char* stage) {
+        const auto reportShader = [&](GLuint shader, const char* stage) {
             GLint compiled = GL_FALSE;
             glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
             if (compiled == GL_TRUE) return;
@@ -775,7 +777,9 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
             std::string msg(len > 0 ? static_cast<size_t>(len) : 0, '\0');
             if (len > 0) glGetShaderInfoLog(shader, len, nullptr, msg.data());
 
-            std::cerr << "[threepp] the " << stage << " shader failed to COMPILE: " << msg << std::endl;
+            THREEPP_LOG(kLogProgram, Error) << "The " << stage << " shader of '" << parameters->shaderName
+                                            << "' did not compile; what uses it draws nothing:\n"
+                                            << msg;
         };
 
         reportShader(glVertexShader, "vertex");
@@ -800,15 +804,20 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
         if (!blank) {
 
-            std::cerr << (linked == GL_TRUE ? "[threepp] shader program warning: "
-                                            : "[threepp] shader program failed to LINK: ")
-                      << msg << std::endl;
+            if (linked == GL_TRUE) {
+                THREEPP_LOG(kLogProgram, Warn) << "The shader program of '" << parameters->shaderName
+                                               << "' linked with warnings:\n"
+                                               << msg;
+            } else {
+                THREEPP_LOG(kLogProgram, Error) << "The shader program of '" << parameters->shaderName
+                                                << "' did not link; what uses it draws nothing:\n"
+                                                << msg;
+            }
 
         } else if (linked != GL_TRUE) {
 
-            std::cerr << "[threepp] shader program failed to LINK, and the driver "
-                         "gave no info log"
-                      << std::endl;
+            THREEPP_LOG(kLogProgram, Error) << "The shader program of '" << parameters->shaderName
+                                            << "' did not link and the driver gave no log; what uses it draws nothing";
         }
     }
 

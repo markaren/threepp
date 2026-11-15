@@ -27,7 +27,7 @@
 
 
 #include <cmath>
-#include <iostream>
+#include "threepp/renderers/gl/GLLog.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -372,11 +372,7 @@ struct GLShadowMap::Impl {
 
             // Removed in three.js r183; r186 warns and uses PCF, whose rotated
             // Vogel disk is softer than PCFSoft's bilinear 3x3 was anyway.
-            static bool warned = false;
-            if (!warned) {
-                std::cerr << "THREE.GLShadowMap: PCFSoftShadowMap has been removed. Using PCFShadowMap instead." << std::endl;
-                warned = true;
-            }
+            THREEPP_LOG_ONCE(kLogShadow, Warn) << "ShadowMap::PFCSoft is no longer supported; shadows use ShadowMap::PFC";
             scope->type = ShadowMap::PFC;
         }
 
@@ -400,7 +396,7 @@ struct GLShadowMap::Impl {
 
             if (!lightWithShadow) {
 
-                std::cerr << "THREE.GLShadowMap:'" << light->type() << "'has no shadow." << std::endl;
+                THREEPP_LOG_ONCE(kLogShadow, Warn) << "A " << light->type() << " cannot cast shadows; it is left out of the shadow pass";
                 continue;
             }
 

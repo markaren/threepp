@@ -16,7 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
-#include <iostream>
+#include "threepp/renderers/gl/GLLog.hpp"
 
 using namespace threepp;
 
@@ -335,7 +335,8 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
                                   glFormat, glType, texture.image().data<std::uint16_t>().data());
             } else {
 
-                std::cerr << "Unnsupported gltype=" << glType << std::endl;
+                THREEPP_LOG(gl::kLogTexture, Warn) << "Texture '" << texture.name << "' has GL data type 0x" << std::hex << glType
+                                                << ", which cannot be uploaded from CPU data; the texture stays empty";
             }
             textureProperties->maxMipLevel = 0;
         }
@@ -441,7 +442,8 @@ int gl::GLTextures::allocateTextureUnit() {
 
     if (textureUnit >= maxTextures) {
 
-        std::cerr << "THREE.GLTextures: Trying to use " << textureUnit << " texture units while this GPU supports only " << maxTextures << std::endl;
+        THREEPP_LOG_ONCE(gl::kLogTexture, Warn) << "A material needs " << (textureUnit + 1) << " texture units, but the GPU has "
+                                       << maxTextures << "; the textures past that do not bind";
     }
 
     textureUnits += 1;
@@ -466,7 +468,7 @@ void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
 
         if (image.empty()) {
 
-            std::cerr << "THREE.GLRenderer: Texture marked for update but image is undefined" << std::endl;
+            THREEPP_LOG(gl::kLogTexture, Warn) << "Texture '" << texture.name << "' needs an update but has no image; it is not uploaded";
 
         } else {
 
@@ -638,14 +640,16 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, *glDepthTexture, 0);
         GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE) {
-            std::cerr << "GLTextures: Depth texture framebuffer (depth) incomplete: 0x" << std::hex << status << std::dec << std::endl;
+            THREEPP_LOG(gl::kLogTexture, Error) << "The render target's depth texture framebuffer is incomplete (status 0x" << std::hex << status
+                                         << "); drawing into it fails";
         }
     } else if (renderTarget->depthTexture->format == Format::DepthStencil) {
 
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, *glDepthTexture, 0);
         GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE) {
-            std::cerr << "GLTextures: Depth texture framebuffer (stencil) incomplete: 0x" << std::hex << status << std::dec << std::endl;
+            THREEPP_LOG(gl::kLogTexture, Error) << "The render target's depth-stencil texture framebuffer is incomplete (status 0x" << std::hex << status
+                                         << "); drawing into it fails";
         }
     } else {
 
@@ -693,7 +697,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     // Handles WebGL2 RGBFormat fallback - #18858
     if (texture->format == Format::RGB && (texture->type == Type::Float || texture->type == Type::HalfFloat)) {
         texture->format = Format::RGBA;
-        std::cerr << "THREE.GLRenderer: Rendering to textures with RGB format is not supported. Using RGBA format instead." << std::endl;
+        THREEPP_LOG(gl::kLogTexture, Warn) << "A float RGB render target cannot be drawn into; its texture is made RGBA";
     }
 
     const bool isCube = dynamic_cast<CubeTexture*>(texture.get()) != nullptr;
@@ -753,7 +757,8 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
                                        GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, *depthProperties->glTexture, 0);
                 const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
                 if (status != GL_FRAMEBUFFER_COMPLETE) {
-                    std::cerr << "GLTextures: cube depth framebuffer incomplete: 0x" << std::hex << status << std::dec << std::endl;
+                    THREEPP_LOG(gl::kLogTexture, Error) << "A cube depth framebuffer is incomplete (status 0x" << std::hex << status
+                                                     << "); drawing into that face fails";
                 }
             }
 
@@ -839,8 +844,8 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
             const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
             if (status != GL_FRAMEBUFFER_COMPLETE) {
-                std::cerr << "GLTextures: multisampled framebuffer incomplete: 0x"
-                          << std::hex << status << std::dec << std::endl;
+                THREEPP_LOG(gl::kLogTexture, Error) << "The multisampled framebuffer is incomplete (status 0x" << std::hex << status
+                                                << "); drawing into the render target fails";
             }
 
             state->bindFramebuffer(GL_FRAMEBUFFER, 0);

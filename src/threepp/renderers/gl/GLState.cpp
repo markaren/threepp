@@ -9,7 +9,7 @@
 #endif
 
 #include <algorithm>
-#include <iostream>
+#include "threepp/renderers/gl/GLLog.hpp"
 
 using namespace threepp;
 
@@ -513,7 +513,7 @@ void gl::GLState::setBlending(
                         break;
 
                     default:
-                        std::cerr << "THREE.GLState: Invalid blending: " << as_integer(blending) << std::endl;
+                        THREEPP_LOG_ONCE(gl::kLogState, Warn) << "Blending " << as_integer(blending) << " is not a blend mode; the blend function is left as it was";
                         break;
                 }
 
@@ -538,7 +538,7 @@ void gl::GLState::setBlending(
                         break;
 
                     default:
-                        std::cerr << "THREE.GLState: Invalid blending: " << as_integer(blending) << std::endl;
+                        THREEPP_LOG_ONCE(gl::kLogState, Warn) << "Blending " << as_integer(blending) << " is not a blend mode; the blend function is left as it was";
                         break;
                 }
             }

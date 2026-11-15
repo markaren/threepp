@@ -1,7 +1,7 @@
 
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#include <iostream>
+#include "threepp/renderers/gl/GLLog.hpp"
 
 #ifdef __EMSCRIPTEN__
 #include <GL/gl.h>
@@ -39,7 +39,7 @@ void gl::GLInfo::update(int count, unsigned int mode, size_t instanceCount) {
             break;
 
         default:
-            std::cerr << "THREE.GLInfo: Unknown draw mode: " << mode << std::endl;
+            THREEPP_LOG_ONCE(gl::kLogRenderer, Warn) << "Draw mode " << mode << " is unknown; its primitives are not counted in info()";
             break;
     }
 }

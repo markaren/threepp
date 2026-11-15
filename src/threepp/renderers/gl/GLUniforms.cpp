@@ -11,7 +11,7 @@
 #endif
 
 #include <algorithm>
-#include <iostream>
+#include "threepp/renderers/gl/GLLog.hpp"
 #include <regex>
 
 using namespace threepp;
@@ -108,8 +108,8 @@ namespace {
 
                 default:
                     return [&](const UniformValue&, GLTextures*) {
-                        std::cout << "SingleUniform TODO: "
-                                  << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
+                        THREEPP_LOG_ONCE(kLogUniform, Warn) << "Uniform '" << activeInfo.name << "' has GL type 0x" << std::hex
+                                                            << activeInfo.type << ", which threepp cannot set; it keeps its default";
                     };
             }
         }
@@ -190,7 +190,7 @@ namespace {
         void setValueV2f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto) { std::cerr << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Uniform '" << activeInfo.name << "' is a vec2, but was given another type (variant " << value.index() << "); it keeps its value"; },
                                [&](Vector2 arg) { setValueV2fHelper(arg); },
                        },
                        value);
@@ -217,7 +217,7 @@ namespace {
         void setValueV3f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto) { std::cerr << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Uniform '" << activeInfo.name << "' is a vec3, but was given another type (variant " << value.index() << "); it keeps its value"; },
                                [&](Vector3 arg) { setValueV3fHelper(arg); },
                                [&](Vector3* arg) { setValueV3fHelper(*arg); },
                                [&](Color arg) { setValueV3fHelper(arg); },
@@ -248,7 +248,7 @@ namespace {
         void setValueV4f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto) { std::cerr << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Uniform '" << activeInfo.name << "' is a vec4, but was given another type (variant " << value.index() << "); it keeps its value"; },
                                [&](Vector4 arg) { setValueV4fHelper(arg); },
                                [&](Quaternion arg) { setValueV4fHelper(arg); },
                        },
@@ -269,7 +269,7 @@ namespace {
         void setValueM3(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto) { std::cerr << "setValueM3: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Uniform '" << activeInfo.name << "' is a mat3, but was given another type (variant " << value.index() << "); it keeps its value"; },
                                [&](Matrix3 arg) { setValueM3Helper(arg.elements); },
                        },
                        value);
@@ -289,7 +289,7 @@ namespace {
         void setValueM4(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Uniform '" << activeInfo.name << "' is a mat4, but was given another type (variant " << value.index() << "); it keeps its value"; },
                                [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
                                [&](Matrix4* arg) { setValueM4Helper(arg->elements); }},
                        value);
@@ -344,7 +344,7 @@ namespace {
                 case 0x8b5c:// MAT4
                     return [&](const UniformValue& value, GLTextures*) {
                         std::visit(overloaded{
-                                           [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                                           [&](auto) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Uniform '" << activeInfo.name << "' is a mat4, but was given another type (variant " << value.index() << "); it keeps its value"; },
                                            [&](const std::vector<float>& arg) { glUniformMatrix4fv(addr, count(arg.size() / 16), false, arg.data()); },
                                            [&](const std::vector<Matrix4>& arg) {
                                                const auto n = count(arg.size());
@@ -388,8 +388,8 @@ namespace {
                     };
                 default:
                     return [&](const UniformValue&, GLTextures*) {
-                        std::cout << "PureArrayUniform TODO: "
-                                  << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
+                        THREEPP_LOG_ONCE(kLogUniform, Warn) << "Array uniform '" << activeInfo.name << "' has GL type 0x" << std::hex
+                                                            << activeInfo.type << ", which threepp cannot set; it keeps its default";
                     };
             }
         }
@@ -426,7 +426,7 @@ namespace {
                 const auto it = fields.find(u->id);
                 if (it == fields.end()) continue;
                 std::visit(overloaded{
-                                   [&](const auto&) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
+                                   [&](const auto&) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Struct uniform '" << activeInfo.name << "', member '" << u->id << "': the value has a type a struct member cannot take; the member is not set"; },
                                    [&](int arg) { u->setValue(arg, textures); },
                                    [&](float arg) { u->setValue(arg, textures); },
                                    [&](const Vector2& arg) { u->setValue(arg, textures); },
@@ -443,7 +443,7 @@ namespace {
             // material refresh.
             std::visit(
                     overloaded{
-                            [&](const auto&) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
+                            [&](const auto&) { THREEPP_LOG_ONCE(kLogUniform, Warn) << "Struct uniform '" << activeInfo.name << "' was given a value that is not a struct (variant " << value.index() << "); it is not set"; },
                             [&](const Fields& fields) { setFields(fields, textures); },
                             [&](const std::vector<Fields*>& arg) {
                                 for (auto& u : seq) {
