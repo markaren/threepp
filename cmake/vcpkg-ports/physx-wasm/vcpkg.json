@@ -1,0 +1,14 @@
+{
+  "name": "physx-wasm",
+  "version": "5.5.0",
+  "description": "NVIDIA PhysX SDK 5.5 built for WebAssembly with Emscripten: CPU only, single-threaded, static. Installs the same CMake package and targets as the vcpkg 'physx' port (unofficial-omniverse-physx-sdk). Overlay port kept in threepp; not supported by NVIDIA.",
+  "homepage": "https://github.com/NVIDIA-Omniverse/PhysX",
+  "license": "BSD-3-Clause",
+  "supports": "wasm32",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    }
+  ]
+}

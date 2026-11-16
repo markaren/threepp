@@ -1,0 +1,7 @@
+physx-wasm provides the same CMake package and targets as the physx port:
+
+    find_package(unofficial-omniverse-physx-sdk CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE unofficial::omniverse-physx-sdk::sdk)
+
+The build is CPU only (PX_SUPPORT_GPU_PHYSX is 0) and has no threads: create
+the CPU dispatcher with PxDefaultCpuDispatcherCreate(0).

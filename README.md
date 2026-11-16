@@ -197,6 +197,7 @@ All core dependencies are bundled. `CMakePresets.json` holds the configurations 
 | `python`     | the pybind11 `threepp` module                                                    |
 | `no-glfw`    | build check only: no GLFW frontend, so no rendering                              |
 | `wasm`       | Emscripten/WebGL2 examples (needs an activated emsdk)                            |
+| `wasm-physx` | as `wasm`, plus PhysX from vcpkg (needs `VCPKG_ROOT` set as well)                |
 
 ```shell
 cmake --preset gl
@@ -210,6 +211,13 @@ that inherits from these. Without presets, `cmake -B build` and `cmake --build b
 usual; add `-DTHREEPP_USE_EXTERNAL_GLFW=ON` to use a system GLFW.
 
 A subset of the examples runs in the browser: **[try them online](https://markaren.github.io/threepp/)**.
+
+vcpkg's `physx` port does not build for WebAssembly, so the repository carries an overlay port,
+[`cmake/vcpkg-ports/physx-wasm`](cmake/vcpkg-ports/physx-wasm), that `vcpkg.json` selects for the
+`wasm32-emscripten` triplet. It is the same PhysX 5.5 source with a small patch, built CPU only,
+single-threaded and with wasm SIMD. The overlay applies when threepp is the top-level project; a
+project that consumes threepp and wants PhysX in the browser copies that directory into its own
+overlay ports.
 
 Some headers need extra packages when you consume them:
 

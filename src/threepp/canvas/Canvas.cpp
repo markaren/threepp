@@ -224,29 +224,43 @@ namespace {
         return generation;
     }
 
+    // GLFW opens the GL client library itself (libGLX.so.0 or libGL.so.1 for
+    // a GLX context, libEGL.so.1 for EGL) and closes it again in
+    // glfwTerminate(). Closing it unloads the whole GL stack behind it - glvnd,
+    // the vendor library, the driver - and a second Canvas in the same process
+    // loads all of it again. Not every stack comes back from that: the
+    // python-bindings CI job (Ubuntu 22.04, llvmpipe under Xvfb) segfaulted
+    // constructing the second canvas's GLRenderer once the first canvas's
+    // death terminated GLFW in between. Hold the client libraries open once,
+    // for the life of the process, so GLFW's close only drops its own
+    // reference and the stack stays mapped. Missing libraries are simply
+    // skipped.
+    //
+    // Called for a window that gets a GL context, and only for that. A Vulkan
+    // canvas has no use for these libraries, and opening them is not neutral
+    // there. NVIDIA's Vulkan ICD (libGLX_nvidia.so.0) maps libEGL.so.1
+    // itself; when the application has opened libEGL.so.1 before the ICD
+    // loads, the ICD's exit handler aborts the process on a bad free
+    // ("corrupted size vs. prev_size", "double free or corruption") if the
+    // ICD is still loaded at exit, which it is whenever the device is left to
+    // process exit. Measured on driver 580.178.04 (H100), and without threepp:
+    // dlopen("libEGL.so.1") followed by vkEnumerateInstanceExtensionProperties
+    // exits 134, the same call alone exits 0. A process that makes a GL
+    // window and then loads that ICD is still exposed.
+    void holdGlClientLibraries() {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+        static bool held = false;
+        if (held) return;
+        held = true;
+        for (const char* soname : {"libGLX.so.0", "libGL.so.1", "libEGL.so.1"}) {
+            dlopen(soname, RTLD_LAZY | RTLD_NODELETE);
+        }
+#endif
+    }
+
     void initGLfw(bool headless) {
         if (glfwRefCount()++ == 0) {
             ++glfwGeneration();
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-            // GLFW opens the GL client library itself (libGLX.so.0 or
-            // libGL.so.1 for a GLX context, libEGL.so.1 for EGL) and closes it
-            // again in glfwTerminate(). Closing it unloads the whole GL stack
-            // behind it - glvnd, the vendor library, the driver - and a second
-            // Canvas in the same process loads all of it again. Not every stack
-            // comes back from that: the python-bindings CI job (Ubuntu 22.04,
-            // llvmpipe under Xvfb) segfaulted constructing the second canvas's
-            // GLRenderer once the first canvas's death terminated GLFW in
-            // between. Hold the client libraries open once, for the life of the
-            // process, so GLFW's close only drops its own reference and the
-            // stack stays mapped. Missing libraries are simply skipped.
-            static bool glClientLibrariesHeld = false;
-            if (!glClientLibrariesHeld) {
-                glClientLibrariesHeld = true;
-                for (const char* soname : {"libGLX.so.0", "libGL.so.1", "libEGL.so.1"}) {
-                    dlopen(soname, RTLD_LAZY | RTLD_NODELETE);
-                }
-            }
-#endif
             glfwSetErrorCallback(error_callback);
             (void) headless;
 #if !defined(__EMSCRIPTEN__) && defined(GLFW_PLATFORM)
@@ -255,7 +269,8 @@ namespace {
             // instances: DISPLAY/WAYLAND_DISPLAY unset) selects the Null
             // platform — glfwInit would otherwise fail outright on X11/Wayland,
             // and a headless Vulkan canvas never needs the window system: its
-            // surface comes from VK_EXT_headless_surface (see VulkanContext).
+            // surface comes from VK_EXT_headless_surface, or it renders with
+            // no surface where the driver has none (see VulkanContext).
             // Windows and macOS always have a window system, so headless keeps
             // the native platform (hidden window). THREEPP_GLFW_PLATFORM=null
             // forces the Null platform anywhere, which is how the display-free
@@ -481,6 +496,7 @@ struct Canvas::Impl {
         if (api == GraphicsAPI::Vulkan) {
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         } else {
+            holdGlClientLibraries();
             glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);

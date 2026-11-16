@@ -13,9 +13,9 @@
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
-#include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/objects/Points.hpp"
 
+#include "EvoqueRig.hpp"
 #include "LandRoverScene.hpp"
 #include "VehicleSounds.hpp"
 
@@ -61,124 +61,21 @@ int main() {
     PhysxWorld world;
     landrover::buildScene(*scene, world);
 
-    PhysxVehicle::Settings settings;
-    // Match the Range Rover Evoque visual proportions (model is ~2.1×1.6×4.4 m).
-    settings.chassisWidth = 1.95f;
-    settings.chassisHeight = 1.4f;
-    settings.chassisLength = 4.4f;
-    settings.wheelbase = 2.66f;
-    settings.trackWidth = 1.65f;
-    // 4WD splits drive torque across all four wheels — twice the grip envelope
-    // before tires break loose at low speed. The Evoque is AWD anyway.
-    settings.drivenWheels = {true, true, true, true};
-    // Direct-drive (no gearbox) means torque has to do all the work itself —
-    // bump up. Damping was high to fight wheelspin; with 4WD + better grip we
-    // can lower it.
-    settings.maxThrottleTorque = 1500.f;
-    settings.wheelDampingRate = 1.5f;
-    // Slightly stickier tires + more longitudinal stiffness so the contact
-    // patch transmits force faster than the engine can spin the wheel.
-    settings.tireFriction = 2.0f;
-    settings.longitudinalStiffness = 100'000.f;
+    auto settings = evoque::vehicleSettings();
     settings.spawnPosition = {20, 1.2f, -10};
     settings.spawnRotation = Quaternion().setFromAxisAngle({0, 1, 0}, math::degToRad(-90.f));
 
     PhysxVehicle vehicle(world, settings);
 
-    auto chassisMesh = Group::create();
+    // Range Rover Evoque visual rig: body, PhysX-driven wheels, lamps.
+    evoque::Rig car(world, vehicle, DATA_FOLDER);
+    auto& chassisMesh = car.chassis;
     scene->add(chassisMesh);
-    world.bind(*chassisMesh, *vehicle.chassisActor());
     chassisMesh->add(povCamera);
 
     auto physxDebug = std::make_shared<PhysxDebugRenderer>(world);
     physxDebug->enableDefaults();
     scene->add(physxDebug);
-
-    // Range Rover Evoque visual rig. The model's native units are roughly mm —
-    // scale ×100 for meters. Its bottom (wheel contacts) sits at y=0 in model
-    // space; offset down so wheel contacts line up with the rest height of the
-    // PhysX chassis (chassis center is wheelRadius+|suspY| above contacts).
-    ModelLoader modelLoader;
-    auto carBody = modelLoader.load(
-            std::string(DATA_FOLDER) + "/models/gltf/2015_land-rover_range_rover_evoque_coupe/scene.gltf");
-    carBody->scale.set(100.f, 100.f, 100.f);
-    // Drop the body slightly so its wheel wells line up with the PhysX wheel
-    // rigs. Tune by a few tenths if the chassis floats or clips.
-    carBody->position.y = -1.f;
-    chassisMesh->add(carBody);
-
-    // Extract the model's wheels into PhysX-driven rigs. The .gltf's per-wheel
-    // "pivot" nodes have identity transforms — wheel positions are baked into
-    // the geometry — so we compute the hub from the combined AABB and clone
-    // each wheel mesh into a rig. The clone's local position and scale recenter
-    // the geometry on the hub and convert from native (mm) to meters; the rig
-    // itself is driven each frame by vehicle.wheelLocalPose(i).
-    //
-    // PhysX index → model tag (Settings::drivenWheels).
-    const char* wheelTag[4] = {"WheelFL", "WheelFR", "WheelBL", "WheelBR"};
-    std::array<std::vector<Mesh*>, 4> wheelParts;
-    carBody->traverseType<Mesh>([&](Mesh& m) {
-        for (int i = 0; i < 4; ++i) {
-            if (m.name.find(wheelTag[i]) != std::string::npos) {
-                wheelParts[i].push_back(&m);
-                return;
-            }
-        }
-    });
-
-    std::array<std::shared_ptr<Group>, 4> wheelRigs;
-    for (int i = 0; i < 4; ++i) {
-        wheelRigs[i] = Group::create();
-        chassisMesh->add(wheelRigs[i]);
-
-        if (wheelParts[i].empty()) continue;
-
-        // Combined hub center in carBody-local (mm) units.
-        Box3 combined;
-        combined.makeEmpty();
-        for (auto* part : wheelParts[i]) {
-            part->geometry()->computeBoundingBox();
-            const auto& b = *part->geometry()->boundingBox;
-            combined.expandByPoint(b.min());
-            combined.expandByPoint(b.max());
-        }
-        const Vector3 hub = combined.getCenter();
-
-        for (auto* part : wheelParts[i]) {
-            // Clone BEFORE hiding the original — Object3D::copy inherits `visible`.
-            auto cloned = std::dynamic_pointer_cast<Mesh>(part->clone());
-            part->visible = false;// hide the static original
-            if (!cloned) continue;
-            cloned->visible = true;
-            // Rig-local transform that bakes recenter + ×100 (mm→m): a vertex v
-            // ends up at 100*(v - hub) in rig space, so the hub sits at the rig
-            // origin and the geometry is in meters.
-            cloned->position.set(-hub.x, -hub.y, -hub.z);
-            wheelRigs[i]->add(cloned);
-        }
-    }
-
-    // Tail lamps: drive the MODEL's own lamp meshes. The Evoque ships
-    // dedicated "lights_position_back" (tail/brake) and "lights_reverse"
-    // groups that share one emissive "glows" material — clone it per group so
-    // brake and reverse can flare independently. emissiveIntensity 1 is the
-    // model's stock glow; the render loop boosts it on brake / reverse gear.
-    std::shared_ptr<MeshStandardMaterial> brakeLightMat, reverseLightMat;
-    carBody->traverseType<Mesh>([&](Mesh& m) {
-        auto retag = [&m](std::shared_ptr<MeshStandardMaterial>& slot) {
-            if (!slot) {
-                if (auto* orig = m.materialAs<MeshStandardMaterial>()) {
-                    slot = std::dynamic_pointer_cast<MeshStandardMaterial>(orig->clone());
-                }
-            }
-            if (slot) m.setMaterial(slot);
-        };
-        if (m.name.find("lights_position_back") != std::string::npos) {
-            retag(brakeLightMat);
-        } else if (m.name.find("lights_reverse") != std::string::npos) {
-            retag(reverseLightMat);
-        }
-    });
 
     // Procedural audio rig: road/wind beds, impact one-shots, horn + reverse
     // beeper (engine/tire loops deliberately omitted — see VehicleSounds.hpp).
@@ -406,12 +303,8 @@ int main() {
         world.step(dt);
         physxDebug->update();
 
-        // Drive wheel rigs from vehicle wheel local poses (chassis-space).
-        for (int i = 0; i < 4; ++i) {
-            const PxTransform wp = vehicle.wheelLocalPose(i);
-            wheelRigs[i]->position.set(wp.p.x, wp.p.y, wp.p.z);
-            wheelRigs[i]->quaternion.set(wp.q.x, wp.q.y, wp.q.z, wp.q.w);
-        }
+        // Wheel rigs from the PhysX wheel poses; brake and reverse lamps.
+        car.update(vehicle, brakeCmd > 0.05f);
 
         // While idle, fade orbit params back toward the default chase view.
         if (!orbiting) {
@@ -449,25 +342,6 @@ int main() {
         // the active camera.
         sounds.update(dt, vehicle, throttleCmd, hornDown, activeCamera,
                       audioOn ? audioVol : 0.f);
-
-        // Lamp states (the model's own lamp meshes, materials cloned above).
-        // Only bump the material version when the state actually flips —
-        // needsUpdate() re-uploads the material on some backends.
-        {
-            static bool brakeWasOn = false, reverseWasOn = false;
-            const bool brakeOn = brakeCmd > 0.05f;
-            const bool reverseOn = vehicle.gear() == PhysxVehicle::Gear::Reverse;
-            if (brakeLightMat && brakeOn != brakeWasOn) {
-                brakeWasOn = brakeOn;
-                brakeLightMat->emissiveIntensity = brakeOn ? 5.f : 1.f;
-                brakeLightMat->needsUpdate();
-            }
-            if (reverseLightMat && reverseOn != reverseWasOn) {
-                reverseWasOn = reverseOn;
-                reverseLightMat->emissiveIntensity = reverseOn ? 5.f : 1.f;
-                reverseLightMat->needsUpdate();
-            }
-        }
 
         renderer->render(*scene, activeCamera);
 

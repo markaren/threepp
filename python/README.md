@@ -598,16 +598,20 @@ repeats a few frames to make the MAILBOX readback deterministic — tune with
 `set_flush_frames`).
 
 **Headless / display-less machines (cloud GPUs).** A `headless=True` canvas
-needs no display at all: the Vulkan renderer creates its surface via
-`VK_EXT_headless_surface` (supported by NVIDIA's Linux driver and Mesa) instead
-of a window surface, and on Linux with no `DISPLAY`/`WAYLAND_DISPLAY` the
-canvas skips the window system entirely (GLFW Null platform). That is exactly
-the Colab/EC2-style setup — compute-only NVIDIA kernel modules, no X server the
-GPU can present to — where the wheel's synthetic-data path
-(`render_aov` / `read_depth` / `read_rgb_pixels`) runs unmodified; presenting
-to a headless surface is simply a no-op. Where the ICD lacks the extension
-(e.g. NVIDIA's *Windows* driver), a headless canvas falls back to the previous
-behaviour — a hidden window with a real surface — and logs that it did so.
+needs no display at all. On Linux with no `DISPLAY`/`WAYLAND_DISPLAY` the
+canvas skips the window system entirely (GLFW Null platform), and the Vulkan
+renderer takes the first of these the machine offers:
+
+- `VK_EXT_headless_surface` (Mesa has it): a surface with no window behind
+  it, and presenting to it is a no-op.
+- No surface at all (NVIDIA's Linux driver, which has no headless surface):
+  frames go to images the renderer owns, and nothing is presented.
+
+That is the Colab/EC2/HPC setup — compute-only NVIDIA kernel modules, no X
+server the GPU can present to — where the wheel's synthetic-data path
+(`render_aov` / `read_depth` / `read_rgb_pixels`) runs unmodified. With a
+window system and no headless surface (NVIDIA's *Windows* driver), a headless
+canvas keeps a hidden window and renders into its own images the same way.
 Set `THREEPP_GLFW_PLATFORM=null` to force the window-system-free path on any
 OS (useful for reproducing the cloud setup locally).
 

@@ -1,6 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
   "name": "threepp",
+  "vcpkg-configuration": {
+    "overlay-ports": [
+      "./cmake/vcpkg-ports"
+    ]
+  },
   "dependencies": [],
   "features": {
     "external-glfw": {
@@ -21,7 +26,15 @@
     "physx": {
       "description": "Enable NVIDIA PhysX physics integration in examples",
       "dependencies": [
-        "physx",
+        {
+          "name": "physx",
+          "platform": "!wasm32"
+        },
+        {
+          "$comment": "The physx port does not support wasm32. physx-wasm is an overlay port in cmake/vcpkg-ports that builds the same PhysX source for Emscripten and installs the same CMake package and targets.",
+          "name": "physx-wasm",
+          "platform": "wasm32"
+        },
         "v-hacd"
       ]
     },

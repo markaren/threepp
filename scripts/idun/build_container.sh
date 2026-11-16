@@ -27,9 +27,14 @@
 #
 # Runtime contract (threepp-env.sh): PhysX dlopens libPhysXGpu_64.so by bare
 # name and the vcpkg port installs it under x64-linux/tools/, not lib/, so
-# LD_LIBRARY_PATH must name that directory. Vulkan is OFF by default: no IDUN
-# GPU exposes VK_KHR_ray_query, so the renderer cannot run there anyway, and
-# leaving it out skips the glslang build.
+# LD_LIBRARY_PATH must name that directory. Vulkan is OFF by default, which
+# skips the glslang and spirv-tools builds; WITH_VULKAN=ON adds the backend
+# (the H100 has no VK_KHR_ray_query, so it runs in the no-ray-tracing mode).
+#
+# A second build beside an existing one (so a running job's tree and
+# environment are left alone) sets SRC, VCPKG_INSTALLED, ENV_FILE and
+# BUILD_TAG. BUILD_LAUNCH prefixes the container step, e.g. an srun line that
+# moves the compile off the login node.
 #
 # Things most likely to need a second try, in order:
 #   - apptainer build of the sandbox: needs outbound HTTPS to quay.io (login
@@ -50,6 +55,9 @@ VCPKG_TAG=${VCPKG_TAG:-2026.01.16}
 VCPKG_ROOT_HOST=${VCPKG_ROOT_HOST:-$WORK/vcpkg}
 VCPKG_INSTALLED=${VCPKG_INSTALLED:-$WORK/vcpkg_installed}
 WITH_VULKAN=${WITH_VULKAN:-OFF}
+ENV_FILE=${ENV_FILE:-$WORK/threepp-env.sh}
+BUILD_TAG=${BUILD_TAG:-}
+BUILD_LAUNCH=${BUILD_LAUNCH:-}
 BUILD_DIR=${BUILD_DIR:-$SRC/build/idun$([ "${PYTAG:-310}" = 310 ] || echo "-cp${PYTAG}")}
 # Interpreter: PYTAG picks the container's CPython and must match the host
 # module the runtime loads. 310 pairs with Python/3.10.8-GCCcore-12.2.0 (the
@@ -128,7 +136,8 @@ fi
 # One inner script for both phases; it runs against the host checkout and the
 # host vcpkg tree through the bind mount, so every product persists outside
 # the container.
-INNER="$WORK/threepp-build-inner.sh"
+INNER="$WORK/threepp-build${BUILD_TAG:+-$BUILD_TAG}-inner.sh"
+BUILD_LOG="$WORK/threepp-build${BUILD_TAG:+-$BUILD_TAG}.log"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -152,12 +161,12 @@ ls "$VCPKG_INSTALLED/x64-linux/tools/libPhysXGpu_64.so" >/dev/null \
 echo "== 4/5 cmake: $BUILD_DIR"
 vk_args=""
 if [ "$WITH_VULKAN" = "ON" ]; then
-    vk_args="-DTHREEPP_WITH_VULKAN=ON -DGLSLANG_VALIDATOR=$VCPKG_INSTALLED/x64-linux/tools/glslang/glslangValidator"
+    vk_args="-DTHREEPP_WITH_VULKAN=ON -DGLSLANG_VALIDATOR=$VCPKG_INSTALLED/x64-linux/tools/glslang/glslangValidator -DSPIRV_OPT=$VCPKG_INSTALLED/x64-linux/tools/spirv-tools/spirv-opt"
 fi
 cmake -S "$SRC" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DTHREEPP_WITH_PYTHON:BOOL=ON -DPYBIND11_FINDPYTHON=ON \
     -DPython_EXECUTABLE=$CONTAINER_PY \
-    -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DTHREEPP_WITH_AUDIO=OFF \
+    -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DTHREEPP_BUILD_EDITOR=OFF     -DTHREEPP_WITH_AUDIO=OFF \
     -DCMAKE_PREFIX_PATH="$VCPKG_INSTALLED/x64-linux" \
     -Dunofficial-omniverse-physx-sdk_DIR="$VCPKG_INSTALLED/x64-linux/share/unofficial-omniverse-physx-sdk" \
     \$vk_args
@@ -166,12 +175,13 @@ ls -la "$SRC"/python/threepp/threepp.cpython-${PYTAG}-*.so
 EOF
 chmod +x "$INNER"
 
-say "3/5 + 4/5 inside the container (log: $WORK/threepp-build.log)"
-apptainer exec --bind "$WORK" "$SIF" bash "$INNER" 2>&1 | tee "$WORK/threepp-build.log"
+say "3/5 + 4/5 inside the container (log: $BUILD_LOG)"
+# shellcheck disable=SC2086  # BUILD_LAUNCH is deliberately word-split
+$BUILD_LAUNCH apptainer exec --bind "$WORK" "$SIF" bash "$INNER" 2>&1 | tee "$BUILD_LOG"
 
 # ── 5. runtime environment + host import test ─────────────────────────────────
-say "5/5 runtime: $WORK/threepp-env.sh"
-cat > "$WORK/threepp-env.sh" <<EOF
+say "5/5 runtime: $ENV_FILE"
+cat > "$ENV_FILE" <<EOF
 # source this before running threepp on IDUN (login or compute node)
 if ! type module >/dev/null 2>&1; then
     for f in /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do
@@ -187,7 +197,7 @@ export THREEPP_SRC="$SRC"
 EOF
 
 # shellcheck disable=SC1090
-. "$WORK/threepp-env.sh"
+. "$ENV_FILE"
 python - <<'EOF'
 import threepp as tp
 print("threepp:", tp.__file__)
@@ -202,7 +212,7 @@ build done. Next, on a GPU node:
 
   srun --account=<acct> --partition=GPUQ --gres=gpu:1 --constraint=h100 \\
        --cpus-per-task=8 --mem=32G --time=01:00:00 --pty bash
-  source $WORK/threepp-env.sh
+  source $ENV_FILE
   python -c "import threepp as tp; w = tp.PhysxWorld(gpu_dynamics=True); print('GPU PhysX ok')"
   python -m pip install --user numpy torch --index-url https://download.pytorch.org/whl/cu126
   cd $SRC/python/examples/spot && python train_spot_steps.py --envs 2048 --iters 100 --graph

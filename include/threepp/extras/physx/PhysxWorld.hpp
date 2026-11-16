@@ -569,6 +569,9 @@ namespace threepp {
             // raw dt needs no low-pass to stay stable. Left as an opt-in only for
             // callers that (unlike the interpolated bindings) sample raw poses.
             bool smoothTimestep = false;
+            // Worker threads for the CPU dispatcher; 0 runs the simulation tasks
+            // on the thread that calls step(). An Emscripten build without
+            // -pthread has no threads to create and always uses 0.
             unsigned numThreads = 2;
             // Enable GPU dynamics. Required for soft bodies (PxDeformableVolume),
             // particle systems, and GPU broadphase. Switches the scene to the TGS
@@ -699,7 +702,11 @@ namespace threepp {
 #endif
             }
 
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+            dispatcher_ = PxDefaultCpuDispatcherCreate(0);
+#else
             dispatcher_ = PxDefaultCpuDispatcherCreate(settings_.numThreads);
+#endif
             if (!dispatcher_) throw std::runtime_error("PxDefaultCpuDispatcherCreate failed");
 
             PxSceneDesc desc(physics_->getTolerancesScale());
