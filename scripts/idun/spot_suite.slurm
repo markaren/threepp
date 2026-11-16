@@ -19,7 +19,7 @@
 # of every untracked file under the scored paths, sha256 of the threepp .so, node, per-item exit code
 # and seconds), the diff itself and `git status --porcelain`.
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=h100

@@ -13,7 +13,7 @@
 #
 # Knobs (environment):
 #   CONSTRAINT  Slurm feature, default h100; empty takes any GPUQ GPU
-#   ACCOUNT     Slurm account, default share-ie-iir
+#   ACCOUNT     Slurm account; unset = SLURM_ACCOUNT, else your default account
 #   THREEPP_PIP pip requirement, default threepp (the newest wheel)
 #   THREEPP_ENV an environment file from build_container.sh; the check then
 #               runs that build's in-tree module, not a wheel
@@ -27,7 +27,7 @@ set -euo pipefail
 
 WORK=${WORK:-/cluster/work/$USER}
 DIR=$WORK/nort_check
-ACCOUNT=${ACCOUNT:-share-ie-iir}
+ACCOUNT=${ACCOUNT:-}
 CONSTRAINT=${CONSTRAINT-h100}
 THREEPP_PIP=${THREEPP_PIP:-threepp}
 THREEPP_ENV=${THREEPP_ENV:-}
@@ -316,7 +316,7 @@ echo "=== srun (GPUQ, constraint '${CONSTRAINT:-<any>}'); waits in the queue ===
 rm -f "$DIR/nort.png"
 set +e
 # shellcheck disable=SC2086
-srun --account="$ACCOUNT" --partition=GPUQ --gres=gpu:1 ${CONSTRAINT:+--constraint=$CONSTRAINT} \
+srun ${ACCOUNT:+--account=$ACCOUNT} --partition=GPUQ --gres=gpu:1 ${CONSTRAINT:+--constraint=$CONSTRAINT} \
      --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=16G --time=00:15:00 --job-name=nort \
      --input=none "$DIR/nort_job.sh" "$DIR" "$PYMOD" "$THREEPP_ENV"
 rc=$?

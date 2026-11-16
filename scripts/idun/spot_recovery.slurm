@@ -27,7 +27,7 @@
 # stopped by the timeout below and evaluates the _latest checkpoint (saved every log).
 # A task refuses a run directory that already holds a manifest.json (OVERWRITE=1 to allow).
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 # H100 or H200, 6 cores, 32 GB: the loop uses ~3 cores, and an h100-only 12-core request left 3 of 4

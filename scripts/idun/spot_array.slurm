@@ -21,7 +21,7 @@
 # PhysX, torch cu126 in --user site, and scratch_flat_best.pt copied to
 # $SRC/python/examples/spot/scratch_distillation/ (git-ignored, comes from the laptop).
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=h100

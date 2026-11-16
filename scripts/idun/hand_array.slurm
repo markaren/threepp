@@ -30,7 +30,7 @@
 # Prerequisites (from build_container.sh): $WORK/threepp-env.sh, the in-tree threepp_py with
 # GPU PhysX, torch cu126 in --user site.
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=h100

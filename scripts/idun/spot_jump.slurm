@@ -26,7 +26,7 @@
 # A task that runs out is stopped by the timeout below and evaluates the _latest checkpoint.
 # A task refuses a run directory that already holds a manifest.json (OVERWRITE=1 to allow).
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=h100|h200

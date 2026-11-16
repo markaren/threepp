@@ -16,7 +16,7 @@
 # NVIDIA GPU with the EGL half of the driver works); check with
 #   sinfo -p GPUQ -o '%20N %10c %10m %25f %30G'
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=h100

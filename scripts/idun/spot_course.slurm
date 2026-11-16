@@ -33,7 +33,7 @@
 # scratch_flat_best.pt, which the imitation anchor loads), plus the parent checkpoint at $PARENT (idun_runs/ is
 # git-ignored: the seed array wrote it to $WORK/spot_runs/raycast_s4/).
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 # H100 or H200, 6 cores, 32 GB (see spot_recovery.slurm: an h100-only 12-core request queued array tasks

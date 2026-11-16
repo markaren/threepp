@@ -9,7 +9,7 @@
 # Afterwards:
 #   python python/examples/spot/score_matrix.py --aggregate /cluster/work/$USER/spot_runs --cells hard
 #
-#SBATCH --account=share-ie-iir
+# (no --account here: pass sbatch -A <account>, or export SBATCH_ACCOUNT in your shell profile)
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=h100
