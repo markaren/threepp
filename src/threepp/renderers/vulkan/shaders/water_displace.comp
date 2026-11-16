@@ -110,7 +110,7 @@ layout(push_constant, scalar) uniform Pc {
     uint    hullCount;      // active vessels; 0 = no hull exclusion, no wake
     // The wave-model switches (DisplacedMesh::Params). waveModel 0 runs the
     // historical path below and reads nothing past here.
-    uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests, bit 3 clear its tags,
+    uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bits 2 and 3 unused,
                             // bit 4 crestFoam (the drawn displacement into the UVs),
                             // bit 5 cascade 1 is mipped: read it at the vertex spacing's level,
                             // bit 6 unused,
@@ -119,7 +119,7 @@ layout(push_constant, scalar) uniform Pc {
     float   boundKm0;       // bound-harmonic mean wavenumber, cascades 0 / 1
     float   boundKm1;
     float   crestSharpness; // DisplacedMesh::Params::crestSharpness (bit 0 only): cascades 0+1 at choppiness 1 + s
-    UvBuf   uvOut;          // breakingCrests: (crest steepness, -1) per vertex; crestFoam: disp.xz
+    UvBuf   uvOut;          // crestFoam: the drawn disp.xz per vertex
     uint64_t wakeTableAddr; // the wake field's table; 0 = no ripple heights (then cascadeMask's
                             // bits 8-15 hold the ray-tracing proxy's stride, grid lines it keeps one of)
 } pc;
@@ -465,8 +465,8 @@ void main() {
 
     // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the
     // vertex grid's spacing (the historical normal stencil) gives the
-    // displacement gradient A (choppiness 1), the height gradient, the CWM
-    // limiter and the crest steepness.
+    // displacement gradient A (choppiness 1), the height gradient and the
+    // CWM limiter.
     const float wmEpsX = pc.planeSizeX / float(pc.gridDimX - 1u);
     const float wmEpsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
     vec3  wmC = vec3(0.0);
@@ -517,7 +517,6 @@ void main() {
     }
 
     OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
-    float hullFadeAll = 1.0;// product of every footprint's fade (crest foam)
 
     // === Hull exclusion: every vessel's footprint ===
     // Suppress displacement inside a vessel's footprint so the ocean mesh
@@ -548,7 +547,6 @@ void main() {
         disp.y  = mix(min(planeY, disp.y), disp.y, hl.z);
         disp.x *= hl.z;
         disp.z *= hl.z;
-        hullFadeAll *= hl.z;
     }
 
     // === Vessel wakes ===
@@ -714,29 +712,14 @@ void main() {
 
     const vec3 outPos = rest + disp;
 
-    // Breaking crests: the local steepness of the choppiness-1 Lagrangian
-    // map, eps = minus the most compressive eigenvalue of A's symmetric part.
-    // For one wave a cos(k x) at its crest A = -a k, so eps = a k (and
-    // J = 1 - eps): it peaks on the crest and falls down both faces, so the
-    // shade's step on it puts foam on the crest top. Written per vertex at
-    // the vertex's own displaced position (no inversion, no lag) into the UV
-    // channel, tagged -1 in G; faded inside every hull footprint.
     if ((pc.waveModel & 16u) != 0u) {
         // Crest foam: the horizontal displacement this vertex was drawn
-        // with. Position and displacement both interpolate linearly over a
+        // with, into the UV channel (the water material samples none).
+        // Position and displacement both interpolate linearly over a
         // triangle, so a pixel's P.xz minus this, interpolated, is its rest
         // point q exactly: the coordinate the foam texture lives on
-        // (foam_crest.comp). Takes the channel the breaking-crest tag uses.
+        // (foam_crest.comp).
         pc.uvOut.v[i] = disp.xz;
-    } else if ((pc.waveModel & 4u) != 0u) {
-        const float sxz = 0.5 * (aXZ + aZX);
-        const float mid = 0.5 * (aXX + aZZ);
-        const float rad = sqrt(0.25 * (aXX - aZZ) * (aXX - aZZ) + sxz * sxz);
-        const float eps = -(mid - rad);
-        pc.uvOut.v[i] = vec2(eps * hullFadeAll, -1.0);
-    } else if ((pc.waveModel & 8u) != 0u) {
-        // Switched off: an untagged UV (the water material samples none).
-        pc.uvOut.v[i] = vec2(0.0);
     }
 
 #ifdef OCEAN_CHOP

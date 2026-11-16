@@ -237,7 +237,6 @@ starting with `0` forces the feature off for every ocean, anything else forces i
 |---|---|---|---|---|---|
 | `THREEPP_OCEAN_CWM` | flag (tri-state) | the mesh's `Params::cwm` (false) | Forces the choppy-wave model (full Lagrangian horizontal displacement with a Jacobian limiter) on or off. | once | |
 | `THREEPP_OCEAN_BOUND_WAVES` | flag (tri-state) | the mesh's `Params::boundWaves` (false) | Forces the second-order bound waves (higher, sharper crests and flatter troughs) on or off. | once | |
-| `THREEPP_OCEAN_BREAKING_CRESTS` | flag (tri-state) | the mesh's `Params::breakingCrests` (false) | Forces whitecaps on crests whose local steepness passes the breaking threshold on or off. | once | |
 | `THREEPP_OCEAN_WAVE_REFLECTIONS` | flag (tri-state) | the mesh's `Params::waveReflections` (false) | Forces a reflection ray that meets another wave to shade it as water (instead of whatever lies beyond) on or off. | once | |
 | `THREEPP_OCEAN_SHORT_WAVE_SPECTRUM` | flag (tri-state) | the mesh's `Params::shortWaveSpectrum` (false) | Forces the short-wave (gravity-capillary) tail of the spectrum on or off. | once | |
 | `THREEPP_OCEAN_HULL_CONTACT` | flag (tri-state) | the mesh's `Params::hullContact` (false) | Forces hull contact (the sea meets a vessel's side instead of easing onto her waterline plane) on or off. | once | |

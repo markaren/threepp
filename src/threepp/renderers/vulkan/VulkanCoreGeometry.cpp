@@ -3412,11 +3412,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // The wave-model switches (DisplacedMesh::Params, each forced by
             // its environment variable). All off is the historical path,
             // untouched.
-            static_assert(DisplacedMesh::kBreakingSteepness == kOceanBreakingSteepness,
-                          "DisplacedMesh::kBreakingSteepness mirrors vulkan_shared.h");
             const bool cwmOn      = dm.cwmOn();
             const bool boundOn    = dm.boundWavesOn();
-            const bool breakingOn = dm.breakingCrestsOn();
             // Bound waves: each band's mean wavenumber (Tayfun 1980's k_m from
             // the band's mean frequency), recomputed on the CPU from the
             // cascade's own spectrum whenever the sea state changes.
@@ -3972,27 +3969,17 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.wakeTrailAddr  = wakeTrailAddr;
             pc.hullAddr       = hullAddr;
             pc.hullCount      = hullCount;
-            // breakingCrests writes each vertex's crest steepness into the UV
-            // buffer (water has no texture to read UVs for); no UV buffer, no
-            // crests.
-            // Crest foam takes the same channel for the displacement each
-            // vertex was drawn with (st.crestFoamOn already says the mesh has
-            // a UV buffer), and wins it: the two are not drawn together.
-            const bool foamOut   = st.crestFoamOn;
-            const bool crestsOut = breakingOn && !foamOut && st.blas->uv.handle != VK_NULL_HANDLE;
-            // Switched off after it drew: one more pass writes an untagged UV
-            // (G = 0) over every vertex, so the shade stops reading crests.
-            const bool crestsClear = !crestsOut && !foamOut && st.crestUvTagged &&
-                                     st.blas->uv.handle != VK_NULL_HANDLE;
-            st.crestUvTagged  = crestsOut || foamOut;
-            pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u) | (crestsOut ? 4u : 0u) |
-                                (crestsClear ? 8u : 0u) | (foamOut ? 16u : 0u) |
+            // Crest foam takes the UV channel (water has no texture to read
+            // UVs for) for the displacement each vertex was drawn with;
+            // st.crestFoamOn already says the mesh has a UV buffer.
+            const bool foamOut = st.crestFoamOn;
+            pc.waveModel      = (cwmOn ? 1u : 0u) | (boundOn ? 2u : 0u) | (foamOut ? 16u : 0u) |
                                 ((st.chopOn && st.c1Mips) ? 32u : 0u) |
                                 // Hull contact: the narrow blend to each waterline plane.
                                 ((hullCount > 0u && dm.hullContactOn()) ? 128u : 0u) |
                                 // The wave climate: its map at kClimateBinding scales the cascades.
                                 (st.climateImage.view != VK_NULL_HANDLE ? 256u : 0u);
-            pc.uvOut          = (crestsOut || crestsClear || foamOut) ? st.blas->uv.address : 0ull;
+            pc.uvOut          = foamOut ? st.blas->uv.address : 0ull;
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
             pc.crestSharpness = cwmOn ? dm.effectiveCrestSharpness() : 0.f;

@@ -2266,14 +2266,6 @@ class DisplacedMesh(Mesh):
         def bound_waves(self, arg0: bool) -> None:
             ...
         @property
-        def breaking_crests(self) -> bool:
-            """
-            Natural foam only where the crest breaks now (default False), from the surface's local steepness; vessel foam unchanged. THREEPP_OCEAN_BREAKING_CRESTS=1/0 overrides it.
-            """
-        @breaking_crests.setter
-        def breaking_crests(self, arg0: bool) -> None:
-            ...
-        @property
         def choppiness(self) -> float:
             """
             Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.

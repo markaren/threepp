@@ -88,15 +88,14 @@ namespace threepp::vulkan {
             // The wave-model switches (DisplacedMesh::Params). With
             // waveModel 0 the shader runs the historical path and touches
             // nothing below.
-            uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves, bit 2 breakingCrests,
-                                          // bit 3 clear the crest tags breakingCrests left,
+            uint32_t        waveModel;    // bit 0 cwm, bit 1 boundWaves, bits 2 and 3 unused,
                                           // bit 4 crestFoam: the drawn disp.xz into the UVs,
                                           // bit 7 hullContact: the narrow blend to each hull's plane,
                                           // bit 8 the wave climate (kClimateBinding scales the cascades)
             float           boundKm0;     // cascade 0's / 1's bound-harmonic mean wavenumber (rad/m),
             float           boundKm1;     // 0 = none on that cascade
             float           crestSharpness;// DisplacedMesh::effectiveCrestSharpness (cwm only; 0 = off)
-            VkDeviceAddress uvOut;        // the mesh's UV buffer: breakingCrests writes (eps, -1) here, crestFoam disp.xz
+            VkDeviceAddress uvOut;        // the mesh's UV buffer: crestFoam writes the drawn disp.xz here
             // The ocean's wake-field table (WakeFieldPipeline::State::tableAddress),
             // whose patches with rippleHeight on add their waves' height
             // from kRippleBinding; 0 = none (the geometry is exactly the old

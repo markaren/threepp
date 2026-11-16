@@ -24,14 +24,11 @@
 
     const MaterialDesc pm = entryMat(id - 1u);
 
-    // Breaking crests: an ocean whose UVs carry G = -1 has its vertices' crest
-    // steepness in R (water_displace.comp); a plane's own UVs are in [0, 1].
+    // Crest foam: an ocean's UVs hold each vertex's drawn horizontal
+    // displacement (water_displace.comp).
     if (geoms[id - 1u].foamAddress != 0ul) {
         const vec4 crestTap = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx) : texelFetch(gbufUvTex, px, 0);
-        // Crest foam: the same channel holds the vertex's drawn horizontal
-        // displacement instead, and no tag (its z can be anything).
         if (kOceanCrestFoam != 0u) gCrestDisp = crestTap.rg;
-        else if (crestTap.g < -0.5) gCrestEps = crestTap.r;
     }
 
     const vec3 V          = normalize(camPos - worldPos);

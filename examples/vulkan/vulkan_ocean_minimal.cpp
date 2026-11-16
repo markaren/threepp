@@ -29,15 +29,13 @@
 //                      its fold limiter (THREEPP_OCEAN_CWM overrides it)
 //   --bound 0|1        Params::boundWaves, second-order bound harmonics
 //                      (THREEPP_OCEAN_BOUND_WAVES overrides it)
-//   --breaking 0|1     Params::breakingCrests, foam only on breaking crests
-//                      (THREEPP_OCEAN_BREAKING_CRESTS overrides it)
 //   --wave-refl 0|1    Params::waveReflections, the water's mirror ray
 //                      shades a wave it meets as water (no black spots where
 //                      a face cannot see the sky)
 //   --short-spectrum 0|1  Params::shortWaveSpectrum, Elfouhaily et al. (1997)'s short waves
 //   --sharpness S      Params::crestSharpness, crests pinched into ridges (a look control; needs cwm)
 //   --crests           the physical-crests set in one flag: cwm,
-//                      bound waves and breaking crests all on (each flag
+//                      and bound waves on (each flag
 //                      above, given after it or not, still sets its own
 //                      switch)
 //   --pinned           1/60 s sim-time steps on a pinned renderer clock, so
@@ -90,7 +88,7 @@ int main(int argc, char** argv) {
     // Sea-state overrides; a negative value keeps the Ocean default.
     float fetch = -1.f, chop = -1.f, waveScale = -1.f, tile2 = -1.f, foam = -1.f;
     float theta = -1e9f;
-    int cwm = -1, bound = -1, breaking = -1, waveRefl = -1, shortSpectrum = -1;
+    int cwm = -1, bound = -1, waveRefl = -1, shortSpectrum = -1;
     float sharpness = -1.f;
     bool crests = false;
     bool pinnedClock = false;
@@ -104,7 +102,6 @@ int main(int argc, char** argv) {
             num("--tile2", tile2) || num("--theta", theta) || num("--foam", foam)) continue;
         if (std::strcmp(argv[i], "--cwm") == 0 && i + 1 < argc) cwm = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--bound") == 0 && i + 1 < argc) bound = std::atoi(argv[++i]);
-        else if (std::strcmp(argv[i], "--breaking") == 0 && i + 1 < argc) breaking = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--wave-refl") == 0 && i + 1 < argc) waveRefl = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--short-spectrum") == 0 && i + 1 < argc) shortSpectrum = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--sharpness") == 0 && i + 1 < argc) sharpness = static_cast<float>(std::atof(argv[++i]));
@@ -214,16 +211,15 @@ int main(int argc, char** argv) {
     if (foam >= 0.f) ocean->params.foamAmount = foam;
     if (crests) {
         auto& p = ocean->params;
-        p.cwm = p.boundWaves = p.breakingCrests = true;
+        p.cwm = p.boundWaves = true;
     }
     if (cwm >= 0) ocean->params.cwm = cwm != 0;
     if (bound >= 0) ocean->params.boundWaves = bound != 0;
-    if (breaking >= 0) ocean->params.breakingCrests = breaking != 0;
     if (waveRefl >= 0) ocean->params.waveReflections = waveRefl != 0;
     if (shortSpectrum >= 0) ocean->params.shortWaveSpectrum = shortSpectrum != 0;
     if (sharpness >= 0.f) ocean->params.crestSharpness = sharpness;
-    std::printf("wave model: cwm %d, bound waves %d, breaking crests %d (with environment overrides)\n",
-                int(ocean->cwmOn()), int(ocean->boundWavesOn()), int(ocean->breakingCrestsOn()));
+    std::printf("wave model: cwm %d, bound waves %d (with environment overrides)\n",
+                int(ocean->cwmOn()), int(ocean->boundWavesOn()));
     scene.add(ocean);
 
     // Live wind control — setWind() takes effect next frame; the sea morphs

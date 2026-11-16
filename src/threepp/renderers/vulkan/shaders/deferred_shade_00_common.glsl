@@ -195,10 +195,6 @@ vec4 gWake = vec4(0.0);
 float gWakeAlbedo = 1.0;
 // The foam level its aerated water carries (WakeField::lace).
 float gWakeLace = 0.0;
-// Breaking crests (DisplacedMesh::Params::breakingCrests): this pixel's crest
-// steepness, interpolated from the per-vertex value water_displace.comp wrote
-// into the ocean's UVs; -1e30 when the ocean carries none (the switch is off).
-float gCrestEps = -1e30;
 // Crest foam (DisplacedMesh::Params::crestFoam; read only where kOceanCrestFoam
 // is set, stand-ins bound otherwise). oceanCrestFoam is the foam on the water's
 // REST coordinates (foam_crest.comp): R16F over one oceanFoamTileSize, REPEAT,

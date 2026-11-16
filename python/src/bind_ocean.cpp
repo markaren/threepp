@@ -193,9 +193,6 @@ namespace threepp_py {
                 .def_readwrite("bound_waves", &DisplacedMesh::Params::boundWaves,
                                "Second-order bound harmonics (default False): sharper crests, flatter troughs "
                                "(Longuet-Higgins 1963, Tayfun 1980). THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.")
-                .def_readwrite("breaking_crests", &DisplacedMesh::Params::breakingCrests,
-                               "Natural foam only where the crest breaks now (default False), from the surface's "
-                               "local steepness; vessel foam unchanged. THREEPP_OCEAN_BREAKING_CRESTS=1/0 overrides it.")
                 .def_readwrite("short_wave_spectrum", &DisplacedMesh::Params::shortWaveSpectrum,
                                "The measured short-wave spectrum (default False, the Phillips tail alone): adds "
                                "Elfouhaily et al.'s (1997) wind-dependent short waves, so the sea's slopes reach "

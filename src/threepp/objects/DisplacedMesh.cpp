@@ -44,11 +44,6 @@ namespace threepp {
         return env < 0 ? params.boundWaves : env == 1;
     }
 
-    bool DisplacedMesh::breakingCrestsOn() const {
-        static const int env = envSwitch("THREEPP_OCEAN_BREAKING_CRESTS");
-        return env < 0 ? params.breakingCrests : env == 1;
-    }
-
     bool DisplacedMesh::waveReflectionsOn() const {
         static const int env = envSwitch("THREEPP_OCEAN_WAVE_REFLECTIONS");
         return env < 0 ? params.waveReflections : env == 1;
