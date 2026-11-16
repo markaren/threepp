@@ -749,12 +749,21 @@ namespace {
                                       static_cast<py::ssize_t>(3)});
             const size_t pxCount = static_cast<size_t>(w) * h;
             const size_t ch = pxCount ? px.size() / pxCount : 3;// 3 (RGB) or 4 (RGBA)
+            // Anything else (an empty readback above all: read_scene_pixels with
+            // scene_capture off, or a read before the first render()) would hand
+            // back the array uninitialised.
+            if (ch != 3 && ch != 4) {
+                throw std::runtime_error(
+                        "VulkanRenderer: the readback returned " + std::to_string(px.size()) + " bytes for a " +
+                        std::to_string(w) + "x" + std::to_string(h) +
+                        " frame (render() first; read_scene_pixels also needs scene_capture = True)");
+            }
             auto* dst = arr.mutable_data();
-            if (px.size() >= pxCount * ch && ch == 3) {
+            if (ch == 3) {
                 // readRGBPixels hands back tightly packed RGB, so the channel
                 // pick below would be byte-for-byte a memcpy — do the memcpy.
                 std::memcpy(dst, px.data(), pxCount * 3);
-            } else if (px.size() >= pxCount * ch && ch == 4) {
+            } else {
                 for (size_t i = 0; i < pxCount; ++i) {
                     dst[i * 3 + 0] = px[i * 4 + 0];
                     dst[i * 3 + 1] = px[i * 4 + 1];

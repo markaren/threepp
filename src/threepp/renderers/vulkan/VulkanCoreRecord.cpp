@@ -3111,21 +3111,19 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         VkBuffer     vbufs[1] = {rec->vertex.handle};
                         VkDeviceSize voffs[1] = {0};
                         vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                        // Counts off the record, as in the depth prepass
+                        // (recordOverlayDepthDraws): they describe the buffers
+                        // bound here, where the CPU attribute's count can run
+                        // past them on a frame where the app grew the array
+                        // before the BLAS refresh ran.
                         if (rec->index.handle != VK_NULL_HANDLE) {
                             // Packed static records store uint16 indices (bit 3).
                             vkCmdBindIndexBuffer(cb, rec->index.handle, 0,
                                                  (rec->packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16
                                                                         : VK_INDEX_TYPE_UINT32);
-                            auto* idxAttr = en.mesh->geometry()->getIndex();
-                            if (idxAttr) {
-                                vkCmdDrawIndexed(cb, static_cast<uint32_t>(idxAttr->count()),
-                                                 1, 0, 0, 0);
-                            }
-                        } else {
-                            auto* posAttr = en.mesh->geometry()->getAttribute<float>("position");
-                            if (posAttr) {
-                                vkCmdDraw(cb, static_cast<uint32_t>(posAttr->count()), 1, 0, 0);
-                            }
+                            if (rec->indexCount > 0u) vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
+                        } else if (rec->vertexCount > 0u) {
+                            vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
                         }
                     };
 

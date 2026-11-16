@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "threepp/loaders/MTLLoader.hpp"
 #include "threepp/loaders/OBJLoader.hpp"
+#include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 
@@ -283,4 +285,29 @@ TEST_CASE("OBJLoader drops an l record with an out-of-range index") {
     REQUIRE(group);
     // The whole record is dropped, and an object with no geometry is skipped.
     CHECK(group->children.empty());
+}
+
+TEST_CASE("MTLLoader leaves a map empty when its file is missing") {
+
+    // map_Kd names a file that is not there: TextureLoader returns null, and
+    // the material used to dereference it.
+    const std::string mtl =
+            "newmtl red\n"
+            "Kd 1.0 0.0 0.0\n"
+            "map_Kd threepp_no_such_texture.png\n"
+            "map_Bump threepp_no_such_normal.png\n";
+
+    auto path = writeTempFile("threepp_missing_map.mtl", mtl);
+
+    MTLLoader loader;
+    auto creator = loader.load(path);
+    std::filesystem::remove(path);
+    REQUIRE(creator);
+
+    auto material = std::dynamic_pointer_cast<MeshPhongMaterial>(creator->create("red"));
+    REQUIRE(material);
+    CHECK(material->map == nullptr);
+    CHECK(material->bumpMap == nullptr);
+    CHECK(material->color.r == 1.0f);
+    CHECK(material->color.g == 0.0f);
 }

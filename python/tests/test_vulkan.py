@@ -250,6 +250,16 @@ def test_save_frame_writes_the_frame_it_rendered(vk_renderer, presents, tmp_path
     assert np.array_equal(png, renderer.read_pixels())
 
 
+def test_read_scene_pixels_without_scene_capture_raises(vk_renderer):
+    """With scene capture off there is no scene copy to read: an error, not an
+    (H, W, 3) array of whatever the allocator left there."""
+    scene, cam = _flat_scene(0xff0000)
+    vk_renderer.scene_capture = False
+    vk_renderer.render(scene, cam)
+    with pytest.raises(RuntimeError, match="scene_capture"):
+        vk_renderer.read_scene_pixels()
+
+
 def test_readback_inside_the_frame_returns_that_frame(vk_canvas, vk_renderer):
     """The same readback from inside the animate body, which is how the C++
     examples take their stills (render(), then writeFramebuffer()). The readback

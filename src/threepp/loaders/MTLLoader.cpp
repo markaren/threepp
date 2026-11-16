@@ -196,7 +196,7 @@ MaterialsInfo MaterialCreator::convert(const MaterialsInfo& mi) {
 std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path& path, std::optional<Mapping> mapping) {
 
     auto texture = TextureLoader().load(path);
-    if (mapping) {
+    if (texture && mapping) {
         texture->mapping = *mapping;
     }
     return texture;
@@ -214,6 +214,9 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
 
         auto texParams = getTextureParams(value, *params);
         auto map = loadTexture(baseUrl / texParams.url);
+        // A file the .mtl names but that is not there (TextureLoader has said
+        // so): the material keeps its colours, with no map in this slot.
+        if (!map) return;
 
         // Color/emissive maps stay sRGB (the default); data textures are Linear.
         if (mapType == "normalMap" || mapType == "bumpMap" ||

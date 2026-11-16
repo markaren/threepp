@@ -63,14 +63,18 @@ namespace threepp_py {
         }
 
         py::array_t<uint8_t> rgb_to_numpy(const std::vector<unsigned char>& buf, int w, int h, bool flip) {
-            py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), static_cast<py::ssize_t>(3)});
             const size_t rowBytes = static_cast<size_t>(w) * 3;
+            // A short buffer would otherwise hand back the array uninitialised.
+            if (buf.size() < rowBytes * static_cast<size_t>(h)) {
+                throw std::runtime_error("EffectComposer.read_pixels: the readback returned " +
+                                         std::to_string(buf.size()) + " bytes for a " + std::to_string(w) + "x" +
+                                         std::to_string(h) + " RGB frame (render() the chain first)");
+            }
+            py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), static_cast<py::ssize_t>(3)});
             auto* dst = arr.mutable_data();
-            if (buf.size() >= rowBytes * static_cast<size_t>(h)) {
-                for (int row = 0; row < h; ++row) {
-                    const auto srcRow = static_cast<size_t>(flip ? (h - 1 - row) : row);
-                    std::memcpy(dst + static_cast<size_t>(row) * rowBytes, buf.data() + srcRow * rowBytes, rowBytes);
-                }
+            for (int row = 0; row < h; ++row) {
+                const auto srcRow = static_cast<size_t>(flip ? (h - 1 - row) : row);
+                std::memcpy(dst + static_cast<size_t>(row) * rowBytes, buf.data() + srcRow * rowBytes, rowBytes);
             }
             return arr;
         }

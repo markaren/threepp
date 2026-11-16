@@ -96,6 +96,10 @@ namespace threepp::vulkan::impl {
         // false afterwards, so the submit does not wait on an already-consumed
         // binary semaphore (which would deadlock).
         std::array<bool, kFramesInFlight> acquireSemPending_{};
+        // The image the acquire behind acquireSemPending_ returned. Read only
+        // while that flag is set: a frame that threw between its acquire and
+        // its submit hands the same image to the slot's next frame.
+        std::array<uint32_t, kFramesInFlight> acquiredSwapImage_{};
 
         uint32_t currentFrame = 0;
         bool needsResize = false;

@@ -153,11 +153,22 @@ VkResult VulkanRenderer::Impl::acquireOrReuseSwapchainImage(uint32_t& imageIndex
                 imageIndex = pinnedSwapImage_[currentFrame];
                 return VK_SUCCESS;
             }
+            if (acquireSemPending_[currentFrame]) {
+                // The last frame on this slot acquired an image and threw before
+                // its submit. The image is still ours and imageAvailable still
+                // carries the acquire's signal, so take the same image again:
+                // acquiring with a semaphore that has a pending signal is invalid,
+                // and each image left held this way is one the presentation
+                // engine can never hand back.
+                imageIndex = acquiredSwapImage_[currentFrame];
+                return VK_SUCCESS;
+            }
             const VkResult r = vkAcquireNextImageKHR(
                     ctx->device(), ctx->swapchain(), UINT64_MAX,
                     imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
             if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
                 acquireSemPending_[currentFrame] = true;
+                acquiredSwapImage_[currentFrame] = imageIndex;
                 if (ctx->presentSuppressed()) pinnedSwapImage_[currentFrame] = imageIndex;
             }
             // Determinism forensics: the acquire order is presentation-engine
@@ -1367,7 +1378,6 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 secondaryPrepStarted_ = vulkan::par::viewsOn() && startSecondaryViewPrep(camera);
             }
 
-            vkResetFences(d, 1, &inFlight[currentFrame]);
             // Per-frame hook: CPU readbacks (e.g. auto-exposure histogram) that are
             // safe only after the current slot's prior GPU work is retired (fence above).
             {
@@ -1566,7 +1576,6 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             }
             frameImageIndex_ = imageIndex;
 
-            vkResetFences(d, 1, &inFlight[currentFrame]);
             vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
             VkCommandBuffer cb = cmdBuffers[currentFrame];
             beginCommandRecording(cb);
@@ -1714,6 +1723,12 @@ void VulkanRenderer::Impl::endFrame() {
             submit.pCommandBufferInfos = &cbInfo;
             submit.signalSemaphoreInfoCount = suppressPresent ? 0u : 1u;
             submit.pSignalSemaphoreInfos = &signalInfo;
+            // Reset here, right before the submit that signals it, and nowhere
+            // earlier: a check() that throws anywhere between the frame-begin
+            // wait and this point (Python catches it as a RuntimeError and calls
+            // render() again) must leave the fence signalled, or the next
+            // frame-begin waits on it with UINT64_MAX for good.
+            check(vkResetFences(ctx->device(), 1, &inFlight[currentFrame]), "vkResetFences(frame)");
             // Separate from present, deliberately: a submit that stalls means
             // driver-side command translation, a present that stalls means the
             // compositor. Different diagnoses, so different keys.
