@@ -297,6 +297,53 @@ namespace threepp::gltf {
 
         const std::vector<uint8_t>& resolveBuffer(int idx);
 
+        // A count, offset, length or stride read from the document. These are
+        // non-negative integers by the schema, and they end up in pointer
+        // arithmetic: a negative one read straight into a size_t becomes a
+        // value near 2^64 that an additive range check wraps back into range.
+        // Anything else than a non-negative whole number throws instead.
+        static size_t sizeField(const json& def, const char* key, size_t fallback) {
+            auto it = def.find(key);
+            if (it == def.end()) return fallback;
+            if (it->is_number_unsigned()) return it->get<size_t>();
+            if (it->is_number_float()) {
+                const double d = it->get<double>();
+                if (d >= 0. && d < 9007199254740992. && d == std::floor(d)) return static_cast<size_t>(d);
+            }
+            throw std::runtime_error(std::string("glTF: \"") + key + "\" is " + it->dump() +
+                                     ", not a non-negative integer");
+        }
+
+        static size_t requiredSizeField(const json& def, const char* key) {
+            if (!def.contains(key))
+                throw std::runtime_error(std::string("glTF: \"") + key + "\" is missing");
+            return sizeField(def, key, 0);
+        }
+
+        // Whether `count` elements of `elemSize` bytes, `stride` apart, fit in
+        // `avail` bytes. Written with a division so that no count or stride
+        // from the document can wrap the comparison.
+        static bool elementsFit(size_t count, size_t stride, size_t elemSize, size_t avail) {
+            if (count == 0) return true;
+            if (elemSize > avail) return false;
+            if (count == 1 || stride == 0) return true;
+            return (count - 1) <= (avail - elemSize) / stride;
+        }
+
+        // A bufferView's definition, by an index taken from the document.
+        const json& bufferViewDef(int bvIdx);
+
+        // The bytes a bufferView names inside its buffer, checked against the
+        // buffer's real size: byteOffset must lie inside it and byteLength
+        // must not run past its end (a view without byteLength, which the
+        // schema requires, takes the rest of the buffer). Every reader of
+        // bufferView bytes goes through this.
+        struct ViewBytes {
+            const uint8_t* ptr;
+            size_t size;
+        };
+        ViewBytes bufferViewBytes(int bvIdx);
+
         struct AccessorData {
             const uint8_t* ptr;// nullptr for a sparse accessor with no base bufferView
             size_t byteStride;
@@ -351,19 +398,27 @@ namespace threepp::gltf {
         // index decoders.
         template<class WriteFn>
         void applySparse(const json& sparse, int accCt, int nc, WriteFn&& writeElement) {
-            size_t sCount = sparse["count"].get<size_t>();
+            size_t sCount = requiredSizeField(sparse, "count");
             if (sCount == 0) return;
 
-            const auto& idxDef = sparse["indices"];
-            int idxBv = idxDef["bufferView"].get<int>();
-            size_t idxOff = idxDef.value("byteOffset", 0);
-            int idxCt = idxDef["componentType"].get<int>();
+            const auto& idxDef = sparse.at("indices");
+            int idxBv = idxDef.at("bufferView").get<int>();
+            size_t idxOff = sizeField(idxDef, "byteOffset", 0);
+            int idxCt = idxDef.at("componentType").get<int>();
             const size_t idxCompSize = static_cast<size_t>(componentSize(idxCt));
 
-            const auto& valDef = sparse["values"];
-            int valBv = valDef["bufferView"].get<int>();
-            size_t valOff = valDef.value("byteOffset", 0);
+            const auto& valDef = sparse.at("values");
+            int valBv = valDef.at("bufferView").get<int>();
+            size_t valOff = sizeField(valDef, "byteOffset", 0);
             const size_t valElemSize = static_cast<size_t>(componentSize(accCt) * nc);
+
+            // An index or value type with no size decodes to nothing, and a
+            // count whose byte size does not fit a size_t would ask
+            // plainBufferViewPtr for a wrapped, small span.
+            if (idxCompSize == 0 || valElemSize == 0) return;
+            if (sCount > (std::numeric_limits<size_t>::max)() / (std::max)(idxCompSize, valElemSize))
+                throw std::runtime_error("glTF: sparse accessor count " + std::to_string(sCount) +
+                                         " is out of range");
 
             const uint8_t* idxPtr = plainBufferViewPtr(idxBv, idxOff, sCount * idxCompSize);
             const uint8_t* valPtr = plainBufferViewPtr(valBv, valOff, sCount * valElemSize);

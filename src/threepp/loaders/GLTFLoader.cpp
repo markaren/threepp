@@ -13,8 +13,16 @@ namespace fs = std::filesystem;
 namespace threepp::gltf {
 
     const std::vector<uint8_t>& GLTFParser::resolveBuffer(int idx) {
-        if (idx < static_cast<int>(buffers.size()) && !buffers[idx].empty())
+        // The index comes from the document. A GLB's BIN chunk is buffer 0
+        // whether or not the document declares it, so `buffers` is asked
+        // first and the "buffers" array only for what is not loaded yet.
+        if (idx >= 0 && static_cast<size_t>(idx) < buffers.size() && !buffers[idx].empty())
             return buffers[idx];
+
+        const size_t declared = gltf.contains("buffers") ? gltf["buffers"].size() : 0;
+        if (idx < 0 || static_cast<size_t>(idx) >= declared || static_cast<size_t>(idx) >= buffers.size())
+            throw std::runtime_error("Buffer index " + std::to_string(idx) +
+                                     " out of range [0, " + std::to_string(declared) + ")");
 
         const auto& bufDef = gltf["buffers"][idx];
         std::string uri = bufDef.value("uri", "");
@@ -33,25 +41,76 @@ namespace threepp::gltf {
         return buffers[idx];
     }
 
+    const json& GLTFParser::bufferViewDef(int bvIdx) {
+        const size_t declared = gltf.contains("bufferViews") ? gltf["bufferViews"].size() : 0;
+        if (bvIdx < 0 || static_cast<size_t>(bvIdx) >= declared)
+            throw std::runtime_error("bufferView index " + std::to_string(bvIdx) +
+                                     " out of range [0, " + std::to_string(declared) + ")");
+        return gltf["bufferViews"][bvIdx];
+    }
+
+    GLTFParser::ViewBytes GLTFParser::bufferViewBytes(int bvIdx) {
+        const auto& bv = bufferViewDef(bvIdx);
+        const int bufIdx = bv.at("buffer").get<int>();
+        const auto& buf = resolveBuffer(bufIdx);
+
+        const size_t offset = sizeField(bv, "byteOffset", 0);
+        if (offset > buf.size())
+            throw std::runtime_error("bufferView " + std::to_string(bvIdx) + " starts at byte " +
+                                     std::to_string(offset) + ", past the " + std::to_string(buf.size()) +
+                                     " bytes of buffer " + std::to_string(bufIdx));
+        const size_t rest = buf.size() - offset;
+        const size_t length = sizeField(bv, "byteLength", rest);
+        if (length > rest)
+            throw std::runtime_error("bufferView " + std::to_string(bvIdx) + " out of bounds of buffer " +
+                                     std::to_string(bufIdx));
+        return {buf.data() + offset, length};
+    }
+
     // Decode a meshopt-compressed bufferView on first access and cache it.
     const std::vector<uint8_t>& GLTFParser::decodeMeshoptBV(int bvIdx) {
         auto it = meshoptCache.find(bvIdx);
         if (it != meshoptCache.end()) return it->second;
 
-        const auto& ext = *meshoptExtension(gltf["bufferViews"][bvIdx]);
-        int bufIdx        = ext["buffer"].get<int>();
-        size_t byteOffset = ext.value("byteOffset", 0);
-        size_t byteLength = ext["byteLength"].get<size_t>();
-        size_t byteStride = ext["byteStride"].get<size_t>();
-        size_t count      = ext["count"].get<size_t>();
-        std::string mode  = ext["mode"].get<std::string>();
+        const auto& ext = *meshoptExtension(bufferViewDef(bvIdx));
+        int bufIdx        = ext.at("buffer").get<int>();
+        size_t byteOffset = sizeField(ext, "byteOffset", 0);
+        size_t byteLength = requiredSizeField(ext, "byteLength");
+        size_t byteStride = requiredSizeField(ext, "byteStride");
+        size_t count      = requiredSizeField(ext, "count");
+        std::string mode  = ext.at("mode").get<std::string>();
         std::string filter = ext.value("filter", "NONE");
 
-        const auto& compressed = resolveBuffer(bufIdx);
-        if (byteOffset + byteLength > compressed.size())
-            throw std::runtime_error("EXT_meshopt_compression: source range out of bounds (bufferView " +
+        auto fail = [&](const std::string& why) {
+            throw std::runtime_error("EXT_meshopt_compression: " + why + " (bufferView " +
                                      std::to_string(bvIdx) + ")");
+        };
+
+        const auto& compressed = resolveBuffer(bufIdx);
+        if (byteOffset > compressed.size() || byteLength > compressed.size() - byteOffset)
+            fail("source range out of bounds");
         const uint8_t* src = compressed.data() + byteOffset;
+
+        // The decoders take these on trust (their own checks are asserts, gone
+        // from a release build) and write count * byteStride bytes, so the
+        // extension's size rules are enforced here.
+        if (mode == "ATTRIBUTES") {
+            if (byteStride == 0 || byteStride > 256 || byteStride % 4 != 0)
+                fail("ATTRIBUTES needs a byteStride that is a multiple of 4, at most 256");
+        } else if (mode == "TRIANGLES" || mode == "INDICES") {
+            if (byteStride != 2 && byteStride != 4) fail(mode + " needs a byteStride of 2 or 4");
+            if (mode == "TRIANGLES" && count % 3 != 0) fail("TRIANGLES needs a count that is a multiple of 3");
+        } else {
+            fail("unknown mode '" + mode + "'");
+        }
+        if (filter == "OCTAHEDRAL" || filter == "COLOR") {
+            if (byteStride != 4 && byteStride != 8) fail(filter + " filter needs a byteStride of 4 or 8");
+        } else if (filter == "QUATERNION") {
+            if (byteStride != 8) fail("QUATERNION filter needs a byteStride of 8");
+        } else if (filter == "EXPONENTIAL") {
+            if (byteStride % 4 != 0) fail("EXPONENTIAL filter needs a byteStride that is a multiple of 4");
+        }
+        if (count > (std::numeric_limits<size_t>::max)() / byteStride) fail("count out of range");
 
         auto& decoded = meshoptCache[bvIdx];
         decoded.resize(count * byteStride);
@@ -61,10 +120,8 @@ namespace threepp::gltf {
             rc = meshopt_decodeVertexBuffer(decoded.data(), count, byteStride, src, byteLength);
         else if (mode == "TRIANGLES")
             rc = meshopt_decodeIndexBuffer(decoded.data(), count, byteStride, src, byteLength);
-        else if (mode == "INDICES")
-            rc = meshopt_decodeIndexSequence(decoded.data(), count, byteStride, src, byteLength);
         else
-            throw std::runtime_error("EXT_meshopt_compression: unknown mode '" + mode + "'");
+            rc = meshopt_decodeIndexSequence(decoded.data(), count, byteStride, src, byteLength);
 
         if (rc != 0)
             throw std::runtime_error("EXT_meshopt_compression: decode failed (bufferView " + std::to_string(bvIdx) + ")");
@@ -90,10 +147,10 @@ namespace threepp::gltf {
                                      " out of range [0, " + std::to_string(accessorCount()) + ")");
 
         const auto& acc = gltf["accessors"][accessorIdx];
-        size_t accOff = acc.value("byteOffset", 0);
-        size_t count = acc["count"].get<size_t>();
-        int ct = acc["componentType"].get<int>();
-        std::string type = acc["type"].get<std::string>();
+        size_t accOff = sizeField(acc, "byteOffset", 0);
+        size_t count = requiredSizeField(acc, "count");
+        int ct = acc.at("componentType").get<int>();
+        std::string type = acc.at("type").get<std::string>();
         int nc = typeCount(type);
         bool normalized = acc.value("normalized", false);
         const size_t elemSize = static_cast<size_t>(componentSize(ct) * nc);
@@ -105,54 +162,41 @@ namespace threepp::gltf {
             return {nullptr, elemSize, count, ct, nc, normalized};
 
         int bvIdx = acc["bufferView"].get<int>();
-        const auto& bv = gltf["bufferViews"][bvIdx];
+        const auto& bv = bufferViewDef(bvIdx);
 
         if (const json* mo = meshoptExtension(bv)) {
-            size_t byteStride = (*mo)["byteStride"].get<size_t>();
-            const auto& decoded = decodeMeshoptBV(bvIdx);
-            if (accOff + accessorSpan(count, byteStride, elemSize) > decoded.size())
+            const auto& decoded = decodeMeshoptBV(bvIdx);// validates byteStride
+            size_t byteStride = requiredSizeField(*mo, "byteStride");
+            if (accOff > decoded.size() ||
+                !elementsFit(count, byteStride, elemSize, decoded.size() - accOff))
                 throw std::runtime_error("Accessor " + std::to_string(accessorIdx) +
                                          " out of bounds of decoded meshopt bufferView");
             return {decoded.data() + accOff, byteStride, count, ct, nc, normalized};
         }
 
-        int bufIdx = bv["buffer"].get<int>();
-        size_t bvOffset = bv.value("byteOffset", 0);
-        size_t bvStride = bv.value("byteStride", 0);
-        const auto& buf = resolveBuffer(bufIdx);
-        size_t stride = bvStride > 0 ? bvStride : elemSize;
-
-        // Validate the accessor's byte span fits both its bufferView (if a
-        // byteLength is declared) and the backing buffer, so malformed
-        // offsets/strides/counts fail cleanly instead of reading OOB.
-        const size_t span = accessorSpan(count, stride, elemSize);
-        if (bv.contains("byteLength")) {
-            size_t bvLen = bv["byteLength"].get<size_t>();
-            if (accOff + span > bvLen)
-                throw std::runtime_error("Accessor " + std::to_string(accessorIdx) +
-                                         " out of bounds of bufferView " + std::to_string(bvIdx));
-        }
-        if (bvOffset + accOff + span > buf.size())
+        // The view is checked against its buffer, and the accessor's elements
+        // against the view, so malformed offsets, strides and counts (negative
+        // ones and ones that overflow included) fail cleanly instead of
+        // reading out of bounds.
+        const ViewBytes view = bufferViewBytes(bvIdx);
+        const size_t bvStride = sizeField(bv, "byteStride", 0);
+        const size_t stride = bvStride > 0 ? bvStride : elemSize;
+        if (accOff > view.size || !elementsFit(count, stride, elemSize, view.size - accOff))
             throw std::runtime_error("Accessor " + std::to_string(accessorIdx) +
-                                     " out of bounds of buffer " + std::to_string(bufIdx));
+                                     " out of bounds of bufferView " + std::to_string(bvIdx));
 
-        const uint8_t* base = buf.data() + bvOffset + accOff;
-        return {base, stride, count, ct, nc, normalized};
+        return {view.ptr + accOff, stride, count, ct, nc, normalized};
     }
 
     // Raw pointer into a plain (uncompressed) bufferView at an extra byte
     // offset, validating that `neededBytes` fit. Used for sparse index /
     // value bufferViews.
     const uint8_t* GLTFParser::plainBufferViewPtr(int bvIdx, size_t extraOffset, size_t neededBytes) {
-        const auto& bv = gltf["bufferViews"][bvIdx];
-        int bufIdx = bv["buffer"].get<int>();
-        size_t bvOffset = bv.value("byteOffset", 0);
-        const auto& buf = resolveBuffer(bufIdx);
-        const size_t start = bvOffset + extraOffset;
-        if (start + neededBytes > buf.size())
+        const ViewBytes view = bufferViewBytes(bvIdx);
+        if (extraOffset > view.size || neededBytes > view.size - extraOffset)
             throw std::runtime_error("Sparse bufferView " + std::to_string(bvIdx) +
                                      " out of bounds");
-        return buf.data() + start;
+        return view.ptr + extraOffset;
     }
 
     // Read accessor into a flat float vector, honouring `normalized` and

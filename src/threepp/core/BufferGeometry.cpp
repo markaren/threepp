@@ -624,7 +624,10 @@ void BufferGeometry::computeVertexNormals() {
 
         if (index) {
 
-            for (unsigned i = 0, il = index->count(); i < il; i += 3) {
+            // Whole triangles only, as in the non-indexed branch below: an
+            // index count that is not a multiple of 3 would read one or two
+            // entries past the end of the index.
+            for (unsigned i = 0, il = index->count() - index->count() % 3; i < il; i += 3) {
 
                 auto vA = index->getX(i + 0);
                 auto vB = index->getX(i + 1);

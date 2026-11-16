@@ -86,6 +86,24 @@ namespace threepp::gltf {
         // --- Indices ---
         if (prim.contains("indices")) {
             auto indices = readIndices(prim["indices"].get<int>());
+
+            // An index is the document's word for "this vertex", and everything
+            // downstream trusts it: computeVertexNormals below writes a normal
+            // at it, the raycaster and both renderers fetch a position at it.
+            // One past the last vertex makes the primitive unusable, so it is
+            // dropped like one with a bad accessor; a trailing partial triangle
+            // only loses itself.
+            const auto* position = geometry->getAttribute<float>("position");
+            const size_t vertexCount = position ? static_cast<size_t>(position->count()) : 0;
+            for (const uint32_t i : indices) {
+                if (i >= vertexCount) {
+                    THREEPP_LOG(kLog, Warn) << "Primitive " << primIdx << " of mesh " << meshIdx
+                                            << " is skipped: index " << i << " is past its "
+                                            << vertexCount << " vertices";
+                    return nullptr;
+                }
+            }
+            indices.resize(indices.size() - indices.size() % 3);
             geometry->setIndex(std::move(indices));
         }
 
@@ -175,6 +193,10 @@ namespace threepp::gltf {
 
             // Shared, cached geometry (decoded once per mesh/prim/skin).
             auto geometry = buildPrimitiveGeometry(meshIdx, primIdx, prim, hasSkin);
+            if (!geometry) {// its indices name vertices it does not have
+                ++primIdx;
+                continue;
+            }
             const auto& attrs = prim["attributes"];
 
             // --- Material (cached by matIdx) ---

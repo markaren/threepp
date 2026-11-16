@@ -13,13 +13,10 @@ namespace threepp::gltf {
         isEmbedded = true;
 
         if (imgDef.contains("bufferView")) {
-            int bvIdx = imgDef["bufferView"].get<int>();
-            const auto& bv = gltf["bufferViews"][bvIdx];
-            int bufIdx = bv["buffer"].get<int>();
-            size_t off = bv.value("byteOffset", 0);
-            size_t len = bv["byteLength"].get<size_t>();
-            const auto& buf = resolveBuffer(bufIdx);
-            raw.assign(buf.data() + off, buf.data() + off + len);
+            // Range-checked against the buffer: an image's byteLength is as
+            // much the document's word as an accessor's count.
+            const ViewBytes view = bufferViewBytes(imgDef["bufferView"].get<int>());
+            raw.assign(view.ptr, view.ptr + view.size);
         } else if (imgDef.contains("uri")) {
             std::string uri = imgDef["uri"].get<std::string>();
             if (uri.rfind("data:", 0) == 0) {

@@ -960,3 +960,111 @@ TEST_CASE("GLTFLoader recognises a GLB by content, not by file extension") {
     REQUIRE(res);
     CHECK(firstMesh(res->scene.get()) != nullptr);
 }
+
+namespace {
+
+    // A triangle whose bufferView/accessor/primitive JSON the caller edits.
+    struct TriangleDoc {
+        Bin bin;
+        size_t posOff, idxOff;
+        TriangleDoc(std::initializer_list<uint16_t> indices) {
+            posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+            idxOff = bin.put<uint16_t>(indices);
+            idxCount = indices.size();
+        }
+        size_t idxCount;
+        std::string json(const std::string& posView, const std::string& extra = "",
+                         const std::string& material = "") const {
+            return R"({
+              "asset":{"version":"2.0"},
+              "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
+              "bufferViews":[
+                )" + posView + R"(,
+                {"buffer":0,"byteOffset":)" + std::to_string(idxOff) + R"(,"byteLength":)" +
+                   std::to_string(idxCount * 2) + R"(}],
+              "accessors":[
+                {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+                {"bufferView":1,"componentType":5123,"count":)" + std::to_string(idxCount) + R"(,"type":"SCALAR"}],
+              )" + extra + R"(
+              "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1)" + material + R"(}]}],
+              "nodes":[{"mesh":0}],
+              "scenes":[{"nodes":[0]}]
+            })";
+        }
+        std::string goodPosView() const {
+            return R"({"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36})";
+        }
+    };
+
+}// namespace
+
+TEST_CASE("GLTFLoader refuses offsets, strides and buffer indices that leave the buffer") {
+    TriangleDoc doc({0, 1, 2});
+    GLTFLoader loader;
+
+    SECTION("a negative byteOffset does not wrap back into range") {
+        // -1000 as a size_t plus a 36-byte span sums to a small number again.
+        auto res = loader.load(makeGlb(doc.json(R"({"buffer":0,"byteOffset":-1000,"byteLength":36})"), doc.bin.data));
+        CHECK_FALSE(res.has_value());
+    }
+    SECTION("a byteStride that overflows the span") {
+        auto res = loader.load(makeGlb(
+                doc.json(R"({"buffer":0,"byteOffset":0,"byteStride":9223372036854775808})"), doc.bin.data));
+        CHECK_FALSE(res.has_value());
+    }
+    SECTION("a negative buffer index") {
+        auto res = loader.load(makeGlb(doc.json(R"({"buffer":-1,"byteOffset":0,"byteLength":36})"), doc.bin.data));
+        CHECK_FALSE(res.has_value());
+    }
+    SECTION("a bufferView longer than its buffer") {
+        auto res = loader.load(makeGlb(doc.json(R"({"buffer":0,"byteOffset":0,"byteLength":100000000})"), doc.bin.data));
+        CHECK_FALSE(res.has_value());
+    }
+    SECTION("the well-formed document still loads") {
+        auto res = loader.load(makeGlb(doc.json(doc.goodPosView()), doc.bin.data));
+        REQUIRE(res);
+        REQUIRE(firstMesh(res->scene.get()));
+    }
+}
+
+TEST_CASE("GLTFLoader does not copy an image bufferView past its buffer") {
+    TriangleDoc doc({0, 1, 2});
+    // bufferView 2 claims 100 MB of image in a buffer of a few dozen bytes.
+    std::string json = doc.json(doc.goodPosView() + R"(,{"buffer":0,"byteOffset":0,"byteLength":100000000})");
+    // the helper puts the index view second; the image view was appended first, so swap accessor 1 to view 2
+    const std::string from = R"({"bufferView":1,"componentType":5123)";
+    json.replace(json.find(from), from.size(), R"({"bufferView":2,"componentType":5123)");
+    const std::string mesh = R"("meshes")";
+    json.insert(json.find(mesh),
+                R"("images":[{"bufferView":1,"mimeType":"image/png"}],"textures":[{"source":0}],
+                   "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)");
+    const std::string prim = R"("indices":1)";
+    json.replace(json.find(prim), prim.size(), R"("indices":1,"material":0)");
+
+    GLTFLoader loader;
+    std::optional<GLTFResult> res;
+    REQUIRE_NOTHROW(res = loader.load(makeGlb(json, doc.bin.data)));
+    CHECK_FALSE(res.has_value());
+}
+
+TEST_CASE("GLTFLoader checks index values against the vertex count") {
+    GLTFLoader loader;
+
+    SECTION("an index past the last vertex drops the primitive") {
+        TriangleDoc doc({0, 1, 60000});// no NORMAL: computeVertexNormals would write at 60000
+        auto res = loader.load(makeGlb(doc.json(doc.goodPosView()), doc.bin.data));
+        REQUIRE(res);
+        std::vector<Mesh*> meshes;
+        collectMeshes(res->scene.get(), meshes);
+        CHECK(meshes.empty());
+    }
+    SECTION("a trailing partial triangle is dropped, the whole ones stay") {
+        TriangleDoc doc({0, 1, 2, 0});
+        auto res = loader.load(makeGlb(doc.json(doc.goodPosView()), doc.bin.data));
+        REQUIRE(res);
+        auto* mesh = firstMesh(res->scene.get());
+        REQUIRE(mesh);
+        CHECK(mesh->geometry()->getIndex()->array().size() == 3);
+        CHECK(mesh->geometry()->getAttribute<float>("normal"));
+    }
+}
