@@ -156,14 +156,29 @@ namespace spot {
         return robot;
     }
 
+    // The physics substep the policy was trained at, and how many of them make one 0.02 s control tick (Isaac's
+    // decimation). The world handed to SpotController::attach must step at SUBSTEP_DT.
+    constexpr float SUBSTEP_DT = 0.002f;
+    constexpr int DECIMATION = 10;
+    constexpr float CONTROL_DT = SUBSTEP_DT * DECIMATION;
+
     // Builds the 96-d observation, runs the policy, writes joint targets.
     // Mirrors play_spot_steps.v2_obs:
     //   [lin_b(3) | ang_b(3) | proj_g(3) | cmd(3) | qpos(12) | qvel(12) | last_action(12)
     //    | clock(2) | base_above(1) | scan(45)]
     // velocities and gravity rotated into the body frame; qpos/qvel/action in the
     // policy's order; clock = [sin, cos] of the gait phase.
+    //
+    // The controller runs INSIDE the world's substep loop: attach() registers a
+    // pre-substep hook, and every DECIMATION-th substep is one control tick. The
+    // caller advances time with world.step(dt) at whatever dt it has — a frame's
+    // wall-clock time, or exactly CONTROL_DT in a headless loop — so the policy
+    // always acts at 50 Hz of SIMULATED time, whatever the display refresh, and
+    // PhysxWorld interpolates the robot's visuals between substeps.
     class SpotController {
     public:
+        using Command = std::array<float, 3>;// [vx, vy, wz] in the body frame
+
         // `terrainHeight(x, y)` is the ground height under a world point — flat by
         // default. A terrain scene passes its own and the scan follows; nothing else
         // in the observation changes.
@@ -179,9 +194,33 @@ namespace spot {
             }
         }
 
+        SpotController(const SpotController&) = delete;
+        SpotController& operator=(const SpotController&) = delete;
+
+        ~SpotController() {
+            if (world_) world_->removeSubstepCallback(hook_);
+        }
+
+        // Drive the robot from `world`'s substep loop from now on.
+        void attach(threepp::PhysxWorld& world) {
+            if (world_) world_->removeSubstepCallback(hook_);
+            world_ = &world;
+            hook_ = world.onPreSubstep([this](float) {
+                if (substep_++ % DECIMATION == 0) controlTick();
+            });
+        }
+
+        // Asked once per control tick for the velocity command, so a command that
+        // depends on the robot's state (a heading hold) sees the state the policy sees.
+        void setCommandSource(std::function<Command()> source) { command_ = std::move(source); }
+
         [[nodiscard]] float heightAt(float x, float y) const { return height_ ? height_(x, y) : 0.f; }
 
-        [[nodiscard]] std::array<float, OBS_DIM> obs(const std::array<float, 3>& cmd) const {
+        // World-space points of the last height scan (forward-major, as observed),
+        // each at the ground height the policy read.
+        [[nodiscard]] const std::array<threepp::Vector3, N_SCAN>& scanPoints() const { return scanPoints_; }
+
+        [[nodiscard]] std::array<float, OBS_DIM> obs(const Command& cmd) {
             const auto rs = art_.rootState();   // [px,py,pz, qx,qy,qz,qw]
             const auto rv = art_.rootVelocity();// [vx,vy,vz, wx,wy,wz]
             float R[3][3];
@@ -231,62 +270,74 @@ namespace spot {
             const float h0 = heightAt(rs[0], rs[1]);
             o[k++] = rs[2] - h0;// base height above the ground under it
 
+            int s = 0;
             for (const float gx : PROBE_DX) {// forward-major, as the trainer flattens it
                 for (const float gy : PROBE_DY) {
                     const float px = rs[0] + gx * hx - gy * hy;
                     const float py = rs[1] + gx * hy + gy * hx;
-                    o[k++] = std::clamp(heightAt(px, py) - h0, -1.f, 1.f);
+                    const float h = heightAt(px, py);
+                    scanPoints_[s++].set(px, py, h);
+                    o[k++] = std::clamp(h - h0, -1.f, 1.f);
                 }
             }
             return o;
         }
 
-        // One control tick: obs -> policy -> drive targets -> step 0.02 s
-        // (10 × 0.002 substeps, matching Isaac's decimation).
-        void step(threepp::PhysxWorld& world, const std::array<float, 3>& cmd) {
+        // True when a stand-mode policy is commanded to stand: exactly zero on all three axes, as in training.
+        [[nodiscard]] bool isStand(const Command& cmd) const {
+            return standMode_ && cmd[0] == 0.f && cmd[1] == 0.f && cmd[2] == 0.f;
+        }
+
+        // Teleport into the default stance just above the ground at (x, y) facing `yaw`, and hold that stance for
+        // the next holdTicks control ticks before the policy takes over. reset() alone zeroes every joint (straight
+        // legs); the old start, straight-legged at Z0 swinging the legs into the stance mid-fall, is what toppled
+        // the viewers' first ticks.
+        void spawnStance(float x, float y, float groundZ = 0.f, float yaw = 0.f, int holdTicks = 40) {
+            learnDofSlots();
+            threepp::Quaternion q;
+            q.setFromAxisAngle(threepp::Vector3(0, 0, 1), yaw);
+            art_.reset(threepp::Vector3(x, y, groundZ + STANCE_Z), q);
+            std::vector<float> dof(art_.numDof(), 0.f);
+            for (int i = 0; i < 12; ++i) dof[slot_[map_[i]]] = DEFAULT_Q[i];
+            art_.setJointPositions(dof.data(), dof.size());
+            last_.fill(0.f);
+            phi_ = 0.f;// the settle does NOT advance the clock (matches the training reset)
+            holdLeft_ = holdTicks;
+            holdTargets();
+        }
+
+        // Control ticks left in the spawn settle (0 once the policy drives).
+        [[nodiscard]] int holdTicksLeft() const { return holdLeft_; }
+
+        [[nodiscard]] const std::array<float, 12>& lastAction() const { return last_; }
+
+    private:
+        // One control tick: obs -> policy -> drive targets. The substeps that follow
+        // integrate them; the phase clock advances now, which is the same as after the
+        // step, since this tick's observation has already read it.
+        void controlTick() {
+            if (holdLeft_ > 0) {
+                --holdLeft_;
+                holdTargets();
+                return;
+            }
+            const Command cmd = command_ ? command_() : Command{0.f, 0.f, 0.f};
             const auto o = obs(cmd);
             const std::vector<float> a = policy_.act(o.data(), o.size());// 12, policy order
             for (int i = 0; i < 12; ++i) last_[i] = a[i];
             std::vector<float> tgt(art_.numDof(), 0.f);
             for (int i = 0; i < 12; ++i) tgt[map_[i]] = DEFAULT_Q[i] + ACTION_SCALE * a[i];
             art_.setDriveTargets(tgt.data(), tgt.size());
-            world.step(0.02f);
-            // advance the phase clock AFTER the step so phi aligns with the NEXT obs; a stand holds it where it stopped
-            if (!isStand(cmd)) phi_ = std::fmod(phi_ + 0.02f / GAIT_PERIOD, 1.0f);
+            // a stand holds the clock where it stopped
+            if (!isStand(cmd)) phi_ = std::fmod(phi_ + CONTROL_DT / GAIT_PERIOD, 1.0f);
         }
 
-        // True when a stand-mode policy is commanded to stand: exactly zero on all three axes, as in training.
-        [[nodiscard]] bool isStand(const std::array<float, 3>& cmd) const {
-            return standMode_ && cmd[0] == 0.f && cmd[1] == 0.f && cmd[2] == 0.f;
-        }
-
-        // Teleport into the default stance just above the ground at (x, y) and hold it for holdTicks. reset()
-        // alone zeroes every joint (straight legs); the old start, straight-legged at Z0 with hold() swinging the
-        // legs into the stance mid-fall, is what toppled the viewers' first ticks.
-        void spawnStance(threepp::PhysxWorld& world, float x, float y, float groundZ = 0.f, int holdTicks = 40) {
-            learnDofSlots();
-            art_.reset(threepp::Vector3(x, y, groundZ + STANCE_Z));
-            std::vector<float> dof(art_.numDof(), 0.f);
-            for (int i = 0; i < 12; ++i) dof[slot_[map_[i]]] = DEFAULT_Q[i];
-            art_.setJointPositions(dof.data(), dof.size());
-            last_.fill(0.f);
-            hold(world, holdTicks);
-        }
-
-        // Hold the default stand pose for n ticks (settle on spawn).
-        void hold(threepp::PhysxWorld& world, int n) {
-            phi_ = 0.f;// the settle does NOT advance the clock (matches the training reset)
+        void holdTargets() {
             std::vector<float> tgt(art_.numDof(), 0.f);
             for (int i = 0; i < 12; ++i) tgt[map_[i]] = DEFAULT_Q[i];
-            for (int k = 0; k < n; ++k) {
-                art_.setDriveTargets(tgt.data(), tgt.size());
-                world.step(0.02f);
-            }
+            art_.setDriveTargets(tgt.data(), tgt.size());
         }
 
-        [[nodiscard]] const std::array<float, 12>& lastAction() const { return last_; }
-
-    private:
         // setJointPositions writes PhysX articulation-cache slots, which need not follow the order jointPositions()
         // reports (the Python plant reads back per leg but writes every hip, then every upper leg, then every knee).
         // Learn each joint's slot once by writing distinct values and reading them back.
@@ -313,7 +364,14 @@ namespace spot {
         bool standMode_ = false;// from the policy file's TPF1 trailer
         std::vector<int> slot_;  // joint index (jointPositions order) -> setJointPositions slot
         std::array<float, 12> last_{};
-        float phi_ = 0.f;// gait phase in [0,1), advanced +DT/GAIT_PERIOD each step()
+        float phi_ = 0.f;// gait phase in [0,1), advanced +CONTROL_DT/GAIT_PERIOD each control tick
+        std::array<threepp::Vector3, N_SCAN> scanPoints_{};
+
+        threepp::PhysxWorld* world_ = nullptr;
+        threepp::PhysxWorld::SubstepHandle hook_ = 0;
+        std::function<Command()> command_;
+        long long substep_ = 0;
+        int holdLeft_ = 0;
     };
 
 }// namespace spot

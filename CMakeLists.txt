@@ -159,7 +159,7 @@ if (THREEPP_BUILD_EXAMPLES OR THREEPP_BUILD_TESTS)
     include(FetchContent)
     FetchContent_Declare(
             threepp_data
-            URL https://github.com/markaren/threepp_data/archive/e891673a2627ac6f236348b5987725e0ae92fdcf.tar.gz
+            URL https://github.com/markaren/threepp_data/archive/a16ed2715c8beb3083495fce0006f91a9f38ccf9.tar.gz
             DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     FetchContent_MakeAvailable(threepp_data)
