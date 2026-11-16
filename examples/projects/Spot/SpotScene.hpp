@@ -220,6 +220,9 @@ namespace spot {
         // each at the ground height the policy read.
         [[nodiscard]] const std::array<threepp::Vector3, N_SCAN>& scanPoints() const { return scanPoints_; }
 
+        // The ground height under the base at that scan: the policy reads each point relative to it.
+        [[nodiscard]] float scanGround() const { return scanGround_; }
+
         [[nodiscard]] std::array<float, OBS_DIM> obs(const Command& cmd) {
             const auto rs = art_.rootState();   // [px,py,pz, qx,qy,qz,qw]
             const auto rv = art_.rootVelocity();// [vx,vy,vz, wx,wy,wz]
@@ -268,6 +271,7 @@ namespace spot {
                 hy = 0.f;
             }
             const float h0 = heightAt(rs[0], rs[1]);
+            scanGround_ = h0;
             o[k++] = rs[2] - h0;// base height above the ground under it
 
             int s = 0;
@@ -366,6 +370,7 @@ namespace spot {
         std::array<float, 12> last_{};
         float phi_ = 0.f;// gait phase in [0,1), advanced +CONTROL_DT/GAIT_PERIOD each control tick
         std::array<threepp::Vector3, N_SCAN> scanPoints_{};
+        float scanGround_ = 0.f;
 
         threepp::PhysxWorld* world_ = nullptr;
         threepp::PhysxWorld::SubstepHandle hook_ = 0;

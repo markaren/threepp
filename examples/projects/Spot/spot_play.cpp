@@ -21,7 +21,8 @@
 //   spot_play --check 2500    # headless: up the stair, through the rubble, down the slope
 //
 // DRIVE (body frame): W / S or Up / Down walk, A / D or Left / Right turn,
-// Q / E sidestep, R back to the start, H shows or hides the height scan.
+// Q / E sidestep, hold Shift to run, R back to the start, H shows or hides the
+// height scan. The panel's slider sets the walking speed.
 // Drag to look around, scroll to zoom.
 
 #include "SpotCourse.hpp"
@@ -33,6 +34,7 @@
 #include "threepp/loaders/RGBELoader.hpp"
 
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -87,10 +89,16 @@ namespace {
     // policy regulates yaw RATE to zero, so any bias would slowly spiral).
     struct Pilot {
         bool forward = false, back = false, turnLeft = false, turnRight = false, stepLeft = false, stepRight = false;
+        bool run = false;  // held: forward at RUN_SPEED whatever the slider says
+        float speed = 1.0f;// forward walking speed (m/s); backing and sidestepping scale with it
+
+        static constexpr float RUN_SPEED = 2.0f;
 
         SpotController::Command command(const Articulation& art, bool standMode) {
-            const float vxKey = (forward ? 1.0f : 0.f) - (back ? 0.6f : 0.f);
-            const float vyKey = (stepLeft ? 0.6f : 0.f) - (stepRight ? 0.6f : 0.f);
+            const float fwd = run ? RUN_SPEED : speed;
+            const float side = std::min(0.6f * fwd, 0.8f);
+            const float vxKey = (forward ? fwd : 0.f) - (back ? std::min(0.6f * fwd, 1.0f) : 0.f);
+            const float vyKey = (stepLeft ? side : 0.f) - (stepRight ? side : 0.f);
             const float turn = (turnLeft ? 1.2f : 0.f) - (turnRight ? 1.2f : 0.f);
             // At most 3 m/s^2. The clamp lands exactly on the target, so releasing the
             // keys still reaches an exact zero and a stand-mode policy stands.
@@ -258,9 +266,13 @@ namespace {
         };
         respawn();
 
-        // What the policy reads: the 45 points of its height scan.
-        auto scanDots = InstancedMesh::create(SphereGeometry::create(0.022f, 8, 6),
-                                              MeshBasicMaterial::create({{"color", Color(0x7ff0ff)}}), N_SCAN);
+        // What the policy reads: the 45 points of its height scan, each coloured by the
+        // value it contributes, its height relative to the ground under the base. Blue is
+        // below, near white level, orange above, saturating at +-0.2 m. Not tone mapped, so
+        // the colours read as set.
+        auto scanMat = MeshBasicMaterial::create({{"color", Color(0xffffff)}});
+        scanMat->toneMapped = false;
+        auto scanDots = InstancedMesh::create(SphereGeometry::create(0.022f, 8, 6), scanMat, N_SCAN);
         scanDots->frustumCulled = false;
         scene->add(scanDots);
         bool showScan = true;
@@ -281,7 +293,7 @@ namespace {
 
         // Keys, and the panel's hold buttons for mouse and touch.
         struct Held {
-            bool fwd = false, back = false, left = false, right = false, sl = false, sr = false;
+            bool fwd = false, back = false, left = false, right = false, sl = false, sr = false, run = false;
         } keys, ui;
         bool respawnRequested = false;
         auto setKey = [&](Key key, bool down) {
@@ -296,6 +308,7 @@ namespace {
                 case Key::RIGHT: keys.right = down; break;
                 case Key::Q: keys.sl = down; break;
                 case Key::E: keys.sr = down; break;
+                case Key::LEFT_SHIFT: keys.run = down; break;
                 default: break;
             }
         };
@@ -328,8 +341,10 @@ namespace {
             ImGui::SetNextWindowBgAlpha(0.55f);
             ImGui::Begin("info", nullptr, kOverlay);
             ImGui::TextUnformatted("Spot, a learned walking policy on PhysX");
-            ImGui::TextDisabled("W/S walk  A/D turn  Q/E sidestep  R restart");
+            ImGui::TextDisabled("W/S walk  A/D turn  Q/E sidestep  Shift run  R restart");
             ImGui::TextDisabled("drag to look around, scroll to zoom");
+            ImGui::SetNextItemWidth(160 * s);
+            ImGui::SliderFloat("walk speed", &pilot.speed, 0.1f, Pilot::RUN_SPEED, "%.1f m/s");
             ImGui::Text("%4.2f m/s   physics + policy %.2f ms/frame", speed, physicsMs);
             ImGui::Checkbox("Height scan (H)", &showScan);
             ImGui::SameLine();
@@ -399,6 +414,7 @@ namespace {
             pilot.turnRight = keys.right || ui.right;
             pilot.stepLeft = keys.sl || ui.sl;
             pilot.stepRight = keys.sr || ui.sr;
+            pilot.run = keys.run;
 
             const auto t0 = std::chrono::steady_clock::now();
             world.step(dt);
@@ -437,11 +453,17 @@ namespace {
             scanDots->visible = showScan && ctrl.holdTicksLeft() == 0;// no scan is read during the spawn settle
             if (scanDots->visible) {
                 const auto& pts = ctrl.scanPoints();
+                const Color level(0.9f, 0.95f, 1.0f), above(1.0f, 0.42f, 0.0f), below(0.05f, 0.35f, 1.0f);
                 for (int i = 0; i < N_SCAN; ++i) {
                     m.makeTranslation(pts[i].x, pts[i].y, pts[i].z + 0.012f);
                     scanDots->setMatrixAt(i, m);
+                    const float t = std::clamp((pts[i].z - ctrl.scanGround()) / 0.2f, -1.f, 1.f);
+                    Color c = level;
+                    c.lerp(t >= 0.f ? above : below, std::abs(t));
+                    scanDots->setColorAt(i, c);
                 }
                 scanDots->instanceMatrix()->needsUpdate();
+                scanDots->instanceColor()->needsUpdate();
             }
 
             renderer->render(*scene, *camera);
@@ -467,7 +489,10 @@ int main(int argc, char** argv) {
         if (a == "--policy" && i + 1 < argc) policyPath = argv[++i];
         else if (a == "--urdf" && i + 1 < argc) urdfPath = argv[++i];
         else if (a == "--data" && i + 1 < argc) dataDir = argv[++i];
-        else if (a == "--check") checkTicks = (i + 1 < argc) ? std::stoi(argv[++i]) : 2500;
+        else if (a == "--check") {// an optional tick count: only a number is taken as one
+            const bool count = i + 1 < argc && std::isdigit(static_cast<unsigned char>(argv[i + 1][0]));
+            checkTicks = count ? std::stoi(argv[++i]) : 2500;
+        }
     }
     if (urdfPath.empty()) urdfPath = defaultUrdfPath();
 
