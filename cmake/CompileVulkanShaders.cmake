@@ -156,28 +156,36 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     string(REPLACE ";" "$<SEMICOLON>" _opt_pass_list "${_THREEPP_SPIRV_OPT_PASSES}")
     set(_opt_passes "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:${_opt_pass_list}>")
 
-    # Depend on every .glsl/.h that sits beside the shader source, whatever its
-    # name. Shaders in this dir #include each other freely (vulkan_shared.h,
-    # probe_common.glsl, the deferred_shade_NN_*.glsl split, ...) and any of
-    # them can be transitively pulled into any shader here, so a glob is the
-    # only dependency list that can't go stale as files are added/renamed.
-    # Cheap (<1s extra glslangValidator invocations on the unrelated shaders
-    # that don't actually include the touched file). CONFIGURE_DEPENDS makes
-    # the generator re-run the glob at build time (ninja re-checks it), so
-    # adding a new .glsl/.h picks it up without a manual reconfigure.
-    # Out-of-tree shaders (e.g. example inference kernels) have no .glsl/.h
-    # neighbours, so the glob returns empty there — no DEPENDS on anything,
-    # same as before.
-    file(GLOB _extra_deps CONFIGURE_DEPENDS "${_src_dir}/*.glsl" "${_src_dir}/*.h")
-
+    # Two steps, so that an edit reaches only what it changes.
+    #
+    # 1. glslangValidator, with the files this shader actually #includes
+    #    (transitively, under its own DEFINES) taken from the depfile it writes.
+    #    An edit to an include recompiles the shaders that include it and no
+    #    others. The depfile names the raw module as its target, which is why
+    #    this step has that one output and nothing else. The first build has no
+    #    depfile yet and runs every step anyway; a new #include is only reached
+    #    by editing a file already on the list, which reruns the step and
+    #    rewrites the list.
     add_custom_command(
-        OUTPUT  "${_out_header}"
-        BYPRODUCTS "${_raw_spv}" "${_opt_spv}"
+        OUTPUT  "${_raw_spv}"
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.3
                 "-I${_src_dir}"
                 ${_define_flags}
                 "${shader_src}"
                 -o   "${_raw_spv}"
+                --depfile "${_raw_spv}.d"
+        DEPFILE "${_raw_spv}.d"
+        DEPENDS "${shader_src}"
+        COMMENT "Compiling Vulkan shader ${_name} -> ${var_name}"
+        VERBATIM)
+
+    # 2. spirv-opt and the embed. EmbedSpirv.cmake leaves the header untouched
+    #    when its bytes would not change (a comment edit, say: no -g, so the
+    #    module carries no line info), and Ninja's restat then skips the C++
+    #    units that include it.
+    add_custom_command(
+        OUTPUT  "${_out_header}"
+        BYPRODUCTS "${_opt_spv}"
         COMMAND "${SPIRV_OPT}" --target-env=vulkan1.3 --skip-validation
                 ${_opt_passes}
                 "${_raw_spv}"
@@ -187,8 +195,8 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
                 "-DOUT=${_out_header}"
                 "-DVAR=${var_name}"
                 -P "${_THREEPP_EMBED_SPIRV}"
-        DEPENDS "${shader_src}" ${_extra_deps} "${_THREEPP_EMBED_SPIRV}"
-        COMMENT "Compiling Vulkan shader ${_name} -> ${var_name}"
+        DEPENDS "${_raw_spv}" "${_THREEPP_EMBED_SPIRV}"
+        COMMENT "Optimizing and embedding Vulkan shader ${_name}"
         VERBATIM
         # Required so the _opt_passes genex expands to one argument per pass,
         # and vanishes (instead of becoming a literal "" argument) in configs

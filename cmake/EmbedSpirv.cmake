@@ -26,9 +26,21 @@ string(REGEX REPLACE "(..)(..)(..)(..)" "0x\\4\\3\\2\\1," _body "${_hex}")
 # eight words per line
 string(REGEX REPLACE "((0x[0-9a-f]+,){8})" "\\1\n\t" _body "${_body}")
 
-file(WRITE "${OUT}"
+string(CONCAT _text
         "\t// ${_words} words\n"
         "\t#pragma once\n"
         "const uint32_t ${VAR}[] = {\n"
         "\t${_body}\n"
         "};\n")
+
+# Written only when the bytes change, so the header keeps its timestamp and the
+# build tool skips every C++ unit that includes it (Ninja: the custom command's
+# restat). An include edit that leaves this module as it was then compiles
+# shaders and nothing else.
+if (EXISTS "${OUT}")
+    file(READ "${OUT}" _old)
+    if (_old STREQUAL _text)
+        return()
+    endif ()
+endif ()
+file(WRITE "${OUT}" "${_text}")
