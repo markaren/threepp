@@ -140,7 +140,8 @@ STAT_KEYS = ("episodes", "timeouts", "terminations", "term_tilt", "term_low",
 _LOC_EDGES = (0.0, N_UP * STEP_RUN, N_UP * STEP_RUN + LAND, TENT_LEN, TENT_LEN + RUNOUT)
 # lane_family names -> the spot_slopes family each builds. Stair and flat lanes build no slope geometry.
 LANE_FAMILIES = {"stairs": "flat", "flat": "flat", "slope_up": "up", "slope_down": "down", "cross": "cross",
-                 "hills": "flat", "cross_bands": "flat", "rough": "flat"}     # the last three are spot_course lanes
+                 "hills": "flat", "cross_bands": "flat", "rough": "flat",       # from here on spot_course lanes
+                 "pyramid": "flat", "pit": "flat", "blocks": "flat"}
 assert sc.SPAWN_OFF == SPAWN_OFF, "spot_course.SPAWN_OFF has drifted from spot_steps_env.SPAWN_OFF"
 # Foot placement reward (w_place > 0): per touchdown on a stair tread, min(d_edge, PLACE_SAT) / PLACE_SAT, and
 # -PLACE_PERCH for a touchdown perched on a nosing (spot_feet.PERCH_RISE). 0.10 m is two thirds of the way to a 0.30 m
@@ -252,7 +253,9 @@ class SpotStepsEnv(VecTask):
                  terrain_material=None, push_interval=(3.0, 8.0), push_dv_min=0.3, push_max=0.5,
                  stand_mode=False, w_stand=W_STAND, w_place=0.0, course_ladder=None, cmd_switch=None,
                  reset_noise=None, reset_nohold_frac=0.3, jump=None, jump_obs=False, jump_lanes=None,
-                 w_jump_imit=2.0, qd_max=None, self_collision=False, blowup_guard=False):
+                 w_jump_imit=2.0, qd_max=None, self_collision=False, blowup_guard=False,
+                 vx_range=None, slow_frac=0.0, stand_prob=None, w_stand_vel=0.0, keep_meshes=False,
+                 stand_grace=0.0, stand_yaw_w=0.3):
         """Everything after push_prob is opt-in, and its default reproduces the training world:
 
         risers         per-level riser ladder (None = RISERS). More levels also lengthen the ground
@@ -365,7 +368,25 @@ class SpotStepsEnv(VecTask):
         blowup_guard   terminate a robot with a non-finite state, base speed > BLOWUP_V, spin > BLOWUP_W or a joint
                        faster than BLOWUP_JV, zero its reward terms that tick, and keep every observation finite within
                        +-OBS_LIMIT (counted: blowup_count()).
+        vx_range       (lo, hi) forward command range in m/s (default (VX_LO, VX_HI) = (-1.0, 1.5)); hi is also the brisk
+                       walk of an abrupt stand -> go switch and sizes the ground the way VX_HI did.
+        slow_frac      the share of sampled commands scaled by U(0.05, 0.3): crawls and slow turns as well as cruising.
+        stand_prob     the share of sampled commands that are exactly zero (default STAND_PROB).
+        w_stand_vel    with stand_mode: a stand env also pays w_stand_vel * (|v_xy| + 0.3 |w_z|) per step, base
+                       velocity in the body frame. Linear, so the slow creep the tracking kernel barely sees
+                       (exp(-0.04^2 / SIG) = 0.994 at 4 cm/s) costs in proportion.
+        stand_grace    seconds after a shove during which a standing env pays neither stand term, so it may step to
+                       catch itself (stand still unless pushed). 0 = always charged, as before.
+        stand_yaw_w    the yaw-rate weight inside the w_stand_vel term (rad/s against m/s).
+        keep_meshes    keep the terrain's threepp meshes as self.terrain_meshes after the raycast BVH is built
+                       (needs height_source='raycast'), for a viewer (spot_train_view.py). Off: they are dropped.
         """
+        self._vx_lo, self._vx_hi = (VX_LO, VX_HI) if vx_range is None else (float(vx_range[0]), float(vx_range[1]))
+        self._slow_frac = float(slow_frac)
+        self._stand_prob = STAND_PROB if stand_prob is None else float(stand_prob)
+        self.w_stand_vel = float(w_stand_vel)
+        self.stand_grace_ticks = int(round(float(stand_grace) / DT))
+        self.stand_yaw_w = float(stand_yaw_w)
         course_ladder = course_ladder or ("hard" if course else "pilot")
         if course_ladder not in sc.LADDERS:
             raise ValueError(f"course_ladder must be one of {list(sc.LADDERS)}, got {course_ladder!r}")
@@ -457,7 +478,7 @@ class SpotStepsEnv(VecTask):
         if self.n_levels <= N_LEVELS:
             ground_len, ground_cx = 60.0, 20.0
         else:
-            x_hi = (self.n_levels - 1) * BAND_LEN + SPAWN_OFF + STEPS_EPISODE_S * VX_HI + 2.0
+            x_hi = (self.n_levels - 1) * BAND_LEN + SPAWN_OFF + STEPS_EPISODE_S * self._vx_hi + 2.0
             ground_len, ground_cx = x_hi + 10.0, (x_hi - 10.0) * 0.5
         self.ground_extent = (ground_cx - ground_len * 0.5, ground_cx + ground_len * 0.5)
         # Slope lanes (opt-in): one SlopeLanes over every lane, stair and flat lanes as its 'flat' (builds nothing).
@@ -475,7 +496,7 @@ class SpotStepsEnv(VecTask):
         if course_code is not None and np.isin(course_code, sc.IK_SPAWN).any():
             course_lanes = self._course = sc.CourseLanes(course_code, SPACING, bands=bands, seed=seed,
                                                          rough_backend=rough_backend, ladder=course_ladder)
-            x_hi = max(self.ground_extent[1], course_lanes.spawn_x_max() + STEPS_EPISODE_S * VX_HI + 2.0)
+            x_hi = max(self.ground_extent[1], course_lanes.spawn_x_max() + STEPS_EPISODE_S * self._vx_hi + 2.0)
             x_lo = min(self.ground_extent[0], -10.0)
             ground_len, ground_cx = x_hi - x_lo, 0.5 * (x_lo + x_hi)
             self.ground_extent = (x_lo, x_hi)
@@ -536,6 +557,7 @@ class SpotStepsEnv(VecTask):
         if height_source == "raycast":
             from threepp.rl.raycast import TerrainRays
             self.rays = TerrainRays.from_objects(collector[0].meshes, device=self.device, up="z")
+            self.terrain_meshes = list(collector[0].meshes) if keep_meshes else None
             collector[0].meshes.clear()      # the BVH owns the triangles now; drop the threepp objects
         dev = self.device
         self.default_q = torch.from_numpy(default_q).to(dev)
@@ -878,15 +900,18 @@ class SpotStepsEnv(VecTask):
         lets the step-path caller sample for every env and pick with `where` instead of `nonzero`."""
         n = stairs.numel()
         dev = self.sim.device
-        vx = torch.empty(n, device=dev).uniform_(VX_LO, VX_HI)
+        vx = torch.empty(n, device=dev).uniform_(self._vx_lo, self._vx_hi)
         vy = torch.empty(n, device=dev).uniform_(-VY_HI, VY_HI)
         wz = torch.empty(n, device=dev).uniform_(-WZ_HI, WZ_HI)
         drive = (torch.rand(n, device=dev) < FWD_DRIVE_FRAC) & stairs   # stair lanes drive at the tent
-        vx = torch.where(drive, torch.empty(n, device=dev).uniform_(0.4, VX_HI), vx)
+        vx = torch.where(drive, torch.empty(n, device=dev).uniform_(0.4, self._vx_hi), vx)
         vy = torch.where(drive, vy * 0.2, vy)
         wz = torch.where(drive, wz * 0.2, wz)
         cmd = torch.stack([vx, vy, wz], dim=1)
-        stand = (torch.rand(n, 1, device=dev) < STAND_PROB)
+        if self._slow_frac > 0.0:                    # crawls: the same direction mix, at 5-30% of the speed
+            slow = torch.rand(n, 1, device=dev) < self._slow_frac
+            cmd = torch.where(slow, cmd * torch.empty(n, 1, device=dev).uniform_(0.05, 0.3), cmd)
+        stand = (torch.rand(n, 1, device=dev) < self._stand_prob)
         cmd = torch.where(stand, torch.zeros_like(cmd), cmd)
         timer = torch.randint(CMD_MIN, CMD_MAX + 1, (n,), device=dev)
         if self._switch is not None:                  # cmd_switch: the next switch in U(lo, hi) seconds
@@ -914,7 +939,7 @@ class SpotStepsEnv(VecTask):
             standing = (self.cmd == 0.0).all(dim=1)
             abrupt = torch.rand(K, device=dev) < p
             zero = torch.zeros(K, device=dev)
-            go = torch.stack([torch.empty(K, device=dev).uniform_(1.0, VX_HI), zero, zero], dim=1)
+            go = torch.stack([torch.empty(K, device=dev).uniform_(1.0, self._vx_hi), zero, zero], dim=1)
             cmd = torch.where(abrupt[:, None], torch.where(standing[:, None], go, torch.zeros_like(cmd)), cmd)
             self._sw.index_add_(0, self._fam_k, torch.stack([due, due & abrupt & standing, due & abrupt & ~standing],
                                                             dim=1).double())
@@ -1188,7 +1213,7 @@ class SpotStepsEnv(VecTask):
         # stair lanes: force a forward command at spawn so the robot ATTEMPTS the tent (level evaluation)
         st = idx[self._terrain_lane[idx]]
         if st.numel() > 0:
-            self.cmd[st, 0] = torch.empty(st.numel(), device=dev).uniform_(0.5, VX_HI)
+            self.cmd[st, 0] = torch.empty(st.numel(), device=dev).uniform_(0.5, self._vx_hi)
             self.cmd[st, 1:] = 0.0
         if self._hold is not None:           # a held command overrides the forced one too
             self.cmd[idx] = torch.where(self._hold_on[idx, None], self._hold[idx], self.cmd[idx])
@@ -1680,7 +1705,14 @@ class SpotStepsEnv(VecTask):
         if self.w_place > 0.0:
             terms["place"] = self.w_place * self._place_buf
         if self.stand_mode:
-            terms["stand"] = -self.w_stand * (self.cmd == 0.0).all(dim=1).float() * s.joint_vel.pow(2).mean(dim=1)
+            standing = (self.cmd == 0.0).all(dim=1)
+            if self.stand_grace_ticks > 0:            # a recent shove: stepping to catch itself is free
+                standing = standing & ((self.push_step < 0) | (self.steps - self.push_step > self.stand_grace_ticks))
+            terms["stand"] = -self.w_stand * standing.float() * s.joint_vel.pow(2).mean(dim=1)
+            if self.w_stand_vel > 0.0:
+                v_xy = torch.sqrt(self._lin_b[:, 0].pow(2) + self._lin_b[:, 1].pow(2) + 1e-6)
+                terms["stand_vel"] = -self.w_stand_vel * standing.float() * (
+                    v_xy + self.stand_yaw_w * self._ang_b[:, 2].abs())
         if self.jump is not None:
             inw = self.jump_t >= 0
             for name in JUMP_OFF_TERMS:

@@ -64,14 +64,18 @@ import spot_slopes as ss
 # --------------------------------------------------------------------------- #
 #  Registry
 # --------------------------------------------------------------------------- #
-FAMILIES = ("flat", "stairs", "hills", "cross", "rough")
-FLAT, STAIRS, HILLS, CROSS, ROUGH = range(len(FAMILIES))
+FAMILIES = ("flat", "stairs", "hills", "cross", "rough", "pyramid", "pit", "blocks")
+FLAT, STAIRS, HILLS, CROSS, ROUGH, PYRAMID, PIT, BLOCKS = range(len(FAMILIES))
 # SpotStepsEnv lane_family names. 'cross' there is spot_slopes' single-angle scoring lane, so the course one is named
 # after what it is: a strip of tilted bands.
-LANE_FAMILY = {"flat": "flat", "stairs": "stairs", "hills": "hills", "cross": "cross_bands", "rough": "rough"}
-CODE_OF_LANE_FAMILY = {"hills": HILLS, "cross_bands": CROSS, "rough": ROUGH}
-DEFAULT_SHARES = {"flat": 0.15, "stairs": 0.35, "hills": 0.20, "cross": 0.15, "rough": 0.15}
-BLOCK_ORDER = ("flat", "stairs", "rough", "hills", "cross")
+LANE_FAMILY = {"flat": "flat", "stairs": "stairs", "hills": "hills", "cross": "cross_bands", "rough": "rough",
+               "pyramid": "pyramid", "pit": "pit", "blocks": "blocks"}
+CODE_OF_LANE_FAMILY = {"hills": HILLS, "cross_bands": CROSS, "rough": ROUGH, "pyramid": PYRAMID, "pit": PIT,
+                       "blocks": BLOCKS}
+# The default course is the 2026-09-13 one: the pyramid, pit and blocks families join a course only through shares.
+DEFAULT_SHARES = {"flat": 0.15, "stairs": 0.35, "hills": 0.20, "cross": 0.15, "rough": 0.15,
+                  "pyramid": 0.0, "pit": 0.0, "blocks": 0.0}
+BLOCK_ORDER = ("flat", "stairs", "pyramid", "blocks", "rough", "pit", "hills", "cross")
 N_LEVELS = 6
 SPAWN_OFF = 0.7                  # = spot_steps_env.SPAWN_OFF (asserted there; importing it here would be circular)
 
@@ -95,15 +99,42 @@ ROUGH_TAPER = 0.25               # raised-cosine edge window share: 1.2 m in x, 
 ROUGH_DIAGONAL = "ll_hh"         # BVH copy of a height field: each cell split (x0,y0)-(x1,y1)
 ROUGH_BACKENDS = ("trimesh", "heightfield")
 
+# Pyramid stairs (2026-11-16): per band a flat approach, then PYR_STEPS stacked rings, each PYR_TREAD in from the last
+# along the lane and PYR_SIDE in from the lane edges, so the stair has treads on all four sides and a robot that
+# strafes or turns climbs it sideways and at the corners. The top ring is PYR_LEN - 2 (PYR_STEPS - 1) PYR_TREAD = 1.9 m
+# long and spacing - 2 (PYR_STEPS - 1) PYR_SIDE = 1.5 m wide. Bands start and end at ground level.
+PYR_STEPS = 4
+PYR_TREAD = 0.35
+PYR_SIDE = 0.25
+PYR_APPROACH = 1.6               # = the stair band's FLAT_APPROACH
+PYR_LEN = 4.0
+PYR_RUNOUT = 0.9
+PYR_BAND = PYR_APPROACH + PYR_LEN + PYR_RUNOUT                         # 6.5 m
+# The pit is the pyramid upside down: the band is a plateau PYR_STEPS risers high and the pit steps down into the
+# ground box, PIT_RIM in from the lane edges, so the robot starts on the top and goes down first. Neighbouring pit lanes
+# meet on their rims; band j meets band j+1 at a step of PYR_STEPS * (riser_j+1 - riser_j) (<= 0.16 m on 'hard').
+PIT_RIM = 0.25
+# Stepping blocks: per band a field of axis-aligned blocks BLOCK_CELL across with heights U(0, h_j), vertical sides,
+# from BLOCK_X0 into the band to BLOCK_RUNOUT short of its end; one static trimesh per lane, as the rough ground.
+BLOCK_CELL = 0.375               # 8 blocks across a 3 m lane
+BLOCK_BAND = 6.0
+BLOCK_X0 = 1.2
+BLOCK_RUNOUT = 0.4
+
 # Level ladders. 'pilot' is the ladder above (the 2026-09-13 pilot trained on it, and score_e0's course cells RG05 /
 # RG11 / RG17 / H08 / H16 / H25 name its values, so it stays the default of every world that is not course=True). 'hard'
 # is the wave-2 training ladder: the pilot reached the top level on stairs, cross and rough within 300 iterations, so the
 # top of those three moves up. Hills are unchanged: 25 deg is still unclimbed. The stair risers only apply to a
 # course=True world (SpotStepsEnv passes them as its riser ladder, so the tread closed form and the placement reward follow).
+PYR_RISERS = (0.05, 0.08, 0.11, 0.14, 0.17, 0.20)
+BLOCK_HEIGHTS = (0.03, 0.05, 0.07, 0.09, 0.11, 0.13)
 LADDERS = {
-    "pilot": {"hills": HILL_DEGS, "cross": CROSS_DEGS, "rough": ROUGH_AMPS, "risers": None},
+    "pilot": {"hills": HILL_DEGS, "cross": CROSS_DEGS, "rough": ROUGH_AMPS, "risers": None,
+              "pyramid": PYR_RISERS, "pit": PYR_RISERS, "blocks": BLOCK_HEIGHTS},
     "hard": {"hills": HILL_DEGS, "cross": (5.0, 9.0, 13.0, 17.0, 21.0, 25.0),
-             "rough": (0.03, 0.07, 0.11, 0.15, 0.20, 0.25), "risers": (0.05, 0.09, 0.13, 0.17, 0.20, 0.23)},
+             "rough": (0.03, 0.07, 0.11, 0.15, 0.20, 0.25), "risers": (0.05, 0.09, 0.13, 0.17, 0.20, 0.23),
+             "pyramid": (0.05, 0.09, 0.13, 0.17, 0.20, 0.23), "pit": (0.05, 0.09, 0.13, 0.17, 0.20, 0.23),
+             "blocks": (0.03, 0.06, 0.09, 0.12, 0.15, 0.18)},
 }
 EDGE_FOOT_DY = 0.21              # a stance foot's lateral offset (spot_feet: settled tips dy +-0.208..0.215)
 
@@ -123,14 +154,19 @@ def cross_edge_steps(degs, spacing, dy=None):
     return [dy * (t[j + 1] - t[j]) for j in range(len(t) - 1)]
 
 
-BAND_LEN = {HILLS: HILL_BAND, CROSS: CROSS_BAND, ROUGH: ROUGH_BAND}
+BAND_LEN = {HILLS: HILL_BAND, CROSS: CROSS_BAND, ROUGH: ROUGH_BAND, PYRAMID: PYR_BAND, PIT: PYR_BAND,
+            BLOCKS: BLOCK_BAND}
 FEATURE_DIST = {HILLS: (HILL_APPROACH - SPAWN_OFF) + 2.0 * HILL_RUN + HILL_LAND,   # 6.3 m: past the down ramp
                 CROSS: CROSS_BAND - SPAWN_OFF,                                     # 4.3 m: the band's end
-                ROUGH: ROUGH_BAND - SPAWN_OFF}                                     # 5.3 m
-DEMOTE_PROGRESS = 0.4            # hills/cross/rough: a timeout under this share of the commanded forward distance demotes
-LEVEL_VALUE = {HILLS: HILL_DEGS, CROSS: CROSS_DEGS, ROUGH: ROUGH_AMPS}
-LEVEL_UNIT = {HILLS: "deg", CROSS: "deg", ROUGH: "m"}
-IK_SPAWN = (HILLS, CROSS, ROUGH)  # spawned on spot_slopes' IK stance and held through the settle
+                ROUGH: ROUGH_BAND - SPAWN_OFF,                                     # 5.3 m
+                PYRAMID: (PYR_APPROACH - SPAWN_OFF) + PYR_LEN,                     # 4.9 m: off the far side
+                PIT: (PYR_APPROACH - SPAWN_OFF) + PYR_LEN,                         # 4.9 m: out of the far side
+                BLOCKS: BLOCK_BAND - BLOCK_RUNOUT - SPAWN_OFF}                     # 4.9 m: past the last block
+DEMOTE_PROGRESS = 0.4            # course terrain: a timeout under this share of the commanded forward distance demotes
+LEVEL_VALUE = {HILLS: HILL_DEGS, CROSS: CROSS_DEGS, ROUGH: ROUGH_AMPS, PYRAMID: PYR_RISERS, PIT: PYR_RISERS,
+               BLOCKS: BLOCK_HEIGHTS}
+LEVEL_UNIT = {HILLS: "deg", CROSS: "deg", ROUGH: "m", PYRAMID: "m", PIT: "m", BLOCKS: "m"}
+IK_SPAWN = (HILLS, CROSS, ROUGH, PYRAMID, PIT, BLOCKS)  # spawned on spot_slopes' IK stance and held through the settle
 
 
 def parse_shares(text):
@@ -199,7 +235,9 @@ class CourseLanes:
         self.ladder = ladder
         lad = LADDERS[ladder]
         self.hill_degs, self.cross_degs, self.rough_amps = lad["hills"], lad["cross"], lad["rough"]
-        self.level_value = {HILLS: self.hill_degs, CROSS: self.cross_degs, ROUGH: self.rough_amps}
+        self.pyr_risers, self.pit_risers, self.block_heights = lad["pyramid"], lad["pit"], lad["blocks"]
+        self.level_value = {HILLS: self.hill_degs, CROSS: self.cross_degs, ROUGH: self.rough_amps,
+                            PYRAMID: self.pyr_risers, PIT: self.pit_risers, BLOCKS: self.block_heights}
         self.cross_pivot = cross_pivot(self.cross_degs, self.spacing)
         # corrugation: alternate the tilt inside each contiguous run of cross lanes, so lane edges meet at one height
         run = np.zeros(self.k, np.int64)
@@ -212,6 +250,11 @@ class CourseLanes:
         self._grids = None
         self._materials = []
         self.n_boxes = self.n_rough_tris = self.n_rough_colliders = 0
+        self.n_block_tris = 0
+        # one block-height field per (lane, band), drawn up front so a lane's blocks do not depend on build order
+        self._block_u = np.random.default_rng(int(seed) + 7121).random(
+            (self.k, N_LEVELS, int(round((BLOCK_BAND - BLOCK_X0 - BLOCK_RUNOUT) / BLOCK_CELL)),
+             int(round(self.spacing / BLOCK_CELL))))
 
     def any(self):
         return bool(np.isin(self.codes, IK_SPAWN).any())
@@ -276,6 +319,71 @@ class CourseLanes:
                     self.n_boxes += 1
             elif c == ROUGH:
                 self._add_rough(world, i, y, bvh_sink)
+            elif c == PYRAMID:
+                for j in self._levels(i):
+                    self._add_pyramid(world, j, y, self.pyr_risers[j], material)
+            elif c == PIT:
+                for j in self._levels(i):
+                    self._add_pit(world, j, y, self.pit_risers[j], material)
+            elif c == BLOCKS:
+                self._add_blocks(world, i, y)
+
+    def _add_pyramid(self, world, j, y, rise, material):
+        """Band j of a pyramid lane: PYR_STEPS boxes stacked, each one tread in from the one below on all four sides."""
+        _box = ss.SlopeLanes._box
+        W = self.spacing
+        xa = j * PYR_BAND + PYR_APPROACH
+        for k in range(PYR_STEPS):
+            x0, x1 = xa + k * PYR_TREAD, xa + PYR_LEN - k * PYR_TREAD
+            hw = 0.5 * W - k * PYR_SIDE
+            top = (k + 1) * rise
+            _box(world, (x1 - x0, 2.0 * hw, top - ss.BOX_BOTTOM), (0.5 * (x0 + x1), y, 0.5 * (top + ss.BOX_BOTTOM)),
+                 None, 0.0, material)
+            self.n_boxes += 1
+
+    def _add_pit(self, world, j, y, rise, material):
+        """Band j of a pit lane: a plateau PYR_STEPS * rise high with the pit stepping down into the ground box. The
+        plateau and each step level are rectangular frames of four boxes; the pit floor is the ground itself."""
+        _box = ss.SlopeLanes._box
+        W = self.spacing
+        n = PYR_STEPS
+        bx0, bx1 = j * PYR_BAND, (j + 1) * PYR_BAND
+        xa, xb = bx0 + PYR_APPROACH, bx0 + PYR_APPROACH + PYR_LEN
+
+        def frame(ox0, ox1, ohw, ix0, ix1, ihw, top):
+            # the outer rectangle minus the inner one, at height top, as four boxes
+            h, zc = top - ss.BOX_BOTTOM, 0.5 * (top + ss.BOX_BOTTOM)
+            _box(world, (ix0 - ox0, 2.0 * ohw, h), (0.5 * (ox0 + ix0), y, zc), None, 0.0, material)
+            _box(world, (ox1 - ix1, 2.0 * ohw, h), (0.5 * (ix1 + ox1), y, zc), None, 0.0, material)
+            for s in (-1.0, 1.0):
+                _box(world, (ix1 - ix0, ohw - ihw, h), (0.5 * (ix0 + ix1), y + s * 0.5 * (ohw + ihw), zc), None, 0.0,
+                     material)
+            self.n_boxes += 4
+
+        hw = [0.5 * W - PIT_RIM - k * PYR_SIDE for k in range(n)]       # half-width of step level k's inner edge
+        frame(bx0, bx1, 0.5 * W, xa, xb, hw[0], n * rise)              # the plateau around the pit
+        for k in range(1, n):                                          # step level k, (n - k) risers above the floor
+            frame(xa + (k - 1) * PYR_TREAD, xb - (k - 1) * PYR_TREAD, hw[k - 1],
+                  xa + k * PYR_TREAD, xb - k * PYR_TREAD, hw[k], (n - k) * rise)
+
+    def block_grid(self, i):
+        """Lane i's stepping blocks as (x0, h [nx, ny]) on the BLOCK_CELL grid over the whole strip (0 between fields),
+        x0 = world x of column 0, y from -spacing/2 across the lane."""
+        lv = list(self._levels(i))
+        per_x = int(round(BLOCK_BAND / BLOCK_CELL))
+        nbx, ny = self._block_u.shape[2], self._block_u.shape[3]
+        off = int(round(BLOCK_X0 / BLOCK_CELL))
+        h = np.zeros((per_x * len(lv), ny), np.float32)
+        for b, j in enumerate(lv):
+            h[b * per_x + off: b * per_x + off + nbx] = self._block_u[i, j] * self.block_heights[j]
+        return lv[0] * BLOCK_BAND, h
+
+    def _add_blocks(self, world, i, y):
+        x0, h = self.block_grid(i)
+        mesh, n_tris = blocks_mesh(h, BLOCK_CELL, (x0, -0.5 * self.spacing))
+        mesh.position.set(0.0, float(y), 0.0)             # lane-local vertices, as the rough ground
+        world.add_static_trimesh(mesh)
+        self.n_block_tris += n_tris
 
     def rough_grid(self, i):
         """Lane i's rough strip as (x0, z [nx, ny]): heights on the ROUGH_CELL grid, x0 = world x of row 0, y from
@@ -326,6 +434,49 @@ def grid_mesh(z, cell, origin):
     g.set_attribute("position", verts)
     g.set_index(np.ascontiguousarray(faces.reshape(-1)))
     return tp.Mesh(g, tp.MeshStandardMaterial())
+
+
+def blocks_mesh(h, cell, origin):
+    """A Mesh of axis-aligned blocks: cell (ix, iy) is a column h[ix, iy] high over [origin + i*cell, + cell], with a top
+    quad where it is above 0 and vertical walls wherever it stands above its neighbour (or the lane edge, read as 0).
+    Wound counter-clockwise seen from outside, so a downward ray meets a top and a sideways one a wall."""
+    nx, ny = h.shape
+    verts, faces = [], []
+
+    def quad(pts, normal):
+        """Two triangles over the planar quad pts (in order round its edge), wound so their normal is `normal`."""
+        p = np.asarray(pts, np.float64)
+        if np.dot(np.cross(p[1] - p[0], p[2] - p[0]), normal) < 0.0:
+            p = p[::-1]
+        base = len(verts)
+        verts.extend(p.tolist())
+        faces.extend(((base, base + 1, base + 2), (base, base + 2, base + 3)))
+
+    pad = np.zeros((nx + 2, ny + 2), np.float32)
+    pad[1:-1, 1:-1] = h
+    for ix in range(nx):
+        x0, x1 = origin[0] + ix * cell, origin[0] + (ix + 1) * cell
+        for iy in range(ny):
+            z = float(h[ix, iy])
+            if z <= 0.0:
+                continue
+            y0, y1 = origin[1] + iy * cell, origin[1] + (iy + 1) * cell
+            quad(((x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)), (0, 0, 1))
+            for zn, pts, nrm in (
+                    (pad[ix, iy + 1], ((x0, y0, 0), (x0, y1, 0), (x0, y1, 1), (x0, y0, 1)), (-1, 0, 0)),
+                    (pad[ix + 2, iy + 1], ((x1, y0, 0), (x1, y1, 0), (x1, y1, 1), (x1, y0, 1)), (1, 0, 0)),
+                    (pad[ix + 1, iy], ((x0, y0, 0), (x1, y0, 0), (x1, y0, 1), (x0, y0, 1)), (0, -1, 0)),
+                    (pad[ix + 1, iy + 2], ((x0, y1, 0), (x1, y1, 0), (x1, y1, 1), (x0, y1, 1)), (0, 1, 0))):
+                zn = float(zn)
+                if zn < z:                       # a wall from the lower neighbour's top up to this top
+                    quad([(px, py, zn if pz == 0 else z) for px, py, pz in pts], nrm)
+    if not faces:                                # an all-zero field: one quad just below the ground, never touched
+        quad(((origin[0], origin[1], -0.01), (origin[0] + cell, origin[1], -0.01),
+              (origin[0] + cell, origin[1] + cell, -0.01), (origin[0], origin[1] + cell, -0.01)), (0, 0, 1))
+    g = tp.BufferGeometry()
+    g.set_attribute("position", np.asarray(verts, np.float32).reshape(-1, 3))
+    g.set_index(np.ascontiguousarray(np.asarray(faces, np.uint32).reshape(-1)))
+    return tp.Mesh(g, tp.MeshStandardMaterial()), len(faces)
 
 
 def grid_height_np(z, cell, origin, x, y):

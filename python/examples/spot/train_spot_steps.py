@@ -263,6 +263,25 @@ def main():
                     help="a zero command freezes the gait clock and shows the policy a (0,0) clock, zeroes the "
                          "imitation weight and charges --w-stand * mean(joint_vel^2). Deploy must send the same sentinel.")
     ap.add_argument("--w-stand", dest="w_stand", type=float, default=W_STAND)
+    # ---- 2026-11-16: a steadier walker: a wider and slower speed range, standing that does not creep, a live view ----
+    ap.add_argument("--vx-range", dest="vx_range", default="",
+                    help="'lo,hi' forward command range in m/s (default the env's VX_LO,VX_HI = -1.0,1.5)")
+    ap.add_argument("--slow-frac", dest="slow_frac", type=float, default=0.0,
+                    help="share of sampled commands scaled to 5-30%% of their speed (crawls and slow turns)")
+    ap.add_argument("--stand-prob", dest="stand_prob", type=float, default=None,
+                    help="share of sampled commands that are exactly zero (default the env's STAND_PROB)")
+    ap.add_argument("--w-stand-vel", dest="w_stand_vel", type=float, default=0.0,
+                    help="with --stand-mode: a standing env pays this * (|v_xy| + 0.3 |w_z|) per step (0 = off)")
+    ap.add_argument("--stand-grace", dest="stand_grace", type=float, default=0.0,
+                    help="with --stand-mode: seconds after a shove a standing env is not charged for moving (0 = off)")
+    ap.add_argument("--stand-yaw-w", dest="stand_yaw_w", type=float, default=0.3,
+                    help="yaw-rate weight inside --w-stand-vel's term")
+    ap.add_argument("--view", type=int, default=0, metavar="N",
+                    help="open a window that shows N of the training robots live (spot_train_view.py); 0 = off")
+    ap.add_argument("--view-every", dest="view_every", type=int, default=1, metavar="N",
+                    help="with --view: draw every Nth env step (1 = every control tick; the GPU-to-CPU pose read and the frame cost ~10%% of the step rate)")
+    ap.add_argument("--view-shots", dest="view_shots", default="",
+                    help="with --view: save a still of the window every 50 frames into this directory")
     # ---- wave 2 (2026-09-13): what the pilot policy was not ready for in spot_slam: resets and a key jumping 0 -> full ---
     ap.add_argument("--course-ladder", dest="course_ladder", choices=tuple(sc.LADDERS), default="hard",
                     help="hills / cross / rough levels and the course stair risers (spot_course.LADDERS). hard (default): "
@@ -366,6 +385,20 @@ def main():
         kw.update(reset_noise=reset_noise, reset_nohold_frac=args.reset_nohold_frac)
     if args.stand_mode:
         kw.update(stand_mode=True, w_stand=args.w_stand)
+        if args.w_stand_vel > 0:
+            kw.update(w_stand_vel=args.w_stand_vel, stand_yaw_w=args.stand_yaw_w)
+        if args.stand_grace > 0:
+            kw.update(stand_grace=args.stand_grace)
+    elif args.w_stand_vel > 0:
+        ap.error("--w-stand-vel needs --stand-mode")
+    if args.vx_range:
+        kw.update(vx_range=tuple(float(v) for v in args.vx_range.split(",")))
+    if args.slow_frac > 0:
+        kw.update(slow_frac=args.slow_frac)
+    if args.stand_prob is not None:
+        kw.update(stand_prob=args.stand_prob)
+    if args.view > 0:
+        kw.update(keep_meshes=True)
     if args.w_place > 0:
         kw.update(w_place=args.w_place)
     if termination != "legacy":
@@ -392,6 +425,21 @@ def main():
                        cadence_jitter=args.cadence_jitter,
                        push_vel=args.push_vel, push_prob=args.push_prob,
                        height_source=None if args.perceive else height_source, **kw)
+    if args.view > 0:
+        # Every env step (the rollout's, the sanity check's, the evals') draws a frame; closing the window stops it.
+        from spot_train_view import TrainView
+        view = TrainView(env, n=args.view, shots=args.view_shots or None)
+        env_step = env.step
+
+        view_tick = [0]
+
+        def step_and_draw(a):
+            out = env_step(a)
+            view_tick[0] += 1
+            if view_tick[0] % max(1, args.view_every) == 0:
+                view.frame()
+            return out
+        env.step = step_and_draw
     if args.course:
         fam = env._cc.cpu().numpy()
         print("course lanes: " + ", ".join(f"{n} {int((fam == c).sum())}" for c, n in enumerate(sc.FAMILIES))
@@ -470,6 +518,9 @@ def main():
                     "course_values": ({"rough": list(env._course.rough_amps), "cross": list(env._course.cross_degs),
                                        "hills": list(env._course.hill_degs)} if args.course else None),
                     "cmd_switch": args.cmd_switch, "reset_noise": args.reset_noise,
+                    "vx_range": [env._vx_lo, env._vx_hi], "slow_frac": args.slow_frac,
+                    "stand_prob": env._stand_prob, "w_stand_vel": args.w_stand_vel,
+                    "stand_grace": args.stand_grace, "stand_yaw_w": args.stand_yaw_w,
                     "reset_nohold_frac": args.reset_nohold_frac if reset_noise is not None else None,
                     **env.jump_config()},
               aux_loss=aux)
