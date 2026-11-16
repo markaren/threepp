@@ -11,3 +11,7 @@
 # checkouts. Marking them binary (= -text -diff) keeps the checked-out bytes
 # byte-identical to the committed blob.
 *.ppm binary
+
+# vcpkg applies port patches with git apply against the LF source tarball, so a
+# patch checked out with CRLF line endings no longer applies.
+*.patch text eol=lf

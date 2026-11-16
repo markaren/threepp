@@ -85,6 +85,18 @@
         "THREEPP_BUILD_TESTS": "OFF"
       }
     },
+    {
+      "name": "wasm-physx",
+      "inherits": "wasm",
+      "displayName": "Emscripten / WebGL2 + PhysX",
+      "description": "As 'wasm', with PhysX from vcpkg (the physx-wasm overlay port in cmake/vcpkg-ports). Needs an activated emsdk and VCPKG_ROOT set.",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+        "VCPKG_TARGET_TRIPLET": "wasm32-emscripten",
+        "VCPKG_MANIFEST_FEATURES": "physx"
+      }
+    },
 
     {
       "name": "ci-base",
@@ -269,6 +281,11 @@
     {
       "name": "wasm",
       "configurePreset": "wasm",
+      "configuration": "Release"
+    },
+    {
+      "name": "wasm-physx",
+      "configurePreset": "wasm-physx",
       "configuration": "Release"
     },
 

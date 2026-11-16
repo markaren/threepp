@@ -1,0 +1,129 @@
+diff --git a/physx/include/foundation/PxHash.h b/physx/include/foundation/PxHash.h
+index 7d1700d..7d026e5 100644
+--- a/physx/include/foundation/PxHash.h
++++ b/physx/include/foundation/PxHash.h
+@@ -86,8 +86,8 @@ PX_FORCE_INLINE uint32_t PxComputeHash(const uint64_t key)
+ 	return uint32_t(UINT32_MAX & k);
+ }
+ 
+-#if PX_APPLE_FAMILY
+-// hash for size_t, to make gcc happy
++#if PX_APPLE_FAMILY || PX_EMSCRIPTEN
++// hash for size_t, to make gcc happy (on wasm32 size_t is unsigned long, distinct from uint32_t)
+ PX_INLINE uint32_t PxComputeHash(const size_t key)
+ {
+ #if PX_P64_FAMILY
+diff --git a/physx/include/foundation/PxMath.h b/physx/include/foundation/PxMath.h
+index e6088be..2562277 100644
+--- a/physx/include/foundation/PxMath.h
++++ b/physx/include/foundation/PxMath.h
+@@ -42,7 +42,7 @@
+ #pragma warning(pop)
+ #endif
+ 
+-#if (PX_LINUX_FAMILY && !PX_ARM_FAMILY)
++#if (PX_LINUX_FAMILY && !PX_ARM_FAMILY && !PX_EMSCRIPTEN)
+ // Force linking against nothing newer than glibc v2.17 to remain compatible with platforms with older glibc versions
+ __asm__(".symver expf,expf@GLIBC_2.2.5");
+ __asm__(".symver powf,powf@GLIBC_2.2.5");
+diff --git a/physx/source/compiler/cmake/linux/CMakeLists.txt b/physx/source/compiler/cmake/linux/CMakeLists.txt
+index ba40765..49dee74 100644
+--- a/physx/source/compiler/cmake/linux/CMakeLists.txt
++++ b/physx/source/compiler/cmake/linux/CMakeLists.txt
+@@ -119,7 +119,14 @@ ENDIF()
+ 
+ SET(COMMON_CXX_FLAGS "-std=c++11 -fno-rtti -fno-exceptions -ffunction-sections -fdata-sections -fvisibility=hidden ${AARCH64_FLAGS}")
+ 
+-IF ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
++IF (EMSCRIPTEN)
++	# Emscripten reuses the linux platform files. Its clang is newer than the
++	# warning list above was written for, so -Weverything -Werror stops the
++	# build, and wasm has no floating-point exception support for maytrap.
++	# The broadphase uses SSE intrinsics without a scalar fallback, so SSE2 is
++	# compiled to wasm SIMD (PX_SSE2 then follows from __SSE2__).
++	SET(PHYSX_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMMON_CXX_FLAGS} -fstrict-aliasing -msimd128 -msse2 -w" CACHE INTERNAL "PhysX CXX")
++ELSEIF ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+ 	IF ("${CMAKE_CXX_COMPILER_VERSION}" VERSION_LESS "10.0.0")
+ 		SET(PHYSX_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMMON_CXX_FLAGS} -fstrict-aliasing ${CLANG_WARNINGS}" CACHE INTERNAL "PhysX CXX")
+ 	ELSE()
+diff --git a/physx/source/foundation/FdTempAllocator.cpp b/physx/source/foundation/FdTempAllocator.cpp
+index 119b085..033d766 100644
+--- a/physx/source/foundation/FdTempAllocator.cpp
++++ b/physx/source/foundation/FdTempAllocator.cpp
+@@ -64,7 +64,7 @@ void* PxTempAllocator::allocate(size_t size, const char* filename, PxI32 line)
+ 	if(!size)
+ 		return 0;
+ 
+-	PxU32 index = PxMax(PxHighestSetBit(PxU32(size) + sizeof(Chunk) - 1), sMinIndex);
++	PxU32 index = PxMax(PxHighestSetBit(PxU32(PxU32(size) + sizeof(Chunk) - 1)), sMinIndex);
+ 
+ 	Chunk* chunk = 0;
+ 	if(index < sMaxIndex)
+diff --git a/physx/source/foundation/unix/FdUnixMutex.cpp b/physx/source/foundation/unix/FdUnixMutex.cpp
+index 40ce635..4f0f5ad 100644
+--- a/physx/source/foundation/unix/FdUnixMutex.cpp
++++ b/physx/source/foundation/unix/FdUnixMutex.cpp
+@@ -93,7 +93,10 @@ PxMutexImpl::PxMutexImpl()
+ 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+ #if PX_LINUX
+ 	pthread_mutexattr_setprotocol(&attr, gMutexProtocol);
++#if !PX_EMSCRIPTEN
++	// Emscripten's libc does not provide this one
+ 	pthread_mutexattr_setprioceiling(&attr, 0);
++#endif
+ #endif
+ 	pthread_mutex_init(&getMutex(this)->lock, &attr);
+ 	pthread_mutexattr_destroy(&attr);
+diff --git a/physx/source/foundation/unix/FdUnixThread.cpp b/physx/source/foundation/unix/FdUnixThread.cpp
+index 7b72e4a..a14f6dd 100644
+--- a/physx/source/foundation/unix/FdUnixThread.cpp
++++ b/physx/source/foundation/unix/FdUnixThread.cpp
+@@ -269,6 +269,8 @@ void PxThreadImpl::yieldProcessor()
+ {
+ #if (PX_ARM || PX_A64)
+ 	__asm__ __volatile__("yield");
++#elif PX_EMSCRIPTEN
++	// wasm has no spin-wait hint instruction
+ #else
+ 	__asm__ __volatile__("pause");
+ #endif
+diff --git a/physx/source/lowleveldynamics/include/DyIslandManager.h b/physx/source/lowleveldynamics/include/DyIslandManager.h
+index 567dc0e..99f9e49 100644
+--- a/physx/source/lowleveldynamics/include/DyIslandManager.h
++++ b/physx/source/lowleveldynamics/include/DyIslandManager.h
+@@ -40,11 +40,9 @@ namespace physx
+ 	namespace Dy
+ 	{
+ 		class FeatherstoneArticulation;
+-#if PX_SUPPORT_GPU_PHYSX
+ 		class DeformableSurface;
+ 		class DeformableVolume;
+ 		class ParticleSystem;
+-#endif
+ 	}
+ 
+ 	template <typename T>
+diff --git a/physx/source/physx/src/NpPhysics.cpp b/physx/source/physx/src/NpPhysics.cpp
+index 5adeb78..970a8bd 100644
+--- a/physx/source/physx/src/NpPhysics.cpp
++++ b/physx/source/physx/src/NpPhysics.cpp
+@@ -770,7 +770,7 @@ PxU32 NpPhysics::getDeformableSurfaceMaterials(PxDeformableSurfaceMaterial** use
+ 
+ IMPLEMENT_INTERNAL_MATERIAL_FUNCTIONS(NpDeformableSurfaceMaterial, mMasterDeformableSurfaceMaterialManager, "PxPhysics::createDeformableSurfaceMaterial: limit of 64K materials reached.")
+ #else
+-PxDeformableSurfaceMaterial* NpPhysics::createDeformableSurfaceMaterial(PxReal, PxReal, PxReal, PxReal, PxReal) { return NULL; }
++PxDeformableSurfaceMaterial* NpPhysics::createDeformableSurfaceMaterial(PxReal, PxReal, PxReal, PxReal, PxReal, PxReal, PxReal) { return NULL; }
+ PxU32 NpPhysics::getNbDeformableSurfaceMaterials() const { return 0; }
+ PxU32 NpPhysics::getDeformableSurfaceMaterials(PxDeformableSurfaceMaterial**, PxU32, PxU32) const { return 0; }
+ #endif
+@@ -851,10 +851,6 @@ PxDeformableVolumeMaterial* NpPhysics::createDeformableVolumeMaterial(PxReal, Px
+ 	}*/
+ 
+ 	//IMPLEMENT_INTERNAL_MATERIAL_FUNCTIONS(NpDeformableSurfaceMaterial, mMasterDeformableSurfaceMaterialManager, "PxPhysics::createDeformableSurfaceMaterial: limit of 64K materials reached.")
+-#else
+-	PxDeformableSurfaceMaterial* NpPhysics::createDeformableSurfaceMaterial(PxReal, PxReal, PxReal, PxReal, PxReal) { return NULL;	}
+-	PxU32 NpPhysics::getNbDeformableSurfaceMaterials() const	{ return 0;		}
+-	PxU32 NpPhysics::getDeformableSurfaceMaterials(PxDeformableSurfaceMaterial**, PxU32, PxU32) const	{ return 0;		}
+ #endif
+ 
+ ///////////////////////////////////////////////////////////////////////////////

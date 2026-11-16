@@ -45,9 +45,10 @@ function(threepp_fix_physx_static_link_order)
         return()
     endif ()
 
-    # Only single-pass linkers need this. MSVC and Apple ld resolve across
-    # all inputs; MinGW would need it but the port does not support MinGW.
-    if (MSVC OR APPLE)
+    # Only single-pass linkers need this. MSVC, Apple ld and wasm-ld (an lld)
+    # resolve across all inputs; MinGW would need it but the port does not
+    # support MinGW.
+    if (MSVC OR APPLE OR EMSCRIPTEN)
         return()
     endif ()
 
