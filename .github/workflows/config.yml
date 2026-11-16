@@ -288,12 +288,12 @@ jobs:
   # in the `linux` job above guards against.
   #
   # Under xvfb, not display-free. A headless canvas with no DISPLAY selects GLFW's
-  # Null platform and then REQUIRES VK_EXT_headless_surface; with a display it
-  # falls back to a hidden-window surface if the ICD lacks the extension. Running
-  # under Xvfb therefore works either way, and lavapipe presenting to Xvfb is
-  # unproblematic — it is a software rasteriser, so there is no GPU/X-server
-  # mismatch of the kind that afflicts a real driver. (The display-free path
-  # itself is still uncovered; it needs an ICD with the extension.)
+  # Null platform and then uses VK_EXT_headless_surface, or no surface at all
+  # if the ICD lacks the extension; with a display it falls back to a
+  # hidden-window surface instead. Running under Xvfb therefore works either
+  # way, and lavapipe presenting to Xvfb is unproblematic — it is a software
+  # rasteriser, so there is no GPU/X-server mismatch of the kind that afflicts
+  # a real driver. (The display-free paths are not covered by this job.)
   linux-vulkan-lavapipe:
 
     runs-on: ubuntu-24.04

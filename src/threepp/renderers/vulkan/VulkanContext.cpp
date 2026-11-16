@@ -251,10 +251,12 @@ namespace threepp::vulkan {
         // window behind it, so no display server is needed — the requirement
         // that actually matters on cloud GPU instances, where a window surface
         // either can't be created at all (no X server) or lands on an X server
-        // the GPU cannot present to (Xvfb). Supported by NVIDIA, Mesa and the
-        // Khronos loader; when an ICD lacks it, fall back to the hidden-window
-        // surface where a window system exists (today's headless behaviour),
-        // and fail with a direct message where none does (GLFW Null platform).
+        // the GPU cannot present to (Xvfb). Mesa has it, NVIDIA's drivers do
+        // not; when an ICD lacks it, fall back to the hidden-window
+        // surface where a window system exists. Where none does (GLFW Null
+        // platform: a compute node with NVIDIA's Linux driver, which has no
+        // VK_EXT_headless_surface), run with no surface at all: the offscreen
+        // image ring below never needed one.
         bool hiddenWindowFallback = false;
         if (preferHeadlessSurface) {
 #ifdef GLFW_PLATFORM// 3.4+
@@ -276,10 +278,11 @@ namespace threepp::vulkan {
                 THREEPP_LOG(kLogDevice, Debug) << "VK_EXT_headless_surface is not available; "
                                                   "the headless canvas renders into offscreen images";
             } else {
-                throw std::runtime_error(
-                        "[VulkanContext] headless mode needs VK_EXT_headless_surface, "
-                        "which this Vulkan driver does not expose, and no window system "
-                        "is available to create a window surface instead");
+                offscreen_   = true;
+                surfaceless_ = true;
+                THREEPP_LOG(kLogDevice, Debug) << "VK_EXT_headless_surface is not available and there is no "
+                                                  "window system; the headless canvas renders into offscreen "
+                                                  "images with no surface";
             }
         }
 
@@ -717,7 +720,10 @@ namespace threepp::vulkan {
         app.apiVersion = VK_API_VERSION_1_3;
 
         std::vector<const char*> extensions;
-        if (headlessSurface_) {
+        if (surfaceless_) {
+            // No surface is created, so no surface extension is named. GLFW's
+            // Null platform has none to report in any case.
+        } else if (headlessSurface_) {
             // No window system involved: name the surface machinery directly
             // instead of asking GLFW, whose Null platform cannot create
             // surfaces and reports no extensions at all.
@@ -784,6 +790,10 @@ namespace threepp::vulkan {
     }
 
     void VulkanContext::createSurface() {
+        if (surfaceless_) {
+            THREEPP_LOG(kLogDevice, Debug) << "surface: none (offscreen images)";
+            return;
+        }
         if (headlessSurface_) {
             // Loaded via vkGetInstanceProcAddr — extension entry points are
             // not exported by every loader.
@@ -827,8 +837,12 @@ namespace threepp::vulkan {
             vkGetPhysicalDeviceProperties(d, &props);
 
             const auto exts = deviceExtensions(d);
-            for (const auto* base : kBaseDeviceExtensions) {
-                if (!hasExtension(exts, base)) return -1;
+            // The swapchain extension is for presenting to a surface; without
+            // one it is neither required nor enabled (see createLogicalDevice).
+            if (!surfaceless_) {
+                for (const auto* base : kBaseDeviceExtensions) {
+                    if (!hasExtension(exts, base)) return -1;
+                }
             }
             int score = 0;
             if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) score += 1000;
@@ -957,7 +971,9 @@ namespace threepp::vulkan {
                 queueFamilies_.compute = i;
             }
             VkBool32 presentSupport = VK_FALSE;
-            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice_, i, surface_, &presentSupport);
+            if (!surfaceless_) {
+                vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice_, i, surface_, &presentSupport);
+            }
             if (presentSupport && queueFamilies_.present == UINT32_MAX) {
                 queueFamilies_.present = i;
             }
@@ -967,7 +983,9 @@ namespace threepp::vulkan {
         // extension leaves that implementation-defined. Presenting there is a
         // no-op regardless, so route it through the graphics queue when the
         // driver declined to name a family.
-        if (headlessSurface_ && queueFamilies_.present == UINT32_MAX) {
+        // With no surface nothing is presented at all; the present queue is
+        // the graphics queue under another name.
+        if ((headlessSurface_ || surfaceless_) && queueFamilies_.present == UINT32_MAX) {
             queueFamilies_.present = queueFamilies_.graphics;
         }
         if (queueFamilies_.graphics == UINT32_MAX || queueFamilies_.present == UINT32_MAX) {
@@ -1016,7 +1034,10 @@ namespace threepp::vulkan {
             qcis.push_back(ci);
         }
 
-        std::vector<const char*> extensions(kBaseDeviceExtensions.begin(), kBaseDeviceExtensions.end());
+        // VK_KHR_swapchain depends on VK_KHR_surface, which a surface-free
+        // instance does not enable.
+        std::vector<const char*> extensions;
+        if (!surfaceless_) extensions.assign(kBaseDeviceExtensions.begin(), kBaseDeviceExtensions.end());
         if (rayTracingEnabled_) {
             extensions.insert(extensions.end(), kRayTracingExtensions.begin(), kRayTracingExtensions.end());
             if (rayQuerySupported_) {

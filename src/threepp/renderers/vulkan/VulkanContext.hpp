@@ -155,7 +155,9 @@ namespace threepp::vulkan {
         // a hidden window, whose size the window system clamps to the desktop
         // (3840x2160 came back 3840x1181, silently). No surface image is ever
         // acquired or presented: presentSuppressed() is always true, image i
-        // belongs to frame slot i.
+        // belongs to frame slot i. Where there is no window system either
+        // (GLFW Null platform with NVIDIA's Linux driver) the same ring runs
+        // with no VkSurfaceKHR and no swapchain extension: surface() is null.
         bool offscreen() const { return offscreen_; }
         // The layout a finished frame's image rests in between frames:
         // PRESENT_SRC for a swapchain image, GENERAL for an offscreen one
@@ -293,6 +295,7 @@ namespace threepp::vulkan {
         bool headlessSurface_ = false;// VK_EXT_headless_surface instead of a window surface
         bool presentSuppressed_ = false;// opt-in headless mode: acquire once per slot, never present
         bool offscreen_ = false;        // headless without VK_EXT_headless_surface: own image ring
+        bool surfaceless_ = false;      // offscreen with no window system: no surface, no swapchain extension
         VkExtent2D requestedExtent_{0, 0};// the canvas's requested size (headless sizing)
         std::vector<VmaAllocation> offscreenAllocs_;// the offscreen ring's memory, by image
         bool rayTracingEnabled_ = false;
