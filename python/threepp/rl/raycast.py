@@ -193,6 +193,7 @@ class TerrainRays:
         self.bx_t = torch.tensor(bx, device=self.device)
         self.up_t = torch.tensor(upv, device=self.device)
         self.up = up
+        self._streams = {}
         self.miss = float(miss)
 
         verts = np.ascontiguousarray(verts, dtype=np.float32)
@@ -207,6 +208,17 @@ class TerrainRays:
         self.mesh = wp.Mesh(points=self._points,
                             indices=wp.array(faces.reshape(-1), dtype=wp.int32,
                                              device=self._wp_device))
+
+    def _stream(self):
+        """torch's current stream as a Warp stream, so every launch is ordered with the torch work around it
+        and is recorded when that stream is capturing a CUDA graph (Warp's own stream is neither)."""
+        if self.device.type != "cuda":
+            return None
+        ts = torch.cuda.current_stream(self.device)
+        ws = self._streams.get(ts.cuda_stream)
+        if ws is None:
+            ws = self._streams[ts.cuda_stream] = self._wp.stream_from_torch(ts)
+        return ws
 
     @classmethod
     def from_objects(cls, objects, **kwargs):
@@ -243,7 +255,7 @@ class TerrainRays:
                           self.h0 if h0 is None else float(h0),
                           self.far if far is None else float(far),
                           self.miss if miss is None else float(miss)],
-                  outputs=[wp.from_torch(out)], device=self._wp_device)
+                  outputs=[wp.from_torch(out)], device=self._wp_device, stream=self._stream())
         return out.view(a.shape)
 
     def visible(self, root, quat, a, b, h, *, mount, mount_rot, tan_x, tan_y,
@@ -277,7 +289,7 @@ class TerrainRays:
                           wp.from_torch(h.contiguous().float()),
                           self._ax, self._bx, self._up,
                           float(tan_x), float(tan_y), float(near), float(far), float(bias)],
-                  outputs=[wp.from_torch(out)], device=self._wp_device)
+                  outputs=[wp.from_torch(out)], device=self._wp_device, stream=self._stream())
         return out
 
     def refit(self, verts):

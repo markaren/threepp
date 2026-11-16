@@ -1042,6 +1042,12 @@ namespace threepp_py {
                      "After it returns, every bound mesh's transform reflects the new state. "
                      "Releases the GIL while stepping.")
                 .def("set_gravity", &PhysxWorld::setGravity, py::arg("gravity"))
+                .def_property("environment_id", &PhysxWorld::environmentId, &PhysxWorld::setEnvironmentId,
+                              "Environment scope (None or an int below 1 << 24): every body and articulation "
+                              "added while it is set gets this PhysX environment ID, and bodies in different "
+                              "environments never collide (filtered in the GPU broadphase). Bodies added with "
+                              "None, e.g. terrain built first, collide with every environment. Needs "
+                              "gpu_dynamics or direct_gpu. GpuSim sets it to each robot's index.")
                 .def("add", [](PhysxWorld& w, Mesh& mesh, float density, const py::object& material) {
                          ::physx::PxMaterial* mat = material.is_none() ? nullptr : material.cast<PhysxMaterial*>()->raw();
                          return RigidBody(w.add(mesh, density, mat));

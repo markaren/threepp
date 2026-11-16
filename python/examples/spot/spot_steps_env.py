@@ -255,7 +255,7 @@ class SpotStepsEnv(VecTask):
                  reset_noise=None, reset_nohold_frac=0.3, jump=None, jump_obs=False, jump_lanes=None,
                  w_jump_imit=2.0, qd_max=None, self_collision=False, blowup_guard=False,
                  vx_range=None, slow_frac=0.0, stand_prob=None, w_stand_vel=0.0, keep_meshes=False,
-                 stand_grace=0.0, stand_yaw_w=0.3):
+                 stand_grace=0.0, stand_yaw_w=0.3, lane_share=1):
         """Everything after push_prob is opt-in, and its default reproduces the training world:
 
         risers         per-level riser ladder (None = RISERS). More levels also lengthen the ground
@@ -380,6 +380,11 @@ class SpotStepsEnv(VecTask):
         stand_yaw_w    the yaw-rate weight inside the w_stand_vel term (rad/s against m/s).
         keep_meshes    keep the terrain's threepp meshes as self.terrain_meshes after the raycast BVH is built
                        (needs height_source='raycast'), for a viewer (spot_train_view.py). Off: they are dropped.
+        lane_share     robots per lane: robot i walks lane i // lane_share, so the world builds ceil(K / lane_share)
+                       lanes. Robots never collide with one another (GpuSim gives each its own PhysX environment), so
+                       they can overlap; each still has its own level, spawn and commands. Every per-lane input
+                       (lane_family, lane_types, course families) must agree within a lane. Not with slope lanes or
+                       single_band, which are laid out per robot. self.lane_of [K] is each robot's lane.
         """
         self._vx_lo, self._vx_hi = (VX_LO, VX_HI) if vx_range is None else (float(vx_range[0]), float(vx_range[1]))
         self._slow_frac = float(slow_frac)
@@ -387,13 +392,21 @@ class SpotStepsEnv(VecTask):
         self.w_stand_vel = float(w_stand_vel)
         self.stand_grace_ticks = int(round(float(stand_grace) / DT))
         self.stand_yaw_w = float(stand_yaw_w)
+        self.lane_share = share = int(lane_share)
+        if share < 1:
+            raise ValueError(f"lane_share must be >= 1, got {lane_share}")
+        self.n_lanes = n_lanes = -(-num_envs // share)
+        lane_of = np.arange(num_envs) // share              # each robot's lane: contiguous runs of `share` robots
+        first = np.arange(n_lanes) * share                  # one robot per lane: the builders read its lane's values
+        if share > 1 and single_band:
+            raise ValueError("single_band builds one band per robot's level, so it cannot share lanes (lane_share=1)")
         course_ladder = course_ladder or ("hard" if course else "pilot")
         if course_ladder not in sc.LADDERS:
             raise ValueError(f"course_ladder must be one of {list(sc.LADDERS)}, got {course_ladder!r}")
         if course:
             if lane_family is not None or lane_types is not None or flat_only:
                 raise ValueError("course=True lays out its own lanes: pass none of lane_family, lane_types, flat_only")
-            lane_family = sc.lane_families(num_envs, course_shares)
+            lane_family = [sc.lane_families(n_lanes, course_shares)[l] for l in lane_of]
             if height_source is None:
                 height_source = "raycast"
             if risers is None and sc.LADDERS[course_ladder]["risers"] is not None:
@@ -439,17 +452,25 @@ class SpotStepsEnv(VecTask):
                 if np.isin(cc, sc.IK_SPAWN).any():
                     if height_source != "raycast":
                         raise ValueError("hills / cross_bands / rough lanes need height_source='raycast'")
-                    if perceive or graph:
-                        raise ValueError("course terrain lanes need the eager raycast: no perceive, no graph")
+                    if perceive:
+                        raise ValueError("course terrain lanes are not validated with perceive=True")
         elif lane_types is not None:
             if flat_only:
                 raise ValueError("pass lane_types or flat_only, not both")
             is_stairs_np = _per_env(lane_types, num_envs, bool, "lane_types")
         else:
             rng = np.random.default_rng(seed)
-            is_stairs_np = np.ones(num_envs, bool) if not flat_only else np.zeros(num_envs, bool)
+            is_stairs_np = np.ones(n_lanes, bool) if not flat_only else np.zeros(n_lanes, bool)
             if not flat_only:
-                is_stairs_np[rng.random(num_envs) < FLAT_FRAC] = False     # FLAT lanes -> steering replay
+                is_stairs_np[rng.random(n_lanes) < FLAT_FRAC] = False      # FLAT lanes -> steering replay
+            is_stairs_np = is_stairs_np[lane_of]
+        if share > 1:
+            if slope_code is not None:
+                raise ValueError("slope lanes are laid out per robot: lane_share must be 1 with them")
+            for name, arr in (("lane types", is_stairs_np), ("course families", course_code)):
+                if arr is not None and not (arr[first][lane_of] == arr).all():
+                    raise ValueError(f"lane_share={share}: the {name} differ between robots on one lane")
+        self.lane_of = lane_of
         # The terrain ladder is per instance: everything below reads these, never the module constants.
         self.riser_list = tuple(float(r) for r in (RISERS if risers is None else risers))
         self.n_levels = len(self.riser_list)
@@ -494,7 +515,7 @@ class SpotStepsEnv(VecTask):
         # longer riser ladder does (hills bands are 7.9 m, so the top one ends 15 m past the stair strip).
         self._course = course_lanes = None
         if course_code is not None and np.isin(course_code, sc.IK_SPAWN).any():
-            course_lanes = self._course = sc.CourseLanes(course_code, SPACING, bands=bands, seed=seed,
+            course_lanes = self._course = sc.CourseLanes(course_code[first], SPACING, bands=bands, seed=seed,
                                                          rough_backend=rough_backend, ladder=course_ladder)
             x_hi = max(self.ground_extent[1], course_lanes.spawn_x_max() + STEPS_EPISODE_S * self._vx_hi + 2.0)
             x_lo = min(self.ground_extent[0], -10.0)
@@ -519,7 +540,7 @@ class SpotStepsEnv(VecTask):
                     kw["foot_material"] = foot_mats[mu]
                 if pay_np is not None and pay_np[i] != 0.0:
                     kw["payload_kg"] = float(pay_np[i])
-                self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, i * SPACING),
+                self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, float(lane_of[i]) * SPACING),
                                           gains=STIFF_GAINS, drive_limits_are_forces=dlf, self_collision=sc_on, **kw)
         # Under "raycast" the builders write into a CollectedWorld, which forwards every call
         # to the real world and keeps the Mesh it was handed — so the BVH is built from the
@@ -532,15 +553,15 @@ class SpotStepsEnv(VecTask):
                 world = CollectedWorld(world)
                 collector.append(world)
             if terrain_material is None:
-                _flat_ground(world, num_envs, SPACING, length=ground_len, x_center=ground_cx)
+                _flat_ground(world, n_lanes, SPACING, length=ground_len, x_center=ground_cx)
                 mat = None
             else:
                 mat = world.create_material(*terrain_material)
                 terrain_mat.append(mat)
-                g = tp.Mesh(tp.BoxGeometry(ground_len, SPACING * num_envs + 20, 1.0), tp.MeshStandardMaterial())
-                g.position.set(float(ground_cx), SPACING * (num_envs - 1) * 0.5, -0.5)    # = _flat_ground's box
+                g = tp.Mesh(tp.BoxGeometry(ground_len, SPACING * n_lanes + 20, 1.0), tp.MeshStandardMaterial())
+                g.position.set(float(ground_cx), SPACING * (n_lanes - 1) * 0.5, -0.5)     # = _flat_ground's box
                 world.add_static(g, mat)
-            _add_steps(world, num_envs, SPACING, is_stairs_np, risers_np, bands=bands, material=mat)
+            _add_steps(world, n_lanes, SPACING, is_stairs_np[first], risers_np, bands=bands, material=mat)
             if slope_lanes is not None:
                 slope_lanes.build(world, slope_material)    # materials stay alive on slope_lanes
             if course_lanes is not None:
@@ -578,8 +599,8 @@ class SpotStepsEnv(VecTask):
             bl = np.where(course_code == sc.STAIRS, BAND_LEN, 0.0)
             fd = np.full(num_envs, CLEAR_DIST)                             # flat lanes: the virtual tent, as today
             if self._course is not None:
-                bl = np.where(np.isin(course_code, sc.IK_SPAWN), self._course.band_len(), bl)
-                fd = np.where(np.isin(course_code, sc.IK_SPAWN), self._course.feature_dist(), fd)
+                bl = np.where(np.isin(course_code, sc.IK_SPAWN), self._course.band_len()[lane_of], bl)
+                fd = np.where(np.isin(course_code, sc.IK_SPAWN), self._course.feature_dist()[lane_of], fd)
             self._band_len_k = torch.from_numpy(bl).float().to(dev)
             self._clear_k = torch.from_numpy(fd).float().to(dev)          # [K] per-lane 'crossed' distance
             self._ep_cmd = self.env_state(())                             # commanded forward distance this episode
@@ -599,7 +620,7 @@ class SpotStepsEnv(VecTask):
         _scratch = os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt")
         self.anchor_ac, self.anchor_norm, _ = load_policy(_scratch, device=dev)
         self.anchor_ac.eval()
-        self.lane_y = torch.arange(num_envs, device=dev, dtype=torch.float32) * SPACING
+        self.lane_y = torch.from_numpy(lane_of).to(dev, torch.float32) * SPACING   # the y of each robot's lane
         pos = torch.zeros(num_envs, 3, device=dev); pos[:, 1] = self.lane_y; pos[:, 2] = SPAWN_Z
         self.base_pose = GpuSim.make_root_pose(pos, quat=(0.0, 0.0, 0.0, 1.0), device=dev)
         # CURRICULUM: per-env difficulty band — persists ACROSS episodes, so NOT env_state
@@ -1101,6 +1122,11 @@ class SpotStepsEnv(VecTask):
         settle, so the policy is also handed the held joints as its last action, which is what a full reset's settle
         leaves behind. Writes pose in place; returns the joint preset (add order). Other rows keep their values."""
         ik = self._ik_row[idx]
+        if not bool(ik.any()):
+            # No hills / cross / rough row in this reset, which is most partial resets (a robot or two, 70% of
+            # them on other families): every write below would put back what it read, and the stance fit under
+            # them is half the reset's kernels (6 of 12 ms at K = 4096, 2026-11-17). Draws no random numbers.
+            return q0
         sp = ss.spawn_pose(self.rays.heights, sx, self.lane_y[idx])      # fitted plane: rough ground has no closed form
         pose.copy_(torch.where(ik[:, None], torch.cat([sp.quat, sp.pos], dim=1).to(pose.dtype), pose))
         q0 = torch.where(ik[:, None], sp.joint_q[:, self.a2i].to(q0.dtype), q0)

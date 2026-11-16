@@ -402,11 +402,15 @@ class VecTask:
         actually keeps a task safe is that everything in the hot region is tensor ops on buffers
         that are written through, never rebound.
 
-        Raises on the first divergence; returns the worst difference seen.
+        Raises on the first divergence; returns the worst difference seen. The per-term reward log
+        (stats_line) is left as it was: these steps are a check, not training.
         """
         if not self.graph:
             raise RuntimeError("verify_graph: this env was not built with graph=True")
         a = actions if actions is not None else torch.zeros(self.K, self.act_dim, device=self.device)
+        log = (None if self._ep_term is None else
+               ({k: v.clone() for k, v in self._ep_term.items()}, {k: v.clone() for k, v in self._done_sum.items()}))
+        steps0 = self._done_steps.clone()
         worst = 0.0
         for i in range(steps):
             obs = self.step(a)[0].clone()
@@ -416,6 +420,14 @@ class VecTask:
                 raise AssertionError(
                     f"verify_graph: the replayed observation is {d:.3e} away from recomputing it at "
                     f"step {i} — the capture froze something this env varies per step")
+        if log is None:
+            self._ep_term = self._done_sum = None
+        else:
+            for k, v in log[0].items():
+                self._ep_term[k].copy_(v)
+            for k, v in log[1].items():
+                self._done_sum[k].copy_(v)
+        self._done_steps.copy_(steps0)
         return worst
 
     def step(self, actions):

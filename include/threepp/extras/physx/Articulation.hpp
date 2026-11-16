@@ -429,8 +429,15 @@ namespace threepp {
             return out;
         }
 
+        // Adds the articulation to the scene, in the world's environment scope
+        // (PhysxWorld::setEnvironmentId): every link gets that environment ID.
         void finalize() {
             if (finalized_) return;
+            if (const auto env = world_.environmentId()) {
+                std::vector<::physx::PxArticulationLink*> links(art_->getNbLinks());
+                art_->getLinks(links.data(), static_cast<::physx::PxU32>(links.size()));
+                for (auto* l : links) l->setEnvironmentID(*env);
+            }
             world_.scene().addArticulation(*art_);
             finalized_ = true;
         }

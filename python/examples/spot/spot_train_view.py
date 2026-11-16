@@ -1,10 +1,10 @@
 """A live window onto a SpotStepsEnv while it trains: N of its robots, each on its own lane's terrain, drawn as the real
 Spot (the URDF visuals) from the GPU sim's link poses every control tick.
 
-The selected lanes sit thousands of metres apart in the training world (one lane per env, SPACING apart in y), so the
-view lays them side by side: slot s shows lane i shifted by s * SPACING - i * SPACING in y, terrain and robot alike.
-Lanes are picked across the course families, evenly within each family's block, so the window shows every kind of
-terrain at once.
+The selected lanes sit hundreds of metres apart in the training world (SPACING apart in y), so the view lays them side
+by side: slot s shows lane i shifted by s * SPACING - i * SPACING in y, terrain and robots alike. Lanes are picked across
+the course families, evenly within each family's block, so the window shows every kind of terrain at once. With
+lane_share > 1 every robot on a shown lane is drawn (they overlap freely: robots never collide), N robots in all.
 
 Used by train_spot_steps.py --view N, which builds the env with keep_meshes=True and calls frame() after every env
 step. The window updates at the training rate (a few ticks of simulated time per second of wall time at K = 2048), and
@@ -71,9 +71,14 @@ class TrainView:
         fam = getattr(env, "_fam_k", None)
         codes = fam.cpu().numpy() if fam is not None else np.zeros(env.K, np.int64)
         self.env = env
-        self.lanes = pick_lanes(codes, min(n, env.K))
+        share = int(getattr(env, "lane_share", 1))
+        lane_of = np.asarray(getattr(env, "lane_of", np.arange(env.K)))
+        codes = codes[np.arange(0, env.K, share)]                     # per lane: the first robot's family
+        self.lanes = pick_lanes(codes, min(max(1, -(-n // share)), len(codes)))
         self.n = len(self.lanes)
-        self.dy = np.array([(s - i) * SPACING for s, i in enumerate(self.lanes)], np.float64)
+        slot = {lane: s for s, lane in enumerate(self.lanes)}
+        self.envs = [i for i in range(env.K) if int(lane_of[i]) in slot]    # every robot on a shown lane
+        self.dy = np.array([(slot[int(lane_of[i])] - int(lane_of[i])) * SPACING for i in self.envs], np.float64)
 
         self.canvas = tp.Canvas("Spot training (live)", width=width, height=height)
         self.renderer = tp.GLRenderer(self.canvas)       # no shadows: a map over the whole layout costs every tick
@@ -97,7 +102,7 @@ class TrainView:
                 assets = sd.fetch_assets()                   # the play scripts' cache of the BD URDF visuals
             except Exception as e:                           # noqa: BLE001 - primitives still show the gait
                 print(f"[view] no URDF visuals ({e}); drawing the colliders")
-        self._robots = [self._robot(assets) for _ in range(self.n)]
+        self._robots = [self._robot(assets) for _ in self.envs]
 
         self.camera = tp.PerspectiveCamera(45, width / height, 0.1, 1000.0)
         self.camera.up.set(0, 0, 1)
@@ -113,7 +118,8 @@ class TrainView:
         if shots:
             os.makedirs(shots, exist_ok=True)
         names = [sc.FAMILIES[int(codes[i])] for i in self.lanes]
-        print("[view] slots (left to right): " + ", ".join(f"{s}:{f}" for s, f in enumerate(names)))
+        print(f"[view] {len(self.envs)} robots on {self.n} lanes, left to right: "
+              + ", ".join(f"{s}:{f}" for s, f in enumerate(names)))
 
     def _resize(self, size):
         self.camera.aspect = size.aspect()
@@ -146,7 +152,7 @@ class TrainView:
             top = float(np.asarray(pos)[:, 2].max() * m.scale.z + m.position.z) if pos is not None and len(pos) else 0.0
             for slot in s:
                 v = tp.Mesh(m.geometry, mat(int(codes[self.lanes[slot]]), top))
-                v.position.set(float(m.position.x), y + float(self.dy[slot]), float(m.position.z))
+                v.position.set(float(m.position.x), y + (slot - self.lanes[slot]) * SPACING, float(m.position.z))
                 q = m.quaternion
                 v.quaternion.set(q.x, q.y, q.z, q.w)
                 v.scale.set(m.scale.x, m.scale.y, m.scale.z)
@@ -172,7 +178,7 @@ class TrainView:
             return False
 
     def _frame(self):
-        lp = self.env.sim.link_pose[self.lanes].cpu().numpy()        # [n, links, 7] = qx, qy, qz, qw, px, py, pz
+        lp = self.env.sim.link_pose[self.envs].cpu().numpy()         # [n, links, 7] = qx, qy, qz, qw, px, py, pz
         for s, meshes in enumerate(self._robots):
             for k, m in enumerate(meshes):
                 q = lp[s, _GPU_LINK[k]]

@@ -14,8 +14,12 @@ pre-allocated device buffers, and the torch<->PhysX sync. None of that is your p
 e.g. a CartPole/Hexapod factory. All state tensors are in canonical add-order — joint i is
 the i-th link you added — for ANY robot, so your obs/reward indices never depend on PhysX's
 internal cache ordering.
+
+Robot i is built in PhysX environment i, so robots never collide with one another and may
+overlap; what `build_world` adds collides with all of them.
 """
 import ctypes
+import os
 
 import numpy as np
 import torch
@@ -75,13 +79,26 @@ class GpuSim:
         torch.zeros(1, device=self.device)
         torch.randn(64, 64, device=self.device).sum().item()   # warm cuBLAS in this context
         torch.cuda.synchronize()
+        # PhysX collides triangle meshes on its CPU dispatcher even in a GPU scene (PhysxWorld cooks them
+        # without GPU data): 8 threads instead of PhysxWorld's default 2 took Spot's course substep from
+        # 7.7 to 5.8 ms at K = 4096, and 4, 12 and 16 were no better. Cooking the meshes for the GPU was
+        # slower than that, 7.1 ms at any thread count (2026-11-17).
         self.world = tp.PhysxWorld(gravity=tp.Vector3(*gravity), direct_gpu=True,
+                                   num_threads=min(8, os.cpu_count() or 2),
                                    cuda_context=_torch_cuda_context())
         # add shared environment geometry (ground, obstacles) BEFORE the robots/batch so it's
         # part of the GPU scene from the first step — free-base robots need a ground to stand on.
         if build_world is not None:
             build_world(self.world)
-        self.robots = [build_robot(self.world, i) for i in range(num_envs)]
+        # Each robot is built in its own PhysX environment, so robots never collide with one
+        # another (the GPU broadphase drops those pairs) while the shared world above, built
+        # with no environment, collides with all of them. Robots may therefore overlap: several
+        # can share one stretch of terrain.
+        self.robots = []
+        for i in range(num_envs):
+            self.world.environment_id = i
+            self.robots.append(build_robot(self.world, i))
+        self.world.environment_id = None
         self.batch = tp.PhysxGpuBatch(self.world, [r.art for r in self.robots])
         self.dof = self.batch.max_dofs
 

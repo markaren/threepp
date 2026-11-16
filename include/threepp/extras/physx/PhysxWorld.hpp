@@ -42,6 +42,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -1199,7 +1200,7 @@ namespace threepp {
             PxShape* shape = physics_->createShape(geom, *mat, true);
             body->attachShape(*shape);
             shape->release();
-            scene_->addActor(*body);
+            addToScene(*body);
             return body;
         }
 
@@ -1214,7 +1215,7 @@ namespace threepp {
             body->attachShape(*shape);
             shape->release();
             PxRigidBodyExt::updateMassAndInertia(*body, density);
-            scene_->addActor(*body);
+            addToScene(*body);
             return body;
         }
 
@@ -1241,7 +1242,7 @@ namespace threepp {
             body->attachShape(*shape);
             shape->release();
             PxRigidBodyExt::updateMassAndInertia(*body, density);
-            scene_->addActor(*body);
+            addToScene(*body);
             bind(mesh, *body);
             return body;
         }
@@ -1265,7 +1266,7 @@ namespace threepp {
             shape->setLocalPose(inferred.localPose);
             body->attachShape(*shape);
             shape->release();
-            scene_->addActor(*body);
+            addToScene(*body);
             return body;
         }
 
@@ -1318,7 +1319,7 @@ namespace threepp {
             // Shape retains a reference; release our local one so the mesh is freed
             // when the shape (and therefore actor) goes away.
             triMesh->release();
-            scene_->addActor(*body);
+            addToScene(*body);
             return body;
         }
 
@@ -1484,7 +1485,7 @@ namespace threepp {
             body->attachShape(*shape);
             shape->release();
             hf->release();// the shape holds its own reference
-            scene_->addActor(*body);
+            addToScene(*body);
             return body;
         }
 
@@ -1559,7 +1560,7 @@ namespace threepp {
             shape->release();
             convex->release();
             PxRigidBodyExt::updateMassAndInertia(*body, density);
-            scene_->addActor(*body);
+            addToScene(*body);
             bind(mesh, *body);
             return body;
         }
@@ -1616,7 +1617,7 @@ namespace threepp {
                 // body's inertia, not a per-piece sum that ignores the offsets.
                 PxRigidBodyExt::updateMassAndInertia(*static_cast<PxRigidDynamic*>(actor), density);
             }
-            scene_->addActor(*actor);
+            addToScene(*actor);
             return actor;
         }
 
@@ -1652,7 +1653,7 @@ namespace threepp {
                 body->attachShape(*shape);
                 shape->release();
                 PxRigidBodyExt::updateMassAndInertia(*body, density);
-                scene_->addActor(*body);
+                addToScene(*body);
                 actors.push_back(body);
             }
             bind(mesh, actors);
@@ -1671,6 +1672,32 @@ namespace threepp {
         ::physx::PxCudaContextManager* cudaContextManager() const { return cuda_; }
 
         const Settings& settings() const { return settings_; }
+
+        // Environment scope for many independent robots sharing one scene (RL swarms).
+        // Every actor and articulation this world adds while an ID is set gets that PhysX
+        // environment ID; actors with different IDs never collide, filtered inside the GPU
+        // broadphase, so they never become pairs. Actors added with no ID set (terrain built
+        // first) collide with every environment. Needs the GPU broadphase (gpu_dynamics or
+        // direct_gpu): PhysX has no environment filter on the CPU broadphase, so setting
+        // one on a CPU world throws. IDs must stay below 1 << 24.
+        void setEnvironmentId(std::optional<std::uint32_t> id) {
+            if (id) {
+                if (!settings_.enableGpuDynamics)
+                    throw std::runtime_error("PhysxWorld.environment_id: needs the GPU broadphase (gpu_dynamics or direct_gpu)");
+                if (*id >= (1u << 24))
+                    throw std::runtime_error("PhysxWorld.environment_id: must be below 1 << 24");
+            }
+            environmentId_ = id ? *id : PX_INVALID_U32;
+        }
+        [[nodiscard]] std::optional<std::uint32_t> environmentId() const {
+            if (environmentId_ == PX_INVALID_U32) return std::nullopt;
+            return environmentId_;
+        }
+        // Add an actor to the scene in the current environment scope.
+        void addToScene(::physx::PxActor& actor) {
+            if (environmentId_ != PX_INVALID_U32) actor.setEnvironmentID(environmentId_);
+            scene_->addActor(actor);
+        }
 
         // Expires when this world is destroyed. For an object that can outlive the
         // world and must not call into PhysX from its destructor once it has gone.
@@ -1859,6 +1886,7 @@ namespace threepp {
         bool extensionsInitialized_ = false;
         ::physx::PxDefaultCpuDispatcher* dispatcher_ = nullptr;
         ::physx::PxScene* scene_ = nullptr;
+        ::physx::PxU32 environmentId_ = PX_INVALID_U32;    // setEnvironmentId
         ::physx::PxMaterial* defaultMat_ = nullptr;
         // Null where THREEPP_PHYSX_GPU is 0; the GPU-only state below is absent there.
         ::physx::PxCudaContextManager* cuda_ = nullptr;

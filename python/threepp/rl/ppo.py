@@ -220,7 +220,8 @@ class PPO:
         # return normalizer (clip≈off): the critic predicts NORMALIZED returns, so value
         # clipping is meaningful regardless of reward scale. denorm() back to raw for GAE.
         self.ret_norm = RunningNorm(1, self.device, clip=1e9) if normalize_returns else None
-        self.opt = torch.optim.Adam(self.ac.parameters(), lr=lr)
+        # fused: one kernel per parameter tensor instead of a dozen; the update is 20 optimizer steps an iteration
+        self.opt = torch.optim.Adam(self.ac.parameters(), lr=lr, fused=self.device.type == "cuda")
         self.meta = {"obs_dim": self.obs_dim, "act_dim": act_dim, "hidden": list(hidden),
                      "image_shape": list(self.image_shape) if self.image_shape else None, **(meta or {})}
         # Update diagnostics of the latest iteration, kept on the device and read back only when

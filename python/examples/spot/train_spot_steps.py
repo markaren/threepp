@@ -126,7 +126,8 @@ def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, hei
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--envs", type=int, default=2048)        # ~52k stair boxes -> builds fine; 2x throughput vs 1024
+    ap.add_argument("--envs", type=int, default=None,
+                    help="robots (default 4096 with --course, 8 per lane; else 2048, one per lane)")
     ap.add_argument("--iters", type=int, default=1500)
     ap.add_argument("--horizon", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-4)
@@ -156,11 +157,12 @@ def main():
                          "of training. The anchor protects steering, so the decay HOLDS on any log "
                          "where flat tracking is under the gate. -1 = never decay (the default, and "
                          "what pins the gait to the teacher for all 1500 iterations).")
-    ap.add_argument("--graph", action="store_true",
+    ap.add_argument("--graph", action=argparse.BooleanOptionalAction, default=None,
                     help="replay the step's torch region from a CUDA graph (VecTask graph=True). "
                          "The region is launch-bound — a few hundred small kernels whose dispatch "
                          "costs far more than their execution — so this is ~1.7x on the step. "
-                         "Verified against a fresh eager observation before training starts.")
+                         "Verified against a fresh eager observation before training starts. "
+                         "Default on with --course (its step: 51.6 -> 29.7 ms at K = 4096, 2026-11-16), else off")
     ap.add_argument("--perceive", action="store_true",
                     help="train on the scan a body-mounted depth camera could actually have seen "
                          "(threepp.rl.perception): occluded and never-observed cells read flat, and "
@@ -276,6 +278,10 @@ def main():
                     help="with --stand-mode: seconds after a shove a standing env is not charged for moving (0 = off)")
     ap.add_argument("--stand-yaw-w", dest="stand_yaw_w", type=float, default=0.3,
                     help="yaw-rate weight inside --w-stand-vel's term")
+    ap.add_argument("--lane-share", dest="lane_share", type=int, default=None, metavar="N",
+                    help="robots per lane (they never collide, so they can overlap): the world builds K / N lanes. "
+                         "Default 8 with --course (4096 robots on 512 lanes: 1.6x the env steps per second of 2048 "
+                         "on 2048 lanes, measured 2026-11-16), else 1")
     ap.add_argument("--view", type=int, default=0, metavar="N",
                     help="open a window that shows N of the training robots live (spot_train_view.py); 0 = off")
     ap.add_argument("--view-every", dest="view_every", type=int, default=1, metavar="N",
@@ -322,6 +328,14 @@ def main():
                     help="with --jump, after training: this many deterministic steps on the training env; jump and fall "
                          "counters -> <out stem>_jumpeval.json")
     args = ap.parse_args()
+    # The course trains 4096 robots, 8 to a lane. 8192 (at 8 or 16 to a lane) does not: robots reset onto the raised
+    # cross and pit terrain sink into it before their contacts come up, whatever the GPU pool sizes (2026-11-16).
+    if args.envs is None:
+        args.envs = 4096 if args.course else 2048
+    if args.lane_share is None:
+        args.lane_share = 8 if args.course else 1
+    if args.graph is None:
+        args.graph = bool(args.course) and not args.perceive
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     if args.score:
@@ -349,8 +363,8 @@ def main():
         return
 
     torch.manual_seed(args.seed)
-    if args.course and (args.perceive or args.graph):
-        ap.error("--course needs the eager raycast: no --perceive, no --graph")
+    if args.course and args.perceive:
+        ap.error("--course is not validated with --perceive")
     if args.shove_ramp and args.push_vel > 0:
         ap.error("--shove-ramp and --push-vel are two shove modes; pick one")
     termination = args.termination or ("honest" if args.course else "legacy")
@@ -399,6 +413,8 @@ def main():
         kw.update(stand_prob=args.stand_prob)
     if args.view > 0:
         kw.update(keep_meshes=True)
+    if args.lane_share > 1:
+        kw.update(lane_share=args.lane_share)
     if args.w_place > 0:
         kw.update(w_place=args.w_place)
     if termination != "legacy":
@@ -521,6 +537,7 @@ def main():
                     "vx_range": [env._vx_lo, env._vx_hi], "slow_frac": args.slow_frac,
                     "stand_prob": env._stand_prob, "w_stand_vel": args.w_stand_vel,
                     "stand_grace": args.stand_grace, "stand_yaw_w": args.stand_yaw_w,
+                    "lane_share": env.lane_share,
                     "reset_nohold_frac": args.reset_nohold_frac if reset_noise is not None else None,
                     **env.jump_config()},
               aux_loss=aux)
