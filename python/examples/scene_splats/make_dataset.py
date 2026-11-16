@@ -45,7 +45,15 @@ ap.add_argument("--warmup", type=int, default=120, help="frames before the first
 ap.add_argument("--init-points", type=int, default=150_000)
 ap.add_argument("--convergence", action="store_true",
                 help="measure how the frame settles after a camera jump, then exit")
+ap.add_argument("--offband", type=int, default=6,
+                help="views in each off-band split (OFFBAND: outside the training band; 0 = none)")
 args = ap.parse_args()
+
+# Held-out views OUTSIDE the training band (elevations 8..68 deg, 2.1 and 3.0 radii), each a split of its own:
+# (split, elevation deg, distance in radii, azimuth of the first view deg); the views of a split are 360 / n
+# apart in azimuth. The first view of each is the single view of the 2026-11-15 off-band table.
+OFFBAND = [("off_path:topdown", 85.0, 2.5, 40.0), ("off_path:grazing", 3.0, 2.5, 200.0),
+           ("off_path:far", 30.0, 6.0, 120.0), ("off_path:close", 25.0, 1.3, 300.0)]
 
 W, H = args.width, args.height
 scene, info = common.build_scene()
@@ -57,6 +65,20 @@ common.setup_renderer(renderer)
 
 train_poses = common.rig_poses(center, radius, args.train)
 test_poses = common.rig_poses(center, radius, args.test, seed_phase=1.0)
+
+
+def offband_poses(elev_deg, dist_r, az0_deg, n):
+    cx, cy, cz = center
+    out = []
+    for k in range(n):
+        e, a = math.radians(elev_deg), math.radians(az0_deg + k * 360.0 / n)
+        d = dist_r * radius
+        out.append(((cx + d * math.cos(e) * math.cos(a), cy + d * math.sin(e), cz + d * math.cos(e) * math.sin(a)),
+                    (cx, cy * 0.6, cz)))
+    return out
+
+
+offband = [(name, offband_poses(e, d, a, args.offband)) for name, e, d, a in OFFBAND] if args.offband else []
 
 # Warm up at the first pose: pipelines, acceleration structures, the probe grid.
 common.place(camera, train_poses[0])
@@ -94,7 +116,7 @@ pts, cols = [], []
 rng = np.random.default_rng(0)
 t0 = time.perf_counter()
 
-for split, poses in (("train", train_poses), ("test", test_poses)):
+for split, poses in [("train", train_poses), ("test", test_poses)] + offband:
     for i, pose in enumerate(poses):
         common.place(camera, pose)
         for _ in range(args.frames - 1):
@@ -108,7 +130,7 @@ for split, poses in (("train", train_poses), ("test", test_poses)):
         valid = depth < depth_far
         mm = np.where(valid, np.clip(depth * 1000.0, 1, 65535), 0).astype(np.uint16)
 
-        name = f"{split}_{i:03d}"
+        name = f"{split.replace(':', '_')}_{i:03d}"
         Image.fromarray(rgb).save(os.path.join(args.out, "images", name + ".png"))
         Image.fromarray(mm).save(os.path.join(args.out, "depth", name + ".png"))
         c2w = common.matrix_world_np(camera)
@@ -159,6 +181,10 @@ transforms = {
 }
 with open(os.path.join(args.out, "transforms.json"), "w", encoding="utf-8") as f:
     json.dump(transforms, f, indent=1)
+import sys  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(common.HERE), "splat_mapping"))
+from manifest import write_manifest  # noqa: E402
+write_manifest(args.out, extra={"views": len(frames_json), "offband": [o[0] for o in OFFBAND] if args.offband else []})
 
 # A sheet of every 17th training view, half size.
 sheet_ids = list(range(0, args.train, max(1, args.train // 12)))[:12]
