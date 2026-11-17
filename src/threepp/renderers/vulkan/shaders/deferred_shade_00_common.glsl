@@ -711,6 +711,7 @@ vec3 giSunLeg(vec3 P, inout vec3 L) { return murkSunLeg(P, L); }
 vec3 murkAmbient(vec3 amb, vec3 P, vec3 dir);
 
 #include "pcg_rng.glsl"
+#include "ggx_vndf.glsl"// sampleGgxVndf: the water's reflection lobe (shadeWater)
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
 #include "deferred_shade_30_gi_gather.glsl"

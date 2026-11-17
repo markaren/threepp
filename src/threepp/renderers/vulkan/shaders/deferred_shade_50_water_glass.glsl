@@ -378,7 +378,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // Effective specular roughness = base water roughness ⊕ the sub-pixel chop
     // variance banked out of N (LEAN spec-AA). Distant water fattens its lobe →
     // the sun glint reads as a soft coherent sheen; near water (slopeVarSq→0)
-    // keeps its crisp near-mirror sparkle.
+    // keeps its crisp near-mirror sparkle. The reflection ray is scattered over
+    // the same lobe (THE REFLECTION LOBE, below).
     const float effRough = sqrt(pm.roughness * pm.roughness + slopeVarSq);
 
     // Reflected sky + scene. Env MISSES read a MILDLY blurred mip — point
@@ -420,7 +421,64 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // leg down the column, where applyMurk below turns it into the murk the
     // open-water pixels beside it already show.
     const vec3 Nsurf = camPortWetDryEye() ? -Nmacro : Nmacro;
-    vec3 R = reflect(-V, N);
+    // ── THE REFLECTION LOBE ──────────────────────────────────────────────────
+    // The waves a pixel cannot show do not reflect the scene along one line.
+    // Their slope spread is what main() banked out of N (slopeVarSq), and the
+    // glint and the environment's blur (reflLod) already widen by it; a ray
+    // that met a mountain or a house stayed one mirror ray, so a far sea under
+    // a breeze mirrored the fells razor sharp at any wind, where a real one
+    // (a drone's view of a Lofoten fjord in a breeze) is a soft sheen of them.
+    // So the ray leaves along a facet drawn from the same lobe: a GGX visible
+    // normal (Heitz 2018, sampleGgxVndf, the path tracer's sampler) about N,
+    // alpha = effRough^2 (the alpha the glint's distGGX takes), one per pixel
+    // and frame, and the temporal accumulation (DLSS Ray Reconstruction, or
+    // the TAA) integrates the lobe. Still one reflection ray a water pixel.
+    // Near and calm water, where slopeVarSq is next to nothing and alpha is the
+    // material's roughness squared (thousandths), is still a mirror; a windy
+    // far sea blurs, and at a grazing view the visible normals stretch the blur
+    // up and down the line of sight, the long streaks a lake throws a far
+    // shore into.
+    // The draws: blue noise across the pixels, as the opaque glossy lobe's
+    // environment takes them; under RR the gather's hashed tile offsets
+    // (giBlueNoiseRR: no period in time), else an R2 walk through the frames
+    // (a held view converges on the lobe, not on a cycle of a few samples).
+    // A facet turned away from the eye has no visible normal to draw (N leans
+    // past V on the back of a resolved wave): the mirror, as before.
+    vec3 Nm = N;
+    {
+        const float vN = dot(V, N);
+        if (vN > 1e-4) {
+            const vec2 u = kRR ? vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u))
+                               : fract(vec2(blueNoiseDef(uvec2(px) + uvec2(29u, 5u), 0u, 0u),
+                                            blueNoiseDef(uvec2(px.yx) + uvec2(7u, 53u), 0u, 0u))
+                                       + float(frame & 0xFFFFu) * vec2(0.7548776662, 0.5698402910));
+            const vec3 tUp = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+            const vec3 T   = normalize(cross(tUp, N));
+            const vec3 B   = cross(N, T);
+            const vec3 mt  = sampleGgxVndf(vec3(dot(V, T), dot(V, B), vN), effRough * effRough, u);
+            Nm = normalize(T * mt.x + B * mt.y + N * mt.z);
+        }
+    }
+    vec3 R = reflect(-V, Nm);
+    // A drawn ray that points under the water is one real waves hide: it meets
+    // the next wave and leaves upward again. Folded back above the water's own
+    // plane, the macro surface's and then the level water's (the two planes
+    // the guards below keep it over; a fold about the second cannot undo the
+    // first, their normals agree in sign), at the elevation it had below it.
+    // Clamped instead, every such draw lands on the horizon: a band of
+    // horizon sky laid over the blur, brightest where the lobe is widest. The
+    // two lifts below stay as the last guard (a fold leaves a ray grazing the
+    // plane where it was grazing it).
+    {
+        const float rS = dot(R, Nsurf);
+        if (rS < 0.0) R -= 2.0 * rS * Nsurf;
+        const float sUpF = dot(Nsurf, fog.waterUp);
+        if (abs(sUpF) > 0.5) {
+            const vec3  upF = sUpF > 0.0 ? fog.waterUp : -fog.waterUp;
+            const float rU  = dot(R, upF);
+            if (rU < 0.0) R -= 2.0 * rU * upF;
+        }
+    }
     const float rDotUp = dot(R, Nsurf);
     if (rDotUp < 0.02) R = normalize(R + Nsurf * (0.02 - rDotUp));
     // Level water (along the water's own up, fog.waterUp): above the water's
@@ -486,10 +544,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // what make water read as water; dimming those is never what is wanted, whereas a
     // shoreline mirrored at full radiance routinely is too strong.
     //
-    // Why a new knob is needed at all: water's reflection is ONE hard mirror ray whose
-    // energy is Schlick Fresnel from ior alone. effRough reaches only reflLod, the
-    // environment-MISS mip, so material.roughness blurs a reflected sky and leaves a
-    // reflected forest at full strength; water writes reflectImage = 0 so it never gets
+    // Why a new knob is needed at all: water's reflection is ONE ray whose energy is
+    // Fresnel from ior alone. effRough blurs it (the miss mip reflLod, and the lobe the
+    // ray is drawn from), so material.roughness softens a reflected forest but leaves it
+    // at full strength; water writes reflectImage = 0 so it never gets
     // the roughness-driven reflection denoiser opaque surfaces get; envMapIntensity
     // scales only the escape-to-environment terms, so lowering it dims the sky and makes
     // the ratio worse; and r0 = 0.02 against a grazing F of 0.25-0.67 leaves ior nearly
