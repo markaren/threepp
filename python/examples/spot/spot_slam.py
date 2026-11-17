@@ -975,9 +975,12 @@ def main():
     _selfc = bool(args.recovery_model) and bool(_rec_meta.get("self_collision", True))
     if args.self_collision != "auto":
         _selfc = args.self_collision == "on"
+    # the joint speed cap the walking checkpoint trained with (meta joint_speed_cap, hx/hy/kn rad/s), else PhysX's 100
+    _cap = dict(zip(("hx", "hy", "kn"), _meta["joint_speed_cap"])) if _meta.get("joint_speed_cap") else None
     art, meshes = build_spot(world, assets, gains=STIFF_GAINS,   # stiff gains (90) = base gait's plant
-                             drive_limits_are_forces=_dlf, self_collision=_selfc)
-    print(f"[spot] plant: torque limits {'real' if _dlf else 'impulse (legacy)'}, self-collision {'on' if _selfc else 'off'}")
+                             drive_limits_are_forces=_dlf, self_collision=_selfc, joint_speed_cap=_cap)
+    print(f"[spot] plant: torque limits {'real' if _dlf else 'impulse (legacy)'}, self-collision {'on' if _selfc else 'off'}, "
+          f"joint speed cap {_meta['joint_speed_cap'] if _cap else 'none'}")
     # Pushes are sized from the total mass. The bindings expose no articulation link mass, so this sums what build_spot built,
     # link by link: each link's density is MASS / its collider's volume (box; capsule pi r^2 l + 4/3 pi r^3, the volumes PhysX
     # integrates), so these are the masses PhysX computed.
@@ -1373,7 +1376,8 @@ def main():
 
         res = {"amplitude": float(args.amplitude), "seed": args.seed, "robot_mass": robot_mass,
                "trip_height": TRIP_HEIGHT, "jitter_deg": PUSH_JITTER_DEG, "policy": os.path.basename(model_path),
-               "plant": {"drive_limits_are_forces": _dlf, "self_collision": _selfc}, "trip": []}
+               "plant": {"drive_limits_are_forces": _dlf, "self_collision": _selfc, "joint_speed_cap": _meta.get("joint_speed_cap")},
+               "trip": []}
         for dv in TRIP_LADDER:
             res["trip"].append(trials("trip", dv))
             if res["trip"][-1]["fell"] >= 8:

@@ -111,7 +111,7 @@ def _capsule(length, radius, center, direction, color):
 
 
 def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material=None, payload_kg=0.0,
-               drive_limits_are_forces=False, self_collision=False):
+               drive_limits_are_forces=False, self_collision=False, joint_speed_cap=None):
     """Build Spot as a PhysX articulation; returns (articulation, render meshes).
 
     Physics uses tuned Box/Capsule colliders (the URDF has no collision/inertial). If `assets`
@@ -131,7 +131,9 @@ def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material
     bit-identical either way (no self-contact in it), nothing explodes (same peak joint speeds over 512
     random extreme poses), and the pairs that do touch are dominated by the upper leg against the base
     box; a spawn with the legs already inside the body is kicked out at up to 27 m/s, so spawn clear of
-    self-penetration (spot_recovery_env)."""
+    self-penetration (spot_recovery_env). `joint_speed_cap` {hx,hy,kn: rad/s} is a hard cap the solver enforces on
+    each joint's speed (PhysX's own default is 100 rad/s, which bang-bang targets reach): the plant's actuators are
+    torque-limited but not speed-limited without it."""
     gn = gains if gains is not None else GAINS
     ox, oy = float(base_xy[0]), float(base_xy[1])
     # PhysX reads each joint's max_force as an IMPULSE unless drive_limits_are_forces is set, so the
@@ -156,15 +158,21 @@ def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material
         hip = art.add_link(hm, parent=base, density=MASS["hip"] / hv, axis=(1, 0, 0), anchor=tuple(Jhx),
                            lower=LIM["hx"][0], upper=LIM["hx"][1], stiffness=gn["hx"][0],
                            damping=gn["hx"][1], max_force=gn["hx"][2], drive_target=DEFAULT[L + "_hx"])
+        if joint_speed_cap:
+            hip.set_max_joint_velocity(float(joint_speed_cap["hx"]))
         um, uv = _capsule(0.30, 0.045, (Jhy + Jkn) / 2, Jkn - Jhy, 0xffc24d)
         uleg = art.add_link(um, parent=hip, density=MASS["uleg"] / uv, axis=(0, 1, 0), anchor=tuple(Jhy),
                             lower=LIM["hy"][0], upper=LIM["hy"][1], stiffness=gn["hy"][0],
                             damping=gn["hy"][1], max_force=gn["hy"][2], drive_target=DEFAULT[L + "_hy"])
+        if joint_speed_cap:
+            uleg.set_max_joint_velocity(float(joint_speed_cap["hy"]))
         lm, lv = _capsule(0.30, 0.028, (Jkn + Jft) / 2, Jft - Jkn, 0x303030)
-        art.add_link(lm, parent=uleg, density=MASS["lleg"] / lv, axis=(0, 1, 0), anchor=tuple(Jkn),
-                     lower=LIM["kn"][0], upper=LIM["kn"][1], stiffness=gn["kn"][0],
-                     damping=gn["kn"][1], max_force=gn["kn"][2], drive_target=DEFAULT[L + "_kn"],
-                     material=foot_material)            # grippy restitution-0 (or per-env) foot contact
+        lleg = art.add_link(lm, parent=uleg, density=MASS["lleg"] / lv, axis=(0, 1, 0), anchor=tuple(Jkn),
+                            lower=LIM["kn"][0], upper=LIM["kn"][1], stiffness=gn["kn"][0],
+                            damping=gn["kn"][1], max_force=gn["kn"][2], drive_target=DEFAULT[L + "_kn"],
+                            material=foot_material)     # grippy restitution-0 (or per-env) foot contact
+        if joint_speed_cap:
+            lleg.set_max_joint_velocity(float(joint_speed_cap["kn"]))
         if assets:
             _attach_obj(hm, Jhx, L + ".hip", 0x303030, assets)
             _attach_obj(um, Jhy, L + ".uleg", 0xffc24d, assets)

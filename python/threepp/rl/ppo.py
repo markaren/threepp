@@ -8,7 +8,7 @@ exported for hand-rolled loops.
 A compact REFERENCE trainer, owned and readable on purpose — not a tuned competitor to rl_games
 / rsl_rl. It carries the robustness that actually matters for varied reward scales: running obs
 AND return normalization (so the value head + its PPO clipping work whether returns are ~1 or
-~1000), linear LR anneal, and target-KL early stopping.
+~1000), linear LR anneal, target-KL early stopping, and a KL brake on the learning rate.
 """
 import math
 import time
@@ -228,6 +228,11 @@ class PPO:
         # asked (diagnostics()), so logging them costs nothing between logs.
         self._diag = None
         self.last_log = {}
+        # KL brake (with target_kl): a minibatch whose policy has already drifted past 2 x target_kl divides the
+        # learning rate by 1.5, one under target_kl / 2 lets it recover by 1.5 up to the scheduled rate. The epoch-level
+        # early stop alone let one epoch move a spot walk + jump policy to a KL of 39 (2026-11-17). The brake turned that
+        # into a slower slide, it did not prevent it (the cause was the task's reward); in healthy runs it stays at 1.
+        self.lr_scale = 1.0
 
     def diagnostics(self):
         """The latest update's approx_kl (low-variance estimator, last epoch run), clip fraction
@@ -239,7 +244,7 @@ class PPO:
         d = self._diag
         return {"approx_kl": float(d["approx_kl"]), "clip_frac": float(d["clip_frac"]),
                 "epochs_run": int(d["epochs_run"]), "explained_var": float(d["explained_var"]),
-                "log_std": float(d["log_std"])}
+                "log_std": float(d["log_std"]), "lr_scale": self.lr_scale}
 
     def _normobs(self, obs):
         return obs if self.norm is None else self.norm.norm(obs)
@@ -264,9 +269,9 @@ class PPO:
         obs = self.obs
         t0 = time.perf_counter(); total = 0
         for it in range(1, iterations + 1):
-            if self.anneal_lr:
-                for g in self.opt.param_groups:
-                    g["lr"] = self.lr0 * (1.0 - (it - 1) / iterations)
+            lr_sched = self.lr0 * (1.0 - (it - 1) / iterations) if self.anneal_lr else self.lr0
+            for g in self.opt.param_groups:
+                g["lr"] = lr_sched * self.lr_scale
             for t in range(T):
                 if self.norm is not None:
                     self.norm.update(obs)
@@ -329,6 +334,15 @@ class PPO:
                         torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.max_grad_norm)
                         self.opt.step()
                         kls.append(((ratio - 1) - logratio).detach().mean())   # Schulman low-var KL
+                        if self.target_kl is not None:
+                            # this minibatch's KL is the drift BEFORE its own step: brake the next ones on it
+                            k_mb = float(kls[-1])
+                            if k_mb > 2.0 * self.target_kl:
+                                self.lr_scale = max(self.lr_scale / 1.5, 1.0 / 64.0)
+                            elif k_mb < 0.5 * self.target_kl:
+                                self.lr_scale = min(self.lr_scale * 1.5, 1.0)
+                            for g in self.opt.param_groups:
+                                g["lr"] = lr_sched * self.lr_scale
                         clipped += ((ratio.detach() - 1.0).abs() > self.clip).float().mean(); n_mb += 1
                     epochs_run += 1
                     if kls:

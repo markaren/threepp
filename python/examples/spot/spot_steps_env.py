@@ -106,7 +106,12 @@ J_RISE, J_FLIGHT, J_LAND, J_MISS, J_VZ = 150.0, 3.0, 50.0, 30.0, 40.0
 J_REF_KEYS = ((0, (0.0, 0.0, 0.0)), (12, (0.0, 0.3, -0.6)), (16, (0.0, 0.3, -0.6)), (24, (0.0, -0.3, 0.6)),
               (40, (0.0, 0.1, -0.3)), (60, (0.0, 0.0, 0.0)))          # = spot_jump_env.REF_KEYS
 J_IMIT_SIGMA2 = 0.1
-JUMP_OFF_TERMS = ("imit", "vz", "scrape", "stand")   # the teacher's gait, the vertical-speed and scrape penalties, the stand
+# Uncommanded hops: -J_UNCMD per tick of a flight outside any jump window once it has lasted JUMP_MIN_FLIGHT ticks (a trot's
+# flight phase is shorter). Without it a walk + jump policy learns to hop unasked: 4-6 such flights per robot-minute after
+# 280 iterations on the course, against ~1 for the walker it started from (2026-11-17).
+J_UNCMD = 5.0
+JUMP_OFF_TERMS = ("imit", "vz", "scrape", "stand", "stand_vel")   # the teacher's gait, the vertical-speed and scrape
+# penalties, and both stand-mode penalties (joint speed, base drift): a jump at a zero command is not a stand
 JUMP_BUCKETS = ("stand", "walk", "fast")             # the command at the trigger: zero, |vx| < 1 m/s, faster
 JUMP_OBS_DIM = OBS_DIM + 2
 # blowup_guard (opt-in): a robot whose state is non-finite or runs away terminates and earns nothing that tick, and every
@@ -253,7 +258,8 @@ class SpotStepsEnv(VecTask):
                  terrain_material=None, push_interval=(3.0, 8.0), push_dv_min=0.3, push_max=0.5,
                  stand_mode=False, w_stand=W_STAND, w_place=0.0, course_ladder=None, cmd_switch=None,
                  reset_noise=None, reset_nohold_frac=0.3, jump=None, jump_obs=False, jump_lanes=None,
-                 w_jump_imit=2.0, qd_max=None, self_collision=False, blowup_guard=False,
+                 w_jump_imit=2.0, qd_max=None, self_collision=False, blowup_guard=False, joint_speed_cap=None,
+                 jump_apex=None, jump_miss=None,
                  vx_range=None, slow_frac=0.0, stand_prob=None, w_stand_vel=0.0, keep_meshes=False,
                  stand_grace=0.0, stand_yaw_w=0.3, lane_share=1):
         """Everything after push_prob is opt-in, and its default reproduces the training world:
@@ -362,9 +368,16 @@ class SpotStepsEnv(VecTask):
                        Counters per command bucket: jump_stats().
         jump_obs       the 98-d observation with the jump channels at zero and no triggers (evaluating a jump checkpoint).
         w_jump_imit    the jump reference's weight (J_REF_KEYS, as spot_jump_env's w_imit).
+        jump_apex      H m: a target jump. The base rise pays up to H and costs as much above it, the take-off speed
+                       likewise around sqrt(2 g H), and the flight pays only for the ticks a jump of H stays up
+                       (2 sqrt(2 H / g)). None: higher is better up to JUMP_VZ_CAP (a 0.45 m rise), which a walk + jump
+                       run chased to 0.53 m foot clearance, landed tilted and fell apart on (2026-11-17).
+        jump_miss      W: the penalty for a window that closes without a counted flight (default J_MISS).
         qd_max         V rad/s: the drive targets move at most V * DT per control tick (spot_recovery_env's limit, in this
                        env's action units), outside the settle.
         self_collision the legs collide with the body and each other (the recovery and jump plant).
+        joint_speed_cap (hx, hy, kn) rad/s: a hard cap the solver puts on each joint's speed (spot_deploy.build_spot).
+                       Without it the torque-limited plant has no speed limit short of PhysX's 100 rad/s.
         blowup_guard   terminate a robot with a non-finite state, base speed > BLOWUP_V, spin > BLOWUP_W or a joint
                        faster than BLOWUP_JV, zero its reward terms that tick, and keep every observation finite within
                        +-OBS_LIMIT (counted: blowup_count()).
@@ -526,6 +539,8 @@ class SpotStepsEnv(VecTask):
         pay_np = None if payload_kg is None else _per_env(payload_kg, num_envs, np.float64, "payload_kg")
         self.drive_limits_are_forces = dlf = bool(drive_limits_are_forces)
         self.self_collision = sc_on = bool(self_collision)
+        self.joint_speed_cap = None if joint_speed_cap is None else tuple(float(v) for v in joint_speed_cap)
+        cap = None if self.joint_speed_cap is None else dict(zip(("hx", "hy", "kn"), self.joint_speed_cap))
         foot_mats = {}
         # Stiff gains (90) = same plant the base gait scratch_flat_best.pt was trained on.
         class _SpotStepsRobot:
@@ -541,7 +556,8 @@ class SpotStepsEnv(VecTask):
                 if pay_np is not None and pay_np[i] != 0.0:
                     kw["payload_kg"] = float(pay_np[i])
                 self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, float(lane_of[i]) * SPACING),
-                                          gains=STIFF_GAINS, drive_limits_are_forces=dlf, self_collision=sc_on, **kw)
+                                          gains=STIFF_GAINS, drive_limits_are_forces=dlf, self_collision=sc_on,
+                                          joint_speed_cap=cap, **kw)
         # Under "raycast" the builders write into a CollectedWorld, which forwards every call
         # to the real world and keeps the Mesh it was handed — so the BVH is built from the
         # boxes PhysX actually got, not from a second description of them.
@@ -741,6 +757,11 @@ class SpotStepsEnv(VecTask):
         self.jump = None if jump is None else tuple(float(v) for v in jump)
         self.qd_max = float(qd_max) if qd_max else None
         self.w_jump_imit = float(w_jump_imit)
+        self.jump_apex = None if jump_apex is None else float(jump_apex)
+        self.jump_miss = J_MISS if jump_miss is None else float(jump_miss)
+        self._apex = 1.0e6 if jump_apex is None else float(jump_apex)   # finite: max(z, top) - max(z0, top) must be 0, not inf - inf
+        self._vz_pay = JUMP_VZ_CAP if jump_apex is None else min(JUMP_VZ_CAP, math.sqrt(2.0 * 9.81 * float(jump_apex)))
+        self._fly_pay = 10 ** 6 if jump_apex is None else int(round(2.0 * math.sqrt(2.0 * float(jump_apex) / 9.81) / DT))
         self.blowup_guard = bool(blowup_guard)
         self._blowup = torch.zeros(num_envs, dtype=torch.bool, device=dev)
         self._blow_n = torch.zeros((), dtype=torch.float64, device=dev)
@@ -1355,14 +1376,18 @@ class SpotStepsEnv(VecTask):
         st = self.jstate
         active = win & (st <= 1)
         new_z = torch.maximum(self.jzmax, ba)
-        self._j_rise.copy_(torch.where(active, new_z - self.jzmax, 0.0))
+        top = self.jz0 + self._apex                      # the base height a jump of jump_apex reaches
+        # below the apex a rise pays, above it the same rise costs (top 1e6 m without jump_apex: no cost)
+        self._j_rise.copy_(torch.where(active, (torch.minimum(new_z, top) - torch.minimum(self.jzmax, top))
+                                       - (torch.maximum(new_z, top) - torch.maximum(self.jzmax, top)), 0.0))
         self.jzmax.copy_(torch.where(active, new_z, self.jzmax))
         new_v = torch.maximum(self.jvzmax, vz.clamp(0.0, JUMP_VZ_CAP))
-        self._j_vz.copy_(torch.where(active, new_v - self.jvzmax, 0.0))
+        self._j_vz.copy_(torch.where(active, (new_v.clamp_max(self._vz_pay) - self.jvzmax.clamp_max(self._vz_pay))
+                                     - (new_v.clamp_min(self._vz_pay) - self.jvzmax.clamp_min(self._vz_pay)), 0.0))
         self.jvzmax.copy_(torch.where(active, new_v, self.jvzmax))
         takeoff = win & (st == 0) & air & (vz > JUMP_TAKEOFF_VZ)
         fly_air = win & ((st == 1) | takeoff) & air
-        self._j_fly.copy_(fly_air)
+        self._j_fly.copy_(fly_air & (self.jflight < self._fly_pay))
         self.jclear.copy_(torch.where(fly_air, torch.maximum(self.jclear, self.feet_clear.min(dim=1).values), self.jclear))
         touch = win & (st == 1) & ~air
         counted = touch & (self.jflight >= JUMP_MIN_FLIGHT)
@@ -1430,10 +1455,12 @@ class SpotStepsEnv(VecTask):
         """What a checkpoint's meta records about the jump, the observation and the plant knobs (all None / False off)."""
         return {"obs_dim": self.obs_dim, "jump": list(self.jump) if self.jump else None, "jump_obs": self.jump_obs,
                 "qd_max": self.qd_max, "self_collision": self.self_collision, "blowup_guard": self.blowup_guard,
-                **({"w_jump_imit": self.w_jump_imit, "jump_window": JUMP_WINDOW, "jump_min_steps": JUMP_MIN_STEPS,
+                "joint_speed_cap": list(self.joint_speed_cap) if self.joint_speed_cap else None,
+                **({"w_jump_imit": self.w_jump_imit, "jump_apex": self.jump_apex, "jump_window": JUMP_WINDOW, "jump_min_steps": JUMP_MIN_STEPS,
                     "jump_air": JUMP_AIR, "jump_takeoff_vz": JUMP_TAKEOFF_VZ, "jump_min_flight": JUMP_MIN_FLIGHT,
                     "jump_land_up": JUMP_LAND_UP, "jump_vz_cap": JUMP_VZ_CAP,
-                    "jump_weights": {"rise": J_RISE, "flight": J_FLIGHT, "land": J_LAND, "miss": J_MISS, "vz": J_VZ},
+                    "jump_weights": {"rise": J_RISE, "flight": J_FLIGHT, "land": J_LAND, "miss": self.jump_miss, "vz": J_VZ,
+                                     "uncommanded": J_UNCMD},
                     "jump_ref_keys": [[k, list(v)] for k, v in J_REF_KEYS], "jump_imit_sigma2": J_IMIT_SIGMA2,
                     "jump_off_terms": list(JUMP_OFF_TERMS)} if self.jump is not None else {})}
 
@@ -1750,8 +1777,9 @@ class SpotStepsEnv(VecTask):
             terms["jvz"] = J_VZ * self._j_vz
             terms["jflight"] = J_FLIGHT * self._j_fly.float()
             terms["jland"] = self._j_land
-            terms["jmiss"] = -J_MISS * self._j_miss.float()
+            terms["jmiss"] = -self.jump_miss * self._j_miss.float()
             terms["jimit"] = self.w_jump_imit * inw.float() * torch.exp(-err / J_IMIT_SIGMA2)
+            terms["juncmd"] = -J_UNCMD * (self._uair >= JUMP_MIN_FLIGHT).float()
             fell = s.terminated & inw
             self._jump_count(fell, fell)
         # Device-side, and read back only when a trainer asks (see the last_* properties). Masked

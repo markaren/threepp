@@ -465,7 +465,10 @@ namespace threepp_py {
                      "substep (force = impulse / fixed_timestep), consumed by the next step().")
                 .def("set_drive_target", &ArticulationLink::setDriveTarget, py::arg("target"),
                      "Set the PD drive's target angle (radians).")
-                .def("set_drive_velocity", &ArticulationLink::setDriveVelocity, py::arg("velocity"));
+                .def("set_drive_velocity", &ArticulationLink::setDriveVelocity, py::arg("velocity"))
+                .def("set_max_joint_velocity", &ArticulationLink::setMaxJointVelocity, py::arg("velocity"),
+                     "Hard cap on this joint's speed, rad/s (m/s for prismatic), enforced by the solver; PhysX "
+                     "defaults to 100. Set it before the articulation is finalized.");
 
         py::class_<Articulation>(m, "Articulation",
                                  "A reduced-coordinate articulation (robot): a tree of links joined by "

@@ -312,8 +312,15 @@ def main():
                          "appended) and the jump rewards (spot_steps_env JUMP_*); a 96-d warm start is widened with zero "
                          "weights on the new inputs. Needs the honest termination (--course). '' = off")
     ap.add_argument("--w-jump-imit", dest="w_jump_imit", type=float, default=2.0, help="the jump reference's weight")
+    ap.add_argument("--jump-miss", dest="jump_miss", type=float, default=None,
+                    help="the penalty for a jump window without a jump (default spot_steps_env.J_MISS)")
+    ap.add_argument("--jump-apex", dest="jump_apex", type=float, default=None,
+                    help="H m: the jump's rise and take-off speed rewards stop at a base rise of H (default: up to 0.45 m)")
     ap.add_argument("--qd-max", dest="qd_max", type=float, default=None,
                     help="rate-limit the drive targets to V rad/s (spot_recovery_env's limit; default none)")
+    ap.add_argument("--joint-speed-cap", dest="joint_speed_cap", default="", metavar="HX,HY,KN",
+                    help="a hard joint speed cap the solver enforces, rad/s per joint type (hip x, hip y, knee); "
+                         "'' = PhysX's 100 rad/s default")
     ap.add_argument("--self-collision", dest="self_collision", action="store_true",
                     help="legs collide with the body and each other (the recovery and jump plant)")
     ap.add_argument("--blowup-guard", dest="blowup_guard", action=argparse.BooleanOptionalAction, default=None,
@@ -324,6 +331,11 @@ def main():
                          "jump windows at a zero command: an auxiliary loss on those minibatch rows, the teacher's "
                          "observation rebuilt from the policy's (last_act and actions converted between action scales)")
     ap.add_argument("--jump-teacher-coef", dest="jump_teacher_coef", type=float, default=1.0)
+    ap.add_argument("--walk-anchor", dest="walk_anchor", default="",
+                    help="a 96-d walking checkpoint (the warm start, spot_steps.pt) whose actions the policy is pulled "
+                         "toward OUTSIDE jump windows: an auxiliary MSE that keeps the walker wherever no jump is asked "
+                         "for (a walk + jump run otherwise leaks the jump into standing and collapsed, 2026-11-17)")
+    ap.add_argument("--walk-anchor-coef", dest="walk_anchor_coef", type=float, default=1.0)
     ap.add_argument("--eval-jump-steps", dest="eval_jump_steps", type=int, default=0,
                     help="with --jump, after training: this many deterministic steps on the training env; jump and fall "
                          "counters -> <out stem>_jumpeval.json")
@@ -426,15 +438,26 @@ def main():
         if termination != "honest":
             ap.error("--jump reads the instrument's foot clearance: it needs the honest termination (--course)")
         kw.update(jump=jump, w_jump_imit=args.w_jump_imit)
+        if args.jump_apex is not None:
+            kw.update(jump_apex=args.jump_apex)
+        if args.jump_miss is not None:
+            kw.update(jump_miss=args.jump_miss)
     if args.qd_max:
         kw.update(qd_max=args.qd_max)
     if args.self_collision:
         kw.update(self_collision=True)
+    if args.joint_speed_cap:
+        cap = tuple(float(v) for v in args.joint_speed_cap.split(","))
+        if len(cap) != 3 or min(cap) <= 0.0:
+            ap.error("--joint-speed-cap takes three positive speeds HX,HY,KN in rad/s")
+        kw.update(joint_speed_cap=cap)
     guard = args.blowup_guard if args.blowup_guard is not None else jump is not None
     if guard:
         kw.update(blowup_guard=True)
     if args.jump_teacher and jump is None:
         ap.error("--jump-teacher needs --jump")
+    if args.walk_anchor and jump is None:
+        ap.error("--walk-anchor needs --jump")
     height_source = args.height_source or ("raycast" if args.course else "analytic")
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", seed=args.seed, perceive=args.perceive,
                        perceive_noise=args.perceive_noise, graph=args.graph,
@@ -475,11 +498,12 @@ def main():
     if reset_noise is not None:
         print(f"reset noise: q N(0, {reset_noise[0]:g}) rad, drop U(0, {reset_noise[1]:g}) m, v U(+-{reset_noise[2]:g}) m/s, "
               f"no hold on {args.reset_nohold_frac:g} of flat/stair resets")
-    if jump is not None or args.qd_max or args.self_collision:
+    if jump is not None or args.qd_max or args.self_collision or args.joint_speed_cap:
         print(f"jump triggers every U({args.jump}) s on the flat lanes, obs {env.obs_dim}-d, reference weight "
               f"{args.w_jump_imit}" if jump is not None else "no jump triggers",
               f"| joint targets <= {args.qd_max} rad/s" if args.qd_max else "| no joint target limit",
-              f"| self-collision {'on' if args.self_collision else 'off'}")
+              f"| self-collision {'on' if args.self_collision else 'off'}",
+              f"| joint speed cap {args.joint_speed_cap} rad/s" if args.joint_speed_cap else "")
     print(f"termination {termination}, drive limits {'torques' if dlf else 'impulses'}"
           + (", stand mode" if args.stand_mode else "") + (f", w_place {args.w_place}" if args.w_place > 0 else ""))
     if env.rays is not None:
@@ -622,6 +646,36 @@ def main():
                         jump_teacher_coef=args.jump_teacher_coef, jump_teacher_action_scale=t_scale)
         print(f"jump teacher {args.jump_teacher} (sha {t_sha[:8]}, action scale {t_scale}): coef {args.jump_teacher_coef} on "
               f"jump-window rows at a zero command")
+    al = [0.0, 0.0]         # walking-anchor loss sum, rows (per log window)
+    if args.walk_anchor:
+        import hashlib
+        w_ac, w_norm, w_meta = load_policy(args.walk_anchor, device="cuda")
+        if w_meta.get("obs_dim") != OBS_DIM:
+            ap.error(f"--walk-anchor must be a {OBS_DIM}-d walking checkpoint")
+        prev_aux = ppo.aux_loss
+
+        def anchor_aux(ac, obs):
+            """Outside jump windows, pull the policy's action toward the walking checkpoint's on the same state (its
+            96-d slice). obs is PPO's normalized minibatch."""
+            out = prev_aux(ac, obs) if prev_aux is not None else obs.new_zeros(())
+            raw = ppo.norm.denorm(obs) if ppo.norm is not None else obs
+            m = raw[:, 96] < 0.5
+            n = int(m.sum())
+            if n == 0:
+                return out
+            w_obs = raw[m][:, :OBS_DIM]
+            with torch.no_grad():
+                a_w = w_ac.act_mean(w_norm.norm(w_obs) if w_norm is not None else w_obs)
+            loss = (ac.actor(ac._feat(obs[m])) - a_w).pow(2).mean()
+            al[0] += float(loss.detach()) * n; al[1] += n
+            return out + args.walk_anchor_coef * loss
+
+        ppo.aux_loss = anchor_aux
+        with open(args.walk_anchor, "rb") as f_:
+            w_sha = hashlib.sha256(f_.read()).hexdigest()
+        ppo.meta.update(walk_anchor=os.path.basename(args.walk_anchor), walk_anchor_sha256=w_sha,
+                        walk_anchor_coef=args.walk_anchor_coef)
+        print(f"walking anchor {args.walk_anchor} (sha {w_sha[:8]}): coef {args.walk_anchor_coef} outside jump windows")
     ppo.meta["blowup_guard"] = bool(guard)
     sanity_walk(env, ppo.ac, ppo.norm)
     flat0 = stochastic_flat_baseline(env, ppo.ac, ppo.norm)
@@ -724,10 +778,15 @@ def main():
                 for n, v in js.items() if isinstance(v, dict) and n != "all")
                   + f" | uncommanded flights/env-min {_f(js['uncommanded_flights_per_env_min'], 3)}"
                   + (f" | teacher mse {tl[0] / tl[1]:.3f} over {int(tl[1])} rows" if tl[1] else "")
+                  + (f" | anchor mse {al[0] / al[1]:.4f}" if al[1] else "")
+                  + f" | lr x{ppo.lr_scale:.3f}"
                   + (f" | blow-ups {env.blowup_count(reset=False)}" if guard else ""))
             if tl[1]:
                 course["jump_teacher"] = {"mse": tl[0] / tl[1], "rows": int(tl[1]), "minibatches": tl[2]}
+            if al[1]:
+                course["walk_anchor_mse"] = al[0] / al[1]
             tl[0] = tl[1] = 0.0; tl[2] = 0
+            al[0] = al[1] = 0.0
         if guard:
             course["blowups"] = env.blowup_count(reset=True)
         env.reset_stats(episodes=False)

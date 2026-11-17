@@ -199,6 +199,8 @@ def eval_flat_steering(env_cls, policy_path, k=512, device="cuda", height_source
         kw["qd_max"] = float(meta["qd_max"])
     if meta.get("self_collision"):
         kw["self_collision"] = True
+    if meta.get("joint_speed_cap"):
+        kw["joint_speed_cap"] = tuple(meta["joint_speed_cap"])
     env = env_cls(num_envs=k, device=device, flat_only=True, **kw)
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     # Base gait teacher (50-d, norm-aware): compare against it so steering regression is defined
