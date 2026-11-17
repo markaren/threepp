@@ -5,11 +5,13 @@
 #include "threepp/core/AttributeView.hpp"
 #include "threepp/renderers/vulkan/EdgeRefine.hpp"
 #include "threepp/extras/DataUtils.hpp"
+#include "threepp/renderers/vulkan/water/OceanLod.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -3768,6 +3770,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // Short waves as geometry: the middle cascade's mipped copies for
             // this frame's displace (which binds them only with the chop set).
             if (st.chopOn && st.c1Mips) st.c1Mips->record(cb);
+            // The patch mesh reads cascades 0 and 2 at each vertex's spacing too.
+            if (st.chopOn && st.c0Mips) st.c0Mips->record(cb);
+            if (st.chopOn && st.c2Mips) st.c2Mips->record(cb);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFFT, currentFrame);
 
             // (3.5) Per-vertex motion: copy current vertex positions into
@@ -3782,7 +3787,10 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // prevVertexAddress / prevPosAddr selection sites), making the
             // ocean reproject as world-static — so the copy is dead work and
             // skipping it also saves a full vertex-buffer transfer per frame.
-            const bool warpActive = dm.warp.halfRange > 0.0f;
+            // The patch mesh keeps each vertex on its world point (save in the
+            // morph bands, which water_displace corrects for), so it copies
+            // as the plain grid does, whatever the warp says.
+            const bool warpActive = dm.warp.halfRange > 0.0f && st.lodSlots == 0u;
             if (st.blas->prevVertex.handle != VK_NULL_HANDLE && !warpActive) {
                 VkBufferCopy region{};
                 region.size = VkDeviceSize(st.vertexCount) * 3u * sizeof(float);
@@ -3793,8 +3801,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 std::array<VkBufferMemoryBarrier, 1> bmb{};
                 bmb[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
                 bmb[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                // (the patch mesh's displace rewrites the slots it moved)
                 bmb[0].dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
-                                       VK_ACCESS_SHADER_READ_BIT;
+                                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
                 bmb[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 bmb[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 bmb[0].buffer = st.blas->prevVertex.handle;
@@ -3808,6 +3817,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
 
             // (4) Dispatch water_displace.comp → writes positions + normals
             // into the BLAS vertex/normal buffers.
+
+            // (3.6) The patch mesh (DisplacedMesh::Lod): this frame's patches,
+            // round the camera and each posed hull, into the slots.
+            VkDeviceAddress lodTableAddr = 0;
+            if (st.lodSlots > 0u) lodTableAddr = updateOceanLod(dm, st);
 
             // (4a) Foam-disturbance SSBO upload. Lazy-allocate the host-
             // mapped buffer on first use, then memcpy the (possibly empty)
@@ -3998,6 +4012,16 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 pc.wakeTableAddr = st.wake->tableAddress();
                 pc.cascadeMask   = st.cascadeMask | (std::min(st.rtStride, 255u) << 8u);
             }
+            if (lodTableAddr != 0u) {
+                // The patch mesh: gridDimX 0 says so, gridDimZ is the slot
+                // count, and planeSizeX/Z carry the table's address (the block
+                // is at the 128-byte limit; the grid's sizes mean nothing here).
+                pc.gridDimX = 0u;
+                pc.gridDimZ = st.lodSlots;
+                static_assert(offsetof(vulkan::WaterDisplacePipeline::PushConstants, planeSizeZ) ==
+                              offsetof(vulkan::WaterDisplacePipeline::PushConstants, planeSizeX) + 4u);
+                std::memcpy(&pc.planeSizeX, &lodTableAddr, sizeof(VkDeviceAddress));
+            }
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.chopOn ? st.displaceChopDS : st.displaceDS, pc, st.chopOn);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
@@ -4084,9 +4108,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 cp.decay       = decay;
                 cp.maxFoam     = kMaxFoam * std::clamp(dm.params.foamAmount, 0.0f, 1.0f);// Params::foamAmount: 0 = no whitecaps
                 // Where the mesh sits in rest space: its warp centre (the
-                // warp recentres the grid there), else its own origin.
-                cp.centerX     = warpActive ? dm.warp.centerX : 0.f;
-                cp.centerZ     = warpActive ? dm.warp.centerZ : 0.f;
+                // warp recentres the grid there, and the bounded patch mesh's
+                // water with it), else its own origin.
+                const bool warped = dm.warp.halfRange > 0.0f;
+                cp.centerX     = warped ? dm.warp.centerX : 0.f;
+                cp.centerZ     = warped ? dm.warp.centerZ : 0.f;
                 {
                     // Fold foam: the J under which the drawn surface takes
                     // foam, its ramp, and the shortest wave that counts (m).
@@ -4163,9 +4189,9 @@ void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, Displa
             // The ray-tracing proxy's triangles when the record has one (see
             // ensureDisplacedState), else the geometry's own.
             const bool proxy = st.blas->rtIndexCount != 0u;
-            const uint32_t primCount = proxy   ? st.blas->rtIndexCount / 3u
-                                     : indexed ? static_cast<uint32_t>(idxAttr->count() / 3)
-                                               : vc / 3;
+            uint32_t primCount = proxy   ? st.blas->rtIndexCount / 3u
+                               : indexed ? static_cast<uint32_t>(idxAttr->count() / 3)
+                                         : vc / 3;
 
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
             triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
@@ -4193,9 +4219,24 @@ void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, Displa
             // keeps the BVH balanced over time. buildBlasFor itself counts as
             // the first build, so blasRefitCounter starts at 0 and the very
             // first refreshDisplacedBlas takes the UPDATE path.
-            const bool fullRebuild = blasRebuildThisFrame_ ||
+            // The patch mesh moves slots to new patches as the camera goes: a
+            // refit then stretches the old boxes over both places (little: a
+            // slot goes to the nearest), so the structure is built anew once
+            // that has happened, at most every 16th frame, at once after a
+            // jump that moved many. It holds the slots up to the last one in
+            // use when it was built (a refit keeps that count): a patch in a
+            // slot past them is built in at once.
+            const bool lodMoved = st.lodSlots > 0u && st.lodChangedSinceBuild > 0u &&
+                                  (st.blasRefitCounter >= 15u || st.lodChangedSinceBuild > st.lodSlots / 8u ||
+                                   st.lodActiveSlots > st.lodRtSlots);
+            const bool fullRebuild = blasRebuildThisFrame_ || lodMoved ||
                     st.blasRefitCounter >= DisplacedMeshState::kBlasFullRebuildInterval;
             st.blasRefitCounter = fullRebuild ? 0u : (st.blasRefitCounter + 1u);
+            if (fullRebuild) st.lodChangedSinceBuild = 0u;
+            if (st.lodSlots > 0u) {
+                if (fullRebuild) st.lodRtSlots = std::max(st.lodActiveSlots, 1u);
+                primCount = water::lod::rtTriangles(st.lodRtSlots);
+            }
 
             VkAccelerationStructureBuildGeometryInfoKHR build{};
             build.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -4236,6 +4277,210 @@ void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, Displa
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanBlas, currentFrame);
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanBlas, currentFrame);
+        }
+
+VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, DisplacedMeshState& st) {
+            using namespace water::lod;
+            // The table water_displace reads (its LodTable): the header, then a
+            // vec4 per slot. Mirrored there field for field (scalar layout).
+            struct Header {
+                float    eye[4];     // x, z, height over the rest plane, 0
+                float    prevEye[4]; // the last dispatch's; [3] = 1 once there was one
+                float    domain[4];  // halfX, halfZ (0 = none), centre x, z
+                VkDeviceAddress prevVertex;
+                uint32_t focusCount;
+                uint32_t prevFocusCount;
+                float    foci[kMaxFoci][4];    // x, z, radius, finest spacing
+                float    prevFoci[kMaxFoci][4];
+            };
+            static_assert(sizeof(Header) == 320u, "water_displace.comp's LodTable header");
+            const uint32_t slots = st.lodSlots;
+
+            // The eye in the mesh's frame: the rest plane is its y = 0.
+            Matrix4 inv;
+            inv.copy(*dm.matrixWorld).invert();
+            Vector3 eye = oceanLodEye_;
+            eye.applyMatrix4(inv);
+
+            // Each posed hull is a focus: cells near half her half beam (a power
+            // of two) over her length and a margin, so her cut keeps its shape
+            // however far the camera is.
+            std::array<Focus, kMaxFoci> foci{};
+            uint32_t focusCount = 0;
+            for (uint32_t v = 0; v < DisplacedMesh::kMaxVessels && focusCount < kMaxFoci; ++v) {
+                const DisplacedMesh::HullExclusion& he = dm.vesselHull(v);
+                if (!(he.halfLength > 0.f)) continue;
+                Focus& f = foci[focusCount++];
+                f.x = he.centerX;
+                f.z = he.centerZ;
+                f.radius = he.halfLength + std::max(he.halfBeam, 2.f);
+                f.minSpacing = std::max(DisplacedMesh::kLodFinest,
+                                        std::exp2(std::floor(std::log2(std::max(0.5f * he.halfBeam, 1e-3f)))));
+            }
+            View view;
+            view.eyeX = eye.x;
+            view.eyeZ = eye.z;
+            view.height = std::abs(eye.y);
+            view.halfX = dm.lod.halfX;
+            view.halfZ = dm.lod.halfZ;
+            if (view.halfX > 0.f && view.halfZ > 0.f && dm.warp.halfRange > 0.f) {
+                // A bounded water with a warp lies where the warped grid did:
+                // halfRange round the warp's centre.
+                view.halfX = view.halfZ = dm.warp.halfRange;
+                view.centerX = dm.warp.centerX;
+                view.centerZ = dm.warp.centerZ;
+            }
+            view.finest = DisplacedMesh::kLodFinest;
+            view.foci = foci.data();
+            view.focusCount = focusCount;
+            const std::vector<Patch> selected = select(view, slots);
+
+            // Slots: a patch that stays keeps its slot; the rest are freed. A new
+            // patch takes, of the free slots the ray-tracing structure holds
+            // (it is built over the slots up to the last one in use), the one
+            // whose last patch lay nearest, so a refit stretches its boxes
+            // least; past those, the lowest free slot, so the slots in use
+            // stay at the front and the structure holds few parked ones. The
+            // finest patches take the first kRtFineSlots slots (traced at
+            // every line), the others the slots after them; either goes to the
+            // other's when its own are all taken.
+            if (st.lodHome.size() != slots) st.lodHome.assign(slots, {0.f, 0.f, 0.f, 0.f});
+            std::unordered_map<DisplacedMeshState::LodKey, uint32_t, DisplacedMeshState::LodKeyHash> next;
+            next.reserve(selected.size() * 2u);
+            std::vector<uint8_t> used(slots, 0u), fresh(slots, 0u);
+            std::vector<const Patch*> pending;
+            for (const Patch& p : selected) {
+                const DisplacedMeshState::LodKey key{p.x, p.z, p.spacing};
+                const auto it = st.lodSlotOf.find(key);
+                if (it != st.lodSlotOf.end()) {
+                    next.emplace(key, it->second);
+                    used[it->second] = 1u;
+                } else {
+                    pending.push_back(&p);
+                }
+            }
+            if (!pending.empty()) {
+                const uint32_t traced = std::min(st.lodRtSlots, slots);
+                const uint32_t fineEnd = std::min(kRtFineSlots, slots);
+                struct Pool {
+                    uint32_t lo, hi, nextFree;
+                    std::vector<uint32_t> near;
+                };
+                std::array<Pool, 2> pools{Pool{0u, fineEnd, 0u, {}}, Pool{fineEnd, slots, 0u, {}}};
+                for (Pool& pl : pools) {
+                    for (uint32_t j = pl.lo; j < std::min(pl.hi, traced); ++j)
+                        if (!used[j]) pl.near.push_back(j);
+                    pl.nextFree = std::max(pl.lo, traced);
+                }
+                auto take = [&](Pool& pl, const Patch& p, uint32_t& slot) {
+                    if (!pl.near.empty()) {
+                        const float cx = p.x + 8.f * p.spacing, cz = p.z + 8.f * p.spacing;
+                        size_t best = 0;
+                        float bestD = std::numeric_limits<float>::infinity();
+                        for (size_t q = 0; q < pl.near.size(); ++q) {
+                            const auto& h = st.lodHome[pl.near[q]];
+                            const float dx = h[0] + 8.f * h[2] - cx, dz = h[1] + 8.f * h[2] - cz;
+                            const float d = h[2] > 0.f ? dx * dx + dz * dz : 1e30f;
+                            if (d < bestD) {
+                                bestD = d;
+                                best = q;
+                            }
+                        }
+                        slot = pl.near[best];
+                        pl.near[best] = pl.near.back();
+                        pl.near.pop_back();
+                        return true;
+                    }
+                    while (pl.nextFree < pl.hi && used[pl.nextFree]) ++pl.nextFree;
+                    if (pl.nextFree >= pl.hi) return false;
+                    slot = pl.nextFree;
+                    return true;
+                };
+                for (const Patch* p : pending) {
+                    const size_t own = p->spacing <= DisplacedMesh::kLodFinest * 1.001f ? 0u : 1u;
+                    uint32_t slot = 0;
+                    if (!take(pools[own], *p, slot)) take(pools[1u - own], *p, slot);// (selected never outnumbers the slots)
+                    st.lodHome[slot] = {p->x, p->z, p->spacing, 0.f};
+                    next.emplace(DisplacedMeshState::LodKey{p->x, p->z, p->spacing}, slot);
+                    used[slot] = 1u;
+                    fresh[slot] = 1u;
+                }
+                st.lodChangedSinceBuild += uint32_t(pending.size());
+            }
+            st.lodSlotOf = std::move(next);
+
+            // The table, this frame's slot of the ring.
+            if (st.lodTable[0].handle == VK_NULL_HANDLE) {
+                for (uint32_t s = 0; s < kFramesInFlight; ++s) {
+                    st.lodTable[s] = createBuffer(ctx->allocator(), ctx->device(),
+                                                  sizeof(Header) + size_t(slots) * 4u * sizeof(float),
+                                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                  VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    ctx->setObjectName(st.lodTable[s].handle, (std::string("ocean.lod.") + std::to_string(s)).c_str());
+                }
+            }
+            Header hd{};
+            hd.eye[0] = view.eyeX;
+            hd.eye[1] = view.eyeZ;
+            hd.eye[2] = view.height;
+            std::copy(std::begin(st.lodPrev), std::end(st.lodPrev), hd.prevEye);
+            hd.domain[0] = view.halfX;
+            hd.domain[1] = view.halfZ;
+            hd.domain[2] = view.centerX;
+            hd.domain[3] = view.centerZ;
+            hd.prevVertex = st.blas->prevVertex.address;
+            hd.focusCount = focusCount;
+            hd.prevFocusCount = st.lodPrevFocusCount;
+            for (uint32_t f = 0; f < focusCount; ++f) {
+                hd.foci[f][0] = foci[f].x;
+                hd.foci[f][1] = foci[f].z;
+                hd.foci[f][2] = foci[f].radius;
+                hd.foci[f][3] = foci[f].minSpacing;
+            }
+            std::memcpy(hd.prevFoci, st.lodPrevFoci.data(), sizeof(hd.prevFoci));
+
+            const Buffer& tb = st.lodTable[currentFrame];
+            void* mapped = nullptr;
+            check(vmaMapMemory(ctx->allocator(), tb.alloc, &mapped), "vmaMapMemory(ocean lod)");
+            auto* dst = static_cast<uint8_t*>(mapped);
+            std::memcpy(dst, &hd, sizeof(Header));
+            auto* tiles = reinterpret_cast<float*>(dst + sizeof(Header));
+            std::vector<uint8_t> active(slots, 0u);
+            st.lodActiveSlots = 0u;
+            for (const auto& [key, slot] : st.lodSlotOf) {
+                active[slot] = 1u;
+                st.lodActiveSlots = std::max(st.lodActiveSlots, slot + 1u);
+                float* t = tiles + 4u * slot;
+                t[0] = key.x;
+                t[1] = key.z;
+                t[2] = key.s;
+                t[3] = (fresh[slot] || !(st.lodPrev[3] > 0.f)) ? 2.f : 1.f;
+            }
+            for (uint32_t j = 0; j < slots; ++j) {
+                if (active[j]) {
+                    st.lodHome[j][3] = 0.f;
+                    continue;
+                }
+                // A free slot lies flat at its last patch's corner: written once
+                // (0), then left (3).
+                auto& h = st.lodHome[j];
+                float* t = tiles + 4u * j;
+                t[0] = h[0];
+                t[1] = h[1];
+                t[2] = h[2];
+                t[3] = h[3] > 0.f ? 3.f : 0.f;
+                h[3] = 1.f;
+            }
+            flushHostWrites(ctx->allocator(), tb.alloc);
+            vmaUnmapMemory(ctx->allocator(), tb.alloc);
+
+            st.lodPrev[0] = view.eyeX;
+            st.lodPrev[1] = view.eyeZ;
+            st.lodPrev[2] = view.height;
+            st.lodPrev[3] = 1.f;
+            std::memcpy(st.lodPrevFoci.data(), hd.foci, sizeof(hd.foci));
+            st.lodPrevFocusCount = focusCount;
+            return tb.address;
         }
 
 void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, DisplacedMeshState& st) {
@@ -5249,8 +5494,13 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // grids), else the historical square derivation from
             // sqrt(vertexCount). PlaneGeometry(w, h, segX, segY) produces
             // (segX+1)·(segY+1) verts laid out row-major, X fastest.
-            uint32_t gridDimX = dm.gridWidth;
-            uint32_t gridDimZ = dm.gridDepth;
+            // The patch mesh (DisplacedMesh::Lod) is no grid: its rest points
+            // come from the frame's patch table, and the ray-tracing proxy
+            // keeps every other line of each patch.
+            const bool patchMesh = dm.lod.slots > 0u;
+            if (patchMesh && vertexCount != dm.lod.slots * water::lod::kPatchVertices) return nullptr;
+            uint32_t gridDimX = patchMesh ? water::lod::kSide : dm.gridWidth;
+            uint32_t gridDimZ = patchMesh ? water::lod::kSide * dm.lod.slots : dm.gridDepth;
             if (gridDimX == 0 || gridDimZ == 0) {
                 const uint32_t gridDim = static_cast<uint32_t>(std::round(std::sqrt(double(vertexCount))));
                 gridDimX = gridDimZ = gridDim;
@@ -5271,8 +5521,8 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 if (z < zMin) zMin = z;
                 if (z > zMax) zMax = z;
             }
-            const float planeSizeX = xMax - xMin;
-            const float planeSizeZ = zMax - zMin;
+            const float planeSizeX = patchMesh ? 1.f : xMax - xMin;
+            const float planeSizeZ = patchMesh ? 1.f : zMax - zMin;
             if (!(planeSizeX > 0.f) || !(planeSizeZ > 0.f)) return nullptr;
 
             // The ray-tracing proxy (DisplacedMesh::rtProxyCells): the AS is
@@ -5287,7 +5537,26 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // linear in the triangle count, the full grid sits past a cliff.
             std::vector<uint32_t> rtIndices;
             uint32_t rtStride = 1;
-            if (dm.rtProxyCells > 0u) {
+            if (patchMesh) {
+                // Every other line of each patch, 8 x 8 cells, 128 triangles a
+                // slot, save the first kRtFineSlots, which keep all 16 x 16
+                // (the finest patches go there): 671 k for 4096 slots. The
+                // parked slots' triangles are points at their last patch.
+                using namespace water::lod;
+                rtStride = kRtStride;
+                rtIndices.reserve(size_t(rtTriangles(dm.lod.slots)) * 3u);
+                for (uint32_t k = 0; k < dm.lod.slots; ++k) {
+                    const uint32_t base = k * kPatchVertices;
+                    const uint32_t step = k < kRtFineSlots ? 1u : kRtStride;
+                    for (uint32_t j = 0; j < kCells; j += step) {
+                        for (uint32_t i = 0; i < kCells; i += step) {
+                            const uint32_t a = base + j * kSide + i, b = base + (j + step) * kSide + i;
+                            const uint32_t c = b + step, d = a + step;
+                            rtIndices.insert(rtIndices.end(), {a, b, d, b, c, d});
+                        }
+                    }
+                }
+            } else if (dm.rtProxyCells > 0u) {
                 const uint32_t cellsX = gridDimX - 1u, cellsZ = gridDimZ - 1u;
                 const uint32_t stride = (std::max(cellsX, cellsZ) + dm.rtProxyCells - 1u) / dm.rtProxyCells;
                 if (stride > 1u) {
@@ -5337,6 +5606,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->gridDimX = gridDimX;
             state->gridDimZ = gridDimZ;
             state->rtStride = rtStride;
+            state->lodSlots = patchMesh ? dm.lod.slots : 0u;
             state->planeSizeX = planeSizeX;
             state->planeSizeZ = planeSizeZ;
             state->liveCheck = dm.geometry();
@@ -5834,6 +6104,11 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                 float spacing = std::max(st.planeSizeX / float(st.gridDimX - 1u),
                                          st.planeSizeZ / float(st.gridDimZ - 1u));
                 if (st.shortWaveHandoff > 0.f) spacing = std::min(spacing, st.shortWaveHandoff / 4.f);
+                // The patch mesh: its finest cells, or the hand-off's quarter
+                // as the grid had it; coarser cells read coarser mips.
+                if (st.lodSlots > 0u)
+                    spacing = st.shortWaveHandoff > 0.f ? std::max(DisplacedMesh::kLodFinest, st.shortWaveHandoff / 4.f)
+                                                        : DisplacedMesh::kLodFinest;
                 for (uint32_t i = 0; i < 3; ++i) {
                     if (!(st.cascadeMask & (1u << i))) continue;
                     st.cascades[i].dyn->enableChop(i < 2u && i != st.chopFineIdx ? spacing : 0.f);
@@ -5879,7 +6154,7 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                 // Short waves as geometry: the middle cascade's four fields
                 // through their mipped copies (water::FieldMips), so the
                 // displace reads them at each vertex's own spacing.
-                if (st.shortWaveHandoff > 0.f && (st.cascadeMask & 2u)) {
+                if ((st.shortWaveHandoff > 0.f || st.lodSlots > 0u) && (st.cascadeMask & 2u)) {
                     auto& c1 = st.cascades[1];
                     st.c1Mips = std::make_unique<water::FieldMips>(
                             *ctx, c1.dyn->ht().width,
@@ -5890,6 +6165,30 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                     infos[3] = {ms, st.c1Mips->view(1), VK_IMAGE_LAYOUT_GENERAL};
                     infos[8] = {ms, st.c1Mips->view(2), VK_IMAGE_LAYOUT_GENERAL};
                     infos[9] = {ms, st.c1Mips->view(3), VK_IMAGE_LAYOUT_GENERAL};
+                }
+                // The patch mesh: every cascade the displace reads through
+                // mipped copies, each vertex at the level whose texel is its
+                // spacing (cascade 2's slope and gradient are the shade's).
+                if (st.lodSlots > 0u && (st.cascadeMask & 1u)) {
+                    auto& c0 = st.cascades[0];
+                    st.c0Mips = std::make_unique<water::FieldMips>(
+                            *ctx, c0.dyn->ht().width,
+                            std::vector<VkImage>{c0.dyn->ht().image, c0.dyn->displacement().image,
+                                                 c0.dyn->slope().image, c0.dyn->jacDiag().image});
+                    const VkSampler ms = st.c0Mips->sampler();
+                    infos[0] = {ms, st.c0Mips->view(0), VK_IMAGE_LAYOUT_GENERAL};
+                    infos[1] = {ms, st.c0Mips->view(1), VK_IMAGE_LAYOUT_GENERAL};
+                    infos[6] = {ms, st.c0Mips->view(2), VK_IMAGE_LAYOUT_GENERAL};
+                    infos[7] = {ms, st.c0Mips->view(3), VK_IMAGE_LAYOUT_GENERAL};
+                }
+                if (st.lodSlots > 0u && (st.cascadeMask & 4u)) {
+                    auto& c2 = st.cascades[2];
+                    st.c2Mips = std::make_unique<water::FieldMips>(
+                            *ctx, c2.dyn->ht().width,
+                            std::vector<VkImage>{c2.dyn->ht().image, c2.dyn->displacement().image});
+                    const VkSampler ms = st.c2Mips->sampler();
+                    infos[4] = {ms, st.c2Mips->view(0), VK_IMAGE_LAYOUT_GENERAL};
+                    infos[5] = {ms, st.c2Mips->view(1), VK_IMAGE_LAYOUT_GENERAL};
                 }
                 vulkan::updateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
 

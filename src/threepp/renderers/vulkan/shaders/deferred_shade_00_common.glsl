@@ -290,6 +290,8 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float hfTopNoise;    // peak displacement of the base height (m); 0 = off
     float hfTopInvScale; // 1 / feature size (1/m)
     vec3  hfTopOffset;   // wind drift and evolution, in noise-space units
+    vec3  waterUp;       // the water's up in the world (the ocean mesh's +Y)
+    vec3  waterX;        // ... and its x (the ocean mesh's +X)
 } fog;
 
 // ── World-space irradiance probe grid (multi-bounce GI, on by default) ──────

@@ -2894,7 +2894,33 @@ void VulkanRenderer::Impl::fingerprintEntries(SceneBuildFrame& sb) {
 // the *DirtyAny flags here.
 // Needs: the entries, sb.leanOk. Leaves: the entry*Dirty bits and, lean, the flags.
 void VulkanRenderer::Impl::scanDeformers(SceneBuildFrame& sb, Camera& camera) {
+            // The ocean's patches (DisplacedMesh::Lod) lie round this frame's camera.
+            oceanLodEye_.setFromMatrixPosition(*camera.matrixWorld);
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            // The water's frame: the +Y and +X of the ocean whose fine cascade
+            // the shade reads (the first displaced mesh without that), the
+            // world's without one.
+            {
+                Vector3 up(0.f, 1.f, 0.f), ax(1.f, 0.f, 0.f);
+                bool exact = false, any = false;
+                for (const auto& sp : entrySpans_) {
+                    if (exact || !entries[sp.first].isDisplaced) continue;
+                    const auto& w = entries[sp.first].worldMatrix;
+                    const Vector3 x(w[0], w[1], w[2]), y(w[4], w[5], w[6]);
+                    if (!(x.lengthSq() > 0.f) || !(y.lengthSq() > 0.f)) continue;
+                    const auto it = displacedStates.find(static_cast<const DisplacedMesh*>(entries[sp.first].mesh));
+                    const DisplacedMeshState* st = it != displacedStates.end() ? it->second.get() : nullptr;
+                    exact = st && oceanFineHeightView != VK_NULL_HANDLE && st->cascades[st->chopFineIdx].dyn &&
+                            st->cascades[st->chopFineIdx].dyn->ht().view == oceanFineHeightView;
+                    if (exact || !any) {
+                        up.copy(y).normalize();
+                        ax.copy(x).normalize();
+                    }
+                    any = true;
+                }
+                oceanWaterUp_ = up;
+                oceanWaterX_ = ax;
+            }
             auto& bonesDirtyAny = sb.bonesDirtyAny;
             auto& displacedDirtyAny = sb.displacedDirtyAny;
             auto& grassDirtyAny = sb.grassDirtyAny;
@@ -4731,6 +4757,7 @@ void VulkanRenderer::Impl::pruneDeadSceneResources() {
                         for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                         destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                         for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
+                        for (auto& b : st->lodTable) destroyBuffer(ctx->allocator(), b);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
                         // run on unique_ptr reset.
                         it = displacedStates.erase(it);
@@ -5470,7 +5497,8 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
             // gets the same world-static fallback.
             bool warpReproject = rec.interopWorldStatic;
             if (en.isDisplaced) {
-                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f;
+                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f &&
+                                static_cast<DisplacedMesh*>(en.mesh)->lod.slots == 0u;
             }
             gdesc.prevVertexAddress =
                     (rec.prevVertex.handle != VK_NULL_HANDLE && !warpReproject)

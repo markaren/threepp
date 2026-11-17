@@ -2173,6 +2173,9 @@ namespace threepp {
         // rebuild over the displaced vertices. The async-compute pilot records
         // them into different command buffers on different queues.
         void recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed);
+        // The patch mesh's frame (DisplacedMesh::Lod): selects the patches,
+        // assigns the slots, uploads the table; returns its device address.
+        VkDeviceAddress updateOceanLod(DisplacedMesh& dm, DisplacedMeshState& st);
         void recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed);
 
         // Mirror cascade height fields into DisplacedMesh for CPU sampling

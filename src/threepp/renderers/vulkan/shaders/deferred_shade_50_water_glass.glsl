@@ -278,6 +278,26 @@ float waterFacetFresnelMean(float c, float var, float r0) {
     return den > 1e-6 ? num / den : r0 + (1.0 - r0) * pow(1.0 - c, 5.0);
 }
 
+// The slope spread of an ocean's rasterised normals at a pixel: the mean
+// squared difference of its four G-buffer neighbours' normals from its own
+// (Nraster, as stored), both axes. Where the mesh's normals are resolved it is
+// next to nothing; where its waves are under a pixel (along the line of sight,
+// past a few hundred metres from a low eye) the neighbours are other waves and
+// it is their slope variance; on a calm sea it is small at any distance. The
+// shade's footprint floor stands for exactly that spread.
+float oceanRasterSlopeVar(ivec2 px, vec3 nRaster) {
+    const ivec2 hi = ivec2(int(pc.width), int(pc.height)) - 1;
+    const ivec2 off[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+    float v = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const vec4 nn = texelFetch(gbufNormalTex, clamp(px + off[i], ivec2(0), hi), 0);
+        if (nn.w <= 0.0) continue;// sky / unlit: no surface
+        const vec3 d = normalize(nn.xyz * 2.0 - 1.0) - nRaster;
+        v += 0.25 * dot(d, d);
+    }
+    return v;
+}
+
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
@@ -288,20 +308,30 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // interpolation error. Every ray below starts a SHADOW_EPS off P, so
     // against the proxy it met the water at once: a crest's refraction ray
     // found a "bottom" at zero depth, and the bay lit up along every ridge.
-    // Put P on the proxy: a short vertical probe through the surface (the
-    // water is single-valued in y), kept only when what it finds is this
-    // water; under a hull or a quay P stays where the raster put it.
+    // Put P on the proxy: a short probe through the surface along the
+    // water's own up (the water is single-valued along it; a Z-up world turns
+    // it, and a probe along world y there crossed the waves sideways and
+    // moved P along the water onto a wave's face: sharp dark blotches),
+    // kept only when what it finds is this water; under a hull or a quay P
+    // stays where the raster put it.
     if ((geoms[instIdx].flags & kGeomFlagRtProxy) != 0u) {
         const float h = 0.5;
         rayQueryEXT pq;
         rayQueryInitializeEXT(pq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque,
-                              P + vec3(0.0, h, 0.0), 0.0, vec3(0.0, -1.0, 0.0), 2.0 * h);
+                              P + fog.waterUp * h, 0.0, -fog.waterUp, 2.0 * h);
         while (rayQueryProceedEXT(pq)) {}
         if (rayQueryGetIntersectionTypeEXT(pq, true) != gl_RayQueryCommittedIntersectionNoneEXT &&
             rayQueryGetIntersectionInstanceCustomIndexEXT(pq, true) == instIdx) {
-            P.y += h - rayQueryGetIntersectionTEXT(pq, true);
+            P += fog.waterUp * (h - rayQueryGetIntersectionTEXT(pq, true));
         }
     }
+    // The water's own plane (fog.waterX, fog.waterUp: world x and z for a
+    // Y-up water), as the prologue lays the fine cascade: the foam and its
+    // footprint lie on it.
+    const vec3 wAxisX = fog.waterX;
+    const vec3 wAxisZ = cross(fog.waterX, fog.waterUp);
+    const vec2 wP     = vec2(dot(P, wAxisX), dot(P, wAxisZ));
+    const vec2 wV     = vec2(dot(V, wAxisX), dot(V, wAxisZ));
     const float NdotV = max(dot(N, V), 1e-4);
     const float ior   = max(pm.ior, 1.0);
     // ── FROM BELOW ───────────────────────────────────────────────────────────
@@ -393,6 +423,17 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     vec3 R = reflect(-V, N);
     const float rDotUp = dot(R, Nsurf);
     if (rDotUp < 0.02) R = normalize(R + Nsurf * (0.02 - rDotUp));
+    // Level water (along the water's own up, fog.waterUp): above the water's
+    // own plane too, not only the tilted vertex normal's. A far patch's normal
+    // leans by more than the view's elevation, and a ray kept just over its
+    // plane still went down through the water to the sea bed: black specks
+    // along the crests and on the far water of a fjord.
+    const float sUp = dot(Nsurf, fog.waterUp);
+    if (abs(sUp) > 0.5) {
+        const vec3  up  = sUp > 0.0 ? fog.waterUp : -fog.waterUp;
+        const float rUp = dot(R, up);
+        if (rUp < 0.02) R = normalize(R + up * (0.02 - rUp));
+    }
     // Env-miss reflection blur widens with the banked chop variance: distant
     // sub-pixel wave facets reflect a point-feature sky (sun disc / bright cloud
     // edge) as per-pixel speckle unless the reflection is filtered by the same
@@ -894,7 +935,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         // under the foam, a third as thick in the gaps.
         float plumes = 1.0;
         if (kOceanCrestFoam != 0u && gWakeLace > 0.0) {
-            const vec2  qA = P.xz - gCrestDisp;
+            const vec2  qA = wP - gCrestDisp;
             const float dA = length(P - gPrimaryOrigin);
             const float pxA = (cam.camAux.x > 0.5 ? 1.0 : dA) * 2.0 * cam.projInverse[1][1] / max(float(pc.height), 1.0);
             // 13 m across one tile: the plumes are larger than the lace on them
@@ -1048,13 +1089,13 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // some of the water through. From below it is the dull raft the
     // accumulator's foam is.
     if (kOceanCrestFoam != 0u && pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
-        const vec2  q        = P.xz - gCrestDisp;
+        const vec2  q        = wP - gCrestDisp;
         const float distF    = length(P - gPrimaryOrigin);
         const float pixWorld = (cam.camAux.x > 0.5 ? 1.0 : distF) * 2.0 * cam.projInverse[1][1]
                              / max(float(pc.height), 1.0);// world m / pixel across the view
         const float pixAlong = pixWorld / max(dot(Nmacro, V), 0.05);
-        const float vl       = length(V.xz);
-        const vec2  along    = vl > 1e-4 ? V.xz / vl : vec2(1.0, 0.0);
+        const float vl       = length(wV);
+        const vec2  along    = vl > 1e-4 ? wV / vl : vec2(1.0, 0.0);
         const vec2  gA       = along * pixAlong;
         const vec2  gX       = vec2(-along.y, along.x) * pixWorld;
         const float invTile  = 1.0 / pc.oceanFoamTileSize;
@@ -1236,7 +1277,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         // interpolates, attenuating an isolated single-texel whitecap to
         // ~0.44 of its stored value — the gain restores it; patch interiors
         // already read ~1 and just clamp.
-        const float foamCoverage = clamp(sampleFoamBicubic(P.xz / pc.oceanFoamTileSize) * 1.3, 0.0, 1.0);
+        const float foamCoverage = clamp(sampleFoamBicubic(wP / pc.oceanFoamTileSize) * 1.3, 0.0, 1.0);
         if (foamCoverage > 0.0) {
             const vec2  drift = vec2(0.42, 0.71) * pc.timeSec * 0.18;
             // Detail from the baked foam tile (binding 34). Manual LOD —
@@ -1258,15 +1299,15 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // of the detail tile (R over an 8 m mapping → 0.3–1 m features)
             // erodes the threshold so the boundary detail comes from the
             // texture — same trick that fixed the lace streaks.
-            const float pools = fbm4(P.xz * 0.18 + drift);
-            const float edgeN = textureLod(foamDetailTex, P.xz * 0.125 + drift * 0.07, lodEdge).r;
+            const float pools = fbm4(wP * 0.18 + drift);
+            const float edgeN = textureLod(foamDetailTex, wP * 0.125 + drift * 0.07, lodEdge).r;
             const float sheet = smoothstep(0.03, 0.42,
                     foamCoverage - pools * mix(0.50, 0.22, foamCoverage)
                                  - (edgeN - 0.5) * 0.30);
             // Lace: ridged filament pattern from the detail tile (~1.2 m
             // cells over the 12 m mapping). Fresh foam widens the band until
             // it merges with the sheet; old foam keeps only filament cores.
-            const float lace = textureLod(foamDetailTex, P.xz * (1.0 / 12.0) + drift * 0.12, lodLace).g;
+            const float lace = textureLod(foamDetailTex, wP * (1.0 / 12.0) + drift * 0.12, lodLace).g;
             const float web  = smoothstep(0.55, 0.80, lace * (0.55 + 0.45 * foamCoverage)) *
                                smoothstep(0.03, 0.22, foamCoverage);
             // From BELOW, foam is not paint on the surface — it is a raft of
@@ -1276,7 +1317,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // outright would leave a breaking crest looking like clear water.
             const float foamMask = max(sheet, web * 0.8) * (below ? 0.12 : 1.0);
             if (foamMask > 0.0) {
-                const float micro = textureLod(foamDetailTex, P.xz * 0.25 - drift * 0.1, lodMicro).r;
+                const float micro = textureLod(foamDetailTex, wP * 0.25 - drift * 0.1, lodMicro).r;
                 vec3 foamCol = mix(vec3(0.62, 0.68, 0.72), vec3(0.97, 0.99, 1.00), micro);
                 foamCol = mix(foamCol, vec3(0.97, 0.99, 1.00), 0.35 * foamCoverage);// fresh caps brighter
                 const float foamRough= mix(1.0, 0.45, micro);
