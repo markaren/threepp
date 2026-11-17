@@ -4235,8 +4235,7 @@ void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, Displa
             if (fullRebuild) st.lodChangedSinceBuild = 0u;
             if (st.lodSlots > 0u) {
                 if (fullRebuild) st.lodRtSlots = std::max(st.lodActiveSlots, 1u);
-                const uint32_t cells = water::lod::kCells / water::lod::kRtStride;
-                primCount = st.lodRtSlots * cells * cells * 2u;
+                primCount = water::lod::rtTriangles(st.lodRtSlots);
             }
 
             VkAccelerationStructureBuildGeometryInfoKHR build{};
@@ -4341,7 +4340,10 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
             // (it is built over the slots up to the last one in use), the one
             // whose last patch lay nearest, so a refit stretches its boxes
             // least; past those, the lowest free slot, so the slots in use
-            // stay at the front and the structure holds few parked ones.
+            // stay at the front and the structure holds few parked ones. The
+            // finest patches take the first kRtFineSlots slots (traced at
+            // every line), the others the slots after them; either goes to the
+            // other's when its own are all taken.
             if (st.lodHome.size() != slots) st.lodHome.assign(slots, {0.f, 0.f, 0.f, 0.f});
             std::unordered_map<DisplacedMeshState::LodKey, uint32_t, DisplacedMeshState::LodKeyHash> next;
             next.reserve(selected.size() * 2u);
@@ -4359,18 +4361,24 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
             }
             if (!pending.empty()) {
                 const uint32_t traced = std::min(st.lodRtSlots, slots);
-                std::vector<uint32_t> near;
-                for (uint32_t j = 0; j < traced; ++j)
-                    if (!used[j]) near.push_back(j);
-                uint32_t nextFree = traced;
-                for (const Patch* p : pending) {
-                    uint32_t slot;
-                    if (!near.empty()) {
-                        const float cx = p->x + 8.f * p->spacing, cz = p->z + 8.f * p->spacing;
+                const uint32_t fineEnd = std::min(kRtFineSlots, slots);
+                struct Pool {
+                    uint32_t lo, hi, nextFree;
+                    std::vector<uint32_t> near;
+                };
+                std::array<Pool, 2> pools{Pool{0u, fineEnd, 0u, {}}, Pool{fineEnd, slots, 0u, {}}};
+                for (Pool& pl : pools) {
+                    for (uint32_t j = pl.lo; j < std::min(pl.hi, traced); ++j)
+                        if (!used[j]) pl.near.push_back(j);
+                    pl.nextFree = std::max(pl.lo, traced);
+                }
+                auto take = [&](Pool& pl, const Patch& p, uint32_t& slot) {
+                    if (!pl.near.empty()) {
+                        const float cx = p.x + 8.f * p.spacing, cz = p.z + 8.f * p.spacing;
                         size_t best = 0;
                         float bestD = std::numeric_limits<float>::infinity();
-                        for (size_t q = 0; q < near.size(); ++q) {
-                            const auto& h = st.lodHome[near[q]];
+                        for (size_t q = 0; q < pl.near.size(); ++q) {
+                            const auto& h = st.lodHome[pl.near[q]];
                             const float dx = h[0] + 8.f * h[2] - cx, dz = h[1] + 8.f * h[2] - cz;
                             const float d = h[2] > 0.f ? dx * dx + dz * dz : 1e30f;
                             if (d < bestD) {
@@ -4378,13 +4386,20 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
                                 best = q;
                             }
                         }
-                        slot = near[best];
-                        near[best] = near.back();
-                        near.pop_back();
-                    } else {
-                        while (used[nextFree]) ++nextFree;// (selected never outnumbers the slots)
-                        slot = nextFree;
+                        slot = pl.near[best];
+                        pl.near[best] = pl.near.back();
+                        pl.near.pop_back();
+                        return true;
                     }
+                    while (pl.nextFree < pl.hi && used[pl.nextFree]) ++pl.nextFree;
+                    if (pl.nextFree >= pl.hi) return false;
+                    slot = pl.nextFree;
+                    return true;
+                };
+                for (const Patch* p : pending) {
+                    const size_t own = p->spacing <= DisplacedMesh::kLodFinest * 1.001f ? 0u : 1u;
+                    uint32_t slot = 0;
+                    if (!take(pools[own], *p, slot)) take(pools[1u - own], *p, slot);// (selected never outnumbers the slots)
                     st.lodHome[slot] = {p->x, p->z, p->spacing, 0.f};
                     next.emplace(DisplacedMeshState::LodKey{p->x, p->z, p->spacing}, slot);
                     used[slot] = 1u;
@@ -5523,18 +5538,20 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             std::vector<uint32_t> rtIndices;
             uint32_t rtStride = 1;
             if (patchMesh) {
-                // Every other line of each patch: 8 x 8 cells, 128 triangles a
-                // slot, 524 k for 4096 slots (the 512 x 512 proxy's count).
-                // The parked slots' triangles are points at their last patch.
+                // Every other line of each patch, 8 x 8 cells, 128 triangles a
+                // slot, save the first kRtFineSlots, which keep all 16 x 16
+                // (the finest patches go there): 671 k for 4096 slots. The
+                // parked slots' triangles are points at their last patch.
                 using namespace water::lod;
                 rtStride = kRtStride;
-                rtIndices.reserve(size_t(dm.lod.slots) * (kCells / kRtStride) * (kCells / kRtStride) * 6u);
+                rtIndices.reserve(size_t(rtTriangles(dm.lod.slots)) * 3u);
                 for (uint32_t k = 0; k < dm.lod.slots; ++k) {
                     const uint32_t base = k * kPatchVertices;
-                    for (uint32_t j = 0; j < kCells; j += kRtStride) {
-                        for (uint32_t i = 0; i < kCells; i += kRtStride) {
-                            const uint32_t a = base + j * kSide + i, b = base + (j + kRtStride) * kSide + i;
-                            const uint32_t c = b + kRtStride, d = a + kRtStride;
+                    const uint32_t step = k < kRtFineSlots ? 1u : kRtStride;
+                    for (uint32_t j = 0; j < kCells; j += step) {
+                        for (uint32_t i = 0; i < kCells; i += step) {
+                            const uint32_t a = base + j * kSide + i, b = base + (j + step) * kSide + i;
+                            const uint32_t c = b + step, d = a + step;
                             rtIndices.insert(rtIndices.end(), {a, b, d, b, c, d});
                         }
                     }

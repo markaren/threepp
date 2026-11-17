@@ -31,6 +31,21 @@ namespace threepp::water::lod {
     inline constexpr float kHorizonSpacing = 16384.f;// the open sea's root cell: a 2^18 m root patch
     inline constexpr uint32_t kMaxFoci = 8;
     inline constexpr uint32_t kRtStride = 2;// the ray-tracing structure keeps every kRtStride-th line of a patch
+    // ... save in the first kRtFineSlots slots, which keep every line and hold
+    // the finest patches (round the camera: some 270 of them from a low eye).
+    // There the traced water is the drawn water: a hull or a post standing in
+    // it meets both at one waterline (at kRtStride the traced surface lay a
+    // few centimetres over the drawn one between its lines, and the strip of
+    // hull under it took no sky, sun or bounce: a dark line along the
+    // waterline).
+    inline constexpr uint32_t kRtFineSlots = 384;
+
+    // The ray-tracing structure's triangles over the first `slots` slots.
+    inline uint32_t rtTriangles(uint32_t slots) {
+        const uint32_t fine = std::min(slots, kRtFineSlots);
+        const uint32_t coarse = kCells / kRtStride;
+        return fine * kCells * kCells * 2u + (slots - fine) * coarse * coarse * 2u;
+    }
 
     struct Focus {
         float x = 0.f, z = 0.f;
