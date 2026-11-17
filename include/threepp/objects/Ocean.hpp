@@ -64,7 +64,8 @@ namespace threepp {
 
         struct Options {
             // Water extent in metres along local X, centred on the mesh's
-            // origin (unless `horizon`). The LARGER of size/sizeZ doubles as
+            // origin, or on the warp's centre once one is set (unless
+            // `horizon`). The LARGER of size/sizeZ doubles as
             // the cascade-0 FFT tile, i.e. the wavelength of the largest swell.
             float size = 1000.0f;
 

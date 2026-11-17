@@ -11,8 +11,8 @@
 // onto the coarser lattice, all the way at 1: a coarser neighbour exists only
 // where the finer patch's border lies past 1, and (for these reaches) a patch
 // never morphs at its border with a finer one, so levels meet without cracks.
-// The lattice is fixed in the mesh's frame: the root is snapped to whole root
-// patches, so every patch has the same place whichever frame lays it.
+// The lattice is fixed in the mesh's frame: the root's corner lies on its own
+// lattice, so every patch has the same place whichever frame lays it.
 
 #ifndef THREEPP_VULKAN_WATER_OCEANLOD_HPP
 #define THREEPP_VULKAN_WATER_OCEANLOD_HPP
@@ -41,6 +41,7 @@ namespace threepp::water::lod {
     struct View {
         float eyeX = 0.f, eyeZ = 0.f, height = 0.f;// the eye in the mesh's frame, height over the rest plane
         float halfX = 0.f, halfZ = 0.f;              // the water's half extents; 0 = none
+        float centerX = 0.f, centerZ = 0.f;          // ... round this point
         float finest = 0.25f;                        // m
         const Focus* foci = nullptr;
         uint32_t focusCount = 0;
@@ -51,12 +52,21 @@ namespace threepp::water::lod {
         float spacing = 0.f;
     };
 
-    // The root: its corner and cell spacing.
+    // The root: its corner and cell spacing. A bounded water's root is the
+    // least that holds it with its corner on its own lattice (the lattice
+    // stays fixed while the water's centre does).
     inline void root(const View& v, float& x0, float& z0, float& spacing) {
         if (v.halfX > 0.f && v.halfZ > 0.f) {
             const float half = std::max(v.halfX, v.halfZ);
             spacing = std::max(v.finest, std::exp2(std::ceil(std::log2(2.f * half / float(kCells)))));
-            x0 = z0 = -0.5f * float(kCells) * spacing;
+            for (int tries = 0;; ++tries) {
+                const float width = float(kCells) * spacing;
+                x0 = std::round(v.centerX / spacing) * spacing - 0.5f * width;
+                z0 = std::round(v.centerZ / spacing) * spacing - 0.5f * width;
+                if (tries == 8 || (x0 <= v.centerX - v.halfX && x0 + width >= v.centerX + v.halfX &&
+                                   z0 <= v.centerZ - v.halfZ && z0 + width >= v.centerZ + v.halfZ)) break;
+                spacing *= 2.f;
+            }
         } else {
             spacing = kHorizonSpacing;
             const float width = float(kCells) * spacing;
@@ -90,7 +100,8 @@ namespace threepp::water::lod {
         const bool bounded = v.halfX > 0.f && v.halfZ > 0.f;
         auto visit = [&](auto&& self, float x, float z, float s) -> void {
             const float w = float(kCells) * s;
-            if (bounded && (x > v.halfX || x + w < -v.halfX || z > v.halfZ || z + w < -v.halfZ)) return;
+            if (bounded && (x > v.centerX + v.halfX || x + w < v.centerX - v.halfX ||
+                            z > v.centerZ + v.halfZ || z + w < v.centerZ - v.halfZ)) return;
             const float c = 0.5f * s;
             if (c >= v.finest * 0.999f && norm(v, x, z, w, c) < 1.f) {
                 const float h = 0.5f * w;

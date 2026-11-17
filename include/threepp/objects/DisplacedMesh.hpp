@@ -334,7 +334,9 @@ namespace threepp {
         // for its cut.
         //   halfX / halfZ: the water's half extents round the mesh's origin
         //   (vertices past them are held to the edge); 0 = no edge, the patches
-        //   reach out to the horizon (2^17 m from the camera).
+        //   reach out to the horizon (2^17 m from the camera). With a warp set
+        //   (halfRange > 0) a bounded water lies where the warped grid did:
+        //   halfRange round the warp's centre.
         struct Lod {
             uint32_t slots = 0;// 0 = the mesh is a grid (gridWidth, gridDepth, warp)
             float    halfX = 0.f;

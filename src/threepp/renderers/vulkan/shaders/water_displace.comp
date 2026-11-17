@@ -73,7 +73,7 @@ layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) readonly buffer LodTable {
     vec4     eye;       // x, z, height over the rest plane
     vec4     prevEye;   // .w 1 once there was a last dispatch
-    vec4     domain;    // the water's half extents, 0 = none
+    vec4     domain;    // the water's half extents (0 = none), its centre
     PosBuf   prevVertex;
     uint     focusCount;
     uint     prevFocusCount;
@@ -456,7 +456,7 @@ vec3 lodRest(vec2 q, float s, vec4 eye, uint focusCount, bool prev) {
     const float m = clamp((lodNorm(q, s, eye, focusCount, prev) - 0.9) / 0.1, 0.0, 1.0);
     vec2 r = mix(q, floor(q / (2.0 * s)) * (2.0 * s), m);
     const vec4 dom = lodTable().domain;
-    if (dom.x > 0.0) r = clamp(r, -dom.xy, dom.xy);
+    if (dom.x > 0.0) r = clamp(r, dom.zw - dom.xy, dom.zw + dom.xy);
     return vec3(r, m);
 }
 // A cascade's level for a lattice spacing: the one whose texel is that

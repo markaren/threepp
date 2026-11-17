@@ -4108,9 +4108,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 cp.decay       = decay;
                 cp.maxFoam     = kMaxFoam * std::clamp(dm.params.foamAmount, 0.0f, 1.0f);// Params::foamAmount: 0 = no whitecaps
                 // Where the mesh sits in rest space: its warp centre (the
-                // warp recentres the grid there), else its own origin.
-                cp.centerX     = warpActive ? dm.warp.centerX : 0.f;
-                cp.centerZ     = warpActive ? dm.warp.centerZ : 0.f;
+                // warp recentres the grid there, and the bounded patch mesh's
+                // water with it), else its own origin.
+                const bool warped = dm.warp.halfRange > 0.0f;
+                cp.centerX     = warped ? dm.warp.centerX : 0.f;
+                cp.centerZ     = warped ? dm.warp.centerZ : 0.f;
                 {
                     // Fold foam: the J under which the drawn surface takes
                     // foam, its ramp, and the shortest wave that counts (m).
@@ -4285,7 +4287,7 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
             struct Header {
                 float    eye[4];     // x, z, height over the rest plane, 0
                 float    prevEye[4]; // the last dispatch's; [3] = 1 once there was one
-                float    domain[4];  // halfX, halfZ (0 = none), 0, 0
+                float    domain[4];  // halfX, halfZ (0 = none), centre x, z
                 VkDeviceAddress prevVertex;
                 uint32_t focusCount;
                 uint32_t prevFocusCount;
@@ -4322,6 +4324,13 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
             view.height = std::abs(eye.y);
             view.halfX = dm.lod.halfX;
             view.halfZ = dm.lod.halfZ;
+            if (view.halfX > 0.f && view.halfZ > 0.f && dm.warp.halfRange > 0.f) {
+                // A bounded water with a warp lies where the warped grid did:
+                // halfRange round the warp's centre.
+                view.halfX = view.halfZ = dm.warp.halfRange;
+                view.centerX = dm.warp.centerX;
+                view.centerZ = dm.warp.centerZ;
+            }
             view.finest = DisplacedMesh::kLodFinest;
             view.foci = foci.data();
             view.focusCount = focusCount;
@@ -4402,6 +4411,8 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
             std::copy(std::begin(st.lodPrev), std::end(st.lodPrev), hd.prevEye);
             hd.domain[0] = view.halfX;
             hd.domain[1] = view.halfZ;
+            hd.domain[2] = view.centerX;
+            hd.domain[3] = view.centerZ;
             hd.prevVertex = st.blas->prevVertex.address;
             hd.focusCount = focusCount;
             hd.prevFocusCount = st.lodPrevFocusCount;
