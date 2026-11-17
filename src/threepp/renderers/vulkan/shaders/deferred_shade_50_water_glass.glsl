@@ -431,27 +431,27 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // So the ray leaves along a facet drawn from the same lobe: a GGX visible
     // normal (Heitz 2018, sampleGgxVndf, the path tracer's sampler) about N,
     // alpha = effRough^2 (the alpha the glint's distGGX takes), one per pixel
-    // and frame, and the temporal accumulation (DLSS Ray Reconstruction, or
-    // the TAA) integrates the lobe. Still one reflection ray a water pixel.
-    // Near and calm water, where slopeVarSq is next to nothing and alpha is the
-    // material's roughness squared (thousandths), is still a mirror; a windy
-    // far sea blurs, and at a grazing view the visible normals stretch the blur
-    // up and down the line of sight, the long streaks a lake throws a far
-    // shore into.
-    // The draws: blue noise across the pixels, as the opaque glossy lobe's
-    // environment takes them; under RR the gather's hashed tile offsets
-    // (giBlueNoiseRR: no period in time), else an R2 walk through the frames
-    // (a held view converges on the lobe, not on a cycle of a few samples).
+    // and frame, and DLSS Ray Reconstruction integrates the lobe. Still one
+    // reflection ray a water pixel. Where slopeVarSq is next to nothing and
+    // alpha is the material's roughness squared (thousandths) it is still a
+    // mirror; a windy far sea blurs, and at a grazing view the visible normals
+    // stretch the blur up and down the line of sight, the long streaks a lake
+    // throws a far shore into.
+    // Under DLSS Ray Reconstruction only, as the glass's frosted facet
+    // (shadeGlassReflect): water writes no reflection image, so without RR the
+    // TAA alone is all that averages the draws, and it leaves them on screen
+    // as grain (a far sea at 10 m/s from the drone: a dither field over the
+    // water ten frames after a cut, where RR settles it to a smooth sheen).
+    // There the water keeps its one mirror ray.
+    // The draws: blue noise across the pixels with the gather's hashed tile
+    // offsets through the frames (giBlueNoiseRR: no period in time).
     // A facet turned away from the eye has no visible normal to draw (N leans
     // past V on the back of a resolved wave): the mirror, as before.
     vec3 Nm = N;
-    {
+    if (kRR) {
         const float vN = dot(V, N);
         if (vN > 1e-4) {
-            const vec2 u = kRR ? vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u))
-                               : fract(vec2(blueNoiseDef(uvec2(px) + uvec2(29u, 5u), 0u, 0u),
-                                            blueNoiseDef(uvec2(px.yx) + uvec2(7u, 53u), 0u, 0u))
-                                       + float(frame & 0xFFFFu) * vec2(0.7548776662, 0.5698402910));
+            const vec2 u = vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u));
             const vec3 tUp = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
             const vec3 T   = normalize(cross(tUp, N));
             const vec3 B   = cross(N, T);
@@ -460,15 +460,17 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         }
     }
     vec3 R = reflect(-V, Nm);
-    // A drawn ray that points under the water is one real waves hide: it meets
-    // the next wave and leaves upward again. Folded back above the water's own
-    // plane, the macro surface's and then the level water's (the two planes
-    // the guards below keep it over; a fold about the second cannot undo the
+    // A ray that points under the water, drawn or the mirror of a facet tilted
+    // past the view's elevation, is one real waves hide: it meets the next
+    // wave and leaves upward again. Folded back above the water's own plane,
+    // the macro surface's and then the level water's (the two planes the
+    // guards below keep it over; a fold about the second cannot undo the
     // first, their normals agree in sign), at the elevation it had below it.
-    // Clamped instead, every such draw lands on the horizon: a band of
-    // horizon sky laid over the blur, brightest where the lobe is widest. The
-    // two lifts below stay as the last guard (a fold leaves a ray grazing the
-    // plane where it was grazing it).
+    // Clamped instead, every such ray lands on the horizon: a band of horizon
+    // laid over the blur, and on near wind-roughened water seen from a few
+    // metres up, long dark streaks of the far shore's foot along the wave
+    // backs. The two lifts below stay as the last guard (a fold leaves a ray
+    // grazing the plane where it was grazing it).
     {
         const float rS = dot(R, Nsurf);
         if (rS < 0.0) R -= 2.0 * rS * Nsurf;
