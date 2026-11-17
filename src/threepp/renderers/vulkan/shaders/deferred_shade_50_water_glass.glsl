@@ -469,6 +469,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // water (white flecks). The lifts run again after the fold, the last guard.
     // A facet turned away from the eye has no visible normal to draw (N leans
     // past V on the back of a resolved wave): the mirror, as before.
+    bool lobeDrawn = false;
     if (kRR) {
         const float vN = dot(V, N);
         if (vN > 1e-4) {
@@ -500,6 +501,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 if (rU2 < 0.02) Rs = normalize(Rs + lvlUp * (0.02 - rU2));
             }
             R = Rs;
+            lobeDrawn = true;
         }
     }
     // Env-miss reflection blur widens with the banked chop variance: distant
@@ -507,6 +509,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // edge) as per-pixel speckle unless the reflection is filtered by the same
     // footprint the glint is. Floor at 0.12 (the near-water sheen).
     const float reflLod = max(0.12, effRough) * maxLod;
+    // A drawn ray carries the lobe in its direction: one that misses reads the
+    // sky at the near-water floor's mip, not the lobe's blur a second time (the
+    // glass's missLod under RR). The transmitted window below keeps reflLod.
+    const float reflMissLod = lobeDrawn ? 0.12 * maxLod : reflLod;
     // Offset along the MACRO normal, not the tilted N: on a coarse water mesh
     // the shading normal can lean far enough from the triangle plane that a
     // fixed offset along it fails to clear the neighbouring facet.
@@ -524,18 +530,18 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     vec3  reflectColor;
     float ssrT;
     bool  ssrMoved;
-    if (ssrWaterReflect(reflOrig, R, maxLod, reflLod, pm.envMapIntensity, doShadows, seed, reflectColor, ssrT,
+    if (ssrWaterReflect(reflOrig, R, maxLod, reflMissLod, pm.envMapIntensity, doShadows, seed, reflectColor, ssrT,
                         ssrMoved)) {
         gTraceHitT     = ssrT;
         gTraceHitMoved = ssrMoved;
         gTraceMissTput = vec3(0.0);
     } else {
-        reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, reflLod, seed, /*cheapHits=*/true,
+        reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, reflMissLod, seed, /*cheapHits=*/true,
                                      /*probeHitFill=*/true, /*envInt=*/pm.envMapIntensity);
     }
 #else
     vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod,
-                                      reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
+                                      reflMissLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
                                       /*probeHitFill=*/true,
                                       /*envInt=*/pm.envMapIntensity);
 #endif
