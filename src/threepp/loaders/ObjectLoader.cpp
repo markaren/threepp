@@ -350,8 +350,13 @@ namespace {
             return Object3D::create();
         }
 
-        ctx.warnings.add("unsupported object type '" + type + "' - skipped");
-        return nullptr;
+        // The exporter writes type() for any class (Sky, Water, Text, ...), so
+        // a node this table does not know still has a place in the tree, and
+        // children. A plain Object3D in its stead keeps the transform, name,
+        // userData and the whole subtree.
+        ctx.warnings.add("unsupported object type '" + type +
+                         "' - loaded as an empty Object3D; its transform and children are kept");
+        return Object3D::create();
     }
 
     // ------------------------------------------------------- articulation

@@ -287,6 +287,99 @@ TEST_CASE("OBJLoader drops an l record with an out-of-range index") {
     CHECK(group->children.empty());
 }
 
+TEST_CASE("OBJLoader reads vertex colours from v x y z r g b") {
+
+    // Tabs and repeated spaces separate fields as well as single spaces.
+    const std::string obj =
+            "v 0 0 0 1 0 0\n"
+            "v\t1 0 0  0 1 0\n"
+            "v 0 1 0 0 0 1\n"
+            "f 1 2 3\n";
+
+    auto group = loadObj("threepp_obj_colors.obj", obj);
+    REQUIRE(positionCount(group) == 3);
+    auto mesh = group->children.front()->as<Mesh>();
+    auto* color = mesh->geometry()->getAttribute<float>("color");
+    REQUIRE(color);
+    REQUIRE(color->count() == 3);
+    CHECK(color->getX(0) == 1.f);
+    CHECK(color->getY(1) == 1.f);
+    CHECK(color->getZ(2) == 1.f);
+    CHECK(color->getY(0) == 0.f);
+    CHECK(mesh->material()->vertexColors);
+}
+
+TEST_CASE("OBJLoader keeps colours aligned when only some vertices have one") {
+
+    // Vertex 1 has no colour, vertex 2 does: vertex 1 reads white and
+    // vertex 3 picks up its own colour, not vertex 2's.
+    const std::string obj =
+            "v 0 0 0\n"
+            "v 1 0 0 0 1 0\n"
+            "v 0 1 0 0 0 1\n"
+            "f 1 2 3\n";
+
+    auto group = loadObj("threepp_obj_colors_partial.obj", obj);
+    REQUIRE(positionCount(group) == 3);
+    auto mesh = group->children.front()->as<Mesh>();
+    auto* color = mesh->geometry()->getAttribute<float>("color");
+    REQUIRE(color);
+    REQUIRE(color->count() == 3);
+    CHECK(color->getX(0) == 1.f);
+    CHECK(color->getY(0) == 1.f);
+    CHECK(color->getZ(0) == 1.f);
+    CHECK(color->getX(1) == 0.f);
+    CHECK(color->getY(1) == 1.f);
+    CHECK(color->getZ(2) == 1.f);
+    CHECK(color->getY(2) == 0.f);
+}
+
+TEST_CASE("OBJLoader drops an object's colours when they begin part way through it") {
+
+    // The first face is emitted before any vertex has a colour, the second
+    // after: a color attribute for only the second would be shorter than
+    // position, so the object loads without one.
+    const std::string obj =
+            "v 0 0 0\n"
+            "v 1 0 0\n"
+            "v 0 1 0\n"
+            "f 1 2 3\n"
+            "v 1 1 0 1 0 0\n"
+            "f 2 4 3\n";
+
+    auto group = loadObj("threepp_obj_colors_late.obj", obj);
+    REQUIRE(positionCount(group) == 6);
+    auto mesh = group->children.front()->as<Mesh>();
+    CHECK(mesh->geometry()->getAttribute<float>("color") == nullptr);
+    CHECK_FALSE(mesh->material()->vertexColors);
+}
+
+TEST_CASE("OBJLoader reads a short v line as zeros instead of past its fields") {
+
+    const std::string obj =
+            "v 1\n"
+            "v 1 0 0\n"
+            "v 0 1 0\n"
+            "vt 0.5\n"
+            "vt 1 0\n"
+            "vt 0 1\n"
+            "f 1/1 2/2 3/3\n";
+
+    auto group = loadObj("threepp_obj_short_v.obj", obj);
+    REQUIRE(positionCount(group) == 3);
+    auto mesh = group->children.front()->as<Mesh>();
+    auto* position = mesh->geometry()->getAttribute<float>("position");
+    CHECK(position->getX(0) == 1.f);
+    CHECK(position->getY(0) == 0.f);
+    CHECK(position->getZ(0) == 0.f);
+    auto* uv = mesh->geometry()->getAttribute<float>("uv");
+    REQUIRE(uv);
+    CHECK(uv->getX(0) == 0.5f);
+    CHECK(uv->getY(0) == 0.f);
+    CHECK(mesh->geometry()->getAttribute<float>("color") == nullptr);
+    CHECK_FALSE(mesh->material()->vertexColors);
+}
+
 TEST_CASE("MTLLoader leaves a map empty when its file is missing") {
 
     // map_Kd names a file that is not there: TextureLoader returns null, and
