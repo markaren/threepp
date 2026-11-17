@@ -278,6 +278,19 @@ float waterFacetFresnelMean(float c, float var, float r0) {
     return den > 1e-6 ? num / den : r0 + (1.0 - r0) * pow(1.0 - c, 5.0);
 }
 
+// Smith's masking of a Beckmann surface (Gaussian slopes, alpha^2 both axes
+// together) for a direction at cosine c to its mean normal: the share of the
+// facets facing that direction that no other wave hides from it. Walter et
+// al. 2007's rational fit (eq. 27), within half a percent of the exact
+// erf form. 0 at or below the surface's plane, 1 for a smooth one.
+float waterBeckmannG1(float c, float alpha) {
+    if (c <= 0.0) return 0.0;
+    const float t = alpha * sqrt(max(1.0 - c * c, 0.0));// alpha tan(theta), times c
+    if (t * 1.6 <= c) return 1.0;
+    const float a = c / t;
+    return (3.535 * a + 2.181 * a * a) / (1.0 + 2.276 * a + 2.577 * a * a);
+}
+
 // The slope spread of an ocean's rasterised normals at a pixel: the mean
 // squared difference of its four G-buffer neighbours' normals from its own
 // (Nraster, as stored), both axes. Where the mesh's normals are resolved it is
@@ -442,13 +455,39 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // that met a mountain or a house stayed one mirror ray, so a far sea under
     // a breeze mirrored the fells razor sharp at any wind, where a real one
     // (a drone's view of a Lofoten fjord in a breeze) is a soft sheen of them.
-    // So the ray leaves along a facet drawn from the same lobe: a GGX visible
-    // normal (Heitz 2018, sampleGgxVndf, the path tracer's sampler) about N,
-    // alpha = effRough^2 (the alpha the glint's distGGX takes), one per pixel
+    // So the ray leaves along a facet drawn from the same lobe, one per pixel
     // and frame, and DLSS Ray Reconstruction integrates the lobe. Still one
-    // reflection ray a water pixel. At a grazing view the visible normals
-    // stretch the blur up and down the line of sight, the long streaks a lake
-    // throws a far shore into.
+    // reflection ray a water pixel.
+    // The facet's slope is drawn from a Gaussian, the shape a sea's slopes
+    // have (Cox and Munk 1954), of the variance the Fresnel above and the
+    // glint take: alpha^2 for both axes together, alpha = effRough^2, alpha^2/2
+    // an axis (a Beckmann lobe; the prologue's fineKernelSq banks it so). A
+    // GGX lobe of that alpha has a tail ten times as heavy (about a fifth of
+    // its facets past two alpha, a Gaussian's one in fifty), and its visible
+    // normals, drawn as often as a facet faces the eye, send a grazing view's
+    // draws to the steep facets that reflect the high, bright sky: a far
+    // breeze sea under the fells turned a light sky-grey where a real one is a
+    // deep blue that darkens under the land.
+    // Each draw is weighted by what its facet reflects (Walter et al. 2007,
+    // "Microfacet Models for Refraction through Rough Surfaces", eq. 41):
+    // its own Fresnel over the facets' mean one F (the shade multiplies by F
+    // below), Smith's masking toward the eye and toward the reflected ray
+    // (Beckmann G1, about N), and the facet's area seen from the eye over its
+    // area on the water, (V.m) / ((V.N)(m.N)). A facet tilted toward the eye
+    // throws its ray up to the bright sky at a steep cosine and a low Fresnel;
+    // one tilted away throws it along the water to the horizon and the land
+    // at a grazing cosine and a high Fresnel, and a ray that would leave under
+    // the next wave is masked by it (G1 = 0): weighted, the sky's share falls
+    // and the land's rises, as in the photograph. Over many draws the weight
+    // averages to one but for that masking, so the guide's specular albedo
+    // stays F: a guide multiplied by each draw's weight would be noise that
+    // RR puts back after it denoises. Clamped at 4 (a facet seen edge-on at a
+    // high Fresnel), so one rare draw cannot make a firefly.
+    // A facet turned away from the eye is not drawn: its slope is turned
+    // round, the same slope the other way, which the Gaussian draws as often.
+    // A facet whose turned-round slope would also face away is reached from
+    // both draws, and its weight is halved for it. No draw is lost to a black
+    // sample.
     // Under DLSS Ray Reconstruction only, as the glass's frosted facet
     // (shadeGlassReflect): water writes no reflection image, so without RR the
     // TAA alone is all that averages the draws, and it leaves them on screen
@@ -458,32 +497,51 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // The draw is a turn off the mirror, and the same turn is put on the
     // mirror the lifts above left (the rotation that takes the one to the
     // other), so a lobe of zero width is that ray exactly, lifts and all.
-    // A turned ray that points under the water is one real waves hide: it
-    // meets the next wave and leaves upward again. It is folded back above
-    // the water's own plane, the macro surface's and then the level water's
-    // (a fold about the second cannot undo the first, their normals agree in
-    // sign), at the elevation it had below it; lifted instead, every such
-    // draw would land on the horizon, a band of it laid over the blur. The
-    // mirror itself keeps its lifts: folded, the mirror of a facet tilted past
-    // the view's elevation put the high sky on the wave backs of near rough
-    // water (white flecks). The lifts run again after the fold, the last guard.
-    // A facet turned away from the eye has no visible normal to draw (N leans
-    // past V on the back of a resolved wave): the mirror, as before.
-    bool lobeDrawn = false;
+    // A ray that still points under the water after the turn (the turn, or a
+    // N that leans from the water's plane, can put it there) is folded back
+    // above the water's own plane, the macro surface's and then the level
+    // water's (a fold about the second cannot undo the first, their normals
+    // agree in sign), at the elevation it had below it; lifted instead, every
+    // such draw would land on the horizon, a band of it laid over the blur.
+    // The mirror itself keeps its lifts: folded, the mirror of a facet tilted
+    // past the view's elevation put the high sky on the wave backs of near
+    // rough water (white flecks). The lifts run again after the fold, the last
+    // guard. Where N leans past V (the back of a resolved wave) no facet is
+    // drawn: the mirror, as before.
+    bool  lobeDrawn = false;
+    float lobeW     = 1.0;// the drawn facet's weight on the reflection; 1 for the mirror
     if (kRR) {
         const float vN = dot(V, N);
         if (vN > 1e-4) {
-            // The tile is 8-bit, 0..1 with both ends, and the sampler takes
-            // [0, 1): at u.x = 1 it returns the hemisphere's rim, a facet at 90
-            // degrees to N whose ray went anywhere (a firefly). The 256 levels
-            // are taken at their centres instead.
-            const vec2 bn  = vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u));
-            const vec2 u   = (floor(bn * 255.0 + 0.5) + 0.5) / 256.0;
-            const vec3 tUp = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-            const vec3 T   = normalize(cross(tUp, N));
-            const vec3 B   = cross(N, T);
-            const vec3 mt  = sampleGgxVndf(vec3(dot(V, T), dot(V, B), vN), effRough * effRough, u);
-            vec3 Rs = reflect(-V, normalize(T * mt.x + B * mt.y + N * mt.z));
+            // The tile is 8-bit, 0..1 with both ends, and the slope's radius
+            // takes the log of u.x: at 0 an infinite slope. The 256 levels are
+            // taken at their centres, so the radius stops at 3.5 deviations.
+            const vec2  bn  = vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u));
+            const vec2  u   = (floor(bn * 255.0 + 0.5) + 0.5) / 256.0;
+            const vec3  tUp = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+            const vec3  T   = normalize(cross(tUp, N));
+            const vec3  B   = cross(N, T);
+            const float aB  = effRough * effRough;
+            const vec2  vt  = vec2(dot(V, T), dot(V, B));
+            // Box-Muller: an axis's deviation is aB / sqrt(2), so its radius
+            // sqrt(-2 ln u) a deviation is aB sqrt(-ln u).
+            vec2 s = aB * sqrt(-log(u.x)) * vec2(cos(TWO_PI * u.y), sin(TWO_PI * u.y));
+            // (V.m) / (m.N) for the facet m ~ N - s.x T - s.y B.
+            float vmN = vN - dot(s, vt);
+            if (vmN <= 0.0) {
+                s   = -s;
+                vmN = 2.0 * vN - vmN;
+            }
+            const vec3  m  = normalize(N - s.x * T - s.y * B);
+            const float vm = vmN * inversesqrt(1.0 + dot(s, s));
+            vec3 Rs = reflect(-V, m);
+            // From below F is the window's, not a mean over facets: weight 1.
+            if (!below) {
+                const float Fm = r0 + (1.0 - r0) * pow(1.0 - clamp(vm, 0.0, 1.0), 5.0);
+                const float w  = Fm / max(F, 1e-4) * waterBeckmannG1(vN, aB) * waterBeckmannG1(dot(Rs, N), aB) *
+                                (vmN / vN) * (vmN >= 2.0 * vN ? 0.5 : 1.0);
+                lobeW = min(w, 4.0);
+            }
             const vec3  Rm = reflect(-V, N);
             const vec3  w  = cross(Rm, R);
             const float c  = dot(Rm, R);
@@ -667,6 +725,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         const float legT = (gTraceHitT > 0.0) ? min(gTraceHitT, 1.0e4) : 1.0e4;
         reflectColor = applyMurk(reflectColor, reflOrig, reflOrig + R * legT);
     }
+    // The drawn facet's weight (THE REFLECTION LOBE) on all the drawn ray
+    // brought back: the surface or sky it met and the air, fire and splats on
+    // its leg alike.
+    reflectColor *= lobeW;
 
     // Transmission. From BELOW it is Snell's window; from above, the analytic
     // deep-water body (+ an optional shallow bottom).

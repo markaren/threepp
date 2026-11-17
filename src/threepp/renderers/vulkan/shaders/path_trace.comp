@@ -802,9 +802,22 @@ bool photonShare(const Surf s) {
            (s.alpha >= kPmGlossAlpha && max(max(s.F0.r, s.F0.g), s.F0.b) > 0.0);
 }
 
-// Heitz 2018: a GGX microfacet normal distributed by the visible normals
-// (sampleGgxVndf; the deferred shade's water reflection draws from it too).
-#include "ggx_vndf.glsl"
+// Heitz 2018: a GGX microfacet normal distributed by the visible normals.
+// Ve is the view direction in the tangent frame (z = N).
+vec3 sampleGgxVndf(vec3 Ve, float a, vec2 u) {
+    const vec3  Vh    = normalize(vec3(a * Ve.x, a * Ve.y, Ve.z));
+    const float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    const vec3  T1    = lensq > 0.0 ? vec3(-Vh.y, Vh.x, 0.0) / sqrt(lensq) : vec3(1.0, 0.0, 0.0);
+    const vec3  T2    = cross(Vh, T1);
+    const float r     = sqrt(u.x);
+    const float phi   = TWO_PI * u.y;
+    const float t1    = r * cos(phi);
+    float       t2    = r * sin(phi);
+    const float sc    = 0.5 * (1.0 + Vh.z);
+    t2 = (1.0 - sc) * sqrt(max(0.0, 1.0 - t1 * t1)) + sc * t2;
+    const vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0, 1.0 - t1 * t1 - t2 * t2)) * Vh;
+    return normalize(vec3(a * Nh.x, a * Nh.y, max(0.0, Nh.z)));
+}
 
 vec3 sampleGgxReflect(vec3 Nx, float alpha, vec3 V, inout uint seed) {
     vec3 T, B;
