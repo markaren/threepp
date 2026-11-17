@@ -128,6 +128,10 @@ namespace threepp::vulkan {
         // the caller wanted a 3D view; the renderer warns about it. Valid until
         // the next record(), while the scene it came from is alive.
         [[nodiscard]] const Mesh* litMeshInLastRecord() const;
+        // Screen-space sprite atlases uploaded and not yet retired.
+        [[nodiscard]] uint32_t spriteAtlasCount() const {
+            return static_cast<uint32_t>(spriteAtlasCache_.size());
+        }
 
     private:
         // Cached uploaded sprite atlas. Keyed on Texture*; liveCheck detects

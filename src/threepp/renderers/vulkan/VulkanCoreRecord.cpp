@@ -3951,6 +3951,7 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             // call per frame; every consumer sees the state it saw before.
             if (particleDescPools_[currentFrame] != VK_NULL_HANDLE)
                 vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
+            sweepParticleTextures();
 
             // The frame's render graph: the head (GPU instance expansion, the
             // ParticleField emitter, counts and density scatter — once for all

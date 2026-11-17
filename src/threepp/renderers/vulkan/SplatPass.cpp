@@ -1276,19 +1276,20 @@ namespace threepp::vulkan {
                targets_[target].width > 0 && !targets_[target].sceneHdrViews.empty();
     }
 
-    void SplatPass::resizeTileRange() {
+    bool SplatPass::resizeTileRange() {
         uint32_t tiles = 0;
         for (const auto& t : targets_)
             if (t.claimed) tiles = std::max(tiles, t.tilesX * t.tilesY);
-        if (tiles == 0) return;
+        if (tiles == 0) return false;
         const VkDeviceSize want = VkDeviceSize(tiles) * 8;
-        if (rangeBuf_.handle != VK_NULL_HANDLE && rangeBuf_.size >= want) return;
+        if (rangeBuf_.handle != VK_NULL_HANDLE && rangeBuf_.size >= want) return false;
         destroyBuffer(ctx_.allocator(), rangeBuf_);
         rangeBuf_ = createBuffer(ctx_.allocator(), ctx_.device(), want,
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                  VMA_MEMORY_USAGE_AUTO);
         ctx_.setObjectName(rangeBuf_.handle, "splat.tileRange");
+        return true;
     }
 
     void SplatPass::resize(uint32_t width, uint32_t height, const ResizeInputs& in,
@@ -1339,13 +1340,20 @@ namespace threepp::vulkan {
             tg.splatDepthImages.assign(framesInFlight_, VK_NULL_HANDLE);
         }
 
-        resizeTileRange();
+        const bool rangeRemade = resizeTileRange();
         if (maxSplats_ == 0) allocateScratch(1, kEntriesPerSplat);
 
         // This target's sets only: the others may be in flight, and every call
         // site that legitimately rewrites them all (upload, env swap) has its
-        // own drained-device argument.
-        for (auto& kv : resident_) writeSets(*kv.second, target);
+        // own drained-device argument. The exception is a tile-range buffer that
+        // just grew: the old one is destroyed and every claimed target's sets
+        // name it. Making it already needed a drained device (the old buffer is
+        // destroyed, not retired), and resize() runs only with the device idle.
+        if (rangeRemade) {
+            for (auto& kv : resident_) writeSets(*kv.second);
+        } else {
+            for (auto& kv : resident_) writeSets(*kv.second, target);
+        }
     }
 
     void SplatPass::barrierIndirect(VkCommandBuffer cb) const {

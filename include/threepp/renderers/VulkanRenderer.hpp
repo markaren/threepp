@@ -1104,6 +1104,11 @@ namespace threepp {
             // renderer prints "material texture slots exhausted" for each).
             uint32_t textureSlotsInUse = 0;
             uint64_t textureSlotFallbacks = 0;
+            // Images held now for the textures of world-space Sprites,
+            // ParticleSystems and ParticleField billboards, and for screen-space
+            // (HUD) Sprites. Each goes when its Texture is disposed of.
+            uint32_t spriteTextures = 0;
+            uint32_t screenSpriteAtlases = 0;
             // Meshes that arrived hidden (Object3D::resident) and were admitted
             // over the frames after their slot edit instead of on it (the BLAS
             // build, the textures' encode and upload): their slot edit only

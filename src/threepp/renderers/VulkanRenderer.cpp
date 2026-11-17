@@ -616,6 +616,13 @@ namespace threepp {
             core()->lastCanvasSize = cur;
             core()->needsResize = true;
         }
+        // A resize that readRGBPixels held back at the end of the last frame:
+        // made here, before this frame starts, so this frame renders at the new
+        // size and the readback's caller saw the old size with the old pixels.
+        if (core()->resizeHeldByReadback_ && core()->frameState_ == Impl::FrameState::Idle) {
+            core()->needsResize = false;
+            core()->recreateSwapchainAndDescriptors();
+        }
         // Mirror Renderer-base tone-mapping state into the Impl so renderFrame
         // can push it as a single 16-byte block. Done every render() so users
         // can flip toneMapping / toneMappingExposure freely between frames.
@@ -840,9 +847,32 @@ namespace threepp {
         // that follows cannot join it any more; render() drops such a pass and
         // says so. An ImGui panel drawn after the readback is one frame late in
         // the capture and unaffected on screen.
+        //
+        // A resize due at that frame end waits for the next render() instead
+        // (holdResizeForReadback_): recreating the swapchain or headless ring
+        // now would destroy the image the frame was just rendered into, and the
+        // caller sizes these pixels by framebufferSize(), which has to stay the
+        // old extent until then.
         if (impl.frameState_ != Impl::FrameState::Idle) {
-            impl.endFrame();
+            impl.holdResizeForReadback_ = true;
+            try {
+                impl.endFrame();
+            } catch (...) {
+                impl.holdResizeForReadback_ = false;
+                throw;
+            }
+            impl.holdResizeForReadback_ = false;
+            if (impl.needsResize) impl.resizeHeldByReadback_ = true;
             impl.frameEndedByReadback_ = impl.canvas.isInsideAnimateLoop();
+        }
+
+        // No frame since the images were made (before the first render(), or
+        // after a resize): they hold nothing, and are not in presentLayout().
+        if (!impl.swapImagesHoldFrame_) {
+            THREEPP_LOG_ONCE(vulkan::kLogFrame, Warn) << "readRGBPixels: no frame has been rendered into the current "
+                                                    "swapchain images (none yet, or a resize since); returning no "
+                                                    "pixels. Call render() first.";
+            return {};
         }
 
         const VkExtent2D ext   = ctx->swapchainExtent();
@@ -3601,6 +3631,8 @@ namespace threepp {
         for (const auto& t : core()->materialTextures)
             if (t.view) ++inUse;
         stats.textureSlotsInUse = inUse;
+        stats.spriteTextures = static_cast<uint32_t>(core()->particleTexCache_.size());
+        stats.screenSpriteAtlases = core()->overlayPass_ ? core()->overlayPass_->spriteAtlasCount() : 0u;
         stats.slotCapacity = core()->slotCapacity_;
         stats.movingEntries = core()->stickyActiveCount_;
         return stats;

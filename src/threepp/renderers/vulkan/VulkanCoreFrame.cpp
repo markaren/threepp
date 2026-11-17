@@ -831,6 +831,8 @@ void VulkanRenderer::Impl::recreateSwapchainAndDescriptors() {
             ctx->setRequestedExtent({static_cast<uint32_t>(std::max(canvas.size().width(), 1)),
                                      static_cast<uint32_t>(std::max(canvas.size().height(), 1))});
             ctx->recreateSwapchain();// device-idles internally
+            swapImagesHoldFrame_  = false;// new images, nothing rendered into them
+            resizeHeldByReadback_ = false;// whatever readRGBPixels held back, this was it
             // imageCount_ is pinned, not refreshed — see its declaration for why
             // (TaaResolve's set arrays were SIZED from it at construction, so the
             // scalar and the arrays have to move together or not at all). Nothing
@@ -1792,6 +1794,7 @@ void VulkanRenderer::Impl::endFrame() {
                       "vkQueueSubmit2");
             }
             acquireSemPending_[currentFrame] = false;// consumed by the submit above
+            swapImagesHoldFrame_ = true;
 
             if (suppressPresent) {
                 // Nothing to present to. The image stays app-owned in PRESENT_SRC
@@ -1799,7 +1802,7 @@ void VulkanRenderer::Impl::endFrame() {
                 // readRGBPixels expects), and this slot re-renders into the same
                 // image next time round. Resize is the one thing that still has
                 // to be honoured — normally it rides in on the present's result.
-                if (needsResize) {
+                if (needsResize && !holdResizeForReadback_) {
                     needsResize = false;
                     recreateSwapchainAndDescriptors();
                 }
@@ -1823,8 +1826,12 @@ void VulkanRenderer::Impl::endFrame() {
                     pr = vkQueuePresentKHR(ctx->presentQueue(), &pi);
                 }
                 if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR || needsResize) {
-                    needsResize = false;
-                    recreateSwapchainAndDescriptors();
+                    if (holdResizeForReadback_) {
+                        needsResize = true;// made by the next render(), after the readback's copy
+                    } else {
+                        needsResize = false;
+                        recreateSwapchainAndDescriptors();
+                    }
                 } else if (pr != VK_SUCCESS) {
                     check(pr, "vkQueuePresentKHR");
                 }
