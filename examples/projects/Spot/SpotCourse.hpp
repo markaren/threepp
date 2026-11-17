@@ -262,6 +262,38 @@ namespace spot::course {
 
         [[nodiscard]] static threepp::Vector2 spawn() { return {0.f, 0.f}; }
 
+        // The bare ground under (x, y) as the terrain mesh draws it, between its samples:
+        // no steps, walls or stones (heightAt has those).
+        [[nodiscard]] float groundAt(float x, float y) const {
+            const float fx = std::clamp((x - X0) / CELL, 0.f, N - 1.001f), fy = std::clamp((y - Y0) / CELL, 0.f, N - 1.001f);
+            const int ix = static_cast<int>(fx), iy = static_cast<int>(fy);
+            const float tx = fx - ix, ty = fy - iy;
+            const auto h = [&](int i, int j) { return heights_[static_cast<std::size_t>(j) * N + i]; };
+            const float a = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * tx;
+            const float b = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * tx;
+            return a + (b - a) * ty;
+        }
+
+        [[nodiscard]] float distanceToPath(float x, float y) const { return distanceToPolyline(path_, x, y); }
+
+        // Every stone on the course: x, y and the radius kept clear round it.
+        [[nodiscard]] const std::vector<threepp::Vector3>& stones() const { return placed_; }
+
+        // Darkens the ground by `factor`, one value per height-field sample (N x N, row-major
+        // in y): shade cast by what is planted on it after the course was built.
+        void shadeGround(const std::vector<float>& factor) {
+            if (factor.size() != heights_.size()) return;
+            for (const auto& g : ground_) {
+                if (!g) continue;
+                auto* col = g->getAttribute<float>("color");
+                auto& c = col->array();
+                for (std::size_t i = 0; i < factor.size(); ++i) {
+                    for (int k = 0; k < 3; ++k) c[i * 3 + k] *= factor[i];
+                }
+                col->needsUpdate();
+            }
+        }
+
     private:
         threepp::PhysxWorld& world_;
         const ::physx::PxScene* scene_;
@@ -271,6 +303,7 @@ namespace spot::course {
         std::vector<threepp::Vector2> path_;
         std::vector<float> heights_;          // the height field, N x N, row-major in y
         std::vector<threepp::Vector3> placed_;// every stone: x, y, footprint radius
+        std::array<std::shared_ptr<threepp::BufferGeometry>, 2> ground_;// the meadow grid, the overlays' grid
 
         void addVisual(const std::shared_ptr<threepp::Object3D>& o) {
             if (visuals_) root_->add(o);
@@ -412,6 +445,7 @@ namespace spot::course {
             geometry->setIndex(std::move(idx));
             // The overlays carry the contact shade without the meadow's tint.
             auto overlayGeometry = geometry->clone();
+            ground_ = {geometry, overlayGeometry};
             overlayGeometry->setAttribute("color", threepp::FloatBufferAttribute::create(std::move(shade), 3));
 
             const auto meadowSet = loadPbr(data_, "forrest_ground_01", SIZE / 2.4f);

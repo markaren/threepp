@@ -1,11 +1,11 @@
 // Play a trained Boston Dynamics Spot policy natively in C++, with no Python and
-// no torch, on a landscape built for it: a meadow, a granite stair cut into a
-// dry-stone terrace, a rubble patch and mossy boulders under an HDR sky. It
-// runs on the desktop and in the browser (WEB in CMakeLists.txt).
+// no torch, on a landscape built for it: a meadow in a forest clearing, a granite
+// stair cut into a dry-stone terrace, a rubble patch and mossy boulders under an
+// HDR sky. It runs on the desktop and in the browser (WEB in CMakeLists.txt).
 //
 // The policy is spot_policy.tpnn beside this file, run by SpotPolicy; the robot
 // and the observation contract are SpotScene.hpp; the landscape is
-// SpotCourse.hpp. The robot is threepp_data's urdf/spot, which carries its own
+// SpotCourse.hpp, its trees SpotFlora.hpp. The robot is threepp_data's urdf/spot, which carries its own
 // Boston Dynamics licence (see the NOTICE there).
 //
 // The policy acts every tenth 2 ms physics substep from inside PhysxWorld's step
@@ -19,18 +19,21 @@
 //   spot_play --urdf R.urdf   # use a specific robot description
 //   spot_play --data DIR      # read the assets from another threepp_data checkout
 //   spot_play --check 2500    # headless: up the stair, through the rubble, down the slope
+//   spot_play --speed 1.2     # start with the walking-speed slider there (m/s)
 //   spot_play --shot out.png --time 2,9 --hold W:1:9 [--hold SHIFT:5:9] [--cam X,Y,Z [--look X,Y,Z]] [--size WxH]
 //                             # headless: the window's own scene at a fixed 60 Hz, keys pressed
 //                             # by the script, one frame written at each time (out_2.0s.png ...);
-//                             # --cam alone starts the follow camera there, with --look it stays put
+//                             # --cam alone starts the follow camera there, with --look it stays put;
+//                             # logs the command, the body's velocity, heading and uprightness
 //
 // DRIVE (body frame): W / S or Up / Down walk, A / D sidestep, Q / E or
 // Left / Right turn. Hold Shift to go twice as fast in whatever direction is
-// held, up to the ranges the policy trained on. R goes back to the start, H
-// shows or hides the height scan. The panel's slider sets the walking speed.
-// Drag to look around, scroll to zoom.
+// held: the slider tops out at half the forward limit, so Shift always has
+// room (see Pilot for the measured limits). R goes back to the start, H shows
+// or hides the height scan. Drag to look around, scroll to zoom.
 
 #include "SpotCourse.hpp"
+#include "SpotFlora.hpp"
 #include "SpotScene.hpp"
 #include "renderer_factory.hpp"
 
@@ -104,9 +107,16 @@ namespace {
         bool run = false;  // held: every axis at RUN_FACTOR times its walking rate
         float speed = 1.0f;// forward walking speed (m/s); backing and sidestepping scale with it
 
-        // The command ranges the policy trained on; nothing it is sent leaves them.
-        static constexpr float MAX_VX = 2.0f, MIN_VX = -1.0f, MAX_VY = 0.8f, MAX_WZ = 1.2f;
-        static constexpr float TURN_RATE = 0.6f;// rad/s at walking pace
+        // The ranges Spot is driven in. The walker trained on vx -1..2 m/s, |vy| 0.8, |wz| 1.2,
+        // and measured in this scene (spot_play --shot, 2026-11-17) it tracks well past them:
+        // 4 m/s forward on the flat, the course at 2.5 m/s in three runs of three (at 3 m/s it
+        // fell once in three, in the rubble), backing at 1.5, sidestepping at 1.2, turning on the
+        // spot at 2.4 rad/s. What topples it is running while turning: it held 5.8 m/s^2 of
+        // centripetal acceleration (2.4 m/s at 2.4 rad/s) and fell at 7.2, so a turn at speed
+        // is held to A_TURN.
+        static constexpr float MAX_VX = 2.5f, MIN_VX = -1.5f, MAX_VY = 1.2f, MAX_WZ = 2.4f, A_TURN = 5.f;
+        static constexpr float MAX_WALK = MAX_VX / 2;// the slider's top, so Shift always has room to double it
+        static constexpr float TURN_RATE = 1.2f;     // rad/s at walking pace
         static constexpr float RUN_FACTOR = 2.0f;
 
         SpotController::Command command(const Articulation& art, bool standMode) {
@@ -114,12 +124,14 @@ namespace {
             const auto axis = [](bool plus, bool minus) { return (plus ? 1.f : 0.f) - (minus ? 1.f : 0.f); };
             const float vxKey = std::clamp(k * ((forward ? speed : 0.f) - (back ? 0.6f * speed : 0.f)), MIN_VX, MAX_VX);
             const float vyKey = std::clamp(k * 0.6f * speed * axis(stepLeft, stepRight), -MAX_VY, MAX_VY);
-            const float turn = std::clamp(k * TURN_RATE * axis(turnLeft, turnRight), -MAX_WZ, MAX_WZ);
             // At most 3 m/s^2. The clamp lands exactly on the target, so releasing the
             // keys still reaches an exact zero and a stand-mode policy stands.
             cmd_[0] += std::clamp(vxKey - cmd_[0], -0.06f, 0.06f);
             cmd_[1] += std::clamp(vyKey - cmd_[1], -0.06f, 0.06f);
             const float vx = cmd_[0], vy = cmd_[1];
+            const float planar = std::hypot(vx, vy);
+            const float maxTurn = planar > A_TURN / MAX_WZ ? A_TURN / planar : MAX_WZ;
+            const float turn = std::clamp(k * TURN_RATE * axis(turnLeft, turnRight), -maxTurn, maxTurn);
 
             const float yaw = yawOf(art.rootState());
             float wz;
@@ -194,6 +206,7 @@ namespace {
         std::optional<Vector3> cam; // the camera's start position (it then follows Spot)...
         std::optional<Vector3> look;// ...unless it looks at a fixed point from a fixed --cam
         int width = 1280, height = 720;
+        std::optional<float> speed;// the walking-speed slider's start value
 
         [[nodiscard]] bool active() const { return !out.empty(); }
 
@@ -304,7 +317,7 @@ namespace {
         // and given its measured energy once the renderer has found it (until then,
         // what that measurement gives for this sky). Its shadow box follows Spot.
         auto sun = DirectionalLight::create(Color(0.99f, 1.0f, 0.91f), 4.37f);
-        Vector3 sunDir(-0.2f, 0.65f, 0.74f);// until the disc is measured
+        Vector3 sunDir(-0.2064f, 0.6381f, 0.7418f);// what the renderer measures for this sky, until it has
         sunDir.normalize();
         sun->castShadow = true;
         sun->shadow->mapSize.set(2048, 2048);
@@ -326,12 +339,15 @@ namespace {
 
         PhysxWorld world(spotWorldSettings());
         course::Course land(world, scene.get(), dataFolder());
+        const int trees = flora::plantForest(*scene, land, dataFolder(), sunDir);
+        std::cout << "[spot] forest: " << trees << " trees\n";
 
         SpotRobot spot = loadSpot(world, urdf);// the URDF's own <visual> meshes render
         paintSpot(spot);
         for (auto& m : spot.meshes) scene->add(m);
         SpotController ctrl(spot, policy, [&](float x, float y) { return land.heightAt(x, y); });
         Pilot pilot;
+        if (shot.speed) pilot.speed = std::clamp(*shot.speed, 0.1f, Pilot::MAX_WALK);
         ctrl.setCommandSource([&] { return pilot.command(*spot.art, policy.standMode()); });
         ctrl.attach(world);
 
@@ -421,7 +437,7 @@ namespace {
             ImGui::TextDisabled("W/S walk  A/D sidestep  Q/E turn  Shift x2  R restart");
             ImGui::TextDisabled("drag to look around, scroll to zoom");
             ImGui::SetNextItemWidth(160 * s);
-            ImGui::SliderFloat("walk speed", &pilot.speed, 0.1f, Pilot::MAX_VX, "%.1f m/s");
+            ImGui::SliderFloat("walk speed", &pilot.speed, 0.1f, Pilot::MAX_WALK, "%.2f m/s");
             ImGui::Text("%4.2f m/s   physics + policy %.2f ms/frame", speed, physicsMs);
             ImGui::Checkbox("Height scan (H)", &showScan);
             ImGui::SameLine();
@@ -589,8 +605,10 @@ namespace {
                     nextLog += 0.5f;
                     const auto& c = pilot.last();
                     const float cy = std::cos(yaw), sy = std::sin(yaw);
-                    std::printf("[shot] t=%5.2f  cmd vx %5.2f vy %5.2f wz %5.2f   body vx %5.2f vy %5.2f wz %5.2f  yaw %6.1f deg\n",
-                                simTime, c[0], c[1], c[2], cy * rv[0] + sy * rv[1], -sy * rv[0] + cy * rv[1], rv[5], math::radToDeg(yaw));
+                    const auto rs = spot.art->rootState();
+                    std::printf("[shot] t=%5.2f  cmd vx %5.2f vy %5.2f wz %5.2f   body vx %5.2f vy %5.2f wz %5.2f  yaw %6.1f deg  upZ %.2f  at %.2f %.2f %.2f\n",
+                                simTime, c[0], c[1], c[2], cy * rv[0] + sy * rv[1], -sy * rv[0] + cy * rv[1], rv[5], math::radToDeg(yaw),
+                                uprightness(*spot.art), rs[0], rs[1], rs[2]);
                 }
                 if (nextShot < shot.times.size() && simTime >= shot.times[nextShot]) {
                     const auto path = shot.pathAt(nextShot++);
@@ -642,6 +660,7 @@ int main(int argc, char** argv) {
             Vector3 v;
             if (std::sscanf(argv[++i], "%f,%f,%f", &v.x, &v.y, &v.z) == 3) shot.look = v;
         } else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &shot.width, &shot.height);
+        else if (a == "--speed" && i + 1 < argc) shot.speed = std::stof(argv[++i]);
     }
     if (urdfPath.empty()) urdfPath = defaultUrdfPath();
 

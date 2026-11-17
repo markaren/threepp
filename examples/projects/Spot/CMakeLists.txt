@@ -7,6 +7,7 @@ add_example(NAME "spot_play" SOURCES spot_play.cpp LINK_PHYSX LINK_IMGUI WEB WEB
         "${THREEPP_DATA_DIR}/urdf/spot@data/urdf/spot"
         "${THREEPP_DATA_DIR}/textures/pbr@data/textures/pbr"
         "${THREEPP_DATA_DIR}/models/gltf/rock_moss_set_02@data/models/gltf/rock_moss_set_02"
+        "${THREEPP_DATA_DIR}/models/fjord/trees@data/models/fjord/trees"
         "${THREEPP_DATA_DIR}/textures/env/kloofendal_48d_partly_cloudy_puresky_2k.hdr@data/textures/env/kloofendal_48d_partly_cloudy_puresky_2k.hdr"
 )
 
