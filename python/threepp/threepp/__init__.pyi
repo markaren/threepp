@@ -399,6 +399,10 @@ class ArticulationLink:
         """
     def set_drive_velocity(self, velocity: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    def set_max_joint_velocity(self, velocity: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Hard cap on this joint's speed, rad/s (m/s for prismatic), enforced by the solver; PhysX defaults to 100. Set it before the articulation is finalized.
+        """
     def world_point(self, local_offset: Vector3) -> Vector3:
         """
         World position of a point given in this link's ACTOR frame — the same frame a spatial tendon attachment's relative_offset uses.
@@ -9443,6 +9447,14 @@ class PhysxWorld:
         Stop sampling a previously registered sensor.
         """
     @property
+    def environment_id(self) -> int | None:
+        """
+        Environment scope (None or an int below 1 << 24): every body and articulation added while it is set gets this PhysX environment ID, and bodies in different environments never collide (filtered in the GPU broadphase). Bodies added with None, e.g. terrain built first, collide with every environment. Needs gpu_dynamics or direct_gpu. GpuSim sets it to each robot's index.
+        """
+    @environment_id.setter
+    def environment_id(self, arg1: typing.SupportsInt | typing.SupportsIndex | None) -> None:
+        ...
+    @property
     def sim_time(self) -> float:
         """
         Accumulated fixed-substep simulation time (s) — the clock stamped onto sensor samples.
@@ -14245,7 +14257,7 @@ class VulkanRenderer:
     @property
     def tlas_stats(self) -> dict:
         """
-        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a skinned, displaced, morphed or tet mesh or a ParticleField added or removed, a mesh changing class), slot_edits (meshes added or removed, a GrassMesh among them, an InstancedMesh count changed, a first show, a geometry, material or texture swap: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed), records_pruned and textures_pruned (geometries and textures that died, freed by a slot edit without a rebuild), texture_slots_in_use (of 2048), texture_slot_fallbacks (textures that found no slot and drew without their map), admissions_deferred (meshes that arrived hidden and were admitted over the following frames), admissions_landed (of those, landed while still hidden), swap_edits (a geometry, material or texture swapped on a mesh, taken by a slot edit), slot_pool_growths (slot edits that outgrew the slot pool and grew it in place, no device wait), slot_capacity (the entries the pool holds now, see reserve_entry_slots), flat_checks (frames with nothing added, removed or swapped settled with no walk of the scene graph), versioned_deltas (slot deltas that visited only the subtrees whose structure moved), slot_deltas (slot edits taken edit-proportionally: only the nodes and spans that changed found and placed) and moving_entries (the entries the last frame treated as moving: moved, shown or hidden in the last 30 frames, their shadow, GI and reflection histories kept short; an instance-matrix edit counts only the instances whose matrix changed).
+        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a skinned, displaced, morphed or tet mesh or a ParticleField added or removed, a mesh changing class), slot_edits (meshes added or removed, a GrassMesh among them, an InstancedMesh count changed, a first show, a geometry, material or texture swap: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed), records_pruned and textures_pruned (geometries and textures that died, freed by a slot edit without a rebuild), texture_slots_in_use (of 2048), texture_slot_fallbacks (textures that found no slot and drew without their map), sprite_textures and screen_sprite_atlases (images held now for world-space Sprite, ParticleSystem and ParticleField billboard textures, and for screen-space Sprites; each goes when its texture is disposed of), admissions_deferred (meshes that arrived hidden and were admitted over the following frames), admissions_landed (of those, landed while still hidden), swap_edits (a geometry, material or texture swapped on a mesh, taken by a slot edit), slot_pool_growths (slot edits that outgrew the slot pool and grew it in place, no device wait), slot_capacity (the entries the pool holds now, see reserve_entry_slots), flat_checks (frames with nothing added, removed or swapped settled with no walk of the scene graph), versioned_deltas (slot deltas that visited only the subtrees whose structure moved), slot_deltas (slot edits taken edit-proportionally: only the nodes and spans that changed found and placed) and moving_entries (the entries the last frame treated as moving: moved, shown or hidden in the last 30 frames, their shadow, GI and reflection histories kept short; an instance-matrix edit counts only the instances whose matrix changed).
         """
     @property
     def tone_mapping_exposure(self) -> float:
