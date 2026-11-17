@@ -88,7 +88,6 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <iostream>
 #include <memory>
 #include <sstream>
 #include <unordered_set>
@@ -159,7 +158,7 @@ namespace {
         if (vulkan) return std::make_unique<VulkanRenderer>(canvas);
 #else
         if (vulkan) {
-            std::cerr << "threepp editor: built without Vulkan support, using OpenGL\n";
+            THREEPP_LOG(kLogEditor, Warn) << "built without Vulkan support, using OpenGL";
         }
 #endif
         return std::make_unique<GLRenderer>(canvas);
@@ -413,7 +412,7 @@ EditorApp::EditorApp(const Options& options)
 
     // What the canvas and the renderer logged while they were constructed,
     // ahead of the editor's own first lines.
-    for (const auto& line : libraryLog_.take()) log(line);
+    drainLibraryLog();
 
     if (options_.resume && options_.resume->maximized) glfwMaximizeWindow(canvas_.windowPtr());
 
@@ -668,7 +667,7 @@ EditorApp::EditorApp(const Options& options)
         message << std::fixed << std::setprecision(2)
                 << " to free " << static_cast<double>(bytesFreed) / gib << " GiB (budget "
                 << static_cast<double>(commands_.byteLimit()) / gib << " GiB)";
-        log(message.str());
+        logWarn(message.str());
     });
 
     // Undoing an "Add" deletes the object it created, and undoing a paste or a
@@ -693,9 +692,6 @@ EditorApp::EditorApp(const Options& options)
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     // Kept as a member too: the collider overlay reads the world it builds.
     physics_ = std::make_shared<PhysicsPlaySession>();
-    // Soft bodies can decline to cook, and the GPU world can decline to come
-    // up; both are worth a line in the log rather than silence.
-    physics_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(physics_);
     // Right after physics: its start() borrows the world physics just built,
     // and stopping in reverse order tears the belts down while that world is
@@ -719,7 +715,6 @@ EditorApp::EditorApp(const Options& options)
         viewCamera().getWorldPosition(position);
         return position;
     });
-    particleSession_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(particleSession_);
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
@@ -732,7 +727,6 @@ EditorApp::EditorApp(const Options& options)
     granularSession_ = std::make_shared<GranularPlaySession>();
     granularSession_->setPhysics(physics_.get());
     granularSession_->setRenderer(renderer_.get());
-    granularSession_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(granularSession_);
 
 #ifdef THREEPP_WITH_VULKAN
@@ -745,7 +739,6 @@ EditorApp::EditorApp(const Options& options)
     splatSurfaceSession_->setPhysics(physics_.get());
     splatSurfaceSession_->setRenderer(renderer_.get());
     splatSurfaceSession_->setCache(splatSurfaces_.get());
-    splatSurfaceSession_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(splatSurfaceSession_);
 #endif
 
@@ -756,7 +749,6 @@ EditorApp::EditorApp(const Options& options)
     // settled this frame.
     characterSession_ = std::make_shared<CharacterPlaySession>();
     characterSession_->setPhysics(physics_.get());
-    characterSession_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(characterSession_);
 #endif
 
@@ -786,7 +778,6 @@ EditorApp::EditorApp(const Options& options)
     // thing the editor has to "where the user is standing" — the ortho views
     // are a drafting aid, not a vantage.
     audio_ = std::make_shared<AudioPlaySession>();
-    audio_->setLogger([this](const std::string& message) { log(message); });
     audio_->setListenerHost(&camera_);
     play_.addSession(audio_);
 #endif
@@ -810,13 +801,11 @@ EditorApp::EditorApp(const Options& options)
     sensors_->setRenderer(renderer_.get());
     sensors_->setRig(sensorRig_.get());
     sensors_->setHiddenDuringScan(overlay_.get());
-    sensors_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(sensors_);
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     // Last, so a script's transform edits are the final word for the frame —
     // physics and the animation player have already had their say.
     scripts_ = std::make_shared<ScriptPlaySession>();
-    scripts_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(scripts_);
 
     // threepp.editor.is_key_down: let a playing script be DRIVEN. Answered from ImGui's key
@@ -979,7 +968,7 @@ int EditorApp::run() {
 void EditorApp::frame(float dt) {
 
     // What the library logged since the last frame, on any thread.
-    for (const auto& line : libraryLog_.take()) log(line);
+    drainLibraryLog();
 
     // Before the sessions step, so this frame's step drives on this frame's keys.
     updateVehicleTeleop(dt);
@@ -1218,7 +1207,7 @@ void EditorApp::drawUi() {
                 if (auto* target = findByUuid(document_.scene(), scriptTargetUuid_)) {
                     assignScript(*target, path);
                 } else {
-                    log("script not attached - the object is no longer in the scene");
+                    logWarn("script not attached - the object is no longer in the scene");
                 }
                 scriptTargetUuid_.clear();
                 break;
@@ -1227,7 +1216,7 @@ void EditorApp::drawUi() {
                 if (auto* target = findByUuid(document_.scene(), soundTargetUuid_)) {
                     assignSound(*target, path);
                 } else {
-                    log("sound not attached - the object is no longer in the scene");
+                    logWarn("sound not attached - the object is no longer in the scene");
                 }
                 soundTargetUuid_.clear();
                 break;
@@ -1236,7 +1225,7 @@ void EditorApp::drawUi() {
                 if (auto* source = findByUuid(document_.scene(), prefabSourceUuid_)) {
                     savePrefab(*source, path);
                 } else {
-                    log("prefab not saved - the object is no longer in the scene");
+                    logWarn("prefab not saved - the object is no longer in the scene");
                 }
                 prefabSourceUuid_.clear();
                 break;
@@ -1459,7 +1448,7 @@ void EditorApp::openScene(const std::filesystem::path& path) {
     selectObject(nullptr);
     std::string error;
     if (!document_.open(path, &error)) {
-        log("open failed: " + error);
+        logError("open failed: " + error);
         return;
     }
     // Only now, on the way in: a failed open leaves the document (and so the
@@ -1485,7 +1474,7 @@ void EditorApp::openExample(const std::string& slug) {
     const auto* example = examples::find(slug);
     const auto json = examples::json(slug);
     if (!example || json.empty()) {
-        log("no example named \"" + slug + "\" ships with this build");
+        logError("no example named \"" + slug + "\" ships with this build");
         return;
     }
 
@@ -1495,7 +1484,7 @@ void EditorApp::openExample(const std::string& slug) {
     // so the markers, the overlays and (for a scene that had one) the robot
     // rearticulation all happen exactly as they do for Open.
     if (!document_.openJson(json, &error)) {
-        log("open example failed: " + error);
+        logError("open example failed: " + error);
         return;
     }
     dockCamera_.reset();
@@ -1545,7 +1534,7 @@ bool EditorApp::applyDocumentView() {
             selectObject(subject);
             followSelection_ = true;
         } else {
-            log("editorFollow names \"" + follow + "\", which is not in this scene - ignored");
+            logWarn("editorFollow names \"" + follow + "\", which is not in this scene - ignored");
         }
     }
 
@@ -1555,7 +1544,7 @@ bool EditorApp::applyDocumentView() {
     Vector3 position;
     Vector3 target;
     if (!parseViewSpec(view, position, target)) {
-        log("editorView is \"" + view + "\" - want px,py,pz@tx,ty,tz; ignored");
+        logWarn("editorView is \"" + view + "\" - want px,py,pz@tx,ty,tz; ignored");
         return false;
     }
 
@@ -1652,7 +1641,7 @@ void EditorApp::saveSceneAs(const std::filesystem::path& path) {
 
     std::string error;
     if (!document_.saveAs(path, &error)) {
-        log("save failed: " + error);
+        logError("save failed: " + error);
         return;
     }
     logWarnings();
@@ -1822,7 +1811,7 @@ void EditorApp::pollImports(float dt) {
     activeImport_.reset();
 
     if (!error.empty()) {
-        log("import failed: " + path.filename().string() + " - " + error);
+        logError("import failed: " + path.filename().string() + " - " + error);
         // A description says why it failed, down to the file and line, and the
         // console has already said it. A modal on top of that only asks for a
         // click before you can go and fix the thing it named.
@@ -2155,11 +2144,11 @@ void EditorApp::setEnvironment(const std::filesystem::path& path, bool alsoBackg
             texture = loader.load(path);
         }
     } catch (const std::exception& e) {
-        log("environment failed: " + std::string(e.what()));
+        logError("environment failed: " + std::string(e.what()));
         return;
     }
     if (!texture) {
-        log("environment failed: " + path.filename().string());
+        logError("environment failed: " + path.filename().string());
         return;
     }
 
@@ -2200,7 +2189,7 @@ void EditorApp::assignTextureToSlot(const std::filesystem::path& path) {
     auto* owner = findByUuid(document_.scene(), pending.objectUuid);
     auto material = owner ? owner->material() : nullptr;
     if (!material) {
-        log("texture not assigned - the object is no longer in the scene");
+        logWarn("texture not assigned - the object is no longer in the scene");
         return;
     }
 
@@ -2211,7 +2200,7 @@ void EditorApp::assignTextureToSlot(const std::filesystem::path& path) {
                                         return slot.name == pending.slot;
                                     });
     if (match == slots.end()) {
-        log("texture not assigned - " + pending.slot + " is no longer a slot on this material");
+        logWarn("texture not assigned - " + pending.slot + " is no longer a slot on this material");
         return;
     }
 
@@ -2222,12 +2211,12 @@ void EditorApp::assignTextureToSelection(const std::filesystem::path& path) {
 
     auto* selected = selection_.get();
     if (!selected) {
-        log("no selection to texture");
+        logWarn("no selection to texture");
         return;
     }
     auto material = selected->material();
     if (!material) {
-        log("selected object has no material");
+        logWarn("selected object has no material");
         return;
     }
 
@@ -2236,7 +2225,7 @@ void EditorApp::assignTextureToSelection(const std::filesystem::path& path) {
     // dropping it there is a change the user then has to notice and undo.
     const auto slots = textureSlotsOf(*material);
     if (slots.empty()) {
-        log("selected object's material has no texture slots");
+        logWarn("selected object's material has no texture slots");
         return;
     }
 
@@ -2295,11 +2284,11 @@ void EditorApp::applyTextureToSlot(const std::filesystem::path& path,
         // is a bug you chase in the renderer rather than here.
         texture = loader.load(path, target.srgb ? ColorSpace::sRGB : ColorSpace::NoColorSpace);
     } catch (const std::exception& e) {
-        log("texture failed: " + std::string(e.what()));
+        logError("texture failed: " + std::string(e.what()));
         return;
     }
     if (!texture) {
-        log("texture failed: " + path.filename().string());
+        logError("texture failed: " + path.filename().string());
         return;
     }
 
@@ -2577,12 +2566,12 @@ bool EditorApp::regenerate(Object3D& carrier) {
 
     const auto config = GeneratorConfig::read(carrier);
     if (!config) {
-        log("regenerate: no generator script on this object");
+        logWarn("regenerate: no generator script on this object");
         return false;
     }
 
 #ifndef THREEPP_EDITOR_WITH_PYTHON
-    log("regenerate: built without Python scripting - the script is saved, not run");
+    logWarn("regenerate: built without Python scripting - the script is saved, not run");
     return false;
 #else
     // The output is built DETACHED and attached only on success, so a script that
@@ -2609,14 +2598,14 @@ bool EditorApp::regenerate(Object3D& carrier) {
     }
 
     if (!error.empty()) {
-        log("regenerate failed: " + error);
+        logError("regenerate failed: " + error);
         return false;
     }
 
     if (output->children.empty()) {
         // Not an error — a script may legitimately have decided to build nothing
         // — but silence here reads as a broken button, so say it.
-        log("regenerate: the script added nothing");
+        logWarn("regenerate: the script added nothing");
     }
 
     // Hold the outgoing generation alive for undo. `generatedChild` returns a raw
@@ -2895,7 +2884,7 @@ void EditorApp::duplicateSelected() {
 
     auto copy = selected->clone();
     if (!copy) {
-        log("cannot duplicate " + selected->type());
+        logWarn("cannot duplicate " + selected->type());
         return;
     }
     copy->name = ObjectFactory::uniqueName(
@@ -3000,7 +2989,7 @@ void EditorApp::savePrefab(Object3D& object, const std::filesystem::path& path) 
 
     std::string error;
     if (!document_.exportSubtree(object, path, &error)) {
-        log("prefab save failed: " + error);
+        logError("prefab save failed: " + error);
         return;
     }
     logWarnings();
@@ -3031,11 +3020,11 @@ void EditorApp::addPrefab(const std::filesystem::path& path, Object3D& parent) {
     }
     if (!root) {
         if (error.empty()) error = "not a scene document";
-        log("prefab failed: " + path.filename().string() + " - " + error);
+        logError("prefab failed: " + path.filename().string() + " - " + error);
         importError_ = path.filename().string() + "\n\n" + error;
         return;
     }
-    for (const auto& warning : loader.warnings()) log("warning: " + warning);
+    for (const auto& warning : loader.warnings()) logWarn(warning);
 
     const auto stem = path.stem().string();
 
@@ -3294,7 +3283,7 @@ void EditorApp::rearticulateRobots(Scene& scene) {
         if (!robot) {
             // The geometry is still in the document, so the scene renders as
             // saved — it just cannot be re-jointed until the file is back.
-            log("robot not re-articulated (" + std::filesystem::path(config.urdf).filename().string() +
+            logWarn("robot not re-articulated (" + std::filesystem::path(config.urdf).filename().string() +
                 (error.empty() ? ")" : "): " + error));
             continue;
         }
@@ -3303,7 +3292,7 @@ void EditorApp::rearticulateRobots(Scene& scene) {
         // document's. That, the identity/placement handover and the reporting all
         // live in a free function so they can be tested headlessly — see
         // transplantRobot.
-        transplantRobot(*placeholder, robot, [this](const std::string& m) { log(m); });
+        transplantRobot(*placeholder, robot);
     }
 }
 
@@ -3384,7 +3373,7 @@ void EditorApp::startAudition(const Object3D& object) {
                                                        ? std::filesystem::path{}
                                                        : document_.path().parent_path());
     if (file.empty()) {
-        log("no sound file to audition on \"" + object.name + "\"");
+        logWarn("no sound file to audition on \"" + object.name + "\"");
         return;
     }
 
@@ -3395,7 +3384,7 @@ void EditorApp::startAudition(const Object3D& object) {
             // Said once per session: the button goes dead rather than logging
             // the same failure on every click.
             auditionUnavailable_ = true;
-            log("audio device unavailable - audition disabled (" + std::string(e.what()) + ")");
+            logWarn("audio device unavailable - audition disabled (" + std::string(e.what()) + ")");
             return;
         }
     }
@@ -3403,7 +3392,7 @@ void EditorApp::startAudition(const Object3D& object) {
     try {
         auditionSound_ = std::make_unique<Audio>(*auditionListener_, file);
     } catch (const std::exception& e) {
-        log("could not play " + file.string() + " (" + e.what() + ")");
+        logError("could not play " + file.string() + " (" + e.what() + ")");
         return;
     }
 
@@ -4264,7 +4253,7 @@ bool EditorApp::rejectWhilePlaying(const char* what) {
     // Once per attempt, not once per frame: every caller is an action, not a
     // poll. Greying the menu item is the hint; this is for the paths that have
     // no affordance to grey (shortcuts, file drops, the dialogs already open).
-    log(std::string(what) + " is not available while playing - press Stop first");
+    logWarn(std::string(what) + " is not available while playing - press Stop first");
     return true;
 }
 
@@ -4297,7 +4286,7 @@ void EditorApp::startPlay() {
 
     std::string error;
     if (!play_.play(document_, &error)) {
-        log("play failed: " + error);
+        logError("play failed: " + error);
         return;
     }
 
@@ -4475,7 +4464,7 @@ void EditorApp::stopPlay() {
 
     std::string error;
     if (!play_.stop(document_, &error)) {
-        log("stop failed: " + error);
+        logError("stop failed: " + error);
         return;
     }
     log("play stopped, scene restored");
@@ -4667,7 +4656,7 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             if (SogLoader::isSog(path)) {
                 importModel(path);
             } else {
-                log("ignored dropped folder " + path.filename().string() +
+                logWarn("ignored dropped folder " + path.filename().string() +
                     " - no meta.json or lod-meta.json, so it is not a splat scan");
             }
             continue;
@@ -4689,7 +4678,7 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             if (auto* selected = selection_.get()) {
                 assignScript(*selected, path);
             } else {
-                log("no selection to attach " + path.filename().string() + " to");
+                logWarn("no selection to attach " + path.filename().string() + " to");
             }
         } else if (formats::isImage(extension)) {
             // Deferred: which slot this belongs in depends on where the cursor
@@ -4698,21 +4687,47 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             // frame.
             pendingTextureDrops_.push_back(path);
         } else {
-            log("ignored dropped file " + path.filename().string());
+            logWarn("ignored dropped file " + path.filename().string());
         }
     }
 }
 
 void EditorApp::log(const std::string& message) {
 
-    console_.push_back(message);
+    logAt(threepp::log::Level::Info, message);
+}
+
+void EditorApp::logWarn(const std::string& message) {
+
+    logAt(threepp::log::Level::Warn, message);
+}
+
+void EditorApp::logError(const std::string& message) {
+
+    logAt(threepp::log::Level::Error, message);
+}
+
+void EditorApp::logAt(threepp::log::Level level, const std::string& message) {
+
+    // The record goes through LibraryLog's sink, which queues the console
+    // line; draining here puts it in console_ before this returns, as callers
+    // (and the self-test) expect.
+    if (kLogEditor.enabled(level)) threepp::log::write(kLogEditor, level, message);
+    drainLibraryLog();
+}
+
+void EditorApp::drainLibraryLog() {
+
+    auto lines = libraryLog_.take();
+    if (lines.empty()) return;
+    for (auto& line : lines) console_.push_back(std::move(line));
     while (console_.size() > kConsoleLimit) console_.pop_front();
     consoleScrollToBottom_ = true;
 }
 
 void EditorApp::logWarnings() {
 
-    for (const auto& warning : document_.warnings()) log("warning: " + warning);
+    for (const auto& warning : document_.warnings()) logWarn(warning);
 }
 
 

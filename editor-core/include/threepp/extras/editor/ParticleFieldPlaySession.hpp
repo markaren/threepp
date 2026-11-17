@@ -33,6 +33,7 @@
 #ifndef THREEPP_EDITOR_PARTICLEFIELDPLAYSESSION_HPP
 #define THREEPP_EDITOR_PARTICLEFIELDPLAYSESSION_HPP
 
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/ParticleFieldBuild.hpp"
 #include "threepp/extras/editor/ParticleFieldConfig.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
@@ -82,6 +83,8 @@ namespace threepp::editor {
         // about a viewpoint that does not exist has no viewpoint to wrap about.
         void setViewpoint(std::function<Vector3()> viewpoint) { viewpoint_ = std::move(viewpoint); }
 
+        // Messages are records in editor.particles (EditorLog.hpp); this callback also
+        // receives each one, after it is written.
         void setLogger(std::function<void(const std::string&)> logger) { logger_ = std::move(logger); }
 
         // --- readouts --------------------------------------------------------
@@ -149,7 +152,7 @@ namespace threepp::editor {
                 // Once per Play, at the moment the user is looking, and then
                 // never again: the backend is a fact about the run, not a
                 // per-frame event. The nodes are still counted above.
-                log("particles: " + std::to_string(authored.size()) +
+                logWarn("particles: " + std::to_string(authored.size()) +
                     " field(s) need the Vulkan backend - skipping visuals");
                 return;
             }
@@ -222,8 +225,15 @@ namespace threepp::editor {
         }
 
         void log(const std::string& message) const {
+            report(kLogParticles, threepp::log::Level::Info, message, logger_);
+        }
 
-            if (logger_) logger_(message);
+        void logWarn(const std::string& message) const {
+            report(kLogParticles, threepp::log::Level::Warn, message, logger_);
+        }
+
+        void logError(const std::string& message) const {
+            report(kLogParticles, threepp::log::Level::Error, message, logger_);
         }
 
         Renderer* renderer_ = nullptr;

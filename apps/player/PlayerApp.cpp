@@ -51,8 +51,7 @@ namespace {
         if (vulkan) return std::make_unique<VulkanRenderer>(canvas);
 #else
         if (vulkan) {
-            std::cerr << "threepp player: built without Vulkan support, using OpenGL"
-                      << std::endl;
+            THREEPP_LOG(threepp::player::kLogPlayer, Warn) << "built without Vulkan support, using OpenGL";
         }
 #endif
         return std::make_unique<GLRenderer>(canvas);
@@ -73,14 +72,7 @@ namespace {
 
 
 PlayerApp::PlayerApp(PlayerOptions options)
-    : options_(std::move(options)) {
-
-    core_.setLogger([](const std::string& message) {
-        // Everything the sessions say goes to stdout, one line each, unadorned:
-        // this is a program whose output somebody greps.
-        std::cout << "  " << message << std::endl;
-    });
-}
+    : options_(std::move(options)) {}
 
 PlayerApp::~PlayerApp() {
 
@@ -102,8 +94,7 @@ int PlayerApp::run() {
 
     std::string error;
     if (!core_.open(options_.scene, &error)) {
-        std::cerr << "threepp player: cannot open " << options_.scene.string() << " - " << error
-                  << std::endl;
+        THREEPP_LOG(kLogPlayer, Error) << "cannot open " << options_.scene.string() << " - " << error;
         // Deliberately not exitCode(): no episode ran, and the caller needs a
         // nonzero code for a document that would not even load.
         return 1;
@@ -155,8 +146,7 @@ void PlayerApp::buildView() {
                         .exitOnKeyEscape(true));
         renderer_ = makeRenderer(*canvas_, options_.vulkan);
     } catch (const std::exception& e) {
-        std::cerr << "threepp player: no renderer (" << e.what()
-                  << ") - vision sensors will not scan" << std::endl;
+        THREEPP_LOG(kLogPlayer, Warn) << "no renderer (" << e.what() << ") - vision sensors will not scan";
         renderer_.reset();
         canvas_.reset();
     }
@@ -211,7 +201,7 @@ void PlayerApp::buildView() {
 
         if (auto* overlay = core_.overlay()) {
             debugDraw_ = std::make_unique<DebugDrawOverlay>(*overlay);
-            debugDraw_->setLogger([this](const std::string& message) { log(message); });
+            debugDraw_->setLogger([this](const std::string& message) { logWarn(message); });
             // Drawing the lines is how they get drained. Without this the core
             // clears the list itself each step, which is what the headless path
             // does — either way it never reaches its cap.
@@ -257,7 +247,7 @@ void PlayerApp::applyDocumentView() {
         return;
     }
     if (!view.empty()) {
-        log("editorView is \"" + view + "\" - want px,py,pz@tx,ty,tz; ignored");
+        logWarn("editorView is \"" + view + "\" - want px,py,pz@tx,ty,tz; ignored");
     }
     frameSceneBounds();
 }
@@ -293,8 +283,7 @@ bool PlayerApp::playEpisode(int index) {
 
     std::string error;
     if (!core_.beginEpisode(index, &error)) {
-        std::cerr << "threepp player: episode " << index << " would not play - " << error
-                  << std::endl;
+        THREEPP_LOG(kLogPlayer, Error) << "episode " << index << " would not play - " << error;
         // A document that refuses once refuses every time; nothing is learned by
         // trying it another ninety-nine times. The refusal is already recorded
         // as a failed episode, so the exit code is nonzero.
@@ -307,7 +296,7 @@ bool PlayerApp::playEpisode(int index) {
     follow_ = followName_.empty() ? nullptr : core_.scene().getObjectByName(followName_);
     followSeeded_ = false;
     if (!followName_.empty() && !follow_) {
-        log("editorFollow names \"" + followName_ + "\", which is not in this scene - ignored");
+        logWarn("editorFollow names \"" + followName_ + "\", which is not in this scene - ignored");
         followName_.clear();
     }
 
@@ -418,5 +407,10 @@ void PlayerApp::report(const EpisodeResult& result) {
 
 void PlayerApp::log(const std::string& message) {
 
-    std::cout << "  " << message << std::endl;
+    THREEPP_LOG(kLogPlayer, Info) << message;
+}
+
+void PlayerApp::logWarn(const std::string& message) {
+
+    THREEPP_LOG(kLogPlayer, Warn) << message;
 }

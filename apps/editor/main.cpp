@@ -84,8 +84,8 @@ int main(int argc, char** argv) {
             if (auto shot = parseShot(argument + 7)) {
                 options.shots.push_back(*shot);
             } else {
-                std::cerr << "threepp editor: cannot read --shot=" << (argument + 7)
-                          << " (want px,py,pz@tx,ty,tz[:label])" << std::endl;
+                THREEPP_LOG(threepp::editor::kLogEditor, Error)
+                        << "cannot read --shot=" << (argument + 7) << " (want px,py,pz@tx,ty,tz[:label])";
                 return 2;
             }
         } else if (std::strcmp(argument, "--help") == 0 || std::strcmp(argument, "-h") == 0) {
@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
         try {
             app = std::make_unique<threepp::editor::EditorApp>(options);
         } catch (const std::exception& e) {
-            std::cerr << "threepp editor: " << e.what() << std::endl;
+            THREEPP_LOG(threepp::editor::kLogEditor, Error) << e.what();
             if (!restarted) return 1;
             // The backend asked for will not come up here (no Vulkan driver,
             // no capable GPU). The one the editor was just running on did, so
@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
         try {
             code = app->run();
         } catch (const std::exception& e) {
-            std::cerr << "threepp editor: " << e.what() << std::endl;
+            THREEPP_LOG(threepp::editor::kLogEditor, Error) << e.what();
             return 1;
         }
 

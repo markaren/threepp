@@ -176,7 +176,7 @@ void EditorApp::applyScriptEditor(ScriptEditorState& state) {
     // because it does not parse yet is a worse editor.
     state.status = scripting::checkSyntax(state.buffer, state.label);
     if (!state.status.empty()) {
-        log("script syntax error on " + state.label + " - " + firstLineOf(state.status));
+        logError("script syntax error on " + state.label + " - " + firstLineOf(state.status));
     }
 #endif
 

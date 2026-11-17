@@ -369,7 +369,9 @@ namespace threepp::editor {
 
         [[nodiscard]] std::string name() const override { return "ScriptPlaySession"; }
 
-        // Console sink. Called on the main thread, from start/update/stop only.
+        // Script errors and warnings are records in editor.script (EditorLog.hpp);
+        // this callback also receives each one, after it is written. Called on
+        // the main thread, from start/update/stop only.
         void setLogger(std::function<void(const std::string&)> logger);
 
         // Errors from the last session, keyed by object uuid. Kept after stop()

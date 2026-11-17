@@ -203,14 +203,14 @@ void EditorApp::ensureScriptWorkspace(const std::filesystem::path& dir) {
         // Worth saying out loud: the settings are still written (the path may
         // be right on the machine that opens them), but nobody should wonder
         // silently why completion is missing.
-        log("script workspace: no type stubs at " +
+        logWarn("script workspace: no type stubs at " +
             (stubs.empty() ? std::string("<unset>") : stubs.generic_string()) +
             " - set THREEPP_PYTHON_STUBS for `import threepp` completion");
     }
 
     const auto result = ScriptWorkspace::ensure(dir, stubs);
     if (!result.ok) {
-        log("could not write " + result.file.generic_string() + " - " + result.error);
+        logError("could not write " + result.file.generic_string() + " - " + result.error);
     } else if (result.created) {
         log("wrote " + result.file.generic_string() + " - `import threepp` completes in this folder");
     }
@@ -230,7 +230,7 @@ void EditorApp::launchExternalEditor(const std::filesystem::path& dir,
     if (launchEditorProcess(dir, file, how)) {
         log("opened " + file.filename().string() + " in " + how);
     } else {
-        log("could not open " + file.generic_string() + " - no `code` on PATH and no handler for .py");
+        logError("could not open " + file.generic_string() + " - no `code` on PATH and no handler for .py");
     }
 }
 
@@ -238,7 +238,7 @@ void EditorApp::openScriptFileExternally(const std::filesystem::path& file) {
 
     std::error_code ec;
     if (file.empty() || !std::filesystem::exists(file, ec)) {
-        log("script file not found: " + file.generic_string());
+        logError("script file not found: " + file.generic_string());
         return;
     }
 
@@ -278,14 +278,14 @@ void EditorApp::startExternalEdit(Object3D& object, ExternalEditKind kind) {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     if (ec) {
-        log("could not create " + dir.generic_string() + " - " + ec.message());
+        logError("could not create " + dir.generic_string() + " - " + ec.message());
         return;
     }
 
     const auto label = object.name.empty() ? object.type() : object.name;
     const auto file = dir / ScriptWorkspace::scratchName(object.uuid, label);
     if (!ScriptWorkspace::writeSource(file, source)) {
-        log("could not write " + file.generic_string());
+        logError("could not write " + file.generic_string());
         return;
     }
 

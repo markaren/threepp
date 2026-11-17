@@ -2,6 +2,7 @@
 #include "PlayerCore.hpp"
 
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 
@@ -70,7 +71,7 @@ PlayerCore::PlayerCore() {
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     physics_ = std::make_shared<editor::PhysicsPlaySession>();
-    physics_->setLogger([this](const std::string& message) { log(message); });
+    physics_->setLogger([this](const std::string& message) { forward(message); });
     play_.addSession(physics_);
     // Right after physics, as in the editor: its start() borrows the world
     // physics just built, and the reverse stop order tears the belts down while
@@ -88,7 +89,7 @@ PlayerCore::PlayerCore() {
     // every headless run — the session says so once and still COUNTS the nodes,
     // because a document that has a field and reports none is the regression.
     particles_ = std::make_shared<editor::ParticleFieldPlaySession>();
-    particles_->setLogger([this](const std::string& message) { log(message); });
+    particles_->setLogger([this](const std::string& message) { forward(message); });
     particles_->setViewpoint([this] {
         Vector3 position;
         if (viewpointHost_) viewpointHost_->getWorldPosition(position);
@@ -104,7 +105,7 @@ PlayerCore::PlayerCore() {
     // the InstancedMesh, the one that does not need Vulkan.
     granular_ = std::make_shared<editor::GranularPlaySession>();
     granular_->setPhysics(physics_.get());
-    granular_->setLogger([this](const std::string& message) { log(message); });
+    granular_->setLogger([this](const std::string& message) { forward(message); });
     play_.addSession(granular_);
 
     // Characters, borrowing the same world for the same reason. The player has
@@ -115,7 +116,7 @@ PlayerCore::PlayerCore() {
     // to it.
     character_ = std::make_shared<editor::CharacterPlaySession>();
     character_->setPhysics(physics_.get());
-    character_->setLogger([this](const std::string& message) { log(message); });
+    character_->setLogger([this](const std::string& message) { forward(message); });
     play_.addSession(character_);
 #endif
 
@@ -133,7 +134,7 @@ PlayerCore::PlayerCore() {
     // listens. A machine with no audio device at all is handled inside the
     // session — it logs once and becomes a no-op, never fatal.
     audio_ = std::make_shared<editor::AudioPlaySession>();
-    audio_->setLogger([this](const std::string& message) { log(message); });
+    audio_->setLogger([this](const std::string& message) { forward(message); });
     play_.addSession(audio_);
 #endif
 
@@ -153,13 +154,13 @@ PlayerCore::PlayerCore() {
 #endif
     sensors_->setRig(sensorRig_.get());
     sensors_->setHiddenDuringScan(overlay_.get());
-    sensors_->setLogger([this](const std::string& message) { log(message); });
+    sensors_->setLogger([this](const std::string& message) { forward(message); });
     play_.addSession(sensors_);
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     // Last, so a script's transform edits are the final word for the frame.
     scripts_ = std::make_shared<editor::ScriptPlaySession>();
-    scripts_->setLogger([this](const std::string& message) { log(message); });
+    scripts_->setLogger([this](const std::string& message) { forward(message); });
     play_.addSession(scripts_);
 #endif
 }
@@ -250,14 +251,14 @@ Group* PlayerCore::overlay() const {
 bool PlayerCore::open(const std::filesystem::path& path, std::string* error) {
 
     if (!document_.open(path, error)) return false;
-    for (const auto& warning : document_.warnings()) log(warning);
+    for (const auto& warning : document_.warnings()) logWarn(warning);
     return true;
 }
 
 bool PlayerCore::openJson(const std::string& json, std::string* error) {
 
     if (!document_.openJson(json, error)) return false;
-    for (const auto& warning : document_.warnings()) log(warning);
+    for (const auto& warning : document_.warnings()) logWarn(warning);
     return true;
 }
 
@@ -429,7 +430,12 @@ int PlayerCore::exitCode() const {
     return failedEpisodes() > 0 ? 1 : 0;
 }
 
-void PlayerCore::log(const std::string& message) {
+void PlayerCore::logWarn(const std::string& message) {
+
+    threepp::editor::report(kLogPlayer, threepp::log::Level::Warn, message, logger_);
+}
+
+void PlayerCore::forward(const std::string& message) {
 
     if (logger_) logger_(message);
 }

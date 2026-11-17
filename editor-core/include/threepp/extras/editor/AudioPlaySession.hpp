@@ -57,8 +57,9 @@ namespace threepp::editor {
         [[nodiscard]] std::string name() const override { return "Audio"; }
 
         // Anything worth telling the user about a sound that could not be
-        // loaded, or about the device that could not be opened — the same hook
-        // the physics and script sessions use.
+        // loaded, or about the device that could not be opened, is a record
+        // in editor.audio (EditorLog.hpp); this callback also receives each
+        // one, after it is written.
         void setLogger(std::function<void(const std::string&)> logger);
 
         // Where a RELATIVE userData["soundFile"] resolves from; the editor
@@ -120,6 +121,8 @@ namespace threepp::editor {
         };
 
         void log(const std::string& message) const;
+        void logWarn(const std::string& message) const;
+        void logError(const std::string& message) const;
 
         // DECLARED FIRST so it is DESTROYED LAST. An ma_sound holds a pointer
         // into the ma_engine it was initialised from, and uninitialising the

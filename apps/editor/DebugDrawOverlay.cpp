@@ -65,7 +65,7 @@ void EditorApp::syncDebugDraw() {
 
     if (list.dropped > 0 && !debugDrawWarned_) {
         debugDrawWarned_ = true;
-        log("debug draw capped at " + std::to_string(scripting::DebugDrawList::cap) +
+        logWarn("debug draw capped at " + std::to_string(scripting::DebugDrawList::cap) +
             " segments - " + std::to_string(list.dropped) + " dropped this frame");
     }
 

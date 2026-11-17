@@ -2,6 +2,7 @@
 #include "threepp/extras/editor/AudioPlaySession.hpp"
 
 #include "threepp/extras/editor/AcousticSurfaceConfig.hpp"
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 
 #include "threepp/audio/Acoustics.hpp"
@@ -58,7 +59,17 @@ void AudioPlaySession::setListenerHost(Object3D* host) {
 
 void AudioPlaySession::log(const std::string& message) const {
 
-    if (logger_) logger_(message);
+    report(kLogAudio, threepp::log::Level::Info, message, logger_);
+}
+
+void AudioPlaySession::logWarn(const std::string& message) const {
+
+    report(kLogAudio, threepp::log::Level::Warn, message, logger_);
+}
+
+void AudioPlaySession::logError(const std::string& message) const {
+
+    report(kLogAudio, threepp::log::Level::Error, message, logger_);
 }
 
 void AudioPlaySession::start(Scene& scene) {
@@ -94,7 +105,7 @@ void AudioPlaySession::start(Scene& scene) {
 
         const auto stored = SoundConfig::file(object);
         if (stored.empty()) {
-            log("sound on \"" + nameOf(object) + "\" has no file - nothing to play");
+            logWarn("sound on \"" + nameOf(object) + "\" has no file - nothing to play");
             return;
         }
         authored.push_back({&object, *config, SoundConfig::resolveFile(stored, resourcePath_)});
@@ -110,7 +121,7 @@ void AudioPlaySession::start(Scene& scene) {
         } catch (const std::exception& e) {
             // No device (headless, CI, exclusive-mode driver). Say so once and
             // become a no-op; every other session still runs.
-            log("audio device unavailable - " + std::to_string(authored.size()) +
+            logWarn("audio device unavailable - " + std::to_string(authored.size()) +
                 " authored sound(s) will not play (" + e.what() + ")");
             return;
         }
@@ -137,7 +148,7 @@ void AudioPlaySession::start(Scene& scene) {
         } catch (const std::exception& e) {
             // One bad file never aborts Play — the same bargain the physics
             // session strikes with a mesh it cannot cook.
-            log("sound on \"" + nameOf(*item.node) + "\" failed to load " +
+            logError("sound on \"" + nameOf(*item.node) + "\" failed to load " +
                 item.file.string() + " (" + e.what() + ")");
             continue;
         }

@@ -190,8 +190,12 @@ undo step.
 **Bottom panel.** A console showing loader and exporter warnings, an asset
 browser (double-click a file to open/import/assign), the live sensor readout,
 and — while any are open — the Script Editor's scripts. Console is the first tab: it is
-where import results and errors land. Collapsible, resizable by dragging its top
-edge, and it runs to the left edge of the window.
+where import results and errors land. It shows every `threepp::log` record: the
+editor's own lines (category `editor`) and the play sessions' (`editor.physics`,
+`editor.script`, ...) without their category, the library's with it. Each line also
+goes to stderr, and `THREEPP_LOG` / `THREEPP_LOG_FILE` apply to all of them (see
+[environment_variables.md](environment_variables.md#logging)). Collapsible,
+resizable by dragging its top edge, and it runs to the left edge of the window.
 
 **Camera dock.** The band beside the bottom panel, under the inspector, renders
 the selected camera live. It collapses with the bottom panel and paints itself

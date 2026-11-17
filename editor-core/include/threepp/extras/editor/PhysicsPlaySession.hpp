@@ -27,6 +27,7 @@
 #ifndef THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 #define THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
 // Read here only to EXCLUDE: a character's subtree is driven by its own
 // capsule controller (CharacterPlaySession), so a rigid body cooked over any
@@ -525,8 +526,8 @@ namespace threepp::editor {
         }
 
         // Anything worth telling the user about a body that could not be
-        // created — same hook the script session uses, so the editor routes
-        // both into its log.
+        // created is a record in editor.physics (EditorLog.hpp); this callback
+        // also receives each one, after it is written.
         void setLogger(std::function<void(const std::string&)> logger) {
 
             logger_ = std::move(logger);
@@ -708,9 +709,16 @@ namespace threepp::editor {
         }
 
     private:
-        void log(const std::string& message) {
+        void log(const std::string& message) const {
+            report(kLogPhysics, threepp::log::Level::Info, message, logger_);
+        }
 
-            if (logger_) logger_(message);
+        void logWarn(const std::string& message) const {
+            report(kLogPhysics, threepp::log::Level::Warn, message, logger_);
+        }
+
+        void logError(const std::string& message) const {
+            report(kLogPhysics, threepp::log::Level::Error, message, logger_);
         }
 
         // Is `object` this robot, or a descendant of one of the articulated
@@ -801,7 +809,7 @@ namespace threepp::editor {
 
             auto geo = config->derived(root);
             if (!geo.valid) {
-                log("vehicle: \"" + root.name + "\" - " + geo.problem + " - not simulated");
+                logWarn("vehicle: \"" + root.name + "\" - " + geo.problem + " - not simulated");
                 return;
             }
 
@@ -869,7 +877,7 @@ namespace threepp::editor {
                             std::make_unique<PhysxVehicle>(*world_, s));
                 }
             } catch (const std::exception& e) {
-                log("vehicle: \"" + root.name + "\" could not be built - " + e.what());
+                logError("vehicle: \"" + root.name + "\" could not be built - " + e.what());
                 return;
             }
 
@@ -1010,7 +1018,7 @@ namespace threepp::editor {
                 return std::abs(v - scale) <= 1e-3f * std::max(1.f, std::abs(scale));
             };
             if (!matches(baseScale.y) || !matches(baseScale.z) || !(scale > 0.f)) {
-                log("physics: \"" + robot.name + "\" has a non-uniform world scale - "
+                logWarn("physics: \"" + robot.name + "\" has a non-uniform world scale - "
                     "PhysX articulation links can be scaled but not stretched, so it is not simulated");
                 return;
             }
@@ -1038,7 +1046,7 @@ namespace threepp::editor {
             try {
                 built = loadArticulation(*world_, robotConfig->urdf, opts);
             } catch (const std::exception& e) {
-                log("physics: \"" + robot.name + "\" could not be articulated - " + e.what());
+                logError("physics: \"" + robot.name + "\" could not be articulated - " + e.what());
                 return;
             }
             if (!built.articulation) {
@@ -1047,7 +1055,7 @@ namespace threepp::editor {
                 // URDFLoader keeps diagnostics at all (see its header): the
                 // editor is the caller that puts them in front of the user
                 // instead of a generic "unreadable".
-                log("physics: \"" + robot.name + "\" could not be articulated - " +
+                logError("physics: \"" + robot.name + "\" could not be articulated - " +
                     (built.error.empty() ? "the URDF at \"" + robotConfig->urdf +
                                                    "\" is unreadable"
                                          : built.error));
@@ -1058,7 +1066,7 @@ namespace threepp::editor {
             // stderr before, which an editor user never sees; the console is
             // exactly the place they belong.
             for (const auto& line : built.diagnostics) {
-                log("physics: \"" + robot.name + "\" - " + line);
+                logWarn("physics: \"" + robot.name + "\" - " + line);
             }
 
             auto played = std::make_unique<PlayedArticulation>();
@@ -1082,7 +1090,7 @@ namespace threepp::editor {
                     }
                 }
                 if (visualIndexOfDof[d] < 0) {
-                    log("physics: \"" + robot.name + "\" articulation joint \"" + built.jointNames[d] +
+                    logWarn("physics: \"" + robot.name + "\" articulation joint \"" + built.jointNames[d] +
                         "\" has no matching visual joint - it will simulate but not drive the mesh");
                 }
             }
@@ -1092,7 +1100,7 @@ namespace threepp::editor {
                 bool found = false;
                 for (const auto& name : built.jointNames) found = found || name == j.name;
                 if (!found) {
-                    log("physics: \"" + robot.name + "\" joint \"" + j.name +
+                    logWarn("physics: \"" + robot.name + "\" joint \"" + j.name +
                         "\" is not an articulation DOF (fixed or collapsed) - not simulated");
                 }
             }
@@ -1262,25 +1270,25 @@ namespace threepp::editor {
             if (!config->body.empty()) {
                 auto* other = scene.getObjectByName(config->body);
                 if (!other) {
-                    log("joint: \"" + node.name + "\" names body \"" + config->body +
+                    logWarn("joint: \"" + node.name + "\" names body \"" + config->body +
                         "\" and nothing in the scene answers to it - not created");
                     return;
                 }
                 actorB = resolveJointBody(other);
                 if (!actorB) {
-                    log("joint: \"" + node.name + "\" body \"" + config->body +
+                    logWarn("joint: \"" + node.name + "\" body \"" + config->body +
                         "\" has no rigid body (enable Physics on it) - not created");
                     return;
                 }
             }
 
             if (!actorA && !actorB) {
-                log("joint: \"" + node.name + "\" has no rigid body above it and no other "
+                logWarn("joint: \"" + node.name + "\" has no rigid body above it and no other "
                     "body named - nothing to constrain");
                 return;
             }
             if (actorA == actorB) {
-                log("joint: \"" + node.name + "\" would join \"" + config->body +
+                logWarn("joint: \"" + node.name + "\" would join \"" + config->body +
                     "\" to itself - not created");
                 return;
             }
@@ -1321,7 +1329,7 @@ namespace threepp::editor {
                                                   *world_, actorA, actorB,
                                                   toPxTransform(position, rotation), params)});
             } catch (const std::exception& e) {
-                log("joint: \"" + node.name + "\" could not be created - " + e.what());
+                logError("joint: \"" + node.name + "\" could not be created - " + e.what());
             }
         }
 
@@ -1359,7 +1367,7 @@ namespace threepp::editor {
                 gpu_ = false;
                 settings.enableGpuDynamics = false;
                 world_ = std::make_unique<PhysxWorld>(settings);
-                log(std::string("physics: soft bodies / granular need a CUDA GPU (") + e.what() +
+                logWarn(std::string("physics: soft bodies / granular need a CUDA GPU (") + e.what() +
                     ") - playing the rigid bodies only");
             }
         }
@@ -1543,7 +1551,7 @@ namespace threepp::editor {
             // Only reachable if some path produced a geometry PhysX refuses as a
             // trigger despite createActor's diversions. Say it rather than leave
             // a "trigger" that quietly still collides.
-            log("physics: \"" + object.name + "\" has a shape PhysX will not make a trigger "
+            logWarn("physics: \"" + object.name + "\" has a shape PhysX will not make a trigger "
                                               "- it still collides");
         }
 
@@ -1562,7 +1570,7 @@ namespace threepp::editor {
 
             using namespace ::physx;
 
-            log("physics: \"" + object.name + "\" is a trigger, and PhysX has no triangle-mesh "
+            logWarn("physics: \"" + object.name + "\" is a trigger, and PhysX has no triangle-mesh "
                                               "trigger - using a convex hull of it instead");
 
             const auto geometry = mesh.geometry();
@@ -1608,14 +1616,14 @@ namespace threepp::editor {
 #else
             auto* mesh = object.as<Mesh>();
             if (!mesh) {
-                log("physics: \"" + object.name + "\" is not a mesh - a soft body needs geometry to deform");
+                logWarn("physics: \"" + object.name + "\" is not a mesh - a soft body needs geometry to deform");
                 return false;
             }
             if (!gpu_) return false;// already reported by createWorld
 
             const auto geometry = mesh->geometry();
             if (!geometry || !geometry->hasAttribute("position")) {
-                log("physics: \"" + object.name + "\" has no geometry to cook a soft body from");
+                logWarn("physics: \"" + object.name + "\" has no geometry to cook a soft body from");
                 return false;
             }
 
@@ -1623,7 +1631,7 @@ namespace threepp::editor {
             // half-open imported shell) cooks into something arbitrary rather
             // than failing, so say so instead of silently simulating nonsense.
             if (!geometry->getIndex()) {
-                log("physics: \"" + object.name + "\" has no index buffer - soft-body cooking needs a "
+                logWarn("physics: \"" + object.name + "\" has no index buffer - soft-body cooking needs a "
                                                   "connected triangle surface");
                 return false;
             }
@@ -1654,7 +1662,7 @@ namespace threepp::editor {
                         std::max(config.mass, 0.f));
                 if (!body) return false;
             } catch (const std::exception& e) {
-                log("physics: \"" + object.name + "\" failed to cook as a soft body - " + e.what());
+                logError("physics: \"" + object.name + "\" failed to cook as a soft body - " + e.what());
                 return false;
             }
 
@@ -1815,7 +1823,7 @@ namespace threepp::editor {
             if (decomposed && meshes.size() > 1) {
                 const int per = std::max(1, config.hulls / static_cast<int>(meshes.size()));
                 if (per * static_cast<int>(meshes.size()) < config.hulls) {
-                    log("physics: \"" + root.name + "\" hull budget " + std::to_string(config.hulls) +
+                    logWarn("physics: \"" + root.name + "\" hull budget " + std::to_string(config.hulls) +
                         " split across " + std::to_string(meshes.size()) + " sub-meshes (" +
                         std::to_string(per) + " each) - raise it to keep more detail");
                 }
@@ -1916,7 +1924,7 @@ namespace threepp::editor {
                     // The subtree cooks triangle meshes, which cannot be
                     // triggers. One hull per sub-mesh, welded into one compound,
                     // is the same envelope the moving case already uses.
-                    log("physics: \"" + object.name + "\" is a trigger, and PhysX has no "
+                    logWarn("physics: \"" + object.name + "\" is a trigger, and PhysX has no "
                                                       "triangle-mesh trigger - using convex hulls of its "
                                                       "subtree instead");
                     if (buildCompoundFromSubMeshes(object, config, false, material)) return true;

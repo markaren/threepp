@@ -28,6 +28,7 @@
 
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#include "threepp/utils/Log.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -59,6 +60,11 @@ namespace threepp::editor {
 }// namespace threepp::editor
 
 namespace threepp::player {
+
+    // The player's own messages: the scene it opened, the document's warnings,
+    // the view it chose, what would not start. The play sessions write theirs
+    // in the editor.* categories (EditorLog.hpp).
+    inline constinit log::Category kLogPlayer{"player"};
 
     // What one episode did. Everything a CI gate could reasonably want to see in
     // a log line, and the `ok()` that decides the process's exit code.
@@ -120,8 +126,10 @@ namespace threepp::player {
 
         // --- wiring (set before the first episode) ---------------------------
 
-        // Console sink for what the sessions have to say. Called on the calling
-        // thread, from open/beginEpisode/step/endEpisode only.
+        // What the sessions and the core have to say is logged (the editor.*
+        // categories and kLogPlayer); this callback also receives each message,
+        // after it is written. Called on the calling thread, from
+        // open/beginEpisode/step/endEpisode only.
         void setLogger(std::function<void(const std::string&)> logger);
 
         // The renderer the VISION sensors (depth, lidar) scan with. Null is a
@@ -218,7 +226,10 @@ namespace threepp::player {
         static constexpr float defaultDt = 1.f / 60.f;
 
     private:
-        void log(const std::string& message);
+        // A record in kLogPlayer, then the callback.
+        void logWarn(const std::string& message);
+        // A session's message, already logged by the session: the callback only.
+        void forward(const std::string& message);
 
         editor::SceneDocument document_;
         editor::PlayController play_;

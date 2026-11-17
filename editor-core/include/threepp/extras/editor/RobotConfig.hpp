@@ -114,13 +114,14 @@ namespace threepp::editor {
     //
     // When the document's subtree has drifted so far from the file that not one
     // joint resolves — an empty placeholder, or a URDF rebuilt from scratch —
-    // the donor's own subtree is planted after all and `log` says so, because a
-    // robot that cannot be driven is worse than one that lost its annotations.
+    // the donor's own subtree is planted after all and a warning in editor.robot
+    // says so, because a robot that cannot be driven is worse than one that lost
+    // its annotations. `logger`, when set, also receives each warning.
     //
     // This is the headless core of EditorApp::rearticulateRobots, factored out so
     // it can be tested without the app; the app calls it inside its traversal.
     std::shared_ptr<Robot> transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& donor,
-                                           const std::function<void(const std::string&)>& log = {});
+                                           const std::function<void(const std::string&)>& logger = {});
 
 }// namespace threepp::editor
 

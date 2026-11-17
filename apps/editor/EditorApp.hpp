@@ -1002,7 +1002,15 @@ namespace threepp::editor {
         bool shootTo(const std::filesystem::path& path);
         void handleShortcuts();
         void handleFileDrop(const std::vector<std::string>& paths);
+        // A console line, as a record in kLogEditor at Info, Warn or Error. It
+        // is in console_ when the call returns.
         void log(const std::string& message);
+        void logWarn(const std::string& message);
+        void logError(const std::string& message);
+        void logAt(threepp::log::Level level, const std::string& message);
+        // Moves what the library and the play sessions logged since the last
+        // call into console_.
+        void drainLibraryLog();
         void logWarnings();
         // Says, in the console and the status bar, that any splat cloud in the
         // scene is about to be dropped by `action` ("Play", "Save"). Splat

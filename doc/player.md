@@ -96,6 +96,14 @@ threepp player: 3 episode(s), 0 failed, 0 script error(s)
 
 The three `Drone_*.csv` files above are byte-identical, noise included.
 
+stdout carries only the episode lines and the summary. Everything else goes to
+stderr through `threepp::log`: the player's own messages (the scene it opened, the
+document's warnings, the view it chose) in the `player` category, and what the play
+sessions have to say (a body that is not simulated, a sound that does not load) in
+the `editor.*` categories, for example `[editor.physics] warning: ...`.
+`THREEPP_LOG=editor:error` keeps only the errors; see
+[environment_variables.md](environment_variables.md#logging).
+
 Script errors do not leak between episodes: `ScriptPlaySession::start()` clears
 the map, so each episode reports its own count and the run fails if any of them
 is nonzero.

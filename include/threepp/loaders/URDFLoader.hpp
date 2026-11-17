@@ -113,10 +113,10 @@ namespace threepp {
         // the order it was produced. Cleared at the start of every call, so an empty list
         // after a successful one is meaningful.
         //
-        // These are also printed to std::cerr, as they always were — the console tools and
-        // the examples have no other place to show them. Keeping them here is for the
-        // callers that do: the editor puts lastError() in front of the user instead of a
-        // generic "nothing importable in the file".
+        // Each is also logged in loader.urdf — the console tools and the examples have no
+        // other place to show them. Keeping them here is for the callers that do: the
+        // editor puts lastError() in front of the user instead of a generic "nothing
+        // importable in the file".
         [[nodiscard]] const std::vector<std::string>& diagnostics() const;
 
         // The errors among them, joined into one message. Empty when the last call

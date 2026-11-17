@@ -42,6 +42,7 @@
 #ifndef THREEPP_EDITOR_GRANULARPLAYSESSION_HPP
 #define THREEPP_EDITOR_GRANULARPLAYSESSION_HPP
 
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 
@@ -92,6 +93,8 @@ namespace threepp::editor {
         // headless run is — and the instanced visual works there.
         void setRenderer(Renderer* renderer) { renderer_ = renderer; }
 
+        // Messages are records in editor.granular (EditorLog.hpp); this callback also
+        // receives each one, after it is written.
         void setLogger(std::function<void(const std::string&)> logger) { logger_ = std::move(logger); }
 
         // --- readouts --------------------------------------------------------
@@ -189,7 +192,7 @@ namespace threepp::editor {
                 const auto& other = authored[i].config;
                 if (other.spacing == first.spacing && other.iterations == first.iterations &&
                     other.maxVelocity == first.maxVelocity) continue;
-                log("granular: \"" + authored[i].node->name +
+                logWarn("granular: \"" + authored[i].node->name +
                     "\" asks for a different grain size - one solver runs the scene, so the "
                     "first chute's sim settings win");
             }
@@ -228,7 +231,7 @@ namespace threepp::editor {
                 try {
                     entry.group = &particles_->addGroup(capacity, material);
                 } catch (const std::exception& e) {
-                    log("granular: \"" + owner.node->name + "\" could not be created - " + e.what());
+                    logError("granular: \"" + owner.node->name + "\" could not be created - " + e.what());
                     continue;
                 }
 
@@ -369,12 +372,19 @@ namespace threepp::editor {
 
             declined_ = true;
             reason_ = std::move(reason);
-            log(reason_);
+            logWarn(reason_);
         }
 
         void log(const std::string& message) const {
+            report(kLogGranular, threepp::log::Level::Info, message, logger_);
+        }
 
-            if (logger_) logger_(message);
+        void logWarn(const std::string& message) const {
+            report(kLogGranular, threepp::log::Level::Warn, message, logger_);
+        }
+
+        void logError(const std::string& message) const {
+            report(kLogGranular, threepp::log::Level::Error, message, logger_);
         }
 
         PhysicsPlaySession* physics_ = nullptr;

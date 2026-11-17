@@ -5,6 +5,7 @@
 #include "ScriptTasks.hpp"
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -126,7 +127,17 @@ struct ScriptPlaySession::Impl {
 
     void log(const std::string& message) const {
 
-        if (logger) logger(message);
+        report(kLogScript, threepp::log::Level::Info, message, logger);
+    }
+
+    void logWarn(const std::string& message) const {
+
+        report(kLogScript, threepp::log::Level::Warn, message, logger);
+    }
+
+    void logError(const std::string& message) const {
+
+        report(kLogScript, threepp::log::Level::Error, message, logger);
     }
 
     // One report, one disable. Never rethrows: the editor keeps playing.
@@ -135,7 +146,7 @@ struct ScriptPlaySession::Impl {
         instance.failed = true;
         instance.self = py::object();
         errors[instance.uuid] = detail;
-        log("script error in " + instance.origin + " on " + instance.label +
+        logError("script error in " + instance.origin + " on " + instance.label +
             " (" + what + "): " + detail);
     }
 
@@ -381,7 +392,7 @@ struct ScriptPlaySession::Impl {
         // No world, no fixed clock. Faking one — a timer of our own, ticking at
         // some nominal rate — would be a lie about the one thing the name
         // promises, so the method simply never fires and the console says so.
-        log("fixed_update needs a playing physics world - it never runs on " +
+        logWarn("fixed_update needs a playing physics world - it never runs on " +
             std::to_string(wanted) + (wanted == 1 ? " script" : " scripts"));
     }
 
@@ -728,7 +739,7 @@ struct ScriptPlaySession::Impl {
                 // and would be invisible to PhysxWorld::findActor.
                 auto* actor = object ? physics->findActor(object.get()) : nullptr;
                 if (!actor) {
-                    log("collision callbacks need a physics body - " + instance.label +
+                    logWarn("collision callbacks need a physics body - " + instance.label +
                         " has none, so they never fire");
                     continue;
                 }
@@ -747,7 +758,7 @@ struct ScriptPlaySession::Impl {
 #endif
         // No world, no contacts. Same shape as fixed_update's line, and the same
         // reason: the methods are not quietly dropped, they are reported once.
-        log("collision callbacks need a playing physics world - they never run on " +
+        logWarn("collision callbacks need a playing physics world - they never run on " +
             std::to_string(wanted) + (wanted == 1 ? " script" : " scripts"));
     }
 
@@ -796,7 +807,7 @@ struct ScriptPlaySession::Impl {
                     // something a trigger can notice. Ticking Trigger is NOT
                     // required — a script on an ordinary body that walks into
                     // somebody else's volume is exactly half of this feature.
-                    log("trigger callbacks need a physics body - " + instance.label +
+                    logWarn("trigger callbacks need a physics body - " + instance.label +
                         " has none, so they never fire");
                     continue;
                 }
@@ -813,7 +824,7 @@ struct ScriptPlaySession::Impl {
             return;
         }
 #endif
-        log("trigger callbacks need a playing physics world - they never run on " +
+        logWarn("trigger callbacks need a playing physics world - they never run on " +
             std::to_string(wanted) + (wanted == 1 ? " script" : " scripts"));
     }
 
@@ -1105,7 +1116,7 @@ void ScriptPlaySession::start(Scene& scene) {
 
     std::string error;
     if (!scripting::ensureInterpreter(&error)) {
-        impl_->log("scripts skipped - the Python interpreter did not start: " + error);
+        impl_->logError("scripts skipped - the Python interpreter did not start: " + error);
         return;
     }
 

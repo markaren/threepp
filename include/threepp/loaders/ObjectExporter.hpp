@@ -106,8 +106,8 @@ namespace threepp {
 
         // Everything the last toJson()/save() could not represent (a texture
         // without CPU-side pixels, a userData entry of an unsupported type,
-        // ShaderMaterial uniforms, ...). Also written to std::cerr. Cleared at
-        // the start of every export.
+        // ShaderMaterial uniforms, ...). Each is also logged, as a warning in
+        // loader.object. Cleared at the start of every export.
         [[nodiscard]] const std::vector<std::string>& warnings() const;
 
     private:

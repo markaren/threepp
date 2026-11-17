@@ -46,6 +46,7 @@
 #ifndef THREEPP_EDITOR_SENSORPLAYSESSION_HPP
 #define THREEPP_EDITOR_SENSORPLAYSESSION_HPP
 
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 
@@ -318,6 +319,8 @@ namespace threepp::editor {
         // restored immediately afterwards.
         void setHiddenDuringScan(Object3D* node) { hidden_ = node; }
 
+        // Messages are records in editor.sensors (EditorLog.hpp); this callback also
+        // receives each one, after it is written.
         void setLogger(std::function<void(const std::string&)> logger) {
             logger_ = std::move(logger);
         }
@@ -519,13 +522,20 @@ namespace threepp::editor {
         // Play — it is the moment the user is looking.
         void commit(std::unique_ptr<Entry> entry) {
 
-            if (!entry->status.empty()) log("sensor: \"" + entry->label + "\" - " + entry->status);
+            if (!entry->status.empty()) logWarn("sensor: \"" + entry->label + "\" - " + entry->status);
             entries_.push_back(std::move(entry));
         }
 
-        void log(const std::string& message) {
+        void log(const std::string& message) const {
+            report(kLogSensors, threepp::log::Level::Info, message, logger_);
+        }
 
-            if (logger_) logger_(message);
+        void logWarn(const std::string& message) const {
+            report(kLogSensors, threepp::log::Level::Warn, message, logger_);
+        }
+
+        void logError(const std::string& message) const {
+            report(kLogSensors, threepp::log::Level::Error, message, logger_);
         }
 
         // Opens the entry's CSV on first use, writing `header`. Returns false
@@ -542,7 +552,7 @@ namespace threepp::editor {
                                           entry.uuid.substr(0, 8) + ".csv");
             entry.csv.open(entry.csvPath, std::ios::out | std::ios::trunc);
             if (!entry.csv.is_open()) {
-                log("sensor: cannot write " + entry.csvPath.string());
+                logError("sensor: cannot write " + entry.csvPath.string());
                 // Turn recording off wholesale rather than retry the open on
                 // every measurement of every frame.
                 recording_ = false;
@@ -938,7 +948,7 @@ namespace threepp::editor {
                     // a Vulkan view's first few warm-up misses out of it.
                     entry->status = "no frame captured - the renderer is not "
                                     "producing images for this camera";
-                    log("sensor: \"" + entry->label + "\" - " + entry->status);
+                    logWarn("sensor: \"" + entry->label + "\" - " + entry->status);
                 }
             }
 
@@ -971,7 +981,7 @@ namespace threepp::editor {
                               frameNumber(entry.camera->frames());
             const auto file = recordDir_ / (stem + ".png");
             if (!entry.camera->writeImage(file)) {
-                log("sensor: cannot write " + file.string());
+                logError("sensor: cannot write " + file.string());
                 recording_ = false;
                 return;
             }

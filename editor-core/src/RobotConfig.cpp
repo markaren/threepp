@@ -5,6 +5,7 @@
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/editor/EditorCommands.hpp"
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/loaders/Xacro.hpp"
 #include "threepp/objects/Robot.hpp"
 
@@ -158,7 +159,11 @@ void RobotConfig::erase(Object3D& object) {
 
 std::shared_ptr<Robot> threepp::editor::transplantRobot(Object3D& placeholder,
                                                         const std::shared_ptr<Robot>& donor,
-                                                        const std::function<void(const std::string&)>& log) {
+                                                        const std::function<void(const std::string&)>& logger) {
+
+    const auto warn = [&logger](const std::string& message) {
+        report(kLogRobot, threepp::log::Level::Warn, message, logger);
+    };
 
     if (!donor) return nullptr;
     auto* parent = placeholder.parent;
@@ -220,8 +225,8 @@ std::shared_ptr<Robot> threepp::editor::transplantRobot(Object3D& placeholder,
     // the strength of its subtree alone.
     const bool adopt = !placeholder.children.empty() && (resolved > 0 || donorInfos.empty());
 
-    if (!adopt && log && !placeholder.children.empty()) {
-        log("robot \"" + placeholder.name + "\": none of the " +
+    if (!adopt && !placeholder.children.empty()) {
+        warn("robot \"" + placeholder.name + "\": none of the " +
             std::to_string(donorInfos.size()) +
             " joints matched a node in the saved subtree, so it was rebuilt from the file - "
             "anything authored below the robot is gone (the file has likely changed since "
@@ -310,13 +315,13 @@ std::shared_ptr<Robot> threepp::editor::transplantRobot(Object3D& placeholder,
         live->finalizeInPlace();
         if (const auto& ee = donor->endEffectorLink(); !ee.empty()) live->setEndEffector(ee);
 
-        if (!unresolved.empty() && log) {
+        if (!unresolved.empty()) {
             std::string names;
             for (std::size_t i = 0; i < unresolved.size() && i < 4; ++i) {
                 names += (i ? ", " : "") + unresolved[i];
             }
             if (unresolved.size() > 4) names += " and " + std::to_string(unresolved.size() - 4) + " more";
-            log("robot \"" + live->name + "\": " +
+            warn("robot \"" + live->name + "\": " +
                 std::filesystem::path(config.urdf).filename().string() + " names " + names +
                 " but the saved subtree has no matching node - those parts are not articulated");
         }

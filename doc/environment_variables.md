@@ -100,6 +100,22 @@ Categories (`THREEPP_LOG=<category>:debug` shows a category's diagnostics):
 | `vulkan.particles` | particle fields |
 | `vulkan.ocean` | the ocean spectrum and FFT |
 | `vulkan.pathtracer` | the path tracer |
+| `python.renderer` | renderer properties the Python bindings ignore (`renderer.fsr`, `renderer.dlss` without the upscaler) |
+| `editor` | the editor's own messages: what it opened, saved, imported, and what failed |
+| `editor.physics` | play sessions: rigid bodies, robots, joints, vehicles, soft bodies and triggers that are not simulated as authored |
+| `editor.character` | play sessions: character controllers |
+| `editor.granular` | play sessions: granular chutes |
+| `editor.particles` | play sessions: particle fields |
+| `editor.sensors` | play sessions: sensors that do not run, recordings that cannot be written |
+| `editor.splat_surface` | play sessions: splat scans baked into colliders |
+| `editor.audio` | play sessions: sounds, the audio device, acoustics |
+| `editor.robot` | robots revived from a saved document |
+| `editor.script` | Python scripts: errors and callbacks that never run |
+| `player` | `threepp_player`: the scene it opened, document warnings, the view, what would not start |
+
+The editor shows the records of every category in its Console tab, the `editor` ones
+without their category. `threepp_player` writes them to stderr; its per-episode lines and
+summary stay on stdout.
 
 These variables were replaced by categories and are no longer read:
 `THREEPP_PROBE_LOG` (`vulkan.probe:debug`), `THREEPP_DISP_LOG` (`vulkan.displacement:debug`),

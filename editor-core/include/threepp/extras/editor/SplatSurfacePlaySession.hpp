@@ -29,6 +29,7 @@
 #ifndef THREEPP_EDITOR_SPLATSURFACEPLAYSESSION_HPP
 #define THREEPP_EDITOR_SPLATSURFACEPLAYSESSION_HPP
 
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/SplatSurfaceCache.hpp"
 #include "threepp/extras/editor/SplatSurfaceConfig.hpp"
@@ -87,6 +88,8 @@ namespace threepp::editor {
         // now" — that is the whole point of it not living here.
         void setCache(SplatSurfaceCache* cache) { cache_ = cache; }
 
+        // Messages are records in editor.splat_surface (EditorLog.hpp); this callback also
+        // receives each one, after it is written.
         void setLogger(std::function<void(const std::string&)> logger) { logger_ = std::move(logger); }
 
         // --- readouts --------------------------------------------------------
@@ -132,7 +135,7 @@ namespace threepp::editor {
             if (clouds.empty()) return;
 
             if (!cache_) {
-                log("splat surface: no bake cache is wired up - no scan is solid this play");
+                logWarn("splat surface: no bake cache is wired up - no scan is solid this play");
                 return;
             }
 
@@ -143,7 +146,7 @@ namespace threepp::editor {
                 std::string problem;
                 const auto* mesh = cache_->bake(renderer_, *cloud, *config, &problem);
                 if (!mesh) {
-                    log("splat surface: \"" + cloud->name + "\" - " + problem);
+                    logWarn("splat surface: \"" + cloud->name + "\" - " + problem);
                     continue;
                 }
 
@@ -163,7 +166,7 @@ namespace threepp::editor {
                         if (physics_->world()->addStaticTrimesh(*geometry)) {
                             ++colliderCount_;
                         } else {
-                            log("splat surface: \"" + cloud->name +
+                            logWarn("splat surface: \"" + cloud->name +
                                 "\" baked but did not cook into a collider");
                         }
                     }
@@ -248,7 +251,7 @@ namespace threepp::editor {
                         hullCount = parts.size();
                         ++colliderCount_;
                     } else {
-                        log("splat surface: \"" + cloud->name +
+                        logWarn("splat surface: \"" + cloud->name +
                             "\" baked but none of its hulls cooked - no moving collider");
                     }
                 }
@@ -321,9 +324,16 @@ namespace threepp::editor {
         }
 
     private:
-        void log(const std::string& message) {
+        void log(const std::string& message) const {
+            report(kLogSplatSurface, threepp::log::Level::Info, message, logger_);
+        }
 
-            if (logger_) logger_(message);
+        void logWarn(const std::string& message) const {
+            report(kLogSplatSurface, threepp::log::Level::Warn, message, logger_);
+        }
+
+        void logError(const std::string& message) const {
+            report(kLogSplatSurface, threepp::log::Level::Error, message, logger_);
         }
 
         void setSensorSurfaces(bool enabled) {
@@ -372,7 +382,7 @@ namespace threepp::editor {
                                     indices.data(), indices.size(), p);
 #else
             (void) indices;
-            log("splat surface: \"" + cloud.name +
+            logWarn("splat surface: \"" + cloud.name +
                 "\" - this build has no V-HACD, so the moving body is one convex hull");
 #endif
             (void) cloud;

@@ -103,7 +103,9 @@ namespace threepp::player {
         void frameSceneBounds();
         void updateFollow();
 
+        // Records in kLogPlayer.
         void log(const std::string& message);
+        void logWarn(const std::string& message);
         void report(const EpisodeResult& result);
 
         PlayerOptions options_;

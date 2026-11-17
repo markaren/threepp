@@ -44,6 +44,7 @@
 #ifndef THREEPP_EDITOR_CHARACTERPLAYSESSION_HPP
 #define THREEPP_EDITOR_CHARACTERPLAYSESSION_HPP
 
+#include "threepp/extras/editor/EditorLog.hpp"
 #include "threepp/extras/editor/CharacterConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 
@@ -86,6 +87,8 @@ namespace threepp::editor {
         // what keeps a stopped world from being dereferenced.
         void setPhysics(PhysicsPlaySession* physics) { physics_ = physics; }
 
+        // Messages are records in editor.character (EditorLog.hpp); this callback also
+        // receives each one, after it is written.
         void setLogger(std::function<void(const std::string&)> logger) {
             logger_ = std::move(logger);
         }
@@ -294,13 +297,13 @@ namespace threepp::editor {
 
             auto geo = config->derived(root);
             if (!geo.valid) {
-                log("character: \"" + root.name + "\" - " + geo.problem + " - not simulated");
+                logWarn("character: \"" + root.name + "\" - " + geo.problem + " - not simulated");
                 return;
             }
             // A partial derive is worth saying out loud but is never fatal: a
             // character with no clips still walks, T-posed.
             if (!geo.problem.empty()) {
-                log("character: \"" + root.name + "\" - " + geo.problem);
+                logWarn("character: \"" + root.name + "\" - " + geo.problem);
             }
 
             auto played = std::make_unique<Played>();
@@ -366,7 +369,7 @@ namespace threepp::editor {
 
             played->controller = manager_->createController(desc);
             if (!played->controller) {
-                log("character: \"" + root.name + "\" - PhysX declined the capsule - not simulated");
+                logWarn("character: \"" + root.name + "\" - PhysX declined the capsule - not simulated");
                 return;
             }
 
@@ -635,12 +638,19 @@ namespace threepp::editor {
 
             declined_ = true;
             reason_ = std::move(reason);
-            log(reason_);
+            logWarn(reason_);
         }
 
         void log(const std::string& message) const {
+            report(kLogCharacter, threepp::log::Level::Info, message, logger_);
+        }
 
-            if (logger_) logger_(message);
+        void logWarn(const std::string& message) const {
+            report(kLogCharacter, threepp::log::Level::Warn, message, logger_);
+        }
+
+        void logError(const std::string& message) const {
+            report(kLogCharacter, threepp::log::Level::Error, message, logger_);
         }
 
         PhysicsPlaySession* physics_ = nullptr;

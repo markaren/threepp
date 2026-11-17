@@ -49,6 +49,7 @@
 #include "threepp/scenes/Downwash.hpp"
 #include "threepp/renderers/vulkan/ExitPolicy.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
+#include "threepp/utils/Log.hpp"
 
 #include <array>
 #include <cstdint>
@@ -80,6 +81,9 @@ namespace {
     constexpr bool kHasDlss = false;
 #endif
 
+    // The Python renderer properties' own messages.
+    constinit threepp::log::Category kLogRenderer{"python.renderer"};
+
     // `renderer.fsr = True` / `renderer.dlss = True` while the upscaler is not
     // available stays a no-op (scripts set them opportunistically), but says
     // why once per property per process instead of silently running the TAA.
@@ -91,19 +95,21 @@ namespace {
         if (warned) return;
         warned = true;
         if (!compiledIn) {
-            std::fprintf(stderr, "[threepp] renderer.%s = True ignored: not compiled into this build "
-                                 "(threepp.%s is False); the built-in TAA upscaler runs.\n",
+            THREEPP_LOGF(kLogRenderer, Warn,
+                         "renderer.%s = True ignored: not compiled into this build "
+                         "(threepp.%s is False); the built-in TAA upscaler runs.",
                          prop, isFsr ? "HAS_FSR" : "HAS_DLSS");
         } else if (isFsr) {
-            std::fprintf(stderr, "[threepp] renderer.fsr = True ignored: compiled in, but this renderer has no FSR "
-                                 "context (amd_fidelityfx_vk.dll missing, the GPU/driver refused it, or it was "
-                                 "skipped at init while DLSS held the upscaler); fsr_available is False.\n");
+            THREEPP_LOG(kLogRenderer, Warn)
+                    << "renderer.fsr = True ignored: compiled in, but this renderer has no FSR "
+                       "context (amd_fidelityfx_vk.dll missing, the GPU/driver refused it, or it was "
+                       "skipped at init while DLSS held the upscaler); fsr_available is False.";
         } else {
-            std::fprintf(stderr, "[threepp] renderer.dlss = True ignored: compiled in, but NGX created no DLSS "
-                                 "feature (nvngx_dlss.dll missing, or a non-RTX GPU / driver refused it); "
-                                 "dlss_available is False.\n");
+            THREEPP_LOG(kLogRenderer, Warn)
+                    << "renderer.dlss = True ignored: compiled in, but NGX created no DLSS "
+                       "feature (nvngx_dlss.dll missing, or a non-RTX GPU / driver refused it); "
+                       "dlss_available is False.";
         }
-        std::fflush(stderr);
     }
 
     // Is the Vulkan LOADER present at runtime? The two platforms differ:

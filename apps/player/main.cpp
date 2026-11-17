@@ -72,14 +72,13 @@ int main(int argc, char** argv) {
             const std::string value = argument + 7;
             const auto x = value.find('x');
             if (x == std::string::npos) {
-                std::cerr << "threepp player: cannot read " << argument << " (want --size=WxH)"
-                          << std::endl;
+                THREEPP_LOG(threepp::player::kLogPlayer, Error) << "cannot read " << argument << " (want --size=WxH)";
                 return 2;
             }
             options.width = std::atoi(value.substr(0, x).c_str());
             options.height = std::atoi(value.substr(x + 1).c_str());
         } else if (argument[0] == '-') {
-            std::cerr << "threepp player: unknown option " << argument << std::endl;
+            THREEPP_LOG(threepp::player::kLogPlayer, Error) << "unknown option " << argument;
             usage();
             return 2;
         } else {
@@ -88,12 +87,12 @@ int main(int argc, char** argv) {
     }
 
     if (options.scene.empty()) {
-        std::cerr << "threepp player: no scene given" << std::endl;
+        THREEPP_LOG(threepp::player::kLogPlayer, Error) << "no scene given";
         usage();
         return 2;
     }
     if (options.episodes < 1) {
-        std::cerr << "threepp player: --episodes must be at least 1" << std::endl;
+        THREEPP_LOG(threepp::player::kLogPlayer, Error) << "--episodes must be at least 1";
         return 2;
     }
 
@@ -101,7 +100,7 @@ int main(int argc, char** argv) {
         threepp::player::PlayerApp app(std::move(options));
         return app.run();
     } catch (const std::exception& e) {
-        std::cerr << "threepp player: " << e.what() << std::endl;
+        THREEPP_LOG(threepp::player::kLogPlayer, Error) << e.what();
         return 1;
     }
 }

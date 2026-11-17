@@ -1381,7 +1381,7 @@ void EditorApp::bakeSplatSurface(Object3D& object) {
     splatBakeNode_ = object.uuid;
     if (!mesh) {
         splatBakeStats_ = "Bake failed: " + problem;
-        log("splat surface: \"" + object.name + "\" - " + problem);
+        logWarn("splat surface: \"" + object.name + "\" - " + problem);
         flashStatus("Surface bake failed");
         return;
     }

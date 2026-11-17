@@ -40,8 +40,9 @@ namespace threepp {
         void setResourcePath(const std::filesystem::path& path);
 
         // Everything the last parse()/load() could not represent (unknown types,
-        // dangling uuid references, undecodable images, ...). Also written to
-        // std::cerr. Cleared at the start of every parse.
+        // dangling uuid references, undecodable images, ...). Each is also
+        // logged, as a warning in loader.object. Cleared at the start of every
+        // parse.
         [[nodiscard]] const std::vector<std::string>& warnings() const;
 
         // A splat cloud is written as a reference to its file, and reading a
