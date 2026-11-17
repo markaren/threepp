@@ -366,6 +366,8 @@ class SpotStepsEnv(VecTask):
                        window closes (the first after JUMP_MIN_STEPS plus one draw), and the 98-d observation (module
                        constants JUMP_*). Needs the instrument's foot clearance: termination='honest' or instrument=True.
                        Counters per command bucket: jump_stats().
+        jump_lanes     where the jump triggers fire: course family names (a tuple or a comma string; default flat), or a
+                       per-env bool mask. Recorded in jump_config when given as names.
         jump_obs       the 98-d observation with the jump channels at zero and no triggers (evaluating a jump checkpoint).
         w_jump_imit    the jump reference's weight (J_REF_KEYS, as spot_jump_env's w_imit).
         jump_apex      H m: a target jump. The base rise pays up to H and costs as much above it, the take-off speed
@@ -768,7 +770,20 @@ class SpotStepsEnv(VecTask):
         if self.jump is not None:
             if not (len(self.jump) == 2 and 0.0 < self.jump[0] <= self.jump[1]):
                 raise ValueError(f"jump must be (0 < lo <= hi seconds), got {jump}")
-            lanes = (self._fam_k == sc.FLAT) if jump_lanes is None else torch.as_tensor(np.asarray(jump_lanes, bool))
+            if isinstance(jump_lanes, str):
+                jump_lanes = tuple(f for f in jump_lanes.split(",") if f)
+            if jump_lanes is None or (len(jump_lanes) and isinstance(jump_lanes[0], str)):
+                names = ("flat",) if jump_lanes is None else tuple(jump_lanes)
+                bad = [f for f in names if f not in sc.FAMILIES]
+                if bad:
+                    raise ValueError(f"jump_lanes: unknown families {bad}, known {sc.FAMILIES}")
+                self._jump_fams = names
+                lanes = torch.zeros_like(self._fam_k, dtype=torch.bool)
+                for f in names:
+                    lanes |= self._fam_k == sc.FAMILIES.index(f)
+            else:
+                self._jump_fams = None
+                lanes = torch.as_tensor(np.asarray(jump_lanes, bool))
             self._jump_lane = lanes.to(dev)
             self.jump_t = self.env_state((), init=-1, dtype=torch.long)       # ticks since the trigger (-1: no window)
             self.jump_cd = self.env_state((), init=0, dtype=torch.long)       # ticks to the next trigger
@@ -1456,7 +1471,7 @@ class SpotStepsEnv(VecTask):
         return {"obs_dim": self.obs_dim, "jump": list(self.jump) if self.jump else None, "jump_obs": self.jump_obs,
                 "qd_max": self.qd_max, "self_collision": self.self_collision, "blowup_guard": self.blowup_guard,
                 "joint_speed_cap": list(self.joint_speed_cap) if self.joint_speed_cap else None,
-                **({"w_jump_imit": self.w_jump_imit, "jump_apex": self.jump_apex, "jump_window": JUMP_WINDOW, "jump_min_steps": JUMP_MIN_STEPS,
+                **({"w_jump_imit": self.w_jump_imit, "jump_apex": self.jump_apex, "jump_lanes": list(self._jump_fams) if self._jump_fams else None, "jump_window": JUMP_WINDOW, "jump_min_steps": JUMP_MIN_STEPS,
                     "jump_air": JUMP_AIR, "jump_takeoff_vz": JUMP_TAKEOFF_VZ, "jump_min_flight": JUMP_MIN_FLIGHT,
                     "jump_land_up": JUMP_LAND_UP, "jump_vz_cap": JUMP_VZ_CAP,
                     "jump_weights": {"rise": J_RISE, "flight": J_FLIGHT, "land": J_LAND, "miss": self.jump_miss, "vz": J_VZ,

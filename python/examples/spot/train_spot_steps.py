@@ -308,9 +308,11 @@ def main():
                          f"-{PLACE_PERCH} if perched on a nosing. Needs honest termination (the touchdowns). 0 = off")
     # ---- walk + jump in one policy (2026-09-14): every default is the walking trainer as before ----
     ap.add_argument("--jump", default="", metavar="LO,HI",
-                    help="a jump trigger every U(LO, HI) s on the flat lanes, the 98-d observation (the jump flag and phase "
+                    help="a jump trigger every U(LO, HI) s on the --jump-lanes lanes, the 98-d observation (the jump flag and phase "
                          "appended) and the jump rewards (spot_steps_env JUMP_*); a 96-d warm start is widened with zero "
                          "weights on the new inputs. Needs the honest termination (--course). '' = off")
+    ap.add_argument("--jump-lanes", dest="jump_lanes", default="flat,hills,cross,rough", metavar="FAMS",
+                    help="the course families whose lanes get jump triggers, comma separated (spot_course.FAMILIES)")
     ap.add_argument("--w-jump-imit", dest="w_jump_imit", type=float, default=2.0, help="the jump reference's weight")
     ap.add_argument("--jump-miss", dest="jump_miss", type=float, default=None,
                     help="the penalty for a jump window without a jump (default spot_steps_env.J_MISS)")
@@ -437,7 +439,7 @@ def main():
     if jump is not None:
         if termination != "honest":
             ap.error("--jump reads the instrument's foot clearance: it needs the honest termination (--course)")
-        kw.update(jump=jump, w_jump_imit=args.w_jump_imit)
+        kw.update(jump=jump, w_jump_imit=args.w_jump_imit, jump_lanes=args.jump_lanes)
         if args.jump_apex is not None:
             kw.update(jump_apex=args.jump_apex)
         if args.jump_miss is not None:
@@ -499,7 +501,7 @@ def main():
         print(f"reset noise: q N(0, {reset_noise[0]:g}) rad, drop U(0, {reset_noise[1]:g}) m, v U(+-{reset_noise[2]:g}) m/s, "
               f"no hold on {args.reset_nohold_frac:g} of flat/stair resets")
     if jump is not None or args.qd_max or args.self_collision or args.joint_speed_cap:
-        print(f"jump triggers every U({args.jump}) s on the flat lanes, obs {env.obs_dim}-d, reference weight "
+        print(f"jump triggers every U({args.jump}) s on the {args.jump_lanes} lanes, obs {env.obs_dim}-d, reference weight "
               f"{args.w_jump_imit}" if jump is not None else "no jump triggers",
               f"| joint targets <= {args.qd_max} rad/s" if args.qd_max else "| no joint target limit",
               f"| self-collision {'on' if args.self_collision else 'off'}",
