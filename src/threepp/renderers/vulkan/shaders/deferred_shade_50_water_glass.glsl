@@ -278,6 +278,26 @@ float waterFacetFresnelMean(float c, float var, float r0) {
     return den > 1e-6 ? num / den : r0 + (1.0 - r0) * pow(1.0 - c, 5.0);
 }
 
+// The slope spread of an ocean's rasterised normals at a pixel: the mean
+// squared difference of its four G-buffer neighbours' normals from its own
+// (Nraster, as stored), both axes. Where the mesh's normals are resolved it is
+// next to nothing; where its waves are under a pixel (along the line of sight,
+// past a few hundred metres from a low eye) the neighbours are other waves and
+// it is their slope variance; on a calm sea it is small at any distance. The
+// shade's footprint floor stands for exactly that spread.
+float oceanRasterSlopeVar(ivec2 px, vec3 nRaster) {
+    const ivec2 hi = ivec2(int(pc.width), int(pc.height)) - 1;
+    const ivec2 off[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+    float v = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const vec4 nn = texelFetch(gbufNormalTex, clamp(px + off[i], ivec2(0), hi), 0);
+        if (nn.w <= 0.0) continue;// sky / unlit: no surface
+        const vec3 d = normalize(nn.xyz * 2.0 - 1.0) - nRaster;
+        v += 0.25 * dot(d, d);
+    }
+    return v;
+}
+
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
@@ -393,6 +413,16 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     vec3 R = reflect(-V, N);
     const float rDotUp = dot(R, Nsurf);
     if (rDotUp < 0.02) R = normalize(R + Nsurf * (0.02 - rDotUp));
+    // Level water (up +Y, as camUnderwater has it): above the water's own
+    // plane too, not only the tilted vertex normal's. A far patch's normal
+    // leans by more than the view's elevation, and a ray kept just over its
+    // plane still went down through the water to the sea bed: black specks
+    // along the crests and on the far water of a fjord.
+    if (abs(Nsurf.y) > 0.5) {
+        const vec3  up  = vec3(0.0, Nsurf.y > 0.0 ? 1.0 : -1.0, 0.0);
+        const float rUp = dot(R, up);
+        if (rUp < 0.02) R = normalize(R + up * (0.02 - rUp));
+    }
     // Env-miss reflection blur widens with the banked chop variance: distant
     // sub-pixel wave facets reflect a point-feature sky (sun disc / bright cloud
     // edge) as per-pixel speckle unless the reflection is filtered by the same

@@ -64,7 +64,15 @@
         // flat, dull sky reflection with NO depth gradient. Water is
         // always viewed from above, so face the camera. Done BEFORE the fine-cascade
         // perturbation so the chop tilt is added in the correct (up) frame.
-        if (dot(N, V) < 0.0) N = -N;
+        // The side is the WATER's, not the tilted normal's: seen at a grazing
+        // angle (the open sea toward the horizon, a camera a few metres up), a
+        // vertex normal tilted away from the eye by more than the view's
+        // elevation faces away while its water faces the eye, and the facing
+        // test alone left it inverted: its reflection went down into the water
+        // (the sea bed: black) and it took no sun. Level water (up +Y, as
+        // camUnderwater has it) is turned to the eye's side of the point; a
+        // normal that faces away from the eye even so is turned too.
+        if (dot(N, V) < 0.0 || (abs(N.y) > 0.5 && N.y * V.y < 0.0)) N = -N;
         Nmacro = N;// post-flip, pre-tilt: the surface's own plane
       if (kOceanChop != 0u) {
         // ── CHOP NORMALS (DisplacedMesh::Params::chopNormals, water::ChopMoments)
@@ -194,9 +202,12 @@
         const float vTot = slopeVar * wakeCalm * wakeCalm + wakeBoilVar;
         fineKernelSq = sqrt(r2 * r2 + vTot) - r2;
         // The footprint floor for the coarse mesh's own sub-pixel normals
-        // (cascades 0+1 in the vertex normal), as on the other path.
+        // (cascades 0+1 in the vertex normal), as on the other path, held to
+        // the slope those normals carry here (oceanRasterSlopeVar).
         const float footRough = 0.45 * smoothstep(0.25, 4.0, pixWorld);
-        fineKernelSq = min(max(fineKernelSq, footRough * footRough), 0.25);
+        if (footRough > 0.0)// (near water floors at nothing: no neighbours to read)
+            fineKernelSq = max(fineKernelSq, min(footRough * footRough, sqrt(oceanRasterSlopeVar(px, Nraster))));
+        fineKernelSq = min(fineKernelSq, 0.25);
       } else {
         const float invTile = 1.0 / pc.oceanFineTileSize;
         const float eps     = pc.oceanFineTileSize / 32.0;
@@ -354,7 +365,16 @@
         // into a coherent glitter sheen. Near water (footprint ≤ ~0.25 m/px) floors
         // at ~0 and keeps its crisp near-mirror sparkle. Independent of wave energy,
         // so it holds for a glassy calm sea and a choppy one alike.
+        // Held to the slope the rasterised normals carry (oceanRasterSlopeVar):
+        // the floor stands for their spread, so where they hold little (a
+        // calm sea; the open sea's far patches, whose normals keep only the
+        // long waves) a footprint that reaches the horizon no longer makes the
+        // far water rougher than its waves: a rough lobe at a grazing view is
+        // a low facet Fresnel, and the sea past a few hundred footprints went
+        // a band darker than the water before it.
         const float footRough = 0.45 * smoothstep(0.25, 4.0, pixWorld);
-        fineKernelSq = min(max(fineKernelSq, footRough * footRough), 0.25);
+        if (footRough > 0.0)// (near water floors at nothing: no neighbours to read)
+            fineKernelSq = max(fineKernelSq, min(footRough * footRough, sqrt(oceanRasterSlopeVar(px, Nraster))));
+        fineKernelSq = min(fineKernelSq, 0.25);
       }
     }

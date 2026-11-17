@@ -464,12 +464,6 @@ vec3 lodRest(vec2 q, float s, vec4 eye, uint focusCount, bool prev) {
 float lodLevel(float spacing, float tile, int res) {
     return max(log2(spacing * float(res) / max(tile, 1e-6)), 0.0);
 }
-// The vertex normal's level: the waves of kLodNormalWave and more. Read at the
-// finest cells, cascade 1's shortest waves steepened the vertex normals
-// enough to draw black slivers along the crests from a camera a few metres
-// up (the warped grid, coarse away from its centre, never held them there);
-// the shorter waves slope the water through the shade's fine cascade.
-const float kLodNormalWave = 8.0;
 // The patch mesh's vertex: its lattice point, slot state and spacing.
 vec2  gLodLattice = vec2(0.0);
 float gLodState   = 0.0;
@@ -824,11 +818,6 @@ void main() {
 
 #ifdef OCEAN_CHOP
     {
-        if (patchMesh) {
-            const float ns = max(gSpacing, 0.5 * kLodNormalWave);
-            gC0Lod = lodLevel(ns, pc.tileSize0, textureSize(height0, 0).x);
-            gC1Lod = lodLevel(ns, pc.tileSize1, textureSize(height1, 0).x);
-        }
         // Chop normals: the normal of the surface this vertex actually sits
         // on, from exact derivatives at the REST point (no stencil), the
         // horizontal chop included: oceanChopSlope (ocean_chop_normal.glsl)
