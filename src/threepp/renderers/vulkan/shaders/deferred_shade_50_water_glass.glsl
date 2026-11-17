@@ -421,6 +421,20 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // leg down the column, where applyMurk below turns it into the murk the
     // open-water pixels beside it already show.
     const vec3 Nsurf = camPortWetDryEye() ? -Nmacro : Nmacro;
+    vec3 R = reflect(-V, N);
+    const float rDotUp = dot(R, Nsurf);
+    if (rDotUp < 0.02) R = normalize(R + Nsurf * (0.02 - rDotUp));
+    // Level water (along the water's own up, fog.waterUp): above the water's
+    // own plane too, not only the tilted vertex normal's. A far patch's normal
+    // leans by more than the view's elevation, and a ray kept just over its
+    // plane still went down through the water to the sea bed: black specks
+    // along the crests and on the far water of a fjord.
+    const float sUp   = dot(Nsurf, fog.waterUp);
+    const vec3  lvlUp = sUp > 0.0 ? fog.waterUp : -fog.waterUp;
+    if (abs(sUp) > 0.5) {
+        const float rUp = dot(R, lvlUp);
+        if (rUp < 0.02) R = normalize(R + lvlUp * (0.02 - rUp));
+    }
     // ── THE REFLECTION LOBE ──────────────────────────────────────────────────
     // The waves a pixel cannot show do not reflect the scene along one line.
     // Their slope spread is what main() banked out of N (slopeVarSq), and the
@@ -432,9 +446,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // normal (Heitz 2018, sampleGgxVndf, the path tracer's sampler) about N,
     // alpha = effRough^2 (the alpha the glint's distGGX takes), one per pixel
     // and frame, and DLSS Ray Reconstruction integrates the lobe. Still one
-    // reflection ray a water pixel. Where slopeVarSq is next to nothing and
-    // alpha is the material's roughness squared (thousandths) it is still a
-    // mirror; a windy far sea blurs, and at a grazing view the visible normals
+    // reflection ray a water pixel. At a grazing view the visible normals
     // stretch the blur up and down the line of sight, the long streaks a lake
     // throws a far shore into.
     // Under DLSS Ray Reconstruction only, as the glass's frosted facet
@@ -443,56 +455,52 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // as grain (a far sea at 10 m/s from the drone: a dither field over the
     // water ten frames after a cut, where RR settles it to a smooth sheen).
     // There the water keeps its one mirror ray.
-    // The draws: blue noise across the pixels with the gather's hashed tile
-    // offsets through the frames (giBlueNoiseRR: no period in time).
+    // The draw is a turn off the mirror, and the same turn is put on the
+    // mirror the lifts above left (the rotation that takes the one to the
+    // other), so a lobe of zero width is that ray exactly, lifts and all.
+    // A turned ray that points under the water is one real waves hide: it
+    // meets the next wave and leaves upward again. It is folded back above
+    // the water's own plane, the macro surface's and then the level water's
+    // (a fold about the second cannot undo the first, their normals agree in
+    // sign), at the elevation it had below it; lifted instead, every such
+    // draw would land on the horizon, a band of it laid over the blur. The
+    // mirror itself keeps its lifts: folded, the mirror of a facet tilted past
+    // the view's elevation put the high sky on the wave backs of near rough
+    // water (white flecks). The lifts run again after the fold, the last guard.
     // A facet turned away from the eye has no visible normal to draw (N leans
     // past V on the back of a resolved wave): the mirror, as before.
-    vec3 Nm = N;
     if (kRR) {
         const float vN = dot(V, N);
         if (vN > 1e-4) {
-            const vec2 u = vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u));
+            // The tile is 8-bit, 0..1 with both ends, and the sampler takes
+            // [0, 1): at u.x = 1 it returns the hemisphere's rim, a facet at 90
+            // degrees to N whose ray went anywhere (a firefly). The 256 levels
+            // are taken at their centres instead.
+            const vec2 bn  = vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u));
+            const vec2 u   = (floor(bn * 255.0 + 0.5) + 0.5) / 256.0;
             const vec3 tUp = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
             const vec3 T   = normalize(cross(tUp, N));
             const vec3 B   = cross(N, T);
             const vec3 mt  = sampleGgxVndf(vec3(dot(V, T), dot(V, B), vN), effRough * effRough, u);
-            Nm = normalize(T * mt.x + B * mt.y + N * mt.z);
+            vec3 Rs = reflect(-V, normalize(T * mt.x + B * mt.y + N * mt.z));
+            const vec3  Rm = reflect(-V, N);
+            const vec3  w  = cross(Rm, R);
+            const float c  = dot(Rm, R);
+            Rs = (c > -0.999) ? Rs * c + cross(w, Rs) + w * (dot(w, Rs) / (1.0 + c)) : R;
+            const float rS = dot(Rs, Nsurf);
+            if (rS < 0.0) Rs -= 2.0 * rS * Nsurf;
+            if (abs(sUp) > 0.5) {
+                const float rU = dot(Rs, lvlUp);
+                if (rU < 0.0) Rs -= 2.0 * rU * lvlUp;
+            }
+            const float rS2 = dot(Rs, Nsurf);
+            if (rS2 < 0.02) Rs = normalize(Rs + Nsurf * (0.02 - rS2));
+            if (abs(sUp) > 0.5) {
+                const float rU2 = dot(Rs, lvlUp);
+                if (rU2 < 0.02) Rs = normalize(Rs + lvlUp * (0.02 - rU2));
+            }
+            R = Rs;
         }
-    }
-    vec3 R = reflect(-V, Nm);
-    // A ray that points under the water, drawn or the mirror of a facet tilted
-    // past the view's elevation, is one real waves hide: it meets the next
-    // wave and leaves upward again. Folded back above the water's own plane,
-    // the macro surface's and then the level water's (the two planes the
-    // guards below keep it over; a fold about the second cannot undo the
-    // first, their normals agree in sign), at the elevation it had below it.
-    // Clamped instead, every such ray lands on the horizon: a band of horizon
-    // laid over the blur, and on near wind-roughened water seen from a few
-    // metres up, long dark streaks of the far shore's foot along the wave
-    // backs. The two lifts below stay as the last guard (a fold leaves a ray
-    // grazing the plane where it was grazing it).
-    {
-        const float rS = dot(R, Nsurf);
-        if (rS < 0.0) R -= 2.0 * rS * Nsurf;
-        const float sUpF = dot(Nsurf, fog.waterUp);
-        if (abs(sUpF) > 0.5) {
-            const vec3  upF = sUpF > 0.0 ? fog.waterUp : -fog.waterUp;
-            const float rU  = dot(R, upF);
-            if (rU < 0.0) R -= 2.0 * rU * upF;
-        }
-    }
-    const float rDotUp = dot(R, Nsurf);
-    if (rDotUp < 0.02) R = normalize(R + Nsurf * (0.02 - rDotUp));
-    // Level water (along the water's own up, fog.waterUp): above the water's
-    // own plane too, not only the tilted vertex normal's. A far patch's normal
-    // leans by more than the view's elevation, and a ray kept just over its
-    // plane still went down through the water to the sea bed: black specks
-    // along the crests and on the far water of a fjord.
-    const float sUp = dot(Nsurf, fog.waterUp);
-    if (abs(sUp) > 0.5) {
-        const vec3  up  = sUp > 0.0 ? fog.waterUp : -fog.waterUp;
-        const float rUp = dot(R, up);
-        if (rUp < 0.02) R = normalize(R + up * (0.02 - rUp));
     }
     // Env-miss reflection blur widens with the banked chop variance: distant
     // sub-pixel wave facets reflect a point-feature sky (sun disc / bright cloud
