@@ -182,9 +182,11 @@ namespace spot::course {
 
     // ── Geometry helpers ────────────────────────────────────────────────────
     // A box whose UVs are world-anchored (metres / tile), so neighbouring boxes of
-    // one material line up and every face has the same texel density.
+    // one material line up and every face has the same texel density. A uv offset
+    // cuts one stone out of a different part of the texture than its neighbour.
     inline std::shared_ptr<threepp::BufferGeometry> worldUvBox(float sx, float sy, float sz,
-                                                               const threepp::Vector3& center, float tile) {
+                                                               const threepp::Vector3& center, float tile,
+                                                               const threepp::Vector2& uvOffset = {}) {
         auto g = threepp::BoxGeometry::create(sx, sy, sz);
         const auto* pos = g->getAttribute<float>("position");
         const auto* nrm = g->getAttribute<float>("normal");
@@ -196,7 +198,7 @@ namespace spot::course {
             if (nx >= ny && nx >= nz) u = py, v = pz;
             else if (ny >= nz) u = px, v = pz;
             else u = px, v = py;
-            uv->setXY(i, u / tile, v / tile);
+            uv->setXY(i, u / tile + uvOffset.x, v / tile + uvOffset.y);
         }
         uv->needsUpdate();
         return g;
@@ -243,6 +245,7 @@ namespace spot::course {
             buildTerrain();
             buildStairAndWalls();
             buildRocks();
+            if (visuals_) buildGround();// last: it is shaded by what stands on it
         }
 
         // Ground height under (x, y): the top of whatever static is there, terrain,
@@ -266,17 +269,20 @@ namespace spot::course {
         std::string data_;
         bool visuals_;
         std::vector<threepp::Vector2> path_;
+        std::vector<float> heights_;          // the height field, N x N, row-major in y
+        std::vector<threepp::Vector3> placed_;// every stone: x, y, footprint radius
 
         void addVisual(const std::shared_ptr<threepp::Object3D>& o) {
             if (visuals_) root_->add(o);
         }
 
         void staticBox(float sx, float sy, float sz, const threepp::Vector3& c,
-                       const std::shared_ptr<threepp::Material>& mat, float tile) {
+                       const std::shared_ptr<threepp::Material>& mat, float tile,
+                       const threepp::Vector2& uvOffset = {}) {
             using namespace ::physx;
             world_.addStatic(PxBoxGeometry(sx / 2, sy / 2, sz / 2), PxTransform(PxVec3(c.x, c.y, c.z)));
             if (!visuals_) return;
-            auto mesh = threepp::Mesh::create(worldUvBox(sx, sy, sz, c, tile), mat);
+            auto mesh = threepp::Mesh::create(worldUvBox(sx, sy, sz, c, tile, uvOffset), mat);
             mesh->position.copy(c);
             mesh->castShadow = true;
             mesh->receiveShadow = true;
@@ -285,26 +291,85 @@ namespace spot::course {
 
         // ── Terrain ─────────────────────────────────────────────────────────
         void buildTerrain() {
-            std::vector<float> h(static_cast<std::size_t>(N) * N);
+            heights_.resize(static_cast<std::size_t>(N) * N);
             for (int iy = 0; iy < N; ++iy) {
                 for (int ix = 0; ix < N; ++ix) {
-                    h[static_cast<std::size_t>(iy) * N + ix] = terrainHeight(X0 + ix * CELL, Y0 + iy * CELL);
+                    heights_[static_cast<std::size_t>(iy) * N + ix] = terrainHeight(X0 + ix * CELL, Y0 + iy * CELL);
                 }
             }
-            if (!world_.addStaticHeightField(h, N, N, CELL, threepp::Vector3(X0, Y0, 0.f))) {
+            if (!world_.addStaticHeightField(heights_, N, N, CELL, threepp::Vector3(X0, Y0, 0.f))) {
                 throw std::runtime_error("SpotCourse: the height field did not cook");
             }
-            if (!visuals_) return;
+        }
+
+        // How much of the sky a ground point sees past the stones, steps and walls
+        // around it (1 = all of it): cosine-weighted rays against the course's statics,
+        // the height field left out, since the open slopes' own shading is the
+        // lighting's job. Only points near something standing on the ground are cast.
+        [[nodiscard]] std::vector<float> skyVisibility() const {
+            using namespace ::physx;
+            struct NotTerrain: PxQueryFilterCallback {
+                PxQueryHitType::Enum preFilter(const PxFilterData&, const PxShape* shape, const PxRigidActor*, PxHitFlags&) override {
+                    return shape->getGeometry().getType() == PxGeometryType::eHEIGHTFIELD ? PxQueryHitType::eNONE : PxQueryHitType::eBLOCK;
+                }
+                PxQueryHitType::Enum postFilter(const PxFilterData&, const PxQueryHit&, const PxShape*, const PxRigidActor*) override {
+                    return PxQueryHitType::eBLOCK;
+                }
+            } notTerrain;
+            const PxQueryFilterData filter(PxQueryFlag::eSTATIC | PxQueryFlag::ePREFILTER);
+
+            constexpr int RAYS = 16;
+            constexpr float REACH = 2.5f;// metres: contact shade, not valley shade
+            std::array<PxVec3, RAYS> dirs{};
+            for (int i = 0; i < RAYS; ++i) {// a cosine-weighted spiral over the upper hemisphere
+                const float u = (i + 0.5f) / RAYS, r = std::sqrt(u), a = i * 2.39996f;
+                dirs[i] = PxVec3(r * std::cos(a), r * std::sin(a), std::sqrt(1.f - u));
+            }
+            const auto near = [&](float x, float y) {
+                if (x > STAIR_X0 - REACH && x < STAIR_BACK + REACH && std::abs(y) < TERRACE_HALF_Y + TERRACE_SIDE + REACH) return true;
+                for (const auto& p : placed_) {
+                    if (std::hypot(x - p.x, y - p.y) < p.z + REACH) return true;
+                }
+                return false;
+            };
+
+            std::vector<float> vis(heights_.size(), 1.f);
+            for (int iy = 0; iy < N; ++iy) {
+                for (int ix = 0; ix < N; ++ix) {
+                    const float x = X0 + ix * CELL, y = Y0 + iy * CELL;
+                    if (!near(x, y)) continue;
+                    const PxVec3 o(x, y, heights_[static_cast<std::size_t>(iy) * N + ix] + 0.03f);
+                    float blocked = 0.f;
+                    for (const auto& d : dirs) {
+                        PxRaycastBuffer hit;
+                        if (scene_->raycast(o, d, REACH, hit, PxHitFlag::ePOSITION, filter, &notTerrain) && hit.hasBlock) {
+                            const float t = hit.block.distance / REACH;
+                            blocked += 1.f - t * t;// fades out toward the reach instead of stopping there
+                        }
+                    }
+                    vis[static_cast<std::size_t>(iy) * N + ix] = 1.f - blocked / RAYS;
+                }
+            }
+            return vis;
+        }
+
+        void buildGround() {
+            const auto& h = heights_;
+            const std::vector<float> vis = skyVisibility();
+            // Darkening at most this much where the sky is fully hidden: the ground at a
+            // stone's foot, the meadow along the wall's base, the gravel round the rubble.
+            constexpr float CONTACT = 0.6f;
 
             // One grid, three layers: the meadow, then the gravel path and the granite
             // on steep ground blended over it through their own masks. Each overlay is
-            // the same geometry drawn again with alpha, so the blend is between two fully
+            // the same grid drawn again with alpha, so the blend is between two fully
             // lit, shadowed surfaces, which is what a splat shader would compute.
             auto geometry = threepp::BufferGeometry::create();
-            std::vector<float> pos, nrm, uv, col;
+            std::vector<float> pos, nrm, uv, col, shade;
             pos.reserve(static_cast<std::size_t>(N) * N * 3);
             nrm.reserve(pos.capacity());
             col.reserve(pos.capacity());
+            shade.reserve(pos.capacity());
             uv.reserve(static_cast<std::size_t>(N) * N * 2);
             const auto at = [&](int ix, int iy) {
                 ix = std::clamp(ix, 0, N - 1);
@@ -320,6 +385,8 @@ namespace spot::course {
                     n.normalize();
                     nrm.insert(nrm.end(), {n.x, n.y, n.z});
                     uv.insert(uv.end(), {(x - X0) / SIZE, (y - Y0) / SIZE});
+                    const float s = 1.f - CONTACT * (1.f - vis[static_cast<std::size_t>(iy) * N + ix]);
+                    shade.insert(shade.end(), {s, s, s});
                     // Macro tint: drier and lusher drifts and a darker grain, so the
                     // 2.4 m meadow tile does not read as a grid from a distance.
                     const float lush = 0.5f + 0.5f * fbm(x / 13.f, y / 13.f, 3, 51u);
@@ -327,7 +394,7 @@ namespace spot::course {
                     const float r = (1.06f + (0.86f - 1.06f) * lush) * grain;
                     const float g = (1.00f + (1.00f - 1.00f) * lush) * grain;
                     const float b = (0.80f + (0.84f - 0.80f) * lush) * grain;
-                    col.insert(col.end(), {r, g, b});
+                    col.insert(col.end(), {r * s, g * s, b * s});
                 }
             }
             std::vector<unsigned int> idx;
@@ -343,6 +410,9 @@ namespace spot::course {
             geometry->setAttribute("uv", threepp::FloatBufferAttribute::create(std::move(uv), 2));
             geometry->setAttribute("color", threepp::FloatBufferAttribute::create(std::move(col), 3));
             geometry->setIndex(std::move(idx));
+            // The overlays carry the contact shade without the meadow's tint.
+            auto overlayGeometry = geometry->clone();
+            overlayGeometry->setAttribute("color", threepp::FloatBufferAttribute::create(std::move(shade), 3));
 
             const auto meadowSet = loadPbr(data_, "forrest_ground_01", SIZE / 2.4f);
             const auto gravelSet = loadPbr(data_, "forest_ground_04", SIZE / 2.0f);
@@ -358,10 +428,11 @@ namespace spot::course {
             int order = 1;
             for (const auto& [set, mask] : {std::pair{gravelSet, gravelMask}, std::pair{graniteSet, graniteMask}}) {
                 auto mat = pbrMaterial(set);
+                mat->vertexColors = true;
                 mat->alphaMap = mask;
                 mat->transparent = true;
                 mat->depthWrite = false;
-                auto layer = threepp::Mesh::create(geometry, mat);
+                auto layer = threepp::Mesh::create(overlayGeometry, mat);
                 layer->receiveShadow = true;
                 layer->renderOrder = order++;
                 root_->add(layer);
@@ -416,21 +487,36 @@ namespace spot::course {
                 granite->color = threepp::Color(0.92f, 0.92f, 0.9f);
                 wall = pbrMaterial(loadPbr(data_, "rock_wall_10", 1.f), 1.3f);
             }
+            // Each step and each coping slab is its own stone: cut from its own part of
+            // the texture and a shade lighter or darker than its neighbours, as quarried
+            // slabs are. One continuous texture made the stair read as a single block.
+            Rand rnd(20261117u);
+            const auto stone = [&] {
+                const threepp::Vector2 offset(rnd.next(), rnd.next());
+                if (!visuals_) return std::pair{std::shared_ptr<threepp::Material>(), offset};
+                auto m = granite->clone<threepp::MeshStandardMaterial>();
+                const float shade = rnd.range(0.9f, 1.07f), warm = rnd.range(-0.02f, 0.02f);
+                m->color.setRGB(granite->color.r * shade * (1.f + warm), granite->color.g * shade, granite->color.b * shade * (1.f - warm));
+                return std::pair{std::shared_ptr<threepp::Material>(m), offset};
+            };
+
             constexpr float bottom = -0.4f;
             const float width = 2 * STAIR_HALF_W;
             for (int k = 1; k <= STEPS; ++k) {
                 const float x0 = STAIR_X0 + (k - 1) * TREAD;
                 const float top = k * RISE;
+                const auto [mat, offset] = stone();
                 staticBox(STAIR_BACK - x0, width, top - bottom,
-                          {(x0 + STAIR_BACK) / 2, 0.f, (top + bottom) / 2}, granite, 1.4f);
+                          {(x0 + STAIR_BACK) / 2, 0.f, (top + bottom) / 2}, mat, 1.4f, offset);
             }
 
             constexpr float coping = 0.07f, overhang = 0.04f;
             const auto wallSegment = [&](float x0, float x1, float y0, float y1, float top) {
                 const float sx = x1 - x0, sy = y1 - y0;
                 staticBox(sx, sy, top - bottom, {(x0 + x1) / 2, (y0 + y1) / 2, (top + bottom) / 2}, wall, 1.6f);
+                const auto [mat, offset] = stone();
                 staticBox(sx + 2 * overhang, sy + 2 * overhang, coping,
-                          {(x0 + x1) / 2, (y0 + y1) / 2, top + coping / 2}, granite, 1.4f);
+                          {(x0 + x1) / 2, (y0 + y1) / 2, top + coping / 2}, mat, 1.4f, offset);
             };
 
             // Cheek walls either side of the stair, flush with the terrace top.
@@ -499,7 +585,7 @@ namespace spot::course {
             if (protos.empty()) throw std::runtime_error("SpotCourse: no rock meshes in rock_moss_set_02");
 
             Rand rnd(20261116u);
-            std::vector<threepp::Vector3> placed;// x, y, radius
+            auto& placed = placed_;// x, y, radius; the ground's contact shade reads it too
             const auto clear = [&](float x, float y, float r) {
                 for (const auto& p : placed) {
                     if (std::hypot(p.x - x, p.y - y) < p.z + r) return false;
