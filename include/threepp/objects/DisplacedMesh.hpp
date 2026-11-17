@@ -67,7 +67,11 @@ namespace threepp {
 
             // What every ocean is, with no switch (each was one once): the
             // spectrum at Pierson and Moskowitz's own constants, so the
-            // significant height is 0.21 U^2 / g; its energy spread over
+            // significant height is 0.21 U^2 / g, from 4.5 m/s up; below that
+            // the wind has not grown it all: nothing under 1 m/s (a mirror),
+            // and up to 4.5 m/s slow, low wavelets near the peak first and
+            // the short, quick ones last, each wave from the wind that beats
+            // its viscous damping (phillips_spectrum.comp, windGrowth); its energy spread over
             // directions as Donelan, Hamilton and Hui (1985) and Banner (1990)
             // measured it, a narrow fan downwind at the spectral peak that
             // widens for the short waves, so the sea travels with the wind

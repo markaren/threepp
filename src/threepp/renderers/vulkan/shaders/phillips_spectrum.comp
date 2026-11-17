@@ -163,6 +163,40 @@ float elfouhailyShortCurvature(float k, float kp) {
     return 0.5 * am * (cm / c) * exp(-1.25 * pr * pr) * exp(-0.25 * (kr - 1.0) * (kr - 1.0));
 }
 
+// The share of the fully grown wind sea that a light wind has raised at
+// wavenumber k (0 to 1). The Pierson-Moskowitz / JONSWAP level below is a
+// constant (alpha = 8.1e-3), and the wind only places the peak, so without
+// this the short waves past the peak would be the same at 0.8 m/s as at
+// 10 m/s: a near-calm sea carrying the whole field of small, short-period
+// bumps of a breeze, when real water below about 1 m/s grows no wind waves
+// at all (Beaufort 0, "sea like a mirror"; the onset of wind-wave growth in
+// Kahma and Donelan (1988), "A laboratory study of the minimum wind speed for
+// wind wave generation", J. Fluid Mech. 192).
+// Each wave grows once the wind feeds it faster than the water's viscosity
+// damps it: the input of Plant (1982), "A relationship between wind stress
+// and wave slope", J. Geophys. Res. 87(C3), 0.04 (u*/c)^2 w, against Lamb's
+// (1932) viscous decay of a wave's energy, 4 nu k^2, gives u* > 10 sqrt(nu w).
+// With u* = 0.032 U10 at these light winds (smooth flow, Cd ~ 1e-3) and the
+// viscosity of 10 C water (1.3e-6 m^2/s) that is an onset of
+// U10 = 0.36 sqrt(w) m/s: 1 m/s for a 1 m wave, 1.8 m/s for a 10 cm one,
+// 2.2 m/s for 4 cm. So the shorter the wave, the more wind it waits for, and
+// the equilibrium range fills in from the peak as the friction velocity
+// rises (Phillips (1985), J. Fluid Mech. 156; Elfouhaily et al. (1997) put
+// the short-wave level in proportion to u*): at Beaufort 1-2 the sea is
+// slow, low, glassy wavelets near the peak, and the fast fine bumps come in
+// last. The onset is held at 1 m/s or more (no growth below it at any
+// length) and at 3.4 m/s or less (by Beaufort 3 every scale grows), and
+// each wave eases in from its onset to full at 4.5 m/s, where this is 1
+// for every k and the sea of Beaufort 3 and up is the spectrum below
+// unchanged. Deep-water w = sqrt(g k), the dispersion the chain evolves by.
+// Multiplies the wind sea only: the swell is not raised by this wind, and
+// the short-wave option carries its own u* (alpha_m is 0 below about 3 m/s).
+// Mirrored in OceanFFT.cpp (windGrowthCpu) and Weather.cpp.
+float windGrowth(float k, float U) {
+    const float onset = clamp(0.36 * sqrt(sqrt(9.81 * k)), 1.0, 3.4);
+    return smoothstep(onset, 4.5, U);
+}
+
 float phillips2D(vec2 k) {
     if (length(k) < 1e-4) return 0.0;
     // Tessendorf "Phillips constant". Empirically calibrated; the literature
@@ -237,6 +271,11 @@ float phillips2D(vec2 k) {
     // physical constant is A = pi alpha = 0.02545: 2.545x the 0.01 above.
     // With the peak fix, var(eta) = alpha L^2 / (4 beta), Hs = 0.21 U^2 / g.
     p *= 2.5446900;// pi * 8.1e-3 / 0.01
+    // The wind sea as far as this wind has grown it (windGrowth). A factor,
+    // so it commutes with the level and the peak enhancement above; it goes
+    // before the short-wave and swell terms below, which are not this wind
+    // sea and keep their own levels.
+    p *= windGrowth(sqrt(k2), P.windSpeed);
     if (P.shortWave != 0u) {
         // The measured short waves, on top of the long-wave spectrum above
         // (the paper's B = B_l + B_h). In the chain's units a curvature B

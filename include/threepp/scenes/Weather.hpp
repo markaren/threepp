@@ -64,7 +64,9 @@ namespace threepp {
          * raise. It is the analytic height of the spectrum the ocean draws
          * (phillips_spectrum.comp): Hs = 0.21 U^2 / g fully developed, and
          * with a fetch the shader's JONSWAP scaling of the length and level
-         * plus the peak's share of the variance; the swell adds in quadrature.
+         * plus the peak's share of the variance; below 4.5 m/s the shader's
+         * wind-growth factor at the peak (0 under 1 m/s); the swell adds in
+         * quadrature.
          * It leaves out the ocean's short-wave cut-off, waveScale (1 =
          * physical) and a site's WaveClimate map, and it has not been
          * compared against the rendered height field.
