@@ -13,6 +13,7 @@
 #include "threepp/utils/Log.hpp"
 #include <optional>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -218,6 +219,12 @@ namespace {
             auto& dst = object->geometry.vertices;
 
             dst.insert(dst.end(), {src[a + 0], src[a + 1], src[a + 2]});
+
+            // Colours are index-parallel with the vertices (see the `v` parse).
+            if (a + 2 < colors.size()) {
+                object->geometry.colors.insert(object->geometry.colors.end(),
+                                               {colors[a + 0], colors[a + 1], colors[a + 2]});
+            }
         }
 
         void addNormal(size_t a, size_t b, size_t c) {
@@ -425,6 +432,7 @@ struct OBJLoader::Impl {
         }
 
         ParserState state;
+        size_t shortLines = 0;
 
         std::string line;
         while (std::getline(in, line)) {
@@ -440,25 +448,38 @@ struct OBJLoader::Impl {
 
             if (lineFirstChar == 'v') {
 
-                auto data = utils::split(line, ' ');
+                // Fields are separated by any run of spaces or tabs.
+                std::vector<std::string> data;
+                {
+                    std::istringstream fields(line);
+                    for (std::string field; fields >> field;) data.push_back(std::move(field));
+                }
+                // A missing component reads as 0 (the spec's default for a
+                // texture coordinate's v). The line is still kept, because
+                // dropping it would shift every later index.
+                auto component = [&](size_t i) {
+                    return i < data.size() ? utils::parseFloat(data[i]) : 0.f;
+                };
 
                 if (data[0] == "v") {
-                    state.vertices.insert(state.vertices.end(), {utils::parseFloat(data[1]),
-                                                                 utils::parseFloat(data[2]),
-                                                                 utils::parseFloat(data[3])});
+                    if (data.size() < 4) ++shortLines;
+                    state.vertices.insert(state.vertices.end(), {component(1), component(2), component(3)});
 
-                    if (data.size() == 8) {
-                        state.colors.insert(state.colors.end(), {utils::parseFloat(data[4]),
-                                                                 utils::parseFloat(data[5]),
-                                                                 utils::parseFloat(data[6])});
+                    // `v x y z r g b`. Colours are kept index-parallel with the
+                    // vertices: once one vertex has a colour, the vertices before
+                    // it and any later vertex without one are white.
+                    if (data.size() >= 7) {
+                        state.colors.resize(state.vertices.size() - 3, 1.f);
+                        state.colors.insert(state.colors.end(), {component(4), component(5), component(6)});
+                    } else if (!state.colors.empty()) {
+                        state.colors.insert(state.colors.end(), {1.f, 1.f, 1.f});
                     }
                 } else if (data[0] == "vn") {
-                    state.normals.insert(state.normals.end(), {utils::parseFloat(data[1]),
-                                                               utils::parseFloat(data[2]),
-                                                               utils::parseFloat(data[3])});
+                    if (data.size() < 4) ++shortLines;
+                    state.normals.insert(state.normals.end(), {component(1), component(2), component(3)});
                 } else if (data[0] == "vt") {
-                    state.uvs.insert(state.uvs.end(), {utils::parseFloat(data[1]),
-                                                       utils::parseFloat(data[2])});
+                    if (data.size() < 2) ++shortLines;
+                    state.uvs.insert(state.uvs.end(), {component(1), component(2)});
                 }
             } else if (lineFirstChar == 'f') {
 
@@ -567,6 +588,11 @@ struct OBJLoader::Impl {
 
         state.finalize();
 
+        if (shortLines > 0) {
+            THREEPP_LOG(kLog, Warn) << path.string() << ": " << shortLines
+                                    << " v, vn or vt lines have too few numbers; the missing ones read as 0";
+        }
+
         if (state.badIndexCount > 0) {
             THREEPP_LOG(kLog, Warn) << path.string() << ": " << state.badIndexCount
                                  << " faces or points have out-of-range indices and are dropped";
@@ -580,7 +606,6 @@ struct OBJLoader::Impl {
             auto& materials = object->materials;
             bool isLine = geometry.type == "Line";
             bool isPoints = geometry.type == "Points";
-            bool hasVertexColors = false;
 
             if (geometry.vertices.empty()) continue;
 
@@ -597,9 +622,18 @@ struct OBJLoader::Impl {
                 //TODO
             }
 
+            bool hasVertexColors = false;
             if (!geometry.colors.empty()) {
 
-                bufferGeometry->setAttribute("color", FloatBufferAttribute::create(geometry.colors, 3));
+                if (geometry.colors.size() != geometry.vertices.size()) {
+                    // Colours began part way through this object's records. A
+                    // color attribute shorter than position reads past its buffer.
+                    THREEPP_LOG(kLog, Warn) << "Object '" << object->name
+                                            << "' has colours on only some of its vertices; its colours are dropped";
+                } else {
+                    bufferGeometry->setAttribute("color", FloatBufferAttribute::create(geometry.colors, 3));
+                    hasVertexColors = true;
+                }
             }
 
             if (!geometry.uvs.empty()) {

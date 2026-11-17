@@ -2130,6 +2130,8 @@ namespace threepp_py {
                                            d["textures_pruned"]     = s.texturesPruned;
                                            d["texture_slots_in_use"]   = s.textureSlotsInUse;
                                            d["texture_slot_fallbacks"] = s.textureSlotFallbacks;
+                                           d["sprite_textures"]        = s.spriteTextures;
+                                           d["screen_sprite_atlases"]  = s.screenSpriteAtlases;
                                            d["admissions_deferred"] = s.admissionsDeferred;
                                            d["admissions_landed"]   = s.admissionsLanded;
                                            d["swap_edits"]          = s.swapEdits;
@@ -2154,7 +2156,10 @@ namespace threepp_py {
                                        "records_pruned and textures_pruned (geometries and textures that died, "
                                        "freed by a slot edit without a rebuild), texture_slots_in_use (of 2048), "
                                        "texture_slot_fallbacks (textures that found no slot and drew without "
-                                       "their map), admissions_deferred (meshes that arrived hidden and were "
+                                       "their map), sprite_textures and screen_sprite_atlases (images held now "
+                                       "for world-space Sprite, ParticleSystem and ParticleField billboard "
+                                       "textures, and for screen-space Sprites; each goes when its texture is "
+                                       "disposed of), admissions_deferred (meshes that arrived hidden and were "
                                        "admitted over the following frames), admissions_landed (of those, "
                                        "landed while still hidden), swap_edits (a geometry, material or "
                                        "texture swapped on a mesh, taken by a slot edit), "

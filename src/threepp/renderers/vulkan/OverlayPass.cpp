@@ -1585,6 +1585,23 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         }
     }
 
+    // An atlas whose Texture has died is never looked up again (a new Texture
+    // at the same address fails liveCheck and uploads its own), so without
+    // this its image would live until the renderer is destroyed.
+    for (auto it = spriteAtlasCache_.begin(); it != spriteAtlasCache_.end();) {
+        if (it->second.liveCheck.expired()) {
+            if (retireFn_) {
+                retireFn_(std::move(it->second.image));
+            } else {
+                vkDeviceWaitIdle(ctx_.device());
+                destroyImage2D(ctx_.allocator(), ctx_.device(), it->second.image);
+            }
+            it = spriteAtlasCache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Collect visible sprites, from the renderer's census of the scene: hidden
     // subtrees are out the same way the deferred scene walk leaves them out,
     // and a scene with no sprite pays nothing here. effWorld captures the

@@ -3224,8 +3224,12 @@ namespace threepp {
         // Upload/refresh a particle texture, keyed on the raw Texture* (the
         // ShaderMaterial uniform holds no shared_ptr). Returns the cached
         // Image2D, or nullptr (caller falls back to the white default). Mirrors
-        // OverlayPass::ensureSpriteAtlasTexture, minus the weak_ptr liveCheck.
+        // OverlayPass::ensureSpriteAtlasTexture, with the texture's dispose
+        // event in place of its weak_ptr liveCheck (see ParticleTexRec).
         const Image2D* ensureParticleTexture(const Texture* tex);
+        // Retires the images of particle textures that have been disposed of
+        // (destroyed, or dispose() called), once per frame.
+        void sweepParticleTextures();
 
         void destroyParticleGeomRec(ParticleGeomRec& rec);
 

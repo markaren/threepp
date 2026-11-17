@@ -673,8 +673,9 @@ namespace threepp::vulkan {
         void writeSets(Cloud& c);
         void writeSets(Cloud& c, uint32_t target);
         // rangeBuf_ is sized from the tile grid, and the targets do not share
-        // an extent — so it is sized to the largest CLAIMED one.
-        void resizeTileRange();
+        // an extent — so it is sized to the largest CLAIMED one. Returns true
+        // when it made a new buffer, which every claimed target's sets name.
+        bool resizeTileRange();
         void uploadCloud(Cloud& c, const SplatCloud& src);
         // Everything a resident cloud owns. Three sites destroy clouds (the
         // destructor, retireStale, and syncClouds' recycled-address branch) and

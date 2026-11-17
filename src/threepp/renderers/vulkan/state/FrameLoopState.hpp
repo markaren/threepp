@@ -103,6 +103,18 @@ namespace threepp::vulkan::impl {
 
         uint32_t currentFrame = 0;
         bool needsResize = false;
+        // readRGBPixels sets this around the endFrame() it calls, so a resize
+        // due at that frame end is not made there: recreating the swapchain (or
+        // the headless ring) first would leave it copying a fresh, never-rendered
+        // image. endFrame() leaves needsResize set instead, readRGBPixels sets
+        // resizeHeldByReadback_, and the next render() makes the resize before
+        // its frame starts. Any recreate clears resizeHeldByReadback_.
+        bool holdResizeForReadback_ = false;
+        bool resizeHeldByReadback_  = false;
+        // True from a frame's submit until the swapchain images are next
+        // recreated: the image at frameImageIndex_ holds that frame's pixels and
+        // is in presentLayout(). False before the first frame and after a resize.
+        bool swapImagesHoldFrame_ = false;
 
         // ── Frame-serial deferred-deletion (retire) queue ────────────────────
         // Replaces staleness-triggered vkDeviceWaitIdle stalls (runtime texture

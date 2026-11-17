@@ -694,7 +694,9 @@ const Image2D* VulkanRenderer::Impl::ensureParticleTexture(const Texture* tex) {
             auto it = particleTexCache_.find(tex);
             if (it != particleTexCache_.end()) {
                 ParticleTexRec& rec = it->second;
-                const bool stale = rec.version != curVersion ||
+                // A dead entry under a live pointer is a new Texture that the
+                // allocator put where the disposed one was.
+                const bool stale = rec.dead->load(std::memory_order_acquire) || rec.version != curVersion ||
                                    rec.width != w || rec.height != h;
                 if (!stale) return &rec.image;
                 // Retire the old image instead of a full device drain: in-flight
@@ -746,8 +748,24 @@ const Image2D* VulkanRenderer::Impl::ensureParticleTexture(const Texture* tex) {
             rec.version = curVersion;
             rec.width   = w;
             rec.height  = h;
+            rec.dead    = std::make_shared<std::atomic<bool>>(false);
+            // Only an atomic store: the event can come from whichever thread
+            // drops the last reference to the texture.
+            rec.onDispose = const_cast<Texture*>(tex)->subscribe(
+                    "dispose", [dead = rec.dead](threepp::Event&) { dead->store(true, std::memory_order_release); });
             auto [ins, _] = particleTexCache_.emplace(tex, std::move(rec));
             return &ins->second.image;
+        }
+
+void VulkanRenderer::Impl::sweepParticleTextures() {
+            for (auto it = particleTexCache_.begin(); it != particleTexCache_.end();) {
+                if (it->second.dead->load(std::memory_order_acquire)) {
+                    retire(std::move(it->second.image));
+                    it = particleTexCache_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
 
 // The CPU half of a material texture's upload (everything up to the device:

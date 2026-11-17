@@ -25,6 +25,7 @@
 #include "threepp/textures/Texture.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -477,14 +478,18 @@ namespace threepp::vulkan::impl {
     };
 
     // Per-Texture sampled image for particle textures. Keyed on the raw
-    // Texture* (the ShaderMaterial uniform holds no shared_ptr) + version;
-    // re-upload is vkDeviceWaitIdle-guarded. Pointer-recycle with an
-    // identical version is a documented edge case.
+    // Texture* (the ShaderMaterial uniform holds no shared_ptr), so the
+    // texture's dispose event (its destructor, or dispose()) sets `dead`:
+    // the entry is then stale for a new Texture at the same address, and the
+    // per-frame sweep retires its image. The callback holds only the flag, so
+    // it reaches nothing of the renderer whichever of the two dies first.
     struct ParticleTexRec {
         Image2D      image{};
         unsigned int version = ~0u;
         uint32_t     width   = 0;
         uint32_t     height  = 0;
+        std::shared_ptr<std::atomic<bool>> dead;
+        Subscription onDispose;
     };
 
     // Per-frame snapshot of visible world-space sprites, rebuilt each

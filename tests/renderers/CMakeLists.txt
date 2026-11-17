@@ -467,6 +467,30 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanFramebufferWrite_test COMMAND VulkanFramebufferWrite_test)
     set_tests_properties(VulkanFramebufferWrite_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # readRGBPixels across a resize: the frame rendered, or nothing (headless).
+    add_executable(VulkanReadbackResize_test VulkanReadbackResize_test.cpp)
+    target_link_libraries(VulkanReadbackResize_test PRIVATE threepp)
+    add_test(NAME VulkanReadbackResize_test COMMAND VulkanReadbackResize_test)
+    set_tests_properties(VulkanReadbackResize_test PROPERTIES SKIP_RETURN_CODE 42)
+
+    # A secondary view bigger than the primary turns splats on; the primary's
+    # splat sets must follow the grown tile-range buffer (headless). Only the
+    # validation layer sees a set naming a destroyed buffer, so it runs strict.
+    add_executable(VulkanSplatViewGrow_test VulkanSplatViewGrow_test.cpp)
+    target_link_libraries(VulkanSplatViewGrow_test PRIVATE threepp)
+    add_test(NAME VulkanSplatViewGrow_test COMMAND VulkanSplatViewGrow_test)
+    set_tests_properties(VulkanSplatViewGrow_test PROPERTIES SKIP_RETURN_CODE 42
+            ENVIRONMENT "THREEPP_VULKAN_VALIDATION=1;THREEPP_VULKAN_STRICT_VALIDATION=1")
+
+    # A sprite texture freed and a new one made at its address draws the new
+    # one; the world-sprite and HUD caches free dead textures' images and keep
+    # live ones (headless). Strict validation catches an image freed too early.
+    add_executable(VulkanSpriteTextureReuse_test VulkanSpriteTextureReuse_test.cpp)
+    target_link_libraries(VulkanSpriteTextureReuse_test PRIVATE threepp)
+    add_test(NAME VulkanSpriteTextureReuse_test COMMAND VulkanSpriteTextureReuse_test)
+    set_tests_properties(VulkanSpriteTextureReuse_test PROPERTIES SKIP_RETURN_CODE 42
+            ENVIRONMENT "THREEPP_VULKAN_VALIDATION=1;THREEPP_VULKAN_STRICT_VALIDATION=1")
+
     # A mesh, geometry and material that are freed and recreated between two
     # frames come back at the same addresses, at version 0 again. The scene sync
     # compared exactly those, took the unchanged fast path, and went on rendering

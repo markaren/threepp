@@ -823,7 +823,7 @@ TEST_CASE("Unknown types are handled without crashing") {
 
     ObjectLoader loader;
 
-    SECTION("unknown child type is skipped, the rest still loads") {
+    SECTION("an unknown type loads as an empty Object3D that keeps its place and children") {
 
         const std::string text = R"({
             "metadata": { "version": 4.5, "type": "Object" },
@@ -831,8 +831,12 @@ TEST_CASE("Unknown types are handled without crashing") {
                 "uuid": "ROOT", "type": "Group", "layers": 1,
                 "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
                 "children": [
-                    { "uuid": "WAT", "type": "TotallyUnknownObject", "layers": 1,
-                      "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] },
+                    { "uuid": "WAT", "type": "TotallyUnknownObject", "name": "sky", "layers": 1,
+                      "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 2,3,4,1],
+                      "children": [
+                        { "uuid": "UNDER", "type": "Group", "name": "under the sky", "layers": 1,
+                          "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] }
+                      ] },
                     { "uuid": "OK", "type": "Group", "name": "kept", "layers": 1,
                       "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] }
                 ]
@@ -841,8 +845,19 @@ TEST_CASE("Unknown types are handled without crashing") {
 
         auto parsed = loader.parse(text);
         REQUIRE(parsed != nullptr);
-        REQUIRE(parsed->children.size() == 1);
-        CHECK(parsed->children.front()->name == "kept");
+        REQUIRE(parsed->children.size() == 2);
+        const auto& placeholder = parsed->children.front();
+        CHECK(placeholder->type() == "Object3D");
+        CHECK(placeholder->name == "sky");
+        CHECK(placeholder->uuid == "WAT");
+        CHECK(placeholder->position.x == 2.f);
+        CHECK(placeholder->position.z == 4.f);
+        REQUIRE(placeholder->children.size() == 1);
+        CHECK(placeholder->children.front()->name == "under the sky");
+        CHECK(parsed->children.back()->name == "kept");
+
+        REQUIRE(loader.warnings().size() == 1);
+        CHECK(loader.warnings().front().find("unsupported object type 'TotallyUnknownObject'") != std::string::npos);
     }
 
     SECTION("unknown geometry and material types degrade gracefully") {
