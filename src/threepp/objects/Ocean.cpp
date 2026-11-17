@@ -104,18 +104,31 @@ namespace threepp {
                                                      : options.look == Look::Pond;
         const bool fjord = options.look == Look::Fjord;
 
+        // Resolve the auto (−1) tile sentinels: proportional to the water
+        // body's scale, capped at the 1000 m reference trio — see
+        // Options::tileSize1 for the why.
+        const float tile1 = options.tileSize1 < 0.f
+                ? std::min(scaleRef * (127.0f / 1000.f), 127.0f)
+                : options.tileSize1;
+        const float tile2 = options.tileSize2 < 0.f
+                ? std::min(scaleRef * (9.3f / 1000.f), 9.3f)
+                : options.tileSize2;
+
         // The patch mesh (DisplacedMesh::Lod). The renderer lays the patches
         // each frame and writes every vertex; what is set here is the topology
         // (each patch's 16 x 16 cells, wound as PlaneGeometry's after its
         // rotateX: row j runs toward -Z), and positions spread over the water's
         // extent so the bounds are the water's. A bounded water needs no more
-        // slots than its finest patches can tile.
+        // slots than its finest patches (lodFinest: a small water's are finer)
+        // can tile: over an extent of n patches the quadtree keeps at most
+        // floor(n) + 2 a side, a patch that only touches the edge included
+        // (a 7 m pond on 0.5 m patches: 16).
         const uint32_t cells = kLodCells, side = cells + 1u, perPatch = side * side;
-        const float finestPatch = float(cells) * kLodFinest;
+        const float finestPatch = float(cells) * lodFinest(tile1, tile2);
         const uint32_t slots = options.horizon
                 ? kLodSlots
-                : uint32_t(std::min<double>(kLodSlots, (std::ceil(sizeX / finestPatch) + 1.0) *
-                                                               (std::ceil(sizeZ / finestPatch) + 1.0)));
+                : uint32_t(std::min<double>(kLodSlots, (std::floor(sizeX / finestPatch) + 2.0) *
+                                                               (std::floor(sizeZ / finestPatch) + 2.0)));
         const size_t vertexCount = size_t(slots) * perPatch;
         std::vector<float> positions(vertexCount * 3u, 0.f), normals(vertexCount * 3u, 0.f), uvs(vertexCount * 2u, 0.f);
         const uint32_t across = uint32_t(std::ceil(std::sqrt(double(slots))));
@@ -154,16 +167,6 @@ namespace threepp {
         ocean->lod.halfZ = options.horizon ? 0.f : 0.5f * sizeZ;
         // The patches follow the camera, wherever the bounds say they are.
         ocean->frustumCulled = false;
-
-        // Resolve the auto (−1) tile sentinels: proportional to the water
-        // body's scale, capped at the 1000 m reference trio — see
-        // Options::tileSize1 for the why.
-        const float tile1 = options.tileSize1 < 0.f
-                ? std::min(scaleRef * (127.0f / 1000.f), 127.0f)
-                : options.tileSize1;
-        const float tile2 = options.tileSize2 < 0.f
-                ? std::min(scaleRef * (9.3f / 1000.f), 9.3f)
-                : options.tileSize2;
 
         auto& p = ocean->params;
         p.tileSize0 = scaleRef;

@@ -4302,6 +4302,10 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
             Vector3 eye = oceanLodEye_;
             eye.applyMatrix4(inv);
 
+            // The finest cell round the camera: kLodFinest, finer on a small
+            // water (DisplacedMesh::lodFinest), so its mesh still draws cascade 1.
+            const float finest = DisplacedMesh::lodFinest(dm.params.tileSize1, dm.params.tileSize2);
+
             // Each posed hull is a focus: cells near half her half beam (a power
             // of two) over her length and a margin, so her cut keeps its shape
             // however far the camera is.
@@ -4314,7 +4318,7 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
                 f.x = he.centerX;
                 f.z = he.centerZ;
                 f.radius = he.halfLength + std::max(he.halfBeam, 2.f);
-                f.minSpacing = std::max(DisplacedMesh::kLodFinest,
+                f.minSpacing = std::max(finest,
                                         std::exp2(std::floor(std::log2(std::max(0.5f * he.halfBeam, 1e-3f)))));
             }
             View view;
@@ -4330,7 +4334,7 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
                 view.centerX = dm.warp.centerX;
                 view.centerZ = dm.warp.centerZ;
             }
-            view.finest = DisplacedMesh::kLodFinest;
+            view.finest = finest;
             view.foci = foci.data();
             view.focusCount = focusCount;
             const std::vector<Patch> selected = select(view, slots);
@@ -4397,7 +4401,7 @@ VkDeviceAddress VulkanRenderer::Impl::updateOceanLod(DisplacedMesh& dm, Displace
                     return true;
                 };
                 for (const Patch* p : pending) {
-                    const size_t own = p->spacing <= DisplacedMesh::kLodFinest * 1.001f ? 0u : 1u;
+                    const size_t own = p->spacing <= finest * 1.001f ? 0u : 1u;
                     uint32_t slot = 0;
                     if (!take(pools[own], *p, slot)) take(pools[1u - own], *p, slot);// (selected never outnumbers the slots)
                     st.lodHome[slot] = {p->x, p->z, p->spacing, 0.f};
@@ -6106,9 +6110,10 @@ void VulkanRenderer::Impl::syncOceanChop(DisplacedMesh& dm, DisplacedMeshState& 
                 if (st.shortWaveHandoff > 0.f) spacing = std::min(spacing, st.shortWaveHandoff / 4.f);
                 // The patch mesh: its finest cells, or the hand-off's quarter
                 // as the grid had it; coarser cells read coarser mips.
-                if (st.lodSlots > 0u)
-                    spacing = st.shortWaveHandoff > 0.f ? std::max(DisplacedMesh::kLodFinest, st.shortWaveHandoff / 4.f)
-                                                        : DisplacedMesh::kLodFinest;
+                if (st.lodSlots > 0u) {
+                    const float finest = DisplacedMesh::lodFinest(dm.params.tileSize1, dm.params.tileSize2);
+                    spacing = st.shortWaveHandoff > 0.f ? std::max(finest, st.shortWaveHandoff / 4.f) : finest;
+                }
                 for (uint32_t i = 0; i < 3; ++i) {
                     if (!(st.cascadeMask & (1u << i))) continue;
                     st.cascades[i].dyn->enableChop(i < 2u && i != st.chopFineIdx ? spacing : 0.f);

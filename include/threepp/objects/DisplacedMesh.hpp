@@ -24,6 +24,7 @@
 #include "threepp/objects/Mesh.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -345,6 +346,18 @@ namespace threepp {
         static constexpr uint32_t kLodCells = 16;    // cells a patch side (17 x 17 vertices)
         static constexpr uint32_t kLodSlots = 4096;  // the most patches a frame lays (1.18 M vertices)
         static constexpr float    kLodFinest = 0.5f; // m, the finest cell, round the camera
+        // The finest cell of a water with these cascade tiles: kLodFinest,
+        // or, when the fine cascade's tile (the short end of cascade 1, the
+        // last band the mesh draws) is under twice that, the power of two at
+        // or under half that tile, so a small water's mesh still draws
+        // cascade 1 (a 7 m pond's 6.5 cm tile: 3.1 cm cells). Without
+        // cascades 1 and 2 both, the finest cascade is the shade's and every
+        // water keeps kLodFinest, as does every water with a fine tile of a
+        // metre or more.
+        static float lodFinest(float tileSize1, float tileSize2) {
+            if (!(tileSize1 > 0.f && tileSize2 > 0.f) || 0.5f * tileSize2 >= kLodFinest) return kLodFinest;
+            return std::exp2(std::floor(std::log2(0.5f * tileSize2)));
+        }
         Lod lod;
 
         // Vessel wake: per-frame state used by water_displace.comp to inject a
