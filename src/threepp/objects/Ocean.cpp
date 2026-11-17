@@ -1,12 +1,13 @@
 #include "threepp/objects/Ocean.hpp"
 
-#include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/math/MathUtils.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace threepp {
 
@@ -103,24 +104,56 @@ namespace threepp {
                                                      : options.look == Look::Pond;
         const bool fjord = options.look == Look::Fjord;
 
-        const unsigned int resX = std::max<unsigned int>(2u, options.resolution);
-        // Default row count keeps grid cells square-ish across the rectangle.
-        const unsigned int resZ = options.resolutionZ > 0
-                ? std::max<unsigned int>(2u, options.resolutionZ)
-                : std::max<unsigned int>(2u, static_cast<unsigned int>(
-                          std::lround(double(resX) * double(sizeZ) / double(sizeX))));
-
-        // Mesh density is decoupled from the FFT field: the renderer samples the
-        // height texture via normalised UVs, so the plane can be any tessellation.
-        auto geo = PlaneGeometry::create(sizeX, sizeZ, resX - 1u, resZ - 1u);
-        geo->rotateX(-math::PI / 2.0f);
+        // The patch mesh (DisplacedMesh::Lod). The renderer lays the patches
+        // each frame and writes every vertex; what is set here is the topology
+        // (each patch's 16 x 16 cells, wound as PlaneGeometry's after its
+        // rotateX: row j runs toward -Z), and positions spread over the water's
+        // extent so the bounds are the water's. A bounded water needs no more
+        // slots than its finest patches can tile.
+        const uint32_t cells = kLodCells, side = cells + 1u, perPatch = side * side;
+        const float finestPatch = float(cells) * kLodFinest;
+        const uint32_t slots = options.horizon
+                ? kLodSlots
+                : uint32_t(std::min<double>(kLodSlots, (std::ceil(sizeX / finestPatch) + 1.0) *
+                                                               (std::ceil(sizeZ / finestPatch) + 1.0)));
+        const size_t vertexCount = size_t(slots) * perPatch;
+        std::vector<float> positions(vertexCount * 3u, 0.f), normals(vertexCount * 3u, 0.f), uvs(vertexCount * 2u, 0.f);
+        const uint32_t across = uint32_t(std::ceil(std::sqrt(double(slots))));
+        for (uint32_t k = 0; k < slots; ++k) {
+            const float px = -0.5f * sizeX + sizeX * (float(k % across) + 0.5f) / float(across);
+            const float pz = -0.5f * sizeZ + sizeZ * (float(k / across) + 0.5f) / float(across);
+            for (uint32_t v = 0; v < perPatch; ++v) {
+                const size_t i = size_t(k) * perPatch + v;
+                positions[3u * i + 0u] = std::clamp(px + (float(v % side) - 8.f) * sizeX / float(across * cells), -0.5f * sizeX, 0.5f * sizeX);
+                positions[3u * i + 2u] = std::clamp(pz - (float(v / side) - 8.f) * sizeZ / float(across * cells), -0.5f * sizeZ, 0.5f * sizeZ);
+                normals[3u * i + 1u] = 1.f;
+            }
+        }
+        std::vector<unsigned int> indices;
+        indices.reserve(size_t(slots) * cells * cells * 6u);
+        for (uint32_t k = 0; k < slots; ++k) {
+            const uint32_t base = k * perPatch;
+            for (uint32_t j = 0; j < cells; ++j) {
+                for (uint32_t i = 0; i < cells; ++i) {
+                    const uint32_t a = base + j * side + i, b = base + (j + 1u) * side + i;
+                    const uint32_t c = b + 1u, d = a + 1u;
+                    indices.insert(indices.end(), {a, b, d, b, c, d});
+                }
+            }
+        }
+        auto geo = BufferGeometry::create();
+        geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
+        geo->setIndex(indices);
 
         auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(pond, fjord));
         ocean->halfExtent_ = scaleRef * 0.5f;
-        // Non-square grids can't be derived from sqrt(vertexCount) — hand the
-        // renderer the actual topology.
-        ocean->gridWidth = resX;
-        ocean->gridDepth = resZ;
+        ocean->lod.slots = slots;
+        ocean->lod.halfX = options.horizon ? 0.f : 0.5f * sizeX;
+        ocean->lod.halfZ = options.horizon ? 0.f : 0.5f * sizeZ;
+        // The patches follow the camera, wherever the bounds say they are.
+        ocean->frustumCulled = false;
 
         // Resolve the auto (−1) tile sentinels: proportional to the water
         // body's scale, capped at the 1000 m reference trio — see

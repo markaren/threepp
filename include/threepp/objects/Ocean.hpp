@@ -1,8 +1,10 @@
 // A ready-to-use FFT-displaced ocean surface for the Vulkan renderer.
 //
 // Ocean is a thin convenience layer over DisplacedMesh: its create() factory
-// builds the plane geometry, a tuned transmissive water material, and a sensible
-// three-cascade Phillips spectrum, so a caller gets photoreal water in one line:
+// builds the patch mesh (DisplacedMesh::Lod: a quadtree of patches round the
+// camera, fine near it and coarser with distance), a tuned transmissive water
+// material, and a sensible three-cascade Phillips spectrum, so a caller gets
+// photoreal water in one line:
 //
 //   scene->add(Ocean::create());
 //
@@ -61,9 +63,9 @@ namespace threepp {
                           Fjord };
 
         struct Options {
-            // Mesh extent in metres along local X. The LARGER of size/sizeZ
-            // doubles as the cascade-0 FFT tile, i.e. the wavelength of the
-            // largest swell.
+            // Water extent in metres along local X, centred on the mesh's
+            // origin (unless `horizon`). The LARGER of size/sizeZ doubles as
+            // the cascade-0 FFT tile, i.e. the wavelength of the largest swell.
             float size = 1000.0f;
 
             // Mesh extent along local Z. 0 (default) = square (`size`). A
@@ -73,14 +75,16 @@ namespace threepp {
             // decoupled from the mesh extent).
             float sizeZ = 0.0f;
 
-            // Vertex grid resolution along local X (columns). Decoupled from
-            // the FFT size — the wave field stays at the FFT resolutions
-            // regardless, so the mesh can be coarser than the spectrum.
+            // The vertex grid's columns and rows. Not read: the ocean's mesh is
+            // the patch quadtree (DisplacedMesh::Lod), whose cells follow the
+            // camera's distance, not the water's size.
             uint32_t resolution = 512;
-
-            // Vertex rows along local Z. 0 (default) = derive from resolution
-            // so grid cells stay square-ish (resolution · sizeZ / size).
             uint32_t resolutionZ = 0;
+
+            // The open sea: the water has no edge and reaches the horizon in
+            // every direction (2^17 m from the camera); `size` then sets only
+            // the wave scale. Otherwise the water ends at size x sizeZ.
+            bool horizon = false;
 
             // Wind direction and speed (m/s). windTheta is the direction the
             // wind blows TOWARD (radians, (cos, sin) in world XZ, 0 = toward

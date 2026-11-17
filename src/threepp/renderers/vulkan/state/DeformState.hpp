@@ -53,6 +53,9 @@ namespace threepp::vulkan::impl {
         // (tens of ms on large scenes). CPU height-field mirrors now read the
         // readback buffers at stage time instead (one frame late).
         std::vector<std::tuple<DisplacedMesh*, DisplacedMeshState*, float>> pendingDisplacedDeforms_;
+        // Where this frame's camera is (world): the ocean's patches
+        // (DisplacedMesh::Lod) are laid round it. Set by scanDeformers.
+        Vector3 oceanLodEye_{};
 
         // ── GPU skinning compute pipeline ──────────────────────────────────
         // Replaces the cpuSkin() loop. One dispatch per skinned mesh per

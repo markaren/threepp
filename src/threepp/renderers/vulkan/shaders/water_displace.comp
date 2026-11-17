@@ -65,6 +65,22 @@ layout(set = 0, binding = 11) uniform sampler2D waveClimate;
 #include "ocean_climate.glsl"
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
+// The patch mesh's frame (DisplacedMesh::Lod; VulkanRenderer::Impl::updateOceanLod
+// writes it, water/OceanLod.hpp selects the patches): the eye and the hull
+// foci of this dispatch and of the last one, then a vec4 a slot: the patch's
+// corner (least x, least z), its spacing, and its state (0 park it, 1 kept
+// from the last dispatch, 2 new, 3 parked already).
+layout(buffer_reference, scalar) readonly buffer LodTable {
+    vec4     eye;       // x, z, height over the rest plane
+    vec4     prevEye;   // .w 1 once there was a last dispatch
+    vec4     domain;    // the water's half extents, 0 = none
+    PosBuf   prevVertex;
+    uint     focusCount;
+    uint     prevFocusCount;
+    vec4     foci[8];   // x, z, radius, finest spacing
+    vec4     prevFoci[8];
+    vec4     tiles[];
+};
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
 layout(buffer_reference, scalar) buffer UvBuf   { vec2  v[]; };
 
@@ -93,10 +109,10 @@ layout(push_constant, scalar) uniform Pc {
     uint64_t wakeTrailAddr; // every vessel's trail; each reads its own slice
     uint64_t hullAddr;      // OceanHull[hullCount]
     uint    vertexCount;
-    uint    gridDimX;       // vertices along local X / Z (rectangles supported)
-    uint    gridDimZ;
-    float   planeSizeX;
-    float   planeSizeZ;
+    uint    gridDimX;       // vertices along local X / Z (rectangles supported);
+    uint    gridDimZ;       // 0 / the slot count for the patch mesh, whose
+    float   planeSizeX;     // LodTable address planeSizeX and planeSizeZ carry
+    float   planeSizeZ;     // (lodTable())
     float   tileSize0;
     float   tileSize1;
     float   tileSize2;
@@ -225,6 +241,12 @@ float sampleBicubicR(sampler2D tex, vec2 uv) {
 // B-spline read; from level 1 the filter is the mip chain's and a trilinear
 // read is as smooth as the mesh can show.
 float gC1Lod = 0.0;
+// The patch mesh reads every cascade so (cascade 0's fields and cascade 2's
+// are mipped copies too, bound in the chop set): the level whose texel is the
+// spacing of the lattice at this vertex (gSpacing: the patch's, toward twice
+// it through the morph band, so two levels meet with the same filter).
+float gC0Lod = 0.0;
+float gC2Lod = 0.0;
 // The wave climate (DisplacedMesh::WaveClimate, waveModel bit 8): the
 // cascades' amplitude factors at this vertex's rest point (set in main),
 // on every field of their cascade read here, so a
@@ -237,8 +259,16 @@ float gC1Lod = 0.0;
 float gC0Gain = 1.0;
 float gC1Gain = 1.0;
 float gC2Gain = 1.0;
-float c0R(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicR(tex, uv); }
-vec2 c0RG(sampler2D tex, vec2 uv) { return gC0Gain * sampleBicubicRG(tex, uv); }
+float c0R(sampler2D tex, vec2 uv) {
+    if (gC0Lod <= 0.0) return gC0Gain * sampleBicubicR(tex, uv);
+    const float lo = textureLod(tex, uv, gC0Lod).r;
+    return gC0Gain * (gC0Lod >= 1.0 ? lo : mix(sampleBicubicR(tex, uv), lo, gC0Lod));
+}
+vec2 c0RG(sampler2D tex, vec2 uv) {
+    if (gC0Lod <= 0.0) return gC0Gain * sampleBicubicRG(tex, uv);
+    const vec2 lo = textureLod(tex, uv, gC0Lod).rg;
+    return gC0Gain * (gC0Lod >= 1.0 ? lo : mix(sampleBicubicRG(tex, uv), lo, gC0Lod));
+}
 vec2 c1RG(sampler2D tex, vec2 uv) {
     if (gC1Lod <= 0.0) return gC1Gain * sampleBicubicRG(tex, uv);
     const vec2 lo = textureLod(tex, uv, gC1Lod).rg;
@@ -311,8 +341,8 @@ vec3 sampleDisplacement(vec2 worldXZ) {
     if ((pc.cascadeMask & 4u) != 0u) {
         const float invTile = 1.0 / pc.tileSize2;
         const vec2 uv = worldXZ * invTile;
-        d.y += gC2Gain * texture(height2,   uv).r * invTile;
-        const vec2 dxz = gC2Gain * texture(displace2, uv).rg * invTile;
+        d.y += gC2Gain * textureLod(height2,   uv, gC2Lod).r * invTile;
+        const vec2 dxz = gC2Gain * textureLod(displace2, uv, gC2Lod).rg * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -376,8 +406,8 @@ vec3 sampleFineRaw(vec2 worldXZ) {
     if ((pc.cascadeMask & 4u) == 0u) return vec3(0.0);
     const float invTile = 1.0 / pc.tileSize2;
     const vec2 uv = worldXZ * invTile;
-    const vec2 dxz = gC2Gain * texture(displace2, uv).rg * invTile;
-    return vec3(dxz.x, gC2Gain * texture(height2, uv).r * invTile * pc.waveScale, dxz.y);
+    const vec2 dxz = gC2Gain * textureLod(displace2, uv, gC2Lod).rg * invTile;
+    return vec3(dxz.x, gC2Gain * textureLod(height2, uv, gC2Lod).r * invTile * pc.waveScale, dxz.y);
 }
 
 // The Choppy Wave Model's limiter. The drawn map x = q + l D(q) has Jacobian
@@ -403,9 +433,52 @@ float cwmLimit(float trA, float detA, float lMax) {
     return min(lMax, r);
 }
 
+// -- The patch mesh (DisplacedMesh::Lod) ----------------------------------
+LodTable lodTable() {
+    return LodTable(packUint2x32(uvec2(floatBitsToUint(pc.planeSizeX), floatBitsToUint(pc.planeSizeZ))));
+}
+// water::lod::norm for a point: its distance at the level of spacing s over
+// that level's reach, the least over the eye (3D) and the hull foci.
+float lodNorm(vec2 p, float s, vec4 eye, uint focusCount, bool prev) {
+    LodTable t = lodTable();
+    float n = length(vec3(p - eye.xy, eye.z)) / (128.0 * s);// kCameraK
+    for (uint f = 0u; f < focusCount; ++f) {
+        const vec4 fo = prev ? t.prevFoci[f] : t.foci[f];
+        if (s < fo.w * 0.999) continue;
+        n = min(n, max(length(p - fo.xy) - fo.z, 0.0) / (64.0 * s));// kFocusK
+    }
+    return n;
+}
+// A lattice point's rest point under an eye: past kMorphStart (0.9) of its
+// level's reach its odd coordinates slide onto the lattice twice as coarse,
+// all the way at 1; then held to the water's edge. .z is the morph.
+vec3 lodRest(vec2 q, float s, vec4 eye, uint focusCount, bool prev) {
+    const float m = clamp((lodNorm(q, s, eye, focusCount, prev) - 0.9) / 0.1, 0.0, 1.0);
+    vec2 r = mix(q, floor(q / (2.0 * s)) * (2.0 * s), m);
+    const vec4 dom = lodTable().domain;
+    if (dom.x > 0.0) r = clamp(r, -dom.xy, dom.xy);
+    return vec3(r, m);
+}
+// A cascade's level for a lattice spacing: the one whose texel is that
+// spacing, so the mesh holds the waves of two cells and more.
+float lodLevel(float spacing, float tile, int res) {
+    return max(log2(spacing * float(res) / max(tile, 1e-6)), 0.0);
+}
+// The vertex normal's level: the waves of kLodNormalWave and more. Read at the
+// finest cells, cascade 1's shortest waves steepened the vertex normals
+// enough to draw black slivers along the crests from a camera a few metres
+// up (the warped grid, coarse away from its centre, never held them there);
+// the shorter waves slope the water through the shade's fine cascade.
+const float kLodNormalWave = 8.0;
+// The patch mesh's vertex: its lattice point, slot state and spacing.
+vec2  gLodLattice = vec2(0.0);
+float gLodState   = 0.0;
+float gSpacing    = 0.0;
+
 void main() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= pc.vertexCount) return;
+    const bool patchMesh = pc.gridDimX == 0u;
 
     // Rest position from grid index. PlaneGeometry::create(planeSizeX,
     // planeSizeZ, gridDimX-1, gridDimZ-1) followed by rotateX(-π/2) places
@@ -414,8 +487,8 @@ void main() {
     // special case). After rotateX, vertex i's z is FLIPPED relative to the
     // unrotated plane; we mirror that here so the FFT texture aligns with
     // mesh world space.
-    const float u = float(i % pc.gridDimX) / float(pc.gridDimX - 1u);
-    const float v = float(i / pc.gridDimX) / float(pc.gridDimZ - 1u);
+    const float u = patchMesh ? 0.0 : float(i % pc.gridDimX) / float(pc.gridDimX - 1u);
+    const float v = patchMesh ? 0.0 : float(i / pc.gridDimX) / float(pc.gridDimZ - 1u);
 
     // Rest position. Uniform grid by default; when the host sets a non-zero
     // warpHalfRange the (u,v) ∈ [-1,1]² coordinates are remapped through a
@@ -424,7 +497,34 @@ void main() {
     // FFT/wake formulas evaluate at moves. Pair with the world-space foam
     // texture so foam doesn't drag with vertex indices.
     vec3 rest;
-    if (pc.warpHalfRange > 0.0) {
+    if (patchMesh) {
+        // The patch mesh: the slot's patch from the table, vertex (col, row)
+        // of its 17 x 17, rows toward -Z as the grid's (PlaneGeometry's
+        // winding); a free slot lies flat at its last patch's corner.
+        LodTable t = lodTable();
+        const uint  slot  = i / 289u;
+        const uint  local = i - slot * 289u;
+        const vec4  tile  = t.tiles[slot];
+        gLodState = tile.w;
+        if (tile.w < 0.5 || tile.w > 2.5) {
+            if (tile.w > 2.5) return;// parked already
+            const vec3 park = vec3(tile.x, 0.0, tile.y);
+            for (uint k = 0u; k < 3u; ++k) {
+                pc.posOut.v[i * 3u + k]  = park[k];
+                pc.normOut.v[i * 3u + k] = k == 1u ? 1.0 : 0.0;
+                t.prevVertex.v[i * 3u + k] = park[k];
+            }
+            if ((pc.waveModel & 16u) != 0u) pc.uvOut.v[i] = vec2(0.0);
+            return;
+        }
+        gLodLattice = tile.xy + vec2(float(local % 17u), float(16u - local / 17u)) * tile.z;
+        const vec3 r = lodRest(gLodLattice, tile.z, t.eye, t.focusCount, false);
+        rest = vec3(r.x, 0.0, r.y);
+        gSpacing = tile.z * (1.0 + r.z);
+        gC0Lod = lodLevel(gSpacing, pc.tileSize0, textureSize(height0, 0).x);
+        gC1Lod = lodLevel(gSpacing, pc.tileSize1, textureSize(height1, 0).x);
+        gC2Lod = lodLevel(gSpacing, pc.tileSize2, textureSize(height2, 0).x);
+    } else if (pc.warpHalfRange > 0.0) {
         const float un = 2.0 * u - 1.0;
         const float vn = 2.0 * v - 1.0;
         const float a  = pc.warpCoefA;
@@ -441,7 +541,7 @@ void main() {
 
     // The middle cascade's level for this vertex (see gC1Lod): the spacing of
     // the grid here, the larger of its two axes, under the warp's cubic map.
-    if ((pc.waveModel & 32u) != 0u) {
+    if ((pc.waveModel & 32u) != 0u && !patchMesh) {
         float sx = pc.planeSizeX / float(pc.gridDimX - 1u);
         float sz = pc.planeSizeZ / float(pc.gridDimZ - 1u);
         if (pc.warpHalfRange > 0.0) {
@@ -467,8 +567,8 @@ void main() {
     // vertex grid's spacing (the historical normal stencil) gives the
     // displacement gradient A (choppiness 1), the height gradient and the
     // CWM limiter.
-    const float wmEpsX = pc.planeSizeX / float(pc.gridDimX - 1u);
-    const float wmEpsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+    const float wmEpsX = patchMesh ? gSpacing : pc.planeSizeX / float(pc.gridDimX - 1u);
+    const float wmEpsZ = patchMesh ? gSpacing : pc.planeSizeZ / float(pc.gridDimZ - 1u);
     vec3  wmC = vec3(0.0);
     float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
     float bGX = 0.0, bGZ = 0.0;// the bound harmonic's own gradient (chop normals)
@@ -695,9 +795,9 @@ void main() {
     // analytic wake is. The mesh's spacing here is the warp's derivative,
     // times the ray-tracing proxy's stride.
     if (pc.wakeTableAddr != 0ul) {
-        float spX = pc.planeSizeX / float(pc.gridDimX - 1u);
-        float spZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
-        if (pc.warpHalfRange > 0.0) {
+        float spX = patchMesh ? gSpacing : pc.planeSizeX / float(pc.gridDimX - 1u);
+        float spZ = patchMesh ? gSpacing : pc.planeSizeZ / float(pc.gridDimZ - 1u);
+        if (pc.warpHalfRange > 0.0 && !patchMesh) {
             const float un = 2.0 * u - 1.0;
             const float vn = 2.0 * v - 1.0;
             const float a  = pc.warpCoefA;
@@ -724,6 +824,11 @@ void main() {
 
 #ifdef OCEAN_CHOP
     {
+        if (patchMesh) {
+            const float ns = max(gSpacing, 0.5 * kLodNormalWave);
+            gC0Lod = lodLevel(ns, pc.tileSize0, textureSize(height0, 0).x);
+            gC1Lod = lodLevel(ns, pc.tileSize1, textureSize(height1, 0).x);
+        }
         // Chop normals: the normal of the surface this vertex actually sits
         // on, from exact derivatives at the REST point (no stencil), the
         // horizontal chop included: oceanChopSlope (ocean_chop_normal.glsl)
@@ -796,8 +901,8 @@ void main() {
         // bound harmonic included.
         n = normalize(vec3(-hGX, 1.0, -hGZ));
     } else {
-        const float epsX = pc.planeSizeX / float(pc.gridDimX - 1u);
-        const float epsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+        const float epsX = patchMesh ? gSpacing : pc.planeSizeX / float(pc.gridDimX - 1u);
+        const float epsZ = patchMesh ? gSpacing : pc.planeSizeZ / float(pc.gridDimZ - 1u);
         const float hL = sampleHeightSmooth(rest.xz + vec2(-epsX, 0.0));
         const float hR = sampleHeightSmooth(rest.xz + vec2( epsX, 0.0));
         const float hD = sampleHeightSmooth(rest.xz + vec2(0.0, -epsZ));
@@ -815,6 +920,27 @@ void main() {
     pc.normOut.v[i * 3u + 1u] = n.y;
     pc.normOut.v[i * 3u + 2u] = n.z;
 #endif
+
+    // The patch mesh's motion history (the frame copied last dispatch's
+    // positions into prevVertex before this one). A new slot has no last
+    // position of its own: it gets this one, no motion, never a smear from
+    // the patch the slot held before. A kept vertex keeps its world point
+    // save in a morph band, where it slid with the eye: its last position
+    // moves by the same slide (rest under this eye less rest under the last),
+    // so its motion is the water's alone.
+    if (patchMesh) {
+        LodTable t = lodTable();
+        if (gLodState > 1.5 || t.prevEye.w < 0.5) {
+            for (uint k = 0u; k < 3u; ++k) t.prevVertex.v[i * 3u + k] = outPos[k];
+        } else {
+            const vec3  rp    = lodRest(gLodLattice, t.tiles[i / 289u].z, t.prevEye, t.prevFocusCount, true);
+            const vec2  slide = rest.xz - rp.xy;
+            if (slide != vec2(0.0)) {
+                t.prevVertex.v[i * 3u + 0u] += slide.x;
+                t.prevVertex.v[i * 3u + 2u] += slide.y;
+            }
+        }
+    }
 
     // Foam used to be computed per-vertex right here (Jacobian + wake
     // formulas + disturbance splats + persistence decay) and written to a

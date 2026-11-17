@@ -2894,6 +2894,8 @@ void VulkanRenderer::Impl::fingerprintEntries(SceneBuildFrame& sb) {
 // the *DirtyAny flags here.
 // Needs: the entries, sb.leanOk. Leaves: the entry*Dirty bits and, lean, the flags.
 void VulkanRenderer::Impl::scanDeformers(SceneBuildFrame& sb, Camera& camera) {
+            // The ocean's patches (DisplacedMesh::Lod) lie round this frame's camera.
+            oceanLodEye_.setFromMatrixPosition(*camera.matrixWorld);
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
             auto& bonesDirtyAny = sb.bonesDirtyAny;
             auto& displacedDirtyAny = sb.displacedDirtyAny;
@@ -4731,6 +4733,7 @@ void VulkanRenderer::Impl::pruneDeadSceneResources() {
                         for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                         destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                         for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
+                        for (auto& b : st->lodTable) destroyBuffer(ctx->allocator(), b);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
                         // run on unique_ptr reset.
                         it = displacedStates.erase(it);
@@ -5470,7 +5473,8 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
             // gets the same world-static fallback.
             bool warpReproject = rec.interopWorldStatic;
             if (en.isDisplaced) {
-                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f;
+                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f &&
+                                static_cast<DisplacedMesh*>(en.mesh)->lod.slots == 0u;
             }
             gdesc.prevVertexAddress =
                     (rec.prevVertex.handle != VK_NULL_HANDLE && !warpReproject)

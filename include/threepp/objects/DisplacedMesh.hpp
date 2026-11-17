@@ -318,6 +318,33 @@ namespace threepp {
         };
         MeshWarp warp;
 
+        // The ocean's own mesh (Ocean::create builds it; the grid and the warp
+        // above are then not read): `slots` patches of kLodCells x kLodCells
+        // cells, laid each frame by the renderer on a quadtree whose lattice is
+        // fixed in the mesh's frame (CDLOD). The finest cells lie round the
+        // frame's camera, every level twice the spacing of the one inside it,
+        // so a cell spans about the same angle wherever it lies; at each
+        // level's outer border its odd vertices slide onto the coarser
+        // lattice, so neighbouring levels meet without cracks. A vertex keeps
+        // its world point while the camera moves, save in those morph bands.
+        // Each patch carries only the waves its spacing can draw (the cascades
+        // are read at the mip whose texel is the spacing); the per-pixel
+        // shading runs everywhere as before. Each posed hull exclusion is a
+        // second focus, so a hull far from the camera keeps cells fine enough
+        // for its cut.
+        //   halfX / halfZ: the water's half extents round the mesh's origin
+        //   (vertices past them are held to the edge); 0 = no edge, the patches
+        //   reach out to the horizon (2^17 m from the camera).
+        struct Lod {
+            uint32_t slots = 0;// 0 = the mesh is a grid (gridWidth, gridDepth, warp)
+            float    halfX = 0.f;
+            float    halfZ = 0.f;
+        };
+        static constexpr uint32_t kLodCells = 16;    // cells a patch side (17 x 17 vertices)
+        static constexpr uint32_t kLodSlots = 4096;  // the most patches a frame lays (1.18 M vertices)
+        static constexpr float    kLodFinest = 0.5f; // m, the finest cell, round the camera
+        Lod lod;
+
         // Vessel wake: per-frame state used by water_displace.comp to inject a
         // Kelvin V-wake (geometric height), a bow bump, and a foam trail behind
         // the vessel. Reuses the HullExclusion pose (centerX/Z, sin/cosYaw,

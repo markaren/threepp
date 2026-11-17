@@ -412,6 +412,7 @@ VulkanRenderer::Impl::~Impl() {
                 for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                 for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
+                for (auto& b : st->lodTable) destroyBuffer(ctx->allocator(), b);
                 if (st->wake && wakeField_) wakeField_->destroyState(*st->wake);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.

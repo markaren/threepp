@@ -852,7 +852,8 @@ namespace threepp {
             // (interopWorldStatic — marching-cubes soups) is the same case.
             bool warpReproject = rec->interopWorldStatic;
             if (en.isDisplaced) {
-                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f;
+                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f &&
+                                static_cast<DisplacedMesh*>(en.mesh)->lod.slots == 0u;
             }
             di.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
                                      ? rec->prevVertex.address

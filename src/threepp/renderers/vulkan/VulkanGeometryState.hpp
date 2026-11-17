@@ -28,9 +28,11 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace threepp::vulkan::impl {
@@ -697,6 +699,41 @@ namespace threepp::vulkan::impl {
         // force a full rebuild every kBlasFullRebuildInterval frames.
         uint32_t  blasRefitCounter = 0;          // frames since last full BUILD
         static constexpr uint32_t kBlasFullRebuildInterval = 64;
+
+        // The patch mesh (DisplacedMesh::Lod; lodSlots 0 = the grid). Each
+        // frame the renderer selects the patches (water/OceanLod.hpp), keeps
+        // every patch that stays in its slot, gives a new one a free slot
+        // (the nearest the structure holds, else the lowest: the ray-tracing
+        // structure is built over the slots up to the last one in use), and
+        // uploads the frame's table: the header (the eye and the hull foci
+        // of this dispatch and the last), then a vec4 a slot (x, z, spacing,
+        // state: 0 park it, 1 kept, 2 new this frame, 3 parked already).
+        uint32_t lodSlots = 0;
+        struct LodKey {
+            float x, z, s;
+            bool operator==(const LodKey& o) const { return x == o.x && z == o.z && s == o.s; }
+        };
+        struct LodKeyHash {
+            size_t operator()(const LodKey& k) const {
+                uint32_t a, b, c;
+                std::memcpy(&a, &k.x, 4);
+                std::memcpy(&b, &k.z, 4);
+                std::memcpy(&c, &k.s, 4);
+                return size_t(a) * 0x9E3779B1u ^ (size_t(b) * 0x85EBCA77u) ^ (size_t(c) * 0xC2B2AE3Du);
+            }
+        };
+        std::unordered_map<LodKey, uint32_t, LodKeyHash> lodSlotOf;// the patch each used slot holds
+        std::vector<std::array<float, 4>> lodHome;                // per slot: x, z, spacing (0 = never used), parked
+        std::array<Buffer, kFramesInFlight> lodTable{};
+        float lodPrev[4] = {0.f, 0.f, 0.f, 0.f};                   // the last dispatch's eye: x, z, height, valid
+        std::array<float, 4 * 8> lodPrevFoci{};
+        uint32_t lodPrevFocusCount = 0;
+        uint32_t lodChangedSinceBuild = 0;// slots handed to new patches since the last full BUILD
+        uint32_t lodActiveSlots = 0;      // one past the last slot in use
+        uint32_t lodRtSlots = 0;          // the slots the ray-tracing structure holds (as built)
+        // The cascades read at each vertex's spacing: mipped copies of
+        // cascades 0 and 2 (cascade 1's is c1Mips), bound in the chop set.
+        std::unique_ptr<water::FieldMips> c0Mips, c2Mips;
 
         // Per-mesh foam-disturbance SSBO. Host-mapped, written from
         // dm.foamDisturbances each frame before the water_displace
