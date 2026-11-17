@@ -1754,6 +1754,12 @@ namespace threepp {
         ubo.worldUp[0] = camera.up.x;
         ubo.worldUp[1] = camera.up.y;
         ubo.worldUp[2] = camera.up.z;
+        ubo.waterUp[0] = oceanWaterUp_.x;
+        ubo.waterUp[1] = oceanWaterUp_.y;
+        ubo.waterUp[2] = oceanWaterUp_.z;
+        ubo.waterX[0]  = oceanWaterX_.x;
+        ubo.waterX[1]  = oceanWaterX_.y;
+        ubo.waterX[2]  = oceanWaterX_.z;
 
         // scene.fog → the homogeneous UBO fields (medium beam-σ / albedo /
         // present-flag) that the volumetric consumers read. These are the AIR

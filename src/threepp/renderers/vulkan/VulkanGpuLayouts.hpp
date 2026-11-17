@@ -186,8 +186,13 @@ namespace threepp::vulkan::impl {
         float hfTopNoise;    // peak displacement (m); 0 = off
         float hfTopInvScale; // 1 / feature size (1/m)
         float hfTopOffset[3];// .xz wind drift, .y evolution phase, in noise-space units
+        // The water's frame in the world: the +Y (up) and +X of the ocean
+        // whose fine cascade the shade reads (a Z-up world turns them); the
+        // world's own without one.
+        float waterUp[3];
+        float waterX[3];
     };
-    static_assert(sizeof(GpuFogUbo) == 112);
+    static_assert(sizeof(GpuFogUbo) == 136);
 
     // Volumetric cloud layer (VulkanRenderer::setClouds) + near-field
     // heterogeneous height fog (VulkanRenderer::setHeightFog). Both ride the

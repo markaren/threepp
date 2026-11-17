@@ -2897,6 +2897,30 @@ void VulkanRenderer::Impl::scanDeformers(SceneBuildFrame& sb, Camera& camera) {
             // The ocean's patches (DisplacedMesh::Lod) lie round this frame's camera.
             oceanLodEye_.setFromMatrixPosition(*camera.matrixWorld);
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            // The water's frame: the +Y and +X of the ocean whose fine cascade
+            // the shade reads (the first displaced mesh without that), the
+            // world's without one.
+            {
+                Vector3 up(0.f, 1.f, 0.f), ax(1.f, 0.f, 0.f);
+                bool exact = false, any = false;
+                for (const auto& sp : entrySpans_) {
+                    if (exact || !entries[sp.first].isDisplaced) continue;
+                    const auto& w = entries[sp.first].worldMatrix;
+                    const Vector3 x(w[0], w[1], w[2]), y(w[4], w[5], w[6]);
+                    if (!(x.lengthSq() > 0.f) || !(y.lengthSq() > 0.f)) continue;
+                    const auto it = displacedStates.find(static_cast<const DisplacedMesh*>(entries[sp.first].mesh));
+                    const DisplacedMeshState* st = it != displacedStates.end() ? it->second.get() : nullptr;
+                    exact = st && oceanFineHeightView != VK_NULL_HANDLE && st->cascades[st->chopFineIdx].dyn &&
+                            st->cascades[st->chopFineIdx].dyn->ht().view == oceanFineHeightView;
+                    if (exact || !any) {
+                        up.copy(y).normalize();
+                        ax.copy(x).normalize();
+                    }
+                    any = true;
+                }
+                oceanWaterUp_ = up;
+                oceanWaterX_ = ax;
+            }
             auto& bonesDirtyAny = sb.bonesDirtyAny;
             auto& displacedDirtyAny = sb.displacedDirtyAny;
             auto& grassDirtyAny = sb.grassDirtyAny;
