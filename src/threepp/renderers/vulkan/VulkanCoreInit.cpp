@@ -405,6 +405,7 @@ VulkanRenderer::Impl::~Impl() {
                 destroyImage2D(ctx->allocator(), d, st->climateImage);
                 for (auto& ring : st->heightReadback)
                     for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
+                for (auto& b : st->shoreReadback) destroyBuffer(ctx->allocator(), b);
                 for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                 for (auto& b : st->lodTable) destroyBuffer(ctx->allocator(), b);

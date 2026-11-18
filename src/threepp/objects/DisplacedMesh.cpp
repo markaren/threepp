@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -188,11 +189,20 @@ namespace threepp {
         const float chop = effectiveChoppiness();
         const float chop01 = chop * (1.f + effectiveCrestSharpness());
         // The wave climate's gains at a rest point (waveClimateGain), on every
-        // field of its cascade, as water_displace.comp applies them.
-        const bool climate = hasWaveClimate();
+        // field of its cascade, as water_displace.comp applies them, times
+        // the gains over the shore's depth (shoreGain).
+        const bool climate = hasWaveClimate() || !shoreDepth.data.empty();
+        auto gains = [&](float qx, float qz) {
+            std::array<float, 3> g = hasWaveClimate() ? waveClimateGain(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
+            if (!shoreDepth.data.empty()) {
+                const std::array<float, 3> s = shoreGain(qx, qz);
+                for (int c = 0; c < 3; ++c) g[c] *= s[c];
+            }
+            return g;
+        };
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
-            const std::array<float, 3> g = climate ? waveClimateGain(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
+            const std::array<float, 3> g = climate ? gains(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
             for (uint32_t i = 0; i < 3; ++i) {
                 if ((cascadeMask & (1u << i)) == 0u) continue;
                 const CascadeField& cf = heightFields[i];
@@ -250,7 +260,7 @@ namespace threepp {
 
         float total = 0.f;
         float bound = 0.f;// second-order harmonic, already in world metres
-        const std::array<float, 3> gq = climate ? waveClimateGain(bestX, bestZ) : std::array<float, 3>{1.f, 1.f, 1.f};
+        const std::array<float, 3> gq = climate ? gains(bestX, bestZ) : std::array<float, 3>{1.f, 1.f, 1.f};
         for (uint32_t i = 0; i < 3; ++i) {
             if ((cascadeMask & (1u << i)) == 0u) continue;
             const CascadeField& cf = heightFields[i];
@@ -313,6 +323,73 @@ namespace threepp {
             const float a = at(i0, j0) + (at(i1, j0) - at(i0, j0)) * tx;
             const float b = at(i0, j1) + (at(i1, j1) - at(i0, j1)) * tx;
             g[c] = a + (b - a) * tz;
+        }
+        return g;
+    }
+
+    std::array<float, 3> DisplacedMesh::shoreGain(float x, float z) const {
+        // ocean_shore_depth.glsl, line for line: its header's words, then the depths.
+        constexpr size_t kHeaderWords = 20;
+        const std::vector<float>& v = shoreDepth.data;
+        if (v.size() < kHeaderWords) return {1.f, 1.f, 1.f};
+        uint32_t res = 0;
+        std::memcpy(&res, &v[16], sizeof(res));
+        if (res < 2u || v.size() < kHeaderWords + 2u * size_t(res) * res) return {1.f, 1.f, 1.f};
+        const float n = static_cast<float>(res);
+        auto depthIn = [&](uint32_t k, float& wgt) {
+            wgt = 0.f;
+            const float* w = &v[k * 4u];
+            if (w[3] < 0.5f) return 0.f;
+            const float u  = (x - w[0]) / (w[2] * n);
+            const float t  = (z - w[1]) / (w[2] * n);
+            const float e  = std::min(std::min(u, 1.f - u), std::min(t, 1.f - t));
+            const float s  = std::clamp(e * 16.f, 0.f, 1.f);
+            wgt = s * s * (3.f - 2.f * s);
+            if (wgt <= 0.f) return 0.f;
+            const float fx = std::clamp(u * n - 0.5f, 0.f, n - 1.f);
+            const float fz = std::clamp(t * n - 0.5f, 0.f, n - 1.f);
+            const uint32_t i0 = std::min(static_cast<uint32_t>(fx), res - 2u);
+            const uint32_t j0 = std::min(static_cast<uint32_t>(fz), res - 2u);
+            const float tx = fx - float(i0), tz = fz - float(j0);
+            const float* D = &v[kHeaderWords + size_t(k) * res * res];
+            const size_t a = size_t(j0) * res + i0;
+            const float lo = D[a] + (D[a + 1] - D[a]) * tx;
+            const float hi = D[a + res] + (D[a + res + 1] - D[a + res]) * tx;
+            return lo + (hi - lo) * tz;
+        };
+        const float* hs = &v[8];
+        const float* km = &v[12];
+        auto gainAt = [&](float d) {
+            std::array<float, 3> g{1.f, 1.f, 1.f};
+            if (d >= 60.f) return g;
+            d = std::max(d, 0.f);
+            constexpr float kGamma = 0.42f, kShare = 0.5f, kMax = 1.15f;
+            float budget = kGamma * kGamma * d * d;
+            for (int c = 2; c >= 0; --c) {
+                float s = 1.f;
+                if (km[c] > 0.f) {
+                    const float kd = std::clamp(km[c] * d, 1e-4f, 10.f);
+                    const float ks = 1.f / std::sqrt(std::tanh(kd) * (1.f + 2.f * kd / std::sinh(2.f * kd)));
+                    s = std::min(1.f + (ks - 1.f) * kShare, kMax);
+                }
+                const float e    = hs[c] * hs[c] * s * s;
+                const float take = std::min(e, budget);
+                budget -= take;
+                g[c] = e > 1e-12f ? s * std::sqrt(take / e) : s;
+            }
+            return g;
+        };
+        float wN = 0.f, wF = 0.f;
+        const float dN = depthIn(0u, wN);
+        const float dF = depthIn(1u, wF);
+        std::array<float, 3> g{1.f, 1.f, 1.f};
+        if (wF > 0.f) {
+            const std::array<float, 3> f = gainAt(dF);
+            for (int c = 0; c < 3; ++c) g[c] = 1.f + (f[c] - 1.f) * wF;
+        }
+        if (wN > 0.f) {
+            const std::array<float, 3> nn = gainAt(dN);
+            for (int c = 0; c < 3; ++c) g[c] = g[c] + (nn[c] - g[c]) * wN;
         }
         return g;
     }

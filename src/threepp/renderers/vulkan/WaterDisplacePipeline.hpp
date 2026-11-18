@@ -54,9 +54,9 @@ namespace threepp::vulkan {
         // its header row), or a 1x1 stand-in while the ocean has none.
         static constexpr uint32_t kClimateBinding = 11;
 
-        // Must match water_displace.comp's `Pc` struct (120 bytes of the
-        // 128-byte maximum): 4 × VkDeviceAddress (32) + 20 × u32/float (80) +
-        // the wake table's address (8). The vessels live in a per-frame
+        // Must match water_displace.comp's `Pc` struct (the 128-byte
+        // maximum): 4 × VkDeviceAddress (32) + 20 × u32/float (80) + the wake
+        // table's address (8) + the shore's depth's (8). The vessels live in a per-frame
         // buffer (hullAddr → OceanHullGpu[hullCount]); one hull alone used to
         // fill this block to the 128-byte maximum.
         struct PushConstants {
@@ -98,6 +98,10 @@ namespace threepp::vulkan {
             // while this is set: the ripples' height is read at the proxy's
             // spacing, so the traced and the drawn surface carry the same waves.
             VkDeviceAddress wakeTableAddr;
+            // The shore's depth (WakeFieldPipeline::State::shoreDepth,
+            // ocean_shore_depth.glsl): each cascade's gain over shallow water
+            // at a vertex's rest point; 0 = none (every gain 1).
+            VkDeviceAddress shoreAddr;
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

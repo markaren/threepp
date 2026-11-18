@@ -653,6 +653,25 @@ namespace threepp {
         };
         mutable CascadeField heightFields[3];
 
+        // The water's depth over the shore's windows and the sea's statistics
+        // as the renderer last read them back (Vulkan, while the height
+        // mirror is wanted): over shallow water the drawn cascades are scaled
+        // to the depth (shoaled, and held under the breaking limit), and
+        // sampleHeight scales them alike (shoreGain). The GPU buffer's words
+        // (ocean_shore_depth.glsl's OceanShoreDepth): two windows' placements
+        // (origin x, z, texel, live), each cascade's significant height and
+        // wavenumber, the windows' side in texels (a uint), three spare words,
+        // then each window's depths, row by row. Empty = none (every gain 1).
+        // Internal; the renderer fills it.
+        struct ShoreDepth {
+            std::vector<float> data;
+        };
+        mutable ShoreDepth shoreDepth;
+        // The three cascades' gains over the depth at a rest point (1, 1, 1
+        // off the shallows and without a depth): ocean_shore_depth.glsl's
+        // oceanShoreGain, line for line.
+        [[nodiscard]] std::array<float, 3> shoreGain(float x, float z) const;
+
         // The site's wave climate (default none: one sea everywhere, as
         // before). A small world-anchored map, baked by the caller from the
         // site's land, seabed and wind, whose channel c (0, 1, 2) scales

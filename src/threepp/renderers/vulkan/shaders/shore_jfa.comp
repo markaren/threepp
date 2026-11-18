@@ -1,5 +1,11 @@
 #version 460
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive                   : enable
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+#include "ocean_shore_depth.glsl"// OceanShoreDepth: mode 2 lays a window's depth
 
 // THE SHORE'S DISTANCE: jump flooding (Rong and Tan 2006, "Jump flooding in
 // GPU with applications to Voronoi diagram and distance transform") over one
@@ -14,6 +20,15 @@
 //   mode 1  the map: .r the distance (m) to the nearest seed's centre, .gb the
 //           unit direction toward it ((0, 0) on a seed), .a the bed the
 //           capture left (kept).
+//   mode 2  the window's DEPTH (ocean_shore_depth.glsl), from the bed the
+//           capture left: over water the depth under the rest level, a tent
+//           over the texel and its eight neighbours that are water (a bed
+//           sounded at a texel's centre alone is noisy at a pile's or a
+//           boulder's edge); inside a solid the deepest water among its
+//           neighbours, so a pile or a footing standing in deep water does
+//           not calm the sea round it, and a beach's waterline is as shallow
+//           as the water before it. 0 where no water is near (inland). The
+//           first thread also writes the window's placement beside it.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -21,13 +36,17 @@ layout(set = 0, binding = 0, r32ui)   uniform readonly  uimage2DArray seedsIn;
 layout(set = 0, binding = 1, r32ui)   uniform writeonly uimage2DArray seedsOut;
 layout(set = 0, binding = 2, rgba16f) uniform image2DArray shoreMap;
 
-// 20 bytes, mirrored by WakeFieldPipeline::ShoreJfaPush.
+// 40 bytes, mirrored by WakeFieldPipeline::ShoreJfaPush.
 layout(push_constant, scalar) uniform Pc {
-    uint  res;
-    uint  layer;
-    uint  mode;  // 0 a round, 1 the map
-    int   step;  // texels (mode 0)
-    float texel; // m (mode 1)
+    uint     res;
+    uint     layer;
+    uint     mode;     // 0 a round, 1 the map, 2 the depth
+    int      step;     // texels (mode 0)
+    float    texel;    // m (modes 1, 2)
+    float    originX;  // the window's world min corner (mode 2)
+    float    originZ;
+    uint     _pad;
+    uint64_t depthAddr;// OceanShoreDepth (mode 2)
 } pc;
 
 const uint  kNoSeed = 0xffffffffu;
@@ -64,6 +83,41 @@ void main() {
             }
         }
         imageStore(seedsOut, ivec3(px, li), uvec4(best));
+        return;
+    }
+
+    if (pc.mode == 2u) {
+        // (only the bed, .a, is read here, and nothing writes it)
+        const float bed = imageLoad(shoreMap, ivec3(px, li)).a;
+        float d = 0.0;
+        if (bed <= 0.0) {
+            float sw = 0.0, sd = 0.0;
+            for (int j = -1; j <= 1; ++j) {
+                for (int i = -1; i <= 1; ++i) {
+                    const ivec2 q = clamp(px + ivec2(i, j), ivec2(0), ivec2(res - 1));
+                    const float b = imageLoad(shoreMap, ivec3(q, li)).a;
+                    if (b > 0.0) continue;
+                    const float w = float((2 - abs(i)) * (2 - abs(j)));
+                    sw += w;
+                    sd += w * -b;
+                }
+            }
+            d = sd / sw;
+        } else {
+            for (int j = -1; j <= 1; ++j) {
+                for (int i = -1; i <= 1; ++i) {
+                    const ivec2 q = clamp(px + ivec2(i, j), ivec2(0), ivec2(res - 1));
+                    const float b = imageLoad(shoreMap, ivec3(q, li)).a;
+                    if (b <= 0.0) d = max(d, -b);
+                }
+            }
+        }
+        OceanShoreDepth sd = OceanShoreDepth(pc.depthAddr);
+        sd.depth[(pc.layer * pc.res + uint(px.y)) * pc.res + uint(px.x)] = d;
+        if (px == ivec2(0)) {
+            sd.win[pc.layer] = OceanShoreWindow(pc.originX, pc.originZ, pc.texel, 1.0);
+            sd.res           = pc.res;
+        }
         return;
     }
 

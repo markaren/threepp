@@ -1,8 +1,12 @@
 #version 460
-#extension GL_GOOGLE_include_directive : enable
-#extension GL_EXT_scalar_block_layout  : require
+#extension GL_GOOGLE_include_directive                   : enable
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-#include "ocean_cascade.glsl"// oceanC1Domain / oceanC1World, sampleBicubicRG
+#include "ocean_cascade.glsl"    // oceanC1Domain / oceanC1World, sampleBicubicRG
+#include "ocean_shore_depth.glsl"// the depth, the sea's statistics, the cascades' gains over the bed
 
 // THE SHORE'S FOAM: what the sea lays where it meets something solid, fed into
 // one of the shore's windows of the wake field (WakeFieldPipeline, the shore
@@ -28,6 +32,30 @@
 // with its own flow (the throw, relaxing to the wind's drift of the foam,
 // kDrift of the wind: Wu 1975 measured the wind drift at about 3 %), stirs it
 // with a little turbulence into lace and ages it as it ages a wake's foam.
+//
+// THE SURF. The drawn sea over shallow water is scaled by its depth
+// (ocean_shore_depth.glsl), its tallest waves held at the breaking limit. Where
+// a parcel's crest, at that depth, nears the limit (its height eta against
+// kCrestShare d, a crest's share of McCowan's 0.78 d) and is still rising or at
+// its top, the crest breaks: foam and air laid in proportion to how far past
+// kBreak0 it stands, so the white comes with each set over a shoal, grows with
+// the sea, and is nothing on a calm one (kCrest0: a crest a few centimetres
+// high lays none, however shallow the water). Broken water then runs toward
+// the shore as a bore does, at kBore sqrt(g d) (the speed of a shallow-water
+// bore, Stoker 1957), slowing as the depth falls, along the flood's direction
+// to the nearest solid (the shore map's), or with the waves (the wind) out
+// over a shoal far from any; and in the last decimetres of a beach it runs up
+// and back with the waterline, which moves at w / tan(beta) (the surface's rise
+// over the bed's slope), so the foam it leaves slides up the slope and back and
+// fades as the field ages it. The field carries it all: the flow is set, the
+// foam is moved by it (wake_field.comp), never slid as a picture.
+//
+// MODE 1, the sea's statistics (one workgroup, before the windows' sources):
+// each cascade's drawn significant height 4 sigma from its height field and
+// its rms wavenumber from the divergence of its horizontal displacement (for
+// a linear sea D is the Riesz transform of the height, div D = -|k| h mode by
+// mode), sampled on a 64 x 64 lattice of its texels, into the depth buffer for
+// every reader of the gains (the geometry, the shade, mode 0 here).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -72,9 +100,8 @@ layout(push_constant, scalar) uniform Pc {
     float keepHalf;   // 0 = none
     float timeSec;
     float gain;       // the deposit's scale: 1, less where a texel is wider than a collar
-    float _pad0;
-    float _pad1;
-    float _pad2;
+    uint  mode;       // 0 a window's foam, 1 the sea's statistics
+    uint64_t depthAddr;// OceanShoreDepth (the depth, the sea's statistics)
 } pc;
 
 // LOOK and calibration constants (2026-11-18, third round). A fetch-limited
@@ -91,6 +118,22 @@ const float kDriftTau  = 1.5; // s: foam takes the wind's drift over this
 // The furthest a deposit is ever laid from the solid, with the waves' own
 // horizontal travel: texels further off do nothing at all.
 const float kBand      = 6.0; // m
+
+// THE SURF's constants (2026-11-18, first round).
+const float kCrestShare = 0.39;// a crest at the breaking limit stands this times the depth (half of 0.78)
+const float kBreak0    = 0.60; // eta / (kCrestShare d): the crest starts to break here ...
+const float kBreak1    = 0.95; // ... and is fully broken here
+const float kCrest0    = 0.04; // m: a crest lower than this lays nothing ...
+const float kCrest1    = 0.15; // m: ... and one this high its full share
+const float kBreakFoam = 0.75; // the film a fully broken crest lays
+const float kBreakAir  = 0.35; // ... the air it takes down (the pale water of a broken band)
+const float kBreakTurb = 0.06; // ... and the churn
+const float kSurfDepth = 6.0;  // m: deeper texels make no surf (a 15 m/s fjord sea breaks from 3 m)
+const float kBore      = 0.8;  // broken water runs in at this share of sqrt(g d)
+const float kRunTau    = 0.6;  // s: the field's flow takes the bore's over this
+const float kSwash0    = 0.10; // m: the swash's flow is the waterline's below this depth ...
+const float kSwash1    = 0.45; // m: ... and the bore's above this
+const float kSwashMax  = 1.5;  // m/s: the fastest the waterline is taken to run
 
 float sHash(ivec3 p) {
     uint h = uint(p.x) * 0x8da6b343u ^ uint(p.y) * 0xd8163841u ^ uint(p.z) * 0xcb1ab31fu;
@@ -116,27 +159,29 @@ float sampleBicubicR1(sampler2D tex, vec2 uv) { return sampleBicubicRG(tex, uv).
 // The drawn surface's (D.x, eta, D.z) at rest point q: water_displace.comp's
 // sampleDisplacement without its per-vertex mip levels (the window's texels are
 // finer than any spacing those serve).
+// Each cascade scaled by its gain over the bed (as water_displace.comp scales it).
 vec3 surfaceAt(vec2 q) {
     vec3 d = vec3(0.0);
+    const vec3 g = oceanShoreGain(pc.depthAddr, q);
     if ((pc.cascadeMask & 1u) != 0u) {
-        const float inv = 1.0 / pc.tileSize0;
-        const vec2  uv  = q * inv;
+        const float inv = g.x / pc.tileSize0;
+        const vec2  uv  = q / pc.tileSize0;
         d.y += sampleBicubicR1(height0, uv) * inv;
         const vec2 dxz = sampleBicubicRG(displace0, uv) * inv;
         d.x += dxz.x;
         d.z += dxz.y;
     }
     if ((pc.cascadeMask & 2u) != 0u) {
-        const float inv = 1.0 / pc.tileSize1;
-        const vec2  uv  = oceanC1Domain(q) * inv;
+        const float inv = g.y / pc.tileSize1;
+        const vec2  uv  = oceanC1Domain(q) / pc.tileSize1;
         d.y += sampleBicubicR1(height1, uv) * inv;
         const vec2 dxz = oceanC1World(sampleBicubicRG(displace1, uv)) * inv;
         d.x += dxz.x;
         d.z += dxz.y;
     }
     if ((pc.cascadeMask & 4u) != 0u) {
-        const float inv = 1.0 / pc.tileSize2;
-        const vec2  uv  = q * inv;
+        const float inv = g.z / pc.tileSize2;
+        const vec2  uv  = q / pc.tileSize2;
         d.y += textureLod(height2, uv, 0.0).r * inv;
         const vec2 dxz = textureLod(displace2, uv, 0.0).rg * inv;
         d.x += dxz.x;
@@ -145,15 +190,70 @@ vec3 surfaceAt(vec2 q) {
     return vec3(d.x * pc.choppiness, d.y * pc.waveScale, d.z * pc.choppiness);
 }
 
+// ── MODE 1: the sea's statistics ──────────────────────────────────────────
+shared vec3 sStat[64][3];// per thread, per cascade: (sum h, sum h^2, sum (div D)^2)
+
+// One cascade's sums over this thread's share of a 64 x 64 lattice of its
+// texels (h and D in metres, at waveScale and choppiness 1).
+vec3 cascadeSums(sampler2D h, sampler2D dsp, float tile, uint t) {
+    const ivec2 sz  = textureSize(h, 0);
+    const float inv = 1.0 / tile;
+    const float dx  = tile / float(sz.x);// m a texel
+    vec3 acc = vec3(0.0);
+    for (uint s = t; s < 4096u; s += 64u) {
+        const ivec2 p  = ivec2(int(s & 63u) * sz.x / 64, int(s >> 6u) * sz.y / 64);
+        const float e  = texelFetch(h, p, 0).r * inv;
+        const ivec2 xp = ivec2((p.x + 1) % sz.x, p.y), xm = ivec2((p.x + sz.x - 1) % sz.x, p.y);
+        const ivec2 zp = ivec2(p.x, (p.y + 1) % sz.y), zm = ivec2(p.x, (p.y + sz.y - 1) % sz.y);
+        const float dv = (texelFetch(dsp, xp, 0).r - texelFetch(dsp, xm, 0).r +
+                          texelFetch(dsp, zp, 0).g - texelFetch(dsp, zm, 0).g) * inv / (2.0 * dx);
+        acc += vec3(e, e * e, dv * dv);
+    }
+    return acc;
+}
+
+void seaStatistics() {
+    const uint t = gl_LocalInvocationIndex;
+    sStat[t][0] = (pc.cascadeMask & 1u) != 0u ? cascadeSums(height0, displace0, pc.tileSize0, t) : vec3(0.0);
+    sStat[t][1] = (pc.cascadeMask & 2u) != 0u ? cascadeSums(height1, displace1, pc.tileSize1, t) : vec3(0.0);
+    sStat[t][2] = (pc.cascadeMask & 4u) != 0u ? cascadeSums(height2, displace2, pc.tileSize2, t) : vec3(0.0);
+    barrier();
+    if (t != 0u) return;
+    vec4 hs = vec4(0.0), km = vec4(0.0);
+    for (int c = 0; c < 3; ++c) {
+        vec3 a = vec3(0.0);
+        for (int k = 0; k < 64; ++k) a += sStat[k][c];
+        a *= 1.0 / 4096.0;
+        const float var = max(a.y - a.x * a.x, 0.0);
+        hs[c] = 4.0 * sqrt(var) * pc.waveScale;
+        km[c] = var > 1e-12 ? sqrt(a.z / var) : 0.0;
+    }
+    hs.w = length(hs.xyz);
+    OceanShoreDepth b = OceanShoreDepth(pc.depthAddr);
+    b.hs = hs;
+    b.km = km;
+}
+
 void main() {
+    if (pc.mode == 1u) {
+        seaStatistics();
+        return;
+    }
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     const int   res = int(pc.res);
     if (px.x >= res || px.y >= res) return;
     const float sl = float(pc.shoreLayer);
 
+    // The water's depth at this texel (0 on land; the window's own lattice).
+    OceanShoreDepth sd = OceanShoreDepth(pc.depthAddr);
+    const uint  di    = (pc.shoreLayer * pc.res + uint(px.y)) * pc.res + uint(px.x);
+    const float depth = sd.res == pc.res ? sd.depth[di] : 1.0e3;
+    const bool  surf  = depth > 0.0 && depth < kSurfDepth;
+
     // Open water: nothing to do (the band is the splash's reach and the waves'
-    // own travel, plus a texel either way).
-    if (texelFetch(shoreMap, ivec3(px, int(pc.shoreLayer)), 0).r > kBand + 2.0 * pc.texel) return;
+    // own travel, plus a texel either way), unless it is shallow enough to break.
+    const vec4 map0 = texelFetch(shoreMap, ivec3(px, int(pc.shoreLayer)), 0);
+    if (map0.r > kBand + 2.0 * pc.texel && !surf) return;
 
     const vec2 q   = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
     const vec3 s3  = surfaceAt(q);
@@ -198,6 +298,14 @@ void main() {
     const float dep    = kept ? 0.0
                               : pc.gain * clamp((impact - kImpact0) / (kImpact1 - kImpact0), 0.0, 1.0) *
                                     exp(-(d * d) / (r * r));
+    // The surf: a crest at this texel's depth nearing the breaking limit,
+    // rising or at its top (not its back), and high enough to be a sea.
+    float brk = 0.0;
+    if (surf && !kept) {
+        const float b = eta / (kCrestShare * depth);
+        brk = smoothstep(kBreak0, kBreak1, b) * smoothstep(kCrest0, kCrest1, eta) * smoothstep(-0.05, 0.05, w);
+    }
+
     if (dep > 1e-3) {
         // A surge does not break as a ribbon: in gulps along the solid,
         // quick in time (two noises over half a metre and over two, never
@@ -209,6 +317,44 @@ void main() {
         s.g = max(s.g, kAir * dep);
         s.b = max(s.b, 0.05 * dep);
         v   = mix(v, drift - n * (kThrow * impact), min(2.0 * dep, 1.0));
+    } else if (surf && (brk > 1e-3 || s.r > 0.01 || s.g > 0.01)) {
+        if (brk > 1e-3) {
+            // A breaking crest is torn as it goes: its white is uneven along
+            // the crest (one noise over a few metres, never finer than two
+            // texels), at its full share where it is most broken.
+            const float tear = sNoise(vec3(q / max(1.5, 2.0 * pc.texel) + 2.3, 0.9 * pc.timeSec + 1.7));
+            s.r = max(s.r, kBreakFoam * pc.gain * brk * mix(0.55, 1.0, tear));
+            s.g = max(s.g, kBreakAir * brk);
+            s.b = max(s.b, kBreakTurb * brk);
+        }
+        // The run-in: along the flood's direction to the nearest solid where
+        // there is one within the flood's reach (64 texels), with the waves
+        // (the wind's way) further out over a shoal.
+        const float n0l  = length(map0.gb);
+        const vec2  n0   = n0l > 1e-3 ? map0.gb / n0l : vec2(0.0);
+        const float wl   = length(drift);
+        const vec2  wind = wl > 1e-4 ? drift / wl : vec2(0.0);
+        const float near = n0l > 1e-3 ? 1.0 - smoothstep(30.0 * pc.texel, 60.0 * pc.texel, map0.r) : 0.0;
+        vec2 dir = near * n0 + (1.0 - near) * wind;
+        const float dl = length(dir);
+        dir = dl > 0.1 ? dir / dl : wind;
+        vec2 vt = drift + dir * (kBore * sqrt(9.81 * depth));
+        // The swash: in the last decimetres the waterline's own motion, up
+        // the slope while the water rises and back while it falls. The bed's
+        // slope from the depth either side (a texel's tent-smoothed depth).
+        if (depth < kSwash1 && n0l > 1e-3) {
+            const int   i0 = max(px.x - 1, 0), i1 = min(px.x + 1, res - 1);
+            const int   j0 = max(px.y - 1, 0), j1 = min(px.y + 1, res - 1);
+            const uint  row = pc.shoreLayer * pc.res;
+            const float gx = (sd.depth[(row + uint(px.y)) * pc.res + uint(i1)] -
+                              sd.depth[(row + uint(px.y)) * pc.res + uint(i0)]) / (float(i1 - i0) * pc.texel);
+            const float gz = (sd.depth[(row + uint(j1)) * pc.res + uint(px.x)] -
+                              sd.depth[(row + uint(j0)) * pc.res + uint(px.x)]) / (float(j1 - j0) * pc.texel);
+            const float slope = max(length(vec2(gx, gz)), 0.05);
+            const vec2  vs    = n0 * clamp(w / slope, -kSwashMax, kSwashMax);
+            vt = mix(vs, vt, smoothstep(kSwash0, kSwash1, depth));
+        }
+        v = mix(v, vt, 1.0 - exp(-pc.dt / kRunTau));
     } else if (s.r > 0.01 || s.g > 0.01) {
         v = mix(v, drift, 1.0 - exp(-pc.dt / kDriftTau));
     }
