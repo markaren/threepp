@@ -12,13 +12,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace threepp::vulkan {
 
     static_assert(sizeof(WakeFieldPipeline::PushConstants) == 24,
                   "WakeFieldPipeline::PushConstants must match the Pc of wake_field.comp and wake_ripple.comp (24 bytes)");
-    static_assert(sizeof(WakeFieldPipeline::ShoreCapturePush) == 48, "shore_capture.comp's Pc");
+    static_assert(sizeof(WakeFieldPipeline::ShoreCapturePush) == 56, "shore_capture.comp's Pc");
     static_assert(sizeof(WakeFieldPipeline::ShoreJfaPush) == 20, "shore_jfa.comp's Pc");
     static_assert(sizeof(WakeFieldPipeline::ShoreSourcePush) == 96, "shore_source.comp's Pc");
 
@@ -559,6 +560,18 @@ namespace threepp::vulkan {
             image(st->sourceDs, 2, st->view[3], false);// velA
             image(st->sourceDs, 3, st->shoreView[3], false);
             updateDescriptorSets(ctx_.device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+
+            for (uint32_t f = 0; f < 2; ++f) {
+                st->countBuf[f] = createBuffer(ctx_.allocator(), ctx_.device(), kShoreLayers * sizeof(uint32_t),
+                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                               VMA_MEMORY_USAGE_AUTO,
+                                               VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                ctx_.setObjectName(st->countBuf[f].handle, "ocean.shore.seedCount");
+                VmaAllocationInfo info{};
+                vmaGetAllocationInfo(ctx_.allocator(), st->countBuf[f].alloc, &info);
+                st->countPtr[f] = static_cast<uint32_t*>(info.pMappedData);
+            }
         }
         return st;
     }
@@ -603,6 +616,8 @@ namespace threepp::vulkan {
             st.captureDs = {};
             st.jfaDs     = {};
             st.sourceDs  = VK_NULL_HANDLE;
+            for (auto& b : st.countBuf) destroyBuffer(ctx_.allocator(), b);
+            st.countPtr = {};
             for (uint32_t i = 0; i < 4; ++i) {
                 if (st.shoreView[i])  vkDestroyImageView(d, st.shoreView[i], nullptr);
                 if (st.shoreImage[i]) vmaDestroyImage(ctx_.allocator(), st.shoreImage[i], st.shoreAlloc[i]);
@@ -712,6 +727,10 @@ namespace threepp::vulkan {
         // three texels far) and no ripples.
         for (uint32_t k = 0; st.shoreOn && k < kShoreLayers; ++k) {
             const uint32_t i = st.appLayers + k;
+            if (st.shoreEmpty[k]) {// no shore in it: off (and started afresh when one comes into it)
+                st.prevSize[i] = 0.0f;
+                continue;
+            }
             WakePatchGpu& g = tb.patches[i];
             const float size  = st.shoreSize[k];
             const float texel = size / static_cast<float>(st.res);
@@ -1004,6 +1023,17 @@ namespace threepp::vulkan {
             sourceDisplaceLayout_ = in.displaceLayout;
         }
 
+        // The counts of maps taken when this frame's slot last came round:
+        // that frame's fence has been waited.
+        const uint32_t f = in.frame % 2u;
+        ++st.shoreCalls;
+        for (uint32_t k = 0; k < kShoreLayers; ++k) {
+            if (st.countSlot[k] != static_cast<int32_t>(f) || st.countCall[k] >= st.shoreCalls || !st.countPtr[f]) continue;
+            invalidateHostReads(ctx_.allocator(), st.countBuf[f].alloc, 0, kShoreLayers * sizeof(uint32_t));
+            st.shoreEmpty[k] = st.countPtr[f][k] == 0u;
+            st.countSlot[k]  = -1;
+        }
+
         const uint32_t groups = (st.res + 7u) / 8u;
         std::array<float, kShoreLayers> ox{}, oz{}, texel{};
         for (uint32_t k = 0; k < kShoreLayers; ++k) {// as record() placed them
@@ -1021,7 +1051,6 @@ namespace threepp::vulkan {
         if (captureMask != 0u) {
             // The TLAS into this frame's capture set (that set's last frame is
             // done with it: its fence was waited before this one was recorded).
-            const uint32_t f = in.frame % 2u;
             if (st.captureTlas[f] != in.tlas) {
                 VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
                 asInfo.sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
@@ -1038,6 +1067,12 @@ namespace threepp::vulkan {
                 st.captureTlas[f] = in.tlas;
             }
             // (the source's last reads of the map, last frame, are behind the frame's entry barrier)
+            // The counts start from nothing.
+            for (uint32_t k = 0; k < kShoreLayers; ++k) {
+                if (captureMask & (1u << k)) vkCmdFillBuffer(cb, st.countBuf[f].handle, k * sizeof(uint32_t), sizeof(uint32_t), 0u);
+            }
+            memoryBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, capturePipeline_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, capturePipeLayout_, 0, 1, &st.captureDs[f], 0,
                                     nullptr);
@@ -1046,6 +1081,7 @@ namespace threepp::vulkan {
                 ShoreCapturePush cp{};
                 cp.geomAddr  = in.geomAddr;
                 cp.hullAddr  = in.hullCount > 0u ? in.hullAddr : 0u;
+                cp.countAddr = st.countBuf[f].address;
                 cp.originX   = ox[k];
                 cp.originZ   = oz[k];
                 cp.texel     = texel[k];
@@ -1081,9 +1117,11 @@ namespace threepp::vulkan {
             }
             for (uint32_t k = 0; k < kShoreLayers; ++k) {
                 if (!(captureMask & (1u << k))) continue;
-                st.mapValid[k] = true;
-                st.mapX[k]     = ox[k];
-                st.mapZ[k]     = oz[k];
+                st.mapValid[k]  = true;
+                st.mapX[k]      = ox[k];
+                st.mapZ[k]      = oz[k];
+                st.countSlot[k] = static_cast<int32_t>(f);
+                st.countCall[k] = st.shoreCalls;
             }
             st.mapTlas      = in.tlas;
             st.mapInstances = in.tlasInstances;
@@ -1099,6 +1137,10 @@ namespace threepp::vulkan {
         const VkDescriptorSet sets[2] = {in.displaceSet, st.sourceDs};
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, sourcePipeLayout_, 0, 2, sets, 0, nullptr);
         for (uint32_t k = 0; k < kShoreLayers; ++k) {
+            if (st.shoreEmpty[k]) {// nothing to lay foam on; nothing of its parcels to keep
+                st.lastX[k] = st.lastZ[k] = std::numeric_limits<float>::quiet_NaN();
+                continue;
+            }
             ShoreSourcePush sp{};
             sp.tileSize0   = in.tileSize[0];
             sp.tileSize1   = in.tileSize[1];

@@ -132,10 +132,11 @@ namespace threepp::vulkan {
             uint32_t        _pad;
         };
 
-        // shore_capture.comp's push block (48 bytes).
+        // shore_capture.comp's push block (56 bytes).
         struct ShoreCapturePush {
             VkDeviceAddress geomAddr;
             VkDeviceAddress hullAddr;
+            VkDeviceAddress countAddr;
             float    originX, originZ, texel, restY;
             uint32_t res, layer, hullCount, _pad;
         };
@@ -221,6 +222,17 @@ namespace threepp::vulkan {
             std::array<VkAccelerationStructureKHR, 2> captureTlas{};
             std::array<VkDescriptorSet, 2> jfaDs{};    // A -> B, B -> A
             VkDescriptorSet sourceDs = VK_NULL_HANDLE;
+            // Each map's seed count, for the host: a uint a window, a buffer a
+            // frame in flight (read back when that frame's slot comes round,
+            // its fence waited). A window whose map has no seed holds no
+            // shore: it is not stepped, fed or sampled (shoreEmpty), so a
+            // scene with nothing at its waterline pays for the maps alone.
+            std::array<Buffer, 2>    countBuf{};
+            std::array<uint32_t*, 2> countPtr{};
+            std::array<int32_t, kShoreLayers>  countSlot{-1, -1};// the slot a map's count is pending in; -1 none
+            std::array<uint32_t, kShoreLayers> countCall{};      // the shore call it was taken on
+            std::array<bool, kShoreLayers>     shoreEmpty{};     // the last counted map had no seed
+            uint32_t shoreCalls = 0;
 
             // The ripples (rippleRes 0 = this field has none).
             uint32_t rippleRes  = 0;

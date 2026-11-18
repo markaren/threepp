@@ -20,7 +20,7 @@
 //     impact = max(u . n, 0) + 0.5 max(w, 0)     (n toward the solid)
 //
 // and the surge breaks on the solid and falls back white: foam and air in
-// proportion to smoothstep(kImpact0, kImpact1, impact), over a reach that
+// proportion to the impact past kImpact0 (full at kImpact1), over a reach that
 // widens with the impact (kReach0 + kReachGain impact), thrown back off the
 // solid at half the impact. So the collar comes with each wave that runs into
 // a pile or a wall, grows with the sea, and is nothing on a calm one (a sea of
@@ -77,11 +77,12 @@ layout(push_constant, scalar) uniform Pc {
     float _pad2;
 } pc;
 
-// LOOK and calibration constants (2026-11-18, second round: a fetch-limited
+// LOOK and calibration constants (2026-11-18, third round). A fetch-limited
 // fjord sea drives at peaks of about 0.3 m/s at 5 m/s of wind, 0.5 at 10 and
-// 0.7 at 15, so the ramp spans them and a light air's ripples lay nothing).
-const float kImpact0   = 0.04;// m/s: a sea that drives slower lays nothing
-const float kImpact1   = 0.9; // m/s: full foam
+// 0.7 at 15, a light air's ripples at a few centimetres a second: the ramp
+// is linear over that span (a smoothstep's slow start left 5 m/s bare).
+const float kImpact0   = 0.02;// m/s: a sea that drives slower lays nothing
+const float kImpact1   = 0.7; // m/s: full foam
 const float kReach0    = 0.3; // m: the splash's reach off the solid
 const float kReachGain = 1.0; // s: ... and how it widens with the impact (m per m/s)
 const float kAir       = 0.2; // the air a surge takes down, a share of its foam: the pale water under a collar
@@ -195,7 +196,8 @@ void main() {
     const float d      = max(dist - 0.5 * pc.texel, 0.0);
     const float r      = max(reach, 0.75 * pc.texel);
     const float dep    = kept ? 0.0
-                              : pc.gain * smoothstep(kImpact0, kImpact1, impact) * exp(-(d * d) / (r * r));
+                              : pc.gain * clamp((impact - kImpact0) / (kImpact1 - kImpact0), 0.0, 1.0) *
+                                    exp(-(d * d) / (r * r));
     if (dep > 1e-3) {
         // A surge does not break as a ribbon: in gulps along the solid,
         // quick in time (two noises over half a metre and over two, never

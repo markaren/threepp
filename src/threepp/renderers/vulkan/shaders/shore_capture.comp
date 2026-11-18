@@ -36,7 +36,8 @@
 //
 // When: a window is taken again when it moves (the camera has crossed an
 // eighth of it) and when the scene's structure changes; a still scene's shore
-// is taken once. Like particle_height_bake.comp, this runs ahead of the frame's
+// is taken once. Its seeds are counted for the host, and a window with none
+// is not stepped (WakeFieldPipeline::recordShore). Like particle_height_bake.comp, this runs ahead of the frame's
 // TLAS refit and traces the structure as the last frame left it, which is the
 // still scene this slice is of.
 
@@ -54,11 +55,15 @@ layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray shoreMap;
 #include "geometry_desc.glsl"
 layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer GeomBuf { GeometryDesc g[]; };
 layout(buffer_reference, scalar) readonly buffer OceanHullBuf { OceanHull h[]; };
+// The seeds this window has, counted for the host: a window with none is
+// not stepped at all (WakeFieldPipeline::recordShore).
+layout(buffer_reference, scalar) buffer CountBuf { uint n[]; };
 
-// 48 bytes, mirrored by WakeFieldPipeline::ShoreCapturePush.
+// 56 bytes, mirrored by WakeFieldPipeline::ShoreCapturePush.
 layout(push_constant, scalar) uniform Pc {
     uint64_t geomAddr; // the frame's GeometryDesc array (foamAddress marks the water, flags the moved)
     uint64_t hullAddr; // OceanHull[hullCount], or 0
+    uint64_t countAddr;// a uint a window: its seeds are added to n[layer]
     float    originX;  // the window's world min corner
     float    originZ;
     float    texel;    // m
@@ -99,9 +104,8 @@ float traceSolid(vec3 o, vec3 d, float tMax, out bool front) {
     return -1.0;
 }
 
-void main() {
-    const uvec2 px = gl_GlobalInvocationID.xy;
-    if (px.x >= pc.res || px.y >= pc.res) return;
+// This texel's slice; true where it is a seed.
+bool capture(uvec2 px) {
     const ivec3 dst = ivec3(px, int(pc.layer));
     const vec2  xz  = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
 
@@ -112,7 +116,7 @@ void main() {
             if (hullLocal(hulls.h[k], xz).z < 1.0) {
                 imageStore(seeds, dst, uvec4(kNoSeed));
                 imageStore(shoreMap, dst, vec4(0.0, 0.0, 0.0, -kDeep));
-                return;
+                return false;
             }
         }
     }
@@ -137,4 +141,18 @@ void main() {
     const bool seed = inside || crossed || bed >= -kAwash;
     imageStore(seeds, dst, uvec4(seed ? (px.x | (px.y << 16)) : kNoSeed));
     imageStore(shoreMap, dst, vec4(0.0, 0.0, 0.0, bed));
+    return seed;
+}
+
+shared uint wgSeeds;
+
+void main() {
+    if (gl_LocalInvocationIndex == 0u) wgSeeds = 0u;
+    barrier();
+    const uvec2 px = gl_GlobalInvocationID.xy;
+    if (px.x < pc.res && px.y < pc.res && capture(px)) atomicAdd(wgSeeds, 1u);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u && wgSeeds > 0u && pc.countAddr != 0ul) {
+        atomicAdd(CountBuf(pc.countAddr).n[pc.layer], wgSeeds);
+    }
 }
