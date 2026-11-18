@@ -11,7 +11,14 @@
     // reflection rays. Floored at 1e-3 (scenes within ~100 units unchanged),
     // grows ~linearly past that so the sun's tmin=0.0 shadow ray clears the
     // surface even when float precision at large |worldPos| swallows 1mm.
-    SHADOW_EPS = max(1e-3, max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)) * 1e-5);
+    // It grows with the distance from the eye as well: worldPos is rebuilt from
+    // the depth buffer through the projection, and that error grows with the
+    // distance, not with |worldPos|. A roof a kilometre off near the origin
+    // rebuilt a millimetre or more inside itself, its sun ray hit the roof, and
+    // which pixels did so changed with the sub-pixel jitter: far surfaces
+    // flickered in and out of their own shadow (1 cm at 1 km).
+    SHADOW_EPS = max(1e-3, max(max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)),
+                                length(viewH.xyz / viewH.w)) * 1e-5);
 
     vec3        N         = normalize(nTap.xyz * 2.0 - 1.0);// mutable: FFT chop below
     // The RASTERISED normal, captured before the ocean branch below flips and tilts

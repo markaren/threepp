@@ -128,8 +128,10 @@ void main() {
 
     // Per-pixel self-intersection offset (matches the shade's SHADOW_EPS: a
     // float32 ULP grows with |coord|, so a fixed 1 mm offset self-hits at large
-    // world scale — the known large-scene acne bug).
-    const float eps = max(1e-3, max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)) * 1e-5);
+    // world scale — the known large-scene acne bug — and the position rebuilt
+    // from depth is off by more the farther it lies from the eye).
+    const float eps = max(1e-3, max(max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)),
+                                    length(viewH.xyz / viewH.w)) * 1e-5);
     const vec3  orig = worldPos + N * eps;
 
     // Hemisphere basis.
