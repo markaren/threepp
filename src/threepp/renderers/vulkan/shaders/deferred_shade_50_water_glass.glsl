@@ -383,9 +383,12 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         // and Munk 1954; Bruneton, Neyret and Holzschuch 2010). The variance
         // is the one the glitter's lobe already takes, alpha^2 with
         // alpha = effRough^2. Near water, where the drawn normal resolves the
-        // waves, it is next to nothing and F is the mirror's.
+        // waves, it is next to nothing and F is the mirror's. Only the slope
+        // along the line of sight tilts the cosine, so it is that axis's
+        // variance (gWaterLobeAlong of it), as both axes' measure.
         const float aF = pm.roughness * pm.roughness + slopeVarSq;
-        F = waterFacetFresnelMean(NdotV, aF * aF, r0);
+        const float r4 = pm.roughness * pm.roughness * pm.roughness * pm.roughness;
+        F = waterFacetFresnelMean(NdotV, r4 + 2.0 * gWaterLobeAlong * max(aF * aF - r4, 0.0), r0);
     }
 
     // Effective specular roughness = base water roughness ⊕ the sub-pixel chop
@@ -508,8 +511,28 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // rough water (white flecks). The lifts run again after the fold, the last
     // guard. Where N leans past V (the back of a resolved wave) no facet is
     // drawn: the mirror, as before.
+    // The lobe is not round: the pixel's footprint on the water is a strip
+    // along the line of sight, and the slope it banks lies along it and
+    // across it in the shares main() found (gWaterLobeAlong, THE FOOTPRINT'S
+    // TWO AXES). So the slope is drawn in the frame of the line of sight on
+    // the water (T along it, B across), each axis with its own alpha
+    // (alpha_x^2 = 2 sigma_x^2), and Smith's masking takes the alpha a
+    // direction's azimuth projects, alpha(phi)^2 = cos^2 phi alpha_T^2 +
+    // sin^2 phi alpha_B^2 (Heitz 2014, "Understanding the Masking-Shadowing
+    // Function in Microfacet-Based BRDFs", JCGT 3(2), section 5.3). The
+    // reflection itself stretches along the line of sight without it (a slope
+    // s along it turns the ray's elevation by 2s, one across turns its
+    // azimuth by 2s tan(elevation), little at a grazing view); the split
+    // keeps the lobe from taking across the line of sight the variance only
+    // the long axis of the strip averaged.
     bool  lobeDrawn = false;
     float lobeW     = 1.0;// the drawn facet's weight on the reflection; 1 for the mirror
+    // The lobe's two alphas (both effRough^2 when round).
+    const float aB  = effRough * effRough;
+    const float r4L = pm.roughness * pm.roughness * pm.roughness * pm.roughness;
+    const float vBL = max(aB * aB - r4L, 0.0);
+    const float aT  = sqrt(r4L + 2.0 * gWaterLobeAlong * vBL);
+    const float aX  = sqrt(r4L + 2.0 * (1.0 - gWaterLobeAlong) * vBL);
     if (kRR) {
         const float vN = dot(V, N);
         if (vN > 1e-4) {
@@ -518,14 +541,17 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // taken at their centres, so the radius stops at 3.5 deviations.
             const vec2  bn  = vec2(giBlueNoiseRR(uvec2(px), frame, 2u), giBlueNoiseRR(uvec2(px), frame, 3u));
             const vec2  u   = (floor(bn * 255.0 + 0.5) + 0.5) / 256.0;
-            const vec3  tUp = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-            const vec3  T   = normalize(cross(tUp, N));
-            const vec3  B   = cross(N, T);
-            const float aB  = effRough * effRough;
-            const vec2  vt  = vec2(dot(V, T), dot(V, B));
-            // Box-Muller: an axis's deviation is aB / sqrt(2), so its radius
-            // sqrt(-2 ln u) a deviation is aB sqrt(-ln u).
-            vec2 s = aB * sqrt(-log(u.x)) * vec2(cos(TWO_PI * u.y), sin(TWO_PI * u.y));
+            // T: the line of sight on the plane of N (V's own tangent part);
+            // straight down any tangent will do.
+            const vec3  vTan = V - N * vN;
+            const float vTl  = length(vTan);
+            const vec3  tUp  = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+            const vec3  T    = vTl > 1e-5 ? vTan / vTl : normalize(cross(tUp, N));
+            const vec3  B    = cross(N, T);
+            const vec2  vt   = vec2(dot(V, T), dot(V, B));
+            // Box-Muller: an axis's deviation is alpha / sqrt(2), so its
+            // radius sqrt(-2 ln u) a deviation is alpha sqrt(-ln u).
+            vec2 s = sqrt(-log(u.x)) * vec2(aT * cos(TWO_PI * u.y), aX * sin(TWO_PI * u.y));
             // (V.m) / (m.N) for the facet m ~ N - s.x T - s.y B.
             float vmN = vN - dot(s, vt);
             if (vmN <= 0.0) {
@@ -538,7 +564,11 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // From below F is the window's, not a mean over facets: weight 1.
             if (!below) {
                 const float Fm = r0 + (1.0 - r0) * pow(1.0 - clamp(vm, 0.0, 1.0), 5.0);
-                const float w  = Fm / max(F, 1e-4) * waterBeckmannG1(vN, aB) * waterBeckmannG1(dot(Rs, N), aB) *
+                // V's azimuth is T's; the ray's own projects its alpha.
+                const vec2  rt = vec2(dot(Rs, T), dot(Rs, B));
+                const float rl = dot(rt, rt);
+                const float aR = rl > 1e-10 ? sqrt((rt.x * rt.x * aT * aT + rt.y * rt.y * aX * aX) / rl) : aT;
+                const float w  = Fm / max(F, 1e-4) * waterBeckmannG1(vN, aT) * waterBeckmannG1(dot(Rs, N), aR) *
                                 (vmN / vN) * (vmN >= 2.0 * vN ? 0.5 : 1.0);
                 lobeW = min(w, 4.0);
             }
@@ -606,7 +636,13 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     gTraceSkipWater = false;
     if (kRR) {
         gRRSpecF     = vec3(F);
-        gRRSpecRough = effRough;
+        // RR takes one roughness, a round lobe's: the one of the same solid
+        // angle as the drawn lobe (alpha = sqrt(alpha_T alpha_B), the
+        // Gaussian's area in slope space). The long axis would have it blur
+        // across the line of sight the streaks the narrow one keeps; the
+        // short one would leave the draws along it as grain. A round lobe is
+        // effRough itself.
+        gRRSpecRough = sqrt(sqrt(aT * aX));
         gRRReflHitT  = gTraceHitT;
     }
     // Reflected GEOMETRY strength, on specularIntensity (KHR_materials_specular).

@@ -122,7 +122,16 @@
             // and two independent fields summed over sqrt(2) have the
             // variance and the spectrum of one, and no common period. Its
             // slope comes back through the transpose of its rotation; the
-            // moments add: the mean slopes sum, the mean squares average.
+            // mean slopes sum over sqrt(2), and the spread under the pixel is
+            // the mean of the two spreads: the two samples are independent,
+            // so their covariance under a footprint is nothing. (Taken as the
+            // mean squares averaged less the summed mean's square, it lost the
+            // cross term g1.g2 of the two means: on the near water, where each
+            // read is one point of its sea, a spread of -g1.g2, as large as
+            // the drawn waves' own slope at half the pixels and nothing at the
+            // rest: the reflection's lobe there scattered what the drawn
+            // ripples should have mirrored, the coloured streaks of a red
+            // house in the ripples smoothed away.)
             const vec2  rD  = vec2(0.9393727, 0.3428978);// cos, sin of 0.35 rad
             const float sD  = 0.77;
             const vec2  uvD = vec2(rD.x * uvW.x - rD.y * uvW.y, rD.y * uvW.x + rD.x * uvW.y) * sD + vec2(0.37, 0.61);
@@ -133,7 +142,18 @@
                                            vec2(rD.x * dX.x - rD.y * dX.y, rD.y * dX.x + rD.x * dX.y));
             const vec2  gD   = vec2(rD.x * momD.g + rD.y * momD.b, -rD.y * momD.g + rD.x * momD.b);
             gKept    = (mom.gb + gD) * 0.70710678;
-            slopeVar = max(0.5 * (mom.a + momD.a) - dot(gKept, gKept), 0.0);
+            slopeVar = 0.5 * (max(mom.a - dot(mom.gb, mom.gb), 0.0) + max(momD.a - dot(momD.gb, momD.gb), 0.0));
+        }
+        // The part of that spread no footprint resolves, the same in every
+        // direction: one texel's own (the fold fade's remainder and the
+        // banked short waves, ocean_chop_moments.comp). The rest is the
+        // cascade's drawn waves that this footprint averages, and that part
+        // has a direction (THE FOOTPRINT'S TWO AXES, below).
+        float slopeVarSub;
+        {
+            const ivec2 tsz = textureSize(oceanFineHeight, 0);
+            const vec4  m0  = texelFetch(oceanFineHeight, ivec2(fract(uvW) * vec2(tsz)) % tsz, 0);
+            slopeVarSub = min(max(m0.a - dot(m0.gb, m0.gb), 0.0), slopeVar);
         }
         if ((kOceanClimate & 1u) != 0u) {
             // ── WAVE CLIMATE (DisplacedMesh::WaveClimate, spec constant 12) ─
@@ -147,8 +167,9 @@
             // map changes over tens of metres, so its own gradient is left out.
             const float s  = oceanClimate(oceanClimateMap, wPos - gCrestDisp).z;
             const float bk = oceanClimateBanked(oceanClimateMap);
-            gKept    *= s;
-            slopeVar  = s * s * max(slopeVar - bk, 0.0) + min(slopeVar, bk);
+            gKept       *= s;
+            slopeVar     = s * s * max(slopeVar - bk, 0.0) + min(slopeVar, bk);
+            slopeVarSub  = s * s * max(slopeVarSub - bk, 0.0) + min(slopeVarSub, bk);
         }
         // ── WAKE FIELD ────────────────────────────────────────────────────────
         // Where something has churned the water the short wind waves are gone
@@ -210,15 +231,112 @@
         // banked or not; the boil's and the producers' ripples' unresolved
         // variance (the same both-axes measure) goes in beside them.
         const float r2   = pm.roughness * pm.roughness;
-        const float vTot = slopeVar * wakeCalm * wakeCalm + wakeBoilVar;
-        fineKernelSq = sqrt(r2 * r2 + vTot) - r2;
+        // ── THE FOOTPRINT'S TWO AXES ────────────────────────────────────────
+        // The pixel's footprint on the water is a strip, pixAlong along the
+        // line of sight and pixWorld across it, so the drawn waves it
+        // averages are not averaged alike in every direction, and the slope
+        // they leave to the reflection's lobe has a direction too. A wave of
+        // wavenumber k at an angle phi to the line of sight has its slope
+        // along k (cos phi of it along the line of sight, sin phi across);
+        // the footprint's box keeps sinc(k cos phi La / 2) sinc(k sin phi Lc
+        // / 2) of it, and what it does not keep is banked on both axes in
+        // proportion cos^2 phi : sin^2 phi (the slope covariance of the
+        // averaged waves; LEAN mapping's second moments, Olano and Baker
+        // 2010). The moment chain holds only the trace of that covariance (a
+        // fourth channel, the mean squared slope), so its split is modelled:
+        // the cascade's slope variance spread evenly over ln k from its tile
+        // to its Nyquist (a saturated range, Phillips 1958: the slope of a
+        // k^-4 spectrum is the same each octave) and evenly over directions
+        // (the short waves' directional spread is wide, Banner 1990), the
+        // box's sinc^2 taken as exp(-(kL)^2 / 12) (the same curvature at the
+        // origin), Lc held to La / 16 (the sampler's anisotropy). It is
+        // nearly even where the strip is long against every drawn wave (a
+        // wave much shorter than La is averaged out at all but the
+        // directions square to the line of sight, whose slope is across) and
+        // leans along the line of sight where La reaches the drawn waves and
+        // Lc does not. The boil's spread and the material's go to both axes
+        // alike; the texel's own (slopeVarSub) is taken below.
+        // A FOOTPRINT UNDER A TEXEL. The fetch filters over a texel at least
+        // (bilinear), and the bilinear blend of the texels' mean squares less
+        // the square of their blended mean is the spread between the texels,
+        // which the drawn surface does not have inside one: it is smooth
+        // there (its shortest wave is six texels, the cascade's roll-off). So
+        // on the near water, where the pixel is a fraction of a texel, the
+        // read spread was a texel's whatever the pixel (on a 2 cm texel a
+        // pixel a few metres off a USV's camera banked the slope of the
+        // cascade's top octave), and the lobe drawn from it blurred the
+        // ripples the normal already drew. The same model gives the share of the band the
+        // footprint banks at its own size and at the size the fetch read
+        // (each axis held to a texel), and the drawn waves' spread is scaled
+        // by their ratio: 1 once the strip is a texel each way.
+        {
+            const float tex = pc.oceanFineTileSize / float(textureSize(oceanFineHeight, 0).x);
+            const float La  = pixAlong;
+            const float Lc  = max(pixWorld, pixAlong * (1.0 / 16.0));
+            const float LaR = max(La, tex);
+            const float LcR = max(Lc, tex);
+            const float lk0 = log(TWO_PI * invTile);
+            const float lk1 = log(PI / tex);
+            float fa = 0.0, fc = 0.0, fR = 0.0;
+            for (int i = 0; i < 6; ++i) {
+                const float k2 = exp(2.0 * mix(lk0, lk1, (float(i) + 0.5) / 6.0)) * (1.0 / 12.0);
+                for (int j = 0; j < 4; ++j) {
+                    const float ph = (float(j) + 0.5) * (0.25 * 0.5 * PI);
+                    const float c2 = cos(ph) * cos(ph);
+                    const float b  = 1.0 - exp(-k2 * (c2 * La * La + (1.0 - c2) * Lc * Lc));
+                    fa += c2 * b;
+                    fc += (1.0 - c2) * b;
+                    fR += 1.0 - exp(-k2 * (c2 * LaR * LaR + (1.0 - c2) * LcR * LcR));
+                }
+            }
+            const float shareBand = (fa + fc) > 1e-6 ? fa / (fa + fc) : 0.5;
+            const float vBand     = (slopeVar - slopeVarSub) * clamp((fa + fc) / max(fR, 1e-6), 0.0, 1.0);
+            // The texel's own spread is the short waves past the grid
+            // (centimetres: a light air's scales, the capillary peak, both
+            // about k_m = 370 rad/m, 1.7 cm). Past the texel is not past the
+            // pixel: a pixel a few metres off the camera is a centimetre
+            // across and draws a definite facet of them, not their spread.
+            // The same box model over them (a log-normal band about k_m, ln
+            // deviation 0.5, held above the grid's Nyquist; four Gauss-Hermite
+            // nodes) gives what of it lies under the pixel, and on which axis.
+            float sa = 0.0, sc = 0.0;
+            {
+                const float xg[4] = float[4](-2.3344142, -0.7419637, 0.7419637, 2.3344142);
+                const float wg[4] = float[4](0.0458759, 0.4541241, 0.4541241, 0.0458759);
+                for (int i = 0; i < 4; ++i) {
+                    const float kS = max(370.0 * exp(0.5 * xg[i]), PI / tex);
+                    const float k2 = kS * kS * (1.0 / 12.0);
+                    for (int j = 0; j < 4; ++j) {
+                        const float ph = (float(j) + 0.5) * (0.25 * 0.5 * PI);
+                        const float c2 = cos(ph) * cos(ph);
+                        const float b  = 1.0 - exp(-k2 * (c2 * La * La + (1.0 - c2) * Lc * Lc));
+                        sa += 0.25 * wg[i] * c2 * b;
+                        sc += 0.25 * wg[i] * (1.0 - c2) * b;
+                    }
+                }
+            }
+            const float vSub = slopeVarSub * (sa + sc);// 1 when all of it is under the pixel, half each axis
+            slopeVar = vSub + vBand;
+            const float vTotS  = slopeVar * wakeCalm * wakeCalm + wakeBoilVar;
+            const float vAlong = (sa * slopeVarSub + shareBand * vBand) * wakeCalm * wakeCalm + 0.5 * wakeBoilVar;
+            fineKernelSq    = sqrt(r2 * r2 + vTotS) - r2;
+            gWaterLobeAlong = vTotS > 1e-10 ? vAlong / vTotS : 0.5;
+        }
         // The footprint floor for the coarse mesh's own sub-pixel normals
         // (cascades 0+1 in the vertex normal), as on the other path, held to
         // the slope those normals carry here (oceanRasterSlopeVar).
+        const float fksDrawn  = fineKernelSq;
         const float footRough = 0.45 * smoothstep(0.25, 4.0, pixWorld);
         if (footRough > 0.0)// (near water floors at nothing: no neighbours to read)
             fineKernelSq = max(fineKernelSq, min(footRough * footRough, sqrt(oceanRasterSlopeVar(px, Nraster))));
         fineKernelSq = min(fineKernelSq, 0.25);
+        // What the floor adds is the raster normals' spread, read from the
+        // pixel's neighbours on screen: both axes alike.
+        if (fineKernelSq > fksDrawn) {
+            const float vD = (fksDrawn + r2) * (fksDrawn + r2) - r2 * r2;
+            const float vF = (fineKernelSq + r2) * (fineKernelSq + r2) - r2 * r2;
+            gWaterLobeAlong = (gWaterLobeAlong * vD + 0.5 * (vF - vD)) / max(vF, 1e-10);
+        }
       } else {
         const float invTile = 1.0 / pc.oceanFineTileSize;
         const float eps     = pc.oceanFineTileSize / 32.0;
