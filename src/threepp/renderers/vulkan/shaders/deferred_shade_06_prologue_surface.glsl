@@ -292,8 +292,8 @@
             const float shareBand = (fa + fc) > 1e-6 ? fa / (fa + fc) : 0.5;
             const float vBand     = (slopeVar - slopeVarSub) * clamp((fa + fc) / max(fR, 1e-6), 0.0, 1.0);
             // The texel's own spread is the short waves past the grid
-            // (centimetres: a light air's scales, the capillary peak, both
-            // about k_m = 370 rad/m, 1.7 cm). Past the texel is not past the
+            // (centimetres: the short-wave option's capillary peak, about
+            // k_m = 370 rad/m, 1.7 cm). Past the texel is not past the
             // pixel: a pixel a few metres off the camera is a centimetre
             // across and draws a definite facet of them, not their spread.
             // The same box model over them (a log-normal band about k_m, ln
@@ -321,6 +321,38 @@
             const float vAlong = (sa * slopeVarSub + shareBand * vBand) * wakeCalm * wakeCalm + 0.5 * wakeBoilVar;
             fineKernelSq    = sqrt(r2 * r2 + vTotS) - r2;
             gWaterLobeAlong = vTotS > 1e-10 ? vAlong / vTotS : 0.5;
+            // ── THE LOBE'S SHARE ────────────────────────────────────────────
+            // How much of that spread the reflection's lobe draws (the glint
+            // and the facet Fresnel take all of it). The spread is under the
+            // pixel, but under a pixel that shows the drawn waves it is the
+            // centimetre waves riding on each drawn facet (the short-wave
+            // option's capillaries, under any pixel past a few metres) and
+            // the top of the cascade the strip just reaches, and drawn as a
+            // lobe it smoothed each drawn facet's crisp mirror of the shore
+            // and the sky into an even sheen at every wind and every
+            // distance: on the near water of a USV's camera at 10 m/s the
+            // high-pass detail fell to 40 %. A still with the sea's clock
+            // held for 300 frames of Ray Reconstruction's history, and the
+            // same lobe integrated by 64 rays a pixel with no noise for RR to
+            // remove, both kept that loss: it is the lobe's width, not the
+            // denoiser. So the lobe draws the spread as far as the pixel has
+            // averaged the drawn waves away: the share the strip's long axis
+            // banks of the drawn cascade's slope (fa over the same samples'
+            // weight, the sum of cos^2 phi over them: 12; the box model
+            // above), squared. Squared because what makes the drawn facets'
+            // reflections read is the bulk of the drawn slope, not its top
+            // octave: 10 m from a camera at a USV's height the strip banks a
+            // fifth of the cascade (its 15 to 30 cm waves), and a fifth of
+            // the capillaries' spread drawn there still smoothed the
+            // reflections of the metre waves under it. So: nothing where a
+            // pixel spans a few centimetres of water (each drawn facet's
+            // mirror, as before the lobe), a twentieth at 10 m, a quarter at
+            // 20 m, and all of it at range, where the pixel's strip runs over
+            // the drawn waves and the sea is the even sheen that darkens
+            // under the land. It grows with the footprint, so it has no edge
+            // on the water.
+            const float bankedAlong = clamp(fa * (1.0 / 12.0), 0.0, 1.0);
+            gWaterLobeShare = bankedAlong * bankedAlong;
         }
         // The footprint floor for the coarse mesh's own sub-pixel normals
         // (cascades 0+1 in the vertex normal), as on the other path, held to
@@ -336,6 +368,9 @@
             const float vD = (fksDrawn + r2) * (fksDrawn + r2) - r2 * r2;
             const float vF = (fineKernelSq + r2) * (fineKernelSq + r2) - r2 * r2;
             gWaterLobeAlong = (gWaterLobeAlong * vD + 0.5 * (vF - vD)) / max(vF, 1e-10);
+            // The raster normals' spread is waves the pixel cannot show: the
+            // lobe draws all of it.
+            gWaterLobeShare = (gWaterLobeShare * vD + (vF - vD)) / max(vF, 1e-10);
         }
       } else {
         const float invTile = 1.0 / pc.oceanFineTileSize;

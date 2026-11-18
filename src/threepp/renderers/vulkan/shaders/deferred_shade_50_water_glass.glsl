@@ -527,12 +527,18 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // the long axis of the strip averaged.
     bool  lobeDrawn = false;
     float lobeW     = 1.0;// the drawn facet's weight on the reflection; 1 for the mirror
-    // The lobe's two alphas (both effRough^2 when round).
+    // The lobe draws the banked spread in the share main() found (THE LOBE'S
+    // SHARE): where the pixel shows the drawn waves, each drawn facet's own
+    // mirror; the whole spread where it averages them away. The glint and F
+    // above keep all of it.
+    // The lobe's two alphas (both effRough^2 when round and whole).
     const float aB  = effRough * effRough;
     const float r4L = pm.roughness * pm.roughness * pm.roughness * pm.roughness;
-    const float vBL = max(aB * aB - r4L, 0.0);
+    const float vBL = max(aB * aB - r4L, 0.0) * gWaterLobeShare;
     const float aT  = sqrt(r4L + 2.0 * gWaterLobeAlong * vBL);
     const float aX  = sqrt(r4L + 2.0 * (1.0 - gWaterLobeAlong) * vBL);
+    // The spread the lobe leaves to the sky's mip (below), alpha^2 both axes.
+    const float vRest = max(aB * aB - r4L, 0.0) * (1.0 - gWaterLobeShare);
     if (kRR) {
         const float vN = dot(V, N);
         if (vN > 1e-4) {
@@ -599,8 +605,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     const float reflLod = max(0.12, effRough) * maxLod;
     // A drawn ray carries the lobe in its direction: one that misses reads the
     // sky at the near-water floor's mip, not the lobe's blur a second time (the
-    // glass's missLod under RR). The transmitted window below keeps reflLod.
-    const float reflMissLod = lobeDrawn ? 0.12 * maxLod : reflLod;
+    // glass's missLod under RR), but for the spread the lobe leaves undrawn
+    // (THE LOBE'S SHARE), which the mip blurs as before: reflLod where the
+    // lobe draws nothing. The transmitted window below keeps reflLod.
+    const float reflMissLod = lobeDrawn ? max(0.12, sqrt(sqrt(r4L + vRest))) * maxLod : reflLod;
     // Offset along the MACRO normal, not the tilted N: on a coarse water mesh
     // the shading normal can lean far enough from the triangle plane that a
     // fixed offset along it fails to clear the neighbouring facet.
@@ -640,9 +648,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         // angle as the drawn lobe (alpha = sqrt(alpha_T alpha_B), the
         // Gaussian's area in slope space). The long axis would have it blur
         // across the line of sight the streaks the narrow one keeps; the
-        // short one would leave the draws along it as grain. A round lobe is
-        // effRough itself.
-        gRRSpecRough = sqrt(sqrt(aT * aX));
+        // short one would leave the draws along it as grain. The spread the
+        // lobe leaves to the sky's mip goes in beside it (alpha^2 adds), so a
+        // round, whole lobe and a lobe that draws nothing are both effRough.
+        gRRSpecRough = sqrt(sqrt(aT * aX + vRest));
         gRRReflHitT  = gTraceHitT;
     }
     // Reflected GEOMETRY strength, on specularIntensity (KHR_materials_specular).
