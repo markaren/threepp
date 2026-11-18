@@ -77,11 +77,14 @@ layout(push_constant, scalar) uniform Pc {
     float _pad2;
 } pc;
 
-// LOOK and calibration constants (2026-11-18, first round).
-const float kImpact0   = 0.03;// m/s: a sea that drives slower lays nothing
-const float kImpact1   = 0.45;// m/s: full foam
+// LOOK and calibration constants (2026-11-18, second round: a fetch-limited
+// fjord sea drives at peaks of about 0.3 m/s at 5 m/s of wind, 0.5 at 10 and
+// 0.7 at 15, so the ramp spans them and a light air's ripples lay nothing).
+const float kImpact0   = 0.04;// m/s: a sea that drives slower lays nothing
+const float kImpact1   = 0.9; // m/s: full foam
 const float kReach0    = 0.3; // m: the splash's reach off the solid
-const float kReachGain = 1.2; // s: ... and how it widens with the impact (m per m/s)
+const float kReachGain = 1.0; // s: ... and how it widens with the impact (m per m/s)
+const float kAir       = 0.3; // the air a surge takes down, a share of its foam: the pale water under a collar
 const float kThrow     = 0.5; // the throw off the solid, a share of the impact
 const float kDriftTau  = 1.5; // s: foam takes the wind's drift over this
 // The furthest a deposit is ever laid from the solid, with the waves' own
@@ -183,16 +186,21 @@ void main() {
     const float impact = max(dot(u, n), 0.0) + 0.5 * max(w, 0.0);
     const float reach  = kReach0 + kReachGain * min(impact, 1.0);
     const bool  kept   = pc.keepHalf > 0.0 && all(lessThan(abs(q - vec2(pc.keepX, pc.keepZ)), vec2(pc.keepHalf)));
+    // The distance is to the nearest solid texel's centre; the solid's face
+    // lies about half a texel nearer (a far window's 2 m texels would
+    // otherwise lay its whole collar on the land side of the line).
+    const float d      = max(dist - 0.5 * pc.texel, 0.0);
     const float dep    = kept ? 0.0
-                              : pc.gain * smoothstep(kImpact0, kImpact1, impact) * exp(-(dist * dist) / (reach * reach));
+                              : pc.gain * smoothstep(kImpact0, kImpact1, impact) * exp(-(d * d) / (reach * reach));
     if (dep > 1e-3) {
         // A surge does not break as a ribbon: in gulps along the solid,
-        // quick in time (two noises over half a metre and over two).
-        const float g1   = sNoise(vec3(x / 0.5 + 7.1, 1.9 * pc.timeSec));
-        const float g2   = sNoise(vec3(x / 2.0 - 3.3, 0.7 * pc.timeSec + 4.0));
+        // quick in time (two noises over half a metre and over two, never
+        // finer than the window's texel).
+        const float g1   = sNoise(vec3(x / max(0.5, pc.texel) + 7.1, 1.9 * pc.timeSec));
+        const float g2   = sNoise(vec3(x / max(2.0, 2.0 * pc.texel) - 3.3, 0.7 * pc.timeSec + 4.0));
         const float gulp = 0.6 * g1 + 0.4 * g2;
         s.r = max(s.r, 0.85 * dep * smoothstep(0.25, 0.65, gulp));
-        s.g = max(s.g, 0.6 * dep);
+        s.g = max(s.g, kAir * dep);
         s.b = max(s.b, 0.05 * dep);
         v   = mix(v, drift - n * (kThrow * impact), min(2.0 * dep, 1.0));
     } else if (s.r > 0.01 || s.g > 0.01) {
