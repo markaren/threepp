@@ -195,6 +195,15 @@ vec4 gWake = vec4(0.0);
 float gWakeAlbedo = 1.0;
 // The foam level its aerated water carries (WakeField::lace).
 float gWakeLace = 0.0;
+// The share of the slope variance main() banked out of a water pixel's normal
+// that lies along the line of sight (the rest lies across it), for
+// shadeWater's reflection lobe and facet Fresnel: 0.5 is the same both ways.
+float gWaterLobeAlong = 0.5;
+// The share of that banked variance shadeWater's reflection lobe draws (THE
+// LOBE'S SHARE, deferred_shade_06): 0 where the pixel shows the drawn waves
+// (the reflection is their mirror), 1 where it averages them away. The glint
+// and the facet Fresnel take all of it.
+float gWaterLobeShare = 1.0;
 // Crest foam (DisplacedMesh::Params::crestFoam; read only where kOceanCrestFoam
 // is set, stand-ins bound otherwise). oceanCrestFoam is the foam on the water's
 // REST coordinates (foam_crest.comp): R16F over one oceanFoamTileSize, REPEAT,
