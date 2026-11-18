@@ -22,9 +22,12 @@
 //           capture left (kept).
 //   mode 2  the window's DEPTH (ocean_shore_depth.glsl), from the bed the
 //           capture left: over water the depth under the rest level, a tent
-//           over the texel and its eight neighbours that are water (a bed
-//           sounded at a texel's centre alone is noisy at a pile's or a
-//           boulder's edge); inside a solid the deepest water among its
+//           kDepthReach either way over the texels that are water (a wave
+//           feels the bed over a good part of its length, not under one
+//           point, and a bed sounded at a texel's centre alone is noisy at a
+//           pile's or a boulder's edge; at a waterline it leans to the water
+//           before it, so the last decimetres keep a little sea and the
+//           waterline moves); inside a solid the deepest water among its
 //           neighbours, so a pile or a footing standing in deep water does
 //           not calm the sea round it, and a beach's waterline is as shallow
 //           as the water before it. 0 where no water is near (inland). The
@@ -51,6 +54,7 @@ layout(push_constant, scalar) uniform Pc {
 
 const uint  kNoSeed = 0xffffffffu;
 const float kFar    = 1.0e4;// m: no seed within reach
+const float kDepthReach = 1.5;// m: the depth's tent reaches this far either way (mode 2)
 
 ivec2 unpackSeed(uint s) { return ivec2(int(s & 0xffffu), int(s >> 16)); }
 
@@ -91,13 +95,17 @@ void main() {
         const float bed = imageLoad(shoreMap, ivec3(px, li)).a;
         float d = 0.0;
         if (bed <= 0.0) {
+            // A tent of kDepthReach a side over the water's texels: two taps
+            // either way (at a quarter metre, three texels apart), one at two.
+            const int n    = clamp(int(round(0.5 * kDepthReach / pc.texel)), 1, 2);
+            const int step = max(int(round(kDepthReach / (float(n) * pc.texel))), 1);
             float sw = 0.0, sd = 0.0;
-            for (int j = -1; j <= 1; ++j) {
-                for (int i = -1; i <= 1; ++i) {
-                    const ivec2 q = clamp(px + ivec2(i, j), ivec2(0), ivec2(res - 1));
+            for (int j = -n; j <= n; ++j) {
+                for (int i = -n; i <= n; ++i) {
+                    const ivec2 q = clamp(px + ivec2(i, j) * step, ivec2(0), ivec2(res - 1));
                     const float b = imageLoad(shoreMap, ivec3(q, li)).a;
                     if (b > 0.0) continue;
-                    const float w = float((2 - abs(i)) * (2 - abs(j)));
+                    const float w = float((n + 1 - abs(i)) * (n + 1 - abs(j)));
                     sw += w;
                     sd += w * -b;
                 }

@@ -17,7 +17,10 @@
 // pixel's rest point), so a texel is a parcel of water: rest point q, drawn at
 // x = q + D(q, t) with height eta(q, t), from the ocean's own cascades (the
 // displace set, bound as set 0). Its velocity is how those moved since the last
-// step: u = dD/dt over the water, w = d eta/dt up. Where x lies within a
+// step: u = dD/dt over the water, w = d eta/dt up, of the INCOMING sea (the
+// cascades before the depth's gains: over a shelf the drawn sea is calmed
+// because its waves broke, and the water they broke into still drives into the
+// rock behind it). Where x (drawn, the gains taken) lies within a
 // splash's reach of the solid (the shore map, shore_jfa.comp), the parcel
 // drives into it at
 //
@@ -34,20 +37,23 @@
 // with a little turbulence into lace and ages it as it ages a wake's foam.
 //
 // THE SURF. The drawn sea over shallow water is scaled by its depth
-// (ocean_shore_depth.glsl), its tallest waves held at the breaking limit. Where
-// a parcel's crest, at that depth, nears the limit (its height eta against
+// (ocean_shore_depth.glsl), its tallest waves held at the breaking limit: what
+// the limit takes out of the waves is what breaks. So the breaking is read off
+// the INCOMING wave, the cascades before the depth's gains: where a parcel's
+// incoming crest stands past the limit at its depth (its height eta against
 // kCrestShare d, a crest's share of McCowan's 0.78 d) and is still rising or at
 // its top, the crest breaks: foam and air laid in proportion to how far past
 // kBreak0 it stands, so the white comes with each set over a shoal, grows with
-// the sea, and is nothing on a calm one (kCrest0: a crest a few centimetres
-// high lays none, however shallow the water). Broken water then runs toward
+// the sea, and is nothing on a calm one (kSea0: a sea of ripples breaks
+// nowhere, however shallow the water). Broken water then runs toward
 // the shore as a bore does, at kBore sqrt(g d) (the speed of a shallow-water
 // bore, Stoker 1957), slowing as the depth falls, along the flood's direction
 // to the nearest solid (the shore map's), or with the waves (the wind) out
 // over a shoal far from any; and in the last decimetres of a beach it runs up
 // and back with the waterline, which moves at w / tan(beta) (the surface's rise
 // over the bed's slope), so the foam it leaves slides up the slope and back and
-// fades as the field ages it. The field carries it all: the flow is set, the
+// fades as the field ages it; where it runs into a solid it drives into it as
+// the drawn water does (the collar). The field carries it all: the flow is set, the
 // foam is moved by it (wake_field.comp), never slid as a picture.
 //
 // MODE 1, the sea's statistics (one workgroup, before the windows' sources):
@@ -123,10 +129,11 @@ const float kBand      = 6.0; // m
 const float kCrestShare = 0.39;// a crest at the breaking limit stands this times the depth (half of 0.78)
 const float kBreak0    = 0.60; // eta / (kCrestShare d): the crest starts to break here ...
 const float kBreak1    = 0.95; // ... and is fully broken here
-const float kCrest0    = 0.04; // m: a crest lower than this lays nothing ...
-const float kCrest1    = 0.15; // m: ... and one this high its full share
-const float kBreakFoam = 0.75; // the film a fully broken crest lays
-const float kBreakAir  = 0.35; // ... the air it takes down (the pale water of a broken band)
+const float kSea0      = 0.08; // m: a sea whose significant height (in deep water) is under this breaks nowhere ...
+const float kSea1      = 0.30; // m: ... and one this high breaks wherever the depth makes it
+const float kCrestMin  = 0.01; // m: a crest lower than this lays nothing however shallow the water
+const float kBreakFoam = 0.5;  // the film a fully broken crest lays (a lace, short of a sheet)
+const float kBreakAir  = 0.3;  // ... the air it takes down (the pale water of a broken band)
 const float kBreakTurb = 0.06; // ... and the churn
 const float kSurfDepth = 6.0;  // m: deeper texels make no surf (a 15 m/s fjord sea breaks from 3 m)
 const float kBore      = 0.8;  // broken water runs in at this share of sqrt(g d)
@@ -159,35 +166,32 @@ float sampleBicubicR1(sampler2D tex, vec2 uv) { return sampleBicubicRG(tex, uv).
 // The drawn surface's (D.x, eta, D.z) at rest point q: water_displace.comp's
 // sampleDisplacement without its per-vertex mip levels (the window's texels are
 // finer than any spacing those serve).
-// Each cascade scaled by its gain over the bed (as water_displace.comp scales it).
-vec3 surfaceAt(vec2 q) {
-    vec3 d = vec3(0.0);
-    const vec3 g = oceanShoreGain(pc.depthAddr, q);
+// Each cascade scaled by its gain over the bed g (as water_displace.comp
+// scales it); `incoming` is the same surface with every gain 1: the waves as
+// they come in from deep water, before the depth has taken anything from them.
+vec3 surfaceAt(vec2 q, vec3 g, out vec3 incoming) {
+    vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0);
     if ((pc.cascadeMask & 1u) != 0u) {
-        const float inv = g.x / pc.tileSize0;
-        const vec2  uv  = q / pc.tileSize0;
-        d.y += sampleBicubicR1(height0, uv) * inv;
-        const vec2 dxz = sampleBicubicRG(displace0, uv) * inv;
-        d.x += dxz.x;
-        d.z += dxz.y;
+        const float inv = 1.0 / pc.tileSize0;
+        const vec2  uv  = q * inv;
+        c0.y = sampleBicubicR1(height0, uv) * inv;
+        c0.xz = sampleBicubicRG(displace0, uv) * inv;
     }
     if ((pc.cascadeMask & 2u) != 0u) {
-        const float inv = g.y / pc.tileSize1;
-        const vec2  uv  = oceanC1Domain(q) / pc.tileSize1;
-        d.y += sampleBicubicR1(height1, uv) * inv;
-        const vec2 dxz = oceanC1World(sampleBicubicRG(displace1, uv)) * inv;
-        d.x += dxz.x;
-        d.z += dxz.y;
+        const float inv = 1.0 / pc.tileSize1;
+        const vec2  uv  = oceanC1Domain(q) * inv;
+        c1.y = sampleBicubicR1(height1, uv) * inv;
+        c1.xz = oceanC1World(sampleBicubicRG(displace1, uv)) * inv;
     }
     if ((pc.cascadeMask & 4u) != 0u) {
-        const float inv = g.z / pc.tileSize2;
-        const vec2  uv  = q / pc.tileSize2;
-        d.y += textureLod(height2, uv, 0.0).r * inv;
-        const vec2 dxz = textureLod(displace2, uv, 0.0).rg * inv;
-        d.x += dxz.x;
-        d.z += dxz.y;
+        const float inv = 1.0 / pc.tileSize2;
+        const vec2  uv  = q * inv;
+        c2.y = textureLod(height2, uv, 0.0).r * inv;
+        c2.xz = textureLod(displace2, uv, 0.0).rg * inv;
     }
-    return vec3(d.x * pc.choppiness, d.y * pc.waveScale, d.z * pc.choppiness);
+    const vec3 k = vec3(pc.choppiness, pc.waveScale, pc.choppiness);
+    incoming = (c0 + c1 + c2) * k;
+    return (g.x * c0 + g.y * c1 + g.z * c2) * k;
 }
 
 // ── MODE 1: the sea's statistics ──────────────────────────────────────────
@@ -255,17 +259,29 @@ void main() {
     const vec4 map0 = texelFetch(shoreMap, ivec3(px, int(pc.shoreLayer)), 0);
     if (map0.r > kBand + 2.0 * pc.texel && !surf) return;
 
-    const vec2 q   = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
-    const vec3 s3  = surfaceAt(q);
-    const vec2 D   = s3.xz;
-    const float eta = s3.y;
+    // The drawn surface (the gains over the bed taken) and the incoming one
+    // (the waves before the depth took anything): the parcel is DRAWN where
+    // the first puts it, but what drives into a solid and what breaks is the
+    // incoming wave, whose energy the depth's limit takes out of the drawn
+    // sea by breaking it. Kept from step to step is the incoming surface.
+    const vec2  q   = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
+    const vec3  g   = oceanShoreGain(pc.depthAddr, q);
+    vec3        s0;
+    const vec3  s3  = surfaceAt(q, g, s0);
+    const vec2  D   = s3.xz;
+    const float eta = s0.y;// the incoming crest
     const ivec3 dstL = ivec3(px, int(pc.shoreLayer));
     const vec4  last = imageLoad(lastSurface, dstL);
-    imageStore(lastSurface, dstL, vec4(eta, D, 1.0));
+    imageStore(lastSurface, dstL, vec4(s0.y, s0.xz, 1.0));
     if (pc.history == 0u || last.a < 0.5 || pc.dt <= 0.0) return;
 
-    const vec2  u = (D - last.gb) / pc.dt;  // the parcel's horizontal speed
-    const float w = (eta - last.r) / pc.dt; // ... and its rise
+    const vec2  u = (s0.xz - last.gb) / pc.dt;// the incoming parcel's horizontal speed
+    const float w = (s0.y - last.r) / pc.dt;  // ... and its rise
+    // The drawn sea's significant height over the incoming one's, here: the
+    // waterline moves with the drawn water (the swash below).
+    const vec4  hs4 = sd.hs;
+    const float hh  = dot(hs4.xyz, hs4.xyz);
+    const float gH  = hh > 1e-8 ? sqrt(dot(g * g, hs4.xyz * hs4.xyz) / hh) : 1.0;
 
     // Where it is drawn, and the solid from there (outside the window: none).
     const vec2 x  = q + D;
@@ -284,7 +300,13 @@ void main() {
     vec2 v = imageLoad(fieldVel, dst).rg;
     const vec2 drift = vec2(pc.driftX, pc.driftZ);
 
-    const float impact = max(dot(u, n), 0.0) + 0.5 * max(w, 0.0);
+    // The drive into the solid: the drawn water's (stage 1's collar), or,
+    // where broken water has run in over shallow water, the bore's: the
+    // field's own flow toward the solid where it carries air (a wave that
+    // broke on the shelf before a rock still runs into the rock, though the
+    // drawn surface there is calm).
+    const float bore   = surf ? max(dot(v, n), 0.0) * clamp(s.g / 0.1, 0.0, 1.0) : 0.0;
+    const float impact = max(max(dot(u, n), 0.0) + 0.5 * max(w, 0.0), bore);
     const float reach  = kReach0 + kReachGain * min(impact, 1.0);
     const bool  kept   = pc.keepHalf > 0.0 && all(lessThan(abs(q - vec2(pc.keepX, pc.keepZ)), vec2(pc.keepHalf)));
     // The distance is to the nearest solid texel's centre; the solid's face
@@ -298,12 +320,16 @@ void main() {
     const float dep    = kept ? 0.0
                               : pc.gain * clamp((impact - kImpact0) / (kImpact1 - kImpact0), 0.0, 1.0) *
                                     exp(-(d * d) / (r * r));
-    // The surf: a crest at this texel's depth nearing the breaking limit,
-    // rising or at its top (not its back), and high enough to be a sea.
+    // The surf: the incoming crest against the breaking limit at this
+    // texel's depth, rising or at its top (not its back), in a sea that is
+    // more than ripples. The further past the limit the incoming crest
+    // stands (the more of it the depth takes), the more of it breaks, at
+    // each crest that passes.
     float brk = 0.0;
     if (surf && !kept) {
         const float b = eta / (kCrestShare * depth);
-        brk = smoothstep(kBreak0, kBreak1, b) * smoothstep(kCrest0, kCrest1, eta) * smoothstep(-0.05, 0.05, w);
+        brk = smoothstep(kBreak0, kBreak1, b) * smoothstep(kSea0, kSea1, sd.hs.w) *
+              smoothstep(kCrestMin, 2.0 * kCrestMin, eta) * smoothstep(-0.05, 0.05, w);
     }
 
     if (dep > 1e-3) {
@@ -323,7 +349,7 @@ void main() {
             // the crest (one noise over a few metres, never finer than two
             // texels), at its full share where it is most broken.
             const float tear = sNoise(vec3(q / max(1.5, 2.0 * pc.texel) + 2.3, 0.9 * pc.timeSec + 1.7));
-            s.r = max(s.r, kBreakFoam * pc.gain * brk * mix(0.55, 1.0, tear));
+            s.r = max(s.r, kBreakFoam * pc.gain * brk * mix(0.25, 1.0, tear));
             s.g = max(s.g, kBreakAir * brk);
             s.b = max(s.b, kBreakTurb * brk);
         }
@@ -351,7 +377,7 @@ void main() {
             const float gz = (sd.depth[(row + uint(j1)) * pc.res + uint(px.x)] -
                               sd.depth[(row + uint(j0)) * pc.res + uint(px.x)]) / (float(j1 - j0) * pc.texel);
             const float slope = max(length(vec2(gx, gz)), 0.05);
-            const vec2  vs    = n0 * clamp(w / slope, -kSwashMax, kSwashMax);
+            const vec2  vs    = n0 * clamp(gH * w / slope, -kSwashMax, kSwashMax);
             vt = mix(vs, vt, smoothstep(kSwash0, kSwash1, depth));
         }
         v = mix(v, vt, 1.0 - exp(-pc.dt / kRunTau));
