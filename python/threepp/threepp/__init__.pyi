@@ -2678,6 +2678,10 @@ class DisplacedMesh(Mesh):
         """
         Patch `index` (0..MAX_WAKE_PATCHES-1) of the wake field.
         """
+    def shore_gain(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple[float, float, float]:
+        """
+        The three cascade gains over the shore's depth at a rest point (Vulkan; read back under sample_height's opt-in, so 1, 1, 1 until sample_height has been called and a frame or two rendered): each cascade shoaled a little and held under the breaking limit over shallow water, as the drawn sea and sample_height scale them.
+        """
     def wave_climate_gain(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple[float, float, float]:
         """
         The wave climate's three cascade gains at a rest point (1, 1, 1 without a map).
