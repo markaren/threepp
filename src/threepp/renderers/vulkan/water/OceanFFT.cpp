@@ -485,7 +485,7 @@ namespace threepp::water {
 
         // CPU mirror of windGrowth in phillips_spectrum.comp (float, as there):
         // the share of the fully grown wind sea a light wind has raised at k,
-        // the light air's peak ripples (to 3 kp) from 0.4 m/s, the grown sea
+        // the light air's peak ripples (to 3 kp, at a quarter) from 0.4 m/s, the grown sea
         // from 1 m/s, 1 from 4.5 m/s; the derivation is cited there.
         float windGrowthCpu(float k, float kp, float U) {
             auto smooth = [](float e0, float e1, float x) {
@@ -494,7 +494,7 @@ namespace threepp::water {
             };
             const float onset = std::clamp(0.36f * std::sqrt(std::sqrt(9.81f * k)), 1.f, 3.4f);
             const float grown = smooth(onset, 4.5f, U);
-            const float air   = smooth(0.4f, 0.8f, U) * (1.f - smooth(1.f, 2.5f, U));
+            const float air   = 0.25f * smooth(0.4f, 0.8f, U) * (1.f - smooth(1.f, 2.5f, U));
             const float peak  = 1.f - smooth(std::log(1.5f), std::log(3.f), std::log(k / kp));
             return std::max(grown, air * peak);
         }

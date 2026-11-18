@@ -196,20 +196,28 @@ float elfouhailyShortCurvature(float k, float kp) {
 // the appearance of scales"; Beaufort 0, under 0.5 m/s, "sea like a
 // mirror"). The light air's sea is taken as the spectrum's own peak and no
 // more: the waves to 1.5 kp in full, none past 3 kp (a smoothstep in ln k),
-// at the Pierson-Moskowitz level, so at 0.8 m/s slow, low ripples (25 to
-// 50 cm, a period of about half a second, 1.4 cm significant height) and not
-// the field of short, quick bumps the whole equilibrium range would put on
-// the water (at 0.8 m/s it reaches 5 cm waves of a fifth of a second); a
-// young sea fills its equilibrium range from the peak outward (Phillips
-// 1985). It comes in from 0.4 to 0.8 m/s (a mirror below) and hands over
-// to the grown sea above from 1 to 2.5 m/s, so from 2.5 m/s this is the
-// balance above alone. kp = 0.894 / L, the peak of phillips2D (fetch
-// included); at no wind kp is infinite and the factor 0.
+// so at 0.8 m/s slow, low ripples (25 to 50 cm, a period of about half a
+// second) and not the field of short, quick bumps the whole equilibrium
+// range would put on the water (at 0.8 m/s it reaches 5 cm waves of a fifth
+// of a second); a young sea fills its equilibrium range from the peak
+// outward (Phillips 1985). Below the growth onset its ripples are not a
+// saturated sea: they are held at a quarter of the Pierson-Moskowitz level,
+// a mean square slope of about 5e-4 (Cox and Munk (1954), "Measurement of
+// the roughness of the sea surface from photographs of the sun's glitter",
+// J. Opt. Soc. Am. 44: the slope the clean sea carries over a slicked one is
+// next to nothing below 1.4 m/s), 7 mm significant height at 0.8 m/s. At
+// the full level (2e-3) the far water's reflection, which banks the ripples
+// as roughness, blurred the fells up and down by some 5 degrees into a
+// sheen; at a quarter it is some 2.5, and the fells stay in the water. It
+// comes in from 0.4 to 0.8 m/s (a mirror below) and hands over to the grown
+// sea above from 1 to 2.5 m/s, so from 2.5 m/s this is the balance above
+// alone. kp = 0.894 / L, the peak of phillips2D (fetch included); at no wind
+// kp is infinite and the factor 0.
 // Mirrored in OceanFFT.cpp (windGrowthCpu) and Weather.cpp.
 float windGrowth(float k, float kp, float U) {
     const float onset = clamp(0.36 * sqrt(sqrt(9.81 * k)), 1.0, 3.4);
     const float grown = smoothstep(onset, 4.5, U);
-    const float air   = smoothstep(0.4, 0.8, U) * (1.0 - smoothstep(1.0, 2.5, U));
+    const float air   = 0.25 * smoothstep(0.4, 0.8, U) * (1.0 - smoothstep(1.0, 2.5, U));
     const float peak  = 1.0 - smoothstep(log(1.5), log(3.0), log(k / kp));
     return max(grown, air * peak);
 }

@@ -30,8 +30,8 @@ double Weather::significantWaveHeight() const {
     if (U > 0.0) {
         // A light wind has not grown its sea: the shader scales the wind
         // sea's variance at k by windGrowth(k, kp, U) (phillips_spectrum.comp,
-        // where the derivation is cited): the light air's peak ripples from
-        // 0.4 m/s, handed over to the grown sea from 1 to 2.5 m/s, and 1 from
+        // where the derivation is cited): the light air's peak ripples (a
+        // quarter of the level) from 0.4 m/s, handed over to the grown sea from 1 to 2.5 m/s, and 1 from
         // 4.5 m/s at every k. Most of the variance is at the peak
         // kp = 0.894 / L (L as there, the fetch scaling included), so Hs goes
         // as the square root of the factor there.
@@ -43,7 +43,7 @@ double Weather::significantWaveHeight() const {
             return t * t * (3.0 - 2.0 * t);
         };
         const double onset = std::clamp(0.36 * std::sqrt(std::sqrt(g * kp)), 1.0, 3.4);
-        const double air   = smooth(0.4, 0.8, U) * (1.0 - smooth(1.0, 2.5, U));
+        const double air   = 0.25 * smooth(0.4, 0.8, U) * (1.0 - smooth(1.0, 2.5, U));
         hsWind *= std::sqrt(std::max(smooth(onset, 4.5, U), air));
     }
     const double swell = std::max(0.0, static_cast<double>(swellHeight));
