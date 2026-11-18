@@ -87,6 +87,8 @@ namespace threepp::vulkan {
     constexpr float kShoreTexel[kShoreLayers] = {0.25f, 2.0f};
     // The field's resolution for an ocean whose producers asked for none.
     constexpr uint32_t kShoreRes = 1024;
+    // The step from which the shore's maps are taken (see recordShore).
+    constexpr uint32_t kShoreFirstStep = 4;
     // = OCEAN_WAKE_MAX_PATCHES
     constexpr uint32_t kWakeTablePatches = DisplacedMesh::kMaxWakePatches + kShoreLayers;
 
@@ -199,6 +201,7 @@ namespace threepp::vulkan {
             bool  stepped  = false;
             float stepDt   = 0.f;
             double stepTime = 0.0;
+            uint32_t steps  = 0;// steps taken since the State was made
 
             // The shore (shoreOn). Its windows' centres and sides for this
             // frame (setShoreWindows), what each map was taken of, and its

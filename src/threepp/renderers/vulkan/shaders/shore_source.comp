@@ -84,7 +84,7 @@ const float kImpact0   = 0.04;// m/s: a sea that drives slower lays nothing
 const float kImpact1   = 0.9; // m/s: full foam
 const float kReach0    = 0.3; // m: the splash's reach off the solid
 const float kReachGain = 1.0; // s: ... and how it widens with the impact (m per m/s)
-const float kAir       = 0.3; // the air a surge takes down, a share of its foam: the pale water under a collar
+const float kAir       = 0.2; // the air a surge takes down, a share of its foam: the pale water under a collar
 const float kThrow     = 0.5; // the throw off the solid, a share of the impact
 const float kDriftTau  = 1.5; // s: foam takes the wind's drift over this
 // The furthest a deposit is ever laid from the solid, with the waves' own
@@ -189,9 +189,13 @@ void main() {
     // The distance is to the nearest solid texel's centre; the solid's face
     // lies about half a texel nearer (a far window's 2 m texels would
     // otherwise lay its whole collar on the land side of the line).
+    // A collar narrower than a texel is held by the texels next to the face:
+    // in a coarse window the reach is at least most of a texel (pc.gain
+    // scales the film).
     const float d      = max(dist - 0.5 * pc.texel, 0.0);
+    const float r      = max(reach, 0.75 * pc.texel);
     const float dep    = kept ? 0.0
-                              : pc.gain * smoothstep(kImpact0, kImpact1, impact) * exp(-(d * d) / (reach * reach));
+                              : pc.gain * smoothstep(kImpact0, kImpact1, impact) * exp(-(d * d) / (r * r));
     if (dep > 1e-3) {
         // A surge does not break as a ribbon: in gulps along the solid,
         // quick in time (two noises over half a metre and over two, never

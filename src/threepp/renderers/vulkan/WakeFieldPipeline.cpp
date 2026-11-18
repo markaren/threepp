@@ -649,6 +649,7 @@ namespace threepp::vulkan {
         st.stepped  = true;
         st.stepDt   = dt;
         st.stepTime = nowSec;
+        ++st.steps;
 
         const DisplacedMesh::WakeField& wf = dm.wakeField;
         struct Upload {
@@ -975,6 +976,10 @@ namespace threepp::vulkan {
 
     void WakeFieldPipeline::recordShore(VkCommandBuffer cb, State& st, const ShoreInputs& in, double nowSec) {
         if (!st.shoreOn || !st.stepped || st.stepTime != nowSec) return;// the field did not step this frame
+        // Nothing until the field has stepped a few frames: a thing that moves
+        // carries kGeomFlagMoved from its second frame, and a map taken on the
+        // first would hold every buoy and boat as it stood then.
+        if (st.steps < kShoreFirstStep) return;
         if (in.tlas == VK_NULL_HANDLE || in.geomAddr == 0u || in.displaceSet == VK_NULL_HANDLE) return;
 
         // The source reads the ocean's cascades through its own displace set,
@@ -1119,9 +1124,12 @@ namespace threepp::vulkan {
                 sp.keepHalf = 0.5f * 0.85f * st.shoreSize[0];
             }
             sp.timeSec = static_cast<float>(std::fmod(nowSec, 4096.0));
-            // A collar is about a metre wide: a coarser texel holds it as a
-            // thinner film over the texel.
-            sp.gain    = std::min(1.0f, 1.0f / texel[k]);
+            // The far window's collar is a texel wide, wider than the real
+            // one, at the near window's density: the shade's foam level has a
+            // threshold, and a collar thinned over a 2 m texel by its share
+            // of it (as a coverage would be) did not show at all from a mast
+            // or a drone. A LOOK choice for the far window.
+            sp.gain    = 1.0f;
             vkCmdPushConstants(cb, sourcePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(sp), &sp);
             vkCmdDispatch(cb, groups, groups, 1);
             st.lastX[k] = ox[k];
