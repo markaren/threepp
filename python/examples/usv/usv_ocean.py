@@ -12,7 +12,8 @@ generator's hydrostatic solver put it; --calm prints that comparison.
 
 The boat herself is ../rigs/usv_rig.py, which any scene can import: StripHull (the
 strips and the rigid body), her drive (thrust, resistance, the helm, the
-actuator nodes, the foam) and Wake (her footprint and wake on the ocean). This
+actuator nodes), Footprint (her footprint on the ocean) and Wash (what she
+leaves on the water, in the ocean's wake field). This
 file is the scene around her, the keys, the scripted run and the cameras.
 
 --boat mariner (the default): the 6 m jet boat, 0.465 m draft and 1.3 deg by
@@ -69,7 +70,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "rigs"))   # examples/ri
 
 import threepp as tp
 from demo_common import Encoder, cli_arg, parse_size, resize_handler, write_radiance_hdr
-from usv_rig import StripHull, Wake, Wash, attitude, drive_for, rot_y, rot_z, smoothstep
+from usv_rig import Footprint, StripHull, Wash, attitude, drive_for, rot_y, rot_z, smoothstep
 
 if not tp.HAS_VULKAN:
     print("The FFT ocean needs a Vulkan build of threepp (-DTHREEPP_WITH_VULKAN=ON).")
@@ -248,7 +249,7 @@ node_cam = boat.get_object_by_name("camera_main")
 hull = StripHull(BOAT, ocean, LOAD)
 hull.drive = drive = drive_for(hull).bind(boat)
 hull.R = rot_y(0.0) @ rot_z(math.radians(hull.design["trim_deg"]))
-wake = Wake(hull, ocean)
+footprint = Footprint(hull, ocean)
 wash = Wash(hull, drive, ocean, 0)
 
 camera = tp.PerspectiveCamera(45.0, W / H, 0.1, 3000.0)
@@ -287,11 +288,11 @@ def seat_on_water():
 
 
 def sea_update(dt):
-    """The sea around her: displacement footprint, Kelvin wake, and what she leaves on the water."""
-    wake.update(dt, hull_excl_on)
+    """The sea around her: displacement footprint and what she leaves on the water."""
+    footprint.update(hull_excl_on)
     ocean.clear_wake_sources()
     wash.update(dt, hull_excl_on)             # her propulsors' races and her hull's lane, in the wake field
-    c = wake.centre
+    c = footprint.centre
     ocean.warp_toward(float(c[0]), float(c[2]), 0.3)
 
 
@@ -372,8 +373,6 @@ def handle_keys(dt):
         camera.update_projection_matrix()
     if pressed("X"):
         hull_excl_on = not hull_excl_on
-        if not hull_excl_on:
-            ocean.clear_wake()
 
 
 _anchor = np.zeros(3)

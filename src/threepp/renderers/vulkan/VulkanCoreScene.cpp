@@ -4574,7 +4574,7 @@ void VulkanRenderer::Impl::pruneDeadSceneResources() {
             // frame-serial retire queue (material/env textures, particle + sprite
             // caches), the structural teardown below frees EIGHT heterogeneous
             // resource classes as one unit — raw VkImageView + vmaDestroyImage
-            // pairs (scratchA/foamImage), Win32 external buffers, descriptor-set
+            // pairs (scratchA), Win32 external buffers, descriptor-set
             // pool frees, and the bindless texture-SLOT reclamation
             // (freeTextureSlots / retiredTextureSlots_) which may REUSE a freed
             // slot within this same rebuild. The retire queue models only
@@ -4717,15 +4717,12 @@ void VulkanRenderer::Impl::pruneDeadSceneResources() {
                             oceanFineTileSize      = 0.0f;
                             oceanChopNormals       = false;
                         }
-                        if (st->foamImage.view == oceanFoamView) {
-                            oceanFoamView     = oceanFoamDummy.view;
-                            oceanFoamTileSize = 0.0f;
-                        }
                         // Crest foam's texture (binding 91), the same way.
                         if (st->crestFoam && st->crestFoam->sampledView() == oceanCrestFoamView) {
                             oceanCrestFoamView    = oceanFoamDummy.view;
                             oceanCrestFoamSampler = oceanFoamDummy.sampler;
                             oceanCrestFoam        = false;
+                            oceanFoamTileSize     = 0.0f;
                         }
                         // The wave climate's map (binding 93), the same way.
                         if (st->climateImage.view != VK_NULL_HANDLE) {
@@ -4746,16 +4743,13 @@ void VulkanRenderer::Impl::pruneDeadSceneResources() {
                         if (st->blas) destroyBlasRecord(*st->blas);
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
                         if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
-                        if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->foamImage.view, nullptr);
-                        if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
                         // Host-side state buffers — same set the renderer
                         // teardown destroys; missing them here leaked the
-                        // readback trio + foam/wake SSBOs on every scene
+                        // readback trio + vessel SSBOs on every scene
                         // switch that removed an ocean (VUID 05137).
                         for (auto& ring : st->heightReadback)
                             for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                         for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
-                        destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                         for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                         for (auto& b : st->lodTable) destroyBuffer(ctx->allocator(), b);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors

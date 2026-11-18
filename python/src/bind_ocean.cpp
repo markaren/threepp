@@ -7,14 +7,12 @@
 // are simply absent, the same convention as tp.VulkanRenderer (check
 // tp.HAS_VULKAN before constructing one).
 //
-// Surface exposed: the wave Params, the adaptive-density MeshWarp, world-space
-// foam disturbances, the CPU height sampler, and — since a Python boat is now a
-// real use case (python/examples/warp_sailboat.py) — the vessel pair:
-// HullExclusion (the hull displaces the water, on its own waterline plane) and
-// VesselWake (Kelvin V + bow bump + foam trail) with the trail bookkeeping done
-// in C++ so Python never loops over records per frame. The mesh-level
-// hull_exclusion / wake / *_wake methods are vessel 0; mesh.vessel(i) hands out
-// a DisplacedMesh.Vessel for any of the MAX_VESSELS, with the same members.
+// Surface exposed: the wave Params, the adaptive-density MeshWarp, the CPU
+// height sampler, the vessels' footprints (HullExclusion: the hull displaces the
+// water, on its own waterline plane) and the wake field, where what a vessel
+// leaves on the water lives (VesselWash). The mesh-level hull_exclusion is
+// vessel 0; mesh.vessel(i) hands out a DisplacedMesh.Vessel for any of the
+// MAX_VESSELS.
 #include "bindings.hpp"
 
 #include <pybind11/stl.h>
@@ -108,54 +106,12 @@ namespace threepp_py {
 
     namespace {
 
-        // Trail bookkeeping in C++: a Python loop over 64 records every
-        // frame is both slower and (because `wake.trail` copies) wrong.
-        void addWakeSample(DisplacedMesh::VesselWake& w, float x, float z, float sin_yaw, float cos_yaw,
-                           float speed, size_t max_samples) {
-            auto& t = w.trail;
-            if (max_samples > 0)
-                while (t.size() >= max_samples) t.erase(t.begin());// oldest out
-            DisplacedMesh::WakeSample s{};
-            s.worldX = x;
-            s.worldZ = z;
-            s.sinYaw = sin_yaw;
-            s.cosYaw = cos_yaw;
-            s.speed = speed;
-            s.age = 0.f;
-            t.push_back(s);
-        }
-
-        size_t ageWake(DisplacedMesh::VesselWake& w, float dt, float max_age, size_t max_samples) {
-            auto& t = w.trail;
-            for (auto& s : t) s.age += dt;
-            t.erase(std::remove_if(t.begin(), t.end(),
-                                   [max_age](const DisplacedMesh::WakeSample& s) {
-                                       return s.age > max_age;
-                                   }),
-                    t.end());
-            if (max_samples > 0 && t.size() > max_samples)
-                t.erase(t.begin(), t.end() - static_cast<long long>(max_samples));
-            return t.size();
-        }
-
         // Python's handle on one of a DisplacedMesh's vessels. Holds the mesh,
         // so a handle kept in a script keeps its ocean alive.
         struct VesselRef {
             std::shared_ptr<DisplacedMesh> mesh;
             uint32_t index = 0;
         };
-
-        constexpr const char* kAddWakeSampleDoc =
-                "Emit one wake snapshot at the vessel's current pose (age 0), dropping the "
-                "oldest once the trail is full. The renderer's hard cap is 64 samples; "
-                "overflow beyond it is dropped silently on upload. The C++ showcase's "
-                "cadence is 10 Hz OR every 1 m travelled, whichever fires first.";
-        constexpr const char* kAgeWakeDoc =
-                "Age every trail sample by dt, drop anything older than max_age, and keep at "
-                "most max_samples (newest). Returns the surviving count. Call once per frame.";
-        constexpr const char* kClearWakeDoc =
-                "Drop the whole trail (e.g. after teleporting the vessel, so the wake does "
-                "not stretch across the map).";
 
     }// namespace
 
@@ -218,7 +174,7 @@ namespace threepp_py {
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
                 .def_readwrite("foam_amount", &DisplacedMesh::Params::foamAmount,
                                "Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; "
-                               "wake/disturbance foam unaffected). Ocean auto-derives ~size/300.")
+                               "the wake field's foam unaffected). Ocean auto-derives ~size/300.")
                 .def_readwrite("texture_size_0", &DisplacedMesh::Params::textureSize0, "Cascade-0 FFT resolution (power of two).")
                 .def_readwrite("texture_size_1", &DisplacedMesh::Params::textureSize1, "Cascade-1 FFT resolution (power of two).")
                 .def_readwrite("texture_size_2", &DisplacedMesh::Params::textureSize2, "Cascade-2 FFT resolution (power of two).");
@@ -230,7 +186,7 @@ namespace threepp_py {
                 .def_readwrite("half_range", &DisplacedMesh::MeshWarp::halfRange, "Half-extent the warp covers; 0 = uniform grid (disabled).")
                 .def_readwrite("coef_a", &DisplacedMesh::MeshWarp::coefA, "1 = uniform; lower = denser centre (~0.1 ≈ 10 cm centre / 2.7 m edge).");
 
-        // ---- the vessel pair -------------------------------------------------
+        // ---- the vessels' footprints ------------------------------------------
         // Hull exclusion. The footprint is plan-form tapered (fine bow, ~75 %
         // beam at the transom) and fades into the wave field over ~2 m outside
         // the hull edge; inside it the surface sits on the vessel's waterline
@@ -240,7 +196,7 @@ namespace threepp_py {
                                "World X of the hull's centre (the exclusion origin).")
                 .def_readwrite("center_z", &DisplacedMesh::HullExclusion::centerZ)
                 .def_readwrite("half_length", &DisplacedMesh::HullExclusion::halfLength,
-                               "Half the vessel's length (m). 0 DISABLES hull exclusion and the wake.")
+                               "Half the vessel's length (m). 0 DISABLES hull exclusion.")
                 .def_readwrite("half_beam", &DisplacedMesh::HullExclusion::halfBeam, "Half the beam (m).")
                 .def_readwrite("stern_beam", &DisplacedMesh::HullExclusion::sternBeam,
                                "The share of her beam the footprint keeps at her stern (default 0.75; about 0.95 for a "
@@ -277,63 +233,17 @@ namespace threepp_py {
                      "so the usual pattern is to set them once and then call set_pose(x, z, y, yaw, "
                      "pitch, roll) every frame.");
 
-        // One snapshot of the vessel's pose; the Kelvin V-wake is the envelope
-        // over the trail, which is why the wake bends through her turns.
-        py::class_<DisplacedMesh::WakeSample>(displaced, "WakeSample")
-                .def(py::init<>())
-                .def_readwrite("world_x", &DisplacedMesh::WakeSample::worldX)
-                .def_readwrite("world_z", &DisplacedMesh::WakeSample::worldZ)
-                .def_readwrite("sin_yaw", &DisplacedMesh::WakeSample::sinYaw)
-                .def_readwrite("cos_yaw", &DisplacedMesh::WakeSample::cosYaw)
-                .def_readwrite("speed", &DisplacedMesh::WakeSample::speed, "m/s along +heading at emission.")
-                .def_readwrite("age", &DisplacedMesh::WakeSample::age, "Seconds since emission.")
-                .def("__repr__", [](const DisplacedMesh::WakeSample& s) {
-                    return "<WakeSample (" + std::to_string(s.worldX) + ", " + std::to_string(s.worldZ) +
-                           ") speed=" + std::to_string(s.speed) + " age=" + std::to_string(s.age) + ">";
-                });
-
-        py::class_<DisplacedMesh::VesselWake>(displaced, "VesselWake")
-                .def_readwrite("forward_speed", &DisplacedMesh::VesselWake::forwardSpeed,
-                               "m/s along +heading. The whole wake fades out below ~0.5 m/s; 0 disables it.")
-                .def_readwrite("enabled", &DisplacedMesh::VesselWake::enabled)
-                .def_readwrite("analytic_waves", &DisplacedMesh::VesselWake::analyticWaves,
-                               "Its bow bump, V-wedge and V-ridge foam (the default). False for a vessel whose "
-                               "waves the wake field makes (a VesselWash with ripples); the stern foam trail stays.")
-                .def_readwrite("trail", &DisplacedMesh::VesselWake::trail,
-                               "Historical pose snapshots (list of WakeSample). Reading COPIES and "
-                               "writing REPLACES — mutating the returned list does not write through. "
-                               "Use mesh.add_wake_sample()/age_wake() for the per-frame path.");
-
-        // One of the mesh's vessels: its own hull exclusion and wake, the same
-        // members the mesh itself exposes for vessel 0.
+        // One of the mesh's vessels: its own hull exclusion, the same member
+        // the mesh itself exposes for vessel 0.
         py::class_<VesselRef>(displaced, "Vessel",
-                              "One vessel on the ocean (mesh.vessel(i)): a hull exclusion and its own wake. "
-                              "Vessel 0 is the mesh's own hull_exclusion / wake.")
+                              "One vessel on the ocean (mesh.vessel(i)): its hull exclusion. "
+                              "Vessel 0 is the mesh's own hull_exclusion.")
                 .def_property_readonly("index", [](const VesselRef& v) { return v.index; })
                 .def_property_readonly("hull_exclusion",
                                        [](const VesselRef& v) { return &v.mesh->vesselHull(v.index); },
                                        py::return_value_policy::reference_internal,
                                        "This vessel's footprint + waterline plane; set each frame before "
                                        "render(). half_length = 0 (the default) takes the vessel off the ocean.")
-                .def_property_readonly("wake",
-                                       [](const VesselRef& v) { return &v.mesh->vesselWake(v.index); },
-                                       py::return_value_policy::reference_internal,
-                                       "This vessel's Kelvin V-wake / bow bump / foam trail. Shares its "
-                                       "hull_exclusion pose, so set that first.")
-                .def("add_wake_sample",
-                     [](const VesselRef& v, float x, float z, float sin_yaw, float cos_yaw, float speed,
-                        size_t max_samples) {
-                         addWakeSample(v.mesh->vesselWake(v.index), x, z, sin_yaw, cos_yaw, speed, max_samples);
-                     },
-                     py::arg("x"), py::arg("z"), py::arg("sin_yaw"), py::arg("cos_yaw"),
-                     py::arg("speed"), py::arg("max_samples") = 64, kAddWakeSampleDoc)
-                .def("age_wake",
-                     [](const VesselRef& v, float dt, float max_age, size_t max_samples) {
-                         return ageWake(v.mesh->vesselWake(v.index), dt, max_age, max_samples);
-                     },
-                     py::arg("dt"), py::arg("max_age") = 6.0f, py::arg("max_samples") = 64, kAgeWakeDoc)
-                .def("clear_wake", [](const VesselRef& v) { v.mesh->vesselWake(v.index).trail.clear(); },
-                     kClearWakeDoc)
                 .def("__repr__", [](const VesselRef& v) {
                     const auto& h = v.mesh->vesselHull(v.index);
                     return "<DisplacedMesh.Vessel " + std::to_string(v.index) +
@@ -461,25 +371,8 @@ namespace threepp_py {
                 .def_property_readonly("hull_exclusion", [](DisplacedMesh& o) { return &o.hullExclusion; },
                                        py::return_value_policy::reference_internal,
                                        "Vessel 0's footprint + waterline plane; set each frame before "
-                                       "render(). half_length = 0 (the default) disables it AND the wake. "
+                                       "render(). half_length = 0 (the default) disables it. "
                                        "More vessels: vessel(i).")
-                .def_property_readonly("wake", [](DisplacedMesh& o) { return &o.wake; },
-                                       py::return_value_policy::reference_internal,
-                                       "Vessel 0's Kelvin V-wake / bow bump / foam trail. Shares the "
-                                       "hull_exclusion pose, so set that first.")
-                .def("add_wake_sample",
-                     [](DisplacedMesh& o, float x, float z, float sin_yaw, float cos_yaw,
-                        float speed, size_t max_samples) {
-                         addWakeSample(o.wake, x, z, sin_yaw, cos_yaw, speed, max_samples);
-                     },
-                     py::arg("x"), py::arg("z"), py::arg("sin_yaw"), py::arg("cos_yaw"),
-                     py::arg("speed"), py::arg("max_samples") = 64, kAddWakeSampleDoc)
-                .def("age_wake",
-                     [](DisplacedMesh& o, float dt, float max_age, size_t max_samples) {
-                         return ageWake(o.wake, dt, max_age, max_samples);
-                     },
-                     py::arg("dt"), py::arg("max_age") = 6.0f, py::arg("max_samples") = 64, kAgeWakeDoc)
-                .def("clear_wake", [](DisplacedMesh& o) { o.wake.trail.clear(); }, kClearWakeDoc)
                 .def("vessel",
                      [](const std::shared_ptr<DisplacedMesh>& o, uint32_t index) {
                          if (index >= DisplacedMesh::kMaxVessels)
@@ -488,25 +381,10 @@ namespace threepp_py {
                          return VesselRef{o, index};
                      },
                      py::arg("index"),
-                     "Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion, wake and "
-                     "add_wake_sample()/age_wake()/clear_wake(). Vessel 0 is the mesh's own "
-                     "hull_exclusion / wake. A vessel takes part while its half_length > 0; each "
-                     "footprint also flattens the other vessels' wakes.")
-                .def("sample_wake_height", &DisplacedMesh::sampleWakeHeight,
-                     py::arg("world_x"), py::arg("world_z"),
-                     "CPU mirror of the shader's wake height (bow bump + bow V-wedge + the "
-                     "trail-summed Kelvin V) at a world XZ, summed over every vessel. 0 with no "
-                     "active vessel or below the speed gate. Add to sample_height() to make a buoy "
-                     "bob through a passing wake. Another vessel's footprint does NOT fade a wake "
-                     "here, so a hull sampling under itself feels the wake it is crossing.")
-                // World-space foam splats (boat waterline, splashes, anything). Clear
-                // and repopulate each frame before render(); decays ~1.4 s half-life.
-                .def("clear_foam_disturbances", &DisplacedMesh::clearFoamDisturbances)
-                .def("add_foam_disturbance", &DisplacedMesh::addFoamDisturbance,
-                     py::arg("world_x"), py::arg("world_z"), py::arg("radius"), py::arg("intensity"),
-                     "Splat a gaussian foam blob at a world XZ (radius m, intensity in [0,1]).")
+                     "Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion. Vessel 0 "
+                     "is the mesh's own hull_exclusion. A vessel takes part while its half_length > 0.")
                 // The wake field. Sources last one frame: clear and repopulate
-                // before render(), as the foam disturbances are.
+                // before render().
                 .def_property_readonly("wake_field", [](DisplacedMesh& o) { return &o.wakeField; },
                                        py::return_value_policy::reference_internal,
                                        "The wake field's switch and knobs (DisplacedMesh.WakeField).")

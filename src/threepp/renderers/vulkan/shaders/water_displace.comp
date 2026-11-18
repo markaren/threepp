@@ -84,29 +84,14 @@ layout(buffer_reference, scalar) readonly buffer LodTable {
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
 layout(buffer_reference, scalar) buffer UvBuf   { vec2  v[]; };
 
-// Historical wake sample — one snapshot of the boat's pose at a past
-// frame, used to trace the Kelvin V-wake along the actual sailed path.
-// Layout matches DisplacedMesh::WakeSample (32 B, 8 floats).
-struct WakeSample {
-    float worldX;
-    float worldZ;
-    float sinYaw;
-    float cosYaw;
-    float speed;
-    float age;
-    float _p0;
-    float _p1;
-};
-layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
-// 112 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants.
+// 120 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants.
 // The vessels live in a per-frame buffer (hullAddr), not here: one hull alone
 // used to fill this block to the 128-byte maximum.
 layout(push_constant, scalar) uniform Pc {
     PosBuf   posOut;
     NormBuf  normOut;
-    uint64_t wakeTrailAddr; // every vessel's trail; each reads its own slice
     uint64_t hullAddr;      // OceanHull[hullCount]
     uint    vertexCount;
     uint    gridDimX;       // vertices along local X / Z (rectangles supported);
@@ -123,7 +108,7 @@ layout(push_constant, scalar) uniform Pc {
     float   warpCenterZ;
     float   warpHalfRange;
     float   warpCoefA;
-    uint    hullCount;      // active vessels; 0 = no hull exclusion, no wake
+    uint    hullCount;      // active vessels; 0 = no hull exclusion
     // The wave-model switches (DisplacedMesh::Params). waveModel 0 runs the
     // historical path below and reads nothing past here.
     uint    waveModel;      // bit 0 cwm, bit 1 boundWaves, bits 2 and 3 unused,
@@ -207,8 +192,8 @@ float hullContactFade(OceanHull hu, vec2 p) {
 // Gouraud interpolation then exposed every ~2 m quad edge as a crease,
 // reading as hard-edged "glass tiles" under grazing sky reflection. The
 // B-spline kernel is C1, so the height gradient is smooth across texels.
-// Its RG twin, sampleBicubicRG, is in ocean_cascade.glsl (foam_world reads
-// it too).
+// Its RG twin, sampleBicubicRG, is in ocean_cascade.glsl (foam_crest and
+// shore_source read it too).
 float sampleBicubicR(sampler2D tex, vec2 uv) {
     const vec2 res = vec2(textureSize(tex, 0));
     const vec2 st  = uv * res - 0.5;
@@ -488,8 +473,7 @@ void main() {
     // warpHalfRange the (u,v) ∈ [-1,1]² coordinates are remapped through a
     // cubic blend (`a·t + (1-a)·t³`) so vertex density packs toward the warp
     // centre. Topology stays fixed — only the per-vertex world position the
-    // FFT/wake formulas evaluate at moves. Pair with the world-space foam
-    // texture so foam doesn't drag with vertex indices.
+    // FFT formulas evaluate at moves.
     vec3 rest;
     if (patchMesh) {
         // The patch mesh: the slot's patch from the table, vertex (col, row)
@@ -624,8 +608,6 @@ void main() {
     // world height of the hull's design waterline at the exclusion centre and
     // pitch/roll tilt it in the vessel-local frame (hullLocal). With all
     // three at their defaults this is bit-for-bit the old `disp *= hullFade`.
-    // All footprints go first, so the wakes below all see the finished
-    // surface; with one vessel the order is exactly the old one.
     for (uint k = 0u; k < pc.hullCount; ++k) {
         const OceanHull hu = hulls.h[k];
         vec3        hl     = hullLocal(hu, rest.xz);
@@ -643,151 +625,10 @@ void main() {
         disp.z *= hl.z;
     }
 
-    // === Vessel wakes ===
-    // Analytical wake from each vessel's pose + forward speed:
-    //   B. Bow bump (positive height bulge centred at the prow)
-    //   C/D. Bow V-wedge (two ridges of pushed-aside water along the hull
-    //      sides, forming a V whose vertex is at the bow), traced along the
-    //      vessel's own trail
-    // (The foam trail and ridge foam live in foam_world.comp.)
-    //
-    // All effects are gated by a smoothstep on |forwardSpeed| so the wake
-    // fades to nothing below ~0.5 m/s — avoids the v²-wavelength blow-up
-    // at v=0 and makes anchored vessels (forwardSpeed=0) wake-free without
-    // a separate branch.
-    //
-    // The bow bump and the current-pose V-wedge extend INTO the hull
-    // rectangle near the prow and along the sides; they get multiplied by
-    // the vessel's own `hullFade` so they fall to zero inside the hull and
-    // don't clip through the deck. Every OTHER vessel's footprint fades the
-    // whole wake (`otherFade`), so a ship's V-wedge does not lift the water
-    // through a smaller boat's deck. With one vessel otherFade is exactly 1.
-    //
-    // Normal finite-diff taps below do NOT re-sample the wake — its
-    // contribution to shading normals is small at long wavelengths and
-    // re-sampling would 4× the wake math per vertex.
-    for (uint k = 0u; k < pc.hullCount; ++k) {
-        const OceanHull hu = hulls.h[k];
-        const vec3  hl         = hullLocal(hu, rest.xz);
-        const float wakeLocalX = hl.x;
-        const float wakeLocalZ = hl.y;
-        float otherFade = 1.0;
-        for (uint j = 0u; j < pc.hullCount; ++j) {
-            if (j != k) otherFade *= hullLocal(hulls.h[j], rest.xz).z;
-        }
-        const float hullFade = hl.z * otherFade;
-
-        // A vessel whose waves the wake field makes has neither the bump
-        // nor the V-wedge (VesselWake::analyticWaves).
-        if (hu.analyticWaves == 0u) continue;
-        const float wakeSpeed = abs(hu.forwardSpeed);
-        const float wakeGate  = smoothstep(0.5, 1.5, wakeSpeed);
-        if (wakeGate > 0.0) {
-            const float lX = wakeLocalX;
-            const float lZ = wakeLocalZ;
-
-            // --- B. Bow bump: gaussian centred at the bow (lZ = +halfLength) ---
-            // Amplitude scales with v² (Bernoulli-flavoured), clamped to keep
-            // tall-wave visuals stable. Multiplied by hullFade so the bump
-            // disappears inside the prow and doesn't poke through the deck.
-            const float distFromBow = lZ - hu.halfLength;            // 0 at bow, +ve ahead
-            const float bowR        = 1.5;
-            const float bowG        = exp(-(distFromBow * distFromBow) / (bowR * bowR));
-            const float bowL        = exp(-(lX * lX) / (hu.halfBeam * hu.halfBeam));
-            const float wakeSpeedSq = hu.forwardSpeed * hu.forwardSpeed;
-            const float bowAmp      = clamp(0.012 * wakeSpeedSq, 0.0, 0.4);
-            disp.y += hullFade * wakeGate * bowAmp * bowG * bowL;
-        }
-
-        // --- Historical V-wedge — two sloped ridges diverging from the
-        // bow at ~20° half-angle, traced along the boat's past path.
-        //
-        // For each snapshot of the boat's pose in its trail slice,
-        // compute that sample's V-wedge ridge value at this vertex and
-        // take MAX across all samples. MAX (not sum) is the right
-        // combiner here because the ridges are PHYSICAL CRESTS — the
-        // boundary lines of the V-wake — not interfering wave trains.
-        // Summing per-sample cosines was what produced the fountain-
-        // shaped pillars: 60 samples × cos(...) of different phases
-        // stack constructively into ~√60·amp peaks.
-        //
-        // With MAX along the curved path, each ridge crest is the
-        // envelope of the V-wedges contributed by samples whose bow
-        // pose places this vertex on their boundary line. The result
-        // is two SLOPED RIDGES bending with the boat's turn, fading
-        // backward as the trail ages out.
-        float vWedgeTrail = 0.0;
-        if (hu.trailCount > 0u) {
-            WakeTrailBuf wt = WakeTrailBuf(pc.wakeTrailAddr);
-            for (uint si = 0u; si < hu.trailCount; ++si) {
-                const WakeSample s = wt.s[hu.trailFirst + si];
-                const float sSpeed = abs(s.speed);
-                const float sGate  = smoothstep(0.5, 1.5, sSpeed);
-                if (sGate <= 0.0) continue;
-                const float dx = rest.x - s.worldX;
-                const float dz = rest.z - s.worldZ;
-                const float sLX = s.cosYaw * dx - s.sinYaw * dz;
-                const float sLZ = s.sinYaw * dx + s.cosYaw * dz;
-                const float sDistAft = hu.halfLength - sLZ;
-                if (sDistAft <= 0.0 || sDistAft > hu.halfLength * 6.0) continue;
-                // Per-sample hullFade — same silhouette taper as the
-                // current-pose hull exclusion above, but anchored to THIS
-                // sample's pose. Suppresses V-wedge ridges inside the
-                // sample's hull footprint so the wake doesn't lift water
-                // under the boat as the boat (or any historical past
-                // position of it) coincides with this vertex.
-                const float uHull = clamp(-sLZ / hu.halfLength, -1.0, 1.0);
-                float sHalfBeamAtLZ;
-                if (uHull <= 0.0) {
-                    sHalfBeamAtLZ = hu.halfBeam *
-                                    pow(max(1.0 - uHull * uHull, 0.0), 0.6);
-                } else {
-                    sHalfBeamAtLZ = hu.halfBeam * (1.0 - (1.0 - hu.sternBeam) * uHull * uHull);
-                }
-                const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
-                const float sHullEdgeZ = abs(sLZ) - hu.halfLength;
-                const float sHullFade  = smoothstep(0.0, oceanHullMargin(hu.halfBeam),
-                                                    max(sHullEdgeX, sHullEdgeZ));
-                if (sHullFade <= 0.0) continue;
-                const float tanAV     = 0.36;
-                const float expectedX = tanAV * sDistAft;
-                const float dRidge    = abs(abs(sLX) - expectedX);
-                const float sigmaR    = 0.6 + 0.05 * sDistAft;
-                const float ridge     = exp(-(dRidge * dRidge) / (sigmaR * sigmaR));
-                const float alongDec  = exp(-sDistAft / (hu.halfLength * 4.0));
-                const float ageFade   = exp(-s.age / 5.0);
-                const float vAmp      = clamp(0.016 * sSpeed * sSpeed +
-                                              0.06 * sSpeed, 0.0, 1.0);
-                vWedgeTrail = max(vWedgeTrail,
-                                  sGate * vAmp * ridge * alongDec * ageFade * sHullFade);
-            }
-            disp.y += vWedgeTrail * otherFade;
-        } else {
-            // Fallback: no historical trail — emit a single V-wedge from
-            // the current pose. Bow-anchored ridges, same shape as the
-            // trail-summed historical path.
-            const float distAft = hu.halfLength - wakeLocalZ;
-            if (wakeGate > 0.0 && distAft > 0.0 && distAft < hu.halfLength * 6.0) {
-                const float tanAV     = 0.36;
-                const float expectedX = tanAV * distAft;
-                const float dRidge    = abs(abs(wakeLocalX) - expectedX);
-                const float sigmaR    = 0.6 + 0.05 * distAft;
-                const float ridge     = exp(-(dRidge * dRidge) / (sigmaR * sigmaR));
-                const float alongDec  = exp(-distAft / (hu.halfLength * 4.0));
-                const float vAmp      = clamp(0.016 * wakeSpeed * wakeSpeed +
-                                              0.06 * wakeSpeed, 0.0, 1.0);
-                // hullFade is this vessel's current-pose silhouette (times
-                // the other footprints) — same suppression-inside-hull
-                // behaviour as the trail path.
-                disp.y += hullFade * wakeGate * vAmp * ridge * alongDec;
-            }
-        }
-    }
-
     // === The wake field's waves ===
-    // Their height (wakeRippleHeight), gone inside every footprint as the
-    // analytic wake is. The mesh's spacing here is the warp's derivative,
-    // times the ray-tracing proxy's stride.
+    // Their height (wakeRippleHeight), gone inside every footprint. The
+    // mesh's spacing here is the warp's derivative, times the ray-tracing
+    // proxy's stride.
     if (pc.wakeTableAddr != 0ul) {
         float spX = patchMesh ? gSpacing : pc.planeSizeX / float(pc.gridDimX - 1u);
         float spZ = patchMesh ? gSpacing : pc.planeSizeZ / float(pc.gridDimZ - 1u);
@@ -930,12 +771,4 @@ void main() {
             }
         }
     }
-
-    // Foam used to be computed per-vertex right here (Jacobian + wake
-    // formulas + disturbance splats + persistence decay) and written to a
-    // per-vertex foam buffer via pc.foamAddr. Foam now lives in a world-
-    // space texture built by foam_world.comp, pinned to world XZ regardless
-    // of mesh layout, so both the buffer and the foamAddr push-constant are
-    // gone, and so is the wake-foam math that fed it. foam_world.comp owns
-    // the wake foam and the disturbance splats.
 }

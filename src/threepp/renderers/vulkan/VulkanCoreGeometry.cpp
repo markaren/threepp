@@ -3823,91 +3823,18 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             VkDeviceAddress lodTableAddr = 0;
             if (st.lodSlots > 0u) lodTableAddr = updateOceanLod(dm, st);
 
-            // (4a) Foam-disturbance SSBO upload. Lazy-allocate the host-
-            // mapped buffer on first use, then memcpy the (possibly empty)
-            // user-supplied list each frame. Capped at kMaxFoamDisturbances;
-            // extras are dropped silently. The fence wait at frame start
-            // guarantees the GPU is done reading last frame's disturbances
-            // before we overwrite, so no double-buffering is needed.
-            const uint32_t kFoamDisturbStride = 16u;  // 4 floats per entry
-            const uint32_t kFoamDisturbBytes  =
-                    DisplacedMeshState::kMaxFoamDisturbances * kFoamDisturbStride;
-            if (st.foamDisturbBuffer.handle == VK_NULL_HANDLE) {
-                st.foamDisturbBuffer = createBuffer(
-                        ctx->allocator(), ctx->device(), kFoamDisturbBytes,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                ctx->setObjectName(st.foamDisturbBuffer.handle, "ocean.foamDisturb");
-            }
-            // Foam dispatch interval: THREEPP_OCEAN_FOAM_INTERVAL=N runs the
-            // foam_world accumulator every Nth frame (default 1 = every
-            // frame). The decay push constant is dt-aware, so a skipped frame
-            // just widens the next dispatch's decay step. Disturbance stamps
-            // supplied on skipped frames are latched in st.foamDisturbCarry
-            // and uploaded as a union with the next dispatch's list — the
-            // shader combines stamps with max(), so re-stamping a source that
-            // persists across frames is idempotent. The buffer's only consumer
-            // is foam_world (water_displace no longer carries a disturbAddr at
-            // all), so a deferred upload changes nothing else.
-            static const uint32_t kFoamInterval =
-                    static_cast<uint32_t>(std::max(vulkan::env::integer("THREEPP_OCEAN_FOAM_INTERVAL").value_or(2), 1LL));
-            const bool runFoam = (st.foamTick++ % kFoamInterval) == 0u;
-
-            static_assert(sizeof(DisplacedMeshState::FoamDisturbCarry) ==
-                                  sizeof(DisplacedMesh::FoamDisturbance),
-                          "carry layout must mirror FoamDisturbance (memcpy'd)");
-            auto latchDisturbances = [&] {
-                for (const auto& d : dm.foamDisturbances)
-                    st.foamDisturbCarry.push_back(
-                            {d.worldX, d.worldZ, d.radius, d.intensity});
-                if (st.foamDisturbCarry.size() >
-                    DisplacedMeshState::kMaxFoamDisturbances)
-                    st.foamDisturbCarry.erase(
-                            st.foamDisturbCarry.begin(),
-                            st.foamDisturbCarry.end() -
-                                    DisplacedMeshState::kMaxFoamDisturbances);
-            };
-            uint32_t disturbCount = 0;
-            if (!runFoam) {
-                latchDisturbances();
-            } else if (!st.foamDisturbCarry.empty()) {
-                latchDisturbances();// union: carried + this frame's list
-                disturbCount = static_cast<uint32_t>(st.foamDisturbCarry.size());
-                uploadHostVisible(ctx->allocator(), st.foamDisturbBuffer,
-                                  st.foamDisturbCarry.data(),
-                                  disturbCount * kFoamDisturbStride);
-                st.foamDisturbCarry.clear();
-            } else {
-                disturbCount = static_cast<uint32_t>(std::min<size_t>(
-                        dm.foamDisturbances.size(),
-                        DisplacedMeshState::kMaxFoamDisturbances));
-                if (disturbCount > 0u) {
-                    uploadHostVisible(ctx->allocator(), st.foamDisturbBuffer,
-                                      dm.foamDisturbances.data(),
-                                      disturbCount * kFoamDisturbStride);
-                }
-            }
-
-            // (4b) Vessel buffer: the active vessels' hull records, then each
-            // one's wake trail in its own kMaxWakeSamples-slot slice (the
-            // oldest kMaxWakeSamples samples; the rest are dropped). This
+            // (4a) Vessel buffer: the active vessels' footprints. This
             // frame's slot of the ring (see DisplacedMeshState::vesselBuffer),
             // allocated with the first active vessel and rewritten in place —
             // nothing is allocated per frame.
             static_assert(DisplacedMeshState::kMaxVessels == DisplacedMesh::kMaxVessels);
             static_assert(DisplacedMeshState::kVesselHullBytes ==
                           DisplacedMeshState::kMaxVessels * sizeof(vulkan::OceanHullGpu));
-            static_assert(sizeof(DisplacedMesh::WakeSample) == 32u,
-                          "the trail slices are memcpy'd; water_displace/foam_world read 32-byte samples");
             std::array<vulkan::OceanHullGpu, DisplacedMesh::kMaxVessels> hulls{};
-            std::array<const DisplacedMesh::VesselWake*, DisplacedMesh::kMaxVessels> hullWakes{};
             uint32_t hullCount = 0;
             for (uint32_t v = 0; v < DisplacedMesh::kMaxVessels; ++v) {
                 const DisplacedMesh::HullExclusion& he = dm.vesselHull(v);
                 if (!(he.halfLength > 0.f)) continue;
-                const DisplacedMesh::VesselWake& wk = dm.vesselWake(v);
                 vulkan::OceanHullGpu& g = hulls[hullCount];
                 g.centerX      = he.centerX;
                 g.centerZ      = he.centerZ;
@@ -3915,26 +3842,19 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 g.halfBeam     = he.halfBeam;
                 g.sinYaw       = he.sinYaw;
                 g.cosYaw       = he.cosYaw;
-                g.forwardSpeed = wk.enabled ? wk.forwardSpeed : 0.0f;
                 g.centerY      = he.centerY;
                 g.pitch        = he.pitch;
                 g.roll         = he.roll;
-                g.trailFirst   = hullCount * DisplacedMeshState::kMaxWakeSamples;
-                g.trailCount   = static_cast<uint32_t>(std::min<size_t>(
-                        wk.trail.size(), DisplacedMeshState::kMaxWakeSamples));
-                g.analyticWaves = wk.analyticWaves ? 1u : 0u;
                 g.sternBeam    = std::clamp(he.sternBeam, 0.f, 1.f);
-                hullWakes[hullCount] = &wk;
                 ++hullCount;
             }
             VkDeviceAddress hullAddr = 0;
-            VkDeviceAddress wakeTrailAddr = 0;
             if (hullCount > 0u) {
                 if (st.vesselBuffer[0].handle == VK_NULL_HANDLE) {
                     for (uint32_t s = 0; s < kFramesInFlight; ++s) {
                         st.vesselBuffer[s] = createBuffer(
                                 ctx->allocator(), ctx->device(),
-                                DisplacedMeshState::kVesselHullBytes + DisplacedMeshState::kVesselTrailBytes,
+                                DisplacedMeshState::kVesselHullBytes,
                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                 VMA_MEMORY_USAGE_AUTO,
@@ -3944,21 +3864,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     }
                 }
                 const Buffer& vb = st.vesselBuffer[currentFrame];
-                void* mapped = nullptr;
-                check(vmaMapMemory(ctx->allocator(), vb.alloc, &mapped), "vmaMapMemory(ocean vessels)");
-                auto* dst = static_cast<uint8_t*>(mapped);
-                std::memcpy(dst, hulls.data(), hullCount * sizeof(vulkan::OceanHullGpu));
-                for (uint32_t k = 0; k < hullCount; ++k) {
-                    if (hulls[k].trailCount == 0u) continue;
-                    std::memcpy(dst + DisplacedMeshState::kVesselHullBytes +
-                                        size_t(hulls[k].trailFirst) * sizeof(DisplacedMesh::WakeSample),
-                                hullWakes[k]->trail.data(),
-                                hulls[k].trailCount * sizeof(DisplacedMesh::WakeSample));
-                }
-                flushHostWrites(ctx->allocator(), vb.alloc);
-                vmaUnmapMemory(ctx->allocator(), vb.alloc);
-                hullAddr      = vb.address;
-                wakeTrailAddr = vb.address + DisplacedMeshState::kVesselHullBytes;
+                uploadHostVisible(ctx->allocator(), vb, hulls.data(), hullCount * sizeof(vulkan::OceanHullGpu));
+                hullAddr = vb.address;
             }
 
             vulkan::WaterDisplacePipeline::PushConstants pc{};
@@ -3980,7 +3887,6 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.warpCenterZ    = dm.warp.centerZ;
             pc.warpHalfRange  = dm.warp.halfRange;
             pc.warpCoefA      = dm.warp.coefA;
-            pc.wakeTrailAddr  = wakeTrailAddr;
             pc.hullAddr       = hullAddr;
             pc.hullCount      = hullCount;
             // Crest foam takes the UV channel (water has no texture to read
@@ -4031,55 +3937,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             waterDisplace_->recordDispatch(cb, st.chopOn ? st.displaceChopDS : st.displaceDS, pc, st.chopOn);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
 
-            // (4c) World-space foam pass — same inputs as water_displace
-            // (cascades, disturbances, hull/wake state) but evaluated per
-            // foam-texel rather than per mesh vertex. Replaces the per-
-            // vertex foam buffer that water_displace used to write. Run
-            // AFTER water_displace finishes so we share the descriptor
-            // pool's cascade-image bindings without a layout flip; the
-            // cascades stay in GENERAL throughout. Skipped entirely on
-            // off-interval frames: the accumulator keeps last dispatch's
-            // content (reads need no barrier, layout stays GENERAL) and the
-            // next dispatch's dt-aware decay covers the gap.
-            const bool timeFoam = timed && (runFoam || st.crestFoamOn);
+            const bool timeFoam = timed && st.crestFoamOn;
             if (timeFoam) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);
-            if (runFoam) {
-                // Wall-clock foam persistence. The old fixed 0.992/frame tied
-                // the foam half-life to frame rate (≈1.4 s at 60 fps, half
-                // that at 120) — same bug class as the TAA temporal constants.
-                // τ = 2 s reproduces the old look at 60 fps. dt clamped so an
-                // alt-tab / loading stall can't wipe the accumulator in one
-                // frame.
-                const double nowSec = frameNowSec();
-                float foamDecay = 0.992f;// first frame: no dt reference yet
-                if (st.foamPrevTimeSec >= 0.0) {
-                    const float dt = std::clamp(
-                            static_cast<float>(nowSec - st.foamPrevTimeSec),
-                            0.0f, 0.25f);
-                    foamDecay = std::exp(-dt / 2.0f);
-                }
-                st.foamPrevTimeSec = nowSec;
-
-                vulkan::FoamWorldPipeline::PushConstants fpc{};
-                fpc.disturbAddr    = st.foamDisturbBuffer.address;
-                fpc.foamRes        = st.foamRes;
-                fpc.foamTileSize   = st.foamTileSize;
-                fpc.tileSize0      = dm.params.tileSize0;
-                fpc.tileSize1      = dm.params.tileSize1;
-                fpc.tileSize2      = dm.params.tileSize2;
-                fpc.waveScale      = dm.params.waveScale;
-                fpc.choppiness     = dm.params.choppiness;
-                fpc.cascadeMask    = st.cascadeMask;
-                fpc.disturbCount   = disturbCount;
-                fpc.decay          = foamDecay;
-                fpc.wakeTrailAddr  = wakeTrailAddr;
-                fpc.hullAddr       = hullAddr;
-                fpc.hullCount      = hullCount;
-                foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
-                // The deferred shade samples the foam image (binding 44) later
-                // this frame; the frame graph orders that read (the water pass
-                // declares the image).
-            }
 
             // (4c') Crest foam (DisplacedMesh::Params::crestFoam): deposit
             // where a crest breaks, decay the rest, in the texture over the
@@ -5622,11 +5481,9 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             blas->liveCheck = dm.geometry();
 
             // FFT-displaced ocean mesh: mark it so the chit / deferred passes
-            // apply world-space foam + thin-shell water shading. Foam itself
-            // lives in a world-space texture built by foam_world.comp, so the
-            // only per-mesh state needed here is this "is water" marker (it
-            // used to be a zero-filled per-vertex foam buffer, read solely for
-            // its non-null address — the contents were dead).
+            // apply the thin-shell water shading (it used to be a zero-filled
+            // per-vertex foam buffer, read solely for its non-null address —
+            // the contents were dead).
             blas->isOceanSurface = true;
 
             // Per-vertex previous-pose buffer for hybrid raster motion vec —
@@ -5839,136 +5696,6 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 ctx->setObjectName(state->scratchA.view,  "ocean.scratchA (IFFT ping-pong)");
             }
 
-            // World-space foam image. Coverage equals the cascade-0 tile
-            // (matches the FFT periodicity, so REPEAT-sampling at any
-            // world XZ folds back into the same texture cell). Resolution
-            // targets ~1 m per texel — capped at 2048² and floored at 256²
-            // so a small pond isn't handed a giant accumulator. The target
-            // was 0.5 m/texel (1 km tile → 2048², 16 MB) until the 2026-08
-            // pass bench: foam_world was the ocean's single biggest GPU item
-            // at 0.74 ms/frame, 1 m/texel cuts it to 0.28 ms, and A/B
-            // captures at wind 10/16 (whitecap field, wake-trail sheet,
-            // vista) were indistinguishable — foam is a decayed accumulator
-            // sampled bilinearly, so the detail floor is the stamp widths,
-            // not the texel grid. THREEPP_OCEAN_FOAM_TEXEL=0.5 restores the
-            // old density. R32F storage so both compute imageLoad/Store and
-            // chit linear sampling work without format conversions.
-            {
-                // THREEPP_OCEAN_FOAM_RES caps the foam accumulator's edge (power
-                // of two). Raise it to 2048 to restore the pre-cap density on a
-                // large ocean; see the cost note below.
-                static const uint32_t kFoamResCap = static_cast<uint32_t>(
-                        std::clamp(vulkan::env::integer("THREEPP_OCEAN_FOAM_RES").value_or(1024), 256LL, 2048LL));
-                static const float kFoamTexelTarget = [] {
-                    const float v = static_cast<float>(vulkan::env::number("THREEPP_OCEAN_FOAM_TEXEL").value_or(1.0));
-                    return v > 0.f ? v : 1.0f;
-                }();
-                // Cap by COST, not by texture size. The loop below targets a
-                // fixed texel SIZE, so the dispatch grows with tile AREA: the
-                // fjord's 3200 m cascade-0 tile hit the old 2048 ceiling at
-                // 4.2 M texels/frame (2.5-3.0 ms) while a 500 m ocean bought
-                // the same visual density for ~1/40th. 2048 read as "largest
-                // sane texture"; what actually matters is the dispatch cost,
-                // and 1024^2 = 1 M texels lands at ~0.9 ms. Small oceans never
-                // reach the cap, so this changes nothing for them.
-                uint32_t foamRes = 256u;
-                while (foamRes < kFoamResCap && float(foamRes) * kFoamTexelTarget < dm.params.tileSize0)
-                    foamRes *= 2u;
-                state->foamRes      = foamRes;
-                state->foamTileSize = dm.params.tileSize0;
-                // Attach the accumulator config to any run that is profiling.
-                // Foam cost is set by texel COUNT, so a foam number without its
-                // foamRes is ambiguous — an unattached 1024-vs-2048 assumption
-                // manufactured a phantom 3.4x per-texel anomaly once already.
-                if (vulkan::cpuprof::Registry::get().on) {
-                    THREEPP_LOGF(vulkan::kLogCpuProf, Info, "foamRes=%u tileSize0=%.1f texelTarget=%.2f "
-                                 "-> %.2f m/texel, %.2fM texels",
-                                 foamRes, double(dm.params.tileSize0), double(kFoamTexelTarget),
-                                 double(dm.params.tileSize0) / double(foamRes),
-                                 double(foamRes) * double(foamRes) / 1.0e6);
-                }
-                VkImageCreateInfo ici{};
-                ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-                ici.imageType     = VK_IMAGE_TYPE_2D;
-                ici.format        = VK_FORMAT_R32_SFLOAT;
-                ici.extent        = {state->foamRes, state->foamRes, 1};
-                ici.mipLevels     = 1;
-                ici.arrayLayers   = 1;
-                ici.samples       = VK_SAMPLE_COUNT_1_BIT;
-                ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-                // TRANSFER_SRC is for VulkanRenderer::readOceanFoam (audits).
-                ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
-                                    VK_IMAGE_USAGE_SAMPLED_BIT |
-                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-                ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-                ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                VmaAllocationCreateInfo aci{};
-                aci.usage = VMA_MEMORY_USAGE_AUTO;
-                check(vmaCreateImage(ctx->allocator(), &ici, &aci,
-                                     &state->foamImage.image, &state->foamImage.alloc, nullptr),
-                      "vmaCreateImage(foamWorld)");
-                state->foamImage.format = VK_FORMAT_R32_SFLOAT;
-                state->foamImage.width  = state->foamRes;
-                state->foamImage.height = state->foamRes;
-                VkImageViewCreateInfo vci{};
-                vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                vci.image = state->foamImage.image;
-                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                vci.format = VK_FORMAT_R32_SFLOAT;
-                vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                check(vulkan::createImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
-                      "vulkan::createImageView(foamWorld)");
-                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (R32F)");
-                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (R32F)");
-
-                // Initial clear to zero + layout transition to GENERAL so the
-                // first foam_world dispatch's imageLoad reads 0 (no foam yet)
-                // and the chit's linear sampler reads from a defined image.
-                VkCommandBuffer cb = beginOneShot();
-                {
-                    VkImageMemoryBarrier imb{};
-                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                    imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    imb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                    imb.srcAccessMask = 0;
-                    imb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    imb.image = state->foamImage.image;
-                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    vkCmdPipelineBarrier(cb,
-                            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            0, 0, nullptr, 0, nullptr, 1, &imb);
-                }
-                VkClearColorValue cc{};
-                cc.float32[0] = 0.0f;
-                VkImageSubresourceRange sub{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdClearColorImage(cb, state->foamImage.image,
-                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                     &cc, 1, &sub);
-                {
-                    VkImageMemoryBarrier imb{};
-                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                    imb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                    imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    imb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-                    imb.image = state->foamImage.image;
-                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    vkCmdPipelineBarrier(cb,
-                            VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                    ctx->rtShaderStage(),
-                            0, 0, nullptr, 0, nullptr, 1, &imb);
-                }
-                endAndSubmitOneShot(cb);
-                state->foamImage.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
-            }
-
             // Allocate this mesh's displace descriptor set + write bindings.
             state->displaceDS = waterDisplace_->allocateMeshDescriptorSet();
 
@@ -5998,41 +5725,6 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             }
             vulkan::updateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
 
-            // Foam-world descriptor set — same cascade bindings 0..5 as the
-            // displace set, plus binding 6 = the storage image foam target.
-            state->foamWorldDS = foamWorld_->allocateMeshDescriptorSet();
-            std::array<VkDescriptorImageInfo, 6> foamCascadeInfos{};
-            for (uint32_t i = 0; i < 3; ++i) {
-                const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
-                const auto& c = state->cascades[srcCascade];
-                foamCascadeInfos[i * 2 + 0].sampler     = foamWorld_->sampler();
-                foamCascadeInfos[i * 2 + 0].imageView   = c.dyn->ht().view;
-                foamCascadeInfos[i * 2 + 0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                foamCascadeInfos[i * 2 + 1].sampler     = foamWorld_->sampler();
-                foamCascadeInfos[i * 2 + 1].imageView   = c.dyn->displacement().view;
-                foamCascadeInfos[i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            }
-            VkDescriptorImageInfo foamStorageInfo{};
-            foamStorageInfo.sampler     = VK_NULL_HANDLE;
-            foamStorageInfo.imageView   = state->foamImage.view;
-            foamStorageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            std::array<VkWriteDescriptorSet, 7> fws{};
-            for (uint32_t i = 0; i < 6; ++i) {
-                fws[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                fws[i].dstSet = state->foamWorldDS;
-                fws[i].dstBinding = i;
-                fws[i].descriptorCount = 1;
-                fws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                fws[i].pImageInfo = &foamCascadeInfos[i];
-            }
-            fws[6].sType          = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            fws[6].dstSet         = state->foamWorldDS;
-            fws[6].dstBinding     = 6;
-            fws[6].descriptorCount= 1;
-            fws[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            fws[6].pImageInfo     = &foamStorageInfo;
-            vulkan::updateDescriptorSets(ctx->device(), uint32_t(fws.size()), fws.data(), 0, nullptr);
-
             // Hand the smallest enabled cascade's height image to closest_hit
             // (binding 32) for sub-mesh-resolution normal perturbation. Picks
             // the highest enabled bit — the cascade with the smallest tileSize
@@ -6056,12 +5748,9 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 }
             }
 
-            // Hand this mesh's world-foam view to closest_hit (binding 33) so
-            // the chit can sample foam at arbitrary world XZ during shading.
-            // Like oceanFineHeight above, the foam VkImage handle is stable
-            // until the DisplacedMesh is destroyed, so we only rewrite once.
-            oceanFoamView     = state->foamImage.view;
-            oceanFoamTileSize = state->foamTileSize;
+            // The tile the crest foam's texture covers (its rest coordinates
+            // repeat with cascade 0).
+            oceanFoamTileSize = dm.params.tileSize0;
 
             // The wake field: the producers' patches if the mesh has them
             // switched on (resolution and patch count are latched here), and on

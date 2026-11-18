@@ -1267,8 +1267,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // Lit as foam is: a Lambertian reflector of albedo 0.55 where it is thick
     // (Whitlock, Bartlett and Gurganus 1982), under water's own interface
     // (F0 = 0.02); where it has only just closed it is a thin layer and lets
-    // some of the water through. From below it is the dull raft the
-    // accumulator's foam is.
+    // some of the water through. From below it is a dull raft: foam seen
+    // from underneath.
     if (kOceanCrestFoam != 0u && pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
         const vec2  q        = wP - gCrestDisp;
         const float distF    = length(P - gPrimaryOrigin);
@@ -1441,78 +1441,6 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
 #if CREST_FOAM_SCOUT == 2
         return vec3(0.0);
 #endif
-    }
-
-    // Foam: folded-surface coverage (foamAddress attribute + live world foam
-    // texture) bleaches a diffuse whitewater layer over the glass. The world
-    // accumulator decays exponentially, so COVERAGE IS FRESHNESS — the mask
-    // uses it to run a whitewater lifecycle instead of uniformly dimming:
-    //   fresh (≈1)  — near-solid sheet, micro-bubble texture
-    //   aging (mid) — fBm pools bite harder as coverage drops, tearing the
-    //                 sheet into patches
-    //   residue     — a ridged filament web (the lace a collapsed whitecap
-    //                 leaves behind) outlives the sheet, thinning to streaks
-    // Matches closest_hit's foam shading.
-    if (pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
-        // Bicubic + 1.3 gain: the B-spline kernel approximates rather than
-        // interpolates, attenuating an isolated single-texel whitecap to
-        // ~0.44 of its stored value — the gain restores it; patch interiors
-        // already read ~1 and just clamp.
-        const float foamCoverage = clamp(sampleFoamBicubic(wP / pc.oceanFoamTileSize) * 1.3, 0.0, 1.0);
-        if (foamCoverage > 0.0) {
-            const vec2  drift = vec2(0.42, 0.71) * pc.timeSec * 0.18;
-            // Detail from the baked foam tile (binding 34). Manual LOD —
-            // compute has no derivatives; a distance-based estimate (pixel
-            // angle ≈ 0.001 rad) lands within ±1 mip of the true footprint,
-            // indistinguishable for band-limited noise content.
-            const float distF   = length(P - gPrimaryOrigin);// view leg of THIS pixel's ray
-            const float lodMicro = log2(max(1.0, distF * 0.128)); // 512 texels / 4 m · 0.001
-            const float lodLace  = log2(max(1.0, distF * 0.0427));// 512 texels / 12 m · 0.001
-            const float lodEdge  = log2(max(1.0, distF * 0.064)); // 512 texels / 8 m · 0.001
-            // Sheet: solid where coverage beats the pool noise; the noise
-            // bite scales with age so fresh caps read unbroken. Calibrated
-            // to foam_world.comp's GRADED soft-knee deposits (solid from
-            // coverage ≈ 0.55) — retune the two together.
-            //
-            // The coverage accumulator only resolves ~1 m (cascade-0 texel
-            // bumps survive the graded deposit), so a sheet edge cut purely
-            // by coverage reads TEXELATED. A zero-mean mid-frequency sample
-            // of the detail tile (R over an 8 m mapping → 0.3–1 m features)
-            // erodes the threshold so the boundary detail comes from the
-            // texture — same trick that fixed the lace streaks.
-            const float pools = fbm4(wP * 0.18 + drift);
-            const float edgeN = textureLod(foamDetailTex, wP * 0.125 + drift * 0.07, lodEdge).r;
-            const float sheet = smoothstep(0.03, 0.42,
-                    foamCoverage - pools * mix(0.50, 0.22, foamCoverage)
-                                 - (edgeN - 0.5) * 0.30);
-            // Lace: ridged filament pattern from the detail tile (~1.2 m
-            // cells over the 12 m mapping). Fresh foam widens the band until
-            // it merges with the sheet; old foam keeps only filament cores.
-            const float lace = textureLod(foamDetailTex, wP * (1.0 / 12.0) + drift * 0.12, lodLace).g;
-            const float web  = smoothstep(0.55, 0.80, lace * (0.55 + 0.45 * foamCoverage)) *
-                               smoothstep(0.03, 0.22, foamCoverage);
-            // From BELOW, foam is not paint on the surface — it is a raft of
-            // bubbles seen from underneath, which reads as a dull patch in the
-            // window rather than white. The lifecycle above still runs (the mask
-            // is where the sheet IS), only its opacity collapses; killing it
-            // outright would leave a breaking crest looking like clear water.
-            const float foamMask = max(sheet, web * 0.8) * (below ? 0.12 : 1.0);
-            if (foamMask > 0.0) {
-                const float micro = textureLod(foamDetailTex, wP * 0.25 - drift * 0.1, lodMicro).r;
-                vec3 foamCol = mix(vec3(0.62, 0.68, 0.72), vec3(0.97, 0.99, 1.00), micro);
-                foamCol = mix(foamCol, vec3(0.97, 0.99, 1.00), 0.35 * foamCoverage);// fresh caps brighter
-                const float foamRough= mix(1.0, 0.45, micro);
-                const vec3  foamDiff = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
-                const vec3  foamLit  = shadeDiffuseDirect(P, N, V, foamCol, foamRough, 0.0,
-                                                          vec3(0.0), doShadows, foamDiff,
-                                                          vec3(0.0), 0.0,
-                                                          vec3(0.04),
-                                                          0.0, 1.3, 0.0, seed,
-                                                          /*addEmissive=*/true,// foam: no iridescence
-                                                          /*cheapHit=*/false);
-                col = mix(col, foamLit, foamMask);
-            }
-        }
     }
 
     // ── WAKE FIELD: the film on top ──────────────────────────────────────────

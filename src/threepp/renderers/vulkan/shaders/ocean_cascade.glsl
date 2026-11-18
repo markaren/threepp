@@ -1,6 +1,6 @@
 // Ocean cascade sampling helpers (the sample domain, a C1 bicubic fetch),
 // shared by every GLSL consumer of the FFT cascade textures
-// (water_displace.comp, foam_world.comp). The rotation
+// (water_displace.comp, foam_crest.comp, shore_source.comp). The rotation
 // constants live in vulkan_shared.h so the C++ mirror
 // (DisplacedMesh::sampleHeight) and the host-side windTheta compensation use
 // the exact same literals — see the comment block there for the why.
@@ -26,7 +26,7 @@ vec2 oceanC1World(vec2 v) {
 // Bicubic B-spline RG fetch (4 bilinear taps, Sigg & Hadwiger). The kernel is
 // C1, so neither a derivative of the fetched field nor a mesh finer than its
 // texels finds a kink at a texel boundary, as both do in a bilinear fetch:
-// foam_world's Jacobian and water_displace's displacement say what that broke.
+// foam_crest's Jacobian and water_displace's displacement say what that broke.
 vec2 sampleBicubicRG(sampler2D tex, vec2 uv) {
     const vec2 res = vec2(textureSize(tex, 0));
     const vec2 st  = uv * res - 0.5;
@@ -50,19 +50,18 @@ vec2 sampleBicubicRG(sampler2D tex, vec2 uv) {
 }
 
 // Width (m) of the band outside a hull's footprint over which the sea blends from
-// the vessel's waterline plane back to the wave field, and inside which the wake
-// ridges fade in. It scales with the hull, 0.6 x half-beam clamped to [0.3, 2] m:
-// a fixed 2 m, sized for the 28 m Gunnerus (4.5 m half-beam, which keeps exactly
-// 2 m), flattened a glassy apron a third of a 6 m USV's length ahead of her bow.
-// DisplacedMesh::sampleWakeHeight mirrors this.
+// the vessel's waterline plane back to the wave field. It scales with the hull,
+// 0.6 x half-beam clamped to [0.3, 2] m: a fixed 2 m, sized for the 28 m Gunnerus
+// (4.5 m half-beam, which keeps exactly 2 m), flattened a glassy apron a third of
+// a 6 m USV's length ahead of her bow.
 float oceanHullMargin(float halfBeam) {
     return clamp(0.6 * halfBeam, 0.3, 2.0);
 }
 
-// One vessel as the ocean passes read it: DisplacedMesh::HullExclusion, the
-// wake's forward speed and the vessel's slice of the wake-trail buffer. The host
-// packs only the active vessels (halfLength > 0). 48 bytes, mirrored field for
-// field by vulkan::OceanHullGpu (WaterDisplacePipeline.hpp).
+// One vessel's footprint as the ocean passes read it: DisplacedMesh::
+// HullExclusion. The host packs only the active vessels (halfLength > 0). 40
+// bytes, mirrored field for field by vulkan::OceanHullGpu
+// (WaterDisplacePipeline.hpp).
 struct OceanHull {
     float centerX;
     float centerZ;
@@ -70,13 +69,9 @@ struct OceanHull {
     float halfBeam;
     float sinYaw;
     float cosYaw;
-    float forwardSpeed; // m/s along +heading; 0 = no wake (or the wake is disabled)
     float centerY;      // waterline plane: world y at (centerX, centerZ),
     float pitch;        // +bow up (+localZ),
     float roll;         // +starboard up (+localX)
-    uint  trailFirst;   // this vessel's samples in the wake-trail buffer
-    uint  trailCount;
-    uint  analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam; 0 = the wake field makes its waves
     float sternBeam;    // the share of her beam the footprint keeps at her stern (HullExclusion::sternBeam)
 };
 
@@ -89,8 +84,7 @@ vec3 hullLocal(OceanHull hu, vec2 p) {
     const float dz = p.y - hu.centerZ;
     const float lX = hu.cosYaw * dx - hu.sinYaw * dz;
     const float lZ = hu.sinYaw * dx + hu.cosYaw * dz;
-    // Hull plan-form half-width at this length fraction — matches
-    // the `hullHalfWidth` lambda the example uses for foam splats.
+    // Hull plan-form half-width at this length fraction.
     // Bow tapers sharply (≈ elliptical with exponent 0.6) so wave
     // suppression follows the actual prow instead of the rectangular
     // bbox corner; stern keeps sternBeam of the beam (0.75 by default: a transom-style aft form).

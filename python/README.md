@@ -346,9 +346,8 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
 - **FFT ocean** (renders under the Vulkan backend): `tp.Ocean(size=1000.0)` is a
   ready-made 3-cascade Phillips/FFT-displaced water surface — waves, foam, and
   transmission. Add it to a scene and render. Tune `ocean.params` (wind / cascades
-  / choppiness), pack vertex density toward any focus with `warp_toward(x, z)`, add
-  `add_foam_disturbance(...)` splats, and read the wave height on the CPU with
-  `sample_height(x, z)` (lazy opt-in: the first call enables the GPU->CPU
+  / choppiness), pack vertex density toward any focus with `warp_toward(x, z)`,
+  and read the wave height on the CPU with `sample_height(x, z)` (lazy opt-in: the first call enables the GPU->CPU
   mirror and may return 0 — values are live from the next rendered frame).
   The low-level `tp.DisplacedMesh` (own geometry + material)
   is exposed too. Not tied to any "hero" object — see

@@ -1215,24 +1215,13 @@ def test_ocean_is_displaced_mesh_with_knobs():
     assert ocean.params.wind_speed == pytest.approx(6.5)
     ocean.warp_toward(10.0, -4.0, 0.2)
     assert ocean.warp.half_range > 0 and ocean.warp.center_x == pytest.approx(10.0)
-    # foam API is callable
-    ocean.add_foam_disturbance(0.0, 0.0, 2.0, 1.0)
-    ocean.clear_foam_disturbances()
-    # the vessel pair: hull exclusion (incl. the waterline plane) + wake trail
+    # a vessel's footprint: the hull exclusion, on its own waterline plane
     ocean.hull_exclusion.set_pose(4.0, -3.0, 0.7, yaw=0.5, pitch=0.04, roll=-0.2,
                                   half_length=4.8, half_beam=1.5)
     h = ocean.hull_exclusion
     assert (h.center_x, h.center_z, h.center_y) == pytest.approx((4.0, -3.0, 0.7))
     assert (h.pitch, h.roll, h.half_length) == pytest.approx((0.04, -0.2, 4.8))
     assert h.sin_yaw == pytest.approx(math.sin(0.5))
-    ocean.wake.forward_speed = 3.2
-    ocean.add_wake_sample(4.0, -3.0, h.sin_yaw, h.cos_yaw, 3.2)
-    assert ocean.age_wake(0.5) == 1 and ocean.wake.trail[0].age == pytest.approx(0.5)
-    assert ocean.age_wake(10.0) == 0          # aged past max_age -> dropped
-    # sampleWakeHeight runs off the CURRENT pose even with an empty trail
-    assert ocean.sample_wake_height(6.0, -3.0) > 0.0
-    ocean.wake.forward_speed = 0.0            # below the speed gate -> no wake
-    assert ocean.sample_wake_height(6.0, -3.0) == pytest.approx(0.0)
 
 
 def test_ocean_carries_several_vessels():
@@ -1240,38 +1229,19 @@ def test_ocean_carries_several_vessels():
     assert tp.DisplacedMesh.MAX_VESSELS == 8
     with pytest.raises(IndexError):
         ocean.vessel(tp.DisplacedMesh.MAX_VESSELS)
-    # vessel 0 IS the mesh-level hull_exclusion / wake (the single-vessel API)
+    # vessel 0 IS the mesh-level hull_exclusion (the single-vessel API)
     boat = ocean.vessel(0)
     boat.hull_exclusion.set_pose(0.0, 0.0, half_length=3.0, half_beam=1.0)
     assert ocean.hull_exclusion.half_length == pytest.approx(3.0)
-    ocean.wake.forward_speed = 4.0
-    assert boat.wake.forward_speed == pytest.approx(4.0)
     assert boat.index == 0
-
-    def bow_bump(x, z):
-        return ocean.sample_wake_height(x, z)
-
-    alone = bow_bump(0.0, 3.0)                # the boat's bow, current pose, no trail
-    assert alone > 0.0
-    # a second vessel far away: its own wake, its own trail, the boat's untouched
+    # a second vessel: its own footprint, the boat's untouched
     ship = ocean.vessel(1)
     assert ship.hull_exclusion.half_length == 0.0 and "off" in repr(ship)
     ship.hull_exclusion.set_pose(200.0, 0.0, yaw=0.0, half_length=30.0, half_beam=6.0)
-    ship.wake.forward_speed = 5.0
-    assert bow_bump(0.0, 3.0) == pytest.approx(alone)
-    assert bow_bump(200.0, 30.0) > 0.0        # the ship's own bow bump
-    ship.add_wake_sample(200.0, 0.0, 0.0, 1.0, 5.0)
-    assert ship.age_wake(0.5) == 1 and ship.wake.trail[0].age == pytest.approx(0.5)
-    assert len(ocean.wake.trail) == 0         # the trails are separate
-    ship.clear_wake()
-    assert len(ship.wake.trail) == 0
-    # wakes ADD where two vessels' wakes overlap (same pose twice = double)
-    twin = ocean.vessel(2)
-    twin.hull_exclusion.set_pose(0.0, 0.0, half_length=3.0, half_beam=1.0)
-    twin.wake.forward_speed = 4.0
-    assert bow_bump(0.0, 3.0) == pytest.approx(2.0 * alone)
-    twin.hull_exclusion.half_length = 0.0     # half_length 0 takes a vessel off the ocean
-    assert bow_bump(0.0, 3.0) == pytest.approx(alone)
+    assert ocean.hull_exclusion.half_length == pytest.approx(3.0)
+    assert "off" not in repr(ship)
+    ship.hull_exclusion.half_length = 0.0     # half_length 0 takes a vessel off the ocean
+    assert "off" in repr(ship)
     # a handle keeps its ocean alive
     del ocean, boat
     assert ship.hull_exclusion.half_beam == pytest.approx(6.0)

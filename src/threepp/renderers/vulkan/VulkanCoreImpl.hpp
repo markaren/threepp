@@ -58,7 +58,6 @@
 #include "PathTracer.hpp"
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
-#include "FoamWorldPipeline.hpp"
 #include "WakeFieldPipeline.hpp"
 #include "GrassWindPipeline.hpp"
 #include "VertexSanitizePipeline.hpp"
@@ -3768,10 +3767,9 @@ namespace threepp {
         // the active ocean's cascade-2 height image via rewriteDeferredDescriptors().
         void createOceanFineDummy_();
 
-        // 1×1 R32F dummy for binding 33 (world-space foam) when no
-        // DisplacedMesh is in the scene. closest_hit gates on
-        // pc.oceanFoamTileSize > 0 so the sampler result is unread; the
-        // descriptor still needs a valid view/sampler.
+        // 1×1 R32F stand-in for the ocean's sampled inputs (crest foam,
+        // wave climate) while no DisplacedMesh provides them: the descriptor
+        // still needs a valid view/sampler.
         void createOceanFoamDummy_();
 
         // Detect the active env texture (scene.environment, falling back to

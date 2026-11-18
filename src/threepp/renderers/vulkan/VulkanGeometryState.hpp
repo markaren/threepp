@@ -749,43 +749,16 @@ namespace threepp::vulkan::impl {
         // cascades 0 and 2 (cascade 1's is c1Mips), bound in the chop set.
         std::unique_ptr<water::FieldMips> c0Mips, c2Mips;
 
-        // Per-mesh foam-disturbance SSBO. Host-mapped, written from
-        // dm.foamDisturbances each frame before the water_displace
-        // dispatch. Sized to kMaxFoamDisturbances × 16B; extra
-        // entries are dropped. .address == 0 until first allocation.
-        Buffer    foamDisturbBuffer{};
-        static constexpr uint32_t kMaxFoamDisturbances = 64;
-
-        // Per-mesh vessel buffer: the active vessels' hull records
-        // (vulkan::OceanHullGpu, kMaxVessels of them) followed by their wake
-        // trails, kMaxWakeSamples slots per vessel (32 B each, =
-        // DisplacedMesh::WakeSample). Rewritten from dm.vesselHull(i) /
-        // dm.vesselWake(i) every frame; water_displace and foam_world loop
-        // over the vessels and each vessel's samples, so every wake traces
-        // its own boat's past path rather than snapping to the current pose.
-        // A RING of kFramesInFlight indexed by currentFrame: the poses change
-        // every frame, and the frame still in flight must keep reading its
-        // own. Allocated on the first frame with an active vessel, never
-        // reallocated; null handles until then.
+        // Per-mesh vessel buffer: the active vessels' footprints
+        // (vulkan::OceanHullGpu, kMaxVessels of them), rewritten from
+        // dm.vesselHull(i) every frame. A RING of kFramesInFlight indexed by
+        // currentFrame: the poses change every frame, and the frame still in
+        // flight must keep reading its own. Allocated on the first frame with
+        // an active vessel, never reallocated; null handles until then.
         static constexpr uint32_t kMaxVessels     = 8;// = DisplacedMesh::kMaxVessels (asserted at the upload)
-        static constexpr uint32_t kMaxWakeSamples = 64;// per vessel
-        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 56u;// vulkan::OceanHullGpu
-        static constexpr VkDeviceSize kVesselTrailBytes = kMaxVessels * kMaxWakeSamples * 32u;
+        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 40u;// vulkan::OceanHullGpu
         Buffer    vesselBuffer[kFramesInFlight] = {};
 
-        // World-space foam texture — 2D R32F covering the cascade-0
-        // tile (foamTileSize × foamTileSize world m), REPEAT-sampled
-        // in both compute and chit so wrapping at the tile boundary
-        // aligns with the FFT pattern's periodicity. Replaces the old
-        // per-vertex `foam` buffer on the BLAS: with foam pinned to
-        // world coords, the ocean mesh can be re-tessellated freely
-        // without dragging foam along with the vertex indices.
-        //
-        // No ping-pong needed because foam_world.comp only reads and
-        // writes its own texel each invocation — no cross-texel
-        // dependency, so `imageLoad` + `imageStore` on the same image
-        // is race-free.
-        water::OceanImage foamImage;
         // The wake field (DisplacedMesh::WakeField), when the mesh had one
         // switched on as the renderer first saw it; null otherwise.
         std::unique_ptr<vulkan::WakeFieldPipeline::State> wake;
@@ -793,25 +766,6 @@ namespace threepp::vulkan::impl {
         // the full grid is traced): water_displace reads the wake field's
         // ripple heights at the proxy's spacing.
         uint32_t rtStride = 1;
-        uint32_t foamRes      = 0;          // texels per side
-        float    foamTileSize = 0.f;        // world extent (m) covered
-        VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;
-        // Wall-clock timestamp of the previous foam dispatch — drives the
-        // frame-rate-independent decay push constant (−1 = first frame).
-        double   foamPrevTimeSec = -1.0;
-        // Foam dispatch-interval state (THREEPP_OCEAN_FOAM_INTERVAL=N runs
-        // foam_world every Nth frame; decay is dt-aware so skipped frames
-        // just widen the decay step). Disturbance stamps supplied on skipped
-        // frames are carried here and uploaded with the next dispatch — the
-        // shader combines stamps with max(), so a re-stamped persistent
-        // source is idempotent. Layout mirrors DisplacedMesh::FoamDisturbance
-        // (static_asserted at the upload site); capped at
-        // kMaxFoamDisturbances, newest kept.
-        struct FoamDisturbCarry {
-            float worldX, worldZ, radius, intensity;
-        };
-        uint32_t foamTick = 0;
-        std::vector<FoamDisturbCarry> foamDisturbCarry;
     };
 
     // ── GrassMesh (GPU wind-deformed foliage) ────────────────────────

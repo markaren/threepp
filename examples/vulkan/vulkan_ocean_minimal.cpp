@@ -2,14 +2,13 @@
 //
 // The "fancy water" (3-cascade Phillips/FFT-displaced surface with foam and
 // transmission) with NO hero object: just an env HDR, a sand floor, and an
-// Ocean. Where examples/vulkan/vulkan_ocean.cpp wraps the same surface in a
-// boat, lighthouse, archipelago, LIDAR and radar, this shows that the water
-// itself is fully standalone — the whole scene is a handful of lines built on
-// the first-party threepp::Ocean type (objects/Ocean.hpp).
+// Ocean. It shows that the water itself is fully standalone — the whole scene
+// is a handful of lines built on the first-party threepp::Ocean type
+// (objects/Ocean.hpp).
 //
 // The adaptive vertex warp follows the orbit target (the point you're looking
-// at), demonstrating that the density focus is just a world coordinate — it was
-// never tied to the boat; here it's the camera.
+// at), demonstrating that the density focus is just a world coordinate; here
+// it's the camera.
 //
 // Controls: drag to orbit, scroll to zoom.
 //   Up/Down    — wind speed ±1 m/s (live; the sea morphs into the new state)

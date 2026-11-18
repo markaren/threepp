@@ -15,8 +15,7 @@ namespace threepp {
 
         // The water material recipe — a thin-shell transmissive surface that the
         // path tracer / deferred renderer refract through with Beer-Lambert
-        // absorption. Lifted from examples/vulkan/vulkan_ocean.cpp so the tuned
-        // values now live in one first-party place.
+        // absorption. The tuned values live here, in one first-party place.
         std::shared_ptr<MeshPhysicalMaterial> makeOceanMaterial(bool pond, bool fjord) {
             auto mat = MeshPhysicalMaterial::create();
             // Pure water has no diffuse pigment — the blue comes from

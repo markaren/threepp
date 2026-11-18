@@ -2194,7 +2194,7 @@ class DisplacedMesh(Mesh):
         @property
         def half_length(self) -> float:
             """
-            Half the vessel's length (m). 0 DISABLES hull exclusion and the wake.
+            Half the vessel's length (m). 0 DISABLES hull exclusion.
             """
         @half_length.setter
         def half_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -2296,7 +2296,7 @@ class DisplacedMesh(Mesh):
         @property
         def foam_amount(self) -> float:
             """
-            Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; wake/disturbance foam unaffected). Ocean auto-derives ~size/300.
+            Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; the wake field's foam unaffected). Ocean auto-derives ~size/300.
             """
         @foam_amount.setter
         def foam_amount(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -2423,22 +2423,10 @@ class DisplacedMesh(Mesh):
             ...
     class Vessel:
         """
-        One vessel on the ocean (mesh.vessel(i)): a hull exclusion and its own wake. Vessel 0 is the mesh's own hull_exclusion / wake.
+        One vessel on the ocean (mesh.vessel(i)): its hull exclusion. Vessel 0 is the mesh's own hull_exclusion.
         """
         def __repr__(self) -> str:
             ...
-        def add_wake_sample(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, sin_yaw: typing.SupportsFloat | typing.SupportsIndex, cos_yaw: typing.SupportsFloat | typing.SupportsIndex, speed: typing.SupportsFloat | typing.SupportsIndex, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> None:
-            """
-            Emit one wake snapshot at the vessel's current pose (age 0), dropping the oldest once the trail is full. The renderer's hard cap is 64 samples; overflow beyond it is dropped silently on upload. The C++ showcase's cadence is 10 Hz OR every 1 m travelled, whichever fires first.
-            """
-        def age_wake(self, dt: typing.SupportsFloat | typing.SupportsIndex, max_age: typing.SupportsFloat | typing.SupportsIndex = 6.0, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> int:
-            """
-            Age every trail sample by dt, drop anything older than max_age, and keep at most max_samples (newest). Returns the surviving count. Call once per frame.
-            """
-        def clear_wake(self) -> None:
-            """
-            Drop the whole trail (e.g. after teleporting the vessel, so the wake does not stretch across the map).
-            """
         @property
         def hull_exclusion(self) -> DisplacedMesh.HullExclusion:
             """
@@ -2446,37 +2434,6 @@ class DisplacedMesh(Mesh):
             """
         @property
         def index(self) -> int:
-            ...
-        @property
-        def wake(self) -> DisplacedMesh.VesselWake:
-            """
-            This vessel's Kelvin V-wake / bow bump / foam trail. Shares its hull_exclusion pose, so set that first.
-            """
-    class VesselWake:
-        enabled: bool
-        @property
-        def analytic_waves(self) -> bool:
-            """
-            Its bow bump, V-wedge and V-ridge foam (the default). False for a vessel whose waves the wake field makes (a VesselWash with ripples); the stern foam trail stays.
-            """
-        @analytic_waves.setter
-        def analytic_waves(self, arg0: bool) -> None:
-            ...
-        @property
-        def forward_speed(self) -> float:
-            """
-            m/s along +heading. The whole wake fades out below ~0.5 m/s; 0 disables it.
-            """
-        @forward_speed.setter
-        def forward_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
-        def trail(self) -> list[DisplacedMesh.WakeSample]:
-            """
-            Historical pose snapshots (list of WakeSample). Reading COPIES and writing REPLACES — mutating the returned list does not write through. Use mesh.add_wake_sample()/age_wake() for the per-frame path.
-            """
-        @trail.setter
-        def trail(self, arg0: collections.abc.Sequence[DisplacedMesh.WakeSample]) -> None:
             ...
     class WakeField:
         """
@@ -2678,51 +2635,6 @@ class DisplacedMesh(Mesh):
         @size.setter
         def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
-    class WakeSample:
-        def __init__(self) -> None:
-            ...
-        def __repr__(self) -> str:
-            ...
-        @property
-        def age(self) -> float:
-            """
-            Seconds since emission.
-            """
-        @age.setter
-        def age(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
-        def cos_yaw(self) -> float:
-            ...
-        @cos_yaw.setter
-        def cos_yaw(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
-        def sin_yaw(self) -> float:
-            ...
-        @sin_yaw.setter
-        def sin_yaw(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
-        def speed(self) -> float:
-            """
-            m/s along +heading at emission.
-            """
-        @speed.setter
-        def speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
-        def world_x(self) -> float:
-            ...
-        @world_x.setter
-        def world_x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
-        @property
-        def world_z(self) -> float:
-            ...
-        @world_z.setter
-        def world_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
-            ...
     MAX_VESSELS: typing.ClassVar[int] = 8
     MAX_WAKE_PATCHES: typing.ClassVar[int] = 8
     MAX_WAKE_SOURCES: typing.ClassVar[int] = 256
@@ -2730,33 +2642,15 @@ class DisplacedMesh(Mesh):
         """
         Low-level constructor. Most callers want Ocean instead, which builds the plane + water material + cascade defaults for you.
         """
-    def add_foam_disturbance(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex, intensity: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        """
-        Splat a gaussian foam blob at a world XZ (radius m, intensity in [0,1]).
-        """
-    def add_wake_sample(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, sin_yaw: typing.SupportsFloat | typing.SupportsIndex, cos_yaw: typing.SupportsFloat | typing.SupportsIndex, speed: typing.SupportsFloat | typing.SupportsIndex, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> None:
-        """
-        Emit one wake snapshot at the vessel's current pose (age 0), dropping the oldest once the trail is full. The renderer's hard cap is 64 samples; overflow beyond it is dropped silently on upload. The C++ showcase's cadence is 10 Hz OR every 1 m travelled, whichever fires first.
-        """
     def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None, push: typing.SupportsFloat | typing.SupportsIndex = 0.0, ax: typing.SupportsFloat | typing.SupportsIndex = 0.0, az: typing.SupportsFloat | typing.SupportsIndex = 0.0, patch: typing.SupportsInt | typing.SupportsIndex = -1, taper: typing.SupportsFloat | typing.SupportsIndex = 0.0, draft: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
         One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from (x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.
         
         `push` is what forces the RIPPLES (wake_field.ripple_resolution): the force in N the producer bears down on the water with, a gaussian of `radius` drawn out to a line that reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along its length; where it moves, the waves that keep up with it are the ones that grow, which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that holds it); a source with a push and nothing else leaves only waves. `taper` rounds the line's ends (a trapezoid, the line convolved with one of taper x its half length). `draft` (m) is how deep the load is carried: the push spread over 0..draft, which weakens its waves of wavenumber k by (1 - e^(-k draft)) / (k draft), as a hull's are (0 = a load on the surface).
         """
-    def age_wake(self, dt: typing.SupportsFloat | typing.SupportsIndex, max_age: typing.SupportsFloat | typing.SupportsIndex = 6.0, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> int:
-        """
-        Age every trail sample by dt, drop anything older than max_age, and keep at most max_samples (newest). Returns the surviving count. Call once per frame.
-        """
     def clear_external_cascade(self, cascade: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Give the cascade back to its spectrum and inverse FFT.
-        """
-    def clear_foam_disturbances(self) -> None:
-        ...
-    def clear_wake(self) -> None:
-        """
-        Drop the whole trail (e.g. after teleporting the vessel, so the wake does not stretch across the map).
         """
     def clear_wake_sources(self) -> None:
         ...
@@ -2768,10 +2662,6 @@ class DisplacedMesh(Mesh):
         """
         Combined wave height (m) at a world XZ. cascade_mask selects cascades (bit i = cascade i). Returns 0 until a Vulkan render() has run.
         """
-    def sample_wake_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex) -> float:
-        """
-        CPU mirror of the shader's wake height (bow bump + bow V-wedge + the trail-summed Kelvin V) at a world XZ, summed over every vessel. 0 with no active vessel or below the speed gate. Add to sample_height() to make a buoy bob through a passing wake. Another vessel's footprint does NOT fade a wake here, so a hull sampling under itself feels the wake it is crossing.
-        """
     def set_external_cascade(self, cascade: typing.SupportsInt | typing.SupportsIndex, height: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], disp: typing.Any = None) -> None:
         """
         Supply cascade 0, 1 or 2 yourself instead of its spectrum and inverse FFT: `height` is an N x N float32 array in metres (N = the cascade's texture size), row j along z, column i along x, the centre of texel (i, j) over the ocean's XZ at (i + 0.5, j + 0.5) * tile_size / N, periodic over the tile (cascade 1 in its rotated domain); `disp` is the horizontal displacement, N x N x 2 (x, z) in metres, or None for none. The drawn sea is the height times wave_scale and the displacement times the choppiness, as for the built-in waves; displacement, normals, crest foam, the traced surface and sample_height all follow the supplied field. The field is uploaded every frame as it stands, so call this again for each new instant.
@@ -2782,7 +2672,7 @@ class DisplacedMesh(Mesh):
         """
     def vessel(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.Vessel:
         """
-        Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion, wake and add_wake_sample()/age_wake()/clear_wake(). Vessel 0 is the mesh's own hull_exclusion / wake. A vessel takes part while its half_length > 0; each footprint also flattens the other vessels' wakes.
+        Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion. Vessel 0 is the mesh's own hull_exclusion. A vessel takes part while its half_length > 0.
         """
     def wake_patch(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.WakePatch:
         """
@@ -2798,7 +2688,7 @@ class DisplacedMesh(Mesh):
     @property
     def hull_exclusion(self) -> DisplacedMesh.HullExclusion:
         """
-        Vessel 0's footprint + waterline plane; set each frame before render(). half_length = 0 (the default) disables it AND the wake. More vessels: vessel(i).
+        Vessel 0's footprint + waterline plane; set each frame before render(). half_length = 0 (the default) disables it. More vessels: vessel(i).
         """
     @property
     def params(self) -> DisplacedMesh.Params:
@@ -2811,11 +2701,6 @@ class DisplacedMesh(Mesh):
     @rt_proxy_cells.setter
     def rt_proxy_cells(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
-    @property
-    def wake(self) -> DisplacedMesh.VesselWake:
-        """
-        Vessel 0's Kelvin V-wake / bow bump / foam trail. Shares the hull_exclusion pose, so set that first.
-        """
     @property
     def wake_field(self) -> DisplacedMesh.WakeField:
         """

@@ -258,9 +258,6 @@ starting with `0` forces the feature off for every ocean, anything else forces i
 | `THREEPP_OCEAN_HULL_CONTACT` | flag (tri-state) | the mesh's `Params::hullContact` (false) | Forces hull contact (the sea meets a vessel's side instead of easing onto her waterline plane) on or off. | once | |
 | `THREEPP_OCEAN_CREST_SHARPNESS` | number (`atof`) | unset or negative: the mesh's `Params::crestSharpness` | Forces the crest sharpness for every ocean, clamped to 0..4; it applies only while the choppy-wave model is on. | once | |
 | `THREEPP_OCEAN_FFT` | string (`shared` or `butterfly`) | `shared` | Default IFFT path for every ocean FFT: the one-dispatch shared-memory path or the butterfly passes; other values print a warning and use `shared`. | once | A/B hatch |
-| `THREEPP_OCEAN_FOAM_INTERVAL` | integer | 2 | Runs the foam accumulator every Nth frame (at least 1). | once | |
-| `THREEPP_OCEAN_FOAM_RES` | integer | 1024 | Cap on the foam accumulator's edge in texels, clamped to 256..2048. | once | |
-| `THREEPP_OCEAN_FOAM_TEXEL` | number | 1.0 | Target foam texel size (0.5 restores the old density); values at or below 0 keep 1. | once | |
 | `THREEPP_OCEAN_CREST_FOAM_RES` | integer | 2048 | Cap on the crest foam texture's edge, clamped to 256..4096. | once | |
 | `THREEPP_OCEAN_CREST_FOAM_MAX` | number | 1.5 | Most foam a breaking crest deposits (at least 1). | once | |
 | `THREEPP_OCEAN_CREST_FOAM_TAU` | number | 2.5 (seconds) | E-folding time of the foam a breaker leaves (at least 0.05). | once | |

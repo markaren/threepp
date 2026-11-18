@@ -22,10 +22,9 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
-    // One vessel as water_displace.comp and foam_world.comp read it: the
-    // DisplacedMesh::HullExclusion pose, the wake's forward speed and the
-    // vessel's slice of the wake-trail buffer. Mirrors `OceanHull` in
-    // ocean_cascade.glsl field for field (scalar layout, 56 bytes).
+    // One vessel's footprint as the ocean passes read it: the
+    // DisplacedMesh::HullExclusion pose. Mirrors `OceanHull` in
+    // ocean_cascade.glsl field for field (scalar layout, 40 bytes).
     struct OceanHullGpu {
         float    centerX;
         float    centerZ;
@@ -33,16 +32,12 @@ namespace threepp::vulkan {
         float    halfBeam;
         float    sinYaw;
         float    cosYaw;
-        float    forwardSpeed;// 0 when the wake is disabled
         float    centerY;
         float    pitch;
         float    roll;
-        uint32_t trailFirst;  // first WakeSample of this vessel in the trail buffer
-        uint32_t trailCount;
-        uint32_t analyticWaves;// 1 = its bow bump, V-wedge and V-ridge foam (VesselWake::analyticWaves)
         float    sternBeam;   // HullExclusion::sternBeam
     };
-    static_assert(sizeof(OceanHullGpu) == 56, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
+    static_assert(sizeof(OceanHullGpu) == 40, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
 
     class WaterDisplacePipeline {
 
@@ -59,15 +54,14 @@ namespace threepp::vulkan {
         // its header row), or a 1x1 stand-in while the ocean has none.
         static constexpr uint32_t kClimateBinding = 11;
 
-        // Must match water_displace.comp's `Pc` struct (128 bytes, the
-        // maximum): 5 × VkDeviceAddress (40) + 20 × u32/float (80) + the wake
-        // table's address (8). The vessels live in
-        // a per-frame buffer (hullAddr → OceanHullGpu[hullCount]); one hull
-        // alone used to fill this block to the 128-byte maximum.
+        // Must match water_displace.comp's `Pc` struct (120 bytes of the
+        // 128-byte maximum): 4 × VkDeviceAddress (32) + 20 × u32/float (80) +
+        // the wake table's address (8). The vessels live in a per-frame
+        // buffer (hullAddr → OceanHullGpu[hullCount]); one hull alone used to
+        // fill this block to the 128-byte maximum.
         struct PushConstants {
             VkDeviceAddress posOut;
             VkDeviceAddress normOut;
-            VkDeviceAddress wakeTrailAddr;// every vessel's trail, sliced per hull
             VkDeviceAddress hullAddr;     // OceanHullGpu[hullCount]
             uint32_t        vertexCount;
             uint32_t        gridDimX;     // vertices along local X / Z — a

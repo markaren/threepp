@@ -921,60 +921,11 @@ vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
 
 // (sunShadowVis lives after blueNoiseDef — it dithers off the blue-noise tile.)
 
-// ── Value-noise / fBm (verbatim from shade_common.glsl) — foam shading only ──
+// A hash of a 2D point to [0, 1) (the fog's star field).
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
-}
-float vnoise21(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-float fbm4(vec2 p) {
-    float a = 0.0;
-    float w = 0.5;
-    for (int i = 0; i < 4; ++i) {
-        a += w * vnoise21(p);
-        p *= 2.03;
-        w *= 0.5;
-    }
-    return a;
-}
-
-// Bicubic B-spline reconstruction of the world foam accumulator via 4
-// bilinear taps (Sigg & Hadwiger, GPU Gems 2 ch. 20). Plain bilinear
-// renders every isolated foam texel as a soft axis-aligned SQUARE (the
-// bilinear tent's support is a square), which reads as a grid artifact up
-// close; the cubic kernel reconstructs round, C1-smooth blobs.
-float sampleFoamBicubic(vec2 uv) {
-    const vec2 res = vec2(textureSize(oceanFoamWorld, 0));
-    const vec2 st  = uv * res - 0.5;
-    const vec2 i   = floor(st);
-    const vec2 f   = st - i;
-    const vec2 f2  = f * f;
-    const vec2 f3  = f2 * f;
-    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
-    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
-    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
-    const vec2 w3  = f3 * (1.0 / 6.0);
-    const vec2 g0  = w0 + w1;
-    const vec2 g1  = w2 + w3;
-    // Two sample coords per axis, each placed so ONE bilinear fetch
-    // integrates a weighted texel pair; REPEAT sampler handles the wrap.
-    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
-    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
-    const float t00 = textureLod(oceanFoamWorld, vec2(c0.x, c0.y), 0.0).r;
-    const float t10 = textureLod(oceanFoamWorld, vec2(c1.x, c0.y), 0.0).r;
-    const float t01 = textureLod(oceanFoamWorld, vec2(c0.x, c1.y), 0.0).r;
-    const float t11 = textureLod(oceanFoamWorld, vec2(c1.x, c1.y), 0.0).r;
-    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
 }
 
 // Emissive-mesh NEE: directly sample the emissive-triangle area lights (power

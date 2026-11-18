@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.join(_EXAMPLES, "rigs"))            # examples/rigs/ 
 
 import threepp as tp
 from demo_common import cli_arg, parse_size, resize_handler, write_radiance_hdr
-from usv_rig import StripHull, Wake, Wash, attitude, drive_for, rot_y, rot_z, wrap
+from usv_rig import Footprint, StripHull, Wash, attitude, drive_for, rot_y, rot_z, wrap
 
 if not tp.HAS_VULKAN:
     print("The sensors trace the Vulkan renderer's scene: this needs a Vulkan build of threepp.")
@@ -493,7 +493,7 @@ p1 = loop_point(START_S + 10.0)
 heading0 = math.atan2(-(p1[1] - p0[1]), p1[0] - p0[0])
 hull.R = rot_y(heading0) @ rot_z(math.radians(hull.design["trim_deg"]))
 hull.p[0], hull.p[2] = float(p0[0]), float(p0[1])     # seated on the water after the first render
-wake = Wake(hull, ocean)
+footprint = Footprint(hull, ocean)
 wash = Wash(hull, drive, ocean, 0)
 
 # The radar on the mast's radar node (local -Z = the bow, +Y up).
@@ -798,7 +798,7 @@ def step(dt):
             hull.seat(float(p0[0]), float(p0[1]), heading0)
             sim["afloat"] = True
         hull.advance(dt, max(1, int(math.ceil(dt * SUBSTEPS_HZ))))
-        wake.update(dt, True)
+        footprint.update(True)
         ocean.clear_wake_sources()
         wash.update(dt, True)
     hull.place(boat)

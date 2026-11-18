@@ -551,8 +551,6 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
                         0, 0, nullptr, 0, nullptr, 1, &imb);
                 endAndSubmitOneShot(cb);
             }
-            oceanFoamView     = oceanFoamDummy.view;
-            oceanFoamSampler  = oceanFoamDummy.sampler;
             oceanFoamTileSize = 0.0f;
             // Crest foam's texture (deferred binding 91) starts on the same dummy.
             oceanCrestFoamView    = oceanFoamDummy.view;

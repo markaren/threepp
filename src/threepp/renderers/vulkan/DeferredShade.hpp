@@ -90,11 +90,9 @@ namespace threepp::vulkan {
             const VkBuffer*    emissiveTriBuf = nullptr;// [framesInFlight] EmTri[] (emissive NEE)
             // Ocean textures (thin-shell water branch). Single shared handles —
             // 1×1 dummies when no DisplacedMesh is in the scene (the tile-size
-            // push constants gate sampling). Mirror RT bindings 32 + 44.
+            // push constants gate sampling).
             VkImageView        oceanFineView    = VK_NULL_HANDLE;// FFT fine-cascade height
             VkSampler          oceanFineSampler = VK_NULL_HANDLE;
-            VkImageView        oceanFoamView    = VK_NULL_HANDLE;// world-space foam accumulator
-            VkSampler          oceanFoamSampler = VK_NULL_HANDLE;
             // Crest foam (bindings 91, 92): the foam texture over the water's
             // rest coordinates (GENERAL) and the foam photograph
             // (SHADER_READ_ONLY), or a stand-in for each in the same layout.
@@ -111,10 +109,6 @@ namespace threepp::vulkan {
             VkSampler          oceanWakeSampler = VK_NULL_HANDLE;
             VkImageView        oceanRippleView    = VK_NULL_HANDLE;// its ripples' slopes (2D array, mipped), or the dummy
             VkSampler          oceanRippleSampler = VK_NULL_HANDLE;
-            // Baked tileable foam detail (R=bubbles, G=lace) — created once at
-            // renderer startup, mipped, SHADER_READ_ONLY. Mirrors RT binding 45.
-            VkImageView        foamDetailView    = VK_NULL_HANDLE;
-            VkSampler          foamDetailSampler = VK_NULL_HANDLE;
             // 64×64 R8 void-and-cluster blue-noise tile (the renderer's shared
             // blueNoiseImage) — dithers the stochastic GI hemisphere directions.
             // Sampled through gbufSampler_ (NEAREST is correct: the shader

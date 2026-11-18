@@ -13,19 +13,18 @@
 // BLAS pipeline every frame in both deferred and path-traced modes. On other
 // renderers it is an inert flat plane wearing the water material.
 //
-// It is NOT tied to any "hero" object: the adaptive-density warp, foam
-// disturbances, and the (inherited) vessel wake all take world coordinates.
-// Point the warp at whatever you like — a vessel, the camera, or nothing — via
-// warpToward() or the inherited DisplacedMesh::warp field. The full ocean
-// showcase in examples/vulkan/vulkan_ocean.cpp drives those same fields from a
-// boat; a stripped-down demo lives in examples/vulkan/vulkan_ocean_minimal.cpp.
+// It is NOT tied to any "hero" object: the adaptive-density warp, the vessels'
+// footprints and the wake field all take world coordinates. Point the warp at
+// whatever you like — a vessel, the camera, or nothing — via warpToward() or
+// the inherited DisplacedMesh::warp field. A minimal demo lives in
+// examples/vulkan/vulkan_ocean_minimal.cpp.
 //
 // ROTATED / TRANSLATED oceans (e.g. a Z-up robotics world with
 // rotation.x = π/2): geometry, waves and the shallow-bottom shading all work,
-// but the deferred per-pixel fine-chop normal and the foam accumulator are
-// sampled in world XZ (Y-up assumption), so set tileSize2 = 0 there or the
-// finest cascade reads as 1-D stripes (see spot_slam.py's pond). The warp /
-// hull / wake fields additionally assume an identity transform.
+// but the deferred per-pixel fine-chop normal is sampled in world XZ (Y-up
+// assumption), so set tileSize2 = 0 there or the finest cascade reads as 1-D
+// stripes (see spot_slam.py's pond). The warp and the hull footprints
+// additionally assume an identity transform.
 //
 // Distinct from threepp::Water (objects/Water.hpp), which is the classic
 // three.js flat reflective plane, not an FFT-displaced surface.

@@ -169,12 +169,10 @@ struct EmTri {
 };
 layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
 
-// Ocean FFT fine-cascade height (sub-mesh chop) + world-space foam accumulator.
-// Both fall back to 1×1 dummies (and the
-// tile-size push constants to 0) when no DisplacedMesh is in the scene, so the
-// thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
+// Ocean FFT fine-cascade height (sub-mesh chop). Falls back to a 1×1 dummy
+// (and the tile-size push constant to 0) when no DisplacedMesh is in the
+// scene, so the thin-shell water branch's `tileSize > 0` gate skips it.
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
-layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
 // The ocean's wake field (DisplacedMesh::WakeField, WakeFieldPipeline): what
 // propellers, jets and paddles left on the water, as one 2D array of
 // world-anchored patches (R foam, G aeration, B turbulence m/s, A lane). A 1x1
@@ -222,12 +220,6 @@ vec2 gCrestDisp = vec2(0.0);
 // gains with its header row (ocean_climate.glsl), read at a pixel's rest point.
 layout(set = 0, binding = 93) uniform sampler2D oceanClimateMap;
 #include "ocean_climate.glsl"
-// Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
-// (designed for a 4 m world mapping), G = ridged lace/filament pattern
-// (12 m mapping). Replaces the per-pixel procedural noise octaves in the
-// foam block — a sampled texture is band-limited at distance via its mip
-// chain (no shimmer under TAA) and 2 fetches replace ~20 hash evaluations.
-layout(set = 0, binding = 34) uniform sampler2D foamDetailTex;
 // 64×64 R8 void-and-cluster blue-noise tile. Used to dither the stochastic GI hemisphere directions
 // so the 1-spp residual is high-frequency (à-trous-removable) instead of the
 // low-frequency clumps white noise leaves behind — the AO speckle.

@@ -41,7 +41,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 93;
+    constexpr uint32_t kDeferredBindingCount = 91;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -164,7 +164,6 @@ namespace threepp::vulkan {
         b[nb - 1].descriptorCount = kMaxMaterialTextures;   // ...fixed-size array (reflection-hit textures)
         set(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // EmTri[] emissive triangles (area-light NEE)
         set(13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean FFT fine-cascade height (water chop)
-        set(14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean world-space foam accumulator
         set(15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf uv (primary emissive-map sample)
         set(16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // demodulated diffuse-indirect (denoiser scratch)
         set(17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV indirect (other fif index) = 1-frame GI history
@@ -187,7 +186,6 @@ namespace threepp::vulkan {
         set(31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflAux CUR (reflection-denoiser auxiliary; mirrors 25)
         set(32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV reflAux (other fif index) = 1-frame reflection-denoiser history (mirrors 26)
         set(33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // scene fog UBO
-        set(34, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // tileable foam detail (R=bubbles, G=lace; mirrors RT binding 45)
         set(35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // blue-noise tile (GI hemisphere dithering)
         set(36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe SH-L1 store (ProbeGI, read)
         set(37, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // probe grid UBO (origin/spacing/dims + enable)
@@ -733,22 +731,12 @@ namespace threepp::vulkan {
             // it (no moved bit).
             VkDescriptorImageInfo idsPrevInfo    = sampled(in.gbufIds[pf], gbufSampler_);
 
-            // Ocean textures stay in GENERAL (written by the FFT/foam compute
-            // passes, sampled here) — matching the RT set's bindings 32 + 44.
+            // Ocean textures stay in GENERAL (written by the FFT compute
+            // passes, sampled here).
             VkDescriptorImageInfo oceanFineInfo{};
             oceanFineInfo.sampler     = in.oceanFineSampler;
             oceanFineInfo.imageView   = in.oceanFineView;
             oceanFineInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            VkDescriptorImageInfo oceanFoamInfo{};
-            oceanFoamInfo.sampler     = in.oceanFoamSampler;
-            oceanFoamInfo.imageView   = in.oceanFoamView;
-            oceanFoamInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            // Baked foam detail tile — uploaded once at startup, stays in
-            // SHADER_READ_ONLY (unlike the GENERAL-layout dynamic ocean images).
-            VkDescriptorImageInfo foamDetailInfo{};
-            foamDetailInfo.sampler     = in.foamDetailSampler;
-            foamDetailInfo.imageView   = in.foamDetailView;
-            foamDetailInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             VkDescriptorBufferInfo matInfo{};
             matInfo.buffer = in.materialBuf[f];
@@ -959,61 +947,59 @@ namespace threepp::vulkan {
             w[11].pImageInfo      = in.materialTex;
             setw(12, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,      nullptr, &emInfo);
             setw(13, 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFineInfo, nullptr);
-            setw(14, 14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFoamInfo, nullptr);
-            setw(15, 15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvInfo, nullptr);
-            setw(16, 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &indInfo, nullptr);
-            setw(17, 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevIndInfo, nullptr);
-            setw(18, 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &motionInfo,  nullptr);
-            setw(19, 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalPrevInfo, nullptr);
-            setw(20, 20, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &momCurInfo,    nullptr);
-            setw(21, 21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevMomInfo,   nullptr);
-            setw(22, 22, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrAInfo,      nullptr);
-            setw(23, 23, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrBInfo,      nullptr);
-            setw(24, 24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthPrevInfo, nullptr);
-            setw(25, 25, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflInfo,      nullptr);
-            setw(26, 26, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflInfo,  nullptr);
-            setw(27, 27, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosWriteInfo, nullptr);
-            setw(28, 28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosReadInfo,  nullptr);
-            setw(29, 29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWWriteInfo,   nullptr);
-            setw(30, 30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWReadInfo,    nullptr);
-            setw(31, 31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflAuxInfo,     nullptr);
-            setw(32, 32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflAuxInfo, nullptr);
-            setw(33, 33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &fogInfo);
-            setw(34, 34, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &foamDetailInfo,  nullptr);
-            setw(35, 35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bnInfo,          nullptr);
-            setw(36, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,          &probeShInfo);
-            setw(37, 37, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &probeGridInfo);
-            setw(38, 38, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalMsInfo, nullptr);
-            setw(39, 39, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthMsInfo,  nullptr);
-            setw(40, 40, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsMsInfo,    nullptr);
-            setw(41, 41, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &albMsInfo,    nullptr);
-            setw(42, 42, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvMsInfo,     nullptr);
-            setw(43, 43, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowVisInfo,     nullptr);
-            setw(44, 44, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevShadowVisInfo, nullptr);
-            setw(45, 45, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &directUInfo,       nullptr);
-            setw(46, 46, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrAInfo,    nullptr);
-            setw(47, 47, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrBInfo,    nullptr);
-            setw(48, 48, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterGridInfo);
-            setw(49, 49, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterLightsInfo);
-            setw(50, 50, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelScatterInfo,     nullptr);
-            setw(51, 51, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelScatterPrevInfo, nullptr);
-            setw(52, 52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelLutInfo,         nullptr);
-            setw(53, 53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelLutTexInfo,      nullptr);
-            setw(54, 54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &probeDepthInfo);
+            setw(14, 15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvInfo, nullptr);
+            setw(15, 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &indInfo, nullptr);
+            setw(16, 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevIndInfo, nullptr);
+            setw(17, 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &motionInfo,  nullptr);
+            setw(18, 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalPrevInfo, nullptr);
+            setw(19, 20, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &momCurInfo,    nullptr);
+            setw(20, 21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevMomInfo,   nullptr);
+            setw(21, 22, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrAInfo,      nullptr);
+            setw(22, 23, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrBInfo,      nullptr);
+            setw(23, 24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthPrevInfo, nullptr);
+            setw(24, 25, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflInfo,      nullptr);
+            setw(25, 26, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflInfo,  nullptr);
+            setw(26, 27, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosWriteInfo, nullptr);
+            setw(27, 28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosReadInfo,  nullptr);
+            setw(28, 29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWWriteInfo,   nullptr);
+            setw(29, 30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWReadInfo,    nullptr);
+            setw(30, 31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflAuxInfo,     nullptr);
+            setw(31, 32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflAuxInfo, nullptr);
+            setw(32, 33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &fogInfo);
+            setw(33, 35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bnInfo,          nullptr);
+            setw(34, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,          &probeShInfo);
+            setw(35, 37, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &probeGridInfo);
+            setw(36, 38, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalMsInfo, nullptr);
+            setw(37, 39, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthMsInfo,  nullptr);
+            setw(38, 40, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsMsInfo,    nullptr);
+            setw(39, 41, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &albMsInfo,    nullptr);
+            setw(40, 42, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvMsInfo,     nullptr);
+            setw(41, 43, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowVisInfo,     nullptr);
+            setw(42, 44, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevShadowVisInfo, nullptr);
+            setw(43, 45, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &directUInfo,       nullptr);
+            setw(44, 46, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrAInfo,    nullptr);
+            setw(45, 47, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrBInfo,    nullptr);
+            setw(46, 48, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterGridInfo);
+            setw(47, 49, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterLightsInfo);
+            setw(48, 50, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelScatterInfo,     nullptr);
+            setw(49, 51, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelScatterPrevInfo, nullptr);
+            setw(50, 52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelLutInfo,         nullptr);
+            setw(51, 53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelLutTexInfo,      nullptr);
+            setw(52, 54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &probeDepthInfo);
             // (binding 56 retired with the hybrid SSR — write indices stay
             // dense while binding numbers jump to 57; 55 = PREV ids, written
             // at index 65 below.)
-            setw(55, 57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &rcamInfo);
-            setw(56, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &cloudInfo);
-            setw(57, 59, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudColorInfo,     nullptr);
-            setw(58, 60, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorPrevInfo, nullptr);
-            setw(59, 61, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorTexInfo,  nullptr);
-            setw(60, 62, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudAuxInfo,       nullptr);
-            setw(61, 63, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxPrevInfo,   nullptr);
-            setw(62, 64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudShadowInfo,    nullptr);
-            setw(63, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
-            setw(64, 66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxTexInfo,    nullptr);
-            setw(65, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsPrevInfo,        nullptr);
+            setw(53, 57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &rcamInfo);
+            setw(54, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &cloudInfo);
+            setw(55, 59, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudColorInfo,     nullptr);
+            setw(56, 60, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorPrevInfo, nullptr);
+            setw(57, 61, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorTexInfo,  nullptr);
+            setw(58, 62, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudAuxInfo,       nullptr);
+            setw(59, 63, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxPrevInfo,   nullptr);
+            setw(60, 64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudShadowInfo,    nullptr);
+            setw(61, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
+            setw(62, 66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxTexInfo,    nullptr);
+            setw(63, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsPrevInfo,        nullptr);
             // ParticleField density volumes: the whole fixed-size array in one
             // write (every slot valid — the caller fills unused ones with its
             // 1×1×1 dummy), plus the per-FIF box UBO.
@@ -1025,18 +1011,18 @@ namespace threepp::vulkan {
                                                  : VK_NULL_HANDLE;
                 pdInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
-            w[66].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[66].dstSet          = sets_[f];
-            w[66].dstBinding      = 67;
-            w[66].dstArrayElement = 0;
-            w[66].descriptorCount = kMaxDensityVolumes;
-            w[66].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w[66].pImageInfo      = pdInfos.data();
+            w[64].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[64].dstSet          = sets_[f];
+            w[64].dstBinding      = 67;
+            w[64].dstArrayElement = 0;
+            w[64].descriptorCount = kMaxDensityVolumes;
+            w[64].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[64].pImageInfo      = pdInfos.data();
             VkDescriptorBufferInfo pdUboInfo{};
             pdUboInfo.buffer = in.particleDensityUbo ? in.particleDensityUbo[f] : VK_NULL_HANDLE;
             pdUboInfo.offset = 0;
             pdUboInfo.range  = VK_WHOLE_SIZE;
-            setw(67, 68, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &pdUboInfo);
+            setw(65, 68, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &pdUboInfo);
             // The r16f mirrors — LINEAR (lutSampler_), unlike the integer
             // volumes above, which is the entire reason they exist.
             std::array<VkDescriptorImageInfo, kMaxDensityVolumes> pdLinInfos{};
@@ -1047,13 +1033,13 @@ namespace threepp::vulkan {
                                                     : VK_NULL_HANDLE;
                 pdLinInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
-            w[68].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[68].dstSet          = sets_[f];
-            w[68].dstBinding      = 69;
-            w[68].dstArrayElement = 0;
-            w[68].descriptorCount = kMaxDensityVolumes;
-            w[68].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w[68].pImageInfo      = pdLinInfos.data();
+            w[66].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[66].dstSet          = sets_[f];
+            w[66].dstBinding      = 69;
+            w[66].dstArrayElement = 0;
+            w[66].descriptorCount = kMaxDensityVolumes;
+            w[66].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[66].pImageInfo      = pdLinInfos.data();
             // Splat reflection volumes: same whole-array-in-one-write shape as
             // the density table, LINEAR (lutSampler_) because the baked volume
             // is rgba16f and svLeg wants one hardware trilinear tap per step.
@@ -1068,18 +1054,18 @@ namespace threepp::vulkan {
                                                  : VK_NULL_HANDLE;
                 svInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
-            w[69].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[69].dstSet          = sets_[f];
-            w[69].dstBinding      = 70;
-            w[69].dstArrayElement = 0;
-            w[69].descriptorCount = kMaxSplatVolumeSlots;
-            w[69].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w[69].pImageInfo      = svInfos.data();
+            w[67].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[67].dstSet          = sets_[f];
+            w[67].dstBinding      = 70;
+            w[67].dstArrayElement = 0;
+            w[67].descriptorCount = kMaxSplatVolumeSlots;
+            w[67].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[67].pImageInfo      = svInfos.data();
             VkDescriptorBufferInfo svUboInfo{};
             svUboInfo.buffer = in.splatVolumeUbo ? in.splatVolumeUbo[f] : VK_NULL_HANDLE;
             svUboInfo.offset = 0;
             svUboInfo.range  = VK_WHOLE_SIZE;
-            setw(70, 71, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &svUboInfo);
+            setw(68, 71, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &svUboInfo);
 
             // Half-res RTAO (72-76). CUR pair are storage images the rtao pass
             // writes (no sampler); the PREV pair use lutSampler_ (LINEAR) for
@@ -1104,22 +1090,22 @@ namespace threepp::vulkan {
             rtaoAuxPrevInfo.sampler     = lutSampler_;
             rtaoAuxPrevInfo.imageView   = in.rtaoAux[pf];
             rtaoAuxPrevInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            setw(71, 72, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoCurInfo,        nullptr);
-            setw(72, 73, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoPrevInfo,       nullptr);
-            setw(73, 74, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoCurSampledInfo, nullptr);
-            setw(74, 75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoAuxCurInfo,     nullptr);
-            setw(75, 76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoAuxPrevInfo,    nullptr);
-            setw(76, 77, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &demodColorInfo,     nullptr);
+            setw(69, 72, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoCurInfo,        nullptr);
+            setw(70, 73, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoPrevInfo,       nullptr);
+            setw(71, 74, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoCurSampledInfo, nullptr);
+            setw(72, 75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoAuxCurInfo,     nullptr);
+            setw(73, 76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoAuxPrevInfo,    nullptr);
+            setw(74, 77, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &demodColorInfo,     nullptr);
             VkDescriptorImageInfo oceanWakeInfo{};
             oceanWakeInfo.sampler     = in.oceanWakeSampler;
             oceanWakeInfo.imageView   = in.oceanWakeView;
             oceanWakeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            setw(77, 78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanWakeInfo,      nullptr);
+            setw(75, 78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanWakeInfo,      nullptr);
             VkDescriptorImageInfo oceanRippleInfo{};
             oceanRippleInfo.sampler     = in.oceanRippleSampler;
             oceanRippleInfo.imageView   = in.oceanRippleView;
             oceanRippleInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            setw(78, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanRippleInfo,    nullptr);
+            setw(76, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanRippleInfo,    nullptr);
             // Shadow maps (80-83): the maps or the dummies, in the layout the
             // shadow pass leaves them in.
             auto depthRO = [&](VkImageView v) {
@@ -1136,10 +1122,10 @@ namespace threepp::vulkan {
             smUboInfo.buffer = in.shadowUbo[f];
             smUboInfo.offset = 0;
             smUboInfo.range  = VK_WHOLE_SIZE;
-            setw(79, 80, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smCascInfo,  nullptr);
-            setw(80, 81, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smSpotInfo,  nullptr);
-            setw(81, 82, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smPointInfo, nullptr);
-            setw(82, 83, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &smUboInfo);
+            setw(77, 80, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smCascInfo,  nullptr);
+            setw(78, 81, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smSpotInfo,  nullptr);
+            setw(79, 82, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smPointInfo, nullptr);
+            setw(80, 83, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &smUboInfo);
             // The half-res fog march (84-86), ping-ponged like rtao.
             VkDescriptorImageInfo fogCurInfo{};
             fogCurInfo.imageView   = in.fogHalf[f];
@@ -1152,9 +1138,9 @@ namespace threepp::vulkan {
             fogCurSampledInfo.sampler     = gbufSampler_;
             fogCurSampledInfo.imageView   = in.fogHalf[f];
             fogCurSampledInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            setw(83, 84, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &fogCurInfo,        nullptr);
-            setw(84, 85, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogPrevInfo,       nullptr);
-            setw(85, 86, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogCurSampledInfo, nullptr);
+            setw(81, 84, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &fogCurInfo,        nullptr);
+            setw(82, 85, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogPrevInfo,       nullptr);
+            setw(83, 86, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fogCurSampledInfo, nullptr);
             // DLSS Ray Reconstruction's guides (87-90), storage in GENERAL.
             VkDescriptorImageInfo rrInfo[4]{};
             const VkImageView* const rrViews[4] = {in.rrDiffuseAlbedo, in.rrSpecularAlbedo,
@@ -1162,7 +1148,7 @@ namespace threepp::vulkan {
             for (uint32_t i = 0; i < 4; ++i) {
                 rrInfo[i].imageView   = rrViews[i][f];
                 rrInfo[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                setw(86 + static_cast<int>(i), 87u + i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &rrInfo[i], nullptr);
+                setw(84 + static_cast<int>(i), 87u + i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &rrInfo[i], nullptr);
             }
             // Crest foam (91, 92): the foam texture in GENERAL like the other
             // dynamic ocean images, the baked pattern in SHADER_READ_ONLY.
@@ -1174,14 +1160,14 @@ namespace threepp::vulkan {
             crestPatternInfo.sampler     = in.crestFoamPatternSampler;
             crestPatternInfo.imageView   = in.crestFoamPatternView;
             crestPatternInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            setw(90, 91, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &crestFoamInfo,    nullptr);
-            setw(91, 92, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &crestPatternInfo, nullptr);
+            setw(88, 91, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &crestFoamInfo,    nullptr);
+            setw(89, 92, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &crestPatternInfo, nullptr);
             // The wave climate's map (93), in its own layout.
             VkDescriptorImageInfo climateInfo{};
             climateInfo.sampler     = in.oceanClimateSampler;
             climateInfo.imageView   = in.oceanClimateView;
             climateInfo.imageLayout = in.oceanClimateLayout;
-            setw(92, 93, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &climateInfo, nullptr);
+            setw(90, 93, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &climateInfo, nullptr);
             // Without ray query the layout has no binding 8: drop its write.
             uint32_t writeCount = static_cast<uint32_t>(w.size());
             if (!ctx_.rayQuerySupported()) {

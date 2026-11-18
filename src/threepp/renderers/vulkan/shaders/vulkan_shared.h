@@ -237,7 +237,7 @@ static_assert(((kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFl
 // PROPAGATE along the world wind direction; only the lattice rotates.
 //
 // Consumers that sample cascade 1 must all agree: water_displace.comp,
-// foam_world.comp (via ocean_cascade.glsl) and the CPU mirror
+// foam_crest.comp (via ocean_cascade.glsl) and the CPU mirror
 // DisplacedMesh::sampleHeight. Height is a scalar (rotate the sample point
 // only); horizontal displacement is a vector (rotate the sampled (dx,dz)
 // BACK into world by the inverse rotation).
@@ -532,7 +532,7 @@ namespace threepp::vulkan {
         float emissiveTotalPower;  // emissive power-CDF total (denominator)
         float fireflyClamp;        // luminance cap for emissive NEE (large = disabled)
         float oceanFineTileSize;   // FFT fine-cascade tile (m); 0 = no ocean fine normal
-        float oceanFoamTileSize;   // world-space foam tile (m); 0 = no foam sampling
+        float oceanFoamTileSize;   // the crest foam texture's tile (m, cascade 0); 0 = no ocean
         float volDensity;          // spot-beam scattering σ (1/m); 0 = beams off
         float volAniso;            // Henyey-Greenstein g for the beam phase
         float starIntensity;       // procedural sky star field; 0 = off

@@ -56,7 +56,6 @@
 #include "../PathTracer.hpp"
 #include "../ProbeGI.hpp"
 #include "../WaterDisplacePipeline.hpp"
-#include "../FoamWorldPipeline.hpp"
 #include "../WakeFieldPipeline.hpp"
 #include "../GrassWindPipeline.hpp"
 #include "../VertexSanitizePipeline.hpp"

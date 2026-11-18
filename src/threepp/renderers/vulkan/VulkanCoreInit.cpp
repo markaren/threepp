@@ -109,8 +109,6 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
             vulkan::startupMark("tet skinning");
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             vulkan::startupMark("water displace");
-            foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
-            vulkan::startupMark("foam world");
             wakeField_     = std::make_unique<vulkan::WakeFieldPipeline>(*ctx);
             vulkan::startupMark("wake field");
             grassWind_     = std::make_unique<vulkan::GrassWindPipeline>(*ctx);
@@ -199,7 +197,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
-            createFoamDetailImage_();// must run before descriptor writes (binding 45 + deferred 34)
+            createFoamDetailImage_();// must run before descriptor writes (the crest foam pattern's stand-in, deferred 92)
             vulkan::startupMark("noise, ocean dummies, foam detail");
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
@@ -405,12 +403,9 @@ VulkanRenderer::Impl::~Impl() {
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
                 destroyImage2D(ctx->allocator(), d, st->climateImage);
-                if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->foamImage.view, nullptr);
-                if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
                 for (auto& ring : st->heightReadback)
                     for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
-                destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                 for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                 for (auto& b : st->lodTable) destroyBuffer(ctx->allocator(), b);
                 if (st->wake && wakeField_) wakeField_->destroyState(*st->wake);
@@ -495,9 +490,6 @@ VulkanRenderer::Impl::~Impl() {
 
             // Water displace pipeline owns its handles + sampler.
             waterDisplace_.reset();
-            // World-space foam pipeline; foam ping-pong images are owned by
-            // each DisplacedMeshState and destroyed there.
-            foamWorld_.reset();
             wakeField_.reset();
             // Grass-wind pipeline; per-mesh buffers freed in the grassStates
             // loop above.

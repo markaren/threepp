@@ -13,9 +13,9 @@ Four things, and nothing scene-specific:
   * the drives    -- ``Waterjet`` (the Mariner), ``AzimuthPods`` (the Otter X) and
                      ``FixedPods`` (the Otter): thrust, hull resistance and the lumped
                      manoeuvring terms, the helm and how fast the actuators follow it, the
-                     actuator nodes of the .glb, the foam. ``drive_for(hull)`` makes a boat's.
-  * ``Wake``      -- the hull footprint and the Kelvin wake trail on the ocean, or on one of
-                     its vessels (``ocean.vessel(i)``) where several boats share a sea.
+                     actuator nodes of the .glb. ``drive_for(hull)`` makes a boat's.
+  * ``Footprint`` -- the hull footprint on the ocean, or on one of its vessels
+                     (``ocean.vessel(i)``) where several boats share a sea.
   * ``Wash``      -- what her propulsors and her hull leave ON the water: the races of her
                      propellers or her jet, and the lane astern of her hull, as sources of the
                      ocean's wake field (``ocean.wake_field``, a patch of it for each boat).
@@ -36,14 +36,14 @@ ocean.sample_height reads the last rendered field, so a boat steps AFTER a rende
 
     hull = StripHull("otter", ocean)
     hull.seat(x, z, heading)
-    wake = Wake(hull, ocean)
+    footprint = Footprint(hull, ocean)
     wash = Wash(hull, drive_for(hull), ocean, 0)      # ocean.wake_field.resolution set before the first render
 
     # on a DP, along a route                    # under her own power
     drive = drive_for(hull).bind(glb_root)      hull.drive = drive_for(hull).bind(glb_root)
     hull.set_target(x, z, hd, vx, vz, rate)     hull.drive.throttle_cmd = 1.0
     hull.advance(dt, substeps)                  hull.drive.tick(dt); hull.advance(dt, substeps)
-    u = wake.update(dt)                         u = wake.update(dt)
+    u = footprint.update()                      u = footprint.update()
     drive.follow(u, rate, dt)
     ocean.clear_wake_sources()                  # once a frame, before the boats' washes
     wash.update(dt)
@@ -525,17 +525,6 @@ class Drive:
         self.nodes = {k: root.get_object_by_name(n) for k, n in self.NODE_NAMES.items()}
         return self
 
-    def foam(self, ocean, u):
-        """Her foam splats on the ocean at surge speed u. They last one frame: the scene calls
-        ocean.clear_foam_disturbances() before its boats add theirs."""
-        h = self.hull
-
-        def emit(xb, zb, radius, k):
-            q = h.to_world([xb, 0.4, zb])
-            if k > 0.02:
-                ocean.add_foam_disturbance(float(q[0]), float(q[2]), radius, min(k, 1.0))
-        self._foam(emit, u)
-
 
 class Waterjet(Drive):
     """The Mariner: a Hamilton-type jet. Thrust along the steerable nozzle, a reverse bucket that
@@ -660,20 +649,6 @@ class Waterjet(Drive):
 
     def status(self):
         return f"thr {self.throttle:.2f}  steer {math.degrees(self.steer):+5.1f}  bucket {self.bucket:.2f}"
-
-    def _foam(self, foam, u):
-        # Splats are gaussians whose visible halo reaches ~1.9 radii, so each sits far
-        # enough aft that none of it lands ahead of the stem, and at intensities that
-        # leave lace at the edges instead of a solid sheet.
-        spd = min(abs(u) / self.u_top, 1.0)
-        for zs in (-0.75, 0.75):
-            foam(2.2, zs, 0.9, 0.10 + 0.45 * spd)                            # bow wave, off the shoulders
-        for zs in (-1.15, 1.15):
-            foam(0.2, zs, 1.1, 0.45 * spd)                                   # spray off the collar
-        foam(-3.4, 0.0, 1.0 + 0.6 * spd, 0.55 * self.throttle + 0.3 * self.bucket * self.throttle)  # jet wash
-        if abs(self.thruster) > 0.05:
-            for zs in (-0.6, 0.6):
-                foam(self.bt_at[0], zs, 0.7, 0.6 * abs(self.thruster))
 
 
 class _Pods(Drive):
@@ -864,16 +839,6 @@ class AzimuthPods(_Pods):
     def status(self):
         return f"thr {self.throttle:+.2f}  steer {math.degrees(self.steer):+5.1f}  diff {self.diff:+.2f}"
 
-    def _foam(self, foam, u):
-        spd = min(abs(u) / self.u_top, 1.0)
-        for zs in (-self.pontoon_z, self.pontoon_z):
-            foam(1.3, zs, 0.5, 0.06 + 0.35 * spd)                            # bow wave off each pontoon
-        line = self._thrust_line()
-        for side in ("port", "stbd"):
-            c = self.pod_command(side)
-            wash = self.pod_at[side] - math.copysign(0.9, c) * line
-            foam(wash[0], wash[2], 0.5 + 0.3 * spd, 0.5 * abs(c))            # pod wash, down the thrust line
-
 
 class FixedPods(_Pods):
     """The Otter: two fixed pods under the pontoons' sterns. The helm is the thrust difference
@@ -922,13 +887,6 @@ class FixedPods(_Pods):
     def status(self):
         return f"thr {self.throttle:+.2f}  port {self.pod_command('port'):+.2f}  stbd {self.pod_command('stbd'):+.2f}"
 
-    def _foam(self, foam, u):
-        spd = min(abs(u) / self.u_top, 1.0)
-        for side, zs in (("port", -self.pontoon_z), ("stbd", self.pontoon_z)):
-            foam(0.6, zs, 0.25, 0.05 + 0.25 * spd)                           # bow wave off each pontoon
-            c = self.pod_command(side)
-            foam(self.pod_at[side][0] - math.copysign(0.4, c), zs, 0.25 + 0.1 * spd, 0.4 * abs(c))   # propeller wash
-
 
 DRIVES = {"mariner": Waterjet, "otterx": AzimuthPods, "otter": FixedPods}
 
@@ -942,52 +900,24 @@ def drive_for(hull):
 
 
 # --------------------------------------------------------------------------- #
-#  The sea around her: displacement footprint and Kelvin wake
+#  The sea around her: displacement footprint
 # --------------------------------------------------------------------------- #
-class Wake:
-    """A boat's footprint and wake trail on the ocean.
+class Footprint:
+    """A boat's footprint on the ocean: the water her hull displaces. What she leaves on the
+    water, her races, her lane and her waves, is her Wash's.
 
-    target             the ocean (its vessel 0), or ocean.vessel(i) where several boats share it
-    floor, gain, cap   the speed handed to the ocean's analytic wake: floor + gain |u|, capped.
-                       The wake gates a tiled foam trail on smoothstep(0.5, 1.5, speed)
-                       (foam_world.comp), so fed a boat's true speed it lays a white carpet
-                       astern from 3 kn up. The defaults hold it just over the trail's
-                       threshold: the wake's height without that foam. What she leaves on the
-                       water is her Wash's.
-    max_age, max_samples   the trail: seconds a sample lives, and how many are kept"""
+    target   the ocean (its vessel 0), or ocean.vessel(i) where several boats share it"""
 
-    def __init__(self, hull, target, floor=0.56, gain=0.02, cap=0.62, max_age=8.0, max_samples=64):
+    def __init__(self, hull, target):
         self.hull, self.target = hull, target
-        self.floor, self.gain, self.cap = floor, gain, cap
-        self.max_age, self.max_samples = max_age, max_samples
-        self.accum, self.last = 0.0, None
         self.centre = None                     # the footprint's centre at the last update (world)
 
-    def speed(self, u):
-        return math.copysign(min(self.floor + self.gain * abs(u), self.cap), u) if abs(u) > 0.2 else 0.0
-
-    def update(self, dt, on=True):
-        """After the hull's advance: her footprint, the wake's speed, and a trail sample every
-        0.1 s or metre made. on=False takes the footprint and the wake away. Returns her surge speed."""
-        h, V = self.hull, self.target
-        c, yaw_ex = h.footprint(V, on)
-        self.centre = c
-        u = float(h.R[:, 0] @ h.v)
-        ws = self.speed(u)
-        V.wake.forward_speed = ws if on else 0.0
-        if on and dt > 0.0:
-            V.age_wake(dt, self.max_age, self.max_samples)
-            self.accum += dt
-            moved = 1e9 if self.last is None else math.hypot(c[0] - self.last[0], c[2] - self.last[1])
-            if abs(u) > 0.4 and (self.accum >= 0.1 or moved >= 1.0):
-                self.accum, self.last = 0.0, (c[0], c[2])
-                V.add_wake_sample(float(c[0]), float(c[2]), math.sin(yaw_ex), math.cos(yaw_ex), float(ws),
-                                  self.max_samples)
-        return u
-
-    def clear(self):
-        self.target.clear_wake()
-        self.accum, self.last = 0.0, None
+    def update(self, on=True):
+        """After the hull's advance: her footprint. on=False takes it away. Returns her surge
+        speed."""
+        h = self.hull
+        self.centre, _ = h.footprint(self.target, on)
+        return float(h.R[:, 0] @ h.v)
 
 
 # --------------------------------------------------------------------------- #

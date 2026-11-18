@@ -28,7 +28,8 @@ moment drive a damped heave/pitch pair. A crest arriving at the bow lifts the
 bow, because the bow's sections are the ones that got deeper. She in turn
 DISPLACES the water: the ocean's hull-exclusion footprint carries her waterline
 plane, so the sea meets the boot stripe on a crest as much as in a trough, and
-the same pose drives an analytical Kelvin V-wake. Press X to toggle it. The ocean
+her wash (the lane her hull drags and the waves her weight makes) lies in the
+ocean's wake field. Press X to toggle both. The ocean
 also follows the boat -- the vertex-density warp centre relocates the whole grid
 in world space, so the water never runs out. The fog is the unified Vulkan air
 medium, and the rig cuts shafts through it when you look toward the sun.
@@ -2951,22 +2952,10 @@ _buoy_h = np.empty(len(BUOY_PTS))
 # --------------------------------------------------------------------------- #
 #  One frame of sailing.
 # --------------------------------------------------------------------------- #
-# Hull exclusion + analytical wake: the hull DISPLACES the water instead of the
-# sea passing through it. `hull_excl_on` is the X-key toggle.
+# Hull exclusion: the hull DISPLACES the water instead of the sea passing
+# through it. `hull_excl_on` is the X-key toggle.
 HULL_HALF_L, HULL_HALF_B = LOA * 0.5, BEAM * 0.5
-WAKE_MAX_AGE, WAKE_MAX_SAMPLES = 6.0, 64
-WAKE_INTERVAL, WAKE_DISTANCE = 0.10, 1.0     # 10 Hz or 1 m, whichever fires first
 hull_excl_on = True
-_wake_accum = 0.0
-_wake_last = None
-
-# The speed handed to the ocean's analytical wake (its bow bump and its V-wedge's
-# height): floor + gain |u|, capped. That wake gates a tiled foam trail on a
-# speed ramp, smoothstep(0.5, 1.5, speed), so it is held just over the trail's
-# threshold (the Norvasundet twin's figures): the wake's height without that
-# foam. Nothing here touches the boat: the height sampler ignores the wake, so
-# the hydrostatics read the same sea either way.
-WAKE_SPEED_FLOOR, WAKE_SPEED_GAIN, WAKE_SPEED_CAP = 0.56, 0.02, 0.62
 
 # What she leaves ON the water: the lane her hull drags and the waves her weight
 # makes, as sources of the ocean's wake field (the model of the twin's boats;
@@ -2975,48 +2964,26 @@ WAKE_SPEED_FLOOR, WAKE_SPEED_GAIN, WAKE_SPEED_CAP = 0.56, 0.02, 0.62
 wash = tp.VesselWash(ocean, 0, length=LOA, half_length=HULL_HALF_L, half_beam=HULL_HALF_B, mass=MASS)
 
 
-def wake_speed(u):
-    """Her speed as the wake shaders should see it -- see the note above."""
-    return math.copysign(min(WAKE_SPEED_FLOOR + WAKE_SPEED_GAIN * abs(u),
-                             WAKE_SPEED_CAP), u)
-
-
 def _wake_update(dt, cy, sy, pitch, roll):
-    """Hand the ocean the vessel's pose + waterline plane, and keep the Kelvin
-    wake's history trail. `half_length = 0` is the off switch for both."""
-    global _wake_accum, _wake_last
+    """Hand the ocean the vessel's pose + waterline plane, and her wash its
+    frame. `half_length = 0` is the off switch for both."""
     bs = boat_state
     h = ocean.hull_exclusion
     h.set_pose(bs["x"], bs["z"], bs["y"], yaw=bs["yaw"], pitch=pitch, roll=roll,
                half_length=HULL_HALF_L if hull_excl_on else 0.0,
                half_beam=HULL_HALF_B)
-    ws = wake_speed(bs["u"])                 # NOT bs["u"] -- see wake_speed()
-    ocean.wake.forward_speed = ws
     ocean.clear_wake_sources()
     if not hull_excl_on:
         wash.clear()
         return
     wash.update(dt, (bs["x"], bs["y"], bs["z"]), (sy, 0.0, cy),
                 (sy * bs["u"] + cy * bs["sway"], 0.0, cy * bs["u"] - sy * bs["sway"]))
-    ocean.age_wake(dt, WAKE_MAX_AGE, WAKE_MAX_SAMPLES)
-    _wake_accum += dt
-    moved = 1e9 if _wake_last is None else math.hypot(bs["x"] - _wake_last[0],
-                                                      bs["z"] - _wake_last[1])
-    if abs(bs["u"]) > 0.3 and (_wake_accum >= WAKE_INTERVAL or moved >= WAKE_DISTANCE):
-        # Emission still keys off her REAL speed (she is either making way or
-        # she is not); only the amplitude the shaders derive is compressed.
-        _wake_accum = 0.0
-        _wake_last = (bs["x"], bs["z"])
-        ocean.add_wake_sample(bs["x"], bs["z"], sy, cy, ws, WAKE_MAX_SAMPLES)
 
 
 def wake_teleport():
-    """After an act cut moves her hundreds of metres: drop the trail, or the
-    Kelvin V stretches across the whole sea from where she used to be."""
-    global _wake_last, _wake_accum
-    ocean.clear_wake()
+    """After an act cut moves her hundreds of metres: drop her wash, or it
+    stretches across the sea from where she used to be."""
     wash.clear()
-    _wake_last, _wake_accum = None, 0.0
     boat_state["floating"] = False   # re-seat her on the new patch of sea
 
 
@@ -3184,8 +3151,7 @@ def step_boat(dt):
     # --- she displaces the water, and leaves a wake --------------------------
     # The exclusion footprint carries her WATERLINE PLANE (centre y + the two
     # angles), so the sea meets the hull at the boot stripe on a crest as well
-    # as in a trough; and the same pose drives the ocean's analytical Kelvin
-    # wake.
+    # as in a trough; and the same pose places her wash in the wake field.
     # NOTE the roll passed here is `wave_roll`, NOT the total roll. Heel is the
     # HULL rotating into the water; the water surface stays where it is. Tilting
     # the excluded patch by the sail heel would lift the sea to the weather deck
@@ -3270,8 +3236,8 @@ def handle_keys(dt):
         order = ("rgb", "depth", "events")
         set_sensor_view(order[(order.index(sensor_view) + 1) % len(order)])
     if pressed("X"):
-        # Toggle the whole watertight story: footprint, waterline plane, Kelvin
-        # wake and analytic wake foam all switch off together.
+        # Toggle the whole watertight story: footprint, waterline plane and
+        # her wash all switch off together.
         hull_excl_on = not hull_excl_on
         if not hull_excl_on:
             wake_teleport()
@@ -4241,7 +4207,7 @@ def _film_cut(sh, prev):
         boat_state["yaw"] = math.radians(sh.place[2])
         _cam_anchor = np.array([boat_state["x"], 0.0, boat_state["z"]])
         ocean.warp_toward(boat_state["x"], boat_state["z"], 1.0)
-        wake_teleport()      # or the Kelvin V runs back to the previous act
+        wake_teleport()      # or her wash runs back to the previous act
     if sh.course is not None:
         knob["course"] = float(sh.course)
     # Per-shot metering. A rainbow is a low-contrast feature on a bright sky:
@@ -5047,7 +5013,7 @@ elif SHOT:
             # rolls and pitches with the boat) at head height in the cockpit
             # looking aft over the transom: if the sea is inside the hull
             # outline, this is where you see it. `wake` stands off astern and
-            # above for the Kelvin V and the flattened footprint.
+            # above for her waves and the flattened footprint.
             bs_ = boat_state
             rot_ = yxz_matrix(-(bs_["pitch"] + 0.020 * (bs_["u"] / max(HULL_SPEED, 0.1)) ** 2),
                               bs_["yaw"], bs_["wave_roll"] + bs_["heel"])

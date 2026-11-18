@@ -44,12 +44,6 @@ namespace threepp::vulkan::impl {
         // per-mesh descriptor sets (state->displaceDS) live in DisplacedMeshState.
         std::unique_ptr<vulkan::WaterDisplacePipeline> waterDisplace_;
 
-        // World-space foam pipeline — see vulkan/FoamWorldPipeline.{hpp,cpp}.
-        // Same one-pipeline-shared / per-mesh-descriptor-set pattern as
-        // waterDisplace. Builds the per-DisplacedMesh foam texture each
-        // frame; replaces the per-vertex foam buffer.
-        std::unique_ptr<vulkan::FoamWorldPipeline> foamWorld_;
-
         // The ocean's wake field — see vulkan/WakeFieldPipeline.{hpp,cpp}. One
         // pipeline; each DisplacedMesh with a wake field owns a State
         // (DisplacedMeshState::wake).

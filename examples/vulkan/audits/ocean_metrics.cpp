@@ -11,14 +11,11 @@
 //   ocean_metrics                         the sweep: U10 = 7, 10, 15 m/s at
 //                                         fetch 0 (fully developed) and 20 km,
 //                                         then two wakes (30 m at 10 kn, 4 m
-//                                         at 15 kn) and the engine's foam
-//                                         interval, each in its own process
+//                                         at 15 kn), each in its own process
 //   ocean_metrics --wind 10 --fetch 0     one case
 //   ocean_metrics --json metrics.jsonl    also append JSON lines to this file
 //   ocean_metrics --wake 5.14 --hull 30   one wake case: a hull of 30 m at
 //                                         5.14 m/s on a calm sea
-//   ocean_metrics --foam-default          the foam interval the engine runs
-//                                         under the current environment
 //
 //   ocean_metrics --compare base.jsonl    run, then print each metric's change
 //                                         against a saved run
@@ -27,32 +24,25 @@
 //
 // Comparing another water branch against dev
 //   1. Bring the audit to the branch: it lives in examples/vulkan/audits and
-//      needs readOceanFoam and readWakeRipples (VulkanRenderer); cherry-pick
+//      needs readOceanCrestFoam and readWakeRipples (VulkanRenderer); cherry-pick
 //      this audit's commits if the branch lacks them, then build the
 //      ocean_metrics target in that branch's own build tree.
-//   2. Check the whitecap mask first. The whitecap area is graded through
-//      FoamShade below, a CPU copy of dev's water-shade foam mask
-//      (deferred_shade_50_water_glass.glsl, the foam block; sampleFoamBicubic;
-//      generateFoamDetailTile_). A branch that changes that mask, the detail
-//      tile or how foam_world.comp fills the accumulator must mirror its
-//      change into FoamShade before running, or the whitecap rows measure
-//      dev's mask on the branch's foam and mean nothing.
-//   3. Run the sweep with dev's saved run as the baseline:
+//   2. Run the sweep with dev's saved run as the baseline:
 //        ocean_metrics --json branch.jsonl --compare dev_baseline_v3.jsonl
 //      (about 6 minutes; one case is --wind 15 --fetch 0 with the same flags).
 //      Rows print base, now, change, the choppiness of both runs and the
 //      verdicts; '*' marks a verdict that changed.
-//   4. Read the chop column. '!' marks a row whose choppiness differs from
+//   3. Read the chop column. '!' marks a row whose choppiness differs from
 //      the baseline's: the dispersion, slope, crest and whitecap rows depend
 //      on it, so rerun with --chop at the baseline's value to split the
 //      branch's change from its change of default.
 //   The wave-model switches are read from the environment, as the engine
 //   reads them (THREEPP_OCEAN_CWM,
 //   THREEPP_OCEAN_BOUND_WAVES = 1 / 0), so a
-//   sweep's child processes inherit them. Under the crest foam (with
-//   the chop normals, which it needs) it grades the crest-foam
-//   texture itself, read back with VulkanRenderer::readOceanCrestFoam.
-//   5. MARGINAL means the estimators of that row fall on both sides of a
+//   sweep's child processes inherit them. The whitecaps are graded on the
+//   crest-foam texture itself, read back with
+//   VulkanRenderer::readOceanCrestFoam.
+//   4. MARGINAL means the estimators of that row fall on both sides of a
 //      limit; it is neither a PASS nor a FAIL (and not a FAIL under
 //      --strict). Two saved runs compare with no GPU: --compare a --against b.
 //
@@ -84,7 +74,6 @@
 //                 wake case writes the image and the ridge maxima to
 //                 <prefix>.f32 and <prefix>.txt
 //   --strict      exit 1 when any graded metric FAILs (MARGINAL does not)
-//   --foam-default  measure the engine's foam interval (see above)
 // Exit codes: 0 ran, 1 a FAIL under --strict or a renderer that failed to
 // start, 2 bad arguments, 42 no Vulkan device (the ctest skip code of the
 // other Vulkan tests). The sweep returns the worst of its children's codes.
@@ -100,11 +89,8 @@
 //   flight; every series here is uniformly spaced, so the lag is a constant
 //   time offset and changes nothing measured.
 //
-//   Whitecaps: VulkanRenderer::readOceanFoam, the foam accumulator itself,
-//     put through a CPU copy of the water shade's foam mask, in a segment run
-//     at a game frame rate with the foam stepped every frame. The engine's
-//     own default steps it less often; the 'engine defaults' case reports
-//     that interval (INFO).
+//   Whitecaps: VulkanRenderer::readOceanCrestFoam, the crest foam itself, in
+//     a segment run at a game frame rate (the engine steps it every frame).
 //
 // Not measured here: the shade's view-dependent LEAN banking (reported only
 // as its footprint floor) and the analytic wake (bow bump and V-wedge in
@@ -264,13 +250,11 @@ namespace {
         double wakeWeight = 0.0;   // N; 0: the box hull's (draft 0.4 B, block 0.5)
         std::string wakeStrips;    // a file of "x z share radius half" lines (usv_rig.Wash.weight_strips)
         float wakeDraft = 0.f;     // m, each source's draft (WakeSource::draft; 0 = none)
-        bool foamDefault = false;  // --foam-default: measure the engine's foam interval
     };
 
-    // The foam accumulator is stepped every frame here, so a foam step is one
-    // frame; foam_world's decay clamps a step to 0.25 s
-    // (VulkanCoreGeometry.cpp, the foamDecay block), so a slower frame rate
-    // would decay too little and read high.
+    // The crest foam is stepped every frame, so a foam step is one frame; its
+    // decay clamps a step to 0.25 s (VulkanCoreGeometry.cpp, the crest foam
+    // block), so a slower frame rate would decay too little and read high.
     constexpr double kMaxFoamStep = 0.25;
 
     // ── Shared: a hidden-window renderer and the table ───────────────────────
@@ -447,141 +431,6 @@ namespace {
         return (cfg.strict && anyFail) ? 1 : 0;
     }
 
-    // ── The water shade's foam mask, on the CPU ──────────────────────────────
-    // deferred_shade_50_water_glass.glsl turns the foam accumulator into the
-    // whitewater it blends over the water:
-    //   coverage = clamp(1.3 B(acc), 0, 1), B the accumulator's bicubic
-    //     B-spline (line 907; sampleFoamBicubic, deferred_shade_10_lighting_
-    //     utils.glsl:904);
-    //   sheet = smoothstep(0.03, 0.42, coverage - pools mix(0.50, 0.22,
-    //     coverage) - (edge - 0.5) 0.30), pools = fbm4(P.xz 0.18 + drift),
-    //     edge = detail.r at P.xz / 8 (lines 929-933);
-    //   web = smoothstep(0.55, 0.80, lace (0.55 + 0.45 coverage)) smoothstep(
-    //     0.03, 0.22, coverage), lace = detail.g at P.xz / 12 (lines 937-939);
-    //   mask = max(sheet, 0.8 web) (line 945), seen from above.
-    // The detail tile is VulkanRenderer's generateFoamDetailTile_
-    // (VulkanCoreTextures.cpp), rebuilt here bit for bit. "Near" samples it at
-    // mip 0, as the shade does for water within about 8 m of the camera;
-    // "far" at its mean, the top of its mip chain.
-    inline float fractf(float x) { return x - std::floor(x); }
-    inline float smoothstepf(float a, float b, float x) {
-        const float t = std::clamp((x - a) / (b - a), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
-    // deferred_shade_10_lighting_utils.glsl hash21 / vnoise21 / fbm4, in fp32.
-    inline float hash21(float px, float py) {
-        px = fractf(px * 123.34f), py = fractf(py * 456.21f);
-        const float d = px * (px + 45.32f) + py * (py + 45.32f);
-        return fractf((px + d) * (py + d));
-    }
-    inline float vnoise21(float x, float y) {
-        const float ix = std::floor(x), iy = std::floor(y);
-        float fx = x - ix, fy = y - iy;
-        fx = fx * fx * (3.f - 2.f * fx), fy = fy * fy * (3.f - 2.f * fy);
-        const float a = hash21(ix, iy), b = hash21(ix + 1.f, iy);
-        const float c = hash21(ix, iy + 1.f), d = hash21(ix + 1.f, iy + 1.f);
-        const float ab = a + (b - a) * fx, cd = c + (d - c) * fx;
-        return ab + (cd - ab) * fy;
-    }
-    inline float fbm4(float x, float y) {
-        float a = 0.f, w = 0.5f;
-        for (int i = 0; i < 4; ++i) {
-            a += w * vnoise21(x, y);
-            x *= 2.03f, y *= 2.03f, w *= 0.5f;
-        }
-        return a;
-    }
-
-    struct FoamShade {
-        static constexpr int kRes = 512;
-        std::vector<uint8_t> tile;// RG8, row-major
-        float mean[2] = {0, 0};
-
-        FoamShade(): tile(size_t(kRes) * kRes * 2) {
-            auto hashf = [](int x, int y) {
-                uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
-                h = (h ^ (h >> 13)) * 1274126177u;
-                h ^= h >> 16;
-                return static_cast<float>(h) * (1.0f / 4294967296.0f);
-            };
-            auto vnoiseT = [&](float u, float v, int cells, int seed) {
-                const float x = u * float(cells), y = v * float(cells);
-                const int xi = int(std::floor(x)), yi = int(std::floor(y));
-                float tx = x - float(xi), ty = y - float(yi);
-                tx = tx * tx * (3.f - 2.f * tx);
-                ty = ty * ty * (3.f - 2.f * ty);
-                auto at = [&](int ix, int iy) {
-                    return hashf(((ix % cells) + cells) % cells + seed * 7919, ((iy % cells) + cells) % cells);
-                };
-                const float a = at(xi, yi), b = at(xi + 1, yi), c = at(xi, yi + 1), d = at(xi + 1, yi + 1);
-                return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
-            };
-            double sum[2] = {0, 0};
-            for (int y = 0; y < kRes; ++y) {
-                const float v = (float(y) + 0.5f) / float(kRes);
-                for (int x = 0; x < kRes; ++x) {
-                    const float u = (float(x) + 0.5f) / float(kRes);
-                    const float micro = 0.55f * vnoiseT(u, v, 26, 1) + 0.30f * vnoiseT(u, v, 60, 2) +
-                                        0.15f * vnoiseT(u, v, 132, 3);
-                    const float nf = 0.62f * vnoiseT(u, v, 10, 4) + 0.38f * vnoiseT(u, v, 23, 5);
-                    const float lace = 1.f - std::fabs(nf - 0.5f) * 2.f;
-                    const size_t i = (size_t(y) * kRes + x) * 2;
-                    tile[i + 0] = uint8_t(std::lround(std::clamp(micro, 0.f, 1.f) * 255.f));
-                    tile[i + 1] = uint8_t(std::lround(std::clamp(lace, 0.f, 1.f) * 255.f));
-                    sum[0] += tile[i] / 255.0, sum[1] += tile[i + 1] / 255.0;
-                }
-            }
-            mean[0] = float(sum[0] / (double(kRes) * kRes)), mean[1] = float(sum[1] / (double(kRes) * kRes));
-        }
-
-        // Bilinear, REPEAT, texel centres at (i + 0.5) / kRes.
-        float sample(float u, float v, int ch) const {
-            const float x = u * kRes - 0.5f, y = v * kRes - 0.5f;
-            const float x0 = std::floor(x), y0 = std::floor(y);
-            const float tx = x - x0, ty = y - y0;
-            const int ix = wrap(int(x0)), iy = wrap(int(y0)), ix1 = wrap(ix + 1), iy1 = wrap(iy + 1);
-            auto t = [&](int a, int b) { return tile[(size_t(b) * kRes + a) * 2 + ch] / 255.f; };
-            return (t(ix, iy) * (1 - tx) + t(ix1, iy) * tx) * (1 - ty) + (t(ix, iy1) * (1 - tx) + t(ix1, iy1) * tx) * ty;
-        }
-        static int wrap(int i) { return ((i % kRes) + kRes) % kRes; }
-
-        // Coverage at world (px, pz): clamp(1.3 B(acc), 0, 1).
-        static float coverage(const std::vector<float>& acc, int res, float tileSize, float px, float pz) {
-            const float sx = px / tileSize * res - 0.5f, sz = pz / tileSize * res - 0.5f;
-            const float ix = std::floor(sx), iz = std::floor(sz);
-            const float fx = sx - ix, fz = sz - iz;
-            auto w = [](float f, float* o) {
-                const float f2 = f * f, f3 = f2 * f;
-                o[0] = (-f3 + 3 * f2 - 3 * f + 1) / 6.f;
-                o[1] = (3 * f3 - 6 * f2 + 4) / 6.f;
-                o[2] = (-3 * f3 + 3 * f2 + 3 * f + 1) / 6.f;
-                o[3] = f3 / 6.f;
-            };
-            float wx[4], wz[4];
-            w(fx, wx), w(fz, wz);
-            float v = 0.f;
-            for (int j = 0; j < 4; ++j) {
-                const int z = ((int(iz) - 1 + j) % res + res) % res;
-                float row = 0.f;
-                for (int i = 0; i < 4; ++i) row += wx[i] * acc[size_t(z) * res + size_t(((int(ix) - 1 + i) % res + res) % res)];
-                v += wz[j] * row;
-            }
-            return std::clamp(1.3f * v, 0.f, 1.f);
-        }
-
-        // The mask at world (px, pz) at time t; `near` picks mip 0 of the
-        // detail tile, else its mean.
-        float mask(float cov, float px, float pz, float t, bool near) const {
-            if (cov <= 0.f) return 0.f;
-            const float dx = 0.42f * t * 0.18f, dz = 0.71f * t * 0.18f;
-            const float pools = fbm4(px * 0.18f + dx, pz * 0.18f + dz);
-            const float edge = near ? sample(px * 0.125f + dx * 0.07f, pz * 0.125f + dz * 0.07f, 0) : mean[0];
-            const float sheet = smoothstepf(0.03f, 0.42f, cov - pools * (0.50f + (0.22f - 0.50f) * cov) - (edge - 0.5f) * 0.30f);
-            const float lace = near ? sample(px / 12.f + dx * 0.12f, pz / 12.f + dz * 0.12f, 1) : mean[1];
-            const float web = smoothstepf(0.55f, 0.80f, lace * (0.55f + 0.45f * cov)) * smoothstepf(0.03f, 0.22f, cov);
-            return std::max(sheet, web * 0.8f);
-        }
-    };
 
     // Per-cascade spectral state kept across frames.
     struct Cascade {
@@ -1048,14 +897,9 @@ namespace {
         }
 
         // ── Whitecap segment ─────────────────────────────────────────────────
-        // At a game frame rate with the foam stepped every frame (main() sets
-        // THREEPP_OCEAN_FOAM_INTERVAL=1): foam_world keeps the max of the new
-        // deposit and the decayed old value, so at a few steps a second a
-        // moving crest leaves gaps a 30-60 Hz game would fill. 20 s of spin-up
-        // (ten of its 2 s e-folding times), then one read a second.
-        double foamArea = 0, foamAreaFar = 0, foamMean = 0, foamRaw = 0, foamCovHalf = 0;
-        int foamReads = 0;
-        // Crest foam: the foam texture over the
+        // At a game frame rate: at a few steps a second a moving crest leaves
+        // gaps a 30-60 Hz game would fill. 20 s of spin-up, then one read a
+        // second. Crest foam: the foam texture over the
         // water's rest coordinates. The shade draws min(F, 1) as the covered
         // fraction (its foam photograph is rank-equalised), so the mean of that
         // over the tile is the whitecap fraction, no mask to mirror.
@@ -1066,35 +910,10 @@ namespace {
             double tf = t0 + (nFrames - 1) * dt;
             const int spin = int(std::lround(20.0 * cfg.foamHz));
             for (int i = 0; i < spin; ++i) renderAt(tf += fdt);
-            const FoamShade shade;
-            std::mt19937 frng(4321);
-            std::uniform_real_distribution<float> jit(0.f, 1.f);
-            std::vector<float> foam;
             const int reads = std::max(1, int(std::lround(cfg.foamSeconds)));
             const int perRead = std::max(1, int(std::lround(cfg.foamHz)));
             for (int r = 0; r < reads; ++r) {
                 for (int i = 0; i < perRead; ++i) renderAt(tf += fdt);
-                uint32_t fres = 0;
-                float ftile = 0.f;
-                if (!renderer.readOceanFoam(*ocean, foam, fres, ftile) || foam.empty()) break;
-                // One jittered point per accumulator texel.
-                double area = 0, areaFar = 0, cov = 0, raw = 0, half = 0;
-                const int res = int(fres);
-                for (int iz = 0; iz < res; ++iz)
-                    for (int ix = 0; ix < res; ++ix) {
-                        const float px = (ix + jit(frng)) * ftile / res, pz = (iz + jit(frng)) * ftile / res;
-                        const float c = FoamShade::coverage(foam, res, ftile, px, pz);
-                        cov += c;
-                        raw += foam[size_t(iz) * res + ix];
-                        if (c > 0.5f) half += 1;
-                        if (c <= 0.f) continue;
-                        if (shade.mask(c, px, pz, float(tf), true) > 0.5f) area += 1;
-                        if (shade.mask(c, px, pz, float(tf), false) > 0.5f) areaFar += 1;
-                    }
-                const double nf = double(res) * res;
-                foamArea += area / nf, foamAreaFar += areaFar / nf, foamMean += cov / nf;
-                foamRaw += raw / nf, foamCovHalf += half / nf;
-                ++foamReads;
                 std::vector<float> cf;
                 uint32_t cres = 0;
                 float ctile = 0.f;
@@ -1568,7 +1387,7 @@ namespace {
             out.push_back({"  area where the CWM limiter binds", jSamples ? double(jLimited) / jSamples : 0.0, 1, 0,
                            "", "", "choppiness < 1 + sharpness there (water_displace.comp cwmLimit)"});
         out.push_back({"  area with J < 0, cascades 0+1 (foam's)", jSamples ? double(jNeg01) / jSamples : 0.0, 1, 0,
-                       "", "", "foam_world.comp sees these"});
+                       "", "", "foam_crest.comp sees these"});
         for (int c = 0; c < 3; ++c)
             out.push_back({fmt("  area with J < 0, cascade %.0f alone", c),
                            jSamples ? double(jNegC[c]) / jSamples : 0.0, 1, 0, "", "", ""});
@@ -1589,10 +1408,7 @@ namespace {
         // et al. (2008): W = 3.18e-3 (U10 - 3.70)^3 % for 3.7-11.25 m/s and
         // 4.82e-4 (U10 + 1.98)^3 % for 9.25-23.09 m/s. Field scatter is a
         // factor of 3 to 10, so the honest target is between the two curves
-        // and zero below 3.7 m/s (research_targets 1.4). Graded: the AREA
-        // where the shade's foam mask is above 0.5, the white a camera sees,
-        // as a field photo is thresholded. The mean coverage the shade is
-        // handed counts every faint decayed texel, so it is INFO only.
+        // and zero below 3.7 m/s (research_targets 1.4).
         if (crestReads > 0) {
             // Rest-space fractions: a parcel's share of the tile at rest. In
             // the drawn sea fresh foam sits where the map is squeezed, so the
@@ -1607,27 +1423,10 @@ namespace {
                            "the breaking front and what it just left"});
             out.push_back({"  crest foam value mean (raw)", crestRaw / crestReads, 1, 0, "", "", ""});
             out.push_back({"  crest foam value max", crestMax, 1, 0, "", "", "the deposit cap when crests break hard"});
-        }
-        if (foamReads > 0) {
-            const double wM = monahan(U), wC = callaghan(U);
-            const double lo = U > 3.7 ? std::min(wM, wC) : 0.0;
-            const double hi = U > 3.7 ? std::max(wM, wC) : 1e-4;
-            out.push_back({"whitecap area (shade mask > 0.5)", foamArea / foamReads, lo, hi,
-                           fmt("%.2f", 100 * lo) + "-" + fmt("%.2f %%", 100 * hi), "between curves",
-                           "Monahan 1980, Callaghan 2008"});
-            out.push_back({"  whitecap area, far (detail at its mean)", foamAreaFar / foamReads, 1, 0, "", "",
-                           "the same mask, top mip"});
-            out.push_back({"  coverage mean (shade's input)", foamMean / foamReads, 1, 0, "", "",
-                           "clamp(1.3 B(foam), 0, 1)"});
-            out.push_back({"  area with coverage > 0.5", foamCovHalf / foamReads, 1, 0, "", "", ""});
-            out.push_back({"  foam value mean (raw)", foamRaw / foamReads, 1, 0, "", "", "foam_world.comp"});
             out.push_back({"  foam step (s)", 1.0 / cfg.foamHz, 0.0, kMaxFoamStep, "<= 0.25 s", "",
                            "foam every frame at --foam-hz"});
-            const char* iv = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
-            out.push_back({"  foam interval in this segment (frames)", iv ? std::atof(iv) : -1.0, 1, 0, "", "",
-                           "forced by this audit; the engine's own default is the 'engine defaults' case"});
         } else {
-            out.push_back({"whitecap area (shade mask > 0.5)", -1, 1, 0, "", "", "no foam readback"});
+            out.push_back({"crest foam cover (mean of min(F, 1))", -1, 1, 0, "", "", "no crest foam readback"});
         }
 
         out.push_back({"stale readback frames", double(staleFrames), 0, 0, "0", "", "harness self-check"});
@@ -1635,69 +1434,6 @@ namespace {
         char tag[96];
         std::snprintf(tag, sizeof(tag), "U10=%.1f fetch=%.0f", U, double(cfg.fetch));
         return report(out, cfg, tag, chop);
-    }
-
-    // ── The engine's foam interval ───────────────────────────────────────────
-    // The sea cases force THREEPP_OCEAN_FOAM_INTERVAL=1, so they grade foam
-    // stepped every frame. The engine reads that variable once, with its own
-    // default when it is unset (VulkanCoreGeometry.cpp, kFoamInterval). This
-    // case measures what it runs: a U15 sea at 30 frames a second, the
-    // accumulator read after every frame once foam has formed; a frame whose
-    // read differs from the one before ran foam_world, and the interval is
-    // frames over such frames. The sweep runs it with the variable unset.
-    int runFoamDefault(const Config& cfg) {
-        Gpu gpu;
-        if (const int rc = makeGpu(gpu)) return rc;
-        Canvas& canvas = *gpu.canvas;
-        VulkanRenderer& renderer = *gpu.renderer;
-
-        Scene scene;
-        PerspectiveCamera camera(55.f, float(kW) / kH, 0.5f, 4000.f);
-        camera.position.set(0.f, 40.f, 120.f);
-        camera.lookAt(Vector3{0.f, 0.f, 0.f});
-        Ocean::Options opt;
-        opt.windSpeed = 15.f;
-        opt.fetch = 0.f;
-        auto ocean = Ocean::create(opt);
-        scene.add(ocean);
-
-        const char* env = std::getenv("THREEPP_OCEAN_FOAM_INTERVAL");
-        std::printf("engine defaults: foam interval with THREEPP_OCEAN_FOAM_INTERVAL %s\n",
-                    env ? (std::string("= ") + env).c_str() : "unset");
-        std::fflush(stdout);
-        const double fps = 30.0;
-        double t = 10.0;
-        auto renderAt = [&](double tt) {
-            renderer.setSimTime(tt);
-            canvas.animateOnce([&] { renderer.render(scene, camera); });
-        };
-        for (int i = 0; i < int(2 * fps); ++i) renderAt(t += 1.0 / fps);
-        std::vector<float> prev, now;
-        uint32_t res = 0;
-        float tile = 0.f;
-        std::vector<Metric> out;
-        if (!renderer.readOceanFoam(*ocean, prev, res, tile) || prev.empty()) {
-            out.push_back({"foam interval, engine default (frames)", -1, 1, 0, "", "", "no foam readback"});
-        } else {
-            const int frames = 24;
-            int ran = 0, reads = 0;
-            for (int i = 0; i < frames; ++i) {
-                renderAt(t += 1.0 / fps);
-                if (!renderer.readOceanFoam(*ocean, now, res, tile)) continue;
-                ++reads;
-                if (now != prev) ++ran;
-                std::swap(prev, now);
-            }
-            if (reads != frames) ran = 0;// a missed read would hide a step
-            const double interval = ran > 0 ? double(frames) / ran : -1.0;
-            const std::string src = env ? std::string("THREEPP_OCEAN_FOAM_INTERVAL=") + env
-                                        : std::string("VulkanCoreGeometry.cpp, variable unset");
-            out.push_back({"foam interval, engine default (frames)", interval, 1, 0, "1 (every frame)", "", src});
-            out.push_back({"  foam step at 30 fps, engine default (s)", interval / 30.0, 1, 0, "0.033 s", "", ""});
-            out.push_back({"  foam step at 60 fps, engine default (s)", interval / 60.0, 1, 0, "0.017 s", "", ""});
-            out.push_back({"  frames that ran foam_world, of 24", double(ran), 1, 0, "", "", "accumulator changed"});
-        }
-        return report(out, cfg, "engine defaults");
     }
 
     // ── 6. Kelvin wake ───────────────────────────────────────────────────────
@@ -1996,7 +1732,7 @@ namespace {
             std::snprintf(want, sizeof(want), "U10=%.1f fetch=%.0f", double(u), double(fetch));
             double v = -1;
             for (const auto& r: rows)
-                if (r.kase == want && r.metric == "whitecap area (shade mask > 0.5)") v = r.measured;
+                if (r.kase == want && r.metric == "crest foam cover (mean of min(F, 1))") v = r.measured;
             meas.push_back(v);
             mo.push_back(monahan(u));
             ca.push_back(callaghan(u));
@@ -2021,22 +1757,6 @@ namespace {
             js << b << "\n";
         }
         return {Row{kase, "whitecap growth exponent n", ok ? "PASS" : "FAIL", n}};
-    }
-
-    void setEnv(const char* name, const char* value) {
-#ifdef _WIN32
-        _putenv_s(name, value);
-#else
-        ::setenv(name, value, 1);
-#endif
-    }
-
-    void unsetEnv(const char* name) {
-#ifdef _WIN32
-        _putenv_s(name, "");// an empty value removes it
-#else
-        ::unsetenv(name);
-#endif
     }
 
     // A child's exit code from std::system: cmd.exe returns it as is; POSIX
@@ -2085,7 +1805,6 @@ int main(int argc, char** argv) {
         else if (const char* s = val("--wake-strips")) cfg.wakeStrips = s;
         else if (const char* s = val("--wake-draft")) cfg.wakeDraft = float(std::atof(s));
         else if (std::strcmp(argv[i], "--strict") == 0) cfg.strict = true;
-        else if (std::strcmp(argv[i], "--foam-default") == 0) cfg.foamDefault = true, single = true;
         else {
             std::printf("unknown argument %s (see the usage block in ocean_metrics.cpp)\n", argv[i]);
             return 2;
@@ -2094,7 +1813,7 @@ int main(int argc, char** argv) {
     if (cfg.hz <= 0 || cfg.seconds <= 0 || cfg.wind <= 0 || cfg.foamSeconds <= 0) return 2;
     if (cfg.wakeScalar != "auto" && cfg.wakeScalar != "slope" && cfg.wakeScalar != "height") return 2;
     // The whitecap segment steps the foam every frame; a step above 0.25 s
-    // would be clamped by foam_world's decay and read high.
+    // would be clamped by the crest foam's decay and read high.
     if (!(cfg.foamHz > 0) || 1.0 / cfg.foamHz > kMaxFoamStep) {
         std::printf("--foam-hz %.3g gives a foam step of more than %.2f s\n", cfg.foamHz, kMaxFoamStep);
         return 2;
@@ -2111,17 +1830,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (single) {
-        // The engine's own interval, under whatever the environment says.
-        if (cfg.foamDefault) return runFoamDefault(cfg);
-        // Foam every frame, read once by the renderer at its first frame.
-        setEnv("THREEPP_OCEAN_FOAM_INTERVAL", "1");
-        return cfg.wakeSpeed > 0.f ? runWake(cfg) : runCase(cfg);
-    }
-    // The sweep's 'engine defaults' case measures the interval the engine
-    // ships, so the variable is removed for every child (the sea cases set
-    // their own).
-    unsetEnv("THREEPP_OCEAN_FOAM_INTERVAL");
+    if (single) return cfg.wakeSpeed > 0.f ? runWake(cfg) : runCase(cfg);
 
     // The sweep: each case in its own process, so no renderer state carries
     // from one ocean to the next. Every other flag but --compare is passed
@@ -2159,8 +1868,6 @@ int main(int argc, char** argv) {
     // and a 4 m USV at 15 kn (Fr_L 1.23, a narrowed wake).
     cases.emplace_back(" --wake 5.14 --hull 30 --beam 8");
     cases.emplace_back(" --wake 7.72 --hull 4 --beam 1.6");
-    // The foam interval the engine ships (INFO).
-    cases.emplace_back(" --foam-default");
     int worst = 0;
     for (const auto& c: cases) {
 #ifdef _WIN32
@@ -2182,11 +1889,6 @@ int main(int argc, char** argv) {
         if (cfg.strict && g[0].verdict == "FAIL") worst = std::max(worst, 1);
     }
     rows.insert(rows.end(), extra.begin(), extra.end());
-    for (const auto& r: rows)
-        if (r.kase == "engine defaults" && r.metric == "foam interval, engine default (frames)" && r.measured > 1.0)
-            std::printf("\nNOTE: the engine steps the whitecap foam every %.3g frames by default (VulkanCoreGeometry.cpp,\n"
-                        "      kFoamInterval), a reduced update rate; the sea cases above grade it stepped every frame.\n",
-                        r.measured);
     if (!cfg.compare.empty()) printCompare(loadRows(cfg.compare), rows);
     return worst;
 }

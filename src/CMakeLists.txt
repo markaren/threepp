@@ -975,7 +975,6 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/TlasGen.cpp"
             "threepp/renderers/vulkan/ParticleFieldPass.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
-            "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/WakeFieldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
             "threepp/renderers/vulkan/VertexSanitizePipeline.cpp"
@@ -1629,10 +1628,6 @@ if (THREEPP_WITH_VULKAN)
         _water_displace_chop_spv_h
         VARIANT_SUFFIX chop
         DEFINES OCEAN_CHOP=1)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
-        kFoamWorldCompSpv
-        _foam_world_spv_h)
     # Crest foam (DisplacedMesh::Params::crestFoam): the deposit-and-decay pass
     # over the foam texture in the water's rest coordinates (water::CrestFoam).
     compile_vulkan_shader(threepp

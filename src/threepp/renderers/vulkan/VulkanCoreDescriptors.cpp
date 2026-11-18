@@ -356,15 +356,13 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.materialTexCount = kMaxMaterialTextures;
             in.emissiveTriBuf   = emBufs.data();
             // Ocean textures for the thin-shell water branch. These renderer
-            // members are the live ocean FFT-fine + foam views/samplers (or 1×1
-            // dummies + tile size 0 when no DisplacedMesh is present) — the same
-            // handles the RT set binds at 32 + 44. ensureDisplacedState sets them
-            // BEFORE the scene-build descriptor rewrite that calls us, so the
-            // deferred set always picks up the current ocean state.
+            // members are the live ocean's FFT-fine view/sampler (or a 1×1
+            // dummy + tile size 0 when no DisplacedMesh is present).
+            // ensureDisplacedState sets them BEFORE the scene-build descriptor
+            // rewrite that calls us, so the deferred set always picks up the
+            // current ocean state.
             in.oceanFineView    = oceanFineHeightView;
             in.oceanFineSampler = oceanFineHeightSampler;
-            in.oceanFoamView    = oceanFoamView;
-            in.oceanFoamSampler = oceanFoamSampler;
             // Crest foam: the live ocean's texture or the foam dummy (both
             // GENERAL), and the foam photograph once an ocean has had it uploaded,
             // the foam detail tile standing in until then (both READ_ONLY).
@@ -380,8 +378,6 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.oceanWakeSampler = wakeField_->sampler();
             in.oceanRippleView    = oceanRippleView;
             in.oceanRippleSampler = wakeField_->rippleSampler();
-            in.foamDetailView    = foamDetailImage.view;
-            in.foamDetailSampler = foamDetailImage.sampler;
             // Shared blue-noise tile — dithers the deferred GI hemisphere
             // directions so the 1-spp residual denoises cleanly instead of
             // showing as AO speckle.

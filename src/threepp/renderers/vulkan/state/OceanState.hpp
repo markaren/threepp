@@ -25,15 +25,12 @@ namespace threepp::vulkan::impl {
         float       oceanWaveScale        = 1.f;          // its params.waveScale (the path tracer's fine slope)
         bool        oceanChopNormals      = false;        // binding 13 is a ChopMoments chain and it is on this frame
 
-        // World-space foam (deferred shade ocean binding). Built by
-        // FoamWorldPipeline each frame from a DisplacedMesh's foamImage.
-        // deferred_shade.comp samples it at world XZ on water hits — replaces
-        // the per-vertex foam buffer that used to live on the BLAS. Held as a
-        // dummy 1×1 R32F when no DisplacedMesh is in the scene.
+        // A 1×1 R32F stand-in for the ocean's sampled inputs (crest foam,
+        // wave climate) while no DisplacedMesh provides them.
         Image2D oceanFoamDummy{};
-        VkImageView oceanFoamView   = VK_NULL_HANDLE;
-        VkSampler   oceanFoamSampler = VK_NULL_HANDLE;
-        float       oceanFoamTileSize = 0.f;              // 0 disables sampling
+        // The tile the crest foam's texture covers (the ocean's cascade-0
+        // tile; its rest coordinates repeat with it). 0 = no ocean.
+        float       oceanFoamTileSize = 0.f;
         // Crest foam (deferred shade bindings 91 and 92): the live ocean's
         // foam texture over its rest coordinates (water::CrestFoam), or the
         // foam dummy, and the foam photograph old foam opens against, uploaded

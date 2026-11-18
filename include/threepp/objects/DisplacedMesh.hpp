@@ -206,9 +206,9 @@ namespace threepp {
             float choppiness = 0.45f;
 
             // How much of the sea's own whitecaps (the crest foam) is laid
-            // down, live-tunable: 1 = all of it, 0 = none. Wake trails and
-            // explicit foam disturbances are NOT scaled by this. Ocean::create
-            // derives ~size/300 (capped at 1), so small water stays calm.
+            // down, live-tunable: 1 = all of it, 0 = none. The wake field's
+            // foam is NOT scaled by this. Ocean::create derives ~size/300
+            // (capped at 1), so small water stays calm.
             float foamAmount = 1.0f;
 
             // FFT texture resolution per cascade (must be power of two).
@@ -274,8 +274,7 @@ namespace threepp {
         //
         // with localZ the length axis (positive toward the BOW, along
         // (sinYaw, cosYaw)) and localX the beam axis (positive to STARBOARD,
-        // along (cosYaw, -sinYaw)) — the same vessel-local frame the wake
-        // formulas use. So:
+        // along (cosYaw, -sinYaw)). So:
         //   centerY  world height of the hull's own design-waterline plane at
         //            (centerX, centerZ); the height the water should meet the
         //            hull at, NOT the deck.
@@ -311,8 +310,6 @@ namespace threepp {
         // `center`. Topology stays fixed (same triangle indices, same
         // vertex count, same BLAS shape) — only positions move, so the
         // ocean's BLAS-rebuild + per-vertex history paths are unchanged.
-        // Pair with the world-space foam texture so foam doesn't drag
-        // along with vertex indices as the warp follows the camera.
         //
         // Mapping per axis: `x = halfRange * (coefA·u + (1-coefA)·u³)`
         //   - coefA = 1: uniform (no warp).
@@ -371,97 +368,26 @@ namespace threepp {
         }
         Lod lod;
 
-        // Vessel wake: per-frame state used by water_displace.comp to inject a
-        // Kelvin V-wake (geometric height), a bow bump, and a foam trail behind
-        // the vessel. Reuses the HullExclusion pose (centerX/Z, sin/cosYaw,
-        // halfLength, halfBeam) for the immediate-pose wake formulas; the
-        // historical trail uses snapshot samples for the Kelvin V-wake so the
-        // wake actually traces the boat's past path through turns instead of
-        // snapping to the current heading.
-        //
-        // Sample emission cadence + trail length are owned by the application
-        // (see examples/vulkan/vulkan_ocean.cpp). Compile-time cap matches
-        // the renderer's allocated trail SSBO; overflow is dropped silently.
-        struct WakeSample {
-            float worldX   = 0.f;
-            float worldZ   = 0.f;
-            float sinYaw   = 0.f;
-            float cosYaw   = 1.f;
-            float speed    = 0.f;
-            float age      = 0.f;       // seconds since emission
-            float _pad0    = 0.f;
-            float _pad1    = 0.f;
-        };
-        struct VesselWake {
-            float forwardSpeed = 0.f;   // m/s along +heading; 0 disables wake
-            bool  enabled      = true;
-            // Its bow bump, its V-wedge and the V-wedge's ridge foam. false =
-            // a scene whose wake field makes her waves (VesselWash with
-            // ripples): the analytic ones would come on top of them. The
-            // stern foam trail stays either way.
-            bool  analyticWaves = true;
-            std::vector<WakeSample> trail;
-        };
-        VesselWake wake;
-
-        // Several vessels on one ocean. Vessel 0 is `hullExclusion` + `wake`
-        // above, the pair every single-vessel scene sets; vessels
-        // 1..kMaxVessels-1 live in `extraVessels`. Each is a footprint on its
-        // own waterline plane plus its own wake (bow bump, V-wedge over its
-        // own trail, foam trail), and takes part while its hull.halfLength
-        // > 0. vesselHull(i) / vesselWake(i) address them all by index.
-        // Every footprint also flattens the OTHER vessels' wakes, so a ship's
-        // V-wedge does not rise through a smaller boat's deck.
+        // Several vessels on one ocean. Vessel 0 is `hullExclusion` above, the
+        // footprint every single-vessel scene sets; vessels 1..kMaxVessels-1
+        // live in `extraHulls`. Each is a footprint on its own waterline plane
+        // and takes part while its halfLength > 0. vesselHull(i) addresses them
+        // all by index. What a vessel leaves on the water, her waves and her
+        // wash, is the wake field's (below; marine::VesselWash).
         static constexpr uint32_t kMaxVessels = 8;
-        struct Vessel {
-            HullExclusion hull;
-            VesselWake    wake;
-        };
-        std::array<Vessel, kMaxVessels - 1> extraVessels;
+        std::array<HullExclusion, kMaxVessels - 1> extraHulls;
 
         HullExclusion& vesselHull(uint32_t i) {
-            return i == 0 ? hullExclusion : extraVessels.at(i - 1).hull;
+            return i == 0 ? hullExclusion : extraHulls.at(i - 1);
         }
         [[nodiscard]] const HullExclusion& vesselHull(uint32_t i) const {
-            return i == 0 ? hullExclusion : extraVessels.at(i - 1).hull;
-        }
-        VesselWake& vesselWake(uint32_t i) {
-            return i == 0 ? wake : extraVessels.at(i - 1).wake;
-        }
-        [[nodiscard]] const VesselWake& vesselWake(uint32_t i) const {
-            return i == 0 ? wake : extraVessels.at(i - 1).wake;
-        }
-
-        // Per-frame point sources of foam — splatted by water_displace.comp
-        // into the per-vertex foam buffer with a gaussian falloff, persisted
-        // via the existing decay (~1.4 s half-life). Use for boat-hull
-        // waterline contacts, propeller wash, dynamic splashes — anything
-        // not captured by the analytical hull/wake. Clear and repopulate
-        // each frame before render(); the renderer uploads on demand.
-        //
-        // Capacity is bounded by a fixed compile-time max (currently 64);
-        // overflow is dropped silently. Tile-local — worldXZ should be in
-        // the same frame as the ocean mesh (typically world space).
-        struct FoamDisturbance {
-            float worldX = 0.f;
-            float worldZ = 0.f;
-            float radius = 1.0f;    // metres
-            float intensity = 1.0f; // [0,1] foam value at centre
-        };
-        std::vector<FoamDisturbance> foamDisturbances;
-
-        void clearFoamDisturbances() { foamDisturbances.clear(); }
-        void addFoamDisturbance(float worldX, float worldZ,
-                                float radius, float intensity) {
-            foamDisturbances.push_back({worldX, worldZ, radius, intensity});
+            return i == 0 ? hullExclusion : extraHulls.at(i - 1);
         }
 
         // ── Wake field ────────────────────────────────────────────────────
         // What something moving through the water leaves ON it: a propeller's
         // race, a waterjet's wash, a bow thruster, a paddle's puddle, a
-        // hull's stern. The foam accumulator above cannot carry these: it is
-        // ONE cascade-0 tile repeated over the sheet (a boat's foam comes back
-        // every tileSize0) at about a metre a texel.
+        // hull's stern, and the waves a vessel makes.
         //
         // The wake field is a set of PATCHES: square windows of simulated
         // water surface, each `resolution` texels a side, placed in the world
@@ -809,7 +735,7 @@ namespace threepp {
         // the horizontal displacement scaled by `choppiness`. The height over
         // a world XZ is therefore H(q) for the q whose displaced image is that
         // XZ, not H(worldXZ). sampleHeight solves x = q + D(q) by fixed-point
-        // iteration (the same inversion foam_world.comp does). Without it the
+        // iteration. Without it the
         // result is off by the local chop displacement, up to metres in a
         // steep sea. `cascadeMask` applies to both D and H, so a masked query
         // returns the height of the surface built from those cascades alone.
@@ -836,21 +762,6 @@ namespace threepp {
         // torn, depending on GPU pacing.)
         float sampleHeight(float worldX, float worldZ,
                            uint32_t cascadeMask = 0b111u) const;
-
-        // CPU mirror of the wake-height block in water_displace.comp —
-        // bow bump (B), bow V-wedge (D), and the bow-anchored Kelvin
-        // V-wake (C, summed over `wake.trail`). Mirrors the shader
-        // formulas closely enough that buoys spring-damping against
-        // (sampleHeight + sampleWakeHeight) bob through a passing
-        // V-wake the way the rendered mesh does. Returns 0 if there is
-        // no active vessel or the speed gate hasn't engaged.
-        //
-        // With several vessels it is the SUM of their wakes, each faded
-        // only inside its own footprint: the water a hull rides on, not the
-        // rendered surface (which another footprint flattens). So a boat
-        // crossing a ship's wake that samples this under her own hull feels
-        // the ship's wake.
-        float sampleWakeHeight(float worldX, float worldZ) const;
 
     private:
         WaveClimate waveClimate_;

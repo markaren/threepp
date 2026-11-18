@@ -1819,26 +1819,6 @@ namespace threepp {
 
     }// namespace
 
-    bool VulkanRenderer::readOceanFoam(const DisplacedMesh& mesh, std::vector<float>& out,
-                                       uint32_t& resolution, float& tileSize) {
-        auto& impl = *core();
-        auto* ctx  = impl.ctx.get();
-        if (!ctx) return false;
-        const auto it = impl.displacedStates.find(&mesh);
-        if (it == impl.displacedStates.end() || !it->second) return false;
-        const auto& st = *it->second;
-        const uint32_t res = st.foamRes;
-        if (st.foamImage.image == VK_NULL_HANDLE || res == 0) return false;
-
-        const auto bytes = copyGeneralImageToHost(*ctx, st.foamImage.image, res, res, 0u, sizeof(float),
-                                                  "readOceanFoam");
-        out.resize(static_cast<size_t>(res) * res);
-        std::memcpy(out.data(), bytes.data(), bytes.size());
-        resolution = res;
-        tileSize   = st.foamTileSize;
-        return true;
-    }
-
     bool VulkanRenderer::readOceanCrestFoam(const DisplacedMesh& mesh, std::vector<float>& out,
                                             uint32_t& resolution, float& tileSize) {
         auto& impl = *core();

@@ -205,9 +205,6 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
                                                VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL),
                                  oceanOut);
                     }
-                    pass.use(g.importImage("ocean.foam", st.foamImage.image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
-                                           VK_IMAGE_LAYOUT_GENERAL),
-                             oceanOut);
                     if (st.wake) {
                         for (const VkImage img : st.wake->image) {
                             pass.use(g.importImage("ocean.wake", img, VK_IMAGE_ASPECT_COLOR_BIT, 1,
