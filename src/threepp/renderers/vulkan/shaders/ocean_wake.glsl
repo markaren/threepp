@@ -11,10 +11,14 @@
 #ifndef THREEPP_OCEAN_WAKE_GLSL
 #define THREEPP_OCEAN_WAKE_GLSL
 
-#define OCEAN_WAKE_MAX_PATCHES 8
+// The producers' patches (DisplacedMesh::kMaxWakePatches), then the shore's
+// two (WakeFieldPipeline::kShoreLayers): its near and its far window, which
+// follow the camera and hold the foam the sea makes where it meets the land,
+// a rock, a pile or a quay (shore_source.comp).
+#define OCEAN_WAKE_MAX_PATCHES 10
 
 // One patch: a square window of water, world-anchored, `res` texels a side.
-// 72 bytes.
+// 76 bytes.
 struct WakePatch {
     float originX;      // world min corner, snapped to whole texels
     float originZ;
@@ -34,6 +38,8 @@ struct WakePatch {
     float breakSlope1;  // ... fully at this; 0 = they never do
     float breakFoam;    // the film and the bubbles a fully broken crest lays in the field
     float breakAir;
+    float shore;        // 1 = one of the shore's windows: no producer lays anything in it, and its own
+                        // flow stirs no turbulence and calms no waves (shore_source.comp feeds it)
 };
 
 // What makes a mark. 68 bytes (= DisplacedMesh::WakeSource).
@@ -53,7 +59,8 @@ struct WakeSource {
     float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
 };
 
-// 68-byte header, then the patches, then the sources of this step.
+// 68-byte header, then the patches (the producers' and the shore's), then the
+// sources of this step.
 layout(buffer_reference, scalar) readonly buffer WakeTable {
     uint  patchCount;
     uint  res;

@@ -16,6 +16,24 @@
 //     patches. The table is rewritten inside the frame's command stream
 //     (vkCmdUpdateBuffer), never from the host, so the frame still in flight
 //     reads the origins its own images were written with.
+//
+// THE SHORE. Every ocean also carries, after its producers' patches, two
+// windows of the same field that follow the camera (kShoreTexel: a near one at
+// a quarter metre a texel and a far one at two), in which the sea lays the
+// foam it makes where it meets something solid: the white collar round a
+// pile, a rock or a quay that comes with each wave and the lace that drifts
+// off it. Each window has a SHORE MAP, a top-down slice of the still scene at
+// the water's rest level (shore_capture.comp, ray queries; then the distance
+// and direction to the nearest solid by jump flooding, shore_jfa.comp), taken
+// again only when the window moves (the camera crosses an eighth of it) or the
+// scene's structure changes. Every step, after the field's own, the source
+// (shore_source.comp) reads the drawn sea at each texel near a shore and lays
+// foam and air where the water drives into the solid; the field then carries,
+// tears and ages it as it does a wake's. The shade draws it as the wake's foam
+// (the shore windows are patches like any other). Nothing about it is a
+// switch: a scene with nothing solid at its waterline has an empty map, and
+// its water is shaded exactly as before. It needs ray queries; without them an
+// ocean has the producers' field alone, as before.
 
 #ifndef THREEPP_VULKAN_WAKE_FIELD_PIPELINE_HPP
 #define THREEPP_VULKAN_WAKE_FIELD_PIPELINE_HPP
@@ -34,7 +52,7 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
-    // Mirrors WakePatch in ocean_wake.glsl (scalar layout, 72 bytes).
+    // Mirrors WakePatch in ocean_wake.glsl (scalar layout, 76 bytes).
     struct WakePatchGpu {
         float originX;
         float originZ;
@@ -57,8 +75,20 @@ namespace threepp::vulkan {
         float breakSlope1;
         float breakFoam;
         float breakAir;
+        float shore;// 1 = one of the shore's windows (fed by shore_source.comp, nothing else)
     };
-    static_assert(sizeof(WakePatchGpu) == 72, "WakePatchGpu must match ocean_wake.glsl's WakePatch");
+    static_assert(sizeof(WakePatchGpu) == 76, "WakePatchGpu must match ocean_wake.glsl's WakePatch");
+
+    // The shore's windows, after the producers' patches in every ocean's field.
+    constexpr uint32_t kShoreLayers = 2;
+    // Their texel (m): the near window's resolves a pile 30 cm across, the far
+    // one's the line along a shore seen from a mast or a drone. Each window is
+    // the field's resolution of them a side (1024: 256 m and 2 km).
+    constexpr float kShoreTexel[kShoreLayers] = {0.25f, 2.0f};
+    // The field's resolution for an ocean whose producers asked for none.
+    constexpr uint32_t kShoreRes = 1024;
+    // = OCEAN_WAKE_MAX_PATCHES
+    constexpr uint32_t kWakeTablePatches = DisplacedMesh::kMaxWakePatches + kShoreLayers;
 
     // Mirrors WakeTable in ocean_wake.glsl up to (not including) its sources.
     struct WakeTableGpu {
@@ -79,9 +109,9 @@ namespace threepp::vulkan {
         float    rippleGain;
         float    albedo;
         float    lace;
-        WakePatchGpu patches[DisplacedMesh::kMaxWakePatches];
+        WakePatchGpu patches[kWakeTablePatches];
     };
-    static_assert(sizeof(WakeTableGpu) == 68 + 72 * DisplacedMesh::kMaxWakePatches,
+    static_assert(sizeof(WakeTableGpu) == 68 + 76 * kWakeTablePatches,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
     static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
                   "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");
@@ -100,10 +130,59 @@ namespace threepp::vulkan {
             uint32_t        _pad;
         };
 
+        // shore_capture.comp's push block (48 bytes).
+        struct ShoreCapturePush {
+            VkDeviceAddress geomAddr;
+            VkDeviceAddress hullAddr;
+            float    originX, originZ, texel, restY;
+            uint32_t res, layer, hullCount, _pad;
+        };
+        // shore_jfa.comp's (20 bytes).
+        struct ShoreJfaPush {
+            uint32_t res, layer, mode;
+            int32_t  step;
+            float    texel;
+        };
+        // shore_source.comp's (96 bytes).
+        struct ShoreSourcePush {
+            float    tileSize0, tileSize1, tileSize2, waveScale, choppiness;
+            uint32_t cascadeMask;
+            float    originX, originZ, texel;
+            uint32_t res, layer, shoreLayer;
+            float    dt;
+            uint32_t history;
+            float    driftX, driftZ;
+            float    keepX, keepZ, keepHalf;
+            float    timeSec;
+            float    gain;
+            float    _pad[3];
+        };
+
+        // What the shore's step needs of the frame and of its ocean.
+        struct ShoreInputs {
+            VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// the scene's, as the last frame left it
+            uint32_t        tlasInstances = 0;              // its instance count: a change is a new scene
+            VkDeviceAddress geomAddr      = 0;              // this frame's GeometryDesc array
+            VkDeviceAddress hullAddr      = 0;              // the vessels (OceanHullGpu), or 0
+            uint32_t        hullCount     = 0;
+            float           restY         = 0.f;            // world y of the water's rest level
+            VkDescriptorSet displaceSet   = VK_NULL_HANDLE; // the ocean's plain displace set (its cascades)
+            VkDescriptorSetLayout displaceLayout = VK_NULL_HANDLE;
+            float           tileSize[3]   = {};
+            float           waveScale     = 1.f;
+            float           choppiness    = 1.f;
+            uint32_t        cascadeMask   = 0;
+            float           windSpeed     = 0.f;
+            float           windTheta     = 0.f;
+            uint32_t        frame         = 0;              // the frame in flight
+        };
+
         // One ocean's wake field.
         struct State {
             uint32_t res    = 0;
-            uint32_t layers = 0;
+            uint32_t layers = 0;     // every layer: the producers', then the shore's
+            uint32_t appLayers = 0;  // the producers' (DisplacedMesh::WakeField::patches; 0 = none)
+            bool     shoreOn   = false;// the shore's windows follow (layers appLayers, appLayers + 1)
             // 0 stateA: what the shade samples, and what a step starts from
             // 1 stateB: carried forward (step 0)     2 stateC: corrected (step 1)
             // 3 velA                                  4 velB
@@ -113,9 +192,32 @@ namespace threepp::vulkan {
             std::array<VkDescriptorSet, 3> ds{};
             Buffer table{};// WakeTableGpu + kMaxWakeSources sources, device-local
             double prevTimeSec = -1.0;
-            std::array<float, DisplacedMesh::kMaxWakePatches> prevOriginX{};
-            std::array<float, DisplacedMesh::kMaxWakePatches> prevOriginZ{};
-            std::array<float, DisplacedMesh::kMaxWakePatches> prevSize{};// 0 = the layer holds nothing
+            std::array<float, kWakeTablePatches> prevOriginX{};
+            std::array<float, kWakeTablePatches> prevOriginZ{};
+            std::array<float, kWakeTablePatches> prevSize{};// 0 = the layer holds nothing
+            // The last step: whether record() stepped this frame, and its dt.
+            bool  stepped  = false;
+            float stepDt   = 0.f;
+            double stepTime = 0.0;
+
+            // The shore (shoreOn). Its windows' centres and sides for this
+            // frame (setShoreWindows), what each map was taken of, and its
+            // images: the maps (rgba16f: distance, direction, bed), the
+            // flood's seeds (r32ui, two to ping-pong) and each window's
+            // parcels at the last step (rgba16f: eta, D), a layer a window.
+            std::array<float, kShoreLayers> shoreX{}, shoreZ{}, shoreSize{};
+            std::array<float, kShoreLayers> mapX{}, mapZ{};
+            std::array<bool, kShoreLayers>  mapValid{};
+            std::array<float, kShoreLayers> lastX{}, lastZ{};// the window lastSurface's parcels are of
+            VkAccelerationStructureKHR mapTlas = VK_NULL_HANDLE;
+            uint32_t                   mapInstances = 0;
+            std::array<VkImage, 4>       shoreImage{};// 0 map, 1 seedsA, 2 seedsB, 3 lastSurface
+            std::array<VmaAllocation, 4> shoreAlloc{};
+            std::array<VkImageView, 4>   shoreView{};
+            std::array<VkDescriptorSet, 2> captureDs{};// one a frame in flight (its TLAS)
+            std::array<VkAccelerationStructureKHR, 2> captureTlas{};
+            std::array<VkDescriptorSet, 2> jfaDs{};    // A -> B, B -> A
+            VkDescriptorSet sourceDs = VK_NULL_HANDLE;
 
             // The ripples (rippleRes 0 = this field has none).
             uint32_t rippleRes  = 0;
@@ -159,9 +261,24 @@ namespace threepp::vulkan {
         // power of two in 128..1024). initState() puts the images in GENERAL
         // and zeroes them and the table (a one-shot buffer, before the State's
         // first record()).
-        std::unique_ptr<State> createState(uint32_t res, uint32_t layers, uint32_t rippleRes);
+        //
+        // `shore`: the shore's two windows follow the producers' `layers`
+        // (which may then be 0); it needs ray queries (shoreSupported()).
+        std::unique_ptr<State> createState(uint32_t res, uint32_t layers, uint32_t rippleRes, bool shore = false);
         void initState(VkCommandBuffer cb, State& st);
         void destroyState(State& st);
+
+        // Whether this device can take a shore (ray queries).
+        [[nodiscard]] bool shoreSupported() const;
+        // The shore's windows for this frame, round the camera at (x, z) in the
+        // ocean's frame: each centred on the multiple of an eighth of its side
+        // nearest the camera, so it moves in whole steps and seldom. Before
+        // record().
+        static void setShoreWindows(State& st, float eyeX, float eyeZ);
+        // The shore's part of the step, after record(): each window's map taken
+        // again if it has moved or the scene changed (capture and flood), then
+        // the source. Nothing when record() did not step this frame.
+        void recordShore(VkCommandBuffer cb, State& st, const ShoreInputs& in, double nowSec);
 
         // One step of the field, into the frame's command stream: the table
         // and this frame's sources, then the three dispatches for every patch
@@ -185,7 +302,23 @@ namespace threepp::vulkan {
         VmaAllocation         dummyAlloc_     = VK_NULL_HANDLE;
         VkImageView           dummyView_      = VK_NULL_HANDLE;
 
+        // The shore's pipelines: the flood and the source (the source's on its
+        // first use, with the displace set's layout), the capture where the
+        // device has ray queries.
+        VkDescriptorPool      shorePool_          = VK_NULL_HANDLE;
+        VkDescriptorSetLayout captureDsLayout_    = VK_NULL_HANDLE;
+        VkPipelineLayout      capturePipeLayout_  = VK_NULL_HANDLE;
+        VkPipeline            capturePipeline_    = VK_NULL_HANDLE;
+        VkDescriptorSetLayout jfaDsLayout_        = VK_NULL_HANDLE;
+        VkPipelineLayout      jfaPipeLayout_      = VK_NULL_HANDLE;
+        VkPipeline            jfaPipeline_        = VK_NULL_HANDLE;
+        VkDescriptorSetLayout sourceDsLayout_     = VK_NULL_HANDLE;
+        VkPipelineLayout      sourcePipeLayout_   = VK_NULL_HANDLE;
+        VkPipeline            sourcePipeline_     = VK_NULL_HANDLE;
+        VkDescriptorSetLayout sourceDisplaceLayout_ = VK_NULL_HANDLE;// the layout sourcePipeline_ was made with
+
         void createPipeline();
+        void createShorePipelines();
         void recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, uint32_t heightMask, PushConstants pc);
     };
 

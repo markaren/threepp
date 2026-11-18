@@ -34,6 +34,8 @@
 //              quantity's decay, the flow feeding its own turbulence and the
 //              turbulence flattening the short waves, then this step's
 //              SOURCES: capsules from where each producer was to where it is.
+//              A shore window (WakePatch::shore) takes the diffusion and the
+//              decay alone; shore_source.comp then lays the shore's foam in it.
 //
 // The patch's origin moves by whole texels, so steps 0 and 1 read last step's
 // images through last step's origin and nothing is resampled by the move;
@@ -175,6 +177,16 @@ void main() {
     s.g *= exp(-dt * mix(2.0, 1.0, clamp(s.g, 0.0, 1.0)) / tb.aerationLife);// a thin cloud clears first
     s.b *= exp(-dt / tb.turbulenceLife);
     s.a *= exp(-dt / tb.laneLife);
+    // A shore window (WakePatch::shore) is fed by shore_source.comp after this
+    // step and by nothing here: its flow is the foam's drift off the solid and
+    // downwind, which is not a stream through still water, and the sea round a
+    // pile keeps its short waves. So the rest of the step is the producers'.
+    const bool shore = p.shore > 0.5;
+    if (shore) {
+        imageStore(dstState, dst, max(vec4(s.rgb, 0.0), vec4(0.0)));
+        imageStore(dstVel, dst, vec4(v, 0.0, 0.0));
+        return;
+    }
     // A stream through still water is turbulent at about a quarter of its
     // speed, and turbulent water has lost its short waves.
     s.b = max(s.b, 0.25 * length(v));

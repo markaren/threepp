@@ -1,0 +1,140 @@
+#version 460
+#extension GL_GOOGLE_include_directive                   : enable
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_ray_query                              : require
+
+#include "ocean_cascade.glsl"// OceanHull, hullLocal: the vessels' footprints (and vulkan_shared.h's masks and flags)
+
+// THE SHORE, as the sea meets it: one window of the ocean's shore foam
+// (WakeFieldPipeline, the shore layers), a top-down slice of the solid, still
+// scene at the water's rest level. One thread a texel, a handful of short ray
+// queries against the scene's acceleration structure:
+//
+//   UP    from the rest level, 6 m. Met from behind (a surface that faces away
+//         from the ray: the underside of the ground, the inside of a rock or a
+//         closed pile) the point is INSIDE the solid; met from the front (a
+//         deck's or a cabin floor's underside) it is open water under a roof.
+//   DOWN  from the rest level, 60 m: the bed under the water (its height is
+//         kept for the surf on shallow beaches), or, met from behind, inside.
+//   FOUR  level rays to the texel's edges (+-x, +-z): any surface they meet
+//         crosses the water's plane inside this texel, a pile's side or a
+//         quay's face, which neither vertical ray can see.
+//
+// A texel the solid occupies, crosses, or stands awash in (its bed within
+// kAwash under the rest level) is a SEED: shore_jfa.comp floods the window
+// with each texel's nearest seed, the distance and direction to the solid.
+//
+// What the shore is not: the water itself (walked past, as every trace in this
+// renderer walks past its own sea), anything that has moved of late
+// (kGeomFlagMoved: a vessel riding the waves, a crane's hook, a walker), and a
+// vessel's footprint (her hull exclusion), so a boat that lay still when the
+// slice was taken leaves no collar behind when she leaves. Anything outside
+// kRayMaskOpaque (glass, blended geometry) is not solid.
+//
+// When: a window is taken again when it moves (the camera has crossed an
+// eighth of it) and when the scene's structure changes; a still scene's shore
+// is taken once. Like particle_height_bake.comp, this runs ahead of the frame's
+// TLAS refit and traces the structure as the last frame left it, which is the
+// still scene this slice is of.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
+// The seeds: x | z << 16 of the texel's own coordinates where it is a seed,
+// 0xffffffff where not (shore_jfa.comp's input). One layer a window.
+layout(set = 0, binding = 1, r32ui) uniform writeonly uimage2DArray seeds;
+// The shore map: .a the bed's height over the rest level (m; +1 where the
+// texel is solid at the rest level, -60 where nothing lies under it). The
+// flood fills .rgb later.
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray shoreMap;
+
+#include "geometry_desc.glsl"
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer GeomBuf { GeometryDesc g[]; };
+layout(buffer_reference, scalar) readonly buffer OceanHullBuf { OceanHull h[]; };
+
+// 48 bytes, mirrored by WakeFieldPipeline::ShoreCapturePush.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t geomAddr; // the frame's GeometryDesc array (foamAddress marks the water, flags the moved)
+    uint64_t hullAddr; // OceanHull[hullCount], or 0
+    float    originX;  // the window's world min corner
+    float    originZ;
+    float    texel;    // m
+    float    restY;    // world y of the water's rest level
+    uint     res;
+    uint     layer;
+    uint     hullCount;
+    uint     _pad;
+} pc;
+
+// A bed this far under the rest level stands awash in a sea that moves at all:
+// the waves break on it, so it is shore.
+const float kAwash      = 0.2;
+const float kDeep       = 60.0;
+const uint  kNoSeed     = 0xffffffffu;
+
+// The first solid, still surface along a ray: t (< 0 = none) and whether it was
+// met from its front. The water and whatever has moved of late are walked past
+// (up to three of them: the sea, a folded crest, one moving thing).
+float traceSolid(vec3 o, vec3 d, float tMax, out bool front) {
+    front = true;
+    float tFrom = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, o, tFrom, d, tMax);
+        while (rayQueryProceedEXT(rq)) {}
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return -1.0;
+        const int   id = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const float t  = rayQueryGetIntersectionTEXT(rq, true);
+        const GeometryDesc gd = GeomBuf(pc.geomAddr).g[id];
+        if (gd.foamAddress != 0ul || (gd.flags & kGeomFlagMoved) != 0u) {
+            tFrom = t + max(1e-3, t * 1e-4);
+            continue;
+        }
+        front = rayQueryGetIntersectionFrontFaceEXT(rq, true);
+        return t;
+    }
+    return -1.0;
+}
+
+void main() {
+    const uvec2 px = gl_GlobalInvocationID.xy;
+    if (px.x >= pc.res || px.y >= pc.res) return;
+    const ivec3 dst = ivec3(px, int(pc.layer));
+    const vec2  xz  = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
+
+    // A vessel's footprint is no shore, whether she moves or not.
+    if (pc.hullAddr != 0ul) {
+        OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
+        for (uint k = 0u; k < pc.hullCount; ++k) {
+            if (hullLocal(hulls.h[k], xz).z < 1.0) {
+                imageStore(seeds, dst, uvec4(kNoSeed));
+                imageStore(shoreMap, dst, vec4(0.0, 0.0, 0.0, -kDeep));
+                return;
+            }
+        }
+    }
+
+    const vec3 o = vec3(xz.x, pc.restY, xz.y);
+    bool inside = false;
+    bool front;
+    const float tUp = traceSolid(o, vec3(0.0, 1.0, 0.0), 6.0, front);
+    if (tUp >= 0.0 && !front) inside = true;
+    const float tDown = traceSolid(o, vec3(0.0, -1.0, 0.0), kDeep, front);
+    if (tDown >= 0.0 && !front) inside = true;
+    const float bed = inside ? 1.0 : (tDown >= 0.0 ? -tDown : -kDeep);
+
+    // A face crossing the water's plane in this texel.
+    bool crossed = false;
+    const float reach = 0.5 * pc.texel;
+    const vec3 dirs[4] = vec3[4](vec3(1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+    for (int k = 0; k < 4 && !crossed; ++k) {
+        crossed = traceSolid(o, dirs[k], reach, front) >= 0.0;
+    }
+
+    const bool seed = inside || crossed || bed >= -kAwash;
+    imageStore(seeds, dst, uvec4(seed ? (px.x | (px.y << 16)) : kNoSeed));
+    imageStore(shoreMap, dst, vec4(0.0, 0.0, 0.0, bed));
+}

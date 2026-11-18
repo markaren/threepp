@@ -1,0 +1,81 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// THE SHORE'S DISTANCE: jump flooding (Rong and Tan 2006, "Jump flooding in
+// GPU with applications to Voronoi diagram and distance transform") over one
+// window of shore_capture.comp's seeds, so every texel learns its nearest
+// solid texel; then the shore map's distance and direction from that.
+//
+//   mode 0  one round at step k: each texel keeps the nearest of its own seed
+//           and the seeds of the eight texels k away. Rounds of k = 32, 16,
+//           ..., 1 and a last at 1 (JFA+1, which mends most of the plain
+//           flood's few wrong answers) reach a seed up to about 64 texels off,
+//           16 m in the near window: further than any collar.
+//   mode 1  the map: .r the distance (m) to the nearest seed's centre, .gb the
+//           unit direction toward it ((0, 0) on a seed), .a the bed the
+//           capture left (kept).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, r32ui)   uniform readonly  uimage2DArray seedsIn;
+layout(set = 0, binding = 1, r32ui)   uniform writeonly uimage2DArray seedsOut;
+layout(set = 0, binding = 2, rgba16f) uniform image2DArray shoreMap;
+
+// 20 bytes, mirrored by WakeFieldPipeline::ShoreJfaPush.
+layout(push_constant, scalar) uniform Pc {
+    uint  res;
+    uint  layer;
+    uint  mode;  // 0 a round, 1 the map
+    int   step;  // texels (mode 0)
+    float texel; // m (mode 1)
+} pc;
+
+const uint  kNoSeed = 0xffffffffu;
+const float kFar    = 1.0e4;// m: no seed within reach
+
+ivec2 unpackSeed(uint s) { return ivec2(int(s & 0xffffu), int(s >> 16)); }
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    const int   res = int(pc.res);
+    if (px.x >= res || px.y >= res) return;
+    const int li = int(pc.layer);
+
+    if (pc.mode == 0u) {
+        uint  best  = imageLoad(seedsIn, ivec3(px, li)).r;
+        float bestD = kFar * kFar;
+        if (best != kNoSeed) {
+            const vec2 d = vec2(unpackSeed(best) - px);
+            bestD = dot(d, d);
+        }
+        for (int j = -1; j <= 1; ++j) {
+            for (int i = -1; i <= 1; ++i) {
+                if (i == 0 && j == 0) continue;
+                const ivec2 q = px + ivec2(i, j) * pc.step;
+                if (q.x < 0 || q.y < 0 || q.x >= res || q.y >= res) continue;
+                const uint s = imageLoad(seedsIn, ivec3(q, li)).r;
+                if (s == kNoSeed) continue;
+                const vec2  d  = vec2(unpackSeed(s) - px);
+                const float dd = dot(d, d);
+                if (dd < bestD) {
+                    bestD = dd;
+                    best  = s;
+                }
+            }
+        }
+        imageStore(seedsOut, ivec3(px, li), uvec4(best));
+        return;
+    }
+
+    const uint s   = imageLoad(seedsIn, ivec3(px, li)).r;
+    const vec4 map = imageLoad(shoreMap, ivec3(px, li));
+    float dist = kFar;
+    vec2  dir  = vec2(0.0);
+    if (s != kNoSeed) {
+        const vec2  d = vec2(unpackSeed(s) - px);
+        const float l = length(d);
+        dist = l * pc.texel;
+        if (l > 0.0) dir = d / l;
+    }
+    imageStore(shoreMap, ivec3(px, li), vec4(dist, dir, map.a));
+}

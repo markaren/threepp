@@ -1660,6 +1660,21 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/wake_ripple.comp"
         kWakeRippleCompSpv
         _wake_ripple_spv_h)
+    # Its shore windows: the slice of the still scene at the waterline (ray
+    # queries), the distance to it (jump flooding), and the foam the sea lays
+    # where it drives into it.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_capture.comp"
+        kShoreCaptureCompSpv
+        _shore_capture_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_jfa.comp"
+        kShoreJfaCompSpv
+        _shore_jfa_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_source.comp"
+        kShoreSourceCompSpv
+        _shore_source_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/grass_wind.comp"
         kGrassWindCompSpv

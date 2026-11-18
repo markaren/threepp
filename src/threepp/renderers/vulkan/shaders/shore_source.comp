@@ -1,0 +1,203 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout  : require
+
+#include "ocean_cascade.glsl"// oceanC1Domain / oceanC1World, sampleBicubicRG
+
+// THE SHORE'S FOAM: what the sea lays where it meets something solid, fed into
+// one of the shore's windows of the wake field (WakeFieldPipeline, the shore
+// layers) after the field's own step has carried, spread and aged what was
+// there (wake_field.comp). One thread a texel of the window.
+//
+// The field lies on the water's REST coordinates (the shade reads it at a
+// pixel's rest point), so a texel is a parcel of water: rest point q, drawn at
+// x = q + D(q, t) with height eta(q, t), from the ocean's own cascades (the
+// displace set, bound as set 0). Its velocity is how those moved since the last
+// step: u = dD/dt over the water, w = d eta/dt up. Where x lies within a
+// splash's reach of the solid (the shore map, shore_jfa.comp), the parcel
+// drives into it at
+//
+//     impact = max(u . n, 0) + 0.5 max(w, 0)     (n toward the solid)
+//
+// and the surge breaks on the solid and falls back white: foam and air in
+// proportion to smoothstep(kImpact0, kImpact1, impact), over a reach that
+// widens with the impact (kReach0 + kReachGain impact), thrown back off the
+// solid at half the impact. So the collar comes with each wave that runs into
+// a pile or a wall, grows with the sea, and is nothing on a calm one (a sea of
+// ripples drives at millimetres a second). The field then carries what was laid
+// with its own flow (the throw, relaxing to the wind's drift of the foam,
+// kDrift of the wind: Wu 1975 measured the wind drift at about 3 %), stirs it
+// with a little turbulence into lace and ages it as it ages a wake's foam.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// The ocean's displace set (WaterDisplacePipeline's layout, the plain set):
+// its cascades at bindings 0-5. (10 and 11 are its ripples and its climate,
+// not read here.)
+layout(set = 0, binding = 0) uniform sampler2D height0;
+layout(set = 0, binding = 1) uniform sampler2D displace0;
+layout(set = 0, binding = 2) uniform sampler2D height1;
+layout(set = 0, binding = 3) uniform sampler2D displace1;
+layout(set = 0, binding = 4) uniform sampler2D height2;
+layout(set = 0, binding = 5) uniform sampler2D displace2;
+
+// The shore map (distance m, direction to the solid, bed), a layer a window.
+layout(set = 1, binding = 0) uniform sampler2DArray shoreMap;
+// The field as its step left it: written back with this step's foam.
+layout(set = 1, binding = 1, rgba16f) uniform image2DArray fieldState;
+layout(set = 1, binding = 2, rg16f)   uniform image2DArray fieldVel;
+// Each parcel's (eta, D) at the last step, a layer a window; .a 1 once written.
+layout(set = 1, binding = 3, rgba16f) uniform image2DArray lastSurface;
+
+// 96 bytes, mirrored by WakeFieldPipeline::ShoreSourcePush.
+layout(push_constant, scalar) uniform Pc {
+    float tileSize0;
+    float tileSize1;
+    float tileSize2;
+    float waveScale;
+    float choppiness;
+    uint  cascadeMask;
+    float originX;    // the window's world min corner (= its field patch's)
+    float originZ;
+    float texel;
+    uint  res;
+    uint  layer;      // the field's layer
+    uint  shoreLayer; // the map's and lastSurface's layer
+    float dt;
+    uint  history;    // 1 = lastSurface holds this window's parcels at the last step
+    float driftX;     // the wind's drift of floating foam (m/s, world)
+    float driftZ;
+    float keepX;      // no foam is laid inside this square (the near window's inside, for the far one)
+    float keepZ;
+    float keepHalf;   // 0 = none
+    float timeSec;
+    float gain;       // the deposit's scale: 1, less where a texel is wider than a collar
+    float _pad0;
+    float _pad1;
+    float _pad2;
+} pc;
+
+// LOOK and calibration constants (2026-11-18, first round).
+const float kImpact0   = 0.03;// m/s: a sea that drives slower lays nothing
+const float kImpact1   = 0.45;// m/s: full foam
+const float kReach0    = 0.3; // m: the splash's reach off the solid
+const float kReachGain = 1.2; // s: ... and how it widens with the impact (m per m/s)
+const float kThrow     = 0.5; // the throw off the solid, a share of the impact
+const float kDriftTau  = 1.5; // s: foam takes the wind's drift over this
+// The furthest a deposit is ever laid from the solid, with the waves' own
+// horizontal travel: texels further off do nothing at all.
+const float kBand      = 6.0; // m
+
+float sHash(ivec3 p) {
+    uint h = uint(p.x) * 0x8da6b343u ^ uint(p.y) * 0xd8163841u ^ uint(p.z) * 0xcb1ab31fu;
+    h ^= h >> 15; h *= 0x2c1b3c6du;
+    h ^= h >> 12; h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return float(h) * (1.0 / 4294967296.0);
+}
+// Value noise over (x, y, time) in 0..1, quintic fade.
+float sNoise(vec3 p) {
+    const ivec3 i = ivec3(floor(p));
+    const vec3  f = p - vec3(i);
+    const vec3  u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    const float a = mix(mix(mix(sHash(i), sHash(i + ivec3(1, 0, 0)), u.x),
+                            mix(sHash(i + ivec3(0, 1, 0)), sHash(i + ivec3(1, 1, 0)), u.x), u.y),
+                        mix(mix(sHash(i + ivec3(0, 0, 1)), sHash(i + ivec3(1, 0, 1)), u.x),
+                            mix(sHash(i + ivec3(0, 1, 1)), sHash(i + ivec3(1, 1, 1)), u.x), u.y), u.z);
+    return a;
+}
+
+float sampleBicubicR1(sampler2D tex, vec2 uv) { return sampleBicubicRG(tex, uv).r; }
+
+// The drawn surface's (D.x, eta, D.z) at rest point q: water_displace.comp's
+// sampleDisplacement without its per-vertex mip levels (the window's texels are
+// finer than any spacing those serve).
+vec3 surfaceAt(vec2 q) {
+    vec3 d = vec3(0.0);
+    if ((pc.cascadeMask & 1u) != 0u) {
+        const float inv = 1.0 / pc.tileSize0;
+        const vec2  uv  = q * inv;
+        d.y += sampleBicubicR1(height0, uv) * inv;
+        const vec2 dxz = sampleBicubicRG(displace0, uv) * inv;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    if ((pc.cascadeMask & 2u) != 0u) {
+        const float inv = 1.0 / pc.tileSize1;
+        const vec2  uv  = oceanC1Domain(q) * inv;
+        d.y += sampleBicubicR1(height1, uv) * inv;
+        const vec2 dxz = oceanC1World(sampleBicubicRG(displace1, uv)) * inv;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    if ((pc.cascadeMask & 4u) != 0u) {
+        const float inv = 1.0 / pc.tileSize2;
+        const vec2  uv  = q * inv;
+        d.y += textureLod(height2, uv, 0.0).r * inv;
+        const vec2 dxz = textureLod(displace2, uv, 0.0).rg * inv;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    return vec3(d.x * pc.choppiness, d.y * pc.waveScale, d.z * pc.choppiness);
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    const int   res = int(pc.res);
+    if (px.x >= res || px.y >= res) return;
+    const float sl = float(pc.shoreLayer);
+
+    // Open water: nothing to do (the band is the splash's reach and the waves'
+    // own travel, plus a texel either way).
+    if (texelFetch(shoreMap, ivec3(px, int(pc.shoreLayer)), 0).r > kBand + 2.0 * pc.texel) return;
+
+    const vec2 q   = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
+    const vec3 s3  = surfaceAt(q);
+    const vec2 D   = s3.xz;
+    const float eta = s3.y;
+    const ivec3 dstL = ivec3(px, int(pc.shoreLayer));
+    const vec4  last = imageLoad(lastSurface, dstL);
+    imageStore(lastSurface, dstL, vec4(eta, D, 1.0));
+    if (pc.history == 0u || last.a < 0.5 || pc.dt <= 0.0) return;
+
+    const vec2  u = (D - last.gb) / pc.dt;  // the parcel's horizontal speed
+    const float w = (eta - last.r) / pc.dt; // ... and its rise
+
+    // Where it is drawn, and the solid from there (outside the window: none).
+    const vec2 x  = q + D;
+    const vec2 uv = (x - vec2(pc.originX, pc.originZ)) / (pc.texel * float(res));
+    float dist = 1.0e4;
+    vec2  n    = vec2(0.0);
+    if (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
+        const vec4 m = textureLod(shoreMap, vec3(uv, sl), 0.0);
+        dist = m.r;
+        const float nl = length(m.gb);
+        n = nl > 1e-3 ? m.gb / nl : vec2(0.0);
+    }
+
+    const ivec3 dst = ivec3(px, int(pc.layer));
+    vec4 s = imageLoad(fieldState, dst);
+    vec2 v = imageLoad(fieldVel, dst).rg;
+    const vec2 drift = vec2(pc.driftX, pc.driftZ);
+
+    const float impact = max(dot(u, n), 0.0) + 0.5 * max(w, 0.0);
+    const float reach  = kReach0 + kReachGain * min(impact, 1.0);
+    const bool  kept   = pc.keepHalf > 0.0 && all(lessThan(abs(q - vec2(pc.keepX, pc.keepZ)), vec2(pc.keepHalf)));
+    const float dep    = kept ? 0.0
+                              : pc.gain * smoothstep(kImpact0, kImpact1, impact) * exp(-(dist * dist) / (reach * reach));
+    if (dep > 1e-3) {
+        // A surge does not break as a ribbon: in gulps along the solid,
+        // quick in time (two noises over half a metre and over two).
+        const float g1   = sNoise(vec3(x / 0.5 + 7.1, 1.9 * pc.timeSec));
+        const float g2   = sNoise(vec3(x / 2.0 - 3.3, 0.7 * pc.timeSec + 4.0));
+        const float gulp = 0.6 * g1 + 0.4 * g2;
+        s.r = max(s.r, 0.85 * dep * smoothstep(0.25, 0.65, gulp));
+        s.g = max(s.g, 0.6 * dep);
+        s.b = max(s.b, 0.05 * dep);
+        v   = mix(v, drift - n * (kThrow * impact), min(2.0 * dep, 1.0));
+    } else if (s.r > 0.01 || s.g > 0.01) {
+        v = mix(v, drift, 1.0 - exp(-pc.dt / kDriftTau));
+    }
+    imageStore(fieldState, dst, s);
+    imageStore(fieldVel, dst, vec4(v, 0.0, 0.0));
+}
