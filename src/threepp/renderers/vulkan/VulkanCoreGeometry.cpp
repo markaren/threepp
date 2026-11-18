@@ -4180,7 +4180,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 si.windSpeed      = dm.params.windSpeed;
                 si.windTheta      = dm.params.windTheta;
                 si.frame          = currentFrame;
+                if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanShore, currentFrame);
                 wakeField_->recordShore(cb, *st.wake, si, frameNowSec());
+                if (timed) gpuTimings_->end(cb, vulkan::TP_OceanShore, currentFrame);
             }
         }
 

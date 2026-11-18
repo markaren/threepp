@@ -132,7 +132,13 @@ namespace threepp::vulkan {
         // and the sprites' fill. Its composite is a fullscreen draw inside the
         // post composite or the overlay pass and is counted there.
         TP_BillboardLayer = 29,
-        TP_COUNT          = 30,
+        // The ocean's shore (WakeFieldPipeline::recordShore): a window's map
+        // taken again (capture and flood) on the frames it moves or the scene
+        // changes, and the source every step. The shore windows' share of the
+        // wake field's own step (advect, correct, settle) is not in it. First
+        // displaced mesh of the frame only.
+        TP_OceanShore     = 30,
+        TP_COUNT          = 31,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

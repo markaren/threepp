@@ -2051,6 +2051,9 @@ namespace threepp {
             float oceanDisplaceMs = 0.f;
             float oceanFoamMs     = 0.f;
             float oceanBlasMs     = 0.f;
+            // The ocean's shore (first displaced mesh only): its maps where a
+            // window moved or the scene changed, and the foam it lays this step.
+            float oceanShoreMs    = 0.f;
             // Per-frame TLAS refit recorded on the frame command buffer
             // (0 on frames with no refit).
             float tlasRefitMs     = 0.f;
