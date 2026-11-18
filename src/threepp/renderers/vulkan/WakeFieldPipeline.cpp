@@ -3,17 +3,25 @@
 #include "threepp/renderers/vulkan/EnvKnob.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
+#include "threepp/renderers/vulkan/shaders/shore_capture.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/shore_jfa.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/shore_source.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/wake_field.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/wake_ripple.comp.spv.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <vector>
 
 namespace threepp::vulkan {
 
     static_assert(sizeof(WakeFieldPipeline::PushConstants) == 24,
                   "WakeFieldPipeline::PushConstants must match the Pc of wake_field.comp and wake_ripple.comp (24 bytes)");
+    static_assert(sizeof(WakeFieldPipeline::ShoreCapturePush) == 56, "shore_capture.comp's Pc");
+    static_assert(sizeof(WakeFieldPipeline::ShoreJfaPush) == 20, "shore_jfa.comp's Pc");
+    static_assert(sizeof(WakeFieldPipeline::ShoreSourcePush) == 96, "shore_source.comp's Pc");
 
     namespace {
 
@@ -22,6 +30,11 @@ namespace threepp::vulkan {
         constexpr VkFormat kAmpFormat   = VK_FORMAT_R32G32B32A32_SFLOAT;
         constexpr VkFormat kWorkFormat  = VK_FORMAT_R32G32_SFLOAT;// what the IFFT's shaders declare
         constexpr VkFormat kSlopeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+        // The shore's images: its maps and its parcels' last surface, the flood's seeds.
+        constexpr VkFormat kShoreMapFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
+        constexpr VkFormat kShoreSeedFormat = VK_FORMAT_R32_UINT;
+        // The flood's rounds: k = 32, 16, ..., 1, then 1 again (shore_jfa.comp).
+        constexpr int32_t kShoreJfaSteps[7] = {32, 16, 8, 4, 2, 1, 1};
         constexpr VkDeviceSize kTableBytes =
                 sizeof(WakeTableGpu) + DisplacedMesh::kMaxWakeSources * sizeof(DisplacedMesh::WakeSource);
 
@@ -173,6 +186,16 @@ namespace threepp::vulkan {
         if (descPool_)             vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)              vkDestroySampler(d, sampler_, nullptr);
         if (rippleSampler_)        vkDestroySampler(d, rippleSampler_, nullptr);
+        if (capturePipeline_)      vkDestroyPipeline(d, capturePipeline_, nullptr);
+        if (capturePipeLayout_)    vkDestroyPipelineLayout(d, capturePipeLayout_, nullptr);
+        if (captureDsLayout_)      vkDestroyDescriptorSetLayout(d, captureDsLayout_, nullptr);
+        if (jfaPipeline_)          vkDestroyPipeline(d, jfaPipeline_, nullptr);
+        if (jfaPipeLayout_)        vkDestroyPipelineLayout(d, jfaPipeLayout_, nullptr);
+        if (jfaDsLayout_)          vkDestroyDescriptorSetLayout(d, jfaDsLayout_, nullptr);
+        if (sourcePipeline_)       vkDestroyPipeline(d, sourcePipeline_, nullptr);
+        if (sourcePipeLayout_)     vkDestroyPipelineLayout(d, sourcePipeLayout_, nullptr);
+        if (sourceDsLayout_)       vkDestroyDescriptorSetLayout(d, sourceDsLayout_, nullptr);
+        if (shorePool_)            vkDestroyDescriptorPool(d, shorePool_, nullptr);
     }
 
     void WakeFieldPipeline::createPipeline() {
@@ -291,6 +314,81 @@ namespace threepp::vulkan {
 
         arrayImage(ctx_, kStateFormat, 1, 1, 1, "oceanWakeDummy (1x1, bindings 78 and 79 placeholder)",
                    dummyImage_, dummyAlloc_, dummyView_);
+
+        if (ctx_.rayQuerySupported()) createShorePipelines();
+    }
+
+    bool WakeFieldPipeline::shoreSupported() const {
+        return capturePipeline_ != VK_NULL_HANDLE;
+    }
+
+    void WakeFieldPipeline::createShorePipelines() {
+        auto setLayout = [&](std::initializer_list<VkDescriptorType> types, const char* what) {
+            std::array<VkDescriptorSetLayoutBinding, 4> bb{};
+            uint32_t n = 0;
+            for (const VkDescriptorType t : types) {
+                bb[n].binding         = n;
+                bb[n].descriptorType  = t;
+                bb[n].descriptorCount = 1;
+                bb[n].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+                ++n;
+            }
+            VkDescriptorSetLayoutCreateInfo dlci{};
+            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dlci.bindingCount = n;
+            dlci.pBindings    = bb.data();
+            VkDescriptorSetLayout l = VK_NULL_HANDLE;
+            check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &l), what);
+            return l;
+        };
+        auto pipeLayout = [&](const VkDescriptorSetLayout* sets, uint32_t count, uint32_t pushBytes, const char* what) {
+            VkPushConstantRange pcr{};
+            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcr.size       = pushBytes;
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = count;
+            plci.pSetLayouts            = sets;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcr;
+            VkPipelineLayout l = VK_NULL_HANDLE;
+            check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &l), what);
+            return l;
+        };
+        constexpr VkDescriptorType kStorage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+
+        // shore_capture.comp: the TLAS, the seeds, the map.
+        captureDsLayout_   = setLayout({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, kStorage, kStorage},
+                                       "vkCreateDescriptorSetLayout(shoreCapture)");
+        capturePipeLayout_ = pipeLayout(&captureDsLayout_, 1, sizeof(ShoreCapturePush), "vkCreatePipelineLayout(shoreCapture)");
+        capturePipeline_   = computePipeline(ctx_, kShoreCaptureCompSpv, sizeof(kShoreCaptureCompSpv), capturePipeLayout_,
+                                             "vkCreateComputePipelines(shoreCapture)");
+        // shore_jfa.comp: seeds in, seeds out, the map.
+        jfaDsLayout_   = setLayout({kStorage, kStorage, kStorage}, "vkCreateDescriptorSetLayout(shoreJfa)");
+        jfaPipeLayout_ = pipeLayout(&jfaDsLayout_, 1, sizeof(ShoreJfaPush), "vkCreatePipelineLayout(shoreJfa)");
+        jfaPipeline_   = computePipeline(ctx_, kShoreJfaCompSpv, sizeof(kShoreJfaCompSpv), jfaPipeLayout_,
+                                         "vkCreateComputePipelines(shoreJfa)");
+        // shore_source.comp's own set (its set 1; set 0 is the ocean's displace
+        // set, whose layout it is made with on first use): the map (sampled),
+        // the field's state and flow, the parcels' last surface.
+        sourceDsLayout_ = setLayout({VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kStorage, kStorage, kStorage},
+                                    "vkCreateDescriptorSetLayout(shoreSource)");
+
+        // An ocean: a capture set a frame in flight, two flood sets, a source set.
+        std::array<VkDescriptorPoolSize, 3> ps{};
+        ps[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        ps[0].descriptorCount = 2 * kMaxOceans;
+        ps[1].type            = kStorage;
+        ps[1].descriptorCount = (2 * 2 + 2 * 3 + 3) * kMaxOceans;
+        ps[2].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ps[2].descriptorCount = kMaxOceans;
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        dpci.maxSets       = 5 * kMaxOceans;
+        dpci.poolSizeCount = static_cast<uint32_t>(ps.size());
+        dpci.pPoolSizes    = ps.data();
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &shorePool_), "vkCreateDescriptorPool(shore)");
     }
 
     void WakeFieldPipeline::initDummy(VkCommandBuffer cb) {
@@ -298,10 +396,14 @@ namespace threepp::vulkan {
     }
 
     std::unique_ptr<WakeFieldPipeline::State> WakeFieldPipeline::createState(uint32_t res, uint32_t layers,
-                                                                              uint32_t rippleRes) {
+                                                                              uint32_t rippleRes, bool shore) {
         auto st = std::make_unique<State>();
-        st->res    = std::clamp(res, 64u, 2048u);
-        st->layers = std::clamp(layers, 1u, DisplacedMesh::kMaxWakePatches);
+        st->res       = std::clamp(res, 64u, 2048u);
+        st->shoreOn   = shore && shoreSupported();
+        st->appLayers = std::clamp(layers, st->shoreOn ? 0u : 1u, DisplacedMesh::kMaxWakePatches);
+        st->layers    = st->appLayers + (st->shoreOn ? kShoreLayers : 0u);
+        if (st->appLayers == 0u) rippleRes = 0u;// the ripples are the producers'
+        for (uint32_t i = 0; i < kShoreLayers; ++i) st->shoreSize[i] = kShoreTexel[i] * static_cast<float>(st->res);
         static const char* const kNames[5] = {"ocean.wake.stateA", "ocean.wake.stateB", "ocean.wake.stateC",
                                               "ocean.wake.velA", "ocean.wake.velB"};
         for (uint32_t i = 0; i < 5; ++i) {
@@ -352,13 +454,14 @@ namespace threepp::vulkan {
             uint32_t mips = 1u;
             while ((n >> mips) >= 4u) ++mips;// down to 4 texels a side
             st->rippleMips = mips;
-            arrayImage(ctx_, kAmpFormat, n, st->layers, 1, "ocean.wake.rippleSpectrum",
+            // (the producers' layers only: the shore's windows have no ripples)
+            arrayImage(ctx_, kAmpFormat, n, st->appLayers, 1, "ocean.wake.rippleSpectrum",
                        st->ampImage, st->ampAlloc, st->ampView);
-            arrayImage(ctx_, kSlopeFormat, n, st->layers, mips, "ocean.wake.rippleSlopes",
+            arrayImage(ctx_, kSlopeFormat, n, st->appLayers, mips, "ocean.wake.rippleSlopes",
                        st->slopeImage, st->slopeAlloc, st->slopeView);
-            st->slopeTarget = viewOf(ctx_, st->slopeImage, kSlopeFormat, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 0, 1, st->layers,
+            st->slopeTarget = viewOf(ctx_, st->slopeImage, kSlopeFormat, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 0, 1, st->appLayers,
                                      "ocean.wake.rippleSlopes (mip 0)");
-            st->ifft    = std::make_unique<water::IFFT>(ctx_, n, st->layers);
+            st->ifft    = std::make_unique<water::IFFT>(ctx_, n, st->appLayers);
             // Only the butterfly path ping-pongs through a scratch plane; the
             // shared-memory one works in place.
             if (st->ifft->path() != water::IFFT::Path::Shared) {
@@ -370,11 +473,11 @@ namespace threepp::vulkan {
             VkDescriptorSetAllocateInfo rai{};
             rai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             rai.descriptorPool     = descPool_;
-            rai.descriptorSetCount = st->layers;
+            rai.descriptorSetCount = st->appLayers;
             rai.pSetLayouts        = rl.data();
             check(vkAllocateDescriptorSets(ctx_.device(), &rai, st->rippleDs.data()),
                   "vkAllocateDescriptorSets(wakeRipple)");
-            for (uint32_t i = 0; i < st->layers; ++i) {
+            for (uint32_t i = 0; i < st->appLayers; ++i) {
                 st->work[i] = planeImage(ctx_, n, "ocean.wake.rippleField");
                 std::array<VkDescriptorImageInfo, 3> ii{};
                 std::array<VkWriteDescriptorSet, 3>  ws{};
@@ -407,11 +510,77 @@ namespace threepp::vulkan {
             w.pImageInfo      = &ri;
             updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
         }
+
+        if (st->shoreOn) {
+            static const char* const kShoreNames[4] = {"ocean.shore.map", "ocean.shore.seedsA", "ocean.shore.seedsB",
+                                                       "ocean.shore.lastSurface"};
+            for (uint32_t i = 0; i < 4; ++i) {
+                arrayImage(ctx_, (i == 1 || i == 2) ? kShoreSeedFormat : kShoreMapFormat, st->res, kShoreLayers, 1,
+                           kShoreNames[i], st->shoreImage[i], st->shoreAlloc[i], st->shoreView[i]);
+            }
+            std::array<VkDescriptorSetLayout, 5> sl{captureDsLayout_, captureDsLayout_, jfaDsLayout_, jfaDsLayout_,
+                                                    sourceDsLayout_};
+            std::array<VkDescriptorSet, 5> sets{};
+            VkDescriptorSetAllocateInfo sai{};
+            sai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            sai.descriptorPool     = shorePool_;
+            sai.descriptorSetCount = 5;
+            sai.pSetLayouts        = sl.data();
+            check(vkAllocateDescriptorSets(ctx_.device(), &sai, sets.data()), "vkAllocateDescriptorSets(shore)");
+            st->captureDs = {sets[0], sets[1]};
+            st->jfaDs     = {sets[2], sets[3]};
+            st->sourceDs  = sets[4];
+
+            std::vector<VkDescriptorImageInfo> ii;
+            std::vector<VkWriteDescriptorSet>  ws;
+            ii.reserve(16);
+            auto image = [&](VkDescriptorSet set, uint32_t binding, VkImageView view, bool sampled) {
+                ii.push_back({sampled ? sampler_ : VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_GENERAL});
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = set;
+                w.dstBinding      = binding;
+                w.descriptorCount = 1;
+                w.descriptorType  = sampled ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                w.pImageInfo      = &ii.back();
+                ws.push_back(w);
+            };
+            for (uint32_t f = 0; f < 2; ++f) {// (binding 0, the TLAS, when it is first traced)
+                image(st->captureDs[f], 1, st->shoreView[1], false);
+                image(st->captureDs[f], 2, st->shoreView[0], false);
+            }
+            image(st->jfaDs[0], 0, st->shoreView[1], false);
+            image(st->jfaDs[0], 1, st->shoreView[2], false);
+            image(st->jfaDs[0], 2, st->shoreView[0], false);
+            image(st->jfaDs[1], 0, st->shoreView[2], false);
+            image(st->jfaDs[1], 1, st->shoreView[1], false);
+            image(st->jfaDs[1], 2, st->shoreView[0], false);
+            image(st->sourceDs, 0, st->shoreView[0], true);
+            image(st->sourceDs, 1, st->view[0], false);// stateA: what the step leaves and the shade samples
+            image(st->sourceDs, 2, st->view[3], false);// velA
+            image(st->sourceDs, 3, st->shoreView[3], false);
+            updateDescriptorSets(ctx_.device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+
+            for (uint32_t f = 0; f < 2; ++f) {
+                st->countBuf[f] = createBuffer(ctx_.allocator(), ctx_.device(), kShoreLayers * sizeof(uint32_t),
+                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                               VMA_MEMORY_USAGE_AUTO,
+                                               VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                ctx_.setObjectName(st->countBuf[f].handle, "ocean.shore.seedCount");
+                VmaAllocationInfo info{};
+                vmaGetAllocationInfo(ctx_.allocator(), st->countBuf[f].alloc, &info);
+                st->countPtr[f] = static_cast<uint32_t*>(info.pMappedData);
+            }
+        }
         return st;
     }
 
     void WakeFieldPipeline::initState(VkCommandBuffer cb, State& st) {
         for (uint32_t i = 0; i < 5; ++i) clearToGeneral(cb, st.image[i]);
+        for (const VkImage img : st.shoreImage) {
+            if (img) clearToGeneral(cb, img);
+        }
         vkCmdFillBuffer(cb, st.table.handle, 0, VK_WHOLE_SIZE, 0u);
         if (st.rippleRes > 0u) {
             clearToGeneral(cb, st.ampImage);
@@ -422,7 +591,7 @@ namespace threepp::vulkan {
                 clearToGeneral(cb, st.scratch.image);
                 st.scratch.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
-            for (uint32_t i = 0; i < st.layers; ++i) {
+            for (uint32_t i = 0; i < st.appLayers; ++i) {
                 clearToGeneral(cb, st.work[i].image);
                 st.work[i].currentLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
@@ -441,9 +610,26 @@ namespace threepp::vulkan {
         st.ds = {};
         destroyBuffer(ctx_.allocator(), st.table);
 
+        if (st.shoreOn) {
+            const VkDescriptorSet sets[5] = {st.captureDs[0], st.captureDs[1], st.jfaDs[0], st.jfaDs[1], st.sourceDs};
+            if (sets[0]) vkFreeDescriptorSets(d, shorePool_, 5, sets);
+            st.captureDs = {};
+            st.jfaDs     = {};
+            st.sourceDs  = VK_NULL_HANDLE;
+            for (auto& b : st.countBuf) destroyBuffer(ctx_.allocator(), b);
+            st.countPtr = {};
+            for (uint32_t i = 0; i < 4; ++i) {
+                if (st.shoreView[i])  vkDestroyImageView(d, st.shoreView[i], nullptr);
+                if (st.shoreImage[i]) vmaDestroyImage(ctx_.allocator(), st.shoreImage[i], st.shoreAlloc[i]);
+                st.shoreView[i]  = VK_NULL_HANDLE;
+                st.shoreImage[i] = VK_NULL_HANDLE;
+            }
+            st.shoreOn = false;
+        }
+
         if (st.rippleRes > 0u) {
             st.ifft.reset();
-            if (st.rippleDs[0]) vkFreeDescriptorSets(d, descPool_, st.layers, st.rippleDs.data());
+            if (st.rippleDs[0]) vkFreeDescriptorSets(d, descPool_, st.appLayers, st.rippleDs.data());
             st.rippleDs = {};
             auto plane = [&](water::OceanImage& img) {
                 if (img.view)  vkDestroyImageView(d, img.view, nullptr);
@@ -472,8 +658,13 @@ namespace threepp::vulkan {
         const double since = nowSec - st.prevTimeSec;
         const bool restart = st.prevTimeSec < 0.0 || since < 0.0;
         const float dt = restart ? 0.0f : std::min(static_cast<float>(since), 0.25f);
+        st.stepped = false;
         if (!restart && dt <= 0.0f) return;
         st.prevTimeSec = nowSec;
+        st.stepped  = true;
+        st.stepDt   = dt;
+        st.stepTime = nowSec;
+        ++st.steps;
 
         const DisplacedMesh::WakeField& wf = dm.wakeField;
         struct Upload {
@@ -502,7 +693,7 @@ namespace threepp::vulkan {
         tb.lace            = std::clamp(wf.lace, 0.0f, 0.9f);
 
         uint32_t liveMask = 0;
-        for (uint32_t i = 0; i < st.layers; ++i) {
+        for (uint32_t i = 0; i < st.appLayers; ++i) {
             const DisplacedMesh::WakePatch& p = dm.wakePatches[i];
             WakePatchGpu& g = tb.patches[i];
             if (!(p.size > 0.0f)) {
@@ -530,6 +721,34 @@ namespace threepp::vulkan {
             g.rippleOriginZ = own ? p.rippleCenterZ - 0.5f * p.rippleSize : g.originZ;
             liveMask |= 1u << i;
         }
+        // The shore's windows (setShoreWindows placed them): patches like the
+        // producers', world-anchored and moved by whole texels (here by whole
+        // eighths of a side), with eddies about a lace's size (a metre near,
+        // three texels far) and no ripples.
+        for (uint32_t k = 0; st.shoreOn && k < kShoreLayers; ++k) {
+            const uint32_t i = st.appLayers + k;
+            if (st.shoreEmpty[k]) {// no shore in it: off (and started afresh when one comes into it)
+                st.prevSize[i] = 0.0f;
+                continue;
+            }
+            WakePatchGpu& g = tb.patches[i];
+            const float size  = st.shoreSize[k];
+            const float texel = size / static_cast<float>(st.res);
+            g.originX = std::floor((st.shoreX[k] - 0.5f * size) / texel + 0.5f) * texel;
+            g.originZ = std::floor((st.shoreZ[k] - 0.5f * size) / texel + 0.5f) * texel;
+            g.size    = size;
+            g.texel   = texel;
+            const bool history = st.prevSize[i] == size;
+            g.prevOriginX = history ? st.prevOriginX[i] : g.originX;
+            g.prevOriginZ = history ? st.prevOriginZ[i] : g.originZ;
+            g.live        = history ? 2.0f : 1.0f;
+            g.eddy        = std::max(1.0f, 3.0f * texel);
+            g.shore       = 1.0f;
+            st.prevOriginX[i] = g.originX;
+            st.prevOriginZ[i] = g.originZ;
+            st.prevSize[i]    = size;
+            liveMask |= 1u << i;
+        }
         const uint32_t sourceCount = static_cast<uint32_t>(
                 std::min<size_t>(dm.wakeSources.size(), DisplacedMesh::kMaxWakeSources));
         if (sourceCount > 0u) {
@@ -548,7 +767,7 @@ namespace threepp::vulkan {
                 DisplacedMesh::WakeSource& sc = up.sources[s];
                 if (sc.push == 0.0f) continue;
                 auto holds = [&](uint32_t i) {
-                    if (i >= st.layers || !(liveMask & (1u << i))) return false;
+                    if (i >= st.appLayers || !(liveMask & (1u << i))) return false;
                     const WakePatchGpu& g = tb.patches[i];
                     const float u = (sc.x1 - g.rippleOriginX) / g.rippleSize;
                     const float v = (sc.z1 - g.rippleOriginZ) / g.rippleSize;
@@ -558,7 +777,7 @@ namespace threepp::vulkan {
                 if (sc.patch >= 0) {
                     if (holds(static_cast<uint32_t>(sc.patch))) owner = sc.patch;
                 } else {
-                    for (uint32_t i = 0; i < st.layers && owner < 0; ++i) {
+                    for (uint32_t i = 0; i < st.appLayers && owner < 0; ++i) {
                         if (holds(i)) owner = static_cast<int32_t>(i);
                     }
                 }
@@ -573,7 +792,7 @@ namespace threepp::vulkan {
                 }
             }
             const float slowest = 1.0f / std::max(wf.rippleLife, 0.1f);
-            for (uint32_t i = 0; i < st.layers; ++i) {
+            for (uint32_t i = 0; i < st.appLayers; ++i) {
                 if (!(liveMask & (1u << i))) {
                     st.rippleHeld[i]  = false;
                     st.rippleQuiet[i] = 0.0f;
@@ -681,19 +900,19 @@ namespace threepp::vulkan {
             // one columns dispatch, so each step runs for all patches before
             // the next. A patch's dispatches touch only its own layer and its
             // own work image, so the order between patches is free.
-            for (uint32_t i = 0; i < st.layers; ++i) {
+            for (uint32_t i = 0; i < st.appLayers; ++i) {
                 if (rippleMask & (1u << i)) dispatch(i, 0u);
             }
             computeBarrier(cb);
-            for (uint32_t i = 0; i < st.layers; ++i) {
+            for (uint32_t i = 0; i < st.appLayers; ++i) {
                 if (rippleMask & (1u << i)) dispatch(i, 1u);
             }
             computeBarrier(cb);
             static_assert(DisplacedMesh::kMaxWakePatches <= water::IFFT::kMaxBatch);
             std::array<water::OceanImage*, DisplacedMesh::kMaxWakePatches> work{};
-            for (uint32_t i = 0; i < st.layers; ++i) work[i] = &st.work[i];
-            st.ifft->recordApplyBatch(cb, work.data(), st.layers, st.scratch, rippleMask);
-            for (uint32_t i = 0; i < st.layers; ++i) {
+            for (uint32_t i = 0; i < st.appLayers; ++i) work[i] = &st.work[i];
+            st.ifft->recordApplyBatch(cb, work.data(), st.appLayers, st.scratch, rippleMask);
+            for (uint32_t i = 0; i < st.appLayers; ++i) {
                 if (rippleMask & (1u << i)) dispatch(i, 2u);
             }
             heightMask &= rippleMask;
@@ -701,23 +920,23 @@ namespace threepp::vulkan {
                 // To real space and back: the height, and the absorbing
                 // layer, each transform again one batch for every patch.
                 computeBarrier(cb);
-                for (uint32_t i = 0; i < st.layers; ++i) {
+                for (uint32_t i = 0; i < st.appLayers; ++i) {
                     if (heightMask & (1u << i)) dispatch(i, 3u);// the free waves' spectrum
                 }
                 computeBarrier(cb);
-                st.ifft->recordApplyBatch(cb, work.data(), st.layers, st.scratch, heightMask);
-                for (uint32_t i = 0; i < st.layers; ++i) {
+                st.ifft->recordApplyBatch(cb, work.data(), st.appLayers, st.scratch, heightMask);
+                for (uint32_t i = 0; i < st.appLayers; ++i) {
                     // their height into the layer's alpha; the sponge; set up the forward transform
                     if (heightMask & (1u << i)) dispatch(i, 4u);
                 }
                 computeBarrier(cb);
-                st.ifft->recordApplyBatch(cb, work.data(), st.layers, st.scratch, heightMask);
-                for (uint32_t i = 0; i < st.layers; ++i) {
+                st.ifft->recordApplyBatch(cb, work.data(), st.appLayers, st.scratch, heightMask);
+                for (uint32_t i = 0; i < st.appLayers; ++i) {
                     if (heightMask & (1u << i)) dispatch(i, 5u);// back to the spectrum
                 }
             }
         } else {
-            for (uint32_t i = 0; i < st.layers; ++i) {
+            for (uint32_t i = 0; i < st.appLayers; ++i) {
                 if (!(rippleMask & (1u << i))) continue;
                 dispatch(i, 0u);// turn the spectrum, and force it
                 computeBarrier(cb);
@@ -744,8 +963,8 @@ namespace threepp::vulkan {
                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
         for (uint32_t m = 1; m < st.rippleMips; ++m) {
             VkImageBlit blit{};
-            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m - 1u, 0, st.layers};
-            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0, st.layers};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m - 1u, 0, st.appLayers};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0, st.appLayers};
             const int32_t s = static_cast<int32_t>(std::max(st.rippleRes >> (m - 1u), 1u));
             const int32_t t = static_cast<int32_t>(std::max(st.rippleRes >> m, 1u));
             blit.srcOffsets[1] = {s, s, 1};
@@ -760,6 +979,205 @@ namespace threepp::vulkan {
             memoryBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                           VK_ACCESS_SHADER_READ_BIT);
         }
+    }
+
+    void WakeFieldPipeline::setShoreWindows(State& st, float eyeX, float eyeZ) {
+        // Each window's centre is the multiple of an eighth of its side
+        // nearest the camera: the camera always has three eighths of a side
+        // of window round it, and the window (and with it the shore map) moves
+        // only when the camera has crossed an eighth.
+        for (uint32_t k = 0; k < kShoreLayers; ++k) {
+            const float step = 0.125f * st.shoreSize[k];
+            st.shoreX[k] = std::round(eyeX / step) * step;
+            st.shoreZ[k] = std::round(eyeZ / step) * step;
+        }
+    }
+
+    void WakeFieldPipeline::recordShore(VkCommandBuffer cb, State& st, const ShoreInputs& in, double nowSec) {
+        if (!st.shoreOn || !st.stepped || st.stepTime != nowSec) return;// the field did not step this frame
+        // Nothing until the field has stepped a few frames: a thing that moves
+        // carries kGeomFlagMoved from its second frame, and a map taken on the
+        // first would hold every buoy and boat as it stood then.
+        if (st.steps < kShoreFirstStep) return;
+        if (in.tlas == VK_NULL_HANDLE || in.geomAddr == 0u || in.displaceSet == VK_NULL_HANDLE) return;
+
+        // The source reads the ocean's cascades through its own displace set,
+        // so it is made with that set's layout, on first use.
+        if (sourcePipeline_ == VK_NULL_HANDLE || sourceDisplaceLayout_ != in.displaceLayout) {
+            if (sourcePipeline_)   vkDestroyPipeline(ctx_.device(), sourcePipeline_, nullptr);
+            if (sourcePipeLayout_) vkDestroyPipelineLayout(ctx_.device(), sourcePipeLayout_, nullptr);
+            const VkDescriptorSetLayout sets[2] = {in.displaceLayout, sourceDsLayout_};
+            VkPushConstantRange pcr{};
+            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcr.size       = sizeof(ShoreSourcePush);
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 2;
+            plci.pSetLayouts            = sets;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcr;
+            check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &sourcePipeLayout_),
+                  "vkCreatePipelineLayout(shoreSource)");
+            sourcePipeline_ = computePipeline(ctx_, kShoreSourceCompSpv, sizeof(kShoreSourceCompSpv), sourcePipeLayout_,
+                                              "vkCreateComputePipelines(shoreSource)");
+            sourceDisplaceLayout_ = in.displaceLayout;
+        }
+
+        // The counts of maps taken when this frame's slot last came round:
+        // that frame's fence has been waited.
+        const uint32_t f = in.frame % 2u;
+        ++st.shoreCalls;
+        for (uint32_t k = 0; k < kShoreLayers; ++k) {
+            if (st.countSlot[k] != static_cast<int32_t>(f) || st.countCall[k] >= st.shoreCalls || !st.countPtr[f]) continue;
+            invalidateHostReads(ctx_.allocator(), st.countBuf[f].alloc, 0, kShoreLayers * sizeof(uint32_t));
+            st.shoreEmpty[k] = st.countPtr[f][k] == 0u;
+            st.countSlot[k]  = -1;
+        }
+
+        const uint32_t groups = (st.res + 7u) / 8u;
+        std::array<float, kShoreLayers> ox{}, oz{}, texel{};
+        for (uint32_t k = 0; k < kShoreLayers; ++k) {// as record() placed them
+            texel[k] = st.shoreSize[k] / static_cast<float>(st.res);
+            ox[k]    = std::floor((st.shoreX[k] - 0.5f * st.shoreSize[k]) / texel[k] + 0.5f) * texel[k];
+            oz[k]    = std::floor((st.shoreZ[k] - 0.5f * st.shoreSize[k]) / texel[k] + 0.5f) * texel[k];
+        }
+
+        // ── The maps: taken again where a window moved, or of a new scene ──
+        const bool newScene = in.tlas != st.mapTlas || in.tlasInstances != st.mapInstances;
+        uint32_t captureMask = 0;
+        for (uint32_t k = 0; k < kShoreLayers; ++k) {
+            if (newScene || !st.mapValid[k] || st.mapX[k] != ox[k] || st.mapZ[k] != oz[k]) captureMask |= 1u << k;
+        }
+        if (captureMask != 0u) {
+            // The TLAS into this frame's capture set (that set's last frame is
+            // done with it: its fence was waited before this one was recorded).
+            if (st.captureTlas[f] != in.tlas) {
+                VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
+                asInfo.sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+                asInfo.accelerationStructureCount = 1;
+                asInfo.pAccelerationStructures    = &in.tlas;
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.pNext           = &asInfo;
+                w.dstSet          = st.captureDs[f];
+                w.dstBinding      = 0;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+                updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+                st.captureTlas[f] = in.tlas;
+            }
+            // (the source's last reads of the map, last frame, are behind the frame's entry barrier)
+            // The counts start from nothing.
+            for (uint32_t k = 0; k < kShoreLayers; ++k) {
+                if (captureMask & (1u << k)) vkCmdFillBuffer(cb, st.countBuf[f].handle, k * sizeof(uint32_t), sizeof(uint32_t), 0u);
+            }
+            memoryBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, capturePipeline_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, capturePipeLayout_, 0, 1, &st.captureDs[f], 0,
+                                    nullptr);
+            for (uint32_t k = 0; k < kShoreLayers; ++k) {
+                if (!(captureMask & (1u << k))) continue;
+                ShoreCapturePush cp{};
+                cp.geomAddr  = in.geomAddr;
+                cp.hullAddr  = in.hullCount > 0u ? in.hullAddr : 0u;
+                cp.countAddr = st.countBuf[f].address;
+                cp.originX   = ox[k];
+                cp.originZ   = oz[k];
+                cp.texel     = texel[k];
+                cp.restY     = in.restY;
+                cp.res       = st.res;
+                cp.layer     = k;
+                cp.hullCount = in.hullCount;
+                vkCmdPushConstants(cb, capturePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cp), &cp);
+                vkCmdDispatch(cb, groups, groups, 1);
+            }
+            computeBarrier(cb);
+            // The flood: rounds ping-pong A -> B -> A ..., an odd count, so the
+            // last round's seeds are in B and the map is made from there.
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, jfaPipeline_);
+            constexpr uint32_t kRounds = sizeof(kShoreJfaSteps) / sizeof(kShoreJfaSteps[0]);
+            static_assert(kRounds % 2u == 1u, "the map is made from seeds B");
+            for (uint32_t r = 0; r <= kRounds; ++r) {
+                const bool map = r == kRounds;
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, jfaPipeLayout_, 0, 1,
+                                        &st.jfaDs[map ? 1u : (r % 2u)], 0, nullptr);
+                for (uint32_t k = 0; k < kShoreLayers; ++k) {
+                    if (!(captureMask & (1u << k))) continue;
+                    ShoreJfaPush jp{};
+                    jp.res   = st.res;
+                    jp.layer = k;
+                    jp.mode  = map ? 1u : 0u;
+                    jp.step  = map ? 0 : kShoreJfaSteps[r];
+                    jp.texel = texel[k];
+                    vkCmdPushConstants(cb, jfaPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(jp), &jp);
+                    vkCmdDispatch(cb, groups, groups, 1);
+                }
+                computeBarrier(cb);
+            }
+            for (uint32_t k = 0; k < kShoreLayers; ++k) {
+                if (!(captureMask & (1u << k))) continue;
+                st.mapValid[k]  = true;
+                st.mapX[k]      = ox[k];
+                st.mapZ[k]      = oz[k];
+                st.countSlot[k] = static_cast<int32_t>(f);
+                st.countCall[k] = st.shoreCalls;
+            }
+            st.mapTlas      = in.tlas;
+            st.mapInstances = in.tlasInstances;
+        } else {
+            computeBarrier(cb);// the field's step -> the source
+        }
+
+        // ── The source, into each window the step has just settled ─────────
+        // Floating foam drifts with the wind at about 3 % of its speed (Wu
+        // 1975, "Wind-induced drift currents", J. Fluid Mech. 68(1)).
+        const float drift = 0.03f * std::max(in.windSpeed, 0.0f);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, sourcePipeline_);
+        const VkDescriptorSet sets[2] = {in.displaceSet, st.sourceDs};
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, sourcePipeLayout_, 0, 2, sets, 0, nullptr);
+        for (uint32_t k = 0; k < kShoreLayers; ++k) {
+            if (st.shoreEmpty[k]) {// nothing to lay foam on; nothing of its parcels to keep
+                st.lastX[k] = st.lastZ[k] = std::numeric_limits<float>::quiet_NaN();
+                continue;
+            }
+            ShoreSourcePush sp{};
+            sp.tileSize0   = in.tileSize[0];
+            sp.tileSize1   = in.tileSize[1];
+            sp.tileSize2   = in.tileSize[2];
+            sp.waveScale   = in.waveScale;
+            sp.choppiness  = in.choppiness;
+            sp.cascadeMask = in.cascadeMask;
+            sp.originX     = ox[k];
+            sp.originZ     = oz[k];
+            sp.texel       = texel[k];
+            sp.res         = st.res;
+            sp.layer       = st.appLayers + k;
+            sp.shoreLayer  = k;
+            sp.dt          = st.stepDt;
+            // The parcels' last surface is this window's when it has not moved
+            // and its map is the one it was read against.
+            sp.history = (st.lastX[k] == ox[k] && st.lastZ[k] == oz[k] && !(captureMask & (1u << k))) ? 1u : 0u;
+            sp.driftX  = drift * std::cos(in.windTheta);
+            sp.driftZ  = drift * std::sin(in.windTheta);
+            if (k > 0u) {// the far window lays nothing well inside the near one
+                sp.keepX    = st.shoreX[0];
+                sp.keepZ    = st.shoreZ[0];
+                sp.keepHalf = 0.5f * 0.85f * st.shoreSize[0];
+            }
+            sp.timeSec = static_cast<float>(std::fmod(nowSec, 4096.0));
+            // The far window's collar is a texel wide, wider than the real
+            // one, at the near window's density: the shade's foam level has a
+            // threshold, and a collar thinned over a 2 m texel by its share
+            // of it (as a coverage would be) did not show at all from a mast
+            // or a drone. A LOOK choice for the far window.
+            sp.gain    = 1.0f;
+            vkCmdPushConstants(cb, sourcePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(sp), &sp);
+            vkCmdDispatch(cb, groups, groups, 1);
+            st.lastX[k] = ox[k];
+            st.lastZ[k] = oz[k];
+        }
+        computeBarrier(cb);
     }
 
 }// namespace threepp::vulkan

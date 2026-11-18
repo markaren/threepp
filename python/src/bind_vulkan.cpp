@@ -1621,6 +1621,8 @@ namespace threepp_py {
                                            d["ocean_displace_ms"] = t.oceanDisplaceMs;
                                            d["ocean_foam_ms"] = t.oceanFoamMs;
                                            d["ocean_blas_ms"] = t.oceanBlasMs;
+                                           // the shore: its maps when retaken, and its foam's source
+                                           d["ocean_shore_ms"] = t.oceanShoreMs;
                                            // Half-res RT AO + bent normals (rtao.comp);
                                            // 0 unless deferred AO is enabled.
                                            d["rtao_ms"] = t.rtaoMs;

@@ -79,10 +79,16 @@ namespace threepp {
             // (the symmetric cos^2 it replaced sent as much energy upwind and
             // drew a standing slosh); normals of the surface the
             // choppy displacement draws, the finest cascade's slope from its
-            // moment chain; the 3 to 9 m waves as geometry; and whitecaps
+            // moment chain; the 3 to 9 m waves as geometry; whitecaps
             // that are crest foam: laid where the drawn surface nears a fold,
             // along the crest, kept on the water it was laid on and aged
-            // there (foam_crest.comp; foamAmount scales it).
+            // there (foam_crest.comp; foamAmount scales it); and the foam the
+            // sea makes where it meets something still and solid, a pile, a
+            // rock, a quay or a beach: laid where the drawn water drives into
+            // it, so a collar comes with each wave and grows with the sea, and
+            // carried off, torn into lace and aged by the wake field's shore
+            // windows (see WakeField; nothing on a calm sea, and nothing round
+            // a vessel or anything else that moves).
 
             // Choppy Wave Model switch (default OFF, the historical chop).
             // ON draws the surface as the first-order Lagrangian sea of
@@ -506,9 +512,23 @@ namespace threepp {
         // rippleSize), which is a finer sea for the same resolution, as a
         // small slow boat's short waves need.
         //
-        // Off by default (resolution 0): no memory, no pass, and the water
-        // shade is byte-identical. `resolution` and `patches` are LATCHED when
-        // the renderer first sees the mesh; the other knobs are live.
+        // THE SHORE. Every ocean's field also holds two windows of its own
+        // that follow the camera (a near one at a quarter metre a texel, 256 m
+        // across at resolution 1024, and a far one at two metres, 2 km), in
+        // which the sea lays the foam it makes on what it meets: a slice of
+        // the still scene at the water's rest level, taken with the renderer's
+        // ray queries when a window moves or the scene changes, says where the
+        // solid is, and every step, where the drawn water drives into it, foam
+        // and air go into the field, which carries, tears and ages them as it
+        // does a wake's. The water, vessels' footprints and whatever has moved
+        // of late are not solid. They take this field's resolution (1024 when
+        // `resolution` is 0) and its foam, air and flow lives; nothing else
+        // here reaches them. A device without ray queries has no shore.
+        //
+        // The producers' patches are off by default (resolution 0): then the
+        // field holds the shore's windows alone. `resolution` and `patches`
+        // are LATCHED when the renderer first sees the mesh; the other knobs
+        // are live.
         static constexpr uint32_t kMaxWakePatches = 8;
         static constexpr uint32_t kMaxWakeSources = 256;
         // THREEPP_WAKE_HEIGHTS from the environment, read once: "0" = false,

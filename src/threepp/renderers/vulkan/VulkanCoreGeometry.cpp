@@ -4001,6 +4001,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // step goes first, so the geometry has this frame's waves, as the
             // shade's slopes do.
             const bool rippleHeights = st.wake && st.wake->rippleRes > 0u && dm.wakeField.rippleHeights;
+            // The shore's windows follow the camera (in the ocean's frame, as
+            // the patches are given).
+            if (st.wake && st.wake->shoreOn) {
+                vulkan::WakeFieldPipeline::setShoreWindows(*st.wake, oceanLodEye_.x, oceanLodEye_.z);
+            }
             if (rippleHeights) {
                 wakeField_->record(cb, *st.wake, dm, frameNowSec());
                 VkMemoryBarrier mb{};
@@ -4152,6 +4157,33 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // (4d) The wake field: carry, settle and feed every patch that is on
             // (already done above when the geometry takes its ripples' height).
             if (st.wake && !rippleHeights) wakeField_->record(cb, *st.wake, dm, frameNowSec());
+
+            // (4e) The shore: its maps where a window moved or the scene
+            // changed (ray queries against the TLAS as the last frame left it,
+            // the still scene), then the foam the sea lays on it this step.
+            if (st.wake && st.wake->shoreOn && tlas != VK_NULL_HANDLE) {
+                vulkan::WakeFieldPipeline::ShoreInputs si{};
+                si.tlas           = tlas;
+                si.tlasInstances  = tlasBuiltInstanceCount_;
+                si.geomAddr       = geometryDescsBuffers[currentFrame].address;
+                si.hullAddr       = hullAddr;
+                si.hullCount      = hullCount;
+                si.restY          = dm.matrixWorld->elements[13];
+                si.displaceSet    = st.displaceDS;
+                si.displaceLayout = waterDisplace_->layout();
+                si.tileSize[0]    = (st.cascadeMask & 1u) ? dm.params.tileSize0 : 1.f;
+                si.tileSize[1]    = (st.cascadeMask & 2u) ? dm.params.tileSize1 : 1.f;
+                si.tileSize[2]    = (st.cascadeMask & 4u) ? dm.params.tileSize2 : 1.f;
+                si.waveScale      = dm.params.waveScale;
+                si.choppiness     = dm.effectiveChoppiness();
+                si.cascadeMask    = st.cascadeMask;
+                si.windSpeed      = dm.params.windSpeed;
+                si.windTheta      = dm.params.windTheta;
+                si.frame          = currentFrame;
+                if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanShore, currentFrame);
+                wakeField_->recordShore(cb, *st.wake, si, frameNowSec());
+                if (timed) gpuTimings_->end(cb, vulkan::TP_OceanShore, currentFrame);
+            }
         }
 
 void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed) {
@@ -6031,12 +6063,18 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             oceanFoamView     = state->foamImage.view;
             oceanFoamTileSize = state->foamTileSize;
 
-            // The wake field, if the mesh has one switched on (resolution and
-            // patch count are latched here). Its table's address goes on the
-            // BLAS record, from where the GeometryDesc picks it up.
-            if (dm.wakeField.resolution > 0u) {
-                state->wake = wakeField_->createState(dm.wakeField.resolution, dm.wakeField.patches,
-                                                      dm.wakeField.rippleResolution);
+            // The wake field: the producers' patches if the mesh has them
+            // switched on (resolution and patch count are latched here), and on
+            // every ocean the shore's windows (WakeFieldPipeline: the foam the
+            // sea makes on what it meets), where the device can trace the scene.
+            // Its table's address goes on the BLAS record, from where the
+            // GeometryDesc picks it up.
+            const bool shore = wakeField_->shoreSupported();
+            if (dm.wakeField.resolution > 0u || shore) {
+                const bool producers = dm.wakeField.resolution > 0u;
+                state->wake = wakeField_->createState(producers ? dm.wakeField.resolution : vulkan::kShoreRes,
+                                                      producers ? std::max(dm.wakeField.patches, 1u) : 0u,
+                                                      producers ? dm.wakeField.rippleResolution : 0u, shore);
                 VkCommandBuffer cb = beginOneShot();
                 wakeField_->initState(cb, *state->wake);
                 endAndSubmitOneShot(cb);
