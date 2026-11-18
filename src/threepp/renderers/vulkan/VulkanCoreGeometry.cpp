@@ -3424,9 +3424,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     st.boundKm[i] = (st.cascadeMask & (1u << i)) ? st.cascades[i].phillips->meanWavenumber() : 0.f;
                 st.boundKmValid = true;
             }
-            // The short waves (a light air's scales; the measured short-wave
-            // spectrum when on): what the finest cascade cannot draw of them
-            // goes to the shade's roughness (the chop moments).
+            // The measured short-wave spectrum: what the finest cascade cannot
+            // draw of it goes to the shade's roughness (the chop moments).
             if (!st.shortWaveBankValid) {
                 st.shortWaveBankedMss = 0.f;
                 for (uint32_t i = 0; i < 3; ++i)

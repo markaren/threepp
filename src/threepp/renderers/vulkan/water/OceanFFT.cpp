@@ -492,19 +492,6 @@ namespace threepp::water {
             return t * t * (3.f - 2.f * t);
         }
 
-        // CPU mirror of lightAirScales in phillips_spectrum.comp (double
-        // here): the curvature of a light air's centimetre wavelets, mean
-        // square slope 1e-3 (U - 0.5)^2 from 0.5 m/s, 1e-3 from 1.5 m/s, handed over to the
-        // gravity spectrum by 4.5 m/s; the sources are cited there.
-        double lightAirScalesCpu(double k, double U) {
-            if (U >= 4.5) return 0.0;
-            const double s  = 0.35;
-            const double a  = std::clamp(U - 0.5, 0.0, 1.0);
-            const double mss = 1.0e-3 * a * a * (1.0 - double(windGrowthCpu(370.f, float(U))));
-            const double x  = std::log(k / 370.0) / s;
-            return mss * std::exp(-0.5 * x * x) / (2.5066282746310002 * s);
-        }
-
         // The fade the shader puts on it: smoothstep over ln k from 2 k_p to 16 k_p.
         double shortWaveFadeCpu(double k, double kp) {
             const double t = std::clamp((std::log(k) - std::log(2.0 * kp)) / std::log(8.0), 0.0, 1.0);
@@ -525,46 +512,26 @@ namespace threepp::water {
 
     float PhillipsSpectrum::unresolvedShortWaveMss() const {
         const Settings& S = settings_;
-        if (S.kMax > 0.f || !(S.windSpeed > 0.f) || !(S.tileSize > 0.f)) return 0.f;
+        if (!S.shortWaveSpectrum || S.kMax > 0.f || !(S.windSpeed > 0.f) || !(S.tileSize > 0.f)) return 0.f;
         // Slope variance of a curvature spectrum: mss = integral B(k) d ln k
         // (both axes; the directional weight integrates out). What the grid
         // draws of it is the roll-off exp(-(k l)^2) up to its Nyquist pi N /
         // tile (the square grid reaches past that on its diagonals only);
         // the rest is banked.
+        const double kp   = 0.894 / spectrumLengthCpu(S);
         const double kNyq = 3.14159265358979 * double(S.textureSize) / double(S.tileSize);
         const double l    = S.smallWaveCutoff;
+        const double lo   = std::log(std::max(double(S.kMin), 2.0 * kp));
+        const double hi   = std::log(370.0 * 30.0);// B_h is under 1e-20 of its peak by then
         constexpr int n   = 4096;
-        double total = 0.0;
-        if (S.shortWaveSpectrum) {
-            const double kp = 0.894 / spectrumLengthCpu(S);
-            const double lo = std::log(std::max(double(S.kMin), 2.0 * kp));
-            const double hi = std::log(370.0 * 30.0);// B_h is under 1e-20 of its peak by then
-            double mss = 0.0;
-            for (int i = 0; i < n; ++i) {
-                const double lk = lo + (i + 0.5) * (hi - lo) / n;
-                const double k  = std::exp(lk);
-                const double drawn = k < kNyq ? std::exp(-k * k * l * l) : 0.0;
-                mss += elfouhailyShortCurvatureCpu(k, kp, S.windSpeed) * shortWaveFadeCpu(k, kp) * (1.0 - drawn);
-            }
-            total += mss * (hi - lo) / n;
+        double mss = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double lk = lo + (i + 0.5) * (hi - lo) / n;
+            const double k  = std::exp(lk);
+            const double drawn = k < kNyq ? std::exp(-k * k * l * l) : 0.0;
+            mss += elfouhailyShortCurvatureCpu(k, kp, S.windSpeed) * shortWaveFadeCpu(k, kp) * (1.0 - drawn);
         }
-        if (S.windSpeed < 4.5f) {
-            // A light air's scales (lightAirScales), six deviations either
-            // side of their peak.
-            const double lo = std::log(std::max(double(S.kMin), 370.0 * std::exp(-6.0 * 0.35)));
-            const double hi = std::log(370.0) + 6.0 * 0.35;
-            if (hi > lo) {
-                double mss = 0.0;
-                for (int i = 0; i < n; ++i) {
-                    const double lk = lo + (i + 0.5) * (hi - lo) / n;
-                    const double k  = std::exp(lk);
-                    const double drawn = k < kNyq ? std::exp(-k * k * l * l) : 0.0;
-                    mss += lightAirScalesCpu(k, S.windSpeed) * (1.0 - drawn);
-                }
-                total += mss * (hi - lo) / n;
-            }
-        }
-        return static_cast<float>(total);
+        return static_cast<float>(mss * (hi - lo) / n);
     }
 
     float PhillipsSpectrum::swellSpreadClamped(float s) {
@@ -659,9 +626,6 @@ namespace threepp::water {
             }
             p *= 2.5446900f;
             p *= windGrowthCpu(kn, S.windSpeed);
-            if (S.windSpeed < 4.5f)
-                p += float(2.0 * 3.14159265358979 * lightAirScalesCpu(kn, S.windSpeed)) * kw *
-                     std::exp(-k2 * l * l) / (k2 * k2);
             if (S.shortWaveSpectrum) {
                 const double kp = 0.894 / double(L);
                 p += float(2.0 * 3.14159265358979 * elfouhailyShortCurvatureCpu(kn, kp, S.windSpeed) *

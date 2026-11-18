@@ -41,18 +41,6 @@ double Weather::significantWaveHeight() const {
         const double t = std::clamp((U - onset) / (4.5 - onset), 0.0, 1.0);
         hsWind *= std::sqrt(t * t * (3.0 - 2.0 * t));
     }
-    if (U > 0.0 && U < 4.5) {
-        // A light air's scales (phillips_spectrum.comp, lightAirScales): a
-        // curvature band of mean square slope m about k_m = 370 rad/m, a
-        // Gaussian in ln k of deviation s = 0.35, whose height variance is
-        // m E[k^-2] = m exp(2 s^2) / k_m^2: under half a millimetre of Hs.
-        const double a = std::clamp(U - 0.5, 0.0, 1.0);
-        const double on = std::clamp(0.36 * std::sqrt(std::sqrt(g * 370.0)), 1.0, 3.4);
-        const double tg = std::clamp((U - on) / (4.5 - on), 0.0, 1.0);
-        const double m = 1.0e-3 * a * a * (1.0 - tg * tg * (3.0 - 2.0 * tg));
-        const double hs = 4.0 * std::sqrt(m * std::exp(2.0 * 0.35 * 0.35)) / 370.0;
-        hsWind = std::sqrt(hsWind * hsWind + hs * hs);
-    }
     const double swell = std::max(0.0, static_cast<double>(swellHeight));
     return std::sqrt(hsWind * hsWind + swell * swell);
 }
