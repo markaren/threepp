@@ -164,14 +164,13 @@ float elfouhailyShortCurvature(float k, float kp) {
 }
 
 // The share of the fully grown wind sea that a light wind has raised at
-// wavenumber k (0 to 1). The Pierson-Moskowitz / JONSWAP level below is a
-// constant (alpha = 8.1e-3), and the wind only places the peak, so without
-// this the short waves past the peak would be the same at 0.8 m/s as at
-// 10 m/s: a near-calm sea carrying the whole field of small, short-period
-// bumps of a breeze, when real water below about 1 m/s grows no wind waves
-// at all (Beaufort 0, "sea like a mirror"; the onset of wind-wave growth in
-// Kahma and Donelan (1988), "A laboratory study of the minimum wind speed for
-// wind wave generation", J. Fluid Mech. 192).
+// wavenumber k (0 to 1), its gravity waves. The Pierson-Moskowitz / JONSWAP
+// level below is a constant (alpha = 8.1e-3), and the wind only places the
+// peak, so without this the short waves past the peak would be the same at
+// 0.8 m/s as at 10 m/s: a near-calm sea carrying the whole field of small,
+// short-period bumps of a breeze. The first waves a rising wind raises are
+// not these but centimetre capillary-gravity wavelets (lightAirScales,
+// below); the gravity waves, the decimetre bumps among them, come after.
 // Each wave grows once the wind feeds it faster than the water's viscosity
 // damps it: the input of Plant (1982), "A relationship between wind stress
 // and wave slope", J. Geophys. Res. 87(C3), 0.04 (u*/c)^2 w, against Lamb's
@@ -195,6 +194,53 @@ float elfouhailyShortCurvature(float k, float kp) {
 float windGrowth(float k, float U) {
     const float onset = clamp(0.36 * sqrt(sqrt(9.81 * k)), 1.0, 3.4);
     return smoothstep(onset, 4.5, U);
+}
+
+// LIGHT AIR: the scales. The curvature spectrum (B = k^3 S(k), omnidirectional;
+// its integral over ln k is the mean square slope, both axes) of the first
+// waves a light wind raises on still water, before it grows any gravity sea.
+// Beaufort 1 (about 0.5 to 1.5 m/s) is "ripples with the appearance of
+// scales, without foam crests"; below it, Beaufort 0, "sea like a mirror".
+// The first wavelets are 1.5 to 2 cm long, near the minimum phase speed of
+// capillary-gravity waves (0.23 m/s at 1.7 cm, k_m = 370 rad/m), where the
+// wind's critical-layer input beats the viscous damping first: Kahma and
+// Donelan (1988), "A laboratory study of the minimum wind speed for wind wave
+// generation", J. Fluid Mech. 192 (a flume; initial wavelets some 10 um
+// high, and the wind at which waves become visible set by the water's
+// viscosity, so by its temperature); Donelan and Plant (2009), "A threshold
+// for wind-wave growth", J. Geophys. Res. 114 (the threshold for 1.5 and
+// 1.9 cm waves). Their clean-water onset is a friction velocity of about
+// 5 cm/s, some 1.3 m/s at 10 m; at sea the Beaufort record puts the scales
+// from about 0.5 m/s, a mean wind's gusts carrying it over the threshold in
+// places (cat's paws). The sea here has one wind, no gusts and no patches,
+// so the scales are laid evenly over the water, in from 0.5 m/s and full by
+// 1.5 m/s, their slope growing with the wind's excess over the onset (so
+// their mean square slope with its square): at first a few tens of
+// microns high, a slope of a few thousandths.
+// Their level is low: a mean square slope of 1e-3 when full (Cox and Munk
+// (1954), "Measurement of the roughness of the sea surface from photographs
+// of the sun's glitter", J. Opt. Soc. Am. 44: the clean sea's mean square
+// slope less the slicked sea's, the part the short waves carry, is nothing
+// near 1.4 m/s and 2e-3 by 2 m/s). A band of about an octave and a half
+// (a Gaussian in ln k about k_m of deviation 0.35, so 1.1 to 2.6 cm at half
+// its height): no decimetre waves, those are windGrowth's. Every grid that
+// holds 1.7 cm draws them (a pond's fine cascade); on a sea's grid they are
+// past the Nyquist and the shade takes them as roughness everywhere
+// (PhillipsSpectrum::unresolvedShortWaveMss banks them in the moment chain):
+// at 0.8 m/s (a mean square slope of 9e-5) a reflection blurs by under a
+// degree up and down, readable and soft, not a mirror; by 1.2 m/s (5e-4)
+// the far water's mirror is a sheen.
+// From where the gravity spectrum's own capillary range grows (windGrowth at
+// k_m: 2.8 m/s) to 4.5 m/s they hand over to it, and from 4.5 m/s they are
+// nothing: the sea of Beaufort 3 and up is the spectrum below unchanged.
+// Mirrored in OceanFFT.cpp (lightAirScalesCpu) and Weather.cpp.
+float lightAirScales(float k, float U) {
+    if (U >= 4.5) return 0.0;
+    const float s   = 0.35;
+    const float a   = clamp(U - 0.5, 0.0, 1.0);// the excess over the onset, over 1 m/s
+    const float mss = 1.0e-3 * a * a * (1.0 - windGrowth(370.0, U));
+    const float x   = log(k / 370.0) / s;
+    return mss * exp(-0.5 * x * x) * (1.0 / (2.5066283 * s));// 1 / (sqrt(2 pi) s)
 }
 
 float phillips2D(vec2 k) {
@@ -276,6 +322,10 @@ float phillips2D(vec2 k) {
     // before the short-wave and swell terms below, which are not this wind
     // sea and keep their own levels.
     p *= windGrowth(sqrt(k2), P.windSpeed);
+    // The light air's scales (lightAirScales), with the short waves'
+    // spreading and taper: P = 2 pi B kw / k^4, as the short-wave term below.
+    // Nothing from 4.5 m/s.
+    if (P.windSpeed < 4.5) p += 2.0 * PI * lightAirScales(sqrt(k2), P.windSpeed) * kw * exp(-k2 * l * l) / k4;
     if (P.shortWave != 0u) {
         // The measured short waves, on top of the long-wave spectrum above
         // (the paper's B = B_l + B_h). In the chain's units a curvature B

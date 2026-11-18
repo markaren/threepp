@@ -130,12 +130,13 @@ namespace threepp::water {
         // phillips2D (spreading and swell included), evaluated for the current settings. 0 for an empty band.
         float meanWavenumber() const;
 
-        // Params::shortWaveSpectrum: the slope variance (both axes, m^2/m^2)
-        // of the short-wave spectrum that this cascade's grid does not draw,
-        // what its roll-off exp(-(k l)^2) takes and everything past its
-        // Nyquist (the capillary peak), integrated over ln k on the CPU.
-        // Only for the open band (kMax == 0, the finest cascade): a lower
-        // band's cut tail is the next cascade's. 0 when the switch is off.
+        // The slope variance (both axes, m^2/m^2) of the short waves that
+        // this cascade's grid does not draw, what its roll-off exp(-(k l)^2)
+        // takes and everything past its Nyquist, integrated over ln k on the
+        // CPU: a light air's centimetre scales (below 4.5 m/s, always) and
+        // Params::shortWaveSpectrum's capillary peak (when on). Only for the
+        // open band (kMax == 0, the finest cascade): a lower band's cut tail
+        // is the next cascade's.
         float unresolvedShortWaveMss() const;
 
         VkImage     h0Image() const { return h0_.image; }
@@ -444,7 +445,7 @@ namespace threepp::water {
             uint32_t textureSize;
             float    slopeScale;// raw IFFT slope -> world slope (waveScale / tile)
             float    chopScale; // raw IFFT dD/dx -> world, times lambda (choppiness / tile)
-            float    bankedVar; // slope variance added to .a everywhere (shortWaveSpectrum); 0 = none
+            float    bankedVar; // slope variance added to .a everywhere (the unresolved short waves); 0 = none
         };
 
         // After the cascade's IFFTs, same command buffer. Leaves every level
