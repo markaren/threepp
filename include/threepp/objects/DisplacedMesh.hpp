@@ -88,7 +88,14 @@ namespace threepp {
             // it, so a collar comes with each wave and grows with the sea, and
             // carried off, torn into lace and aged by the wake field's shore
             // windows (see WakeField; nothing on a calm sea, and nothing round
-            // a vessel or anything else that moves).
+            // a vessel or anything else that moves); and over shallow water a
+            // sea that feels the bed: each cascade shoaled a little and held
+            // under the breaking limit (the significant height at most 0.42 of
+            // the depth, the shore windows' sounding of the bed), so a flat or
+            // a cove calms and no trough shows the bottom, and where a crest
+            // there nears the limit it breaks, its foam running in toward the
+            // shore and up and back on a beach (shore_source.comp; nothing in
+            // a calm, nothing where the water is deep).
 
             // Choppy Wave Model switch (default OFF, the historical chop).
             // ON draws the surface as the first-order Lagrangian sea of
