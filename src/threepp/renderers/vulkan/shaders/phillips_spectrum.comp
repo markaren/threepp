@@ -168,10 +168,10 @@ float elfouhailyShortCurvature(float k, float kp) {
 // constant (alpha = 8.1e-3), and the wind only places the peak, so without
 // this the short waves past the peak would be the same at 0.8 m/s as at
 // 10 m/s: a near-calm sea carrying the whole field of small, short-period
-// bumps of a breeze, when real water below about 1 m/s grows no wind waves
-// at all (Beaufort 0, "sea like a mirror"; the onset of wind-wave growth in
-// Kahma and Donelan (1988), "A laboratory study of the minimum wind speed for
-// wind wave generation", J. Fluid Mech. 192).
+// bumps of a breeze, when a light wind's water is a mirror or low ripples
+// (the onset of wind-wave growth in Kahma and Donelan (1988), "A laboratory
+// study of the minimum wind speed for wind wave generation", J. Fluid Mech.
+// 192; LIGHT AIR, below).
 // Each wave grows once the wind feeds it faster than the water's viscosity
 // damps it: the input of Plant (1982), "A relationship between wind stress
 // and wave slope", J. Geophys. Res. 87(C3), 0.04 (u*/c)^2 w, against Lamb's
@@ -191,10 +191,27 @@ float elfouhailyShortCurvature(float k, float kp) {
 // unchanged. Deep-water w = sqrt(g k), the dispersion the chain evolves by.
 // Multiplies the wind sea only: the swell is not raised by this wind, and
 // the short-wave option carries its own u* (alpha_m is 0 below about 3 m/s).
+// LIGHT AIR. That balance raises nothing below 1 m/s, where a real light air
+// already shows ripples (Beaufort 1, about 0.5 to 1.5 m/s: "ripples with
+// the appearance of scales"; Beaufort 0, under 0.5 m/s, "sea like a
+// mirror"). The light air's sea is taken as the spectrum's own peak and no
+// more: the waves to 1.5 kp in full, none past 3 kp (a smoothstep in ln k),
+// at the Pierson-Moskowitz level, so at 0.8 m/s slow, low ripples (25 to
+// 50 cm, a period of about half a second, 1.4 cm significant height) and not
+// the field of short, quick bumps the whole equilibrium range would put on
+// the water (at 0.8 m/s it reaches 5 cm waves of a fifth of a second); a
+// young sea fills its equilibrium range from the peak outward (Phillips
+// 1985). It comes in from 0.4 to 0.8 m/s (a mirror below) and hands over
+// to the grown sea above from 1 to 2.5 m/s, so from 2.5 m/s this is the
+// balance above alone. kp = 0.894 / L, the peak of phillips2D (fetch
+// included); at no wind kp is infinite and the factor 0.
 // Mirrored in OceanFFT.cpp (windGrowthCpu) and Weather.cpp.
-float windGrowth(float k, float U) {
+float windGrowth(float k, float kp, float U) {
     const float onset = clamp(0.36 * sqrt(sqrt(9.81 * k)), 1.0, 3.4);
-    return smoothstep(onset, 4.5, U);
+    const float grown = smoothstep(onset, 4.5, U);
+    const float air   = smoothstep(0.4, 0.8, U) * (1.0 - smoothstep(1.0, 2.5, U));
+    const float peak  = 1.0 - smoothstep(log(1.5), log(3.0), log(k / kp));
+    return max(grown, air * peak);
 }
 
 float phillips2D(vec2 k) {
@@ -275,8 +292,8 @@ float phillips2D(vec2 k) {
     // so it commutes with the level and the peak enhancement above; it goes
     // before the short-wave and swell terms below, which are not this wind
     // sea and keep their own levels.
-    p *= windGrowth(sqrt(k2), P.windSpeed);
-    if (P.shortWave != 0u) {
+    p *= windGrowth(sqrt(k2), 0.894 / L, P.windSpeed);
+    if (P.shortWave != 0u && P.windSpeed > 0.0) {// (no wind: no short waves, and no peak to place them by)
         // The measured short waves, on top of the long-wave spectrum above
         // (the paper's B = B_l + B_h). In the chain's units a curvature B
         // with the directional weight kw (which integrates to pi over the

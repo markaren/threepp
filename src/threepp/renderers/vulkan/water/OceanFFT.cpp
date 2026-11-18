@@ -485,11 +485,18 @@ namespace threepp::water {
 
         // CPU mirror of windGrowth in phillips_spectrum.comp (float, as there):
         // the share of the fully grown wind sea a light wind has raised at k,
-        // 0 below 1 m/s, 1 from 4.5 m/s; the derivation is cited there.
-        float windGrowthCpu(float k, float U) {
+        // the light air's peak ripples (to 3 kp) from 0.4 m/s, the grown sea
+        // from 1 m/s, 1 from 4.5 m/s; the derivation is cited there.
+        float windGrowthCpu(float k, float kp, float U) {
+            auto smooth = [](float e0, float e1, float x) {
+                const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
+                return t * t * (3.f - 2.f * t);
+            };
             const float onset = std::clamp(0.36f * std::sqrt(std::sqrt(9.81f * k)), 1.f, 3.4f);
-            const float t = std::clamp((U - onset) / (4.5f - onset), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
+            const float grown = smooth(onset, 4.5f, U);
+            const float air   = smooth(0.4f, 0.8f, U) * (1.f - smooth(1.f, 2.5f, U));
+            const float peak  = 1.f - smooth(std::log(1.5f), std::log(3.f), std::log(k / kp));
+            return std::max(grown, air * peak);
         }
 
         // The fade the shader puts on it: smoothstep over ln k from 2 k_p to 16 k_p.
@@ -625,8 +632,8 @@ namespace threepp::water {
                 p *= std::pow(gamma, std::exp(-0.5f * d * d));
             }
             p *= 2.5446900f;
-            p *= windGrowthCpu(kn, S.windSpeed);
-            if (S.shortWaveSpectrum) {
+            p *= windGrowthCpu(kn, 0.894f / L, S.windSpeed);
+            if (S.shortWaveSpectrum && S.windSpeed > 0.f) {
                 const double kp = 0.894 / double(L);
                 p += float(2.0 * 3.14159265358979 * elfouhailyShortCurvatureCpu(kn, kp, S.windSpeed) *
                            shortWaveFadeCpu(kn, kp)) * kw * std::exp(-k2 * l * l) / (k2 * k2);
