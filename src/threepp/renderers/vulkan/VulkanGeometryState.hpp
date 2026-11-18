@@ -713,13 +713,27 @@ namespace threepp::vulkan::impl {
             float x, z, s;
             bool operator==(const LodKey& o) const { return x == o.x && z == o.z && s == o.s; }
         };
+        // A patch's corner is a multiple of its spacing, a power of two, so the
+        // floats' low mantissa bits are all zero; multiplying them by odd
+        // constants keeps them zero, and the map takes its bucket from the low
+        // bits. Every key then fell in one bucket and each lookup scanned all
+        // of them: 3000 patches cost 15 ms a frame. A finalizer (splitmix64)
+        // spreads every input bit over the whole hash.
         struct LodKeyHash {
+            static uint64_t mix(uint64_t x) {
+                x ^= x >> 30;
+                x *= 0xBF58476D1CE4E5B9ull;
+                x ^= x >> 27;
+                x *= 0x94D049BB133111EBull;
+                x ^= x >> 31;
+                return x;
+            }
             size_t operator()(const LodKey& k) const {
                 uint32_t a, b, c;
                 std::memcpy(&a, &k.x, 4);
                 std::memcpy(&b, &k.z, 4);
                 std::memcpy(&c, &k.s, 4);
-                return size_t(a) * 0x9E3779B1u ^ (size_t(b) * 0x85EBCA77u) ^ (size_t(c) * 0xC2B2AE3Du);
+                return size_t(mix((uint64_t(a) << 32 | b) ^ mix(uint64_t(c) + 0x9E3779B97F4A7C15ull)));
             }
         };
         std::unordered_map<LodKey, uint32_t, LodKeyHash> lodSlotOf;// the patch each used slot holds
