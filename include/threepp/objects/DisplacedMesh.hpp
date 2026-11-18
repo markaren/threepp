@@ -88,7 +88,14 @@ namespace threepp {
             // it, so a collar comes with each wave and grows with the sea, and
             // carried off, torn into lace and aged by the wake field's shore
             // windows (see WakeField; nothing on a calm sea, and nothing round
-            // a vessel or anything else that moves).
+            // a vessel or anything else that moves); and over shallow water a
+            // sea that feels the bed: each cascade shoaled a little and held
+            // under the breaking limit (the significant height at most 0.42 of
+            // the depth, the shore windows' sounding of the bed), so a flat or
+            // a cove calms and no trough shows the bottom, and where a crest
+            // there nears the limit it breaks, its foam running in toward the
+            // shore and up and back on a beach (shore_source.comp; nothing in
+            // a calm, nothing where the water is deep).
 
             // Choppy Wave Model switch (default OFF, the historical chop).
             // ON draws the surface as the first-order Lagrangian sea of
@@ -652,6 +659,25 @@ namespace threepp {
             float    bankedMss = 0.f;
         };
         mutable CascadeField heightFields[3];
+
+        // The water's depth over the shore's windows and the sea's statistics
+        // as the renderer last read them back (Vulkan, while the height
+        // mirror is wanted): over shallow water the drawn cascades are scaled
+        // to the depth (shoaled, and held under the breaking limit), and
+        // sampleHeight scales them alike (shoreGain). The GPU buffer's words
+        // (ocean_shore_depth.glsl's OceanShoreDepth): two windows' placements
+        // (origin x, z, texel, live), each cascade's significant height and
+        // wavenumber, the windows' side in texels (a uint), three spare words,
+        // then each window's depths, row by row. Empty = none (every gain 1).
+        // Internal; the renderer fills it.
+        struct ShoreDepth {
+            std::vector<float> data;
+        };
+        mutable ShoreDepth shoreDepth;
+        // The three cascades' gains over the depth at a rest point (1, 1, 1
+        // off the shallows and without a depth): ocean_shore_depth.glsl's
+        // oceanShoreGain, line for line.
+        [[nodiscard]] std::array<float, 3> shoreGain(float x, float z) const;
 
         // The site's wave climate (default none: one sea everywhere, as
         // before). A small world-anchored map, baked by the caller from the

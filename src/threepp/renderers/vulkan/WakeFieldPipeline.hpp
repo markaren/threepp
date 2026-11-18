@@ -29,7 +29,12 @@
 // scene's structure changes. Every step, after the field's own, the source
 // (shore_source.comp) reads the drawn sea at each texel near a shore and lays
 // foam and air where the water drives into the solid; the field then carries,
-// tears and ages it as it does a wake's. The shade draws it as the wake's foam
+// tears and ages it as it does a wake's. With the map the window's DEPTH is
+// laid (shore_jfa.comp, mode 2) and every step the sea's statistics measured
+// (shore_source.comp, mode 1): over shallow water the drawn waves are scaled
+// to the depth (ocean_shore_depth.glsl), and where a crest nears the breaking
+// limit the source lays the surf's foam and runs it in toward the shore. The
+// shade draws it as the wake's foam
 // (the shore windows are patches like any other). Nothing about it is a
 // switch: a scene with nothing solid at its waterline has an empty map, and
 // its water is shaded exactly as before. It needs ray queries; without them an
@@ -89,6 +94,9 @@ namespace threepp::vulkan {
     constexpr uint32_t kShoreRes = 1024;
     // The step from which the shore's maps are taken (see recordShore).
     constexpr uint32_t kShoreFirstStep = 4;
+    // The shore's depth buffer's header (ocean_shore_depth.glsl's OceanShoreDepth
+    // up to its depths): two windows' placements, the sea's statistics, res.
+    constexpr uint32_t kShoreDepthHeader = 80;
     // = OCEAN_WAKE_MAX_PATCHES
     constexpr uint32_t kWakeTablePatches = DisplacedMesh::kMaxWakePatches + kShoreLayers;
 
@@ -111,9 +119,10 @@ namespace threepp::vulkan {
         float    rippleGain;
         float    albedo;
         float    lace;
+        uint32_t shoreDepth[2];// the shore's depth buffer's address, low half first (0 = none)
         WakePatchGpu patches[kWakeTablePatches];
     };
-    static_assert(sizeof(WakeTableGpu) == 68 + 76 * kWakeTablePatches,
+    static_assert(sizeof(WakeTableGpu) == 76 + 76 * kWakeTablePatches,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
     static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
                   "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");
@@ -140,11 +149,14 @@ namespace threepp::vulkan {
             float    originX, originZ, texel, restY;
             uint32_t res, layer, hullCount, _pad;
         };
-        // shore_jfa.comp's (20 bytes).
+        // shore_jfa.comp's (40 bytes).
         struct ShoreJfaPush {
             uint32_t res, layer, mode;
             int32_t  step;
             float    texel;
+            float    originX, originZ;// the window's world min corner (mode 2, the depth)
+            uint32_t _pad;
+            VkDeviceAddress depthAddr;// State::shoreDepth (mode 2)
         };
         // shore_source.comp's (96 bytes).
         struct ShoreSourcePush {
@@ -158,7 +170,8 @@ namespace threepp::vulkan {
             float    keepX, keepZ, keepHalf;
             float    timeSec;
             float    gain;
-            float    _pad[3];
+            uint32_t mode;           // 0 a window's foam, 1 the sea's statistics
+            VkDeviceAddress depthAddr;// State::shoreDepth
         };
 
         // What the shore's step needs of the frame and of its ocean.
@@ -222,6 +235,13 @@ namespace threepp::vulkan {
             std::array<VkAccelerationStructureKHR, 2> captureTlas{};
             std::array<VkDescriptorSet, 2> jfaDs{};    // A -> B, B -> A
             VkDescriptorSet sourceDs = VK_NULL_HANDLE;
+            // The water's depth over each window and the sea's statistics
+            // (ocean_shore_depth.glsl's OceanShoreDepth, kShoreDepthHeader
+            // bytes, then a float a texel a window): what scales the drawn
+            // waves over shallow water, in the geometry (water_displace.comp),
+            // the shade and the source.
+            Buffer shoreDepth{};
+            uint32_t depthLaid = 0;// windows' depths laid since the State was made (a version)
             // Each map's seed count, for the host: a uint a window, a buffer a
             // frame in flight (read back when that frame's slot comes round,
             // its fence waited). A window whose map has no seed holds no
@@ -256,6 +276,8 @@ namespace threepp::vulkan {
             [[nodiscard]] VkImageView     stateView() const { return view[0]; }
             [[nodiscard]] VkImageView     rippleView() const { return slopeView; }// null when it has none
             [[nodiscard]] VkDeviceAddress tableAddress() const { return table.address; }
+            // The shore's depth buffer (0 without a shore).
+            [[nodiscard]] VkDeviceAddress shoreDepthAddress() const { return shoreOn ? shoreDepth.address : 0u; }
         };
 
         explicit WakeFieldPipeline(VulkanContext& ctx);

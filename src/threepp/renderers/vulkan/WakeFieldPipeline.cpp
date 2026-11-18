@@ -20,7 +20,7 @@ namespace threepp::vulkan {
     static_assert(sizeof(WakeFieldPipeline::PushConstants) == 24,
                   "WakeFieldPipeline::PushConstants must match the Pc of wake_field.comp and wake_ripple.comp (24 bytes)");
     static_assert(sizeof(WakeFieldPipeline::ShoreCapturePush) == 56, "shore_capture.comp's Pc");
-    static_assert(sizeof(WakeFieldPipeline::ShoreJfaPush) == 20, "shore_jfa.comp's Pc");
+    static_assert(sizeof(WakeFieldPipeline::ShoreJfaPush) == 40, "shore_jfa.comp's Pc");
     static_assert(sizeof(WakeFieldPipeline::ShoreSourcePush) == 96, "shore_source.comp's Pc");
 
     namespace {
@@ -572,6 +572,14 @@ namespace threepp::vulkan {
                 vmaGetAllocationInfo(ctx_.allocator(), st->countBuf[f].alloc, &info);
                 st->countPtr[f] = static_cast<uint32_t*>(info.pMappedData);
             }
+            // The depth: the header, then a float a texel of each window
+            // (8 MB at the default 1024 a side).
+            st->shoreDepth = createBuffer(ctx_.allocator(), ctx_.device(),
+                                          kShoreDepthHeader + VkDeviceSize(kShoreLayers) * st->res * st->res * sizeof(float),
+                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                          VMA_MEMORY_USAGE_AUTO);
+            ctx_.setObjectName(st->shoreDepth.handle, "ocean.shore.depth");
         }
         return st;
     }
@@ -582,6 +590,8 @@ namespace threepp::vulkan {
             if (img) clearToGeneral(cb, img);
         }
         vkCmdFillBuffer(cb, st.table.handle, 0, VK_WHOLE_SIZE, 0u);
+        // No window's depth laid (live 0, res 0): the gains are 1 until one is.
+        if (st.shoreDepth.handle) vkCmdFillBuffer(cb, st.shoreDepth.handle, 0, VK_WHOLE_SIZE, 0u);
         if (st.rippleRes > 0u) {
             clearToGeneral(cb, st.ampImage);
             clearToGeneral(cb, st.slopeImage);
@@ -618,6 +628,7 @@ namespace threepp::vulkan {
             st.sourceDs  = VK_NULL_HANDLE;
             for (auto& b : st.countBuf) destroyBuffer(ctx_.allocator(), b);
             st.countPtr = {};
+            destroyBuffer(ctx_.allocator(), st.shoreDepth);
             for (uint32_t i = 0; i < 4; ++i) {
                 if (st.shoreView[i])  vkDestroyImageView(d, st.shoreView[i], nullptr);
                 if (st.shoreImage[i]) vmaDestroyImage(ctx_.allocator(), st.shoreImage[i], st.shoreAlloc[i]);
@@ -691,6 +702,11 @@ namespace threepp::vulkan {
         tb.rippleGain      = wf.rippleGain;
         tb.albedo          = std::max(wf.albedo, 0.0f);
         tb.lace            = std::clamp(wf.lace, 0.0f, 0.9f);
+        {
+            const VkDeviceAddress a = st.shoreDepthAddress();
+            tb.shoreDepth[0] = static_cast<uint32_t>(a & 0xffffffffu);
+            tb.shoreDepth[1] = static_cast<uint32_t>(a >> 32u);
+        }
 
         uint32_t liveMask = 0;
         for (uint32_t i = 0; i < st.appLayers; ++i) {
@@ -1115,6 +1131,25 @@ namespace threepp::vulkan {
                 }
                 computeBarrier(cb);
             }
+            // The depth over each window taken (mode 2, from the bed the
+            // capture left), with its placement: the frame's displace has
+            // already read the last depth with its own placement, and the
+            // shade and the source read this one.
+            for (uint32_t k = 0; k < kShoreLayers; ++k) {
+                if (!(captureMask & (1u << k))) continue;
+                ShoreJfaPush jp{};
+                jp.res       = st.res;
+                jp.layer     = k;
+                jp.mode      = 2u;
+                jp.texel     = texel[k];
+                jp.originX   = ox[k];
+                jp.originZ   = oz[k];
+                jp.depthAddr = st.shoreDepth.address;
+                vkCmdPushConstants(cb, jfaPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(jp), &jp);
+                vkCmdDispatch(cb, groups, groups, 1);
+            }
+            computeBarrier(cb);
+            ++st.depthLaid;
             for (uint32_t k = 0; k < kShoreLayers; ++k) {
                 if (!(captureMask & (1u << k))) continue;
                 st.mapValid[k]  = true;
@@ -1136,6 +1171,23 @@ namespace threepp::vulkan {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, sourcePipeline_);
         const VkDescriptorSet sets[2] = {in.displaceSet, st.sourceDs};
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, sourcePipeLayout_, 0, 2, sets, 0, nullptr);
+        // The sea's statistics first (mode 1, one workgroup): each cascade's
+        // significant height and wavenumber, which the gains over the depth
+        // take, here and in the next frame's geometry.
+        {
+            ShoreSourcePush mp{};
+            mp.tileSize0   = in.tileSize[0];
+            mp.tileSize1   = in.tileSize[1];
+            mp.tileSize2   = in.tileSize[2];
+            mp.waveScale   = in.waveScale;
+            mp.choppiness  = in.choppiness;
+            mp.cascadeMask = in.cascadeMask;
+            mp.mode        = 1u;
+            mp.depthAddr   = st.shoreDepth.address;
+            vkCmdPushConstants(cb, sourcePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mp), &mp);
+            vkCmdDispatch(cb, 1, 1, 1);
+            computeBarrier(cb);
+        }
         for (uint32_t k = 0; k < kShoreLayers; ++k) {
             if (st.shoreEmpty[k]) {// nothing to lay foam on; nothing of its parcels to keep
                 st.lastX[k] = st.lastZ[k] = std::numeric_limits<float>::quiet_NaN();
@@ -1171,7 +1223,9 @@ namespace threepp::vulkan {
             // threshold, and a collar thinned over a 2 m texel by its share
             // of it (as a coverage would be) did not show at all from a mast
             // or a drone. A LOOK choice for the far window.
-            sp.gain    = 1.0f;
+            sp.gain      = 1.0f;
+            sp.mode      = 0u;
+            sp.depthAddr = st.shoreDepth.address;
             vkCmdPushConstants(cb, sourcePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(sp), &sp);
             vkCmdDispatch(cb, groups, groups, 1);
             st.lastX[k] = ox[k];

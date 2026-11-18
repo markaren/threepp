@@ -690,6 +690,15 @@ namespace threepp::vulkan::impl {
         // would hand garbage heights to buoyancy for a frame; the mirror
         // skips it and keeps the last good field instead.
         bool      heightReadbackWritten[kFramesInFlight] = {};
+        // The shore's depth for sampleHeight (DisplacedMesh::shoreDepth),
+        // under the same opt-in and ring: a slot a frame in flight holding a
+        // copy of the shore's depth buffer, whole when the depth it holds is
+        // older than the last one laid (WakeFieldPipeline::State::depthLaid),
+        // else its header alone (the sea's statistics, every step); the lay
+        // each slot's depths are of, and the one the mesh's mirror holds.
+        Buffer    shoreReadback[kFramesInFlight] = {};
+        uint32_t  shoreReadbackLaid[kFramesInFlight] = {};
+        uint32_t  shoreMirrorLaid = 0;
         std::weak_ptr<BufferGeometry> liveCheck;
         MeshOwner owner;// the mesh itself (see MeshOwner)
         // Per-frame BLAS-refit state. The initial AS is built (buildBlasFor)

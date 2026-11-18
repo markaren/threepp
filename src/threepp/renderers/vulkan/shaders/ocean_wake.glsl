@@ -59,7 +59,7 @@ struct WakeSource {
     float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
 };
 
-// 68-byte header, then the patches (the producers' and the shore's), then the
+// 76-byte header, then the patches (the producers' and the shore's), then the
 // sources of this step.
 layout(buffer_reference, scalar) readonly buffer WakeTable {
     uint  patchCount;
@@ -79,6 +79,8 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
     float rippleGain;
     float albedo;           // scales what the film and the bubbles turn back; 1 = as shaded
     float lace;             // the foam level water full of air carries (WakeField::lace); 0 = none
+    uvec2 shoreDepth;       // the shore's depth (ocean_shore_depth.glsl's OceanShoreDepth), as two
+                            // 32-bit halves (packUint2x32); 0 = none
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
     WakeSource sources[];
 };

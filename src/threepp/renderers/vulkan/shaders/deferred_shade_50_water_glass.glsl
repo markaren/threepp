@@ -1297,6 +1297,16 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             foamF     = cf.r;
             foamFresh = cf.g;
         }
+        // Over shallow water the deep sea's whitecaps go with its waves
+        // (ocean_shore_depth.glsl): their cover by the square of the middle
+        // cascade's gain, whose waves the fold foam mostly counts. Where the
+        // water is shallow enough to break, the surf's own white is the shore
+        // windows' (shore_source.comp).
+        {
+            const float cover = gShoreGain.y * gShoreGain.y;
+            foamF     *= cover;
+            foamFresh *= cover;
+        }
         // How much of the foam here is a vessel's (the rest is the sea's own).
         // The two are ONE foam on one water: their levels add as covers do,
         // and the drawing goes over from one's look to the other's by this

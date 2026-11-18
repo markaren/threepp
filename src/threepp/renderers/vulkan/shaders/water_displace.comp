@@ -63,6 +63,9 @@ layout(set = 0, binding = 10) uniform sampler2DArray wakeRipples;
 // read then). (WaterDisplacePipeline::kClimateBinding.)
 layout(set = 0, binding = 11) uniform sampler2D waveClimate;
 #include "ocean_climate.glsl"
+// The shore's depth (WakeFieldPipeline, the shore windows): the cascades'
+// gains over shallow water, read through pc.shoreAddr.
+#include "ocean_shore_depth.glsl"
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 // The patch mesh's frame (DisplacedMesh::Lod; VulkanRenderer::Impl::updateOceanLod
@@ -86,7 +89,7 @@ layout(buffer_reference, scalar) buffer UvBuf   { vec2  v[]; };
 
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
-// 120 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants.
+// 128 bytes, mirrored field-for-field by WaterDisplacePipeline::PushConstants.
 // The vessels live in a per-frame buffer (hullAddr), not here: one hull alone
 // used to fill this block to the 128-byte maximum.
 layout(push_constant, scalar) uniform Pc {
@@ -123,6 +126,7 @@ layout(push_constant, scalar) uniform Pc {
     UvBuf   uvOut;          // crestFoam: the drawn disp.xz per vertex
     uint64_t wakeTableAddr; // the wake field's table; 0 = no ripple heights (then cascadeMask's
                             // bits 8-15 hold the ray-tracing proxy's stride, grid lines it keeps one of)
+    uint64_t shoreAddr;     // the shore's depth (OceanShoreDepth), or 0: the cascades' gains over the bed
 } pc;
 
 // (hullLocal, a rest point in a vessel's frame with its footprint fade, is in
@@ -539,6 +543,15 @@ void main() {
         gC0Gain = cl.x;
         gC1Gain = cl.y;
         gC2Gain = cl.z;
+    }
+    // ... and the depth's (ocean_shore_depth.glsl): over shallow water each
+    // cascade shoals and is held under the breaking limit, so a flat or a
+    // cove calms and no trough comes down to the bed.
+    if (pc.shoreAddr != 0ul) {
+        const vec3 g = oceanShoreGain(pc.shoreAddr, rest.xz);
+        gC0Gain *= g.x;
+        gC1Gain *= g.y;
+        gC2Gain *= g.z;
     }
 
     // Wave-model switches: one 4-tap stencil of cascades 0 and 1 at the

@@ -4749,6 +4749,7 @@ void VulkanRenderer::Impl::pruneDeadSceneResources() {
                         // switch that removed an ocean (VUID 05137).
                         for (auto& ring : st->heightReadback)
                             for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
+                        for (auto& b : st->shoreReadback) destroyBuffer(ctx->allocator(), b);
                         for (auto& ring : st->externalStaging) for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                         for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                         for (auto& b : st->lodTable) destroyBuffer(ctx->allocator(), b);

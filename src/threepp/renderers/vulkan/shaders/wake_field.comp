@@ -173,7 +173,15 @@ void main() {
         s += a * vec4(0.15, 1.0, 1.0, 1.0) * (nb - 4.0 * s);
     }
     // A thin film goes faster than a thick one: a patch dies from its edges in.
-    s.r *= exp(-dt * mix(tb.foamThinning, 1.0, clamp(s.r, 0.0, 1.0)) / tb.foamLife);
+    // A shore window's foam is a broken wave's or a surge's: its white goes as
+    // fast, but the lace it thins into (a film under kShoreLace) is the
+    // stabilised residue of broken water, which outlasts the bright foam
+    // several times over (Callaghan, Deane and Stokes 2012, a whitecap's
+    // decay in two stages), so it is carried off as streaks before it goes.
+    const bool  shore = p.shore > 0.5;
+    const float kShoreLace = 0.2;
+    const float thin = shore ? mix(0.15, 1.0, smoothstep(0.06, kShoreLace, s.r)) : 1.0;
+    s.r *= exp(-dt * thin * mix(tb.foamThinning, 1.0, clamp(s.r, 0.0, 1.0)) / tb.foamLife);
     s.g *= exp(-dt * mix(2.0, 1.0, clamp(s.g, 0.0, 1.0)) / tb.aerationLife);// a thin cloud clears first
     s.b *= exp(-dt / tb.turbulenceLife);
     s.a *= exp(-dt / tb.laneLife);
@@ -181,7 +189,6 @@ void main() {
     // step and by nothing here: its flow is the foam's drift off the solid and
     // downwind, which is not a stream through still water, and the sea round a
     // pile keeps its short waves. So the rest of the step is the producers'.
-    const bool shore = p.shore > 0.5;
     if (shore) {
         imageStore(dstState, dst, max(vec4(s.rgb, 0.0), vec4(0.0)));
         imageStore(dstVel, dst, vec4(v, 0.0, 0.0));

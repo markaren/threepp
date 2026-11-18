@@ -3903,6 +3903,9 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
             pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
             pc.crestSharpness = cwmOn ? dm.effectiveCrestSharpness() : 0.f;
+            // The shore's depth: the cascades' gains over shallow water (the
+            // last depth the shore laid, with its own placement; 0 = none).
+            pc.shoreAddr      = st.wake ? st.wake->shoreDepthAddress() : 0ull;
             // The wake field's ripple heights (WakeField::rippleHeights): its
             // step goes first, so the geometry has this frame's waves, as the
             // shade's slopes do.
@@ -4042,6 +4045,42 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanShore, currentFrame);
                 wakeField_->recordShore(cb, *st.wake, si, frameNowSec());
                 if (timed) gpuTimings_->end(cb, vulkan::TP_OceanShore, currentFrame);
+                // sampleHeight's copy of the shore's depth (the height
+                // readback's opt-in and ring; see DisplacedMeshState::
+                // shoreReadback): whole after a new depth was laid, else the
+                // header with the sea's statistics.
+                if (dm.wantsHeightReadback && st.wake->depthLaid > 0u) {
+                    Buffer& rb = st.shoreReadback[currentFrame];
+                    const VkDeviceSize whole = vulkan::kShoreDepthHeader +
+                                               VkDeviceSize(vulkan::kShoreLayers) * st.wake->res * st.wake->res * sizeof(float);
+                    if (rb.handle == VK_NULL_HANDLE) {
+                        rb = createBuffer(ctx->allocator(), ctx->device(), whole, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                          VMA_MEMORY_USAGE_AUTO,
+                                          VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                        ctx->setObjectName(rb.handle, (std::string("ocean.shoreReadback.") + std::to_string(currentFrame)).c_str());
+                        st.shoreReadbackLaid[currentFrame] = 0u;
+                    }
+                    VkBufferMemoryBarrier bb{};
+                    bb.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                    bb.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+                    bb.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+                    bb.buffer              = st.wake->shoreDepth.handle;
+                    bb.size                = VK_WHOLE_SIZE;
+                    bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                         0, 0, nullptr, 1, &bb, 0, nullptr);
+                    const bool full = st.shoreReadbackLaid[currentFrame] != st.wake->depthLaid;
+                    VkBufferCopy bc{0, 0, full ? whole : VkDeviceSize(vulkan::kShoreDepthHeader)};
+                    vkCmdCopyBuffer(cb, st.wake->shoreDepth.handle, rb.handle, 1, &bc);
+                    bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    bb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+                    bb.buffer        = rb.handle;
+                    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                                         0, 0, nullptr, 1, &bb, 0, nullptr);
+                    // (the buffer's next readers are compute; the frame's own barriers order them)
+                    st.shoreReadbackLaid[currentFrame] = st.wake->depthLaid;
+                }
             }
         }
 
@@ -4421,6 +4460,26 @@ void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, Displa
                     cf.tileSize = tileSizes[ci];
                     cf.boundKm  = (ci < 2 && dm.boundWavesOn() && st.boundKmValid) ? st.boundKm[ci] : 0.f;
                     cf.bankedMss = (st.chopOn && uint32_t(ci) == st.chopFineIdx) ? st.shortWaveBankedMss : 0.f;
+                }
+            }
+            // The shore's depth (sampleHeight's gains over shallow water):
+            // the slot's depths when they are newer than the mirror's, its
+            // header (the sea's statistics) always.
+            {
+                Buffer& rb = st.shoreReadback[slot];
+                const uint32_t laid = st.shoreReadbackLaid[slot];
+                if (rb.handle != VK_NULL_HANDLE && laid > 0u && st.wake) {
+                    const size_t words = vulkan::kShoreDepthHeader / sizeof(float) +
+                                         size_t(vulkan::kShoreLayers) * st.wake->res * st.wake->res;
+                    const bool full = laid != st.shoreMirrorLaid || dm.shoreDepth.data.size() != words;
+                    if (dm.shoreDepth.data.size() != words) dm.shoreDepth.data.assign(words, 0.f);
+                    void* mapped = nullptr;
+                    check(vmaMapMemory(ctx->allocator(), rb.alloc, &mapped), "vmaMapMemory(shore readback)");
+                    const size_t bytes = full ? words * sizeof(float) : size_t(vulkan::kShoreDepthHeader);
+                    invalidateHostReads(ctx->allocator(), rb.alloc, 0, bytes);
+                    std::memcpy(dm.shoreDepth.data.data(), mapped, bytes);
+                    vmaUnmapMemory(ctx->allocator(), rb.alloc);
+                    st.shoreMirrorLaid = laid;
                 }
             }
         }

@@ -517,7 +517,18 @@ namespace threepp_py {
                             return py::make_tuple(g[0], g[1], g[2]);
                         },
                         py::arg("x"), py::arg("z"),
-                        "The wave climate's three cascade gains at a rest point (1, 1, 1 without a map).");
+                        "The wave climate's three cascade gains at a rest point (1, 1, 1 without a map).")
+                .def(
+                        "shore_gain",
+                        [](const DisplacedMesh& o, float x, float z) {
+                            const auto g = o.shoreGain(x, z);
+                            return py::make_tuple(g[0], g[1], g[2]);
+                        },
+                        py::arg("x"), py::arg("z"),
+                        "The three cascade gains over the shore's depth at a rest point (Vulkan; read back under "
+                        "sample_height's opt-in, so 1, 1, 1 until sample_height has been called and a frame or two "
+                        "rendered): each cascade shoaled a little and held under the breaking limit over shallow "
+                        "water, as the drawn sea and sample_height scale them.");
 
         // ---- Ocean -----------------------------------------------------------
         // The one-liner: builds the patch mesh, the tuned transmissive water

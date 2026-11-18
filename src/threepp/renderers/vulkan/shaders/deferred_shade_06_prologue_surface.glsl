@@ -178,6 +178,24 @@
             slopeVar     = s * s * max(slopeVar - bk, 0.0) + min(slopeVar, bk);
             slopeVarSub  = s * s * max(slopeVarSub - bk, 0.0) + min(slopeVarSub, bk);
         }
+        // ── THE DEPTH (ocean_shore_depth.glsl) ───────────────────────────────
+        // Over shallow water the cascades are scaled to the depth, as the
+        // geometry's are (water_displace.comp). The gain takes this cascade's
+        // height; its slope lies mostly in its shortest waves, which the depth
+        // leaves until it is about their own height, so the resolved slope
+        // takes the gain's square root and the spread the pixel averages of
+        // it the gain. The spread no footprint resolves (one texel's own, the
+        // banked short waves) is the local wind's, in equilibrium within
+        // metres of fetch, and stays.
+        if (geoms[id - 1u].foamAddress > 1ul) {
+            const uvec2 sa = WakeTable(geoms[id - 1u].foamAddress).shoreDepth;
+            if (sa != uvec2(0u)) {
+                gShoreGain    = oceanShoreGain(packUint2x32(sa), wPos - gCrestDisp);
+                const float s = sqrt(gShoreGain.z);
+                gKept   *= s;
+                slopeVar = slopeVarSub + s * s * max(slopeVar - slopeVarSub, 0.0);
+            }
+        }
         // ── WAKE FIELD ────────────────────────────────────────────────────────
         // Where something has churned the water the short wind waves are gone
         // (turbulence under the surface breaks them up: the smooth lane a boat

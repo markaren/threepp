@@ -55,8 +55,8 @@ layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray shoreMap;
 #include "geometry_desc.glsl"
 layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer GeomBuf { GeometryDesc g[]; };
 layout(buffer_reference, scalar) readonly buffer OceanHullBuf { OceanHull h[]; };
-// The seeds this window has, counted for the host: a window with none is
-// not stepped at all (WakeFieldPipeline::recordShore).
+// The seeds this window has (and its shallow texels), counted for the host: a
+// window with none is not stepped at all (WakeFieldPipeline::recordShore).
 layout(buffer_reference, scalar) buffer CountBuf { uint n[]; };
 
 // 56 bytes, mirrored by WakeFieldPipeline::ShoreCapturePush.
@@ -77,6 +77,10 @@ layout(push_constant, scalar) uniform Pc {
 // A bed this far under the rest level stands awash in a sea that moves at all:
 // the waves break on it, so it is shore.
 const float kAwash      = 0.2;
+// A window whose bed lies this near the rest level anywhere has surf to make
+// there (shore_source.comp: the waves break over a shoal with no rock awash),
+// so such texels count as the window's shore too, though they seed no flood.
+const float kShallow    = 6.0;
 const float kDeep       = 60.0;
 const uint  kNoSeed     = 0xffffffffu;
 
@@ -104,7 +108,7 @@ float traceSolid(vec3 o, vec3 d, float tMax, out bool front) {
     return -1.0;
 }
 
-// This texel's slice; true where it is a seed.
+// This texel's slice; true where it is a seed, or its bed is shallow (kShallow).
 bool capture(uvec2 px) {
     const ivec3 dst = ivec3(px, int(pc.layer));
     const vec2  xz  = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
@@ -141,7 +145,7 @@ bool capture(uvec2 px) {
     const bool seed = inside || crossed || bed >= -kAwash;
     imageStore(seeds, dst, uvec4(seed ? (px.x | (px.y << 16)) : kNoSeed));
     imageStore(shoreMap, dst, vec4(0.0, 0.0, 0.0, bed));
-    return seed;
+    return seed || bed > -kShallow;
 }
 
 shared uint wgSeeds;

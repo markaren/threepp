@@ -186,6 +186,12 @@ layout(set = 0, binding = 78) uniform sampler2DArray oceanWakeField;
 layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
 #define OCEAN_WAKE_RIPPLE_SAMPLER oceanWakeRipple
 #include "ocean_wake.glsl"
+// The shore's depth (ocean_shore_depth.glsl), reached through the wake table's
+// shoreDepth: the cascades' gains over shallow water at a water pixel's rest
+// point, taken once in main() (the fine cascade's slope) and used again by
+// shadeWater (the crest foam). 1 off the shallows.
+#include "ocean_shore_depth.glsl"
+vec3 gShoreGain = vec3(1.0);
 // This pixel's read of it, taken once in main() where the ocean's fine normal
 // is built and used again by shadeWater (bubbles, film). Zero off a wake.
 vec4 gWake = vec4(0.0);
