@@ -47,7 +47,7 @@
 // the sea, and is nothing on a calm one (kSea0: a sea of ripples breaks
 // nowhere, however shallow the water). Broken water then runs toward
 // the shore as a bore does, at kBore sqrt(g d) (the speed of a shallow-water
-// bore, Stoker 1957), slowing as the depth falls, along the flood's direction
+// bore, Stoker 1957) inside the surf zone, slowing as the depth falls, along the flood's direction
 // to the nearest solid (the shore map's), or with the waves (the wind) out
 // over a shoal far from any; and in the last decimetres of a beach it runs up
 // and back with the waterline, which moves at w / tan(beta) (the surface's rise
@@ -134,7 +134,7 @@ const float kSea1      = 0.30; // m: ... and one this high breaks wherever the d
 const float kCrestMin  = 0.01; // m: a crest lower than this lays nothing however shallow the water
 const float kBreakFoam = 0.7;  // the film a fully broken crest lays at most (torn: a quarter of it at the least)
 const float kBreakAir  = 0.16; // ... the air it takes down (the pale water of a broken band)
-const float kBreakTurb = 0.06; // ... and the churn
+const float kBreakTurb = 0.3;  // m/s: ... and the churn, whose eddies strain what it laid into streaks (wake_field.comp)
 const float kSurfDepth = 6.0;  // m: deeper texels make no surf (a 15 m/s fjord sea breaks from 3 m)
 const float kBore      = 0.8;  // broken water runs in at this share of sqrt(g d)
 const float kRunTau    = 0.6;  // s: the field's flow takes the bore's over this
@@ -368,7 +368,12 @@ void main() {
         vec2 dir = near * n0 + (1.0 - near) * wind;
         const float dl = length(dir);
         dir = dl > 0.1 ? dir / dl : wind;
-        vec2 vt = drift + dir * (kBore * sqrt(9.81 * depth));
+        // A bore runs only in the surf zone, where the depth holds the waves
+        // down (the drawn sea under the incoming one) or a crest is breaking
+        // now; broken water carried out of it drifts with the wind, so a
+        // patch that broke over a shoal leaves a trail behind it.
+        const float zone = max(smoothstep(0.02, 0.25, 1.0 - gH), brk);
+        vec2 vt = drift + dir * (zone * kBore * sqrt(9.81 * depth));
         // The swash: in the last decimetres the waterline's own motion, up
         // the slope while the water rises and back while it falls. The bed's
         // slope from the depth either side (a texel's tent-smoothed depth).
