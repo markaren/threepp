@@ -428,51 +428,64 @@ namespace threepp {
 
     DisplacedMesh::ShoreBend DisplacedMesh::shoreBend(float x, float z) const {
         // ocean_shore_depth.glsl's oceanShoreBendAt and oceanShoreBend: the
-        // bend's table after the depths (the far window's), toward the open
-        // sea over its outer sixteenth.
+        // bend's table after the depths, the near window's over the far
+        // one's (over a quarter of its side), the far one's over the open sea
+        // (over a sixteenth).
         ShoreBend out;
-        constexpr size_t kHeaderWords = 20, kBendHeaderWords = 8;
+        constexpr size_t kHeaderWords = 20, kBendHeaderWords = 12;
         const std::vector<float>& v = shoreDepth.data;
         if (v.size() < kHeaderWords) return out;
         uint32_t res = 0, n = 0;
         std::memcpy(&res, &v[16], sizeof(res));
         std::memcpy(&n, &v[17], sizeof(n));
         const size_t base = kHeaderWords + 2u * size_t(res) * res;
-        if (n < 2u || v.size() < base + kBendHeaderWords + size_t(n) * n * 4u) return out;
+        if (n < 2u || v.size() < base + kBendHeaderWords + 2u * size_t(n) * n * 4u) return out;
         const float* T = &v[base];
-        if (T[3] < 0.5f) return out;
-        const float wx = T[4], wz = T[5];
+        if (T[3] < 0.5f && T[7] < 0.5f) return out;
+        const float wx = T[8], wz = T[9];
         const float fn = static_cast<float>(n);
-        auto at = [&](float px, float pz, float* P, float* A) {
-            P[0] = P[1] = 0.f;
-            A[0] = A[1] = 1.f;
-            const float u = (px - T[0]) / (T[2] * fn);
-            const float t = (pz - T[1]) / (T[2] * fn);
+        // Window k's (dP0, dP1, A0, A1) and its weight.
+        auto windowAt = [&](uint32_t k, float px, float pz, float blend, float* val) {
+            val[0] = val[1] = 0.f;
+            val[2] = val[3] = 1.f;
+            const float* w = &T[k * 4u];
+            if (w[3] < 0.5f) return 0.f;
+            const float u = (px - w[0]) / (w[2] * fn);
+            const float t = (pz - w[1]) / (w[2] * fn);
             const float e = std::min(std::min(u, 1.f - u), std::min(t, 1.f - t));
-            const float s = std::clamp(e * 16.f, 0.f, 1.f);
+            const float s = std::clamp(e / blend, 0.f, 1.f);
             const float wgt = s * s * (3.f - 2.f * s);
-            if (wgt <= 0.f) return;
+            if (wgt <= 0.f) return 0.f;
             const float fx = std::clamp(u * fn - 0.5f, 0.f, fn - 1.f);
             const float fz = std::clamp(t * fn - 0.5f, 0.f, fn - 1.f);
             const uint32_t i0 = std::min(static_cast<uint32_t>(fx), n - 2u);
             const uint32_t j0 = std::min(static_cast<uint32_t>(fz), n - 2u);
             const float tx = fx - float(i0), tz = fz - float(j0);
-            const float* C = &T[kBendHeaderWords + (size_t(j0) * n + i0) * 4u];
+            const float* C = &T[kBendHeaderWords + ((size_t(k) * n + j0) * n + i0) * 4u];
             const size_t r = size_t(n) * 4u;
-            float val[4];
             for (int c = 0; c < 4; ++c) {
                 const float a = C[c], b = C[4 + c], cc = C[r + c], d = C[r + 4 + c];
                 const float lo = a + (b - a) * tx, hi = cc + (d - cc) * tx;
                 val[c] = (a == b && cc == d && a == cc) ? a : lo + (hi - lo) * tz;
             }
-            P[0] = wgt * val[0];
-            P[1] = wgt * val[1];
-            A[0] = 1.f + wgt * (val[2] - 1.f);
-            A[1] = 1.f + wgt * (val[3] - 1.f);
+            return wgt;
         };
-        const float h = std::max(T[2], 0.05f);
+        auto at = [&](float px, float pz, float* P, float* A) {
+            float vN[4], vF[4];
+            const float wN = windowAt(0u, px, pz, 0.25f, vN);
+            const float wF = windowAt(1u, px, pz, 1.f / 16.f, vF);
+            for (int c = 0; c < 2; ++c) {
+                P[c] = wF * vF[c];
+                A[c] = 1.f + wF * (vF[2 + c] - 1.f);
+                P[c] = P[c] + wN * (vN[c] - P[c]);
+                A[c] = A[c] + wN * (vN[2 + c] - A[c]);
+            }
+            const float cF = T[7] > 0.5f ? T[6] : T[2];
+            const float cN = T[3] > 0.5f ? T[2] : cF;
+            return std::max(cF + (cN - cF) * wN, 0.05f);
+        };
         float P[2], A[2], xp[2], xm[2], zp[2], zm[2], aT[2];
-        at(x, z, P, A);
+        const float h = at(x, z, P, A);
         out.amp = {A[0], A[1]};
         at(x + h, z, xp, aT);
         at(x - h, z, xm, aT);

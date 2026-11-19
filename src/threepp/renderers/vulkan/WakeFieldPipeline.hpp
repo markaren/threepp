@@ -99,16 +99,17 @@ namespace threepp::vulkan {
     // up to its depths): two windows' placements, the sea's statistics, res.
     constexpr uint32_t kShoreDepthHeader = 80;
     // THE BEND (shore_refract.comp): the long cascades' turn over the bed,
-    // solved over the far window (kShoreBendWindow) on a lattice of at most
-    // kShoreBendRes cells a side (a whole number of its texels: 4 m at the
+    // solved over each shore window on a lattice of at most kShoreBendRes
+    // cells a side (a whole number of its texels: 0.5 m and 4 m at the
     // default 1024) and published after the depths in the same buffer, its
     // own header (ocean_shore_depth.glsl's OceanShoreBendTable) then 4 floats
-    // a cell. The solve marches kShoreBendRows rows of one sweep a frame.
-    constexpr uint32_t kShoreBendWindow = 1;
-    constexpr uint32_t kShoreBendRes    = 512;
-    constexpr uint32_t kShoreBendRows   = 256;
-    constexpr uint32_t kShoreBendSweeps = 8;// four directions, twice
-    constexpr uint32_t kShoreBendHeader = 32;
+    // a cell of each window. A solve marches kShoreBendRows rows of one sweep
+    // a frame, then lays its raw fields kShoreBendRawChunks frames.
+    constexpr uint32_t kShoreBendRes       = 512;
+    constexpr uint32_t kShoreBendRows      = 256;
+    constexpr uint32_t kShoreBendSweeps    = 8;// four directions, twice
+    constexpr uint32_t kShoreBendRawChunks = 4;
+    constexpr uint32_t kShoreBendHeader    = 48;
     // The bend's cells a side for a field of `res` texels a side.
     constexpr uint32_t shoreBendRes(uint32_t res) {
         return res / ((res + kShoreBendRes - 1u) / kShoreBendRes);
@@ -117,7 +118,7 @@ namespace threepp::vulkan {
     constexpr VkDeviceSize shoreDepthBytes(uint32_t res) {
         const VkDeviceSize b = shoreBendRes(res);
         return VkDeviceSize(kShoreDepthHeader) + VkDeviceSize(kShoreLayers) * res * res * sizeof(float) +
-               kShoreBendHeader + b * b * 4u * sizeof(float);
+               kShoreBendHeader + VkDeviceSize(kShoreLayers) * b * b * 4u * sizeof(float);
     }
     // = OCEAN_WAKE_MAX_PATCHES
     constexpr uint32_t kWakeTablePatches = DisplacedMesh::kMaxWakePatches + kShoreLayers;
@@ -276,18 +277,20 @@ namespace threepp::vulkan {
             // the shade and the source.
             Buffer shoreDepth{};
             uint32_t depthLaid = 0;// windows' depths (and bends) laid since the State was made (a version)
-            // The bend (shore_refract.comp): the solve's own lattice (a cell's
-            // depth, and a cascade the phase's and the ray label's departures
-            // from the sea's plane wave and the ray's age) and the raw fields
-            // it publishes from. Solved over kShoreBendSweeps * the rows'
-            // chunks frames; what is read meanwhile is the last published
-            // table, with its own placement.
-            Buffer   bendWork{};
+            // The bend (shore_refract.comp): the solve's own lattice, a slot a
+            // window (a cell's depth, and a cascade the phase's and the ray
+            // label's departures from the sea's plane wave) and the raw fields
+            // it publishes from. One window is solved at a time, the far one
+            // first (the near one's edge is seeded from its table), over
+            // kShoreBendSweeps * the rows' chunks + kShoreBendRawChunks frames;
+            // what is read meanwhile is the last published table, with its own
+            // placement.
+            Buffer   bendWork{};// a slot a window
             Buffer   bendTemp{};
             uint32_t bendRes   = 0;
-            bool     bendDirty = false;// wants solving (the far window's depth was laid again, the sea changed)
-            bool     bendOn    = false;// a solve is under way, of bendX, bendZ
-            float    bendX = 0.f, bendZ = 0.f;
+            std::array<bool, kShoreLayers>  bendDirty{};// window k wants solving (its depth was laid again, the sea changed)
+            std::array<float, kShoreLayers> bendX{}, bendZ{};// the placement window k's solve is of
+            int      bendJob  = -1;// the window being solved, -1 none
             uint32_t bendStep = 0; // its chunks done (the start's in the first)
             float    bendWindTheta = std::numeric_limits<float>::quiet_NaN();
             float    bendWindSpeed = std::numeric_limits<float>::quiet_NaN();

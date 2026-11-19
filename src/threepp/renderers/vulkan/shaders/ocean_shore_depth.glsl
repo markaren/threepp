@@ -78,21 +78,26 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanShoreD
     float depth[];// window k's texel (i, j) at (k * res + j) * res + i: m under the rest level, 0 on land
 };
 
-// The bend's table (shore_refract.comp publishes it, over the far window,
-// with the placement and the heading it was solved on): 32 bytes, then 4
-// floats a cell, the phase departures dP of cascades 0 and 1 (m, along the
-// heading) and their refraction factors. Mirrored by
-// WakeFieldPipeline::kShoreBendHeader.
+// The bend's table (shore_refract.comp publishes it, a window at a time,
+// each with the placement it was solved on, and the heading): 48 bytes, then
+// 4 floats a cell, the phase departures dP of cascades 0 and 1 (m, along the
+// heading) and their factors. Mirrored by WakeFieldPipeline::kShoreBendHeader.
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanShoreBendTable {
-    OceanShoreWindow win;
-    vec2  heading;// the sea's heading it was solved for (unit)
+    OceanShoreWindow win[2];// 0 near, 1 far
+    vec2  heading;          // the sea's heading it was solved for (unit)
     uint  res;
     uint  _pad0;
-    float v[];// cell (i, j) at (j * res + i) * 4: dP0, dP1, A0, A1
+    float v[];// window k's cell (i, j) at ((k * res + j) * res + i) * 4: dP0, dP1, A0, A1
 };
 OceanShoreBendTable oceanShoreBendTable(uint64_t addr, uint depthRes) {
     return OceanShoreBendTable(addr + 80ul + uint64_t(depthRes) * uint64_t(depthRes) * 8ul);
 }
+// The near window's bend goes over to the far one's over this share of its
+// side from each edge (a quarter: the two solves agree in slope and differ by
+// their resolution's few metres of phase after a wide flat, and spread over a
+// quarter of 256 m that is a few per cent of a wavelength); the far one's to
+// the open sea over a sixteenth.
+const float kShoreBendNearBlend = 0.25;
 
 const float kShoreGamma = 0.42;// the sea's significant height over a depth d is at most this times d
 const float kShoalShare = 0.5; // the share of linear shoaling drawn
@@ -141,10 +146,35 @@ vec3 oceanShoreGainAt(float d, vec4 hs, vec4 km, vec3 amp) {
     return g;
 }
 
-// The bend at a world xz (bilinear between cell centres): the long
-// cascades' phase departures dP (m) and their factors A, toward the open sea
-// (0 and 1, exactly) over the outer sixteenth of the window and outside it;
-// the heading, and the table's cell (m).
+// Window k's bend at a world xz (bilinear between cell centres) and its
+// weight, smoothstep over `blend` of the side from each edge.
+void oceanShoreBendIn(OceanShoreBendTable t, uint k, uint n, vec2 xz, float blend, out vec4 v, out float wgt) {
+    v   = vec4(0.0, 0.0, 1.0, 1.0);
+    wgt = 0.0;
+    const OceanShoreWindow w = t.win[k];
+    if (w.live < 0.5) return;
+    const float fn = float(n);
+    const vec2  uv = (xz - vec2(w.originX, w.originZ)) / (w.texel * fn);
+    const vec2  e  = min(uv, 1.0 - uv);
+    wgt = smoothstep(0.0, blend, min(e.x, e.y));
+    if (wgt <= 0.0) return;
+    const vec2  f  = clamp(uv * fn - 0.5, vec2(0.0), vec2(fn - 1.0));
+    const uvec2 i0 = uvec2(min(floor(f), vec2(fn - 2.0)));
+    const vec2  tt = f - vec2(i0);
+    const uint  a  = ((k * n + i0.y) * n + i0.x) * 4u;
+    const uint  r  = n * 4u;
+    for (uint c = 0u; c < 4u; ++c) {
+        const float v00 = t.v[a + c], v10 = t.v[a + 4u + c];
+        const float v01 = t.v[a + r + c], v11 = t.v[a + r + 4u + c];
+        // (equal corners give that value exactly: the open sea stays W = x)
+        v[c] = (v00 == v10 && v01 == v11 && v00 == v01) ? v00 : mix(mix(v00, v10, tt.x), mix(v01, v11, tt.x), tt.y);
+    }
+}
+
+// The bend at a world xz: the long cascades' phase departures dP (m) and
+// their factors A, the near window's over the far one's and the far one's over
+// the open sea's (0 and 1, exactly where neither has anything); the heading,
+// and the cell (m) of the table that holds it.
 void oceanShoreBendAt(uint64_t addr, vec2 xz, out vec2 dP, out vec2 A, out vec2 heading, out float cellM) {
     dP      = vec2(0.0);
     A       = vec2(1.0);
@@ -155,29 +185,18 @@ void oceanShoreBendAt(uint64_t addr, vec2 xz, out vec2 dP, out vec2 A, out vec2 
     const uint n = b.bendRes;
     if (n < 2u) return;
     OceanShoreBendTable t = oceanShoreBendTable(addr, b.res);
-    const OceanShoreWindow w = t.win;
-    if (w.live < 0.5) return;
+    vec4  vN, vF;
+    float wN, wF;
+    oceanShoreBendIn(t, 0u, n, xz, kShoreBendNearBlend, vN, wN);
+    oceanShoreBendIn(t, 1u, n, xz, 1.0 / 16.0, vF, wF);
     heading = t.heading;
-    cellM   = max(w.texel, 0.05);
-    const float fn = float(n);
-    const vec2  uv = (xz - vec2(w.originX, w.originZ)) / (w.texel * fn);
-    const vec2  e  = min(uv, 1.0 - uv);
-    const float wgt = smoothstep(0.0, 1.0 / 16.0, min(e.x, e.y));
-    if (wgt <= 0.0) return;
-    const vec2  f  = clamp(uv * fn - 0.5, vec2(0.0), vec2(fn - 1.0));
-    const uvec2 i0 = uvec2(min(floor(f), vec2(fn - 2.0)));
-    const vec2  tt = f - vec2(i0);
-    const uint  a  = (i0.y * n + i0.x) * 4u;
-    const uint  r  = n * 4u;
-    vec4 v;
-    for (uint c = 0u; c < 4u; ++c) {
-        const float v00 = t.v[a + c], v10 = t.v[a + 4u + c];
-        const float v01 = t.v[a + r + c], v11 = t.v[a + r + 4u + c];
-        // (equal corners give that value exactly: the open sea stays W = x)
-        v[c] = (v00 == v10 && v01 == v11 && v00 == v01) ? v00 : mix(mix(v00, v10, tt.x), mix(v01, v11, tt.x), tt.y);
-    }
-    dP = wgt * v.xy;
-    A  = 1.0 + wgt * (v.zw - 1.0);
+    dP = wF * vF.xy;
+    A  = 1.0 + wF * (vF.zw - 1.0);
+    dP = dP + wN * (vN.xy - dP);
+    A  = A + wN * (vN.zw - A);
+    const float cF = t.win[1].live > 0.5 ? t.win[1].texel : t.win[0].texel;
+    const float cN = t.win[0].live > 0.5 ? t.win[0].texel : cF;
+    cellM = max(mix(cF, cN, wN), 0.05);
 }
 
 // The bend at a rest point as a reader of the cascades takes it: each long

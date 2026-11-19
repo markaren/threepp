@@ -669,8 +669,9 @@ namespace threepp {
         // (origin x, z, texel, live), each cascade's significant height and
         // wavenumber, the windows' side in texels (a uint), the bend's side in
         // cells (a uint), two spare words, then each window's depths, row by
-        // row, then the bend's table (OceanShoreBendTable: its placement, the
-        // heading, its side, a spare word, then 4 floats a cell).
+        // row, then the bend's table (OceanShoreBendTable: the two windows'
+        // placements, the heading, its side, a spare word, then 4 floats a
+        // cell of each window).
         // Empty = none (every gain 1, no bend). Internal; the renderer fills it.
         struct ShoreDepth {
             std::vector<float> data;

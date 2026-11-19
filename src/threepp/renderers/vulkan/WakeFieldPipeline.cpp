@@ -581,17 +581,18 @@ namespace threepp::vulkan {
             }
             // The depth: the header, then a float a texel of each window
             // (8 MB at the default 1024 a side), then the bend's table (6
-            // floats a cell over the far window: 4.2 MB at 512 cells a side).
+            // floats a cell of each window: 8.4 MB at 512 cells a side).
             st->shoreDepth = createBuffer(ctx_.allocator(), ctx_.device(), shoreDepthBytes(st->res),
                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                           VMA_MEMORY_USAGE_AUTO);
             ctx_.setObjectName(st->shoreDepth.handle, "ocean.shore.depth");
-            // The bend's solve (5 floats a cell, after the k0 it took: 5.2 MB
-            // at 512) and its raw fields (4 floats a cell: 4.2 MB).
+            // The bend's solve (a slot a window: 5 floats a cell after the k0
+            // it took, 5.2 MB at 512) and its raw fields (4 floats a cell of
+            // one window: 4.2 MB).
             st->bendRes  = shoreBendRes(st->res);
             const VkDeviceSize cells = VkDeviceSize(st->bendRes) * st->bendRes;
-            st->bendWork = createBuffer(ctx_.allocator(), ctx_.device(), 16u + cells * 5u * sizeof(float),
+            st->bendWork = createBuffer(ctx_.allocator(), ctx_.device(), kShoreLayers * (16u + cells * 5u * sizeof(float)),
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                         VMA_MEMORY_USAGE_AUTO);
             ctx_.setObjectName(st->bendWork.handle, "ocean.shore.bendWork");
@@ -1261,42 +1262,54 @@ namespace threepp::vulkan {
                                        const std::array<float, kShoreLayers>& ox, const std::array<float, kShoreLayers>& oz,
                                        const std::array<float, kShoreLayers>& texel) {
         if (refractPipeline_ == VK_NULL_HANDLE || st.bendRes < 2u || st.res % st.bendRes != 0u) return;
-        constexpr uint32_t k = kShoreBendWindow;
-        // What wants solving: the window's depth laid again (it moved, the
-        // scene changed), or the sea's wind changed (its heading and its
-        // wavenumbers; the sea's statistics, measured this step above, are
-        // what the solve's start takes). A solve under way then starts over.
+        // What wants solving: a window whose depth was laid again (it moved,
+        // the scene changed), every window when the sea's wind changed (its
+        // heading and its wavenumbers; the sea's statistics, measured this
+        // step above, are what a solve's start takes). A solve whose window's
+        // depth was laid again since it started starts over.
         if (in.windTheta != st.bendWindTheta || in.windSpeed != st.bendWindSpeed) {
             st.bendWindTheta = in.windTheta;
             st.bendWindSpeed = in.windSpeed;
-            st.bendDirty     = true;
+            st.bendDirty.fill(true);
         }
-        if (captureMask & (1u << k)) st.bendDirty = true;
-        if (st.bendDirty && st.mapValid[k]) {
-            st.bendDirty = false;
-            st.bendOn    = true;
-            st.bendStep  = 0;
-            st.bendX     = ox[k];
-            st.bendZ     = oz[k];
+        for (uint32_t k = 0; k < kShoreLayers; ++k) {
+            if (captureMask & (1u << k)) st.bendDirty[k] = true;
         }
-        if (!st.bendOn) return;
+        if (st.bendJob >= 0 && st.bendDirty[uint32_t(st.bendJob)]) st.bendJob = -1;
+        if (st.bendJob < 0) {
+            // The far window first: the near one's edge is seeded from its table.
+            for (const uint32_t k : {1u, 0u}) {
+                if (!st.bendDirty[k] || !st.mapValid[k]) continue;
+                if (k == 0u && st.bendDirty[1] && st.mapValid[1]) continue;
+                st.bendJob      = static_cast<int>(k);
+                st.bendStep     = 0;
+                st.bendDirty[k] = false;
+                st.bendX[k]     = ox[k];
+                st.bendZ[k]     = oz[k];
+                break;
+            }
+        }
+        if (st.bendJob < 0) return;
 
+        const uint32_t k      = static_cast<uint32_t>(st.bendJob);
         const uint32_t G      = st.bendRes;
         const uint32_t ratio  = st.res / G;
         const uint32_t chunks = (G - 1u + kShoreBendRows - 1u) / kShoreBendRows;// a sweep's
-        const uint32_t total  = kShoreBendSweeps * chunks;
+        const uint32_t sweeps = kShoreBendSweeps * chunks;
+        const uint32_t total  = sweeps + kShoreBendRawChunks;
         const float    cwx    = std::cos(st.bendWindTheta);
         const float    cwz    = std::sin(st.bendWindTheta);
+        const VkDeviceSize slot = 16u + VkDeviceSize(G) * G * 5u * sizeof(float);
 
         ShoreRefractPush rp{};
         rp.depthAddr = st.shoreDepth.address;
-        rp.workAddr  = st.bendWork.address;
+        rp.workAddr  = st.bendWork.address + k * slot;
         rp.tempAddr  = st.bendTemp.address;
         rp.window    = k;
         rp.res       = G;
         rp.depthRes  = st.res;
-        rp.originX   = st.bendX;
-        rp.originZ   = st.bendZ;
+        rp.originX   = st.bendX[k];
+        rp.originZ   = st.bendZ[k];
         rp.cell      = texel[k] * float(ratio);
         rp.windX     = cwx;
         rp.windZ     = cwz;
@@ -1309,7 +1322,7 @@ namespace threepp::vulkan {
         };
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, refractPipeline_);
         if (st.bendStep == 0u) dispatch(0u, cellGroups);
-        if (st.bendStep < total) {
+        if (st.bendStep < sweeps) {
             // The sweeps' order: along the waves first, then across both
             // ways, then against them (0 +x, 1 -x, 2 +z, 3 -z).
             uint32_t order[4];
@@ -1326,13 +1339,19 @@ namespace threepp::vulkan {
             rp.row0  = 1u + chunk * kShoreBendRows;
             rp.rows  = kShoreBendRows;
             dispatch(1u, 2u);// a workgroup a cascade
-            ++st.bendStep;
+        } else {
+            // The raw fields, a chunk of rows a frame (the lee's marches upwind are the cost).
+            const uint32_t rows = (G + kShoreBendRawChunks - 1u) / kShoreBendRawChunks;
+            rp.row0 = (st.bendStep - sweeps) * rows;
+            rp.rows = rows;
+            dispatch(2u, (rows * G + 511u) / 512u);
         }
+        ++st.bendStep;
         if (st.bendStep == total) {
-            dispatch(2u, cellGroups);
             dispatch(3u, cellGroups);
-            st.bendOn = false;
+            st.bendJob = -1;
             ++st.depthLaid;// sampleHeight's mirror copies the table again
+            if (k == 1u) st.bendDirty[0] = true;// the near window's edge is seeded from this
         }
     }
 
