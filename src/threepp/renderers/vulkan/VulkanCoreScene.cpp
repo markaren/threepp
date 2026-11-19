@@ -6304,6 +6304,12 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             d.detailNormalScale = 1.f;
             d.detailRoughStrength = 0.f;
             d.ripples = 0.f;
+            d.flow = 0.f;// running water off (MeshStandardMaterial::flow)
+            d.flowTile = 1.f;
+            d.flowPeriod = 1.f;
+            d.flowTime = 0.f;
+            d.flowFoam = 0.f;
+            d.flowFoamAlbedo = 0.f;
             d.terrainWeightTexIndex = -1;
             d.terrainNormalTexIndex = -1;
             d.terrainBandStrength = 0.f;
@@ -6473,6 +6479,14 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             }
             if (auto* st = dynamic_cast<MeshStandardMaterial*>(mat.get())) {
                 d.ripples = std::max(0.f, st->ripples);
+                if (st->flow > 0.f) {
+                    d.flow = st->flow;
+                    d.flowTile = std::max(st->flowTile, 1e-3f);
+                    d.flowPeriod = std::max(st->flowPeriod, 0.05f);
+                    d.flowTime = st->flowTime;
+                    d.flowFoam = std::clamp(st->flowFoam, 0.f, 1.f);
+                    d.flowFoamAlbedo = std::clamp(st->flowFoamAlbedo, 0.f, 1.f);
+                }
             }
             if (auto* ao = dynamic_cast<MaterialWithAoMap*>(mat.get())) {
                 // The index is bound at the texture-index fill sites

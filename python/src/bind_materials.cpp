@@ -233,6 +233,26 @@ namespace threepp_py {
                                "the downwash's concentric rings and its struck disc's roughness, scaled by this value "
                                "(1 = as tuned). 0 (default) = off. Vulkan deferred G-buffer only. Changed on a material "
                                "already rendered, call needs_update() as for any material value.")
+                .def_readwrite("flow", &MeshStandardMaterial::flow,
+                               "Running water whose mesh carries its own flow (Vulkan deferred G-buffer only): > 0 "
+                               "turns the flow mode on. The geometry's 'uv2' holds the water's velocity (m/s along "
+                               "world x, z), its 'uv' x the foam (0..1). The normal map, laid over world XZ at "
+                               "flow_tile metres a tile, is carried along the velocity in two crossfaded phases of "
+                               "flow_period s; flow scales its tilt (which grows with the speed too). Foam, broken up "
+                               "by the normal map's alpha, whitens the surface toward flow_foam_albedo and takes "
+                               "flow_foam of a transmissive material's transmission. Set flow_time (s) every frame "
+                               "with needs_update(). 0 (default) = off.")
+                .def_readwrite("flow_tile", &MeshStandardMaterial::flowTile,
+                               "Metres of water surface per tile of the normal map in flow mode (default 0.5).")
+                .def_readwrite("flow_period", &MeshStandardMaterial::flowPeriod,
+                               "Seconds of each of the flow mode's two crossfaded phases (default 1).")
+                .def_readwrite("flow_time", &MeshStandardMaterial::flowTime,
+                               "The flow mode's clock in seconds: set it every frame (with needs_update()).")
+                .def_readwrite("flow_foam", &MeshStandardMaterial::flowFoam,
+                               "Share of a transmissive material's transmission the flow mode's foam takes (default 1: "
+                               "full foam is opaque).")
+                .def_readwrite("flow_foam_albedo", &MeshStandardMaterial::flowFoamAlbedo,
+                               "The flow mode's foam albedo (linear grey, default 0.8).")
                 .def_readwrite("map", &MeshStandardMaterial::map)
                 .def_readwrite("normal_map", &MeshStandardMaterial::normalMap)
                 .def_readwrite("roughness_map", &MeshStandardMaterial::roughnessMap)

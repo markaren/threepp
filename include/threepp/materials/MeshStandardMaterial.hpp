@@ -132,6 +132,28 @@ namespace threepp {
         // after the first render: needsUpdate(), as for any material value.
         float ripples = 0.f;
 
+        // Running water whose mesh carries its own flow (a shallow-water
+        // simulation's surface; Vulkan deferred G-buffer only). > 0 turns the
+        // flow mode on: the mesh's "uv2" holds the water's velocity in m/s
+        // along world x and z, its "uv" .x the foam (0..1). The normal map is
+        // laid over world XZ at flowTile metres a tile and carried along that
+        // velocity in two phases flowPeriod seconds long, crossfaded (the
+        // classic flow map, but the flow is the simulation's, so the ripples
+        // move with the water); flow scales their tilt, which also grows with
+        // the speed. Foam, broken up by the normal map's alpha (a foam
+        // pattern carried with the ripples), turns the surface white toward
+        // flowFoamAlbedo and rough, and on a transmissive material takes
+        // flowFoam of its transmission (white water is opaque). flowTime is
+        // the clock in seconds: set it every frame (with needsUpdate(), the
+        // cheap material patch). 0 (default) = off; the GL renderer ignores
+        // it.
+        float flow = 0.f;
+        float flowTile = 0.5f;
+        float flowPeriod = 1.f;
+        float flowTime = 0.f;
+        float flowFoam = 1.f;
+        float flowFoamAlbedo = 0.8f;
+
         [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<MeshStandardMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});

@@ -432,7 +432,8 @@ void main() {
     // and both are no-ops at mip 0 (nLen ~= 1) by construction.
     const bool toksvigOn = (gbufCamFlags() & 1u) != 0u;
     float toksvigSigma2 = 0.0;
-    if (m.normalTexIndex >= 0 && !isWater) {
+    // Running water (m.flow > 0) lays its normal map over world XZ below instead.
+    if (m.normalTexIndex >= 0 && !isWater && m.flow <= 0.0) {
         const vec3 dpx = dFdx(vWorldPos);
         const vec3 dpy = dFdy(vWorldPos);
         const float det = duvx.x * duvy.y - duvy.x * duvx.y;
@@ -477,6 +478,56 @@ void main() {
                 N = normalize(T * ns.x + B * ns.y + N * ns.z);
             }
         }
+    }
+
+    // Running water whose mesh carries its own flow (MeshStandardMaterial::
+    // flow; a shallow-water simulation's surface): vUv2 is the water's
+    // velocity (m/s along world x, z), vUv.x its foam. The normal map is laid
+    // over world XZ and carried along that velocity in two phases of
+    // flowPeriod s, offset half a period and crossfaded so neither phase's
+    // reset shows (the classic flow map; here the flow is the simulation's, so
+    // the ripples run with the water, round the stones and down the chutes).
+    // Its alpha is a foam pattern carried with the ripples: the simulation's
+    // foam density decides how much of the pattern turns white, so foam
+    // streaks and clumps with the flow instead of lying as a flat sheet. The
+    // branch is per material (uniform over a draw), so its implicit-
+    // derivative taps stay in uniform control flow but at a material's edge.
+    float flowFoamVis = 0.0;
+    if (m.flow > 0.0) {
+        const vec2  vel   = vUv2;
+        const float T     = max(m.flowPeriod, 0.05);
+        const float ph0   = fract(m.flowTime / T);
+        const float ph1   = fract(m.flowTime / T + 0.5);
+        const float blend = abs(1.0 - 2.0 * ph0);// 1 at phase 0's reset: phase 1 alone
+        const float tile  = max(m.flowTile, 1e-3);
+        const vec2  base  = vWorldPos.xz / tile;
+        const vec2  uv0   = base - vel * (ph0 * T / tile);
+        const vec2  uv1   = base - vel * (ph1 * T / tile) + vec2(0.37, 0.61);
+        vec4 tap = vec4(0.5, 0.5, 1.0, 0.0);
+        if (m.normalTexIndex >= 0) {
+            const int nidx = clamp(m.normalTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            const vec4 t0 = texture(gbufAlbedoMaps[nonuniformEXT(nidx)], uv0);
+            const vec4 t1 = texture(gbufAlbedoMaps[nonuniformEXT(nidx)], uv1);
+            tap = mix(t0, t1, blend);
+        }
+        // Faster water is rougher: the ripples' tilt from 45 % in still water to all of it at 1.5 m/s
+        const float speed = length(vel);
+        vec2 nxy = (tap.xy * 2.0 - 1.0) * m.normalScale * m.flow * (0.45 + 0.55 * clamp(speed / 1.5, 0.0, 1.0));
+        nxy /= max(1.0, length(nxy) / 0.95);
+        // Tangent frame: world +x and +z on the surface (the normal map's u, v run along them)
+        vec3 Tf = vec3(1.0, 0.0, 0.0) - N * N.x;
+        vec3 Bf = vec3(0.0, 0.0, 1.0) - N * N.z;
+        const float tl = length(Tf), bl = length(Bf);
+        if (tl > 1e-4 && bl > 1e-4) {
+            Tf /= tl;
+            Bf /= bl;
+            const float nz = sqrt(max(1e-4, 1.0 - dot(nxy, nxy)));
+            N = normalize(Tf * nxy.x + Bf * nxy.y + N * nz);
+        }
+        // The foam: the simulation's density thresholds the carried pattern (light foam shows only the pattern's
+        // brightest cells, dense foam covers it all)
+        const float foam = clamp(vUv.x, 0.0, 1.0);
+        flowFoamVis = clamp((tap.a + 1.4 * foam - 1.0) / 0.4, 0.0, 1.0) * clamp(4.0 * foam, 0.0, 1.0);
     }
 
     // Terrain WORLD-space normal map (MaterialWithTerrainMaps): replaces the
@@ -849,6 +900,8 @@ void main() {
         N = normalize(N - (g - dot(g, N) * N));
         roughness = max(roughness, clamp(m.roughness + m.ripples * roughAdd, 0.04, 1.0));
     }
+    // Running water's foam is rough (a froth of bubbles, not a mirror)
+    if (flowFoamVis > 0.0 && roughness >= 0.0) roughness = mix(roughness, 0.55, flowFoamVis);
 
     // Material ambient occlusion (aoMap; glTF occlusionTexture): the R channel,
     // ao = 1 + (r - 1) x aoMapIntensity as three.js reads it. Stored as the
@@ -868,6 +921,8 @@ void main() {
         occlusion = clamp((1.0 - aoR) * m.aoMapIntensity, 0.0, 1.0);
     }
     vec3 albedoOut = albedo;
+    // Running water's foam: white (its share of the transmission goes in deferred_shade, from outUv.x below)
+    if (flowFoamVis > 0.0) albedoOut = mix(albedoOut, vec3(m.flowFoamAlbedo), flowFoamVis);
     if (m.roughness < 0.0) {
         albedoOut *= 1.0 - occlusion;
         occlusion = 0.0;
@@ -957,4 +1012,7 @@ void main() {
     const float lodBias = 0.5 * log2(max(fp2, 1e-32));
 
     outUv = vec4(vUv, lodBias, occlusion);
+    // Running water: the deferred shade reads its foam coverage here (the material has no uv-mapped texture the
+    // shade would sample with it)
+    if (m.flow > 0.0) outUv.x = flowFoamVis;
 }
