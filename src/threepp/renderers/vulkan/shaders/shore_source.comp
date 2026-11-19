@@ -188,14 +188,14 @@ vec3 surfaceAt(vec2 q, vec3 g, OceanShoreBend bd, out vec3 incoming) {
         c1.y = sampleBicubicR1(height1, uv) * inv;
         c1.xz = oceanShoreTurn(bd.turn.zw, oceanC1World(sampleBicubicRG(displace1, uv))) * inv;
     }
-    if ((pc.cascadeMask & 4u) != 0u) {
+    if ((pc.cascadeMask & 4u) != 0u) {// (the chop: bent over the near window)
         const float inv = 1.0 / pc.tileSize2;
-        const vec2  uv  = q * inv;
+        const vec2  uv  = (q + bd.d2) * inv;
         c2.y = textureLod(height2, uv, 0.0).r * inv;
-        c2.xz = textureLod(displace2, uv, 0.0).rg * inv;
+        c2.xz = oceanShoreTurn(bd.turn2, textureLod(displace2, uv, 0.0).rg) * inv;
     }
     const vec3 k = vec3(pc.choppiness, pc.waveScale, pc.choppiness);
-    incoming = (bd.amp.x * c0 + bd.amp.y * c1 + c2) * k;
+    incoming = (bd.amp.x * c0 + bd.amp.y * c1 + bd.amp.z * c2) * k;
     return (g.x * c0 + g.y * c1 + g.z * c2) * k;
 }
 

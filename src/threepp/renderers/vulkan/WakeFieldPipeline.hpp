@@ -118,7 +118,8 @@ namespace threepp::vulkan {
     constexpr VkDeviceSize shoreDepthBytes(uint32_t res) {
         const VkDeviceSize b = shoreBendRes(res);
         return VkDeviceSize(kShoreDepthHeader) + VkDeviceSize(kShoreLayers) * res * res * sizeof(float) +
-               kShoreBendHeader + VkDeviceSize(kShoreLayers) * b * b * 4u * sizeof(float);
+               kShoreBendHeader + VkDeviceSize(kShoreLayers) * b * b * 4u * sizeof(float) +
+               b * b * sizeof(uint32_t);// the chop's, the near window's (packHalf2x16)
     }
     // = OCEAN_WAKE_MAX_PATCHES
     constexpr uint32_t kWakeTablePatches = DisplacedMesh::kMaxWakePatches + kShoreLayers;
@@ -197,17 +198,20 @@ namespace threepp::vulkan {
             VkDeviceAddress depthAddr;// State::shoreDepth
         };
 
-        // shore_refract.comp's (72 bytes).
+        // shore_refract.comp's (88 bytes).
         struct ShoreRefractPush {
             VkDeviceAddress depthAddr;// State::shoreDepth (the depths, km; the bend's table after them)
-            VkDeviceAddress workAddr; // State::bendWork
+            VkDeviceAddress workAddr; // State::bendWork (the window's slot)
             VkDeviceAddress tempAddr; // State::bendTemp
             uint32_t mode, window, res, depthRes;
             float    originX, originZ, cell;
             float    windX, windZ;
             uint32_t sweep, row0, rows;
+            VkDeviceAddress chopAddr; // State::bendWork's chop region (the near window's)
+            uint32_t cascades;        // 2, 3 with the chop
+            uint32_t _pad;
         };
-        static_assert(sizeof(ShoreRefractPush) == 72, "ShoreRefractPush must match shore_refract.comp's Pc");
+        static_assert(sizeof(ShoreRefractPush) == 88, "ShoreRefractPush must match shore_refract.comp's Pc");
 
         // What the shore's step needs of the frame and of its ocean.
         struct ShoreInputs {

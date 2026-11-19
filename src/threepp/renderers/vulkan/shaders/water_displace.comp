@@ -263,6 +263,9 @@ vec2 bendW0(vec2 y) { return gBend.on ? gBendRest + gBend.d.xy + gBend.j0 * (y -
 vec2 bendW1(vec2 y) { return gBend.on ? gBendRest + gBend.d.zw + gBend.j1 * (y - gBendRest) : y; }
 vec2 bendV0(vec2 v) { return gBend.on ? oceanShoreTurn(gBend.turn.xy, v) : v; }
 vec2 bendV1(vec2 v) { return gBend.on ? oceanShoreTurn(gBend.turn.zw, v) : v; }
+// ... and the chop's (cascade 2, the near window's bend: gBend.on2).
+vec2 bendW2(vec2 y) { return gBend.on2 ? gBendRest + gBend.d2 + gBend.j2 * (y - gBendRest) : y; }
+vec2 bendV2(vec2 v) { return gBend.on2 ? oceanShoreTurn(gBend.turn2, v) : v; }
 float c0R(sampler2D tex, vec2 uv) {
     if (gC0Lod <= 0.0) return gC0Gain * sampleBicubicR(tex, uv);
     const float lo = textureLod(tex, uv, gC0Lod).r;
@@ -344,9 +347,9 @@ vec3 sampleDisplacement(vec2 worldXZ) {
     }
     if ((pc.cascadeMask & 4u) != 0u) {
         const float invTile = 1.0 / pc.tileSize2;
-        const vec2 uv = worldXZ * invTile;
+        const vec2 uv = bendW2(worldXZ) * invTile;
         d.y += gC2Gain * textureLod(height2,   uv, gC2Lod).r * invTile;
-        const vec2 dxz = gC2Gain * textureLod(displace2, uv, gC2Lod).rg * invTile;
+        const vec2 dxz = bendV2(gC2Gain * textureLod(displace2, uv, gC2Lod).rg) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -409,8 +412,8 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
 vec3 sampleFineRaw(vec2 worldXZ) {
     if ((pc.cascadeMask & 4u) == 0u) return vec3(0.0);
     const float invTile = 1.0 / pc.tileSize2;
-    const vec2 uv = worldXZ * invTile;
-    const vec2 dxz = gC2Gain * textureLod(displace2, uv, gC2Lod).rg * invTile;
+    const vec2 uv = bendW2(worldXZ) * invTile;
+    const vec2 dxz = bendV2(gC2Gain * textureLod(displace2, uv, gC2Lod).rg) * invTile;
     return vec3(dxz.x, gC2Gain * textureLod(height2, uv, gC2Lod).r * invTile * pc.waveScale, dxz.y);
 }
 
@@ -564,10 +567,14 @@ void main() {
     // cove calms and no trough comes down to the bed; the long cascades turn
     // with the bed (the bend), and are lower where its rays spread or none
     // arrives (a lee).
-    gBend.on = false;
+    gBend.on  = false;
+    gBend.on2 = false;
     if (pc.shoreAddr != 0ul) {
         gBend     = oceanShoreBend(pc.shoreAddr, rest.xz);
         gBendRest = rest.xz;
+        // The chop compressed over the bed holds waves shorter than the
+        // spacing its level was chosen for: read it that many times coarser.
+        if (gBend.on2) gC2Lod += log2(max(gBend.n2, 1.0));
         const vec3 g = oceanShoreGainWith(pc.shoreAddr, rest.xz, gBend.amp);
         gC0Gain *= g.x;
         gC1Gain *= g.y;

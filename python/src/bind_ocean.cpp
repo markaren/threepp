@@ -535,14 +535,17 @@ namespace threepp_py {
                         [](const DisplacedMesh& o, float x, float z) {
                             const auto b = o.shoreBend(x, z);
                             return py::make_tuple(b.d[0], b.d[1], b.d[2], b.d[3], b.amp[0], b.amp[1],
-                                                  b.turn[0], b.turn[1], b.turn[2], b.turn[3]);
+                                                  b.turn[0], b.turn[1], b.turn[2], b.turn[3],
+                                                  b.d2[0], b.d2[1], b.amp[2], b.turn2[0], b.turn2[1]);
                         },
                         py::arg("x"), py::arg("z"),
                         "The two long cascades' turn over the bed at a rest point, under shore_gain's opt-in: "
-                        "(dx0, dz0, dx1, dz1, amp0, amp1, cos0, sin0, cos1, sin1). Cascade c is read at "
-                        "(x + dxc, z + dzc), where the waves that reach (x, z) came from (its crests turned "
-                        "toward the shore and shortened over the bed), its displacement turned by (cosc, sinc); "
-                        "ampc is its refraction factor. (0, 0, 0, 0, 1, 1, 1, 0, 1, 0) in the open sea.")
+                        "(dx0, dz0, dx1, dz1, amp0, amp1, cos0, sin0, cos1, sin1, dx2, dz2, amp2, cos2, sin2). "
+                        "Cascade c is read at (x + dxc, z + dzc), where the waves that reach (x, z) came from (its "
+                        "crests turned toward the shore and shortened over the bed), its displacement turned by "
+                        "(cosc, sinc); ampc is its refraction factor. Cascade 2, the chop, is bent near the camera "
+                        "only (the shore's near window). (0, 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0) in the open "
+                        "sea.")
                 .def(
                         "shore_depth",
                         [](const DisplacedMesh& o, float x, float z) { return o.shoreDepthAt(x, z); },

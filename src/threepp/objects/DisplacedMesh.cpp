@@ -215,8 +215,9 @@ namespace threepp {
                 const CascadeField& cf = heightFields[i];
                 if (!hasField(cf, cf.disp)) continue;
                 const float invTile = 1.f / cf.tileSize;
-                const bool  turn = b.on && i < 2u;
-                const Vec2f p = turn ? cascadeDomain(i, qx + b.d[2 * i], qz + b.d[2 * i + 1]) : cascadeDomain(i, qx, qz);
+                const bool  turn = i < 2u ? b.on : b.on2;
+                const float dx = i < 2u ? b.d[2 * i] : b.d2[0], dz = i < 2u ? b.d[2 * i + 1] : b.d2[1];
+                const Vec2f p = turn ? cascadeDomain(i, qx + dx, qz + dz) : cascadeDomain(i, qx, qz);
                 Vec2f v = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile,
                                       cascadeBicubic(i));
                 if (i == 1) {
@@ -225,7 +226,7 @@ namespace threepp {
                          -kOceanCascade1RotSin * v.x + kOceanCascade1RotCos * v.y};
                 }
                 if (turn) {
-                    const float c = b.turn[2 * i], s = b.turn[2 * i + 1];
+                    const float c = i < 2u ? b.turn[2 * i] : b.turn2[0], s = i < 2u ? b.turn[2 * i + 1] : b.turn2[1];
                     v = {c * v.x - s * v.y, s * v.x + c * v.y};
                 }
                 // Sharpness 0 keeps the historical sum, bit for bit.
@@ -279,8 +280,10 @@ namespace threepp {
             const CascadeField& cf = heightFields[i];
             if (!hasField(cf, cf.data)) continue;
             const float invTile = 1.f / cf.tileSize;
-            const Vec2f p = (bq.on && i < 2u) ? cascadeDomain(i, bestX + bq.d[2 * i], bestZ + bq.d[2 * i + 1])
-                                              : cascadeDomain(i, bestX, bestZ);
+            const Vec2f p = (i < 2u ? bq.on : bq.on2)
+                                    ? cascadeDomain(i, bestX + (i < 2u ? bq.d[2 * i] : bq.d2[0]),
+                                                    bestZ + (i < 2u ? bq.d[2 * i + 1] : bq.d2[1]))
+                                    : cascadeDomain(i, bestX, bestZ);
             Vec2f h = sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
                                   cascadeBicubic(i));
             if (climate) h.x *= gq[i];
@@ -345,7 +348,7 @@ namespace threepp {
         return shoreGainWith(x, z, shoreBend(x, z).amp);
     }
 
-    std::array<float, 3> DisplacedMesh::shoreGainWith(float x, float z, const std::array<float, 2>& bendAmp) const {
+    std::array<float, 3> DisplacedMesh::shoreGainWith(float x, float z, const std::array<float, 3>& bendAmp) const {
         // ocean_shore_depth.glsl, line for line: its header's words, then the depths.
         constexpr size_t kHeaderWords = 20;
         const std::vector<float>& v = shoreDepth.data;
@@ -377,7 +380,7 @@ namespace threepp {
         };
         const float* hs = &v[8];
         const float* km = &v[12];
-        const std::array<float, 3> amp{bendAmp[0], bendAmp[1], 1.f};
+        const std::array<float, 3> amp = bendAmp;
         auto gainAt = [&](float d) {
             std::array<float, 3> g = amp;
             if (d >= 60.f) return g;
@@ -449,6 +452,26 @@ namespace threepp {
         if (T[3] < 0.5f && T[7] < 0.5f) return out;
         const float wx = T[8], wz = T[9];
         const float fn = static_cast<float>(n);
+        // The chop's table (the near window's, half floats), after both windows' cells.
+        uint32_t chopLaid = 0;
+        std::memcpy(&chopLaid, &T[11], sizeof(chopLaid));
+        const size_t chopBase = base + kBendHeaderWords + 2u * size_t(n) * n * 4u;
+        const bool   chopOn   = chopLaid != 0u && v.size() >= chopBase + size_t(n) * n;
+        auto halves = [&](size_t cell, float& lo, float& hi) {
+            uint32_t u = 0;
+            std::memcpy(&u, &v[chopBase + cell], sizeof(u));
+            auto half = [](uint32_t h) {
+                const uint32_t sign = (h >> 15u) & 1u, exp = (h >> 10u) & 31u, man = h & 1023u;
+                float f;
+                if (exp == 0u) f = std::ldexp(float(man), -24);
+                else if (exp == 31u) f = man ? std::numeric_limits<float>::quiet_NaN() : std::numeric_limits<float>::infinity();
+                else f = std::ldexp(float(man | 1024u), int(exp) - 25);
+                return sign ? -f : f;
+            };
+            lo = half(u & 0xffffu);
+            hi = half(u >> 16u);
+            return u;
+        };
         // Window k's (dP0, dP1, A0, A1) and its weight.
         auto windowAt = [&](uint32_t k, float px, float pz, float blend, float* val) {
             val[0] = val[1] = 0.f;
@@ -485,30 +508,63 @@ namespace threepp {
                 P[c] = P[c] + wN * (vN[c] - P[c]);
                 A[c] = A[c] + wN * (vN[2 + c] - A[c]);
             }
+            // The chop: the near window's alone (ocean_shore_depth.glsl's oceanShoreChopIn).
+            P[2] = 0.f;
+            A[2] = 1.f;
+            if (chopOn && wN > 0.f) {
+                const float* w = &T[0];
+                const float fx = std::clamp((px - w[0]) / w[2] - 0.5f, 0.f, fn - 1.f);
+                const float fz = std::clamp((pz - w[1]) / w[2] - 0.5f, 0.f, fn - 1.f);
+                const uint32_t i0 = std::min(static_cast<uint32_t>(fx), n - 2u);
+                const uint32_t j0 = std::min(static_cast<uint32_t>(fz), n - 2u);
+                const float tx = fx - float(i0), tz = fz - float(j0);
+                const size_t a = size_t(j0) * n + i0;
+                float p00, a00, p10, a10, p01, a01, p11, a11;
+                const uint32_t u00 = halves(a, p00, a00), u10 = halves(a + 1, p10, a10);
+                const uint32_t u01 = halves(a + n, p01, a01), u11 = halves(a + n + 1, p11, a11);
+                float vp = p00, va = a00;
+                if (!(u00 == u10 && u01 == u11 && u00 == u01)) {
+                    const float plo = p00 + (p10 - p00) * tx, phi = p01 + (p11 - p01) * tx;
+                    const float alo = a00 + (a10 - a00) * tx, ahi = a01 + (a11 - a01) * tx;
+                    vp = plo + (phi - plo) * tz;
+                    va = alo + (ahi - alo) * tz;
+                }
+                P[2] = wN * vp;
+                A[2] = 1.f + wN * (va - 1.f);
+            }
             const float cF = T[7] > 0.5f ? T[6] : T[2];
             const float cN = T[3] > 0.5f ? T[2] : cF;
             return std::max(cF + (cN - cF) * wN, 0.05f);
         };
-        float P[2], A[2], xp[2], xm[2], zp[2], zm[2], aT[2];
+        float P[3], A[3], xp[3], xm[3], zp[3], zm[3], aT[3];
         const float h = at(x, z, P, A);
-        out.amp = {A[0], A[1]};
+        out.amp = {A[0], A[1], A[2]};
         at(x + h, z, xp, aT);
         at(x - h, z, xm, aT);
         at(x, z + h, zp, aT);
         at(x, z - h, zm, aT);
-        for (int c = 0; c < 2; ++c) {
-            out.on = out.on || P[c] != 0.f || xp[c] != 0.f || xm[c] != 0.f || zp[c] != 0.f || zm[c] != 0.f;
+        for (int c = 0; c < 3; ++c) {
+            const bool any = P[c] != 0.f || xp[c] != 0.f || xm[c] != 0.f || zp[c] != 0.f || zm[c] != 0.f;
+            if (c < 2) out.on = out.on || any;
+            else       out.on2 = any;
         }
-        if (!out.on) return out;
-        for (int c = 0; c < 2; ++c) {
-            out.d[2 * c]     = wx * P[c];
-            out.d[2 * c + 1] = wz * P[c];
+        for (int c = 0; c < 3; ++c) {
+            if (!(c < 2 ? out.on : out.on2)) continue;
             // The waves' own heading here, grad P = w + grad dP, against the sea's.
             const float nx = wx + (xp[c] - xm[c]) / (2.f * h);
             const float nz = wz + (zp[c] - zm[c]) / (2.f * h);
             const float l  = std::hypot(nx, nz);
-            out.turn[2 * c]     = l > 1e-6f ? (nx * wx + nz * wz) / l : 1.f;
-            out.turn[2 * c + 1] = l > 1e-6f ? (wx * nz - wz * nx) / l : 0.f;
+            const float tc = l > 1e-6f ? (nx * wx + nz * wz) / l : 1.f;
+            const float ts = l > 1e-6f ? (wx * nz - wz * nx) / l : 0.f;
+            if (c < 2) {
+                out.d[2 * c]        = wx * P[c];
+                out.d[2 * c + 1]    = wz * P[c];
+                out.turn[2 * c]     = tc;
+                out.turn[2 * c + 1] = ts;
+            } else {
+                out.d2    = {wx * P[c], wz * P[c]};
+                out.turn2 = {tc, ts};
+            }
         }
         return out;
     }

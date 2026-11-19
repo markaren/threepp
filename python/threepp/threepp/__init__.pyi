@@ -2680,7 +2680,7 @@ class DisplacedMesh(Mesh):
         """
     def shore_bend(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple:
         """
-        The two long cascades' turn over the bed at a rest point, under shore_gain's opt-in: (dx0, dz0, dx1, dz1, amp0, amp1, cos0, sin0, cos1, sin1). Cascade c is read at (x + dxc, z + dzc), where the waves that reach (x, z) came from (its crests turned toward the shore and shortened over the bed), its displacement turned by (cosc, sinc); ampc is its refraction factor. (0, 0, 0, 0, 1, 1, 1, 0, 1, 0) in the open sea.
+        The two long cascades' turn over the bed at a rest point, under shore_gain's opt-in: (dx0, dz0, dx1, dz1, amp0, amp1, cos0, sin0, cos1, sin1, dx2, dz2, amp2, cos2, sin2). Cascade c is read at (x + dxc, z + dzc), where the waves that reach (x, z) came from (its crests turned toward the shore and shortened over the bed), its displacement turned by (cosc, sinc); ampc is its refraction factor. Cascade 2, the chop, is bent near the camera only (the shore's near window). (0, 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0) in the open sea.
         """
     def shore_depth(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> float:
         """

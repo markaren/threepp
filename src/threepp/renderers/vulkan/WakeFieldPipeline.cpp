@@ -588,15 +588,17 @@ namespace threepp::vulkan {
                                           VMA_MEMORY_USAGE_AUTO);
             ctx_.setObjectName(st->shoreDepth.handle, "ocean.shore.depth");
             // The bend's solve (a slot a window: 5 floats a cell after the k0
-            // it took, 5.2 MB at 512) and its raw fields (4 floats a cell of
-            // one window: 4.2 MB).
+            // it took, 5.2 MB at 512; then the chop's, the near window's: 2
+            // floats a cell, 2.1 MB) and its raw fields (4 floats a cell of
+            // one window and 2 of the chop's: 6.3 MB).
             st->bendRes  = shoreBendRes(st->res);
             const VkDeviceSize cells = VkDeviceSize(st->bendRes) * st->bendRes;
-            st->bendWork = createBuffer(ctx_.allocator(), ctx_.device(), kShoreLayers * (16u + cells * 5u * sizeof(float)),
+            st->bendWork = createBuffer(ctx_.allocator(), ctx_.device(),
+                                        kShoreLayers * (16u + cells * 5u * sizeof(float)) + cells * 2u * sizeof(float),
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                         VMA_MEMORY_USAGE_AUTO);
             ctx_.setObjectName(st->bendWork.handle, "ocean.shore.bendWork");
-            st->bendTemp = createBuffer(ctx_.allocator(), ctx_.device(), cells * 4u * sizeof(float),
+            st->bendTemp = createBuffer(ctx_.allocator(), ctx_.device(), cells * 6u * sizeof(float),
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                         VMA_MEMORY_USAGE_AUTO);
             ctx_.setObjectName(st->bendTemp.handle, "ocean.shore.bendTemp");
@@ -1313,6 +1315,9 @@ namespace threepp::vulkan {
         rp.cell      = texel[k] * float(ratio);
         rp.windX     = cwx;
         rp.windZ     = cwz;
+        // The chop (cascade 2) is bent over the near window alone.
+        rp.chopAddr  = st.bendWork.address + kShoreLayers * slot;
+        rp.cascades  = k == 0u ? 3u : 2u;
         const uint32_t cellGroups = (G * G + 511u) / 512u;
         auto dispatch = [&](uint32_t mode, uint32_t groups) {
             rp.mode = mode;
@@ -1338,7 +1343,7 @@ namespace threepp::vulkan {
             rp.sweep = order[sweep % 4u];
             rp.row0  = 1u + chunk * kShoreBendRows;
             rp.rows  = kShoreBendRows;
-            dispatch(1u, 2u);// a workgroup a cascade
+            dispatch(1u, rp.cascades);// a workgroup a cascade
         } else {
             // The raw fields, a chunk of rows a frame (the lee's marches upwind are the cost).
             const uint32_t rows = (G + kShoreBendRawChunks - 1u) / kShoreBendRawChunks;

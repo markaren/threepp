@@ -86,11 +86,24 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanShoreB
     OceanShoreWindow win[2];// 0 near, 1 far
     vec2  heading;          // the sea's heading it was solved for (unit)
     uint  res;
-    uint  _pad0;
+    uint  chop;             // 1 once the near window's chop table (below) is laid
     float v[];// window k's cell (i, j) at ((k * res + j) * res + i) * 4: dP0, dP1, A0, A1
 };
 OceanShoreBendTable oceanShoreBendTable(uint64_t addr, uint depthRes) {
     return OceanShoreBendTable(addr + 80ul + uint64_t(depthRes) * uint64_t(depthRes) * 8ul);
+}
+// THE CHOP's bend (cascade 2), over the near window only (the chop is seen
+// near the camera, and its few metres of wavelength feel the bed only in the
+// last metre or two): after both windows' cells, a uint a cell of the near
+// window, packHalf2x16(dP2, A2) (half floats: a centimetre at 30 m of
+// departure, a hundredth of the chop's wavelength). It goes to the open sea
+// over the near window's outer quarter, as the near window's bend does.
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanShoreChopTable {
+    uint v[];// the near window's cell (i, j) at j * res + i
+};
+OceanShoreChopTable oceanShoreChopTable(uint64_t addr, uint depthRes, uint n) {
+    return OceanShoreChopTable(addr + 80ul + uint64_t(depthRes) * uint64_t(depthRes) * 8ul + 48ul +
+                               uint64_t(n) * uint64_t(n) * 32ul);
 }
 // The near window's bend goes over to the far one's over this share of its
 // side from each edge (a quarter: the two solves agree in slope and differ by
@@ -175,9 +188,29 @@ void oceanShoreBendIn(OceanShoreBendTable t, uint k, uint n, vec2 xz, float blen
 // their factors A, the near window's over the far one's and the far one's over
 // the open sea's (0 and 1, exactly where neither has anything); the heading,
 // and the cell (m) of the table that holds it.
-void oceanShoreBendAt(uint64_t addr, vec2 xz, out vec2 dP, out vec2 A, out vec2 heading, out float cellM) {
-    dP      = vec2(0.0);
-    A       = vec2(1.0);
+// The chop's (dP2, A2) at a world xz, the near window's weight wN taken
+// (its bilinear read of the half floats; (0, 1) exactly where it has none).
+vec2 oceanShoreChopIn(OceanShoreBendTable t, uint64_t addr, uint depthRes, uint n, vec2 xz, float wN) {
+    if (wN <= 0.0 || t.chop == 0u) return vec2(0.0, 1.0);
+    OceanShoreChopTable ct = oceanShoreChopTable(addr, depthRes, n);
+    const OceanShoreWindow w = t.win[0];
+    const float fn = float(n);
+    const vec2  f  = clamp((xz - vec2(w.originX, w.originZ)) / w.texel - 0.5, vec2(0.0), vec2(fn - 1.0));
+    const uvec2 i0 = uvec2(min(floor(f), vec2(fn - 2.0)));
+    const vec2  tt = f - vec2(i0);
+    const uint  a  = i0.y * n + i0.x;
+    const uint  u00 = ct.v[a], u10 = ct.v[a + 1u], u01 = ct.v[a + n], u11 = ct.v[a + n + 1u];
+    // (equal corners give that value exactly: the open sea stays W = x)
+    const vec2 v = (u00 == u10 && u01 == u11 && u00 == u01)
+                 ? unpackHalf2x16(u00)
+                 : mix(mix(unpackHalf2x16(u00), unpackHalf2x16(u10), tt.x),
+                       mix(unpackHalf2x16(u01), unpackHalf2x16(u11), tt.x), tt.y);
+    return vec2(wN * v.x, 1.0 + wN * (v.y - 1.0));
+}
+
+void oceanShoreBendAt(uint64_t addr, vec2 xz, out vec3 dP, out vec3 A, out vec2 heading, out float cellM) {
+    dP      = vec3(0.0);
+    A       = vec3(1.0);
     heading = vec2(1.0, 0.0);
     cellM   = 1.0;
     if (addr == 0ul) return;
@@ -190,29 +223,31 @@ void oceanShoreBendAt(uint64_t addr, vec2 xz, out vec2 dP, out vec2 A, out vec2 
     oceanShoreBendIn(t, 0u, n, xz, kShoreBendNearBlend, vN, wN);
     oceanShoreBendIn(t, 1u, n, xz, 1.0 / 16.0, vF, wF);
     heading = t.heading;
-    dP = wF * vF.xy;
-    A  = 1.0 + wF * (vF.zw - 1.0);
-    dP = dP + wN * (vN.xy - dP);
-    A  = A + wN * (vN.zw - A);
+    dP.xy = wF * vF.xy;
+    A.xy  = 1.0 + wF * (vF.zw - 1.0);
+    dP.xy = dP.xy + wN * (vN.xy - dP.xy);
+    A.xy  = A.xy + wN * (vN.zw - A.xy);
+    // The chop: the near window's alone.
+    const vec2 c2 = oceanShoreChopIn(t, addr, b.res, n, xz, wN);
+    dP.z = c2.x;
+    A.z  = c2.y;
     const float cF = t.win[1].live > 0.5 ? t.win[1].texel : t.win[0].texel;
     const float cN = t.win[0].live > 0.5 ? t.win[0].texel : cF;
     cellM = max(mix(cF, cN, wN), 0.05);
 }
 
-// The bend at a rest point as a reader of the cascades takes it: each long
-// cascade is read at W_c(x) = x + w dP_c, near x at W_c(x) + J_c (y - x) (the
-// warp's Jacobian I + w grad dP_c, the departure differenced a cell either
-// way); a vector of the cascade's (its horizontal displacement) comes back to
-// the world turned from the sea's heading w to the waves' own here, J_c^T w =
-// grad P_c (turn: its cos, sin); amp the refraction factors. on false: the
-// open sea, where W = x exactly and nothing need be read.
 struct OceanShoreBend {
-    vec4 d;   // departures W - x: cascade 0's .xy, cascade 1's .zw (m)
-    mat2 j0;  // dW0 / dx (columns: d / dx, d / dz)
+    vec4 d;    // departures W - x: cascade 0's .xy, cascade 1's .zw (m)
+    vec2 d2;   // ... and the chop's
+    mat2 j0;   // dW0 / dx (columns: d / dx, d / dz)
     mat2 j1;
-    vec4 turn;// cascade 0's (cos, sin) .xy, cascade 1's .zw
-    vec2 amp;
-    bool on;
+    mat2 j2;
+    vec4 turn; // cascade 0's (cos, sin) .xy, cascade 1's .zw
+    vec2 turn2;// ... and the chop's
+    vec3 amp;  // the three cascades' factors
+    float n2;  // the chop's compression |grad P2| (1 in the open sea)
+    bool on;   // the long cascades are bent here
+    bool on2;  // the chop is
 };
 vec2 oceanShoreTurnOf(vec2 w, vec2 g) {
     const vec2  n = w + g;// grad P = w + grad dP
@@ -223,42 +258,103 @@ vec2 oceanShoreTurnOf(vec2 w, vec2 g) {
 }
 OceanShoreBend oceanShoreBend(uint64_t addr, vec2 xz) {
     OceanShoreBend s;
-    s.d    = vec4(0.0);
-    s.j0   = mat2(1.0);
-    s.j1   = mat2(1.0);
-    s.turn = vec4(1.0, 0.0, 1.0, 0.0);
-    vec2  dP, w, aT, wT;
+    s.d     = vec4(0.0);
+    s.d2    = vec2(0.0);
+    s.j0    = mat2(1.0);
+    s.j1    = mat2(1.0);
+    s.j2    = mat2(1.0);
+    s.turn  = vec4(1.0, 0.0, 1.0, 0.0);
+    s.turn2 = vec2(1.0, 0.0);
+    s.n2    = 1.0;
+    vec3  dP, aT, pXp, pXm, pZp, pZm;
+    vec2  w, wT;
     float h, hT;
     oceanShoreBendAt(addr, xz, dP, s.amp, w, h);
-    vec2 pXp, pXm, pZp, pZm;
     oceanShoreBendAt(addr, xz + vec2(h, 0.0), pXp, aT, wT, hT);
     oceanShoreBendAt(addr, xz - vec2(h, 0.0), pXm, aT, wT, hT);
     oceanShoreBendAt(addr, xz + vec2(0.0, h), pZp, aT, wT, hT);
     oceanShoreBendAt(addr, xz - vec2(0.0, h), pZm, aT, wT, hT);
-    s.on = any(notEqual(vec4(dP, pXp), vec4(0.0))) || any(notEqual(vec4(pXm, pZp), vec4(0.0))) ||
-           any(notEqual(pZm, vec2(0.0)));
-    if (!s.on) return s;
-    const vec2 gx = (pXp - pXm) / (2.0 * h);// d dP_c / dx, c = 0, 1
-    const vec2 gz = (pZp - pZm) / (2.0 * h);
-    s.d    = vec4(w * dP.x, w * dP.y);
-    s.j0   = mat2(1.0) + mat2(w * gx.x, w * gz.x);
-    s.j1   = mat2(1.0) + mat2(w * gx.y, w * gz.y);
-    s.turn = vec4(oceanShoreTurnOf(w, vec2(gx.x, gz.x)), oceanShoreTurnOf(w, vec2(gx.y, gz.y)));
+    s.on  = any(notEqual(vec4(dP.xy, pXp.xy), vec4(0.0))) || any(notEqual(vec4(pXm.xy, pZp.xy), vec4(0.0))) ||
+            any(notEqual(pZm.xy, vec2(0.0)));
+    s.on2 = any(notEqual(vec4(dP.z, pXp.z, pXm.z, pZp.z), vec4(0.0))) || pZm.z != 0.0;
+    const vec3 gx = (pXp - pXm) / (2.0 * h);// d dP_c / dx
+    const vec3 gz = (pZp - pZm) / (2.0 * h);
+    if (s.on) {
+        s.d    = vec4(w * dP.x, w * dP.y);
+        s.j0   = mat2(1.0) + mat2(w * gx.x, w * gz.x);
+        s.j1   = mat2(1.0) + mat2(w * gx.y, w * gz.y);
+        s.turn = vec4(oceanShoreTurnOf(w, vec2(gx.x, gz.x)), oceanShoreTurnOf(w, vec2(gx.y, gz.y)));
+    }
+    if (s.on2) {
+        s.d2    = w * dP.z;
+        s.j2    = mat2(1.0) + mat2(w * gx.z, w * gz.z);
+        s.turn2 = oceanShoreTurnOf(w, vec2(gx.z, gz.z));
+        s.n2    = length(w + vec2(gx.z, gz.z));
+    }
     return s;
 }
+// The near window's weight at a world xz (oceanShoreBendIn's, without its read).
+float oceanShoreNearWeight(OceanShoreWindow w, uint n, vec2 xz) {
+    if (w.live < 0.5) return 0.0;
+    const vec2 uv = (xz - vec2(w.originX, w.originZ)) / (w.texel * float(n));
+    const vec2 e  = min(uv, 1.0 - uv);
+    return smoothstep(0.0, kShoreBendNearBlend, min(e.x, e.y));
+}
+
+// The chop's bend alone (oceanShoreBend's d2, j2, turn2, n2, on2 and amp.z;
+// the long cascades' left as the open sea): what the shade's per-pixel fine
+// cascade needs, from the near window's half-float table only.
+OceanShoreBend oceanShoreChopBend(uint64_t addr, vec2 xz) {
+    OceanShoreBend s;
+    s.d     = vec4(0.0);
+    s.d2    = vec2(0.0);
+    s.j0    = mat2(1.0);
+    s.j1    = mat2(1.0);
+    s.j2    = mat2(1.0);
+    s.turn  = vec4(1.0, 0.0, 1.0, 0.0);
+    s.turn2 = vec2(1.0, 0.0);
+    s.amp   = vec3(1.0);
+    s.n2    = 1.0;
+    s.on    = false;
+    s.on2   = false;
+    if (addr == 0ul) return s;
+    OceanShoreDepth b = OceanShoreDepth(addr);
+    const uint n = b.bendRes;
+    if (n < 2u) return s;
+    OceanShoreBendTable t = oceanShoreBendTable(addr, b.res);
+    if (t.chop == 0u || t.win[0].live < 0.5) return s;
+    const OceanShoreWindow nw = t.win[0];
+    const float h = max(nw.texel, 0.05);
+    const vec2 c  = oceanShoreChopIn(t, addr, b.res, n, xz, oceanShoreNearWeight(nw, n, xz));
+    const float xp = oceanShoreChopIn(t, addr, b.res, n, xz + vec2(h, 0.0), oceanShoreNearWeight(nw, n, xz + vec2(h, 0.0))).x;
+    const float xm = oceanShoreChopIn(t, addr, b.res, n, xz - vec2(h, 0.0), oceanShoreNearWeight(nw, n, xz - vec2(h, 0.0))).x;
+    const float zp = oceanShoreChopIn(t, addr, b.res, n, xz + vec2(0.0, h), oceanShoreNearWeight(nw, n, xz + vec2(0.0, h))).x;
+    const float zm = oceanShoreChopIn(t, addr, b.res, n, xz - vec2(0.0, h), oceanShoreNearWeight(nw, n, xz - vec2(0.0, h))).x;
+    s.amp.z = c.y;
+    s.on2   = c.x != 0.0 || xp != 0.0 || xm != 0.0 || zp != 0.0 || zm != 0.0;
+    if (!s.on2) return s;
+    const vec2 w = t.heading;
+    const vec2 g = vec2(xp - xm, zp - zm) / (2.0 * h);
+    s.d2    = w * c.x;
+    s.j2    = mat2(1.0) + mat2(w * g.x, w * g.y);
+    s.turn2 = oceanShoreTurnOf(w, g);
+    s.n2    = length(w + g);
+    return s;
+}
+
 // A cascade's vector turned with its crests.
 vec2 oceanShoreTurn(vec2 cs, vec2 v) {
     return vec2(cs.x * v.x - cs.y * v.y, cs.y * v.x + cs.x * v.y);
 }
 
 // The three cascades' gains at a world xz (1, 1, 1 where no window has a
-// depth, and with no buffer: addr 0), with the long cascades' refraction
-// factors amp (oceanShoreBend's, or oceanShoreBendAt's).
-vec3 oceanShoreGainWith(uint64_t addr, vec2 xz, vec2 amp) {
+// depth, and with no buffer: addr 0), with the cascades' refraction factors
+// amp (oceanShoreBend's, or oceanShoreBendAt's).
+vec3 oceanShoreGainWith(uint64_t addr, vec2 xz, vec3 amp) {
     if (addr == 0ul) return vec3(1.0);
     OceanShoreDepth b = OceanShoreDepth(addr);
     const uint res = b.res;
-    const vec3 a3 = vec3(amp, 1.0);
+    const vec3 a3 = amp;
     if (res == 0u) return a3;
     float wN, wF;
     const float dN = oceanShoreDepthIn(b, 0u, res, xz, wN);
@@ -270,7 +366,8 @@ vec3 oceanShoreGainWith(uint64_t addr, vec2 xz, vec2 amp) {
     return wN > 0.0 ? mix(gF, oceanShoreGainAt(dN, hs, km, a3), wN) : gF;
 }
 vec3 oceanShoreGain(uint64_t addr, vec2 xz) {
-    vec2  dP, A, w;
+    vec3  dP, A;
+    vec2  w;
     float h;
     oceanShoreBendAt(addr, xz, dP, A, w, h);
     return oceanShoreGainWith(addr, xz, A);

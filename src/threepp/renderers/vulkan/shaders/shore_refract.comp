@@ -64,6 +64,19 @@
 // kSmoothWaves of a wavelength and the factor with twice that, kSmoothAmp at
 // least (normalised Gaussians over the water's cells).
 //
+// THE CHOP. Cascade 2 (a few metres and less) is bent the same way over the
+// near window alone, with its own k0 (its measured km): its waves feel the
+// bed only where d < lambda / 2, a metre or two, so a few metres off steep
+// rock and tens of metres over a flat or a lagoon, which a near-window cell
+// (0.5 m) holds and a far one does not. Its edge holds the plane wave (there
+// is no far table for it) and its bend goes to the open sea over the near
+// window's outer quarter, as the near window's does. Its factor is the ray
+// spread's alone: the local wind remakes the chop within ten of its
+// wavelengths of open water, so it has no lee of its own. Its table is half
+// floats (ocean_shore_depth.glsl, OceanShoreChopTable).
+//
+// A cascade whose sea is under kSeaMin (a light air's) is not bent at all.
+//
 // THE SOLVE. Fast sweeping (Zhao 2005, "A fast sweeping method for Eikonal
 // equations") with a semi-Lagrangian update: a sweep marches the window's
 // rows along one axis, and each cell of a row takes the least of its own P and
@@ -91,7 +104,8 @@
 //           land where most are), the open sea's plane wave, the window's
 //           edge's (the far one's phase for the near window), unknown where
 //           the bed is felt; the cascades' k0 taken.
-//   mode 1  a chunk of one sweep's rows (one workgroup a cascade).
+//   mode 1  a chunk of one sweep's rows (one workgroup a cascade: 3 with the
+//           chop, the near window's).
 //   mode 2  a chunk of rows of the phase departures and the factors, the ray
 //           spacing's and the lee's (the temp buffer).
 //   mode 3  smoothed and published into the shore's depth buffer, after the
@@ -99,7 +113,7 @@
 
 layout(local_size_x = 512) in;
 
-// 72 bytes, mirrored by WakeFieldPipeline::ShoreRefractPush.
+// 88 bytes, mirrored by WakeFieldPipeline::ShoreRefractPush.
 layout(push_constant, scalar) uniform Pc {
     uint64_t depthAddr; // OceanShoreDepth: the depths, km; the bend's table after them
     uint64_t workAddr;  // OceanRefractWork
@@ -116,6 +130,9 @@ layout(push_constant, scalar) uniform Pc {
     uint  sweep;        // mode 1: 0 +x, 1 -x, 2 +z, 3 -z
     uint  row0;         // mode 1: the chunk's first row (1 .. res - 1)
     uint  rows;
+    uint64_t chopAddr;  // OceanRefractChop: the chop's solve (the near window's)
+    uint  cascades;     // 2, or 3 with the chop (the near window)
+    uint  _pad;
 } pc;
 
 // The solve: 5 floats a cell (its depth, then for cascades 0 and 1 the
@@ -129,8 +146,12 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanRefrac
     vec4  k0;  // .xy cascades 0 and 1 (rad/m), 0 = not solved
     float c[]; // cell (i, j) at (j * res + i) * 5
 };
+// The chop's (cascade 2's) solve, the near window's only: its two departures a cell.
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanRefractChop {
+    float c[]; // cell (i, j) at (j * res + i) * 2
+};
 layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanRefractTemp {
-    float c[]; // cell (i, j) at (j * res + i) * 4: per cascade the phase departure (land -kInf, unreached -kInf / 4) and the factor
+    float c[]; // per cascade the phase departure (land -kInf, unreached -kInf / 4) and the factor: tempAt
 };
 
 const float kInf         = 1.0e30;
@@ -147,7 +168,8 @@ const float kFetchSpread = 0.35;// rad: the lee is read along the heading and th
 const float kLeeShare    = 0.4; // the share of the fetch-limited lee drawn
 const float kSmoothWaves = 0.25;// the published fields are smoothed with sigma this share of a wavelength
 const float kSmoothAmp   = 12.0;// m: the factor's least smoothing (sigma)
-const float kSnap        = 1.0e-3;// departures (m) and factor changes under this are open sea, exactly
+const float kSnap        = 1.0e-3;
+const float kSeaMin      = 0.01;// m: a cascade whose significant height is under this is not bent// departures (m) and factor changes under this are open sea, exactly
 
 // The open sea for a cascade: water too deep for its waves to feel the bed.
 bool deepFor(float k0, float d) {
@@ -162,7 +184,28 @@ float indexAt(float k0, float d) {
 }
 
 uint cellIndex(uint i, uint j) {
-    return (j * pc.res + i) * 5u;
+    return j * pc.res + i;
+}
+// A cell's depth, and cascade c's two departures (P's and psi's), wherever
+// they are kept: cascades 0 and 1 beside the depth, the chop on its own.
+float depthOf(uint q) { return OceanRefractWork(pc.workAddr).c[q * 5u]; }
+float loadP(uint c, uint q) {
+    return c < 2u ? OceanRefractWork(pc.workAddr).c[q * 5u + 1u + c * 2u] : OceanRefractChop(pc.chopAddr).c[q * 2u];
+}
+float loadS(uint c, uint q) {
+    return c < 2u ? OceanRefractWork(pc.workAddr).c[q * 5u + 2u + c * 2u] : OceanRefractChop(pc.chopAddr).c[q * 2u + 1u];
+}
+void storeP(uint c, uint q, float v) {
+    if (c < 2u) OceanRefractWork(pc.workAddr).c[q * 5u + 1u + c * 2u] = v;
+    else        OceanRefractChop(pc.chopAddr).c[q * 2u] = v;
+}
+void storeS(uint c, uint q, float v) {
+    if (c < 2u) OceanRefractWork(pc.workAddr).c[q * 5u + 2u + c * 2u] = v;
+    else        OceanRefractChop(pc.chopAddr).c[q * 2u + 1u] = v;
+}
+// The raw fields' index of cascade c's (P, A) at cell q.
+uint tempAt(uint c, uint q) {
+    return c < 2u ? q * 4u + c * 2u : pc.res * pc.res * 4u + q * 2u;
 }
 
 // ── MODE 0: the start ────────────────────────────────────────────────────
@@ -170,8 +213,13 @@ void initCell(uint id) {
     OceanShoreDepth  sd = OceanShoreDepth(pc.depthAddr);
     OceanRefractWork wk = OceanRefractWork(pc.workAddr);
     const uint i = id % pc.res, j = id / pc.res;
-    const vec2 k0 = sd.km.xy;
-    if (id == 0u) wk.k0 = vec4(k0, 0.0, 0.0);
+    // The cascades' deep-water wavenumbers; a cascade with no sea to speak of
+    // (under a centimetre: a light air's) is not bent at all.
+    vec3 k0 = sd.km.xyz;
+    for (int c = 0; c < 3; ++c) {
+        if (sd.hs[c] < kSeaMin || (c == 2 && pc.cascades < 3u)) k0[c] = 0.0;
+    }
+    if (id == 0u) wk.k0 = vec4(k0, 0.0);
 
     // The depth: the window's texels under the cell, land where at least half
     // of them are (a pile's texels hold the water round it: shore_jfa.comp).
@@ -198,13 +246,15 @@ void initCell(uint id) {
         oceanShoreBendIn(oceanShoreBendTable(pc.depthAddr, pc.depthRes), 1u, pc.res,
                          vec2(pc.originX, pc.originZ) + (vec2(i, j) + 0.5) * pc.cell, 1.0e-6, farV, wF);
     }
+    // (The chop has no far table: its edge holds the plane wave, and its
+    // bend goes to the open sea over the near window's outer quarter anyway.)
     const uint q = cellIndex(i, j);
-    wk.c[q] = d;
-    for (uint c = 0u; c < 2u; ++c) {
+    wk.c[q * 5u] = d;
+    for (uint c = 0u; c < pc.cascades; ++c) {
         const bool deep = deepFor(k0[c], d);
         const bool src  = d > 0.0 && (edge || deep);
-        wk.c[q + 1u + c * 2u] = src ? (deep ? 0.0 : farV[c]) : kInf;
-        wk.c[q + 2u + c * 2u] = 0.0;
+        storeP(c, q, src ? ((deep || c == 2u) ? 0.0 : farV[c]) : kInf);
+        storeS(c, q, 0.0);
     }
 }
 
@@ -231,7 +281,6 @@ void sweepRows() {
     const float k0 = wk.k0[c];
     if (k0 <= 0.0) return;// (the whole workgroup)
     const bool on = t < pc.res;
-    const uint o  = 1u + c * 2u;
     // The march's two axes in the world: em the march's (row r + 1 lies a
     // cell along it), el the lateral (t + 1).
     const vec2 em = pc.sweep == 0u ? vec2(1.0, 0.0) : pc.sweep == 1u ? vec2(-1.0, 0.0)
@@ -250,9 +299,9 @@ void sweepRows() {
     if (on) {
         const uvec2 p = sweepCell(pc.row0 - 1u, t);
         const uint  q = cellIndex(p.x, p.y);
-        sP[0][t] = wk.c[q + o];
-        sS[0][t] = wk.c[q + o + 1u];
-        sN[0][t] = indexAt(k0, wk.c[q]);
+        sP[0][t] = loadP(c, q);
+        sS[0][t] = loadS(c, q);
+        sN[0][t] = indexAt(k0, depthOf(q));
     }
     barrier();
     const uint last = min(pc.row0 + pc.rows, pc.res);
@@ -262,10 +311,10 @@ void sweepRows() {
         if (on) {
             const uvec2 p  = sweepCell(r, t);
             const uint  q  = cellIndex(p.x, p.y);
-            const float d  = wk.c[q];
+            const float d  = depthOf(q);
             nN = indexAt(k0, d);
-            nP = wk.c[q + o];
-            nS = wk.c[q + o + 1u];
+            nP = loadP(c, q);
+            nS = loadS(c, q);
             // The open sea keeps the wind's own waves; where the bed is felt
             // the least of the paths in from the row behind.
             if (d > 0.0 && nN > 1.0) {
@@ -302,8 +351,8 @@ void sweepRows() {
                     }
                 }
                 if (better) {
-                    wk.c[q + o]      = nP;
-                    wk.c[q + o + 1u] = nS;
+                    storeP(c, q, nP);
+                    storeS(c, q, nS);
                 }
             }
         }
@@ -347,7 +396,7 @@ void rawCell(uint id) {
     OceanRefractTemp tp = OceanRefractTemp(pc.tempAddr);
     const uint  i  = id % pc.res, j = id / pc.res;
     const uint  q  = cellIndex(i, j);
-    const float d  = wk.c[q];
+    const float d  = depthOf(q);
     const vec2  w  = vec2(pc.windX, pc.windZ);
     const vec2  wp = vec2(-w.y, w.x);
     // THE LEE: the open water upwind, along the heading and kFetchSpread
@@ -367,15 +416,14 @@ void rawCell(uint id) {
             F[k] = fetchAlong(sd, from, dir, reach);
         }
     }
-    for (uint c = 0u; c < 2u; ++c) {
-        const uint  t  = (j * pc.res + i) * 4u + c * 2u;
+    for (uint c = 0u; c < pc.cascades; ++c) {
+        const uint  t  = tempAt(c, q);
         const float k0 = wk.k0[c];
         if (d <= 0.0) {// land: no water to read
             tp.c[t] = -kInf; tp.c[t + 1u] = 1.0;
             continue;
         }
-        const uint  o = q + 1u + c * 2u;
-        const float P = wk.c[o];// the departure P - w . x
+        const float P = loadP(c, q);// the departure P - w . x
         if (k0 <= 0.0) {
             tp.c[t] = 0.0; tp.c[t + 1u] = 1.0;
             continue;
@@ -386,10 +434,13 @@ void rawCell(uint id) {
         // kFetchWaves of their wavelengths: sqrt(F / Fc), averaged over the
         // three directions; UNDERSTATED, kLeeShare of it (the lee of a rock
         // keeps most of its long waves: they come round it).
+        // Not the chop's: the local wind remakes it within tens of metres of
+        // open water (ten of its wavelengths), and the lee of a rock that
+        // short is the waves' own wrapping, which the bend draws.
         const float Fc  = clamp(kFetchWaves * 6.2831853 / k0, kFetchMin, kFetchMax);
         float lee = 0.0;
         for (int k = 0; k < 3; ++k) lee += sqrt(clamp(F[k] / Fc, 0.0, 1.0));
-        lee = mix(1.0, lee * (1.0 / 3.0), kLeeShare);
+        lee = c < 2u ? mix(1.0, lee * (1.0 / 3.0), kLeeShare) : 1.0;
         if (P >= 0.5 * kInf) {
             // Water no ray from the open sea reaches (the shallows in the lee
             // of a point, a pond behind a mole): the least a spread draws,
@@ -397,7 +448,7 @@ void rawCell(uint id) {
             tp.c[t] = -0.25 * kInf; tp.c[t + 1u] = kRefractMin * lee;
             continue;
         }
-        const float S = wk.c[o + 1u];// psi - w_perp . x
+        const float S = loadS(c, q);// psi - w_perp . x
         // |grad psi|: each axis's central difference, or the one side where
         // the two differ more than threefold (a jump across a meeting line is
         // not a ray spacing; the smaller side everywhere, minmod, read the
@@ -410,8 +461,8 @@ void rawCell(uint id) {
                 const ivec2 nb  = ivec2(i, j) + (ax == 0 ? ivec2(sgn, 0) : ivec2(0, sgn));
                 if (any(lessThan(nb, ivec2(0))) || any(greaterThanEqual(nb, ivec2(pc.res)))) continue;
                 const uint qn = cellIndex(uint(nb.x), uint(nb.y));
-                if (wk.c[qn] <= 0.0 || wk.c[qn + 1u + c * 2u] >= 0.5 * kInf) continue;
-                side[k] = (wk.c[qn + 2u + c * 2u] - S) * float(sgn) / pc.cell + wp[ax];
+                if (depthOf(qn) <= 0.0 || loadP(c, qn) >= 0.5 * kInf) continue;
+                side[k] = (loadS(c, qn) - S) * float(sgn) / pc.cell + wp[ax];
             }
             const bool  l = side[0] < 1.0e8, r = side[1] < 1.0e8;
             const float lo = min(abs(side[0]), abs(side[1])), hi = max(l ? abs(side[0]) : 0.0, r ? abs(side[1]) : 0.0);
@@ -435,7 +486,8 @@ void publishCell(uint id) {
     OceanShoreBendTable bt = oceanShoreBendTable(pc.depthAddr, pc.depthRes);
     const int i = int(id % pc.res), j = int(id / pc.res);
     vec4 outV = vec4(0.0, 0.0, 1.0, 1.0);// the two phase departures, the two factors
-    for (uint c = 0u; c < 2u; ++c) {
+    vec2 chop = vec2(0.0, 1.0);          // the chop's (the near window's)
+    for (uint c = 0u; c < pc.cascades; ++c) {
         const float k0 = wk.k0[c];
         if (k0 <= 0.0) continue;
         // Normalised Gaussians over the water's cells (7 x 7 taps spaced to
@@ -452,7 +504,7 @@ void publishCell(uint id) {
             for (int b = -3; b <= 3; ++b) {
                 for (int a = -3; a <= 3; ++a) {
                     const ivec2 nb = clamp(ivec2(i + a * sp, j + b * sp), ivec2(0), ivec2(pc.res - 1u));
-                    const uint  t  = (uint(nb.y) * pc.res + uint(nb.x)) * 4u + c * 2u;
+                    const uint  t  = tempAt(c, uint(nb.y) * pc.res + uint(nb.x));
                     const float tP = tp.c[t];
                     if (tP < -0.5 * kInf) continue;// land
                     const vec2  r  = vec2(a, b) * float(sp);
@@ -473,15 +525,21 @@ void publishCell(uint id) {
         A = swA > 0.0 ? A / swA : 1.0;
         if (abs(P) < kSnap) P = 0.0;
         if (abs(A - 1.0) < kSnap) A = 1.0;
-        outV[c]      = P;
-        outV[2u + c] = A;
+        if (c < 2u) {
+            outV[c]      = P;
+            outV[2u + c] = A;
+        } else {
+            chop = vec2(P, A);
+        }
     }
     const uint base = ((pc.window * pc.res + uint(j)) * pc.res + uint(i)) * 4u;
     for (uint e = 0u; e < 4u; ++e) bt.v[base + e] = outV[e];
+    if (pc.cascades > 2u) oceanShoreChopTable(pc.depthAddr, pc.depthRes, pc.res).v[uint(j) * pc.res + uint(i)] = packHalf2x16(chop);
     if (id == 0u) {
         bt.win[pc.window] = OceanShoreWindow(pc.originX, pc.originZ, pc.cell, 1.0);
         bt.heading = vec2(pc.windX, pc.windZ);
         bt.res     = pc.res;
+        if (pc.cascades > 2u) bt.chop = 1u;
         sd.bendRes = pc.res;
     }
 }
