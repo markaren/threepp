@@ -12,19 +12,18 @@
 //   5. foam: made where the water is white (piling up, a steep surface, a fast shallow chute), carried, aged.
 // The sluice gate is a set of faces whose flux depth is capped by the gate's opening.
 //
-// Every loop runs over rows (threepp::parallelForEach: in parallel on MSVC, in order elsewhere) and within a row only
-// over its span of active cells. Each row writes only its own cells and faces, and the rows' sums are kept per row and
+// Every loop runs over rows (threepp::ThreadPool: a step forks a few dozen short loops, which a pool that stays awake
+// between them takes in microseconds) and within a row only over its span of active cells. Each row writes only its own cells and faces, and the rows' sums are kept per row and
 // added up serially, so a step gives the same numbers on any number of threads.
 
 #ifndef THREEPP_EXAMPLE_SLUICE_SHALLOW_WATER_HPP
 #define THREEPP_EXAMPLE_SLUICE_SHALLOW_WATER_HPP
 
-#include "threepp/utils/Parallel.hpp"
+#include "threepp/utils/ThreadPool.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <numeric>
 #include <vector>
 
 namespace sluice {
@@ -68,8 +67,6 @@ namespace sluice {
             wGate_.assign(zFaces, -1);
             lo_.assign(nz, 0);
             hi_.assign(nz, nx - 1);
-            rowIds_.resize(nz + 1);
-            std::iota(rowIds_.begin(), rowIds_.end(), 0);
         }
 
         [[nodiscard]] int cell(int i, int j) const { return j * nx + i; }
@@ -221,15 +218,13 @@ namespace sluice {
         std::vector<float> u_, u2_, hu_, fu_, w_, w2_, hw_, fw_;
         std::vector<int8_t> uGate_, wGate_;
         std::vector<int> lo_, hi_;
-        std::vector<int> rowIds_;// 0..nz, the rows handed to parallelForEach
         float gate_ = 0, volume_ = 0, gateFlux_ = 0;
         bool surfaced_ = false;
 
         // fn(j) for every row j in [j0, j1), the rows spread over the cores
         template<class Fn>
         void rows(int j0, int j1, Fn&& fn) const {
-            if (j1 <= j0) return;
-            threepp::parallelForEach(rowIds_.begin() + j0, rowIds_.begin() + j1, [&fn](int j) { fn(j); });
+            threepp::ThreadPool::shared().parallelFor(j0, j1, fn);
         }
 
         [[nodiscard]] int uf(int i, int j) const { return j * (nx + 1) + i; }// x face left of cell (i, j)
