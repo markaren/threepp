@@ -167,21 +167,24 @@ float sampleBicubicR1(sampler2D tex, vec2 uv) { return sampleBicubicRG(tex, uv).
 // sampleDisplacement without its per-vertex mip levels (the window's texels are
 // finer than any spacing those serve).
 // Each cascade scaled by its gain over the bed g (as water_displace.comp
-// scales it); `incoming` is the same surface with every gain 1: the waves as
-// they come in from deep water, before the depth has taken anything from them.
-vec3 surfaceAt(vec2 q, vec3 g, out vec3 incoming) {
+// scales it); `incoming` is the same surface before the depth has taken
+// anything from it: the waves as they arrive from deep water, the long
+// cascades turned by the bed and spread or gathered by it (the bend: read at
+// W, their displacement turned with their crests, times their refraction
+// factors), not yet shoaled or held under the limit.
+vec3 surfaceAt(vec2 q, vec3 g, OceanShoreBend bd, out vec3 incoming) {
     vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0);
     if ((pc.cascadeMask & 1u) != 0u) {
         const float inv = 1.0 / pc.tileSize0;
-        const vec2  uv  = q * inv;
+        const vec2  uv  = (q + bd.d.xy) * inv;
         c0.y = sampleBicubicR1(height0, uv) * inv;
-        c0.xz = sampleBicubicRG(displace0, uv) * inv;
+        c0.xz = oceanShoreTurn(bd.turn.xy, sampleBicubicRG(displace0, uv)) * inv;
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float inv = 1.0 / pc.tileSize1;
-        const vec2  uv  = oceanC1Domain(q) * inv;
+        const vec2  uv  = oceanC1Domain(q + bd.d.zw) * inv;
         c1.y = sampleBicubicR1(height1, uv) * inv;
-        c1.xz = oceanC1World(sampleBicubicRG(displace1, uv)) * inv;
+        c1.xz = oceanShoreTurn(bd.turn.zw, oceanC1World(sampleBicubicRG(displace1, uv))) * inv;
     }
     if ((pc.cascadeMask & 4u) != 0u) {
         const float inv = 1.0 / pc.tileSize2;
@@ -190,7 +193,7 @@ vec3 surfaceAt(vec2 q, vec3 g, out vec3 incoming) {
         c2.xz = textureLod(displace2, uv, 0.0).rg * inv;
     }
     const vec3 k = vec3(pc.choppiness, pc.waveScale, pc.choppiness);
-    incoming = (c0 + c1 + c2) * k;
+    incoming = (bd.amp.x * c0 + bd.amp.y * c1 + c2) * k;
     return (g.x * c0 + g.y * c1 + g.z * c2) * k;
 }
 
@@ -265,9 +268,10 @@ void main() {
     // incoming wave, whose energy the depth's limit takes out of the drawn
     // sea by breaking it. Kept from step to step is the incoming surface.
     const vec2  q   = vec2(pc.originX, pc.originZ) + (vec2(px) + 0.5) * pc.texel;
-    const vec3  g   = oceanShoreGain(pc.depthAddr, q);
+    const OceanShoreBend bd = oceanShoreBend(pc.depthAddr, q);
+    const vec3  g   = oceanShoreGainWith(pc.depthAddr, q, bd.amp);
     vec3        s0;
-    const vec3  s3  = surfaceAt(q, g, s0);
+    const vec3  s3  = surfaceAt(q, g, bd, s0);
     const vec2  D   = s3.xz;
     const float eta = s0.y;// the incoming crest
     const ivec3 dstL = ivec3(px, int(pc.shoreLayer));
@@ -362,8 +366,10 @@ void main() {
         // (the wind's way) further out over a shoal.
         const float n0l  = length(map0.gb);
         const vec2  n0   = n0l > 1e-3 ? map0.gb / n0l : vec2(0.0);
+        // (the waves' own heading here: the wind's, turned by the bed as
+        // the middle cascade's crests are)
         const float wl   = length(drift);
-        const vec2  wind = wl > 1e-4 ? drift / wl : vec2(0.0);
+        const vec2  wind = wl > 1e-4 ? oceanShoreTurn(bd.turn.zw, drift / wl) : vec2(0.0);
         const float near = n0l > 1e-3 ? 1.0 - smoothstep(30.0 * pc.texel, 60.0 * pc.texel, map0.r) : 0.0;
         vec2 dir = near * n0 + (1.0 - near) * wind;
         const float dl = length(dir);

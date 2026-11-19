@@ -190,7 +190,14 @@
         if (geoms[id - 1u].foamAddress > 1ul) {
             const uvec2 sa = WakeTable(geoms[id - 1u].foamAddress).shoreDepth;
             if (sa != uvec2(0u)) {
-                gShoreGain    = oceanShoreGain(packUint2x32(sa), wPos - gCrestDisp);
+                // (and the long cascades' refraction over the bed: the
+                // factors in the gains, cascade 1's departure for the crest
+                // foam)
+                vec2  bendP, bendA, bendW;
+                float bendH;
+                oceanShoreBendAt(packUint2x32(sa), wPos - gCrestDisp, bendP, bendA, bendW, bendH);
+                gShoreGain    = oceanShoreGainWith(packUint2x32(sa), wPos - gCrestDisp, bendA);
+                gShoreBend1   = bendW * bendP.y;
                 const float s = sqrt(gShoreGain.z);
                 gKept   *= s;
                 slopeVar = slopeVarSub + s * s * max(slopeVar - slopeVarSub, 0.0);

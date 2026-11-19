@@ -4047,12 +4047,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 if (timed) gpuTimings_->end(cb, vulkan::TP_OceanShore, currentFrame);
                 // sampleHeight's copy of the shore's depth (the height
                 // readback's opt-in and ring; see DisplacedMeshState::
-                // shoreReadback): whole after a new depth was laid, else the
-                // header with the sea's statistics.
+                // shoreReadback): whole after a new depth or bend was laid,
+                // else the header with the sea's statistics.
                 if (dm.wantsHeightReadback && st.wake->depthLaid > 0u) {
                     Buffer& rb = st.shoreReadback[currentFrame];
-                    const VkDeviceSize whole = vulkan::kShoreDepthHeader +
-                                               VkDeviceSize(vulkan::kShoreLayers) * st.wake->res * st.wake->res * sizeof(float);
+                    const VkDeviceSize whole = vulkan::shoreDepthBytes(st.wake->res);
                     if (rb.handle == VK_NULL_HANDLE) {
                         rb = createBuffer(ctx->allocator(), ctx->device(), whole, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                           VMA_MEMORY_USAGE_AUTO,
@@ -4469,8 +4468,7 @@ void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, Displa
                 Buffer& rb = st.shoreReadback[slot];
                 const uint32_t laid = st.shoreReadbackLaid[slot];
                 if (rb.handle != VK_NULL_HANDLE && laid > 0u && st.wake) {
-                    const size_t words = vulkan::kShoreDepthHeader / sizeof(float) +
-                                         size_t(vulkan::kShoreLayers) * st.wake->res * st.wake->res;
+                    const size_t words = size_t(vulkan::shoreDepthBytes(st.wake->res) / sizeof(float));
                     const bool full = laid != st.shoreMirrorLaid || dm.shoreDepth.data.size() != words;
                     if (dm.shoreDepth.data.size() != words) dm.shoreDepth.data.assign(words, 0.f);
                     void* mapped = nullptr;

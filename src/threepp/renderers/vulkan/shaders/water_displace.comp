@@ -248,6 +248,20 @@ float gC2Lod = 0.0;
 float gC0Gain = 1.0;
 float gC1Gain = 1.0;
 float gC2Gain = 1.0;
+// THE BEND (ocean_shore_depth.glsl, shore_refract.comp): over the bed the
+// long cascades are read where the waves that reach this rest point came
+// from, W_c, so their crests turn toward the shore and shorten there. Taken
+// once at the vertex's rest point (set in main): W_c and its Jacobian J_c,
+// and every tap near it (the stencil's) at W_c + J_c (y - rest), so the
+// finite differences carry the chain rule; the cascade's displacement comes
+// back to the world turned with its crests (gBend.turn). Off it, gBend.on is
+// false and every read is the plain one.
+OceanShoreBend gBend;
+vec2           gBendRest = vec2(0.0);
+vec2 bendW0(vec2 y) { return gBend.on ? gBendRest + gBend.d.xy + gBend.j0 * (y - gBendRest) : y; }
+vec2 bendW1(vec2 y) { return gBend.on ? gBendRest + gBend.d.zw + gBend.j1 * (y - gBendRest) : y; }
+vec2 bendV0(vec2 v) { return gBend.on ? oceanShoreTurn(gBend.turn.xy, v) : v; }
+vec2 bendV1(vec2 v) { return gBend.on ? oceanShoreTurn(gBend.turn.zw, v) : v; }
 float c0R(sampler2D tex, vec2 uv) {
     if (gC0Lod <= 0.0) return gC0Gain * sampleBicubicR(tex, uv);
     const float lo = textureLod(tex, uv, gC0Lod).r;
@@ -278,11 +292,11 @@ float sampleHeightSmooth(vec2 worldXZ) {
     float h = 0.0;
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
-        h += c0R(height0, worldXZ * invTile) * invTile;
+        h += c0R(height0, bendW0(worldXZ) * invTile) * invTile;
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
-        h += c1R(height1, oceanC1Domain(worldXZ) * invTile) * invTile;
+        h += c1R(height1, oceanC1Domain(bendW1(worldXZ)) * invTile) * invTile;
     }
     return h * pc.waveScale;
 }
@@ -310,9 +324,9 @@ vec3 sampleDisplacement(vec2 worldXZ) {
     vec3 d = vec3(0.0);
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
-        const vec2 uv = worldXZ * invTile;
+        const vec2 uv = bendW0(worldXZ) * invTile;
         d.y += c0R(height0, uv) * invTile;
-        const vec2 dxz = c0RG(displace0, uv) * invTile;
+        const vec2 dxz = bendV0(c0RG(displace0, uv)) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -321,9 +335,9 @@ vec3 sampleDisplacement(vec2 worldXZ) {
         // ocean_cascade.glsl); its displacement is a domain-space vector, so
         // rotate it back into world before accumulating.
         const float invTile = 1.0 / pc.tileSize1;
-        const vec2 uv = oceanC1Domain(worldXZ) * invTile;
+        const vec2 uv = oceanC1Domain(bendW1(worldXZ)) * invTile;
         d.y += c1R(height1, uv) * invTile;
-        const vec2 dxz = oceanC1World(c1RG(displace1, uv)) * invTile;
+        const vec2 dxz = bendV1(oceanC1World(c1RG(displace1, uv))) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -367,8 +381,8 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
     vec4 d = vec4(0.0);
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
-        const vec2 uv = worldXZ * invTile;
-        const vec2 dxz = c0RG(displace0, uv) * invTile;
+        const vec2 uv = bendW0(worldXZ) * invTile;
+        const vec2 dxz = bendV0(c0RG(displace0, uv)) * invTile;
         const float h  = c0R(height0, uv) * invTile * pc.waveScale;
         d.y += h;
         if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm0);
@@ -377,8 +391,8 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
-        const vec2 uv = oceanC1Domain(worldXZ) * invTile;
-        const vec2 dxz = oceanC1World(c1RG(displace1, uv)) * invTile;
+        const vec2 uv = oceanC1Domain(bendW1(worldXZ)) * invTile;
+        const vec2 dxz = bendV1(oceanC1World(c1RG(displace1, uv))) * invTile;
         const float h  = c1R(height1, uv) * invTile * pc.waveScale;
         d.y += h;
         if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm1);
@@ -546,9 +560,14 @@ void main() {
     }
     // ... and the depth's (ocean_shore_depth.glsl): over shallow water each
     // cascade shoals and is held under the breaking limit, so a flat or a
-    // cove calms and no trough comes down to the bed.
+    // cove calms and no trough comes down to the bed; the long cascades turn
+    // with the bed (the bend), and are lower where its rays spread or none
+    // arrives (a lee).
+    gBend.on = false;
     if (pc.shoreAddr != 0ul) {
-        const vec3 g = oceanShoreGain(pc.shoreAddr, rest.xz);
+        gBend     = oceanShoreBend(pc.shoreAddr, rest.xz);
+        gBendRest = rest.xz;
+        const vec3 g = oceanShoreGainWith(pc.shoreAddr, rest.xz, gBend.amp);
         gC0Gain *= g.x;
         gC1Gain *= g.y;
         gC2Gain *= g.z;
@@ -681,31 +700,58 @@ void main() {
         // added per pixel by the deferred shade.
         vec2  sl  = vec2(0.0);
         float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+        // The bend: a cascade read at W(x) has the slope J^T grad h and the
+        // displacement gradient Rot (grad D) J (Rot its crests' turn; the
+        // symmetric part, as the fields hold it).
         if ((pc.cascadeMask & 1u) != 0u) {
             const float invTile = 1.0 / pc.tileSize0;
-            const vec2  uv = rest.xz * invTile;
-            sl += c0RG(slope0, uv) * invTile;
-            const vec2 jd = c0RG(jac0, uv) * invTile;
-            jxx += jd.x;
-            jzz += jd.y;
-            jxz += c0RG(height0, uv).g * invTile;
+            const vec2  uv = bendW0(rest.xz) * invTile;
+            const vec2  s0 = c0RG(slope0, uv) * invTile;
+            const vec2  jd = c0RG(jac0, uv) * invTile;
+            const float q0 = c0RG(height0, uv).g * invTile;
+            if (gBend.on) {
+                sl += transpose(gBend.j0) * s0;
+                const vec2 cs = gBend.turn.xy;
+                const mat2 M  = mat2(cs.x, cs.y, -cs.y, cs.x) * mat2(jd.x, q0, q0, jd.y) * gBend.j0;
+                jxx += M[0][0];
+                jzz += M[1][1];
+                jxz += 0.5 * (M[1][0] + M[0][1]);
+            } else {
+                sl  += s0;
+                jxx += jd.x;
+                jzz += jd.y;
+                jxz += q0;
+            }
         }
         if ((pc.cascadeMask & 2u) != 0u) {
             // Rotated sample domain d = R*x: a gradient comes back as
             // R^T*g (oceanC1World) and the displacement gradient as
             // R^T * Jd * R.
             const float invTile = 1.0 / pc.tileSize1;
-            const vec2  uv = oceanC1Domain(rest.xz) * invTile;
-            sl += oceanC1World(c1RG(slope1, uv)) * invTile;
+            const vec2  uv = oceanC1Domain(bendW1(rest.xz)) * invTile;
+            const vec2  s1 = oceanC1World(c1RG(slope1, uv)) * invTile;
             const vec2  jd = c1RG(jac1, uv) * invTile;
             const float p  = jd.x;
             const float r  = jd.y;
             const float q  = c1RG(height1, uv).g * invTile;
             const float c  = kOceanCascade1RotCos;
             const float sn = kOceanCascade1RotSin;
-            jxx += c * c * p + 2.0 * c * sn * q + sn * sn * r;
-            jzz += sn * sn * p - 2.0 * c * sn * q + c * c * r;
-            jxz += c * sn * (r - p) + (c * c - sn * sn) * q;
+            const float wxx = c * c * p + 2.0 * c * sn * q + sn * sn * r;
+            const float wzz = sn * sn * p - 2.0 * c * sn * q + c * c * r;
+            const float wxz = c * sn * (r - p) + (c * c - sn * sn) * q;
+            if (gBend.on) {
+                sl += transpose(gBend.j1) * s1;
+                const vec2 cs = gBend.turn.zw;
+                const mat2 M  = mat2(cs.x, cs.y, -cs.y, cs.x) * mat2(wxx, wxz, wxz, wzz) * gBend.j1;
+                jxx += M[0][0];
+                jzz += M[1][1];
+                jxz += 0.5 * (M[1][0] + M[0][1]);
+            } else {
+                sl  += s1;
+                jxx += wxx;
+                jzz += wzz;
+                jxz += wxz;
+            }
         }
         // Near a fold the chop correction fades back to the rest slope
         // (ocean_chop_normal.glsl); a vertex has no roughness to bank the

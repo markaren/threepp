@@ -200,21 +200,31 @@ namespace threepp {
             }
             return g;
         };
+        // The long cascades' turn over the bed (shoreBend): cascade i < 2 is
+        // read at q + its departure, its displacement turned with its crests.
+        const bool bent = !shoreDepth.data.empty();
+        auto bendAt = [&](float qx, float qz) { return bent ? shoreBend(qx, qz) : ShoreBend{}; };
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
             const std::array<float, 3> g = climate ? gains(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
+            const ShoreBend b = bendAt(qx, qz);
             for (uint32_t i = 0; i < 3; ++i) {
                 if ((cascadeMask & (1u << i)) == 0u) continue;
                 const CascadeField& cf = heightFields[i];
                 if (!hasField(cf, cf.disp)) continue;
                 const float invTile = 1.f / cf.tileSize;
-                const Vec2f p = cascadeDomain(i, qx, qz);
+                const bool  turn = b.on && i < 2u;
+                const Vec2f p = turn ? cascadeDomain(i, qx + b.d[2 * i], qz + b.d[2 * i + 1]) : cascadeDomain(i, qx, qz);
                 Vec2f v = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile,
                                       cascadeBicubic(i));
                 if (i == 1) {
                     // Domain vector back to world; mirror of oceanC1World().
                     v = {kOceanCascade1RotCos * v.x + kOceanCascade1RotSin * v.y,
                          -kOceanCascade1RotSin * v.x + kOceanCascade1RotCos * v.y};
+                }
+                if (turn) {
+                    const float c = b.turn[2 * i], s = b.turn[2 * i + 1];
+                    v = {c * v.x - s * v.y, s * v.x + c * v.y};
                 }
                 // Sharpness 0 keeps the historical sum, bit for bit.
                 const float c = (chop01 == chop) ? 1.f : (i < 2 ? chop01 : chop) / chop;
@@ -261,12 +271,14 @@ namespace threepp {
         float total = 0.f;
         float bound = 0.f;// second-order harmonic, already in world metres
         const std::array<float, 3> gq = climate ? gains(bestX, bestZ) : std::array<float, 3>{1.f, 1.f, 1.f};
+        const ShoreBend bq = bendAt(bestX, bestZ);
         for (uint32_t i = 0; i < 3; ++i) {
             if ((cascadeMask & (1u << i)) == 0u) continue;
             const CascadeField& cf = heightFields[i];
             if (!hasField(cf, cf.data)) continue;
             const float invTile = 1.f / cf.tileSize;
-            const Vec2f p = cascadeDomain(i, bestX, bestZ);
+            const Vec2f p = (bq.on && i < 2u) ? cascadeDomain(i, bestX + bq.d[2 * i], bestZ + bq.d[2 * i + 1])
+                                              : cascadeDomain(i, bestX, bestZ);
             Vec2f h = sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
                                   cascadeBicubic(i));
             if (climate) h.x *= gq[i];
@@ -359,8 +371,10 @@ namespace threepp {
         };
         const float* hs = &v[8];
         const float* km = &v[12];
+        const ShoreBend bend = shoreBend(x, z);
+        const std::array<float, 3> amp{bend.amp[0], bend.amp[1], 1.f};
         auto gainAt = [&](float d) {
-            std::array<float, 3> g{1.f, 1.f, 1.f};
+            std::array<float, 3> g = amp;
             if (d >= 60.f) return g;
             d = std::max(d, 0.f);
             constexpr float kGamma = 0.42f, kShare = 0.5f, kMax = 1.15f;
@@ -372,26 +386,113 @@ namespace threepp {
                     const float ks = 1.f / std::sqrt(std::tanh(kd) * (1.f + 2.f * kd / std::sinh(2.f * kd)));
                     s = std::min(1.f + (ks - 1.f) * kShare, kMax);
                 }
-                const float e    = hs[c] * hs[c] * s * s;
+                const float e    = hs[c] * hs[c] * s * s * (amp[c] * amp[c]);
                 const float take = std::min(e, budget);
                 budget -= take;
-                g[c] = e > 1e-12f ? s * std::sqrt(take / e) : s;
+                g[c] = e > 1e-12f ? amp[c] * s * std::sqrt(take / e) : amp[c] * s;
             }
             return g;
         };
         float wN = 0.f, wF = 0.f;
         const float dN = depthIn(0u, wN);
         const float dF = depthIn(1u, wF);
-        std::array<float, 3> g{1.f, 1.f, 1.f};
+        std::array<float, 3> g = amp;
         if (wF > 0.f) {
             const std::array<float, 3> f = gainAt(dF);
-            for (int c = 0; c < 3; ++c) g[c] = 1.f + (f[c] - 1.f) * wF;
+            for (int c = 0; c < 3; ++c) g[c] = amp[c] + (f[c] - amp[c]) * wF;
         }
         if (wN > 0.f) {
             const std::array<float, 3> nn = gainAt(dN);
             for (int c = 0; c < 3; ++c) g[c] = g[c] + (nn[c] - g[c]) * wN;
         }
         return g;
+    }
+
+    float DisplacedMesh::shoreDepthAt(float x, float z) const {
+        constexpr size_t kHeaderWords = 20;
+        const std::vector<float>& v = shoreDepth.data;
+        if (v.size() < kHeaderWords) return -1.f;
+        uint32_t res = 0;
+        std::memcpy(&res, &v[16], sizeof(res));
+        if (res < 2u || v.size() < kHeaderWords + 2u * size_t(res) * res) return -1.f;
+        for (uint32_t k = 0; k < 2u; ++k) {
+            const float* w = &v[k * 4u];
+            if (w[3] < 0.5f) continue;
+            const int i = static_cast<int>(std::floor((x - w[0]) / w[2]));
+            const int j = static_cast<int>(std::floor((z - w[1]) / w[2]));
+            if (i < 0 || j < 0 || i >= int(res) || j >= int(res)) continue;
+            return v[kHeaderWords + (size_t(k) * res + size_t(j)) * res + size_t(i)];
+        }
+        return -1.f;
+    }
+
+    DisplacedMesh::ShoreBend DisplacedMesh::shoreBend(float x, float z) const {
+        // ocean_shore_depth.glsl's oceanShoreBendAt and oceanShoreBend: the
+        // bend's table after the depths (the far window's), toward the open
+        // sea over its outer sixteenth.
+        ShoreBend out;
+        constexpr size_t kHeaderWords = 20, kBendHeaderWords = 8;
+        const std::vector<float>& v = shoreDepth.data;
+        if (v.size() < kHeaderWords) return out;
+        uint32_t res = 0, n = 0;
+        std::memcpy(&res, &v[16], sizeof(res));
+        std::memcpy(&n, &v[17], sizeof(n));
+        const size_t base = kHeaderWords + 2u * size_t(res) * res;
+        if (n < 2u || v.size() < base + kBendHeaderWords + size_t(n) * n * 4u) return out;
+        const float* T = &v[base];
+        if (T[3] < 0.5f) return out;
+        const float wx = T[4], wz = T[5];
+        const float fn = static_cast<float>(n);
+        auto at = [&](float px, float pz, float* P, float* A) {
+            P[0] = P[1] = 0.f;
+            A[0] = A[1] = 1.f;
+            const float u = (px - T[0]) / (T[2] * fn);
+            const float t = (pz - T[1]) / (T[2] * fn);
+            const float e = std::min(std::min(u, 1.f - u), std::min(t, 1.f - t));
+            const float s = std::clamp(e * 16.f, 0.f, 1.f);
+            const float wgt = s * s * (3.f - 2.f * s);
+            if (wgt <= 0.f) return;
+            const float fx = std::clamp(u * fn - 0.5f, 0.f, fn - 1.f);
+            const float fz = std::clamp(t * fn - 0.5f, 0.f, fn - 1.f);
+            const uint32_t i0 = std::min(static_cast<uint32_t>(fx), n - 2u);
+            const uint32_t j0 = std::min(static_cast<uint32_t>(fz), n - 2u);
+            const float tx = fx - float(i0), tz = fz - float(j0);
+            const float* C = &T[kBendHeaderWords + (size_t(j0) * n + i0) * 4u];
+            const size_t r = size_t(n) * 4u;
+            float val[4];
+            for (int c = 0; c < 4; ++c) {
+                const float a = C[c], b = C[4 + c], cc = C[r + c], d = C[r + 4 + c];
+                const float lo = a + (b - a) * tx, hi = cc + (d - cc) * tx;
+                val[c] = (a == b && cc == d && a == cc) ? a : lo + (hi - lo) * tz;
+            }
+            P[0] = wgt * val[0];
+            P[1] = wgt * val[1];
+            A[0] = 1.f + wgt * (val[2] - 1.f);
+            A[1] = 1.f + wgt * (val[3] - 1.f);
+        };
+        const float h = std::max(T[2], 0.05f);
+        float P[2], A[2], xp[2], xm[2], zp[2], zm[2], aT[2];
+        at(x, z, P, A);
+        out.amp = {A[0], A[1]};
+        at(x + h, z, xp, aT);
+        at(x - h, z, xm, aT);
+        at(x, z + h, zp, aT);
+        at(x, z - h, zm, aT);
+        for (int c = 0; c < 2; ++c) {
+            out.on = out.on || P[c] != 0.f || xp[c] != 0.f || xm[c] != 0.f || zp[c] != 0.f || zm[c] != 0.f;
+        }
+        if (!out.on) return out;
+        for (int c = 0; c < 2; ++c) {
+            out.d[2 * c]     = wx * P[c];
+            out.d[2 * c + 1] = wz * P[c];
+            // The waves' own heading here, grad P = w + grad dP, against the sea's.
+            const float nx = wx + (xp[c] - xm[c]) / (2.f * h);
+            const float nz = wz + (zp[c] - zm[c]) / (2.f * h);
+            const float l  = std::hypot(nx, nz);
+            out.turn[2 * c]     = l > 1e-6f ? (nx * wx + nz * wz) / l : 1.f;
+            out.turn[2 * c + 1] = l > 1e-6f ? (wx * nz - wz * nx) / l : 0.f;
+        }
+        return out;
     }
 
     bool DisplacedMesh::defaultRippleHeights() {
