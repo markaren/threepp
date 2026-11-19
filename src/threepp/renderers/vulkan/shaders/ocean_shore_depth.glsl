@@ -30,7 +30,7 @@
 //   the short wind waves a flat keeps, the long ones are what break on it.
 //
 //   THE BEND (shore_refract.comp). The two long cascades are read through a
-//   warp worked out from the depth by the ray method over the far window,
+//   warp worked out from the depth by the ray method over the shore windows,
 //   W(x) = x + w dP(x) (w the sea's heading, dP the departure of the waves'
 //   phase from the open sea's plane wave, in metres): their crests turn
 //   toward the shore, wrap round points and shoals, shorten and slow over the
@@ -43,8 +43,10 @@
 //   takes its share. In the open sea W = x and the factor is 1, exactly. Every reader of the cascades reads
 //   the warped cascade alike: the position, the displacement turned with the
 //   crests (to the local heading J^T w), the slopes by the chain rule (J^T),
-//   the crest foam at W, the surf's incoming crest, sampleHeight. The fine
-//   cascade (metres and less, the local wind's) is never warped.
+//   the crest foam at W, the surf's incoming crest, sampleHeight. The chop
+//   (cascade 2, metres and less) is bent alike near the camera only (the
+//   near window's own table, OceanShoreChopTable): it feels the bed only in
+//   the last metre or two, and has no lee (the local wind remakes it).
 //
 // Reflection is left out.
 //
