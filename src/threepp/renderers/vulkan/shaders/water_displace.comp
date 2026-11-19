@@ -64,7 +64,8 @@ layout(set = 0, binding = 10) uniform sampler2DArray wakeRipples;
 layout(set = 0, binding = 11) uniform sampler2D waveClimate;
 #include "ocean_climate.glsl"
 // The shore's depth (WakeFieldPipeline, the shore windows): the cascades'
-// gains over shallow water, read through pc.shoreAddr.
+// gains over shallow water and the long cascades' bend toward the shore,
+// read through pc.shoreAddr.
 #include "ocean_shore_depth.glsl"
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
@@ -126,7 +127,7 @@ layout(push_constant, scalar) uniform Pc {
     UvBuf   uvOut;          // crestFoam: the drawn disp.xz per vertex
     uint64_t wakeTableAddr; // the wake field's table; 0 = no ripple heights (then cascadeMask's
                             // bits 8-15 hold the ray-tracing proxy's stride, grid lines it keeps one of)
-    uint64_t shoreAddr;     // the shore's depth (OceanShoreDepth), or 0: the cascades' gains over the bed
+    uint64_t shoreAddr;     // the shore's depth (OceanShoreDepth), or 0: the cascades' gains and bend over the bed
 } pc;
 
 // (hullLocal, a rest point in a vessel's frame with its footprint fade, is in

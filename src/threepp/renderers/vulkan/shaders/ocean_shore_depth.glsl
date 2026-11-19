@@ -35,11 +35,12 @@
 //   phase from the open sea's plane wave, in metres): their crests turn
 //   toward the shore, wrap round points and shoals, shorten and slow over the
 //   bed (each wave keeps its frequency; the local wavenumber is the
-//   dispersion relation's), and where the rays spread or no ray from the open
-//   sea arrives (a lee) they are lower: refraction's Kr = sqrt(b0 / b),
-//   UNDERSTATED as the shoaling is (its square root), multiplies the
-//   cascade's height before the depth limit takes its share. In the open sea
-//   W = x and the factor is 1, exactly. Every reader of the cascades reads
+//   dispersion relation's); where the rays spread they are a little lower
+//   and where they gather a little higher (refraction's Kr = sqrt(b0 / b),
+//   much UNDERSTATED), and in the lee of land, by the open water upwind (a
+//   wind sea's fetch-limited growth, understated), lower: one factor a
+//   cascade, which multiplies the cascade's height before the depth limit
+//   takes its share. In the open sea W = x and the factor is 1, exactly. Every reader of the cascades reads
 //   the warped cascade alike: the position, the displacement turned with the
 //   crests (to the local heading J^T w), the slopes by the chain rule (J^T),
 //   the crest foam at W, the surf's incoming crest, sampleHeight. The fine

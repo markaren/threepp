@@ -39,7 +39,9 @@
 // THE SURF. The drawn sea over shallow water is scaled by its depth
 // (ocean_shore_depth.glsl), its tallest waves held at the breaking limit: what
 // the limit takes out of the waves is what breaks. So the breaking is read off
-// the INCOMING wave, the cascades before the depth's gains: where a parcel's
+// the INCOMING wave, the cascades before the depth's gains (but turned and
+// spread by the bed: ocean_shore_depth.glsl's bend, so a crest breaks along
+// its turned line, and less in a lee): where a parcel's
 // incoming crest stands past the limit at its depth (its height eta against
 // kCrestShare d, a crest's share of McCowan's 0.78 d) and is still rising or at
 // its top, the crest breaks: foam and air laid in proportion to how far past
