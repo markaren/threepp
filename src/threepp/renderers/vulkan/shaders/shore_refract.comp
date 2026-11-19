@@ -51,10 +51,11 @@
 // units, is the energy's spread along a crest (refraction's Kr = sqrt(b0 /
 // b)): higher on a point the rays gather on, lower in a bay they spread over.
 // UNDERSTATED, more than the shoaling: Kr^(1/4) = (b0 / b)^(1/8), between
-// kRefractMin and kRefractMax (a bay's crests a little lower, a point's a
-// little higher: where the depth holds the drawn sea under its limit, the
-// factor changes only how much of the incoming wave breaks, and at a half
-// power it took half the surf off a cove open to the fjord). Where fronts meet psi jumps: its gradient is
+// kRefractMin and kRefractMax (a point's crests a little higher, a bay's
+// hardly lower: where the depth holds the drawn sea under its limit the
+// factor changes only how much of the incoming wave breaks, the breaking is a
+// threshold, and a bay's spread at a half power took half the breakers off a
+// cove open to the fjord's whole fetch, at an eighth power still a quarter). Where fronts meet psi jumps: its gradient is
 // taken one-sided there. THE LEE: a wind sea's
 // height grows with its fetch, so behind land the long cascades are lower,
 // by the open water upwind along the heading and either side of it (the
@@ -136,7 +137,7 @@ const float kDeepCap     = 59.9;// m: the capture's deepest sounding (shore_capt
 const float kFeltKd      = 2.3; // k0 d over this (or the deepest sounding): open sea, the wind's own waves (n < 1.01)
 const float kForward     = 0.1; // a ray leaves the open sea only going with the waves (cos to the heading over this)
 const float kRefractMax  = 1.15;// the most a convergence draws (the shoaling's own cap) ...
-const float kRefractMin  = 0.9; // ... and the least a spread does (and water no ray reaches)
+const float kRefractMin  = 0.97;// ... and the least a spread does (and water no ray reaches)
 const float kFetchWaves  = 10.0;// a cascade's waves come up over this many of its wavelengths of open water ...
 const float kFetchMin    = 60.0;// m, ... at least
 const float kFetchMax    = 600.0;// m, ... and at most (well inside the window's 3/8 side ahead of the camera)
