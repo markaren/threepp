@@ -12,6 +12,7 @@ frame index, reads every sensor for N frames, and folds each stream into one
     python sensor_audit.py --frames 120 --out b.json      # fresh process
     python sensor_audit.py --compare a.json b.json        # exit 0 = bit-identical
     python sensor_audit.py --resolve fsr --out a_fsr.json # the rgb.fsr row instead
+    python sensor_audit.py --no-contraction --out a_nc.json  # shader float arithmetic pinned
 
 Rows (each a chained hash over all frames):
 
@@ -286,8 +287,16 @@ def run(args):
         save_sample()
         return manifest
 
+    # --no-contraction: every float arithmetic result in every shader module
+    # decorated NoContraction (GLSL `precise`), decided before the renderer.
+    if args.no_contraction:
+        if not hasattr(tp, "vulkan_set_no_contraction"):
+            sys.exit("--no-contraction: this threepp predates vulkan_set_no_contraction")
+        tp.vulkan_set_no_contraction(True)
     canvas = tp.Canvas("sensor_audit", args.width, args.height, vsync=False, headless=True)
     renderer = tp.VulkanRenderer(canvas)
+    manifest["meta"]["no_contraction"] = (bool(tp.vulkan_no_contraction())
+                                          if hasattr(tp, "vulkan_no_contraction") else "no binding")
     # Pinned, as in the C++ audits: nothing that adapts from image statistics
     # or from a third-party temporal black box. `--resolve fsr` lifts exactly
     # one pin, FSR, and renames the frame row so the two claims stay apart.
@@ -516,6 +525,8 @@ def main():
     ap.add_argument("--resolve", choices=("taa", "fsr"), default="taa",
                     help="temporal resolve for the frame row: the pinned in-house TAA (rgb), "
                          "or AMD FSR 3.1 as its own row (rgb.fsr)")
+    ap.add_argument("--no-contraction", action="store_true",
+                    help="decorate shader float arithmetic NoContraction (THREEPP_VK_NO_CONTRACTION)")
     ap.add_argument("--out", default="")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
     ap.add_argument("--sample", default="", metavar="NPZ",
@@ -537,7 +548,7 @@ def main():
         print(f"wrote {args.out}")
     for k, v in m["rows"].items():
         print(f"{k:14s} {v if isinstance(v, str) else v['fnv']}")
-    print("meta:", {k: m["meta"][k] for k in ("gpu", "pins", "sonar", "wall_seconds") if k in m["meta"]})
+    print("meta:", {k: m["meta"][k] for k in ("gpu", "pins", "no_contraction", "sonar", "wall_seconds") if k in m["meta"]})
 
 
 if __name__ == "__main__":

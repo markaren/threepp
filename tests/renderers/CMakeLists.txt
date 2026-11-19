@@ -328,6 +328,11 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # SPIR-V binding reflection against the embedded shaders; CPU only.
     add_test_executable(SpirvReflect_test)
     target_include_directories(SpirvReflect_test PRIVATE "${CMAKE_BINARY_DIR}/generated")
+    # The NoContraction rewrite (vulkan::setNoContraction) on a hand-built
+    # module and on embedded shaders: structure kept, every float arithmetic
+    # result decorated once, nothing else; CPU only.
+    add_test_executable(SpirvNoContraction_test)
+    target_include_directories(SpirvNoContraction_test PRIVATE "${CMAKE_BINARY_DIR}/generated")
 
     # More than 65,535 entries: the entry added last must still shade with its
     # own material (the ids attachment's index channel wrapped at 16 bits).
