@@ -26,6 +26,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Rng.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/core/NoiseUtils.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/utils/Parallel.hpp"
 
@@ -569,8 +570,6 @@ namespace threepp::terrain {
         }
 
         // ── noise primitives ─────────────────────────────────────────────────
-        static float fade(float t) { return t * t * t * (t * (t * 6.f - 15.f) + 10.f); }
-        static float lerp(float a, float b, float t) { return a + t * (b - a); }
         static float grad2(int h, float x, float y) {
             switch (h & 7) {
                 case 0: return x + y;
@@ -590,25 +589,18 @@ namespace threepp::terrain {
             const int Y = static_cast<int>(std::floor(y)) & 255;
             x -= std::floor(x);
             y -= std::floor(y);
-            const float u = fade(x), v = fade(y);
+            const float u = noise::fade(x), v = noise::fade(y);
             const int aa = perm_[perm_[X] + Y];
             const int ab = perm_[perm_[X] + Y + 1];
             const int ba = perm_[perm_[X + 1] + Y];
             const int bb = perm_[perm_[X + 1] + Y + 1];
-            const float x1 = lerp(grad2(aa, x, y), grad2(ba, x - 1.f, y), u);
-            const float x2 = lerp(grad2(ab, x, y - 1.f), grad2(bb, x - 1.f, y - 1.f), u);
-            return lerp(x1, x2, v);
+            const float x1 = noise::lerp(grad2(aa, x, y), grad2(ba, x - 1.f, y), u);
+            const float x2 = noise::lerp(grad2(ab, x, y - 1.f), grad2(bb, x - 1.f, y - 1.f), u);
+            return noise::lerp(x1, x2, v);
         }
 
         float fbm(float x, float y, int oct, float lac, float gain) const {
-            float f = 1.f, a = 1.f, sum = 0.f, norm = 0.f;
-            for (int i = 0; i < oct; ++i) {
-                sum += a * noise2(x * f, y * f);
-                norm += a;
-                f *= lac;
-                a *= gain;
-            }
-            return norm > 0.f ? sum / norm : 0.f;
+            return noise::fbmOf([this](float u, float v) { return noise2(u, v); }, x, y, oct, lac, gain);
         }
 
         float ridged(float x, float y, int oct, float lac, float gain, float sharp) const {
@@ -633,7 +625,7 @@ namespace threepp::terrain {
             const float fb = fbm(x, y, oct, lac, gain) * 0.5f + 0.5f;
             const float rg = ridged(x, y, oct, lac, gain, sharp);
             const float t = std::clamp(fb, 0.f, 1.f);
-            return std::clamp(lerp(fb, rg, 0.5f * t + 0.25f * sharp), 0.f, 1.f);
+            return std::clamp(noise::lerp(fb, rg, 0.5f * t + 0.25f * sharp), 0.f, 1.f);
         }
 
         std::array<int, 512> perm_{};

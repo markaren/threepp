@@ -2,6 +2,7 @@
 
 #include "threepp/core/Uniform.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Sky.hpp"
 
@@ -34,11 +35,6 @@ namespace {
     float sunIntensity(float zenithAngleCos) {
         zenithAngleCos = std::clamp(zenithAngleCos, -1.0f, 1.0f);
         return kEE * std::max(0.0f, 1.0f - std::pow(kE, -((kCutoffAngle - std::acos(zenithAngleCos)) / kSteepness)));
-    }
-
-    float smoothstep(float e0, float e1, float x) {
-        const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
-        return t * t * (3.0f - 2.0f * t);
     }
 
     float rayleighPhase(float cosTheta) {
@@ -126,7 +122,7 @@ void threepp::preethamRadiance(const PreethamSkyParams& p, const float dir[3], b
     const float rPhase = rayleighPhase(cosTheta * 0.5f + 0.5f);
     const float mPhase = hgPhase(cosTheta, p.mieDirectionalG);
     const float sunfadeMix = std::clamp(std::pow(1.0f - dot3(p.up, p.sunDir), 5.0f), 0.0f, 1.0f);
-    const float sundisk = withDisc ? smoothstep(kSunAngularDiameterCos, kSunAngularDiameterCos + 0.00002f, cosTheta) : 0.0f;
+    const float sundisk = withDisc ? math::smoothstep(kSunAngularDiameterCos, kSunAngularDiameterCos + 0.00002f, cosTheta) : 0.0f;
     const float bias[3] = {0.0f, 0.0003f, 0.00075f};
     const float gammaInv = 1.0f / (1.2f + (1.2f * sunfade));
     for (int i = 0; i < 3; ++i) {

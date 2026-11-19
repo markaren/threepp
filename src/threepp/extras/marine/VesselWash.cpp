@@ -12,11 +12,6 @@ using namespace threepp::marine;
 
 namespace {
 
-    float smoothstep(float a, float b, float x) {
-        const float t = std::clamp((x - a) / (b - a), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
-
     // The plan form the ocean's hull footprint has (water_displace.comp
     // hullLocal), as a share of the half beam at s in [-1, 1], stern to bow.
     float planForm(float s) {
@@ -221,16 +216,16 @@ void VesselWash::update(float dt, const Vector3& origin, const Vector3& forward,
     const float rh = std::max(hull_.halfBeam - zs, 0.1f);// a hull's half-breadth at the water
     patch.eddy = std::max(kEddy * std::max(widest, rh), 4.f * texel);
     const float froude = std::abs(u) / std::sqrt(kG * 2.f * hl);
-    const float lane   = lanes ? smoothstep(0.15f, 0.6f, std::abs(u)) : 0.f;
+    const float lane   = lanes ? math::smoothstep(0.15f, 0.6f, std::abs(u)) : 0.f;
     static const std::string kHullNames[2] = {"hull_0", "hull_1"};
     if (lane > 0.f) {
-        const float dry = smoothstep(0.35f, 0.85f, froude);// a transom runs dry and white when she is fast for her length
+        const float dry = math::smoothstep(0.35f, 0.85f, froude);// a transom runs dry and white when she is fast for her length
         const float x   = hull_.centre - std::copysign(hl, u);
         const int hulls = zs > 0.f ? 2 : 1;
         for (int k = 0; k < hulls; ++k) {
             const float z = hulls == 2 ? (k == 0 ? -zs : zs) : 0.f;
             emit(kHullNames[k], origin.x + fx * x + sx * z, origin.z + fz * x + sz * z, 0.15f * vbx, 0.15f * vbz,
-                 std::max(rh, 1.25f * texel), smoothstep(0.45f, 1.05f, froude) * dry, dry, 0.07f * std::abs(u), lane);
+                 std::max(rh, 1.25f * texel), math::smoothstep(0.45f, 1.05f, froude) * dry, dry, 0.07f * std::abs(u), lane);
         }
     } else {
         last_.erase(kHullNames[0]);

@@ -14,6 +14,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -39,16 +40,9 @@ namespace {
     // that spells its files differently.
     constexpr float kCycleRatio = 2.5f;
 
-    std::string lowered(std::string text) {
-
-        std::transform(text.begin(), text.end(), text.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return text;
-    }
-
     bool mentions(const std::string& haystack, const char* needle) {
 
-        return lowered(haystack).find(needle) != std::string::npos;
+        return utils::toLower(haystack).find(needle) != std::string::npos;
     }
 
     CharacterConfig::Facing facingFrom(std::string_view text, CharacterConfig::Facing fallback) {

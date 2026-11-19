@@ -1,5 +1,6 @@
 
 #include "FileBrowser.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <imgui.h>
 
@@ -9,13 +10,6 @@
 using namespace threepp::editor;
 
 namespace {
-
-    std::string toLower(std::string text) {
-
-        std::transform(text.begin(), text.end(), text.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return text;
-    }
 
     void copyInto(char* buffer, std::size_t size, const std::string& text) {
 
@@ -36,7 +30,7 @@ void FileBrowser::open(std::string title,
     title_ = std::move(title);
     mode_ = mode;
     extensions_.clear();
-    for (auto& extension : extensions) extensions_.push_back(toLower(extension));
+    for (auto& extension : extensions) extensions_.push_back(threepp::utils::toLower(extension));
 
     std::error_code ec;
     auto directory = startDirectory;
@@ -93,14 +87,14 @@ void FileBrowser::refresh() {
     // file dialog uses, and the one users scan fastest.
     std::sort(entries_.begin(), entries_.end(), [](const Entry& a, const Entry& b) {
         if (a.isDirectory != b.isDirectory) return a.isDirectory;
-        return toLower(a.name) < toLower(b.name);
+        return threepp::utils::toLower(a.name) < threepp::utils::toLower(b.name);
     });
 }
 
 bool FileBrowser::matches(const std::filesystem::path& path) const {
 
     if (extensions_.empty()) return true;
-    const auto extension = toLower(path.extension().string());
+    const auto extension = threepp::utils::toLower(path.extension().string());
     return std::find(extensions_.begin(), extensions_.end(), extension) != extensions_.end();
 }
 

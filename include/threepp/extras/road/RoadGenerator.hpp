@@ -31,6 +31,7 @@
 
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/core/NoiseUtils.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/math/Vector3.hpp"
 
@@ -240,7 +241,7 @@ namespace threepp::road {
         //   mix(terrainHeight, centerHeightAt(x,z), corridorWeight(x,z))
         [[nodiscard]] float groundHeight(float terrainHeight, float x, float z) const {
             const float w = corridorWeight(x, z);
-            return lerp(terrainHeight, centerHeightAt(x, z), w);
+            return noise::lerp(terrainHeight, centerHeightAt(x, z), w);
         }
 
         // Build the paved ribbon plus graded shoulder strips as one indexed
@@ -326,18 +327,18 @@ namespace threepp::road {
                     const size_t j = std::min(i + 1, n - 1);
                     const Sample& a = samples_[i];
                     const Sample& b = samples_[j];
-                    nd.x = lerp(a.pos.x, b.pos.x, t);
-                    nd.z = lerp(a.pos.z, b.pos.z, t);
-                    nd.h = lerp(a.height, b.height, t);
-                    nd.rx = lerp(a.right.x, b.right.x, t);
-                    nd.rz = lerp(a.right.z, b.right.z, t);
+                    nd.x = noise::lerp(a.pos.x, b.pos.x, t);
+                    nd.z = noise::lerp(a.pos.z, b.pos.z, t);
+                    nd.h = noise::lerp(a.height, b.height, t);
+                    nd.rx = noise::lerp(a.right.x, b.right.x, t);
+                    nd.rz = noise::lerp(a.right.z, b.right.z, t);
                     const float rl = std::sqrt(nd.rx * nd.rx + nd.rz * nd.rz);
                     if (rl > 1e-6f) {
                         nd.rx /= rl;
                         nd.rz /= rl;
                     }
-                    bank = lerp(bankingAngle(i), bankingAngle(j), t);
-                    nd.v = (lerp(a.arcLength, b.arcLength, t) + vOffsetMeters) / tile;
+                    bank = noise::lerp(bankingAngle(i), bankingAngle(j), t);
+                    nd.v = (noise::lerp(a.arcLength, b.arcLength, t) + vOffsetMeters) / tile;
                 }
                 nd.cb = std::cos(bank);
                 nd.sb = std::sin(bank);
@@ -470,15 +471,15 @@ namespace threepp::road {
             const Sample& b = samples_[hi];
             const float span = std::max(b.arcLength - a.arcLength, 1e-6f);
             const float t = std::clamp((station - a.arcLength) / span, 0.f, 1.f);
-            const float bank = lerp(bankingAngle(lo), bankingAngle(hi), t);
+            const float bank = noise::lerp(bankingAngle(lo), bankingAngle(hi), t);
             const float cb = std::cos(bank), sb = std::sin(bank);
-            float rx = lerp(a.right.x, b.right.x, t);
-            float rz = lerp(a.right.z, b.right.z, t);
+            float rx = noise::lerp(a.right.x, b.right.x, t);
+            float rz = noise::lerp(a.right.z, b.right.z, t);
             const float rl = std::sqrt(rx * rx + rz * rz);
             if (rl > 1e-6f) { rx /= rl; rz /= rl; }
-            const float cx = lerp(a.pos.x, b.pos.x, t);
-            const float cz = lerp(a.pos.z, b.pos.z, t);
-            const float ch = lerp(a.height, b.height, t);
+            const float cx = noise::lerp(a.pos.x, b.pos.x, t);
+            const float cz = noise::lerp(a.pos.z, b.pos.z, t);
+            const float ch = noise::lerp(a.height, b.height, t);
             return Vector3(cx + lat * (rx * cb),
                            ch + lat * sb + params_.surfaceRaise + extraRaise,
                            cz + lat * (rz * cb));
@@ -510,9 +511,9 @@ namespace threepp::road {
 
             const auto setPx = [&](int x, int y, float r, float g, float b) {
                 const size_t o = (static_cast<size_t>(y) * W + x) * 4;
-                out[o + 0] = toByte(r);
-                out[o + 1] = toByte(g);
-                out[o + 2] = toByte(b);
+                out[o + 0] = noise::toByte(r);
+                out[o + 1] = noise::toByte(g);
+                out[o + 2] = noise::toByte(b);
                 out[o + 3] = 255u;
             };
 
@@ -1051,11 +1052,11 @@ namespace threepp::road {
                     }
 
                     const size_t o = (static_cast<size_t>(y) * W + x) * 4;
-                    m.albedo[o + 0] = toByte(r);
-                    m.albedo[o + 1] = toByte(g);
-                    m.albedo[o + 2] = toByte(b);
+                    m.albedo[o + 0] = noise::toByte(r);
+                    m.albedo[o + 1] = noise::toByte(g);
+                    m.albedo[o + 2] = noise::toByte(b);
                     m.roughMetal[o + 0] = 0u;
-                    m.roughMetal[o + 1] = toByte(rough);
+                    m.roughMetal[o + 1] = noise::toByte(rough);
                     m.roughMetal[o + 2] = 0u;// asphalt is a dielectric
                     hgt[static_cast<size_t>(y) * W + x] = relief;
                 }
@@ -1077,9 +1078,9 @@ namespace threepp::road {
                     float nx = -dhdu, ny = -dhdv, nz = 1.f;
                     const float il = 1.f / std::sqrt(nx * nx + ny * ny + nz * nz);
                     const size_t o = (static_cast<size_t>(y) * W + x) * 4;
-                    m.normal[o + 0] = toByte(nx * il * 0.5f + 0.5f);
-                    m.normal[o + 1] = toByte(ny * il * 0.5f + 0.5f);
-                    m.normal[o + 2] = toByte(nz * il * 0.5f + 0.5f);
+                    m.normal[o + 0] = noise::toByte(nx * il * 0.5f + 0.5f);
+                    m.normal[o + 1] = noise::toByte(ny * il * 0.5f + 0.5f);
+                    m.normal[o + 2] = noise::toByte(nz * il * 0.5f + 0.5f);
                 }
 
             if (pavedCount > 0) {
@@ -1117,8 +1118,8 @@ namespace threepp::road {
             // Flat tangent-space normal everywhere (the patch's own relief is far
             // below what a 1.5 cm lift already reads as).
             for (size_t p = 0; p < nPx; ++p) {
-                m.normal[p * 4 + 0] = toByte(0.5f);
-                m.normal[p * 4 + 1] = toByte(0.5f);
+                m.normal[p * 4 + 0] = noise::toByte(0.5f);
+                m.normal[p * 4 + 1] = noise::toByte(0.5f);
                 m.normal[p * 4 + 2] = 255u;
             }
             const float fC = static_cast<float>(C);
@@ -1160,11 +1161,11 @@ namespace threepp::road {
                             rough += (0.62f - rough) * seam;
                         }
                         const size_t o = (static_cast<size_t>(y) * W + (v * C + x)) * 4;
-                        m.albedo[o + 0] = toByte(k * 1.01f);
-                        m.albedo[o + 1] = toByte(k);
-                        m.albedo[o + 2] = toByte(k * 0.98f);
+                        m.albedo[o + 0] = noise::toByte(k * 1.01f);
+                        m.albedo[o + 1] = noise::toByte(k);
+                        m.albedo[o + 2] = noise::toByte(k * 0.98f);
                         m.roughMetal[o + 0] = 0u;
-                        m.roughMetal[o + 1] = toByte(rough);
+                        m.roughMetal[o + 1] = noise::toByte(rough);
                         m.roughMetal[o + 2] = 0u;// dielectric
                     }
                 }
@@ -1359,37 +1360,25 @@ namespace threepp::road {
             return t * params_.maxBanking;
         }
 
-        // ── small numeric helpers (mirrors TerrainGenerator) ─────────────────
-        static float lerp(float a, float b, float t) { return a + t * (b - a); }
-        static unsigned char toByte(float v) {
-            return static_cast<unsigned char>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f);
-        }
-
         // ── value-noise / fBm for asphalt grain (deterministic, hash-based) ──
-        // Self-contained integer hash so the generator needs no permutation table
-        // and the texture is reproducible across runs.
-        static float hash2(int x, int y) {
-            unsigned int h = static_cast<unsigned int>(x) * 374761393u +
-                             static_cast<unsigned int>(y) * 668265263u;
-            h = (h ^ (h >> 13)) * 1274126177u;
-            h ^= h >> 16;
-            return static_cast<float>(h & 0xFFFFFFu) / static_cast<float>(0xFFFFFF) * 2.f - 1.f;
-        }
-        static float fade(float t) { return t * t * t * (t * (t * 6.f - 15.f) + 10.f); }
+        // An integer hash, so the generator needs no permutation table and the
+        // texture is reproducible across runs: noise::hash2 at seed 0, mapped
+        // to [-1, 1].
+        static float hash2(int x, int y) { return noise::hash2(x, y, 0u) * 2.f - 1.f; }
         // 2D value noise, output ~[-1, 1].
         static float noise2(float x, float y) {
             const int xi = static_cast<int>(std::floor(x));
             const int yi = static_cast<int>(std::floor(y));
             const float xf = x - static_cast<float>(xi);
             const float yf = y - static_cast<float>(yi);
-            const float u = fade(xf), v = fade(yf);
+            const float u = noise::fade(xf), v = noise::fade(yf);
             const float n00 = hash2(xi, yi);
             const float n10 = hash2(xi + 1, yi);
             const float n01 = hash2(xi, yi + 1);
             const float n11 = hash2(xi + 1, yi + 1);
-            const float x1 = lerp(n00, n10, u);
-            const float x2 = lerp(n01, n11, u);
-            return lerp(x1, x2, v);
+            const float x1 = noise::lerp(n00, n10, u);
+            const float x2 = noise::lerp(n01, n11, u);
+            return noise::lerp(x1, x2, v);
         }
         // Same value noise, but the Y lattice WRAPS every `period` cells. The
         // marking tile is shared and repeats every tileLength metres along the
@@ -1402,14 +1391,14 @@ namespace threepp::road {
             const int yi = static_cast<int>(std::floor(y));
             const float xf = x - static_cast<float>(xi);
             const float yf = y - static_cast<float>(yi);
-            const float u = fade(xf), v = fade(yf);
+            const float u = noise::fade(xf), v = noise::fade(yf);
             const int y0 = ((yi % P) + P) % P;
             const int y1 = (y0 + 1) % P;
             const float n00 = hash2(xi, y0);
             const float n10 = hash2(xi + 1, y0);
             const float n01 = hash2(xi, y1);
             const float n11 = hash2(xi + 1, y1);
-            return lerp(lerp(n00, n10, u), lerp(n01, n11, u), v);
+            return noise::lerp(noise::lerp(n00, n10, u), noise::lerp(n01, n11, u), v);
         }
         // fBm over noise2p. Octave i runs at lacunarity^i, so its wrap period
         // scales with it — integer as long as the caller's base period is.
@@ -1426,14 +1415,7 @@ namespace threepp::road {
             return norm > 0.f ? sum / norm : 0.f;
         }
         static float fbm(float x, float y, int oct, float lac, float gain) {
-            float f = 1.f, a = 1.f, sum = 0.f, norm = 0.f;
-            for (int i = 0; i < oct; ++i) {
-                sum += a * noise2(x * f, y * f);
-                norm += a;
-                f *= lac;
-                a *= gain;
-            }
-            return norm > 0.f ? sum / norm : 0.f;
+            return noise::fbmOf(noise2, x, y, oct, lac, gain);
         }
 
         RoadParams params_;

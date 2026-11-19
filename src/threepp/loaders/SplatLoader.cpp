@@ -1,5 +1,6 @@
 
 #include "threepp/loaders/SplatLoader.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -585,12 +586,6 @@ namespace {
         return v;
     }
 
-    std::string lowered(std::string s) {
-
-        for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
-    }
-
     // Rotation taking +Z onto `n`, as (x, y, z, w). Identity for a zero
     // normal; a half-turn about X when n is -Z.
     SplatQuat quatFromNormal(Vector3 n) {
@@ -696,7 +691,7 @@ SplatData SplatLoader::parsePointCloudPly(std::istream& stream, const PointCloud
 
     for (const auto& p : vertex->properties) {
 
-        const std::string n = lowered(p.name);
+        const std::string n = utils::toLower(p.name);
         if (n == "x") px = &p;
         else if (n == "y") py = &p;
         else if (n == "z") pz = &p;

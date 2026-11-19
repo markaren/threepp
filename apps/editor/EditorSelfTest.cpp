@@ -47,6 +47,7 @@
 #include "threepp/extras/editor/TreeConfig.hpp"
 #include "threepp/extras/editor/VehicleConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #ifdef THREEPP_WITH_AUDIO
 #include "threepp/extras/editor/AudioPlaySession.hpp"
@@ -188,12 +189,6 @@ namespace {
             "sog-scan",
     };
 
-    std::string lowered(std::string text) {
-        std::transform(text.begin(), text.end(), text.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return text;
-    }
-
     bool isRegisteredSection(const std::string& name) {
         for (const char* candidate : kSelfTestSections) {
             if (name == candidate) return true;
@@ -208,8 +203,8 @@ namespace {
     // everything: the no-arg run is the full run it has always been.
     bool sectionMatches(const std::string& filter, const char* name) {
         if (filter.empty()) return true;
-        const std::string haystack = lowered(name);
-        std::istringstream terms(lowered(filter));
+        const std::string haystack = utils::toLower(name);
+        std::istringstream terms(utils::toLower(filter));
         std::string term;
         while (std::getline(terms, term, ',')) {
             if (term.empty()) continue;

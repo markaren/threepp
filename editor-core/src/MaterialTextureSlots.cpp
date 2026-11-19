@@ -4,6 +4,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/textures/Texture.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,20 +30,12 @@ namespace {
             {"emissiveMap", {"emissive", "emission", "emit", nullptr, nullptr, nullptr}},
     }};
 
-    std::string lowered(const std::string& text) {
-
-        std::string out = text;
-        std::transform(out.begin(), out.end(), out.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return out;
-    }
-
     // The trailing word of a name split on the usual separators: "brick_wall-NRM"
     // -> "nrm". Matching the last token only is what keeps a file that merely
     // contains "normal" somewhere in a directory-ish name from being claimed.
     std::string lastToken(const std::string& stem) {
 
-        const auto text = lowered(stem);
+        const auto text = utils::toLower(stem);
         const auto cut = text.find_last_of("_-. ");
         return cut == std::string::npos ? text : text.substr(cut + 1);
     }

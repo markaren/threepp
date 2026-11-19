@@ -1,5 +1,7 @@
 #include "threepp/scenes/Downwash.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -7,11 +9,6 @@
 using namespace threepp;
 
 namespace {
-
-    float smooth01(float a, float b, float v) {
-        const float t = std::clamp((v - a) / (b - a), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
 
     // [0, 1) from a row index: displace()'s per-point jitter.
     float hash01(std::uint32_t x) {
@@ -89,7 +86,7 @@ float Downwash::jetShare(const Source& s) {
 }
 
 float Downwash::heightFade(float h) {
-    return 1.f - smooth01(2.f, 9.f, h);
+    return 1.f - math::smoothstep(2.f, 9.f, h);
 }
 
 float Downwash::peakRadius(float radius, float h) {
@@ -117,7 +114,7 @@ Vector3 Downwash::warp(const Vector3& p0, float jitter) const {
         const Vector3& c = s.center;
         const float ground = std::isnan(s.surfaceY) ? p.y : s.surfaceY;
         const float h = std::max(c.y - ground, 0.f);
-        const float k = share * heightFade(h) * (1.f - smooth01(c.y - 0.3f, c.y + 0.6f, p.y));
+        const float k = share * heightFade(h) * (1.f - math::smoothstep(c.y - 0.3f, c.y + 0.6f, p.y));
         if (k <= 0.f) continue;
         const float rh = peakRadius(s.radius, h) + 0.8f;
         const float c0 = std::min(hollowRadius * k, 1.8f * rh) * own;

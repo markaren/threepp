@@ -1,5 +1,6 @@
 
 #include "threepp/utils/Log.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -27,12 +28,6 @@ namespace threepp::log {
             return name.size() == prefix.size() || name[prefix.size()] == '.';
         }
 
-        std::string lower(std::string_view s) {
-            std::string out(s);
-            for (auto& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return out;
-        }
-
         std::string_view trim(std::string_view s) {
             while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
             while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
@@ -40,7 +35,7 @@ namespace threepp::log {
         }
 
         std::optional<Level> parseLevel(std::string_view s) {
-            const auto l = lower(trim(s));
+            const auto l = utils::toLower(std::string(trim(s)));
             if (l == "trace") return Level::Trace;
             if (l == "debug") return Level::Debug;
             if (l == "info") return Level::Info;
@@ -55,7 +50,7 @@ namespace threepp::log {
             if (p == "*") return {};
             // "vulkan.*" means the same as "vulkan".
             if (p.size() >= 2 && p.substr(p.size() - 2) == ".*") p.remove_suffix(2);
-            return lower(p);
+            return utils::toLower(std::string(p));
         }
 
         // Appends rule {prefix, l}, dropping the earlier rules it shadows.

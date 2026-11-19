@@ -35,7 +35,25 @@ namespace threepp::noise {
     // Smoothstep-style interpolant.
     inline float smooth(float t) { return t * t * (3.f - 2.f * t); }
 
+    // Perlin's quintic fade, 6t^5 - 15t^4 + 10t^3: zero first and second
+    // derivatives at 0 and 1, where smooth() zeroes only the first.
+    inline float fade(float t) { return t * t * t * (t * (t * 6.f - 15.f) + 10.f); }
+
     inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
+
+    // Fractal sum of any 2D noise `n(x, y)`: octave i samples at
+    // lacunarity^i and weighs gain^i; the result is divided by the weight sum.
+    template<class Noise2>
+    float fbmOf(const Noise2& n, float x, float y, int octaves, float lacunarity, float gain) {
+        float f = 1.f, a = 1.f, sum = 0.f, norm = 0.f;
+        for (int i = 0; i < octaves; ++i) {
+            sum += a * n(x * f, y * f);
+            norm += a;
+            f *= lacunarity;
+            a *= gain;
+        }
+        return norm > 0.f ? sum / norm : 0.f;
+    }
 
     // Tileable 2D value noise over a [0,period) lattice.
     inline float valueNoise(float x, float y, int period, unsigned int seed) {
