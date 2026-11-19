@@ -139,6 +139,12 @@ void MeshStandardMaterial::copyInto(Material& material) const {
     m->translucencyColor.copy(translucencyColor);
 
     m->ripples = ripples;
+    m->flow = flow;
+    m->flowTile = flowTile;
+    m->flowPeriod = flowPeriod;
+    m->flowTime = flowTime;
+    m->flowFoam = flowFoam;
+    m->flowFoamAlbedo = flowFoamAlbedo;
 
     m->emissive.copy(emissive);
     m->emissiveMap = emissiveMap;

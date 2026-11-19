@@ -396,12 +396,24 @@ namespace threepp::vulkan_pt {
         float terrainBandFarTint[12];
         float terrainFarStart;
         float terrainFarInvRange;
+        // MeshStandardMaterial::flow: running water whose mesh carries its
+        // velocity in uv2 and its foam in uv.x. gbuffer.frag carries the
+        // normal map along the velocity (two phases of flowPeriod s at
+        // flowTile m a tile, clock flowTime) and whitens the foam toward
+        // flowFoamAlbedo; deferred_shade takes flowFoam x the foam (left in
+        // the G-buffer's uv .x) off the transmission. flow 0 = off.
+        float flow;
+        float flowTile;
+        float flowPeriod;
+        float flowTime;
+        float flowFoam;
+        float flowFoamAlbedo;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 680,
+    static_assert(sizeof(MaterialDesc) == 704,
                   "MaterialDesc size changed - update the GLSL mirror in this file too.");
 }
 
@@ -477,6 +489,12 @@ struct MaterialDesc {
     vec3  terrainBandFarTint[4];// per band: the albedo multiply the ground takes far from the eye
     float terrainFarStart;      // metres from the eye where the tint begins
     float terrainFarInvRange;   // 1 / (end - start); 0 = no far tint
+    float flow;                 // running water (velocity in uv2, foam in uv.x); 0 = off
+    float flowTile;             // metres per normal-map tile
+    float flowPeriod;           // seconds per phase
+    float flowTime;             // the clock (s)
+    float flowFoam;             // share of the transmission full foam takes
+    float flowFoamAlbedo;       // the foam's albedo (linear grey)
 };
 
 // The ground's far tint: the multiply on a terrain material's albedo `dist`

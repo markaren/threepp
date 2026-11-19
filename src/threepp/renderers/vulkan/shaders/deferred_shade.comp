@@ -1246,10 +1246,13 @@ void main() {
             // transmissionMap and filled transmissionTexIndex all along, and
             // nothing sampled it, so a stained-glass shade was glass through
             // its lead came as well as its panes. No map → factor unchanged.
-            const float gt       = clamp(pm.transmission
+            float gt             = clamp(pm.transmission
                                          * hitTex(pm.transmissionTexIndex, pm.uvTransformTransmission,
                                                   primUv, vec3(1.0)).r,
                                          0.0, 1.0);
+            // Running water's foam (MeshStandardMaterial::flow): gbuffer.frag left its coverage in the uv's .x; white
+            // water is opaque, so its share of the transmission goes
+            if (pm.flow > 0.0) gt *= 1.0 - clamp(pm.flowFoam * primUv.x, 0.0, 1.0);
             const vec3  glassCol = shadeGlassEnd(worldPos, N, V, pm, albedo, shadowsOn, glassCtx, behindReq.want, behind);
             if (kRR) {
                 // The glass's reflection ray, not its last (transmission) trace.
