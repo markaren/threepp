@@ -58,6 +58,29 @@
 // the drawn water does (the collar). The field carries it all: the flow is set, the
 // foam is moved by it (wake_field.comp), never slid as a picture.
 //
+// THE TWO WINDOWS are one field at two resolutions. Both lay what the near
+// window's rules lay (the collar's reach, its gulps over half a metre and two,
+// the surf's tear over a metre and a half): the near window texel by texel,
+// the far one the POWER MEAN (kCoarseP) of that over its texel (its texel's
+// 8 x 8 near texels' worth of the collar; the shore read through its own map),
+// so a metre of shore holds the same foam in either. Inside the near window,
+// less its outer sixteenth, the far window lays nothing and is set to the
+// same power mean of the near window's field each step (MODE 2, after both
+// windows' sources); the near window reads what it has not held from the far
+// one (wake_field.comp). So foam that the near window leaves goes on in the
+// far one, and foam that comes into it starts as the far one's: neither
+// starts from still water.
+//
+// Why a power mean and not the mean: a collar is a line of bright foam a few
+// decimetres wide, and its mean over a 2 m texel is a band of grey four times
+// as wide (bilinear) that reads from a mast or a drone as much less foam than
+// the line it stands for (the far window held its own texel-wide collar at the
+// near window's density for that reason, judged by eye). The fourth-power mean
+// keeps about the brightest quarter of a texel: a collar on an eighth of it
+// holds 0.6 of its density, a lace spread evenly over it holds the lace. A
+// LOOK choice, the same in the far window's own deposits and in what it takes
+// from the near one, so the two agree where they meet.
+//
 // MODE 1, the sea's statistics (one workgroup, before the windows' sources):
 // each cascade's drawn significant height 4 sigma from its height field and
 // its rms wavenumber from the divergence of its horizontal displacement (for
@@ -85,7 +108,7 @@ layout(set = 1, binding = 2, rg16f)   uniform image2DArray fieldVel;
 // Each parcel's (eta, D) at the last step, a layer a window; .a 1 once written.
 layout(set = 1, binding = 3, rgba16f) uniform image2DArray lastSurface;
 
-// 96 bytes, mirrored by WakeFieldPipeline::ShoreSourcePush.
+// 112 bytes, mirrored by WakeFieldPipeline::ShoreSourcePush.
 layout(push_constant, scalar) uniform Pc {
     float tileSize0;
     float tileSize1;
@@ -108,9 +131,18 @@ layout(push_constant, scalar) uniform Pc {
     float keepHalf;   // 0 = none
     float timeSec;
     float gain;       // the deposit's scale: 1, less where a texel is wider than a collar
-    uint  mode;       // 0 a window's foam, 1 the sea's statistics
+    uint  mode;       // 0 a window's foam, 1 the sea's statistics, 2 the far window from the near one's
+    float fineX;      // the near window's world min corner, its texel and its field layer: the far window's
+    float fineZ;      // deposits are the mean of the near window's rules over this texel's lattice
+    float fineTexel;  // (mode 0), and mode 2 reads the near window's field
+    uint  fineLayer;
     uint64_t depthAddr;// OceanShoreDepth (the depth, the sea's statistics)
 } pc;
+
+// The far window's statistic of the near one's texels (see THE TWO WINDOWS).
+const float kCoarseP = 4.0;
+float coarseMean(float sumP, float count) { return pow(max(sumP / count, 0.0), 1.0 / kCoarseP); }
+float coarsePow(float x) { const float x2 = x * x; return x2 * x2; }
 
 // LOOK and calibration constants (2026-11-18, third round). A fetch-limited
 // fjord sea drives at peaks of about 0.3 m/s at 5 m/s of wind, 0.5 at 10 and
@@ -164,6 +196,15 @@ float sNoise(vec3 p) {
 }
 
 float sampleBicubicR1(sampler2D tex, vec2 uv) { return sampleBicubicRG(tex, uv).r; }
+
+// A surge's gulps along a solid at x (0..1 before its threshold): two noises,
+// over half a metre and over two (or the window's texel and two, where that
+// is coarser), quick in time.
+float collarGulp(vec2 x, float texel) {
+    const float g1 = sNoise(vec3(x / max(0.5, texel) + 7.1, 1.9 * pc.timeSec));
+    const float g2 = sNoise(vec3(x / max(2.0, 2.0 * texel) - 3.3, 0.7 * pc.timeSec + 4.0));
+    return 0.6 * g1 + 0.4 * g2;
+}
 
 // The drawn surface's (D.x, eta, D.z) at rest point q: water_displace.comp's
 // sampleDisplacement without its per-vertex mip levels (the window's texels are
@@ -243,9 +284,44 @@ void seaStatistics() {
     b.km = km;
 }
 
+// ── MODE 2: the far window inside the near one, from the near one ────────
+// A thread a far texel of the near window's span; the texels wholly inside
+// the square the far window lays nothing in (keep) take the near texels they
+// cover: the foam and the air as their power mean (kCoarseP, what the far
+// window's own deposits are), the churn and the flow as their mean.
+void restrictFar() {
+    const int  res   = int(pc.res);
+    const vec2 fo    = vec2(pc.originX, pc.originZ);
+    const vec2 no    = vec2(pc.fineX, pc.fineZ);
+    const ivec2 i0   = ivec2(floor((no - fo) / pc.texel + 0.5));
+    const ivec2 I    = i0 + ivec2(gl_GlobalInvocationID.xy);
+    if (any(lessThan(I, ivec2(0))) || any(greaterThanEqual(I, ivec2(res)))) return;
+    const vec2 lo = fo + vec2(I) * pc.texel;
+    if (any(greaterThan(abs(lo + 0.5 * pc.texel - vec2(pc.keepX, pc.keepZ)), vec2(pc.keepHalf - 0.5 * pc.texel)))) return;
+    const int   n  = max(int(round(pc.texel / pc.fineTexel)), 1);
+    const ivec2 j0 = ivec2(floor((lo - no) / pc.fineTexel + 0.5));
+    vec4 s = vec4(0.0);// sums of foam^p, air^p, churn, lane
+    vec2 v = vec2(0.0);
+    for (int b = 0; b < n; ++b) {
+        for (int a = 0; a < n; ++a) {
+            const ivec3 q = ivec3(clamp(j0 + ivec2(a, b), ivec2(0), ivec2(res - 1)), int(pc.fineLayer));
+            const vec4  t = max(imageLoad(fieldState, q), vec4(0.0));
+            s += vec4(coarsePow(t.r), coarsePow(t.g), t.b, t.a);
+            v += imageLoad(fieldVel, q).rg;
+        }
+    }
+    const float cnt = float(n * n);
+    imageStore(fieldState, ivec3(I, int(pc.layer)), vec4(coarseMean(s.r, cnt), coarseMean(s.g, cnt), s.ba / cnt));
+    imageStore(fieldVel, ivec3(I, int(pc.layer)), vec4(v / cnt, 0.0, 0.0));
+}
+
 void main() {
     if (pc.mode == 1u) {
         seaStatistics();
+        return;
+    }
+    if (pc.mode == 2u) {
+        restrictFar();
         return;
     }
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -314,18 +390,48 @@ void main() {
     const float bore   = surf ? max(dot(v, n), 0.0) * clamp(s.g / 0.1, 0.0, 1.0) : 0.0;
     const float impact = max(max(dot(u, n), 0.0) + 0.5 * max(w, 0.0), bore);
     const float reach  = kReach0 + kReachGain * min(impact, 1.0);
-    const bool  kept   = pc.keepHalf > 0.0 && all(lessThan(abs(q - vec2(pc.keepX, pc.keepZ)), vec2(pc.keepHalf)));
+    // (the far window's texels wholly inside the near window's square: mode 2 sets them)
+    const bool  kept   = pc.keepHalf > 0.0 &&
+                         all(lessThanEqual(abs(q - vec2(pc.keepX, pc.keepZ)), vec2(pc.keepHalf - 0.5 * pc.texel)));
+    // The far window: a texel the near window's texels tile (8 x 8).
+    const bool  coarse = pc.fineTexel > 0.0 && pc.texel > 1.5 * pc.fineTexel;
     // The distance is to the nearest solid texel's centre; the solid's face
     // lies about half a texel nearer (a far window's 2 m texels would
     // otherwise lay its whole collar on the land side of the line).
     // A collar narrower than a texel is held by the texels next to the face:
-    // in a coarse window the reach is at least most of a texel (pc.gain
-    // scales the film).
-    const float d      = max(dist - 0.5 * pc.texel, 0.0);
-    const float r      = max(reach, 0.75 * pc.texel);
-    const float dep    = kept ? 0.0
-                              : pc.gain * clamp((impact - kImpact0) / (kImpact1 - kImpact0), 0.0, 1.0) *
-                                    exp(-(d * d) / (r * r));
+    // the reach is at least most of a texel. The far window lays the mean of
+    // the near window's collar over its texel: the near rule at each of the
+    // fine texels it covers, the face read through the far map (bilinear),
+    // the gulps at the near window's scales. `dep` is the surge's share (its
+    // air, its churn, its throw) and `film` the foam it lays.
+    const float imp    = kept ? 0.0 : pc.gain * clamp((impact - kImpact0) / (kImpact1 - kImpact0), 0.0, 1.0);
+    float dep  = 0.0;
+    float film = 0.0;
+    if (imp > 0.0 && !coarse) {
+        const float d = max(dist - 0.5 * pc.texel, 0.0);
+        const float r = max(reach, 0.75 * pc.texel);
+        dep  = imp * exp(-(d * d) / (r * r));
+        film = dep > 1e-3 ? 0.85 * dep * smoothstep(0.25, 0.65, collarGulp(x, pc.texel)) : 0.0;
+    } else if (imp > 0.0 && dist - 0.5 * pc.texel < 3.0 * reach + pc.texel) {
+        const int   m   = clamp(int(round(pc.texel / pc.fineTexel)), 1, 8);
+        const float r   = max(reach, 0.75 * pc.fineTexel);
+        const vec2  o   = vec2(pc.originX, pc.originZ);
+        const float span = pc.texel * float(res);
+        float e = 0.0, f = 0.0;
+        for (int b = 0; b < m; ++b) {
+            for (int a = 0; a < m; ++a) {
+                const vec2 xf = x + ((vec2(a, b) + 0.5) / float(m) - 0.5) * pc.texel;
+                const vec2 uf = (xf - o) / span;
+                if (any(lessThanEqual(uf, vec2(0.0))) || any(greaterThanEqual(uf, vec2(1.0)))) continue;
+                const float df = max(textureLod(shoreMap, vec3(uf, sl), 0.0).r - 0.5 * pc.texel, 0.0);
+                const float ef = exp(-(df * df) / (r * r));
+                e += coarsePow(ef);
+                if (ef > 1e-3) f += coarsePow(ef * smoothstep(0.25, 0.65, collarGulp(xf, pc.fineTexel)));
+            }
+        }
+        dep  = imp * coarseMean(e, float(m * m));
+        film = 0.85 * imp * coarseMean(f, float(m * m));
+    }
     // The surf: the incoming crest against the breaking limit at this
     // texel's depth, rising or at its top (not its back), in a sea that is
     // more than ripples. The further past the limit the incoming crest
@@ -339,13 +445,9 @@ void main() {
     }
 
     if (dep > 1e-3) {
-        // A surge does not break as a ribbon: in gulps along the solid,
-        // quick in time (two noises over half a metre and over two, never
-        // finer than the window's texel).
-        const float g1   = sNoise(vec3(x / max(0.5, pc.texel) + 7.1, 1.9 * pc.timeSec));
-        const float g2   = sNoise(vec3(x / max(2.0, 2.0 * pc.texel) - 3.3, 0.7 * pc.timeSec + 4.0));
-        const float gulp = 0.6 * g1 + 0.4 * g2;
-        s.r = max(s.r, 0.85 * dep * smoothstep(0.25, 0.65, gulp));
+        // A surge does not break as a ribbon: in gulps along the solid
+        // (collarGulp, in `film`).
+        s.r = max(s.r, film);
         s.g = max(s.g, kAir * dep);
         s.b = max(s.b, 0.05 * dep);
         v   = mix(v, drift - n * (kThrow * impact), min(2.0 * dep, 1.0));
@@ -358,7 +460,22 @@ void main() {
             // a broken patch is white over pale green water with a torn,
             // see-through rim, and what it leaves behind thins into lace as
             // the field carries and ages it.
-            const float tear = sNoise(vec3(q / max(1.5, 2.0 * pc.texel) + 2.3, 0.9 * pc.timeSec + 1.7));
+            // (the far window's: its mean over the texel's quarters, at the
+            // near window's scale)
+            float tear;
+            if (coarse) {
+                const float sc = max(1.5, 2.0 * pc.fineTexel);
+                const float h  = 0.25 * pc.texel;
+                // (as the factor's power mean: tear 0 to 1 is mix(0.25, 1, tear) below)
+                float t4 = 0.0;
+                for (int c = 0; c < 4; ++c) {
+                    const vec2 o4 = vec2((c & 1) == 0 ? -h : h, (c & 2) == 0 ? -h : h);
+                    t4 += coarsePow(mix(0.25, 1.0, sNoise(vec3((q + o4) / sc + 2.3, 0.9 * pc.timeSec + 1.7))));
+                }
+                tear = (coarseMean(t4, 4.0) - 0.25) / 0.75;
+            } else {
+                tear = sNoise(vec3(q / max(1.5, 2.0 * pc.texel) + 2.3, 0.9 * pc.timeSec + 1.7));
+            }
             s.r = max(s.r, kBreakFoam * pc.gain * brk * mix(0.25, 1.0, tear));
             s.g = max(s.g, kBreakAir * sqrt(brk));
             s.b = max(s.b, kBreakTurb * brk);

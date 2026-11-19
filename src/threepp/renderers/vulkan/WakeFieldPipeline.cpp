@@ -22,7 +22,7 @@ namespace threepp::vulkan {
                   "WakeFieldPipeline::PushConstants must match the Pc of wake_field.comp and wake_ripple.comp (24 bytes)");
     static_assert(sizeof(WakeFieldPipeline::ShoreCapturePush) == 56, "shore_capture.comp's Pc");
     static_assert(sizeof(WakeFieldPipeline::ShoreJfaPush) == 40, "shore_jfa.comp's Pc");
-    static_assert(sizeof(WakeFieldPipeline::ShoreSourcePush) == 96, "shore_source.comp's Pc");
+    static_assert(sizeof(WakeFieldPipeline::ShoreSourcePush) == 112, "shore_source.comp's Pc");
 
     namespace {
 
@@ -730,6 +730,8 @@ namespace threepp::vulkan {
             const VkDeviceAddress a = st.shoreDepthAddress();
             tb.shoreDepth[0] = static_cast<uint32_t>(a & 0xffffffffu);
             tb.shoreDepth[1] = static_cast<uint32_t>(a >> 32u);
+            tb.shoreEyeX     = st.eyeX;
+            tb.shoreEyeZ     = st.eyeZ;
         }
 
         uint32_t liveMask = 0;
@@ -764,9 +766,14 @@ namespace threepp::vulkan {
         // The shore's windows (setShoreWindows placed them): patches like the
         // producers', world-anchored and moved by whole texels (here by whole
         // eighths of a side), with eddies about a lace's size (a metre near,
-        // three texels far) and no ripples.
+        // three texels far) and no ripples. The two are one field at two
+        // resolutions (shore = 1 the near one, 2 the far one): the near one
+        // takes what comes in over its edge from the far one (wake_field.comp)
+        // and the far one is the near one's mean inside it (shore_source.comp,
+        // mode 2).
         for (uint32_t k = 0; st.shoreOn && k < kShoreLayers; ++k) {
             const uint32_t i = st.appLayers + k;
+            st.shoreStepped[k] = !st.shoreEmpty[k];
             if (st.shoreEmpty[k]) {// no shore in it: off (and started afresh when one comes into it)
                 st.prevSize[i] = 0.0f;
                 continue;
@@ -783,7 +790,7 @@ namespace threepp::vulkan {
             g.prevOriginZ = history ? st.prevOriginZ[i] : g.originZ;
             g.live        = history ? 2.0f : 1.0f;
             g.eddy        = std::max(1.0f, 3.0f * texel);
-            g.shore       = 1.0f;
+            g.shore       = static_cast<float>(k + 1u);
             st.prevOriginX[i] = g.originX;
             st.prevOriginZ[i] = g.originZ;
             st.prevSize[i]    = size;
@@ -1031,6 +1038,8 @@ namespace threepp::vulkan {
             st.shoreX[k] = std::round(eyeX / step) * step;
             st.shoreZ[k] = std::round(eyeZ / step) * step;
         }
+        st.eyeX = eyeX;
+        st.eyeZ = eyeZ;
     }
 
     void WakeFieldPipeline::recordShore(VkCommandBuffer cb, State& st, const ShoreInputs& in, double nowSec) {
@@ -1082,7 +1091,7 @@ namespace threepp::vulkan {
             oz[k]    = std::floor((st.shoreZ[k] - 0.5f * st.shoreSize[k]) / texel[k] + 0.5f) * texel[k];
         }
 
-        // ── The maps: taken again where a window moved, or of a new scene ──
+        // â”€â”€ The maps: taken again where a window moved, or of a new scene â”€â”€
         const bool newScene = in.tlas != st.mapTlas || in.tlasInstances != st.mapInstances;
         uint32_t captureMask = 0;
         for (uint32_t k = 0; k < kShoreLayers; ++k) {
@@ -1188,7 +1197,7 @@ namespace threepp::vulkan {
             computeBarrier(cb);// the field's step -> the source
         }
 
-        // ── The source, into each window the step has just settled ─────────
+        // â”€â”€ The source, into each window the step has just settled â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Floating foam drifts with the wind at about 3 % of its speed (Wu
         // 1975, "Wind-induced drift currents", J. Fluid Mech. 68(1)).
         const float drift = 0.03f * std::max(in.windSpeed, 0.0f);
@@ -1212,6 +1221,17 @@ namespace threepp::vulkan {
             vkCmdDispatch(cb, 1, 1, 1);
             computeBarrier(cb);
         }
+        // A bend published last step changed the incoming sea at once: no
+        // window reads that change as the water's motion (see State::bendFresh).
+        const bool bendFresh = st.bendFresh;
+        st.bendFresh = false;
+        // The far window is the near one's mean inside the near one, less its
+        // outer sixteenth (whose map does not see the solids just outside it):
+        // it lays nothing there, and mode 2 below sets it.
+        // (both stepped by record() this step: a window switched on since
+        // holds only what it held when it went off)
+        const bool  nested   = st.shoreStepped[0] && st.shoreStepped[1] && !st.shoreEmpty[0] && !st.shoreEmpty[1];
+        const float nestHalf = 0.5f * st.shoreSize[0] - st.shoreSize[0] / 16.0f;
         for (uint32_t k = 0; k < kShoreLayers; ++k) {
             if (st.shoreEmpty[k]) {// nothing to lay foam on; nothing of its parcels to keep
                 st.lastX[k] = st.lastZ[k] = std::numeric_limits<float>::quiet_NaN();
@@ -1233,20 +1253,24 @@ namespace threepp::vulkan {
             sp.dt          = st.stepDt;
             // The parcels' last surface is this window's when it has not moved
             // and its map is the one it was read against.
-            sp.history = (st.lastX[k] == ox[k] && st.lastZ[k] == oz[k] && !(captureMask & (1u << k))) ? 1u : 0u;
+            sp.history = (st.lastX[k] == ox[k] && st.lastZ[k] == oz[k] && !(captureMask & (1u << k)) && !bendFresh)
+                                 ? 1u : 0u;
             sp.driftX  = drift * std::cos(in.windTheta);
             sp.driftZ  = drift * std::sin(in.windTheta);
-            if (k > 0u) {// the far window lays nothing well inside the near one
+            if (k > 0u && nested) {// the far window lays nothing where it is the near one's mean
                 sp.keepX    = st.shoreX[0];
                 sp.keepZ    = st.shoreZ[0];
-                sp.keepHalf = 0.5f * 0.85f * st.shoreSize[0];
+                sp.keepHalf = nestHalf;
             }
+            // Every window lays what the near one's rules lay, the far one as
+            // their mean over its texel (the same foam a metre of shore in
+            // both, so the two agree where they meet and the far one carries
+            // on from the near one's mean where the near one leaves).
+            sp.fineX     = ox[0];
+            sp.fineZ     = oz[0];
+            sp.fineTexel = texel[0];
+            sp.fineLayer = st.appLayers;
             sp.timeSec = static_cast<float>(std::fmod(nowSec, 4096.0));
-            // The far window's collar is a texel wide, wider than the real
-            // one, at the near window's density: the shade's foam level has a
-            // threshold, and a collar thinned over a 2 m texel by its share
-            // of it (as a coverage would be) did not show at all from a mast
-            // or a drone. A LOOK choice for the far window.
             sp.gain      = 1.0f;
             sp.mode      = 0u;
             sp.depthAddr = st.shoreDepth.address;
@@ -1256,6 +1280,30 @@ namespace threepp::vulkan {
             st.lastZ[k] = oz[k];
         }
         computeBarrier(cb);
+        // The far window inside the near one: the near one's mean (mode 2,
+        // over the far window's texels the near one covers).
+        if (nested) {
+            ShoreSourcePush rp{};
+            rp.originX   = ox[1];
+            rp.originZ   = oz[1];
+            rp.texel     = texel[1];
+            rp.res       = st.res;
+            rp.layer     = st.appLayers + 1u;
+            rp.shoreLayer = 1u;
+            rp.keepX     = st.shoreX[0];
+            rp.keepZ     = st.shoreZ[0];
+            rp.keepHalf  = nestHalf;
+            rp.fineX     = ox[0];
+            rp.fineZ     = oz[0];
+            rp.fineTexel = texel[0];
+            rp.fineLayer = st.appLayers;
+            rp.mode      = 2u;
+            rp.depthAddr = st.shoreDepth.address;
+            vkCmdPushConstants(cb, sourcePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rp), &rp);
+            const uint32_t span = static_cast<uint32_t>(std::ceil(st.shoreSize[0] / texel[1])) + 1u;
+            vkCmdDispatch(cb, (span + 7u) / 8u, (span + 7u) / 8u, 1);
+            computeBarrier(cb);
+        }
 
         recordBend(cb, st, in, captureMask, ox, oz, texel);
     }
@@ -1354,7 +1402,8 @@ namespace threepp::vulkan {
         ++st.bendStep;
         if (st.bendStep == total) {
             dispatch(3u, cellGroups);
-            st.bendJob = -1;
+            st.bendJob   = -1;
+            st.bendFresh = true;
             ++st.depthLaid;// sampleHeight's mirror copies the table again
             if (k == 1u) st.bendDirty[0] = true;// the near window's edge is seeded from this
         }

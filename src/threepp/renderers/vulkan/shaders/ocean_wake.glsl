@@ -38,8 +38,9 @@ struct WakePatch {
     float breakSlope1;  // ... fully at this; 0 = they never do
     float breakFoam;    // the film and the bubbles a fully broken crest lays in the field
     float breakAir;
-    float shore;        // 1 = one of the shore's windows: no producer lays anything in it, and its own
-                        // flow stirs no turbulence and calms no waves (shore_source.comp feeds it)
+    float shore;        // one of the shore's windows, 1 the near one and 2 the far one: no producer lays
+                        // anything in it, and its own flow stirs no turbulence and calms no waves
+                        // (shore_source.comp feeds it)
 };
 
 // What makes a mark. 68 bytes (= DisplacedMesh::WakeSource).
@@ -59,7 +60,7 @@ struct WakeSource {
     float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
 };
 
-// 76-byte header, then the patches (the producers' and the shore's), then the
+// 84-byte header, then the patches (the producers' and the shore's), then the
 // sources of this step.
 layout(buffer_reference, scalar) readonly buffer WakeTable {
     uint  patchCount;
@@ -81,6 +82,7 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
     float lace;             // the foam level water full of air carries (WakeField::lace); 0 = none
     uvec2 shoreDepth;       // the shore's depth (ocean_shore_depth.glsl's OceanShoreDepth), as two
                             // 32-bit halves (packUint2x32); 0 = none
+    vec2  shoreEye;         // the camera the shore's windows were placed round (oceanWakeSample)
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
     WakeSource sources[];
 };
@@ -114,6 +116,15 @@ vec3 oceanWakeNoised(vec3 p) {
 // a line. `footprint` is the pixel's size on the water (m): above a texel the
 // read is a box of taps over the footprint, at or under it a B-spline (four
 // bilinear taps), whose derivative is continuous where bilinear's is not.
+//
+// The shore's two windows are one field at two resolutions (the far one is
+// the near one's mean inside it), so they are not maxed but blended: the near
+// window near the camera, going over to the far one between 5/16 and 7/16 of
+// the near window's side from the camera the windows were placed round (80
+// and 112 m). The weight follows the camera, not the window's eighth-of-a-side
+// steps, so the detail sharpens and softens gradually as the camera moves, and
+// the near window (which reaches at least 7/16 of its side from that camera)
+// has handed over at its edge.
 vec4 oceanWakeBicubic(vec2 uv, float layer, float res) {
     const vec2 st = uv * res - 0.5;
     const vec2 i  = floor(st);
@@ -139,13 +150,22 @@ vec4 oceanWakeSample(uint64_t tableAddr, vec2 xz, float footprint) {
     vec4 acc = vec4(0.0);
     const uint n = min(tb.patchCount, uint(OCEAN_WAKE_MAX_PATCHES));
     const float res = float(tb.res);
+    vec4  shoreN = vec4(0.0), shoreF = vec4(0.0);// the shore's near and far windows
+    float wN     = 0.0;                          // the near one's share
     for (uint k = 0u; k < n; ++k) {
         const WakePatch p = tb.patches[k];
         if (p.live < 0.5) continue;
         const vec2 uv = (xz - vec2(p.originX, p.originZ)) / p.size;
         if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) continue;
         const vec2  e    = min(uv, 1.0 - uv);
-        const float edge = smoothstep(0.0, 0.06, min(e.x, e.y));
+        float       edge = smoothstep(0.0, 0.06, min(e.x, e.y));
+        const bool  near = p.shore > 0.5 && p.shore < 1.5;
+        if (near) {
+            // (with no far window on, the near one fades at its edge as a patch does)
+            const bool farOn = k + 1u < n && tb.patches[k + 1u].live > 0.5 && tb.patches[k + 1u].shore > 1.5;
+            edge = farOn ? 1.0 - smoothstep(0.3125, 0.4375, length(xz - tb.shoreEye) / p.size) : edge;
+            if (edge <= 0.0) continue;
+        }
         vec4 s;
         if (footprint <= p.texel) {
             s = oceanWakeBicubic(uv, float(k), res);
@@ -160,9 +180,16 @@ vec4 oceanWakeSample(uint64_t tableAddr, vec2 xz, float footprint) {
                                     vec3(uv + (vec2(float(a), float(b)) - 0.5 * float(m - 1)) * step, float(k)), 0.0);
             s /= float(m * m);
         }
-        acc = max(acc, s * edge);
+        if (near) {
+            shoreN = s;
+            wN     = edge;
+        } else if (p.shore > 1.5) {
+            shoreF = s * edge;
+        } else {
+            acc = max(acc, s * edge);
+        }
     }
-    return acc;
+    return max(acc, mix(shoreF, shoreN, wN));
 }
 #endif// OCEAN_WAKE_SAMPLER
 
