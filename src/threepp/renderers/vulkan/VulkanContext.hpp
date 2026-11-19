@@ -16,6 +16,16 @@
 #include <string>
 #include <vector>
 
+// Every backend source that creates a shader module includes this header, so
+// every vkCreateShaderModule of the backend goes through
+// threeppVkCreateShaderModule (SpirvNoContraction.cpp). With
+// vulkan::noContraction() off (NoContraction.hpp) that calls the real entry
+// point with the caller's create info as given; on, it decorates the module's
+// float arithmetic NoContraction first.
+VkResult threeppVkCreateShaderModule(VkDevice device, const VkShaderModuleCreateInfo* createInfo,
+                                     const VkAllocationCallbacks* allocator, VkShaderModule* module);
+#define vkCreateShaderModule threeppVkCreateShaderModule
+
 struct GLFWwindow;
 
 namespace threepp::vulkan {

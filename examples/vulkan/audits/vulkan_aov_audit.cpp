@@ -13,6 +13,8 @@
 //     vulkan_aov_audit --compare a.txt b.txt      # exit 0 = bit-identical
 //     vulkan_aov_audit --fsr --out a_fsr.txt       # the rgb.fsr row instead of rgb
 //     vulkan_aov_audit --events --out a_ev.txt     # + the GPU event-camera stream row
+//     vulkan_aov_audit --no-contraction --out a_nc.txt # shader float arithmetic pinned
+//                                                  # (vulkan::setNoContraction)
 //     vulkan_aov_audit --scene fjord --terrain geodata/norddal --out a_fj.txt
 //                                                  # the capstone environment: GeoScene
 //                                                  # terrain + FFT ocean + fog + clouds,
@@ -32,6 +34,7 @@
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/vulkan/NoContraction.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -243,6 +246,10 @@ int main(int argc, char** argv) {
     // of the hashed window. The hard form of the test above: every temporal
     // accumulator on every view restarts from nothing.
     bool resetHistory = false;
+    // --no-contraction: vulkan::setNoContraction(true) before the renderer, so
+    // the driver evaluates shader float arithmetic as written. Also on with
+    // THREEPP_VK_NO_CONTRACTION=1; the script row records which it was.
+    bool noContraction = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -263,6 +270,7 @@ int main(int argc, char** argv) {
         else if (arg == "--lidar-grazing") lidarGrazing = true;
         else if (arg == "--fresh-camera") freshCamera = true;
         else if (arg == "--reset-history") resetHistory = true;
+        else if (arg == "--no-contraction") noContraction = true;
         else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
@@ -283,6 +291,7 @@ int main(int argc, char** argv) {
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
 
+    if (noContraction) vulkan::setNoContraction(true);
     Canvas canvas("vulkan_aov_audit",
                   {{"vsync", false}, {"size", WindowSize{800, 600}}, {"headless", true}});
     VulkanRenderer renderer(canvas);
@@ -585,7 +594,7 @@ int main(int argc, char** argv) {
     Stream lidarRow;
     std::vector<LidarReturn> lidarReturns;
     std::uint64_t lidarHits = 0;
-    double rtaoMsSum = 0.0, shadeMsSum = 0.0;
+    double rtaoMsSum = 0.0, shadeMsSum = 0.0, gpuMsSum = 0.0;
     // The grazing probe: 8 deg x 8 deg, 160 x 160 beams, from the shore point.
     PathTracedLidarSensor grazing(8.f, 160u, 160u, 3000.f);
     grazing.params.detectorThreshold = 0.f;
@@ -653,6 +662,7 @@ int main(int argc, char** argv) {
             const auto ft = renderer.lastFrameTimings();
             rtaoMsSum += ft.rtaoMs;
             shadeMsSum += ft.pathTraceMs;
+            gpuMsSum += ft.gpuTotalMs;
         }
 
         if (lidarGrazing && fjord && f % 6 == 0) {
@@ -871,6 +881,7 @@ int main(int argc, char** argv) {
              << " scene=" << sceneName << " ao=" << (noAo ? 0 : 1)
              << " freshCamera=" << (freshCamera ? 1 : 0) << " resetHistory=" << (resetHistory ? 1 : 0)
              << " events=" << (events ? (eventsFinal ? "final" : "shaded") : "off")
+             << " noContraction=" << (vulkan::noContraction() ? 1 : 0)
              << " tlasRebuilds=" << tl.fullRebuilds << " tlasInstances=" << tl.instances << "\n";
     if (!staticScene && dyn.graduated == 0) {
         std::cout << "DYNAMIC-GEOM PATH NEVER ENGAGED (deformer failed to graduate)\n";
@@ -878,7 +889,8 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "timings: rtao " << (frames ? rtaoMsSum / frames : 0.0) << " ms, shade "
-              << (frames ? shadeMsSum / frames : 0.0) << " ms (means over hashed frames)\n";
+              << (frames ? shadeMsSum / frames : 0.0) << " ms, gpu total "
+              << (frames ? gpuMsSum / frames : 0.0) << " ms (means over hashed frames)\n";
     std::cout << "vulkan_aov_audit: " << frames << " frames";
     if (failures) {
         std::cout << ", READBACK FAILURES: " << failures;

@@ -48,6 +48,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Downwash.hpp"
 #include "threepp/renderers/vulkan/ExitPolicy.hpp"
+#include "threepp/renderers/vulkan/NoContraction.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 #include "threepp/utils/Log.hpp"
 
@@ -3038,6 +3039,20 @@ namespace threepp_py {
               "True once a renderer has actually installed the validation-layer "
               "messenger (layer requested via THREEPP_VULKAN_VALIDATION=1 or a debug "
               "build, AND found on the machine).");
+        // Shader float arithmetic pinned NoContraction
+        // (threepp/renderers/vulkan/NoContraction.hpp): process-wide, fixed at
+        // the first renderer's first shader module.
+        m.def("vulkan_set_no_contraction",
+              [](bool enabled) { return threepp::vulkan::setNoContraction(enabled); },
+              py::arg("enabled"),
+              "Decorate every float arithmetic result in every shader module NoContraction "
+              "(GLSL `precise`), so the rendered frame replays bit for bit across processes. "
+              "Call before the first VulkanRenderer; overrides THREEPP_VK_NO_CONTRACTION. "
+              "Returns False (and changes nothing) once modules exist with the other value.");
+        m.def("vulkan_no_contraction",
+              [] { return threepp::vulkan::noContraction(); },
+              "Whether shader float arithmetic is (or will be, before the first renderer) "
+              "decorated NoContraction.");
     }
 
     threepp::Renderer* py_vulkan_native_renderer(const py::handle& h) {
@@ -3063,6 +3078,10 @@ namespace threepp_py {
         m.def("vulkan_validation_error_count", [] { return 0u; },
               "Always 0 in a GL-only build.");
         m.def("vulkan_validation_active", [] { return false; },
+              "Always False in a GL-only build.");
+        m.def("vulkan_set_no_contraction", [](bool) { return false; }, py::arg("enabled"),
+              "Always False in a GL-only build.");
+        m.def("vulkan_no_contraction", [] { return false; },
               "Always False in a GL-only build.");
     }
 
