@@ -34,8 +34,14 @@
 // (shore_source.comp, mode 1): over shallow water the drawn waves are scaled
 // to the depth (ocean_shore_depth.glsl), and where a crest nears the breaking
 // limit the source lays the surf's foam and runs it in toward the shore. The
-// shade draws it as the wake's foam
-// (the shore windows are patches like any other). Nothing about it is a
+// two windows are ONE field at two resolutions, as a clipmap's levels are: both
+// lay what the near window's rules lay (the far one their mean over its
+// texel), the far one inside the near one is the near one's mean, set every
+// step, and the near one reads what it has not held (a move's new strip, what
+// comes in over its edge) from the far one. So the foam at a place does not
+// depend on where the camera is or how it got there; the camera decides only
+// how finely it is drawn: the shade (ocean_wake.glsl) blends the near window
+// into the far one by the distance from the camera. Nothing about it is a
 // switch: a scene with nothing solid at its waterline has an empty map, and
 // its water is shaded exactly as before. It needs ray queries; without them an
 // ocean has the producers' field alone, as before.
@@ -81,7 +87,7 @@ namespace threepp::vulkan {
         float breakSlope1;
         float breakFoam;
         float breakAir;
-        float shore;// 1 = one of the shore's windows (fed by shore_source.comp, nothing else)
+        float shore;// one of the shore's windows (fed by shore_source.comp, nothing else): 1 the near one, 2 the far one
     };
     static_assert(sizeof(WakePatchGpu) == 76, "WakePatchGpu must match ocean_wake.glsl's WakePatch");
 
@@ -144,9 +150,11 @@ namespace threepp::vulkan {
         float    albedo;
         float    lace;
         uint32_t shoreDepth[2];// the shore's depth buffer's address, low half first (0 = none)
+        float    shoreEyeX;    // the camera the shore's windows were placed round (the ocean's frame):
+        float    shoreEyeZ;    // the shade goes over from the near window to the far one by the distance from it
         WakePatchGpu patches[kWakeTablePatches];
     };
-    static_assert(sizeof(WakeTableGpu) == 76 + 76 * kWakeTablePatches,
+    static_assert(sizeof(WakeTableGpu) == 84 + 76 * kWakeTablePatches,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
     static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
                   "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");
@@ -182,7 +190,7 @@ namespace threepp::vulkan {
             uint32_t _pad;
             VkDeviceAddress depthAddr;// State::shoreDepth (mode 2)
         };
-        // shore_source.comp's (96 bytes).
+        // shore_source.comp's (112 bytes).
         struct ShoreSourcePush {
             float    tileSize0, tileSize1, tileSize2, waveScale, choppiness;
             uint32_t cascadeMask;
@@ -194,7 +202,11 @@ namespace threepp::vulkan {
             float    keepX, keepZ, keepHalf;
             float    timeSec;
             float    gain;
-            uint32_t mode;           // 0 a window's foam, 1 the sea's statistics
+            uint32_t mode;           // 0 a window's foam, 1 the sea's statistics, 2 the far window from the near one's
+            // The near window (the far one's foam is laid as the mean of what
+            // the near one's rules lay over its texel; mode 2 reads it).
+            float    fineX, fineZ, fineTexel;
+            uint32_t fineLayer;
             VkDeviceAddress depthAddr;// State::shoreDepth
         };
 
@@ -262,6 +274,8 @@ namespace threepp::vulkan {
             // flood's seeds (r32ui, two to ping-pong) and each window's
             // parcels at the last step (rgba16f: eta, D), a layer a window.
             std::array<float, kShoreLayers> shoreX{}, shoreZ{}, shoreSize{};
+            float eyeX = 0.f, eyeZ = 0.f;// the camera they were placed round
+            std::array<bool, kShoreLayers> shoreStepped{};// the window's patch was on in record()'s last step
             std::array<float, kShoreLayers> mapX{}, mapZ{};
             std::array<bool, kShoreLayers>  mapValid{};
             std::array<float, kShoreLayers> lastX{}, lastZ{};// the window lastSurface's parcels are of
@@ -296,6 +310,11 @@ namespace threepp::vulkan {
             std::array<float, kShoreLayers> bendX{}, bendZ{};// the placement window k's solve is of
             int      bendJob  = -1;// the window being solved, -1 none
             uint32_t bendStep = 0; // its chunks done (the start's in the first)
+            // A table was published this step: the incoming sea the source
+            // reads changed at once, so the next step's source must not take
+            // the change for the water's motion (it would read a surge into
+            // every rock at once).
+            bool     bendFresh = false;
             float    bendWindTheta = std::numeric_limits<float>::quiet_NaN();
             float    bendWindSpeed = std::numeric_limits<float>::quiet_NaN();
             // Each map's seed count, for the host: a uint a window, a buffer a

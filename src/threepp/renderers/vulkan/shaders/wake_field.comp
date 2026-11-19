@@ -40,7 +40,12 @@
 // The patch's origin moves by whole texels, so steps 0 and 1 read last step's
 // images through last step's origin and nothing is resampled by the move;
 // water that the patch has left is gone, and water it has not held yet reads
-// as undisturbed (the samplers clamp to a zero border).
+// as undisturbed (the samplers clamp to a zero border). The shore's near
+// window (WakePatch::shore 1) is the far one (the next patch) at a finer
+// texel: water it has not held yet, a move's new strip, what it carries in
+// over its edge and the whole window when it starts, is read from the far
+// window's last step (bilinear), so the two are one field and nothing in the
+// near one starts from still water where the far one holds foam.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -102,6 +107,13 @@ vec4 stateAt(sampler2DArray tex, ivec2 q, int res, int layer) {
     return texelFetch(tex, ivec3(q, layer), 0);
 }
 
+// Whether a window coordinate of last step's images lies between the outer
+// texel centres (a bilinear read there takes nothing of the zero border).
+bool insideLast(vec2 uv, int res) {
+    const float h = 0.5 / float(res);
+    return all(greaterThanEqual(uv, vec2(h))) && all(lessThanEqual(uv, vec2(1.0 - h)));
+}
+
 void main() {
     WakeTable tb = WakeTable(pc.tableAddr);
     const int   res = int(tb.res);
@@ -117,17 +129,46 @@ void main() {
     const float dt   = tb.dt;
     const float eddy = p.eddy;
     const bool  history = p.live > 1.5;
+    // The shore's near window, and the far one it reads past its edge (when
+    // that one has last step's water).
+    bool  coarse   = false;
+    vec2  cOrigin  = vec2(0.0);
+    float cSize    = 1.0;
+    const float cLayer = layer + 1.0;
+    if (p.shore > 0.5 && p.shore < 1.5 && pc.layer + 1u < tb.patchCount) {
+        const WakePatch f = tb.patches[pc.layer + 1u];
+        coarse  = f.shore > 1.5 && f.live > 1.5;
+        cOrigin = vec2(f.prevOriginX, f.prevOriginZ);
+        cSize   = f.size;
+    }
 
     if (pc.mode == 0u) {
         if (!history) {
+            if (coarse) {// a near window that starts takes the far one's water
+                const vec2 cuv = (x - cOrigin) / cSize;
+                imageStore(dstState, dst, textureLod(srcState0, vec3(cuv, cLayer), 0.0));
+                imageStore(dstVel, dst, vec4(textureLod(srcVel, vec3(cuv, cLayer), 0.0).rg, 0.0, 0.0));
+                return;
+            }
             imageStore(dstState, dst, vec4(0.0));
             imageStore(dstVel, dst, vec4(0.0));
             return;
         }
         const vec2 uv0 = (x - prevOrigin) / p.size;
-        const vec4 s0  = textureLod(srcState0, vec3(uv0, layer), 0.0);
-        const vec2 v   = textureLod(srcVel, vec3(uv0, layer), 0.0).rg + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy);
+        const bool own0 = !coarse || insideLast(uv0, res);
+        const vec4 s0  = own0 ? textureLod(srcState0, vec3(uv0, layer), 0.0)
+                              : textureLod(srcState0, vec3((x - cOrigin) / cSize, cLayer), 0.0);
+        const vec2 v0  = own0 ? textureLod(srcVel, vec3(uv0, layer), 0.0).rg
+                              : textureLod(srcVel, vec3((x - cOrigin) / cSize, cLayer), 0.0).rg;
+        const vec2 v   = v0 + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy);
         const vec2 uvb = (x - v * dt - prevOrigin) / p.size;
+        if (coarse && !insideLast(uvb, res)) {// carried in from where only the far window held it
+            const vec2 cuv = (x - v * dt - cOrigin) / cSize;
+            imageStore(dstState, dst, textureLod(srcState0, vec3(cuv, cLayer), 0.0));
+            imageStore(dstVel, dst,
+                       vec4(textureLod(srcVel, vec3(cuv, cLayer), 0.0).rg * exp(-dt / tb.velocityLife), 0.0, 0.0));
+            return;
+        }
         imageStore(dstState, dst, textureLod(srcState0, vec3(uvb, layer), 0.0));
         // the mean flow is carried too, eddies and all: the race meanders
         imageStore(dstVel, dst,
@@ -136,16 +177,24 @@ void main() {
     }
 
     if (pc.mode == 1u) {
-        if (!history) {
-            imageStore(dstState, dst, vec4(0.0));
+        if (!history) {// (step 0 left what the window starts from)
+            imageStore(dstState, dst, coarse ? texelFetch(srcState1, dst, 0) : vec4(0.0));
             return;
         }
         const vec2 uv0 = (x - prevOrigin) / p.size;
+        if (coarse && !insideLast(uv0, res)) {// the far window's water: carried, not corrected
+            imageStore(dstState, dst, texelFetch(srcState1, dst, 0));
+            return;
+        }
         const vec4 s0  = textureLod(srcState0, vec3(uv0, layer), 0.0);// what was here
         const vec2 v   = textureLod(srcVel, vec3(uv0, layer), 0.0).rg + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy);
         const vec4 s1  = texelFetch(srcState1, dst, 0);               // carried forward
         const vec4 sb  = textureLod(srcState1, vec3((x + v * dt - origin) / p.size, layer), 0.0);// and back
         vec4 s = s1 + 0.5 * (s0 - sb);
+        if (coarse && !insideLast((x - v * dt - prevOrigin) / p.size, res)) {
+            imageStore(dstState, dst, s1);
+            return;
+        }
         const vec2  st = ((x - v * dt - prevOrigin) / p.size) * float(res) - 0.5;
         const ivec2 i0 = ivec2(floor(st));
         const vec4 c00 = stateAt(srcState0, i0, res, li);
