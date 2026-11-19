@@ -192,22 +192,24 @@ namespace threepp {
         // field of its cascade, as water_displace.comp applies them, times
         // the gains over the shore's depth (shoreGain).
         const bool climate = hasWaveClimate() || !shoreDepth.data.empty();
+        // The long cascades' turn over the bed (shoreBend): cascade i < 2 is
+        // read at q + its departure, its displacement turned with its crests.
+        // Taken once, at the world point: the rest point the iteration below
+        // finds is within the waves' horizontal travel of it (a metre or so),
+        // and the bend changes over many metres (it was five table reads at
+        // every step of the iteration).
+        const ShoreBend b = shoreDepth.data.empty() ? ShoreBend{} : shoreBend(worldX, worldZ);
         auto gains = [&](float qx, float qz) {
             std::array<float, 3> g = hasWaveClimate() ? waveClimateGain(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
             if (!shoreDepth.data.empty()) {
-                const std::array<float, 3> s = shoreGain(qx, qz);
+                const std::array<float, 3> s = shoreGainWith(qx, qz, b.amp);
                 for (int c = 0; c < 3; ++c) g[c] *= s[c];
             }
             return g;
         };
-        // The long cascades' turn over the bed (shoreBend): cascade i < 2 is
-        // read at q + its departure, its displacement turned with its crests.
-        const bool bent = !shoreDepth.data.empty();
-        auto bendAt = [&](float qx, float qz) { return bent ? shoreBend(qx, qz) : ShoreBend{}; };
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
             const std::array<float, 3> g = climate ? gains(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
-            const ShoreBend b = bendAt(qx, qz);
             for (uint32_t i = 0; i < 3; ++i) {
                 if ((cascadeMask & (1u << i)) == 0u) continue;
                 const CascadeField& cf = heightFields[i];
@@ -271,7 +273,7 @@ namespace threepp {
         float total = 0.f;
         float bound = 0.f;// second-order harmonic, already in world metres
         const std::array<float, 3> gq = climate ? gains(bestX, bestZ) : std::array<float, 3>{1.f, 1.f, 1.f};
-        const ShoreBend bq = bendAt(bestX, bestZ);
+        const ShoreBend& bq = b;
         for (uint32_t i = 0; i < 3; ++i) {
             if ((cascadeMask & (1u << i)) == 0u) continue;
             const CascadeField& cf = heightFields[i];
@@ -340,6 +342,10 @@ namespace threepp {
     }
 
     std::array<float, 3> DisplacedMesh::shoreGain(float x, float z) const {
+        return shoreGainWith(x, z, shoreBend(x, z).amp);
+    }
+
+    std::array<float, 3> DisplacedMesh::shoreGainWith(float x, float z, const std::array<float, 2>& bendAmp) const {
         // ocean_shore_depth.glsl, line for line: its header's words, then the depths.
         constexpr size_t kHeaderWords = 20;
         const std::vector<float>& v = shoreDepth.data;
@@ -371,8 +377,7 @@ namespace threepp {
         };
         const float* hs = &v[8];
         const float* km = &v[12];
-        const ShoreBend bend = shoreBend(x, z);
-        const std::array<float, 3> amp{bend.amp[0], bend.amp[1], 1.f};
+        const std::array<float, 3> amp{bendAmp[0], bendAmp[1], 1.f};
         auto gainAt = [&](float d) {
             std::array<float, 3> g = amp;
             if (d >= 60.f) return g;

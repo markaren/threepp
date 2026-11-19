@@ -694,6 +694,9 @@ namespace threepp {
             bool                 on = false;
         };
         [[nodiscard]] ShoreBend shoreBend(float x, float z) const;
+        // shoreGain with the long cascades' refraction factors given (a bend
+        // already taken).
+        [[nodiscard]] std::array<float, 3> shoreGainWith(float x, float z, const std::array<float, 2>& bendAmp) const;
         // The water's depth over the shore's windows at a world xz (m; 0 on
         // land, -1 where no window has one), the near window's where it has it.
         [[nodiscard]] float shoreDepthAt(float x, float z) const;
