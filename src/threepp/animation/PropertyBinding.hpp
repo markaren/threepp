@@ -125,23 +125,6 @@ namespace threepp {
             }
         }
 
-        static void _setValue_direct(PropertyBinding* that, const std::vector<float>& buffer, size_t offset) {
-
-            if (that->propertyName == "quaternion") {
-                that->targetObject->quaternion.fromArray(buffer, offset);
-            } else if (that->propertyName == "position") {
-                that->targetObject->position.fromArray(buffer, offset);
-            } else if (that->propertyName == "scale") {
-                that->targetObject->scale.fromArray(buffer, offset);
-            } else if (int idx = parseMorphIndex(that->propertyName); idx >= 0) {
-                applyMorphInfluence(that->targetObject, idx, buffer[offset]);
-                for (auto* t : that->extraTargets) applyMorphInfluence(t, idx, buffer[offset]);
-            } else {
-                THREEPP_LOG_ONCE(kPropertyBindingLog, Warn) << "Animation property '" << that->propertyName
-                                                            << "' cannot be written; the track does not animate it";
-            }
-        }
-
         static void _setValue_direct_setMatrixWorldNeedsUpdate(PropertyBinding* that, const std::vector<float>& buffer, size_t offset) {
 
             if (that->propertyName == "quaternion") {

@@ -1079,12 +1079,6 @@ namespace threepp::editor {
         void drawHeightSplitter(const char* id, float x, float top, float width,
                                 float& height);
 
-        // Undo-friendly ImGui helpers: begin a transaction when a widget is
-        // activated and close it when the edit finishes, so a drag collapses to
-        // one undo step.
-        void beginEditIfActivated();
-        void endEditIfDeactivated();
-
         // --- state ---------------------------------------------------------
         Options options_;
 

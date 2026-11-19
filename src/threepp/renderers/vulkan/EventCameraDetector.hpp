@@ -86,7 +86,6 @@ namespace threepp::vulkan {
         // resolution (setEventCameraResolution) rather than tracking a large
         // swapchain.
         static constexpr uint32_t kEventStreamCapacityFloor = 256u * 1024u;
-        [[nodiscard]] uint32_t streamCapacity() const { return streamCapacity_; }
         // Per-pixel event cap the stream ring is sized for. Growing it past
         // the current allocation reallocates the ring: the caller must have
         // the device idle, as for resize(). Returns true if it reallocated.

@@ -137,21 +137,11 @@ namespace threepp::editor::formats {
         return std::find(list.begin(), list.end(), extension) != list.end();
     }
 
-    inline bool isRobot(const std::filesystem::path& path) {
-
-        return contains(robots(), extensionOf(path));
-    }
-
     // The extension only — it says the file MIGHT be a splat scan. The header
     // is what says it is.
     inline bool isSplatCandidate(const std::filesystem::path& path) {
 
         return contains(splats(), extensionOf(path));
-    }
-
-    inline bool isImportable(const std::filesystem::path& path) {
-
-        return contains(importable(), extensionOf(path));
     }
 
     inline bool isScene(const std::filesystem::path& path) {

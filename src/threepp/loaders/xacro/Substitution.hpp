@@ -37,8 +37,6 @@ namespace threepp::xacro {
 
     [[nodiscard]] SubstResult substitute(std::string_view raw, const SubstCtx& ctx);
 
-    [[nodiscard]] std::string substituteText(std::string_view raw, const SubstCtx& ctx);
-
 }// namespace threepp::xacro
 
 #endif

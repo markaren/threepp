@@ -413,7 +413,7 @@ void ParticleFieldPass::ensureDensityPipeline() {
     // scatter's (1 storage image), the convert's (2 storage images + the shared
     // majorant SSBO) and — only for a field whose sprites march it (R8) — the
     // transmittance prepass's (1 sampled image). A field past that gets no
-    // volume, which densityOverflowCount reports.
+    // volume.
     VkDescriptorPoolSize ps[3]{};
     ps[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     ps[0].descriptorCount = kMaxDensityFields * 3u;
@@ -1220,7 +1220,6 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     // overwhelming majority of them — a map is re-traced only when the key that
     // describes it moved (BakeKey).
     bakeDispatch_.clear();
-    densityOverflow_ = 0;
     // R8/R10: rebuilt from scratch every frame and EMPTY unless some visible
     // field actually marches, which is what makes "both knobs at 0 records no
     // prepass" true frame by frame rather than only at scene load.
@@ -1668,9 +1667,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         // wrong answers to "is there dust in this scene".
         const auto& dr = r.field->densityRepr();
         if (dr.enabled && std::min(r.field->liveCount(), st.capacity) > 0u) {
-            if (densityVols_.size() >= kMaxDensityFields) {
-                ++densityOverflow_;
-            } else if (ensureDensityVolume(st, *r.field)) {
+            if (densityVols_.size() < kMaxDensityFields && ensureDensityVolume(st, *r.field)) {
                 // Half-extent is a divisor; a degenerate axis would produce an
                 // infinity that poisons every sample in the volume.
                 const float hx = std::max(dr.halfExtent.x, 1e-4f);

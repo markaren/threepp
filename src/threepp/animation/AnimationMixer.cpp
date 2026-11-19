@@ -459,30 +459,6 @@ struct AnimationMixer::Impl {
         bindings.emplace_back(binding);
     }
 
-    void _removeInactiveBinding(const std::shared_ptr<PropertyMixer>& binding) {
-
-        auto& bindings = this->_bindings;
-        auto& propBinding = binding->binding;
-        auto rootUuid = propBinding->rootNode->uuid;
-        auto trackName = propBinding->path;
-        auto& bindingsByRoot = this->_bindingsByRootAndName;
-        auto& bindingByName = bindingsByRoot[rootUuid];
-
-        auto& lastInactiveBinding = bindings.back();
-        const auto cacheIndex = binding->_cacheIndex;
-
-        lastInactiveBinding->_cacheIndex = cacheIndex;
-        bindings[cacheIndex] = lastInactiveBinding;
-        bindings.pop_back();
-
-        bindingByName.erase(trackName);
-
-        if (bindingByName.empty()) {
-
-            bindingsByRoot.erase(rootUuid);
-        }
-    }
-
     void _lendBinding(const std::shared_ptr<PropertyMixer>& binding) {
 
         auto& bindings = this->_bindings;

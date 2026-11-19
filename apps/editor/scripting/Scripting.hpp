@@ -378,7 +378,6 @@ namespace threepp::editor {
         // so the inspector can show what went wrong where.
         [[nodiscard]] std::string errorFor(const std::string& uuid) const;
         [[nodiscard]] std::size_t errorCount() const;
-        void clearErrors();
 
         // How many script instances are currently live (diagnostics/tests).
         [[nodiscard]] std::size_t instanceCount() const;

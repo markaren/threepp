@@ -94,7 +94,6 @@ namespace threepp::vulkan {
         [[nodiscard]] bool ready() const { return levels_ > 0; }
 
         // The half-extent linear-HDR colour target the billboards render into.
-        [[nodiscard]] VkImage     srcImage(uint32_t frame) const { return src_[frame].image; }
         [[nodiscard]] VkImageView srcView(uint32_t frame) const { return src_[frame].view; }
         [[nodiscard]] VkExtent2D  srcExtent() const { return {srcW_, srcH_}; }
 

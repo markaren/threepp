@@ -20,24 +20,6 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
     return texture(froxelLutTex, vec3(fuv, w)).rgb;
 }
 #include "cloud_shadow_sample.glsl"// cloudShadowSample: the cloud shadow map at a world point
-// Integrated PARTICLE transmittance (LUT .a) for the same leg — exp(-∫σ_dust)
-// over camera→(uv, viewDist), folded front-to-back by froxel_integrate from
-// the ParticleField density volumes (plan §3.3). 1.0 when the froxels didn't
-// run, and 1.0 everywhere when no field has a density representation, so the
-// surface path this feeds is an exact no-op on every scene without dust.
-//
-// The channel used to carry the medium's TOTAL transmittance and was read by
-// nobody: heterogeneous surface extinction is the closed-form height-fog
-// integral (applyHeteroSurfaceFog says why), and dust — neither smooth nor
-// analytic — is the term that genuinely wants the LUT's per-slice walk.
-float froxelParticleTransmittance(vec2 fuv, float viewDist) {
-    if (!flagOn(256u)) return 1.0;
-    const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
-                  / log(kFroxelZMax / kFroxelZMin);
-    // Same half-texel shift as froxelInscatter above (texel = slice FAR edge).
-    const float w = max(clamp(t, 0.0, 1.0) * 64.0 - 0.5, 0.0) / 64.0;
-    return texture(froxelLutTex, vec3(fuv, w)).a;
-}
 
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
 // α = 1/historyLength → fast convergence early, then a long stable mean. Tracks the

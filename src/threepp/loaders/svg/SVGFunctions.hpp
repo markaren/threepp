@@ -640,11 +640,6 @@ namespace threepp::svg {
         return result.set(-result.y, result.x).normalize();
     }
 
-    inline bool isTransformRotated(const Matrix3& m) {
-
-        return m.elements[1] != 0 || m.elements[3] != 0;
-    }
-
     inline bool isTransformFlipped(const Matrix3& m) {
 
         const auto& te = m.elements;
@@ -871,8 +866,6 @@ namespace threepp::svg {
 
             v2.set(tempV3.x, tempV3.y);
         };
-
-        // const auto isRotated = isTransformRotated(m);
 
         const auto& subPaths = path.subPaths;
 

@@ -275,18 +275,6 @@ namespace threepp::editor {
             if (onEdit_) onEdit_();
         }
 
-        // Give every field its OWN merge key, suffixed with its label, so that
-        // dragging one field and then another stays two undo steps instead of
-        // coalescing into one. Sections that edit several unrelated knobs of a
-        // single config (joints, vehicles, sensors) want this; a section whose
-        // knobs describe one thing is fine sharing a key. Opt-in, because it
-        // changes what a sequence of edits undoes as.
-        ConfigFields& mergePerField(bool on = true) {
-
-            perField_ = on;
-            return *this;
-        }
-
         // Fix up a config on its way to being committed. The sensor section
         // stamps its host camera's frustum into every write, so the flat string
         // in userData cannot drift from the frustum Play will actually read.
@@ -315,8 +303,7 @@ namespace threepp::editor {
         // are derived in exactly one place.
         void commitField(const char* label, const char* action, Config after) {
 
-            commit(std::move(after), actionFor(label, action),
-                   perField_ ? mergeKey_ + ":" + label : mergeKey_);
+            commit(std::move(after), actionFor(label, action), mergeKey_);
         }
 
         [[nodiscard]] std::string actionFor(const char* label, const char* action) const {
@@ -331,7 +318,6 @@ namespace threepp::editor {
         Config before_;
         std::string mergeKey_;
         std::string prefix_;
-        bool perField_ = false;
         std::function<void()> onEdit_;
         std::function<void(Config&)> normalize_;
         std::function<void(const Config&, Object3D&)> writer_ =

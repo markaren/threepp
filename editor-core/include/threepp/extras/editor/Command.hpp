@@ -184,7 +184,6 @@ namespace threepp::editor {
         // of widgets that each open their own.
         void beginTransaction();
         void endTransaction();
-        [[nodiscard]] bool inTransaction() const { return transactionDepth_ > 0; }
 
         // Fired after every change to the stack (execute/undo/redo/clear).
         void onChange(std::function<void()> listener);

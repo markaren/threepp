@@ -445,13 +445,6 @@ namespace {
             return arr;
         }
 
-        py::array_t<uint8_t> albedo_last() {
-            std::vector<uint8_t> raw;
-            int w = 0, h = 0, bpp = 0;
-            if (!read_aov_released(VulkanRenderer::GBufferAOV::Albedo, raw, w, h, bpp)) w = h = 0;
-            return decode_albedo(raw, w, h);
-        }
-
         py::array_t<float> read_depth(Object3D& scene, Camera& camera) {
             drive_frames(scene, camera);
             return depth_last(camera);

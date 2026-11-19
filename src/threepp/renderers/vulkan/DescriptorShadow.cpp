@@ -128,12 +128,6 @@ namespace threepp::vulkan {
         return it == accels().end() ? ++nextSerial : it->second.serial;
     }
 
-    VkBuffer accelerationStructureBuffer(VkAccelerationStructureKHR as) {
-        std::lock_guard lock(mtx());
-        const auto it = accels().find(as);
-        return it == accels().end() ? VK_NULL_HANDLE : it->second.storage;
-    }
-
     void unregisterImageView(VkImageView view) {
         if (view == VK_NULL_HANDLE) return;
         std::lock_guard lock(mtx());

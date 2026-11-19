@@ -71,11 +71,6 @@ namespace threepp {
         // reads it like any other file.
         // -----------------------------------------------------------------------
 
-        bool isHttpUrl(const std::string& s) {
-            return s.compare(0, 7, "http://") == 0 ||
-                   s.compare(0, 8, "https://") == 0;
-        }
-
         // The URL comes from the USD file and goes into a shell command line.
         bool isShellSafeUrl(const std::string& url) {
             return url.find_first_of("\"'`$;&|<>\\ \t\r\n") == std::string::npos;

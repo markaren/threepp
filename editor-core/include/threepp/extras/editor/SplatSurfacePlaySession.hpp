@@ -94,10 +94,6 @@ namespace threepp::editor {
 
         // --- readouts --------------------------------------------------------
 
-        // Clouds carrying an enabled config that the last start() saw, whether
-        // or not any of them baked.
-        [[nodiscard]] std::size_t surfaceNodeCount() const { return surfaceNodeCount_; }
-
         // Surfaces actually realized this play.
         [[nodiscard]] std::size_t surfaceCount() const { return surfaces_.size(); }
 
@@ -115,7 +111,6 @@ namespace threepp::editor {
         void start(Scene& scene) override {
 
             scene_ = &scene;
-            surfaceNodeCount_ = 0;
             colliderCount_ = 0;
             surfaces_.clear();
 
@@ -131,7 +126,6 @@ namespace threepp::editor {
                     if (config && config->enabled) clouds.push_back(cloud);
                 }
             });
-            surfaceNodeCount_ = clouds.size();
             if (clouds.empty()) return;
 
             if (!cache_) {
@@ -405,7 +399,6 @@ namespace threepp::editor {
 
         Scene* scene_ = nullptr;
         std::vector<std::shared_ptr<Mesh>> surfaces_;
-        std::size_t surfaceNodeCount_ = 0;
         std::size_t colliderCount_ = 0;
         bool masterOn_ = false;
     };

@@ -620,10 +620,6 @@ namespace threepp::vulkan {
         // `fields` and, when a bake runs, the bake set's TLAS (reflected).
         void declareEmit(rg::RenderGraph& g, rg::PassBuilder& pass, rg::BufferHandle fields) const;
 
-        // A bake will be recorded this frame. Same purpose as emitActive(): let
-        // the renderer skip the timestamp bracket on the frames that do nothing.
-        [[nodiscard]] bool surfaceBakeActive() const { return !bakeDispatch_.empty(); }
-
         // The scene TLAS every bake traces, and the frame in flight being
         // prepared. Called every frame from prepareParticleFields, in that
         // frame's post-fence window; only that frame's set is rewritten, and
@@ -729,10 +725,6 @@ namespace threepp::vulkan {
         // easy-to-miss" wiring plan §3.3 calls out.
         [[nodiscard]] bool densityActive() const { return !densityVols_.empty(); }
 
-        // Fields whose DensityRepr is on but which did not fit in
-        // kMaxDensityFields this frame. Reported, not silently dropped.
-        [[nodiscard]] std::uint32_t densityOverflowCount() const { return densityOverflow_; }
-
         [[nodiscard]] const std::vector<DrawState>& drawStates() const { return draws_; }
 
         // Any visible field asked for the glow chain this frame. Lets the
@@ -758,14 +750,6 @@ namespace threepp::vulkan {
         // not draw" — a null buffer_reference dereference is undefined, not a
         // no-op. Index resets to 0 in prepareFrame.
         VkDeviceAddress pushViewRecord(std::uint32_t frame, const BillboardViewGpu& rec);
-
-        // The FieldDesc SSBO for a frame-in-flight, and how many entries of it
-        // prepareFrame filled. Nothing reads these before phase 1; they are the
-        // handles the phase-1 descriptor writes will name.
-        [[nodiscard]] VkBuffer descBuffer(std::uint32_t frame) const {
-            return descBufs_[frame].handle;
-        }
-        [[nodiscard]] std::uint32_t descCount() const { return descCount_; }
 
         // TEST/DEBUG: one field's density volume, for readback. False when the
         // field has none (representation off, or never rendered). See
@@ -1175,7 +1159,6 @@ namespace threepp::vulkan {
         std::vector<DensityVolumeDesc> densityVols_;
         std::vector<DensityDispatch>   densityDispatch_;
         std::uint64_t densityGen_      = 0;
-        std::uint32_t densityOverflow_ = 0;
 
         State& ensureState(const ParticleField& field);
         void   ensureDescCapacity(std::uint32_t frame, std::uint32_t count);

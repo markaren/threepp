@@ -171,18 +171,6 @@ namespace threepp::editor {
             return played_;
         }
 
-        // The character governing `object`, or the nearest ancestor of it that
-        // is one — the same walk-up-parents contract findVehicle keeps.
-        [[nodiscard]] const Played* findCharacter(const Object3D* object) const {
-
-            for (const Object3D* o = object; o != nullptr; o = o->parent) {
-                for (const auto& played : played_) {
-                    if (played->root == o) return played.get();
-                }
-            }
-            return nullptr;
-        }
-
         // The character a chase camera should follow: the first in document
         // order. Null when the scene has none.
         [[nodiscard]] const Played* player() const {

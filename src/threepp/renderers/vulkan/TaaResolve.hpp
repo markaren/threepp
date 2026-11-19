@@ -186,7 +186,6 @@ namespace threepp::vulkan {
             historyValid_ = false;
             historyInvalidResolves_ = 2;
         }
-        [[nodiscard]] bool historyValid() const { return historyValid_; }
 
         // HDR-mode finalize: reads PostComposite's hdrOut_ (display-extent
         // bgra8 — PostComposite ran the tone map at display res but can't

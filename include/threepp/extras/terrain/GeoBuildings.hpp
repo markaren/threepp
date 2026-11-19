@@ -134,18 +134,6 @@ namespace threepp::terrain {
             return h;
         }
 
-        // Muted Nordic town palette (LINEAR space): white/cream painted wood,
-        // ochre, oxide red, grey render — and slate/zinc/tile roofs.
-        inline const std::array<std::array<float, 3>, 5>& geoBldWallPalette() {
-            static const std::array<std::array<float, 3>, 5> p{{
-                    {0.62f, 0.60f, 0.56f},// white-painted wood
-                    {0.55f, 0.47f, 0.32f},// cream
-                    {0.42f, 0.27f, 0.10f},// ochre
-                    {0.26f, 0.07f, 0.05f},// oxide red (falu)
-                    {0.35f, 0.35f, 0.36f},// grey render
-            }};
-            return p;
-        }
         // Signed shoelace area of an open (x, z) ring (Vector2 = (x, z)).
         inline float geoBldRingArea(const std::vector<Vector2>& r) {
             float a = 0.f;

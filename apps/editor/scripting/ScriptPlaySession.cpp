@@ -1075,11 +1075,6 @@ std::size_t ScriptPlaySession::errorCount() const {
     return impl_->errors.size();
 }
 
-void ScriptPlaySession::clearErrors() {
-
-    impl_->errors.clear();
-}
-
 std::size_t ScriptPlaySession::instanceCount() const {
 
     return impl_->instances.size();

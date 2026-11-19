@@ -103,7 +103,7 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // shadowed ONCE, at the σ-weighted centroid of the traversed dust (a full
 // per-step shadow ray is shaft-resolution the plume scale does not need),
 // dimmed by the cloud-shadow map at the same point — and SELF-shadowed by the
-// medium itself (pdLightTransmittance at the same centroid): the scene shadow
+// medium itself (pdSurfaceLightTransmittance at the same centroid): the scene shadow
 // map holds geometry only, density volumes never render into it, so without
 // the medium's own light-leg transmittance a deep soot column was fully
 // sunlit through its entire depth and read as white ash at any albedo.
@@ -396,7 +396,7 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         // Three occluders on the sun's leg, disjoint by construction:
         // shadowVis is GEOMETRY (the RT scene — the medium is not in it),
         // cloudShadowSample is the cloud layer overhead, and
-        // pdLightTransmittance is the medium ITSELF — Beer-Lambert through
+        // pdSurfaceLightTransmittance is the medium ITSELF — Beer-Lambert through
         // the density mirrors from the centroid toward the sun, the term
         // that makes a soot column's shaded side actually dark.
         // MULTIPLE SCATTERING, as a second, slower-dying octave of the same

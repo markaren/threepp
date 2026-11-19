@@ -96,7 +96,7 @@ namespace threepp::water {
         PhillipsSpectrum& operator=(const PhillipsSpectrum&) = delete;
 
         // Records the one-shot dispatch that fills h0_. Call once after
-        // construction, then use h0Image/h0View as a sampled input to
+        // construction, then use h0View as a sampled input to
         // DynamicSpectrum.
         void recordCompute(VkCommandBuffer cb);
 
@@ -138,7 +138,6 @@ namespace threepp::water {
         // band's cut tail is the next cascade's. 0 when the switch is off.
         float unresolvedShortWaveMss() const;
 
-        VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }
         const OceanImage& h0() const { return h0_; }
 
@@ -203,7 +202,6 @@ namespace threepp::water {
         // grid's Nyquist for the cascades that feed the vertex normal; 0 for
         // the per-pixel cascade (see dynamic_spectrum.comp).
         void enableChop(float taperSpacing);
-        bool chopEnabled() const { return chopPipe_ != VK_NULL_HANDLE; }
 
         // chop (only once enableChop ran): the OCEAN_CHOP variant, which also
         // stores the slope spectrum i*k*h, the displacement gradient's

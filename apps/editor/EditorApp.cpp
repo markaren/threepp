@@ -4731,16 +4731,6 @@ void EditorApp::logWarnings() {
 }
 
 
-void EditorApp::beginEditIfActivated() {
-
-    if (ImGui::IsItemActivated()) commands_.beginTransaction();
-}
-
-void EditorApp::endEditIfDeactivated() {
-
-    if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-}
-
 void EditorApp::loadSettings() {
 
     settingsPath_ = EditorSettings::defaultPath();

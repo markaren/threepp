@@ -62,8 +62,6 @@ namespace threepp::vulkan {
         // skinned meshes.
         VkDescriptorSet allocateMeshDescriptorSet();
         void            freeMeshDescriptorSet(VkDescriptorSet ds);
-        // Live count for diagnostics (#allocated − #freed).
-        [[nodiscard]] uint32_t liveSetCount() const { return liveSetCount_; }
 
         // Caller binds the pipeline once before iterating pendingSkinnedRebuilds_.
         void bindPipeline(VkCommandBuffer cb);

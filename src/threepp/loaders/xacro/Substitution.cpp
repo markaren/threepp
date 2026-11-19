@@ -235,8 +235,3 @@ SubstResult threepp::xacro::substitute(std::string_view raw, const SubstCtx& ctx
 
     return result;
 }
-
-std::string threepp::xacro::substituteText(std::string_view raw, const SubstCtx& ctx) {
-
-    return substitute(raw, ctx).text;
-}

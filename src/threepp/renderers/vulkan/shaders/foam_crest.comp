@@ -139,17 +139,6 @@ void gradD(vec2 q, out float jxx, out float jzz, out float jxz) {
     }
 }
 
-// The fold-foam measure at q (foldFoam): how far under pc.threshold the
-// drawn map's Jacobian falls there.
-float foldMeasure(vec2 q) {
-    float jxx, jzz, jxz;
-    gradD(q, jxx, jzz, jxz);
-    const float trA  = (jxx + jzz) * pc.steepScale;
-    const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
-    const float l    = cwmLimit(trA, detA, 1.0 + pc.sharpness);
-    return pc.threshold - (1.0 + l * trA + l * l * detA);
-}
-
 // The crest through q (crestLineFoam): the unit direction along it,
 // perpendicular to grad D's most compressive eigenvector, and how much the
 // squeeze is one-sided, rad / |lambda_min| (0.5 for one long-crested wave,
@@ -166,8 +155,10 @@ vec2 crestDir(float jxx, float jzz, float jxz, out float aniso) {
     return vec2(-e.y, e.x);
 }
 
-// foldMeasure, counted for a texel whose crest runs along t only where the
-// crest at q runs the same way and is one-sided (else -1e30).
+// The fold-foam measure at q (foldFoam): how far under pc.threshold the
+// drawn map's Jacobian falls there, counted for a texel whose crest runs
+// along t only where the crest at q runs the same way and is one-sided
+// (else -1e30).
 float crestMeasure(vec2 q, vec2 t) {
     float jxx, jzz, jxz;
     gradD(q, jxx, jzz, jxz);
@@ -185,7 +176,7 @@ float crestMeasure(vec2 q, vec2 t) {
 // crest foam read interpolates between them, and to no foam at 0).
 const vec3 kLevels = vec3(1.0, 2.0 / 3.0, 1.0 / 3.0);
 
-// The fold measure (foldMeasure) at the three levels, from one grad D.
+// The fold measure at the three levels, from one grad D.
 vec3 foldLevels(float trA, float detA) {
     vec3 m;
     for (int k = 0; k < 3; ++k) {

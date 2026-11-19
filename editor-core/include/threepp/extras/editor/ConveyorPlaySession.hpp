@@ -66,15 +66,6 @@ namespace threepp::editor {
             return sim_ ? sim_->wallCount() : 0;
         }
 
-        // Global speed multiplier (belt drag, texture scroll, roller spin,
-        // cleat travel — all of it, so the visuals never disagree with the
-        // physics).
-        void setSpeedScale(float scale) {
-            speedScale_ = scale;
-            if (sim_) sim_->speedScale = scale;
-        }
-        [[nodiscard]] float speedScale() const { return speedScale_; }
-
         ~ConveyorPlaySession() override { release(); }
 
         void start(Scene& scene) override {
@@ -124,7 +115,6 @@ namespace threepp::editor {
             if (specs.empty()) return;
 
             sim_ = std::make_unique<conveyor::ConveyorPhysics>(*world, std::move(specs));
-            sim_->speedScale = speedScale_;
 
             spawnCleatBars(scene);
         }
@@ -293,7 +283,6 @@ namespace threepp::editor {
         std::weak_ptr<const void> worldLife_;
         Scene* scene_ = nullptr;
         std::unique_ptr<conveyor::ConveyorPhysics> sim_;
-        float speedScale_ = 1.f;
         std::size_t conveyorCount_ = 0;
 
         std::vector<BeltVisual> beltVisuals_;

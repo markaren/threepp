@@ -353,11 +353,6 @@ namespace threepp::gltf {
             bool normalized;
         };
 
-        // Byte span occupied by `count` elements of `elemSize` bytes at `stride`.
-        static size_t accessorSpan(size_t count, size_t stride, size_t elemSize) {
-            return count == 0 ? 0 : (count - 1) * stride + elemSize;
-        }
-
         // Meshopt compression on a bufferView: EXT_meshopt_compression is the
         // ratified name; KHR_meshopt_compression is the earlier draft name
         // still found in the wild. Accept both. Returns nullptr when absent.

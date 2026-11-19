@@ -129,13 +129,6 @@ namespace threepp::vulkan {
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
 
-        // True when the surface is a VK_EXT_headless_surface (headless canvas
-        // on a supporting ICD). The swapchain machinery runs unchanged, but
-        // presentation is a no-op sink — nothing is displayed and no
-        // window-system connection is needed, which is what lets the renderer
-        // run on display-less machines (cloud GPU instances).
-        bool headlessSurface() const { return headlessSurface_; }
-
         // True when this swapchain must never be presented to: a headless canvas
         // (nothing is displayed) that additionally asked for it via
         // THREEPP_VULKAN_SUPPRESS_PRESENT=1. Presenting to a hidden window costs

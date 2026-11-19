@@ -279,70 +279,27 @@ float pdMediumLinear(vec3 p, out vec3 albedo) {
     return s;
 }
 
-// ── SELF-SHADOW: transmittance through the medium toward a light ─────────────
+// ── THE MEDIUM'S TRANSMITTANCE TOWARD A LIGHT ────────────────────────────────
 // Beer-Lambert through the r16f mirrors from p along L (unit, TOWARD the
-// light) to the exit of the volume-box union. This is the term the scene
-// shadow map cannot supply: density volumes are a participating medium, not
-// geometry, so they are never rasterised into that map and shadowVis() reports
-// "fully sunlit" through any thickness of soot — which lit a deep smoke column
-// uniformly through its whole depth and read as white ash whatever the albedo.
+// light). This is the term the scene shadow map cannot supply: density volumes
+// are a participating medium, not geometry, so they are never rasterised into
+// that map and shadowVis() reports "fully sunlit" through any thickness of
+// soot — which lit a deep smoke column uniformly through its whole depth and
+// read as white ash whatever the albedo.
 //
-// Evaluated ONCE per (pixel, light) at the march's σ-weighted centroid — the
-// same point and the same reasoning as the centroid shadow ray (a full
-// per-step light march is shaft-resolution the plume scale does not need; the
-// centroid moves per pixel, so the lit side of a column stays bright while
-// pixels whose dust sits deep behind it darken, which is the shading a plume
-// needs). 8 midpoint taps, fixed and unjittered: the integrand is a trilinear
-// volume evaluated at one smoothly-varying point, so there is no shell to
-// dither away, and the determinism contract wants no new noise sources.
-float pdLightTransmittance(vec3 p, vec3 L) {
-    const uint n = min(pd.counts.x, uint(kMaxDensityFields));
-    if (n == 0u) return 1.0;
-    // Exit of the box union along L. Entry is ~0 (p sits inside the traversed
-    // dust); disjoint boxes waste taps in the gap, matching the primary
-    // march's one-interval trade.
-    float tExit = 0.0;
-    const vec3 inv = 1.0 / L;// ±inf on axis-parallel components is fine below
-    for (uint i = 0u; i < n; ++i) {
-        const vec3  bmin  = pd.boxMin[i].xyz;
-        const vec3  bsize = 1.0 / pd.boxInvSize[i].xyz;
-        const vec3  ta = (bmin - p) * inv;
-        const vec3  tb = (bmin + bsize - p) * inv;
-        const vec3  lo = min(ta, tb), hi = max(ta, tb);
-        const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
-        const float x = min(min(hi.x, hi.y), hi.z);
-        if (x > e) tExit = max(tExit, x);
-    }
-    if (tExit <= 0.0) return 1.0;
-    const int   kTaps = 8;
-    const float dl    = tExit / float(kTaps);
-    float tau = 0.0;
-    for (int s = 0; s < kTaps; ++s) {
-        const vec3 x = p + L * ((float(s) + 0.5) * dl);
-        for (uint i = 0u; i < n; ++i) {
-            const vec3 tt = (x - pd.boxMin[i].xyz) * pd.boxInvSize[i].xyz;
-            // Skip, don't clamp — the boundary-smear rule above.
-            if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
-            tau += texture(particleDensityLinTex[i], tt).r * dl;
-        }
-        if (tau > 8.0) break;// e^-8: fully occluded, the rest cannot matter
-    }
-    return exp(-tau);
-}
-
-// ── THE MEDIUM'S SHADOW ON A SURFACE ─────────────────────────────────────────
-// The same Beer-Lambert leg as pdLightTransmittance, for a point that is NOT in
-// the medium: a patch of sea or ground whose sun passes through a plume on its
-// way down. Without it a fog bank or a smoke column shaded itself and left the
-// surface under it in full sun, which is the cue that says "painted on" from
-// the air: a plume over water is read by the dark stripe beside it.
+// p may sit in the medium (the plume's self-shadow) or outside it: a patch of
+// sea or ground whose sun passes through a plume on its way down. Without the
+// latter a fog bank or a smoke column shaded itself and left the surface under
+// it in full sun, which is the cue that says "painted on" from the air: a
+// plume over water is read by the dark stripe beside it.
 //
-// It differs from pdLightTransmittance in where the taps go. That one starts at
-// p because p sits in the dust; here p can be kilometres from the box, and taps
-// spread from p would nearly all land in clear air. Each volume is marched over
-// its OWN [entry, exit] stretch of the ray, so the taps are all in a box and a
-// second plume elsewhere takes none of the first one's. 16 midpoint taps, fixed
-// and unjittered, for pdLightTransmittance's reasons.
+// p can be kilometres from the box, and taps spread from p would nearly all
+// land in clear air. Each volume is marched over its OWN [entry, exit] stretch
+// of the ray, so the taps are all in a box and a second plume elsewhere takes
+// none of the first one's. 16 midpoint taps, fixed and unjittered: the
+// integrand is a trilinear volume evaluated at a smoothly-varying point, so
+// there is no shell to dither away, and the determinism contract wants no new
+// noise sources.
 float pdSurfaceLightTransmittance(vec3 p, vec3 L) {
     const uint n = min(pd.counts.x, uint(kMaxDensityFields));
     if (n == 0u) return 1.0;

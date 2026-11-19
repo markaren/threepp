@@ -46,7 +46,6 @@ namespace threepp::vulkan {
 
         VkDescriptorSet allocateMeshDescriptorSet();
         void            freeMeshDescriptorSet(VkDescriptorSet ds);
-        [[nodiscard]] uint32_t liveSetCount() const { return liveSetCount_; }
 
         void bindPipeline(VkCommandBuffer cb);
         void recordDispatch(VkCommandBuffer cb,
