@@ -12,15 +12,19 @@
 //   5. foam: made where the water is white (piling up, a steep surface, a fast shallow chute), carried, aged.
 // The sluice gate is a set of faces whose flux depth is capped by the gate's opening.
 //
-// Every loop runs over rows (OpenMP when the build has it) and within a row only over its span of active cells; the
-// rows' sums are kept per row and added up serially, so a step gives the same numbers on any number of threads.
+// Every loop runs over rows (threepp::parallelForEach: in parallel on MSVC, in order elsewhere) and within a row only
+// over its span of active cells. Each row writes only its own cells and faces, and the rows' sums are kept per row and
+// added up serially, so a step gives the same numbers on any number of threads.
 
 #ifndef THREEPP_EXAMPLE_SLUICE_SHALLOW_WATER_HPP
 #define THREEPP_EXAMPLE_SLUICE_SHALLOW_WATER_HPP
 
+#include "threepp/utils/Parallel.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <vector>
 
 namespace sluice {
@@ -64,6 +68,8 @@ namespace sluice {
             wGate_.assign(zFaces, -1);
             lo_.assign(nz, 0);
             hi_.assign(nz, nx - 1);
+            rowIds_.resize(nz + 1);
+            std::iota(rowIds_.begin(), rowIds_.end(), 0);
         }
 
         [[nodiscard]] int cell(int i, int j) const { return j * nx + i; }
@@ -159,8 +165,7 @@ namespace sluice {
                 a = std::max(lo - 2, 0);
                 b = std::min(hi + 2, nx - 1);
             };
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            rows(0, nz, [&](int j) {
                 int a, b;
                 span(j, a, b);
                 for (int i = a; i <= b; ++i) {
@@ -192,9 +197,8 @@ namespace sluice {
                     water[2 * c] = std::clamp(foam_[c], 0.f, 1.f);
                     water[2 * c + 1] = wet ? h_[c] : 0.f;
                 }
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            });
+            rows(0, nz, [&](int j) {
                 int a, b;
                 span(j, a, b);
                 for (int i = a; i <= b; ++i) {
@@ -208,7 +212,7 @@ namespace sluice {
                     n[1] = inv;
                     n[2] = -gz * inv;
                 }
-            }
+            });
         }
 
     private:
@@ -217,8 +221,16 @@ namespace sluice {
         std::vector<float> u_, u2_, hu_, fu_, w_, w2_, hw_, fw_;
         std::vector<int8_t> uGate_, wGate_;
         std::vector<int> lo_, hi_;
+        std::vector<int> rowIds_;// 0..nz, the rows handed to parallelForEach
         float gate_ = 0, volume_ = 0, gateFlux_ = 0;
         bool surfaced_ = false;
+
+        // fn(j) for every row j in [j0, j1), the rows spread over the cores
+        template<class Fn>
+        void rows(int j0, int j1, Fn&& fn) const {
+            if (j1 <= j0) return;
+            threepp::parallelForEach(rowIds_.begin() + j0, rowIds_.begin() + j1, [&fn](int j) { fn(j); });
+        }
 
         [[nodiscard]] int uf(int i, int j) const { return j * (nx + 1) + i; }// x face left of cell (i, j)
         [[nodiscard]] int wf(int i, int j) const { return j * nx + i; }      // z face below cell (i, j)
@@ -263,8 +275,7 @@ namespace sluice {
 
         [[nodiscard]] float maxWaveSpeed() const {
             std::vector<float> row(nz, 0.f);
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            rows(0, nz, [&](int j) {
                 float m = 0;
                 for (int i = lo_[j]; i <= hi_[j]; ++i) {
                     const float h = h_[cell(i, j)];
@@ -274,7 +285,7 @@ namespace sluice {
                     m = std::max(m, std::sqrt(gravity * h) + std::sqrt(vx * vx + vz * vz));
                 }
                 row[j] = m;
-            }
+            });
             return *std::max_element(row.begin(), row.end());
         }
 
@@ -304,8 +315,7 @@ namespace sluice {
             const float k = dt / dx;
 
             // 1. the face velocities carried along the flow
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            rows(0, nz, [&](int j) {
                 for (int i = std::max(1, lo_[j] + 1); i <= std::min(nx - 1, hi_[j]); ++i) {
                     const int a = cell(i - 1, j), b = cell(i, j), f = uf(i, j);
                     if (!active_[a] || !active_[b] || (h_[a] <= dryDepth && h_[b] <= dryDepth)) {
@@ -315,9 +325,8 @@ namespace sluice {
                     const float vz = 0.25f * (w_[wf(i - 1, j)] + w_[wf(i, j)] + w_[wf(i - 1, j + 1)] + w_[wf(i, j + 1)]);
                     u2_[f] = sampleU(static_cast<float>(i) - u_[f] * k, static_cast<float>(j) - vz * k);
                 }
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 1; j < nz; ++j) {
+            });
+            rows(1, nz, [&](int j) {
                 for (int i = wLo(j); i <= wHi(j); ++i) {
                     const int a = cell(i, j - 1), b = cell(i, j), f = wf(i, j);
                     if (!active_[a] || !active_[b] || (h_[a] <= dryDepth && h_[b] <= dryDepth)) {
@@ -327,61 +336,53 @@ namespace sluice {
                     const float vx = 0.25f * (u_[uf(i, j - 1)] + u_[uf(i + 1, j - 1)] + u_[uf(i, j)] + u_[uf(i + 1, j)]);
                     w2_[f] = sampleW(static_cast<float>(i) - vx * k, static_cast<float>(j) - w_[f] * k);
                 }
-            }
+            });
 
             // 2-3. gravity, the gate, friction
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            rows(0, nz, [&](int j) {
                 for (int i = std::max(1, lo_[j] + 1); i <= std::min(nx - 1, hi_[j]); ++i) {
                     const int f = uf(i, j);
                     face(cell(i - 1, j), cell(i, j), u2_[f], uGate_[f] >= 0, dt, u_[f], hu_[f]);
                 }
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 1; j < nz; ++j) {
+            });
+            rows(1, nz, [&](int j) {
                 for (int i = wLo(j); i <= wHi(j); ++i) {
                     const int f = wf(i, j);
                     face(cell(i, j - 1), cell(i, j), w2_[f], wGate_[f] >= 0, dt, w_[f], hw_[f]);
                 }
-            }
+            });
 
             // 4. the fluxes, scaled so no cell gives away more than it holds
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            rows(0, nz, [&](int j) {
                 for (int i = std::max(1, lo_[j] + 1); i <= std::min(nx - 1, hi_[j]); ++i) fu_[uf(i, j)] = u_[uf(i, j)] * hu_[uf(i, j)];
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 1; j < nz; ++j) {
+            });
+            rows(1, nz, [&](int j) {
                 for (int i = wLo(j); i <= wHi(j); ++i) fw_[wf(i, j)] = w_[wf(i, j)] * hw_[wf(i, j)];
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            });
+            rows(0, nz, [&](int j) {
                 for (int i = lo_[j]; i <= hi_[j]; ++i) {
                     const int c = cell(i, j);
                     const float out = k * (std::max(0.f, fu_[uf(i + 1, j)]) + std::max(0.f, -fu_[uf(i, j)]) +
                                            std::max(0.f, fw_[wf(i, j + 1)]) + std::max(0.f, -fw_[wf(i, j)]));
                     scale_[c] = out > h_[c] && out > 0 ? h_[c] / out : 1.f;
                 }
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            });
+            rows(0, nz, [&](int j) {
                 for (int i = std::max(1, lo_[j] + 1); i <= std::min(nx - 1, hi_[j]); ++i) {
                     float& F = fu_[uf(i, j)];
                     F *= F > 0 ? scale_[cell(i - 1, j)] : scale_[cell(i, j)];
                 }
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 1; j < nz; ++j) {
+            });
+            rows(1, nz, [&](int j) {
                 for (int i = wLo(j); i <= wHi(j); ++i) {
                     float& F = fw_[wf(i, j)];
                     F *= F > 0 ? scale_[cell(i, j - 1)] : scale_[cell(i, j)];
                 }
-            }
+            });
 
             // 5. the depths; a sink's cells held at its level
             std::vector<double> rowVolume(nz, 0.0), rowGate(nz, 0.0);
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            rows(0, nz, [&](int j) {
                 double vol = 0, gate = 0;
                 for (int i = lo_[j]; i <= hi_[j]; ++i) {
                     const int c = cell(i, j);
@@ -395,14 +396,13 @@ namespace sluice {
                 }
                 rowVolume[j] = vol;
                 rowGate[j] = gate;
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            });
+            rows(0, nz, [&](int j) {
                 for (int i = lo_[j]; i <= hi_[j]; ++i) {
                     const int c = cell(i, j);
                     if (active_[c]) h_[c] = h2_[c];
                 }
-            }
+            });
             double vol = 0, gate = 0;
             for (int j = 0; j < nz; ++j) {
                 vol += rowVolume[j];
@@ -414,8 +414,7 @@ namespace sluice {
             // 6. foam: carried, made where the water is white, aged
             const float decay = std::exp(-dt / foamLife);
             const float dryDecay = std::exp(-dt / 0.4f);
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            rows(0, nz, [&](int j) {
                 for (int i = lo_[j]; i <= hi_[j]; ++i) {
                     const int c = cell(i, j);
                     const float h = h_[c];
@@ -445,11 +444,10 @@ namespace sluice {
                     const float rate = body * std::min(foamMaxRate, foamPiling * piling + foamSlope * std::max(0.f, slope - foamSlopeMin) + foamChute * chute);
                     foam2_[c] = std::min(1.f, carried + dt * rate) * decay;
                 }
-            }
-#pragma omp parallel for schedule(dynamic, 8)
-            for (int j = 0; j < nz; ++j) {
+            });
+            rows(0, nz, [&](int j) {
                 for (int i = lo_[j]; i <= hi_[j]; ++i) foam_[cell(i, j)] = foam2_[cell(i, j)];
-            }
+            });
         }
     };
 
