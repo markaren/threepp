@@ -1,0 +1,561 @@
+#version 460
+#extension GL_GOOGLE_include_directive                   : enable
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+#include "ocean_shore_depth.glsl"// the depth, the sea's km; the bend's table after the depths
+
+// THE WAVES' TURN OVER THE BED: where the waves of each of the long cascades
+// that reach a point of a shore window came from, worked out from the depth
+// and laid as a warp of where that cascade is read (ocean_shore_depth.glsl,
+// "THE BEND"), so the FFT sea itself turns toward the shore, wraps round points
+// and shoals and shortens over the bed, its own irregularity and wave groups
+// kept, and is lower where the rays spread or none arrives (a lee).
+//
+// The ray method (Munk and Arthur 1952; linear refraction, Snell's law in a
+// slowly varying depth). A wave of the cascade's frequency w0 (its measured
+// rms wavenumber k0 in deep water, w0^2 = g k0) has the local wavenumber k(d)
+// of w0^2 = g k tanh(k d), here Eckart's explicit form k = k0 / sqrt(tanh(k0
+// d)) (Eckart 1952, within 5 % everywhere), so it is shorter and slower over
+// shallow water. Its phase S, divided by k0 (P = S / k0, metres: the
+// "optical" distance), solves the eikonal |grad P| = n(d) = k(d) / k0, land
+// blocking it. The sea drawn is a WIND sea, which the wind makes again over
+// every stretch of open water: so wherever the water is too deep for the
+// cascade's waves to feel the bed (k0 d > kFeltKd, n < 1.01) P is the sea's
+// own plane wave, P = w . x (w the waves' heading), and the eikonal is solved
+// only over the water the bed is felt under, from the open sea round it (a
+// ray leaves the open sea only going with the waves; the window's edge holds
+// the plane wave too). P's first arrival is the crest that came fastest, so
+// it bends round a point and into a bay. (Taken as swell from the window's
+// edge, with nothing remade, the first arrival drew every island's
+// diffraction arcs across the whole fjord.) The cascade is read at
+//
+//     W(x) = x + w (P(x) - w . x)
+//
+// so its crests (its lines of constant w . W) are the lines of constant P:
+// turned, and closer together over the bed, each wave keeping its frequency,
+// so it crawls in at the local phase speed; in the open sea W = x exactly.
+// P is continuous everywhere (where two fronts meet both arrive at once and
+// only P's slope kinks: the crests meet at an angle, as crossing seas do), so
+// the warp has no seam; the departure P - w . x can be tens of metres over a
+// flat, and it is a phase, harmless. Only the crest-wise coordinate is not
+// warped (a ray label as the second coordinate jumps where fronts meet, a
+// seam): the waves' short crests keep the world's crosswind axis, a shear
+// where the crests turn far.
+//
+// THE AMPLITUDE. psi, the ray's label, is carried unchanged along each ray
+// (grad P . grad psi = 0) from the open sea, where it is the crosswind
+// coordinate w_perp . x; the ray spacing, b0 / b = |grad psi| in deep water's
+// units, is the energy's spread along a crest (refraction's Kr = sqrt(b0 /
+// b)): higher on a point the rays gather on, lower in a bay they spread over.
+// UNDERSTATED, more than the shoaling: Kr^(1/4) = (b0 / b)^(1/8), between
+// kRefractMin and kRefractMax: a point's crests a little higher, a bay's
+// hardly lower. (Where the depth holds the drawn sea under its limit the
+// factor changes only how much of the incoming wave breaks, and the breaking
+// is a threshold: a bay's spread at a half power took half the breakers off
+// a cove open to the fjord's whole fetch, at an eighth power still a
+// quarter.) Where fronts meet psi jumps: its gradient is taken one-sided
+// there. THE LEE: a wind sea's height grows with its fetch, so behind land
+// the long cascades are lower, by the open water upwind along the heading
+// and either side of it (the sea's directional spread fills a lee from its
+// sides), the factor below. The phase departure is then smoothed with sigma
+// kSmoothWaves of a wavelength and the factor with twice that, kSmoothAmp at
+// least (normalised Gaussians over the water's cells).
+//
+// THE CHOP. Cascade 2 (a few metres and less) is bent the same way over the
+// near window alone, with its own k0 (its measured km): its waves feel the
+// bed only where d < lambda / 2, a metre or two, so a few metres off steep
+// rock and tens of metres over a flat or a lagoon, which a near-window cell
+// (0.5 m) holds and a far one does not. Its edge holds the plane wave (there
+// is no far table for it) and its bend goes to the open sea over the near
+// window's outer quarter, as the near window's does. Its factor is the ray
+// spread's alone: the local wind remakes the chop within ten of its
+// wavelengths of open water, so it has no lee of its own. Its table is half
+// floats (ocean_shore_depth.glsl, OceanShoreChopTable).
+//
+// A cascade whose sea is under kSeaMin (a light air's) is not bent at all.
+//
+// THE SOLVE. Fast sweeping (Zhao 2005, "A fast sweeping method for Eikonal
+// equations") with a semi-Lagrangian update: a sweep marches the window's
+// rows along one axis, and each cell of a row takes the least of its own P and
+// of every path from the row behind it, P(foot) + n h sqrt(1 + delta^2) for a
+// foot delta cells to the side (up to three: rays to 72 degrees off the
+// march; the sweeps along the other axes take the rest), the foot's P linear
+// between the row's cells, which minimises in closed form per segment (the
+// discrete Snell's law: delta / sqrt(1 + delta^2) = -dP / (n h)). The ray's
+// label comes from the foot. Four sweeps, the wind's own axis first and its
+// opposite last, twice. One workgroup a cascade marches the rows with the row
+// behind in shared memory, a barrier a row, a chunk of rows a frame
+// (WakeFieldPipeline::recordBend), so the solve takes a few dozen frames and
+// its cost is spread; what the shade and the geometry read meanwhile is the
+// last published table, with its own placement. The far window first (4 m
+// cells: the bed at the long cascades' scale, out to a kilometre), then the
+// near one (0.5 m: a skerry's fringe), its edge seeded with the far one's
+// published phase; the two solves agree in slope and differ by a few metres
+// of phase after a wide flat, so the near one goes over to the far one over a
+// quarter of its side (ocean_shore_depth.glsl, kShoreBendNearBlend), where
+// that is a few per cent of a wavelength. The near window is solved again
+// when it moves (every 32 m of the camera's travel), the far one when it does
+// (256 m); a solve is about twenty frames.
+//
+//   mode 0  the solve's start: a cell's depth (the window's texels under it;
+//           land where most are), the open sea's plane wave, the window's
+//           edge's (the far one's phase for the near window), unknown where
+//           the bed is felt; the cascades' k0 taken.
+//   mode 1  a chunk of one sweep's rows (one workgroup a cascade: 3 with the
+//           chop, the near window's).
+//   mode 2  a chunk of rows of the phase departures and the factors, the ray
+//           spacing's and the lee's (the temp buffer).
+//   mode 3  smoothed and published into the shore's depth buffer, after the
+//           depths (OceanShoreBendTable), with its placement and heading.
+
+layout(local_size_x = 512) in;
+
+// 88 bytes, mirrored by WakeFieldPipeline::ShoreRefractPush.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t depthAddr; // OceanShoreDepth: the depths, km; the bend's table after them
+    uint64_t workAddr;  // OceanRefractWork
+    uint64_t tempAddr;  // mode 2's raw fields, mode 3's input
+    uint  mode;
+    uint  window;       // the shore window solved over (its depth's layer)
+    uint  res;          // the solve's cells a side (<= 512)
+    uint  depthRes;     // the depth's texels a side (a whole multiple of res)
+    float originX;      // the window's world min corner (its depth's)
+    float originZ;
+    float cell;         // m a cell
+    float windX;        // the waves' heading (unit, the ocean's xz)
+    float windZ;
+    uint  sweep;        // mode 1: 0 +x, 1 -x, 2 +z, 3 -z
+    uint  row0;         // mode 1: the chunk's first row (1 .. res - 1)
+    uint  rows;
+    uint64_t chopAddr;  // OceanRefractChop: the chop's solve (the near window's)
+    uint  cascades;     // 2, or 3 with the chop (the near window)
+    uint  _pad;
+} pc;
+
+// The solve: 5 floats a cell (its depth, then for cascades 0 and 1 the
+// departures of P and psi from the sea's plane wave, P - w . x and
+// psi - w_perp . x), after the k0 the solve took.
+// Departures, not P and psi themselves: those are a few thousand metres
+// across the window, and a float's rounding of them (a tenth of a millimetre
+// a step, over thousands of steps) would leave the open sea a few
+// centimetres off W = x; the departures are exactly 0 there.
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanRefractWork {
+    vec4  k0;  // .xy cascades 0 and 1 (rad/m), 0 = not solved
+    float c[]; // cell (i, j) at (j * res + i) * 5
+};
+// The chop's (cascade 2's) solve, the near window's only: its two departures a cell.
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanRefractChop {
+    float c[]; // cell (i, j) at (j * res + i) * 2
+};
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer OceanRefractTemp {
+    float c[]; // per cascade the phase departure (land -kInf, unreached -kInf / 4) and the factor: tempAt
+};
+
+const float kInf         = 1.0e30;
+const float kDeepCap     = 59.9;// m: the capture's deepest sounding (shore_capture.comp's 60 m)
+const float kFeltKd      = 2.3; // k0 d over this (or the deepest sounding): open sea, the wind's own waves (n < 1.01)
+const float kForward     = 0.1; // a ray leaves the open sea only going with the waves (cos to the heading over this)
+const float kRefractMax  = 1.15;// the most a convergence draws (the shoaling's own cap) ...
+const float kRefractMin  = 0.97;// ... and the least a spread does (and water no ray reaches)
+const float kFetchWaves  = 10.0;// a cascade's waves come up over this many of its wavelengths of open water ...
+const float kFetchMin    = 60.0;// m, ... at least
+const float kFetchMax    = 600.0;// m, ... and at most (well inside the window's 3/8 side ahead of the camera)
+const float kFetchStep   = 2.0; // m: the march's step (the far window's texel)
+const float kFetchSpread = 0.35;// rad: the lee is read along the heading and this either side of it
+const float kLeeShare    = 0.4; // the share of the fetch-limited lee drawn
+const float kSmoothWaves = 0.25;// the published fields are smoothed with sigma this share of a wavelength
+const float kSmoothAmp   = 12.0;// m: the factor's least smoothing (sigma)
+const float kSnap        = 1.0e-3;
+const float kSeaMin      = 0.01;// m: a cascade whose significant height is under this is not bent// departures (m) and factor changes under this are open sea, exactly
+
+// The open sea for a cascade: water too deep for its waves to feel the bed.
+bool deepFor(float k0, float d) {
+    return d >= kDeepCap || k0 * d > kFeltKd;
+}
+// The refractive index n(d) = k(d) / k0, Eckart's dispersion: 1 in the open
+// sea, kInf on land.
+float indexAt(float k0, float d) {
+    if (d <= 0.0) return kInf;
+    if (deepFor(k0, d)) return 1.0;
+    return inversesqrt(tanh(k0 * max(d, 0.05)));
+}
+
+uint cellIndex(uint i, uint j) {
+    return j * pc.res + i;
+}
+// A cell's depth, and cascade c's two departures (P's and psi's), wherever
+// they are kept: cascades 0 and 1 beside the depth, the chop on its own.
+float depthOf(uint q) { return OceanRefractWork(pc.workAddr).c[q * 5u]; }
+float loadP(uint c, uint q) {
+    return c < 2u ? OceanRefractWork(pc.workAddr).c[q * 5u + 1u + c * 2u] : OceanRefractChop(pc.chopAddr).c[q * 2u];
+}
+float loadS(uint c, uint q) {
+    return c < 2u ? OceanRefractWork(pc.workAddr).c[q * 5u + 2u + c * 2u] : OceanRefractChop(pc.chopAddr).c[q * 2u + 1u];
+}
+void storeP(uint c, uint q, float v) {
+    if (c < 2u) OceanRefractWork(pc.workAddr).c[q * 5u + 1u + c * 2u] = v;
+    else        OceanRefractChop(pc.chopAddr).c[q * 2u] = v;
+}
+void storeS(uint c, uint q, float v) {
+    if (c < 2u) OceanRefractWork(pc.workAddr).c[q * 5u + 2u + c * 2u] = v;
+    else        OceanRefractChop(pc.chopAddr).c[q * 2u + 1u] = v;
+}
+// The raw fields' index of cascade c's (P, A) at cell q.
+uint tempAt(uint c, uint q) {
+    return c < 2u ? q * 4u + c * 2u : pc.res * pc.res * 4u + q * 2u;
+}
+
+// ── MODE 0: the start ────────────────────────────────────────────────────
+void initCell(uint id) {
+    OceanShoreDepth  sd = OceanShoreDepth(pc.depthAddr);
+    OceanRefractWork wk = OceanRefractWork(pc.workAddr);
+    const uint i = id % pc.res, j = id / pc.res;
+    // The cascades' deep-water wavenumbers; a cascade with no sea to speak of
+    // (under a centimetre: a light air's) is not bent at all.
+    vec3 k0 = sd.km.xyz;
+    for (int c = 0; c < 3; ++c) {
+        if (sd.hs[c] < kSeaMin || (c == 2 && pc.cascades < 3u)) k0[c] = 0.0;
+    }
+    if (id == 0u) wk.k0 = vec4(k0, 0.0);
+
+    // The depth: the window's texels under the cell, land where at least half
+    // of them are (a pile's texels hold the water round it: shore_jfa.comp).
+    const uint r = max(pc.depthRes / pc.res, 1u);
+    float sumD = 0.0, nW = 0.0, nL = 0.0;
+    const bool live = sd.win[pc.window].live > 0.5 && sd.res == pc.depthRes;
+    for (uint b = 0u; b < r; ++b) {
+        for (uint a = 0u; a < r; ++a) {
+            if (!live) { sumD += 60.0; nW += 1.0; continue; }
+            const float d = sd.depth[(pc.window * pc.depthRes + j * r + b) * pc.depthRes + i * r + a];
+            if (d > 0.0) { sumD += d; nW += 1.0; } else nL += 1.0;
+        }
+    }
+    const float d = (nW > nL && nW > 0.0) ? sumD / nW : 0.0;
+
+    // The open sea holds the sea's plane wave (no departure), and so does the
+    // window's edge, but for the near window's: the far window's published
+    // phase there, so the near solve goes on from it; water the bed is felt
+    // under is unknown until the sweeps.
+    const bool edge = i == 0u || j == 0u || i + 1u == pc.res || j + 1u == pc.res;
+    vec4 farV = vec4(0.0, 0.0, 1.0, 1.0);
+    if (edge && pc.window == 0u && sd.bendRes == pc.res) {
+        float wF;
+        oceanShoreBendIn(oceanShoreBendTable(pc.depthAddr, pc.depthRes), 1u, pc.res,
+                         vec2(pc.originX, pc.originZ) + (vec2(i, j) + 0.5) * pc.cell, 1.0e-6, farV, wF);
+    }
+    // (The chop has no far table: its edge holds the plane wave, and its
+    // bend goes to the open sea over the near window's outer quarter anyway.)
+    const uint q = cellIndex(i, j);
+    wk.c[q * 5u] = d;
+    for (uint c = 0u; c < pc.cascades; ++c) {
+        const bool deep = deepFor(k0[c], d);
+        const bool src  = d > 0.0 && (edge || deep);
+        storeP(c, q, src ? ((deep || c == 2u) ? 0.0 : farV[c]) : kInf);
+        storeS(c, q, 0.0);
+    }
+}
+
+// ── MODE 1: a chunk of a sweep ───────────────────────────────────────────
+shared float sP[2][512];
+shared float sS[2][512];
+shared float sN[2][512];
+
+// The cell at row r (along the march) and lateral index t.
+uvec2 sweepCell(uint r, uint t) {
+    const uint n = pc.res - 1u;
+    switch (pc.sweep) {
+        case 0u: return uvec2(r, t);
+        case 1u: return uvec2(n - r, t);
+        case 2u: return uvec2(t, r);
+        default: return uvec2(t, n - r);
+    }
+}
+
+void sweepRows() {
+    const uint c = gl_WorkGroupID.x;// the cascade
+    const uint t = gl_LocalInvocationID.x;
+    OceanRefractWork wk = OceanRefractWork(pc.workAddr);
+    const float k0 = wk.k0[c];
+    if (k0 <= 0.0) return;// (the whole workgroup)
+    const bool on = t < pc.res;
+    // The march's two axes in the world: em the march's (row r + 1 lies a
+    // cell along it), el the lateral (t + 1).
+    const vec2 em = pc.sweep == 0u ? vec2(1.0, 0.0) : pc.sweep == 1u ? vec2(-1.0, 0.0)
+                  : pc.sweep == 2u ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
+    const vec2 el = pc.sweep < 2u ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+    const vec2 w  = vec2(pc.windX, pc.windZ);
+    const vec2 wp = vec2(-w.y, w.x);
+    const float h = pc.cell;
+    // The plane wave's P and psi a cell back along the march and a cell to
+    // the side (the departures are taken from it), and the heading along each.
+    const float wM = dot(w, em), wL = dot(w, el);
+    const float wBack = -h * wM,  wLat = h * wL;
+    const float pBack = -h * dot(wp, em), pLat = h * dot(wp, el);
+
+    // The row before the chunk.
+    if (on) {
+        const uvec2 p = sweepCell(pc.row0 - 1u, t);
+        const uint  q = cellIndex(p.x, p.y);
+        sP[0][t] = loadP(c, q);
+        sS[0][t] = loadS(c, q);
+        sN[0][t] = indexAt(k0, depthOf(q));
+    }
+    barrier();
+    const uint last = min(pc.row0 + pc.rows, pc.res);
+    uint b = 0u;
+    for (uint r = pc.row0; r < last; ++r) {
+        float nP = kInf, nS = 0.0, nN = kInf;
+        if (on) {
+            const uvec2 p  = sweepCell(r, t);
+            const uint  q  = cellIndex(p.x, p.y);
+            const float d  = depthOf(q);
+            nN = indexAt(k0, d);
+            nP = loadP(c, q);
+            nS = loadS(c, q);
+            // The open sea keeps the wind's own waves; where the bed is felt
+            // the least of the paths in from the row behind.
+            if (d > 0.0 && nN > 1.0) {
+                bool better = false;
+                for (int m = -3; m <= 2; ++m) {
+                    const int a = int(t) + m;
+                    if (a < 0 || a + 1 >= int(pc.res)) continue;
+                    const float Pa = sP[b][a], Pb = sP[b][a + 1];
+                    if (Pa >= 0.5 * kInf || Pb >= 0.5 * kInf) continue;
+                    const float na = sN[b][a], nb = sN[b][a + 1];
+                    // The optical path from a foot dl cells to the side on
+                    // the row behind: P(foot) + n h sqrt(1 + dl^2), P linear
+                    // between the row's cells (g a cell); least where
+                    // dl / sqrt(1 + dl^2) = -g / (n h), Snell's law.
+                    const float K  = 0.5 * (nN + 0.5 * (na + nb)) * h;
+                    const float g  = (Pb - Pa) + wLat;
+                    const float qq = -g / K;
+                    float dl = abs(qq) < 1.0 ? qq * inversesqrt(1.0 - qq * qq) : sign(qq) * 1.0e4;
+                    dl = clamp(dl, float(m), float(m + 1));
+                    const float path = sqrt(1.0 + dl * dl);
+                    // Out of the open sea only with the waves: its plane wave
+                    // runs one way (from the row behind, the step is
+                    // em - dl el).
+                    if (na == 1.0 && nb == 1.0 && wM - dl * wL < kForward * path) continue;
+                    const float tt = dl - float(m);
+                    // ... as a departure from the plane wave at this cell
+                    // (never under it: n >= 1, so nothing arrives before the
+                    // open sea's own crest; the floor takes the rounding).
+                    const float cand = max(Pa + wBack + float(m) * wLat + tt * g + K * path, 0.0);
+                    if (cand < nP - 1e-6) {
+                        nP = cand;
+                        nS = mix(sS[b][a], sS[b][a + 1], tt) + pBack + dl * pLat;
+                        better = true;
+                    }
+                }
+                if (better) {
+                    storeP(c, q, nP);
+                    storeS(c, q, nS);
+                }
+            }
+        }
+        const uint b1 = b ^ 1u;
+        if (on) {
+            sP[b1][t] = nP;
+            sS[b1][t] = nS;
+            sN[b1][t] = nN;
+        }
+        barrier();
+        b = b1;
+    }
+}
+
+// ── MODE 2: the raw fields ───────────────────────────────────────────────
+// The open water upwind of a world point along a direction (m, up to
+// `reach`): the distance to the first land texel of the shore's depth (the
+// near window's where it has one, the far one's past it; open sea past both),
+// in steps of kFetchStep, or the reach. The same for either window's solve.
+float fetchAlong(OceanShoreDepth sd, vec2 from, vec2 dir, float reach) {
+    const int  steps = int(ceil(reach / kFetchStep));
+    const uint n     = sd.res;
+    for (int s = 1; s <= steps; ++s) {
+        const vec2 x = from - dir * (float(s) * kFetchStep);
+        float d = -1.0;
+        for (uint k = 0u; k < 2u && d < 0.0; ++k) {
+            const OceanShoreWindow w = sd.win[k];
+            if (w.live < 0.5) continue;
+            const ivec2 ij = ivec2(floor((x - vec2(w.originX, w.originZ)) / w.texel));
+            if (any(lessThan(ij, ivec2(0))) || any(greaterThanEqual(ij, ivec2(n)))) continue;
+            d = sd.depth[(k * n + uint(ij.y)) * n + uint(ij.x)];
+        }
+        if (d < 0.0) return reach;// past both windows
+        if (d <= 0.0) return float(s - 1) * kFetchStep;
+    }
+    return reach;
+}
+
+void rawCell(uint id) {
+    OceanRefractWork wk = OceanRefractWork(pc.workAddr);
+    OceanRefractTemp tp = OceanRefractTemp(pc.tempAddr);
+    const uint  i  = id % pc.res, j = id / pc.res;
+    const uint  q  = cellIndex(i, j);
+    const float d  = depthOf(q);
+    const vec2  w  = vec2(pc.windX, pc.windZ);
+    const vec2  wp = vec2(-w.y, w.x);
+    // THE LEE: the open water upwind, along the heading and kFetchSpread
+    // either side (the sea's directional spread fills a lee in from its
+    // sides), in cells.
+    float reach = 0.0;
+    for (uint c = 0u; c < 2u; ++c) {
+        if (wk.k0[c] > 0.0) reach = max(reach, clamp(kFetchWaves * 6.2831853 / wk.k0[c], kFetchMin, kFetchMax));
+    }
+    float F[3] = float[3](reach, reach, reach);
+    if (d > 0.0 && reach > 0.0) {
+        OceanShoreDepth sd = OceanShoreDepth(pc.depthAddr);
+        const vec2 from = vec2(pc.originX, pc.originZ) + (vec2(i, j) + 0.5) * pc.cell;
+        for (int k = 0; k < 3; ++k) {
+            const float a = float(k - 1) * kFetchSpread;
+            const vec2  dir = vec2(cos(a) * w.x - sin(a) * w.y, sin(a) * w.x + cos(a) * w.y);
+            F[k] = fetchAlong(sd, from, dir, reach);
+        }
+    }
+    for (uint c = 0u; c < pc.cascades; ++c) {
+        const uint  t  = tempAt(c, q);
+        const float k0 = wk.k0[c];
+        if (d <= 0.0) {// land: no water to read
+            tp.c[t] = -kInf; tp.c[t + 1u] = 1.0;
+            continue;
+        }
+        const float P = loadP(c, q);// the departure P - w . x
+        if (k0 <= 0.0) {
+            tp.c[t] = 0.0; tp.c[t + 1u] = 1.0;
+            continue;
+        }
+        // The lee: a wind sea's height grows as the root of its fetch
+        // (Hs ~ U sqrt(F / g), the fetch-limited growth laws, e.g. JONSWAP:
+        // Hasselmann et al. 1973), a cascade's waves fully up over
+        // kFetchWaves of their wavelengths: sqrt(F / Fc), averaged over the
+        // three directions; UNDERSTATED, kLeeShare of it (the lee of a rock
+        // keeps most of its long waves: they come round it).
+        // Not the chop's: the local wind remakes it within tens of metres of
+        // open water (ten of its wavelengths), and the lee of a rock that
+        // short is the waves' own wrapping, which the bend draws.
+        const float Fc  = clamp(kFetchWaves * 6.2831853 / k0, kFetchMin, kFetchMax);
+        float lee = 0.0;
+        for (int k = 0; k < 3; ++k) lee += sqrt(clamp(F[k] / Fc, 0.0, 1.0));
+        lee = c < 2u ? mix(1.0, lee * (1.0 / 3.0), kLeeShare) : 1.0;
+        if (P >= 0.5 * kInf) {
+            // Water no ray from the open sea reaches (the shallows in the lee
+            // of a point, a pond behind a mole): the least a spread draws,
+            // and no phase of its own (the smoothing takes its neighbours').
+            tp.c[t] = -0.25 * kInf; tp.c[t + 1u] = kRefractMin * lee;
+            continue;
+        }
+        const float S = loadS(c, q);// psi - w_perp . x
+        // |grad psi|: each axis's central difference, or the one side where
+        // the two differ more than threefold (a jump across a meeting line is
+        // not a ray spacing; the smaller side everywhere, minmod, read the
+        // ordinary scatter of a ray field over a rough bed as spreading).
+        vec2 gS;
+        for (int ax = 0; ax < 2; ++ax) {
+            float side[2] = float[2](1.0e9, 1.0e9);
+            for (int k = 0; k < 2; ++k) {
+                const int   sgn = 2 * k - 1;
+                const ivec2 nb  = ivec2(i, j) + (ax == 0 ? ivec2(sgn, 0) : ivec2(0, sgn));
+                if (any(lessThan(nb, ivec2(0))) || any(greaterThanEqual(nb, ivec2(pc.res)))) continue;
+                const uint qn = cellIndex(uint(nb.x), uint(nb.y));
+                if (depthOf(qn) <= 0.0 || loadP(c, qn) >= 0.5 * kInf) continue;
+                side[k] = (loadS(c, qn) - S) * float(sgn) / pc.cell + wp[ax];
+            }
+            const bool  l = side[0] < 1.0e8, r = side[1] < 1.0e8;
+            const float lo = min(abs(side[0]), abs(side[1])), hi = max(l ? abs(side[0]) : 0.0, r ? abs(side[1]) : 0.0);
+            gS[ax] = !l && !r ? wp[ax]
+                   : !l ? side[1] : !r ? side[0]
+                   : hi > 3.0 * lo + 0.25 ? (abs(side[0]) < abs(side[1]) ? side[0] : side[1])
+                   : 0.5 * (side[0] + side[1]);
+        }
+        const float spread = length(gS);// b0 / b
+        const float amp    = clamp(sqrt(sqrt(sqrt(spread))), kRefractMin, kRefractMax);
+        tp.c[t]      = P;
+        tp.c[t + 1u] = amp * lee;
+    }
+}
+
+// ── MODE 3: smoothed and published ───────────────────────────────────────
+void publishCell(uint id) {
+    OceanShoreDepth     sd = OceanShoreDepth(pc.depthAddr);
+    OceanRefractWork    wk = OceanRefractWork(pc.workAddr);
+    OceanRefractTemp    tp = OceanRefractTemp(pc.tempAddr);
+    OceanShoreBendTable bt = oceanShoreBendTable(pc.depthAddr, pc.depthRes);
+    const int i = int(id % pc.res), j = int(id / pc.res);
+    vec4 outV = vec4(0.0, 0.0, 1.0, 1.0);// the two phase departures, the two factors
+    vec2 chop = vec2(0.0, 1.0);          // the chop's (the near window's)
+    for (uint c = 0u; c < pc.cascades; ++c) {
+        const float k0 = wk.k0[c];
+        if (k0 <= 0.0) continue;
+        // Normalised Gaussians over the water's cells (7 x 7 taps spaced to
+        // reach two sigma; land cells take their water's): the phase over
+        // kSmoothWaves of a wavelength, the factor over kSmoothAmp metres at
+        // least (the ray spacing of a field over a rough bed scatters from
+        // ray to ray, and drawn as it is it laid bands of rough and calm
+        // water along the rays).
+        float P = 0.0, A = 0.0, swA = 0.0, swP = 0.0;
+        for (int pass = 0; pass < 2; ++pass) {
+            const float sig = pass == 0 ? max(kSmoothWaves * 6.2831853 / k0 / pc.cell, 0.5)
+                                        : max(2.0 * kSmoothWaves * 6.2831853 / k0, kSmoothAmp) / pc.cell;
+            const int   sp  = max(int(round(2.0 * sig / 3.0)), 1);
+            for (int b = -3; b <= 3; ++b) {
+                for (int a = -3; a <= 3; ++a) {
+                    const ivec2 nb = clamp(ivec2(i + a * sp, j + b * sp), ivec2(0), ivec2(pc.res - 1u));
+                    const uint  t  = tempAt(c, uint(nb.y) * pc.res + uint(nb.x));
+                    const float tP = tp.c[t];
+                    if (tP < -0.5 * kInf) continue;// land
+                    const vec2  r  = vec2(a, b) * float(sp);
+                    const float ww = exp(-0.5 * dot(r, r) / (sig * sig));
+                    if (pass == 0) {
+                        if (tP > -0.1 * kInf) {// (water no ray reached has no phase)
+                            P   += ww * tP;
+                            swP += ww;
+                        }
+                    } else {
+                        A   += ww * tp.c[t + 1u];
+                        swA += ww;
+                    }
+                }
+            }
+        }
+        P = swP > 0.0 ? P / swP : 0.0;
+        A = swA > 0.0 ? A / swA : 1.0;
+        if (abs(P) < kSnap) P = 0.0;
+        if (abs(A - 1.0) < kSnap) A = 1.0;
+        if (c < 2u) {
+            outV[c]      = P;
+            outV[2u + c] = A;
+        } else {
+            chop = vec2(P, A);
+        }
+    }
+    const uint base = ((pc.window * pc.res + uint(j)) * pc.res + uint(i)) * 4u;
+    for (uint e = 0u; e < 4u; ++e) bt.v[base + e] = outV[e];
+    if (pc.cascades > 2u) oceanShoreChopTable(pc.depthAddr, pc.depthRes, pc.res).v[uint(j) * pc.res + uint(i)] = packHalf2x16(chop);
+    if (id == 0u) {
+        bt.win[pc.window] = OceanShoreWindow(pc.originX, pc.originZ, pc.cell, 1.0);
+        bt.heading = vec2(pc.windX, pc.windZ);
+        bt.res     = pc.res;
+        if (pc.cascades > 2u) bt.chop = 1u;
+        sd.bendRes = pc.res;
+    }
+}
+
+void main() {
+    if (pc.mode == 1u) {
+        sweepRows();
+        return;
+    }
+    if (pc.mode == 2u) {// rows row0 .. row0 + rows - 1
+        const uint id = pc.row0 * pc.res + gl_GlobalInvocationID.x;
+        if (gl_GlobalInvocationID.x < pc.rows * pc.res && id < pc.res * pc.res) rawCell(id);
+        return;
+    }
+    const uint id = gl_GlobalInvocationID.x;
+    if (id >= pc.res * pc.res) return;
+    if (pc.mode == 0u) initCell(id);
+    else publishCell(id);
+}

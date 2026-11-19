@@ -667,17 +667,43 @@ namespace threepp {
         // sampleHeight scales them alike (shoreGain). The GPU buffer's words
         // (ocean_shore_depth.glsl's OceanShoreDepth): two windows' placements
         // (origin x, z, texel, live), each cascade's significant height and
-        // wavenumber, the windows' side in texels (a uint), three spare words,
-        // then each window's depths, row by row. Empty = none (every gain 1).
-        // Internal; the renderer fills it.
+        // wavenumber, the windows' side in texels (a uint), the bend's side in
+        // cells (a uint), two spare words, then each window's depths, row by
+        // row, then the bend's table (OceanShoreBendTable: the two windows'
+        // placements, the heading, its side, a spare word, then 4 floats a
+        // cell of each window).
+        // Empty = none (every gain 1, no bend). Internal; the renderer fills it.
         struct ShoreDepth {
             std::vector<float> data;
         };
         mutable ShoreDepth shoreDepth;
         // The three cascades' gains over the depth at a rest point (1, 1, 1
-        // off the shallows and without a depth): ocean_shore_depth.glsl's
+        // off the shallows and without a depth), the long cascades'
+        // refraction factors in them: ocean_shore_depth.glsl's
         // oceanShoreGain, line for line.
         [[nodiscard]] std::array<float, 3> shoreGain(float x, float z) const;
+        // The cascades' turn over the bed at a rest point
+        // (ocean_shore_depth.glsl's oceanShoreBend): long cascade c is read at
+        // x + d[2c], d[2c + 1] and its displacement turned by (turn[2c],
+        // turn[2c + 1]) (cos, sin), the chop at x + d2 turned by turn2; amp
+        // the three factors. on / on2 false: the open sea (W = x).
+        struct ShoreBend {
+            std::array<float, 4> d{};
+            std::array<float, 4> turn{1.f, 0.f, 1.f, 0.f};
+            std::array<float, 3> amp{1.f, 1.f, 1.f};
+            bool                 on = false;
+            // The chop (cascade 2), bent over the near window alone.
+            std::array<float, 2> d2{};
+            std::array<float, 2> turn2{1.f, 0.f};
+            bool                 on2 = false;
+        };
+        [[nodiscard]] ShoreBend shoreBend(float x, float z) const;
+        // shoreGain with the long cascades' refraction factors given (a bend
+        // already taken).
+        [[nodiscard]] std::array<float, 3> shoreGainWith(float x, float z, const std::array<float, 3>& bendAmp) const;
+        // The water's depth over the shore's windows at a world xz (m; 0 on
+        // land, -1 where no window has one), the near window's where it has it.
+        [[nodiscard]] float shoreDepthAt(float x, float z) const;
 
         // The site's wave climate (default none: one sea everywhere, as
         // before). A small world-anchored map, baked by the caller from the

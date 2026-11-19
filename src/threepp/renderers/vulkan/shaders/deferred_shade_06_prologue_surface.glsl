@@ -106,17 +106,35 @@
         // mapping, Olano and Baker 2010). The footprint is a strip: one pixel
         // across the line of sight, pixWorld / cos(view) along it, so the
         // fetch is anisotropic with those two axes as its gradients.
+        // THE CHOP's BEND (ocean_shore_depth.glsl): over the bed, near the
+        // camera, the fine cascade is read where its waves came from, its
+        // crests turned toward the shore and closer together; the footprint
+        // is carried into the bent read by the warp's Jacobian J, the slope
+        // comes back by J^T, and the slope spread the footprint averages
+        // grows with the crests' compression n along the heading ((n^2 + 1)
+        // / 2 of it, the crosswind half untouched). Off the bed it is read
+        // as before.
+        OceanShoreBend chopBend;
+        chopBend.on2 = false;
+        if (geoms[id - 1u].foamAddress > 1ul) {
+            const uvec2 sa0 = WakeTable(geoms[id - 1u].foamAddress).shoreDepth;
+            if (sa0 != uvec2(0u)) chopBend = oceanShoreChopBend(packUint2x32(sa0), wPos);
+        }
         const float invTile  = 1.0 / pc.oceanFineTileSize;
-        const vec2  uvW      = wPos * invTile;
+        const vec2  uvW      = (chopBend.on2 ? wPos + chopBend.d2 : wPos) * invTile;
         const float pixWorld = (cam.camAux.x > 0.5 ? 1.0 : length(worldPos - camPos))
                              * 2.0 * cam.projInverse[1][1]
                              / max(float(pc.height), 1.0);            // world m / pixel (FOV+res correct)
         const float pixAlong = pixWorld / max(dot(Nmacro, V), 0.02);
         const float vlM      = length(wV);
         const vec2  alongM   = vlM > 1e-4 ? wV / vlM : vec2(1.0, 0.0);
-        const vec4  mom      = textureGrad(oceanFineHeight, uvW,
-                                           alongM * (pixAlong * invTile),
-                                           vec2(-alongM.y, alongM.x) * (pixWorld * invTile));
+        vec2 fpAlong  = alongM * (pixAlong * invTile);
+        vec2 fpAcross = vec2(-alongM.y, alongM.x) * (pixWorld * invTile);
+        if (chopBend.on2) {
+            fpAlong  = chopBend.j2 * fpAlong;
+            fpAcross = chopBend.j2 * fpAcross;
+        }
+        const vec4  mom      = textureGrad(oceanFineHeight, uvW, fpAlong, fpAcross);
         float slopeVar = max(mom.a - dot(mom.gb, mom.gb), 0.0);
         vec2 gKept = mom.gb;
         {
@@ -142,8 +160,12 @@
             const vec2  rD  = vec2(0.9393727, 0.3428978);// cos, sin of 0.35 rad
             const float sD  = 0.77;
             const vec2  uvD = vec2(rD.x * uvW.x - rD.y * uvW.y, rD.y * uvW.x + rD.x * uvW.y) * sD + vec2(0.37, 0.61);
-            const vec2  dA  = alongM * (pixAlong * invTile * sD);
-            const vec2  dX  = vec2(-alongM.y, alongM.x) * (pixWorld * invTile * sD);
+            vec2 dA = alongM * (pixAlong * invTile * sD);
+            vec2 dX = vec2(-alongM.y, alongM.x) * (pixWorld * invTile * sD);
+            if (chopBend.on2) {
+                dA = chopBend.j2 * dA;
+                dX = chopBend.j2 * dX;
+            }
             const vec4  momD = textureGrad(oceanFineHeight, uvD,
                                            vec2(rD.x * dA.x - rD.y * dA.y, rD.y * dA.x + rD.x * dA.y),
                                            vec2(rD.x * dX.x - rD.y * dX.y, rD.y * dX.x + rD.x * dX.y));
@@ -161,6 +183,12 @@
             const ivec2 tsz = textureSize(oceanFineHeight, 0);
             const vec4  m0  = texelFetch(oceanFineHeight, ivec2(fract(uvW) * vec2(tsz)) % tsz, 0);
             slopeVarSub = min(max(m0.a - dot(m0.gb, m0.gb), 0.0), slopeVar);
+        }
+        if (chopBend.on2) {
+            gKept = transpose(chopBend.j2) * gKept;
+            const float sq = 0.5 * (chopBend.n2 * chopBend.n2 + 1.0);
+            slopeVar    *= sq;
+            slopeVarSub *= sq;
         }
         if ((kOceanClimate & 1u) != 0u) {
             // ── WAVE CLIMATE (DisplacedMesh::WaveClimate, spec constant 12) ─
@@ -190,7 +218,15 @@
         if (geoms[id - 1u].foamAddress > 1ul) {
             const uvec2 sa = WakeTable(geoms[id - 1u].foamAddress).shoreDepth;
             if (sa != uvec2(0u)) {
-                gShoreGain    = oceanShoreGain(packUint2x32(sa), wPos - gCrestDisp);
+                // (and the long cascades' refraction over the bed: the
+                // factors in the gains, cascade 1's departure for the crest
+                // foam)
+                vec3  bendP, bendA;
+                vec2  bendW;
+                float bendH;
+                oceanShoreBendAt(packUint2x32(sa), wPos - gCrestDisp, bendP, bendA, bendW, bendH);
+                gShoreGain    = oceanShoreGainWith(packUint2x32(sa), wPos - gCrestDisp, bendA);
+                gShoreBend1   = bendW * bendP.y;
                 const float s = sqrt(gShoreGain.z);
                 gKept   *= s;
                 slopeVar = slopeVarSub + s * s * max(slopeVar - slopeVarSub, 0.0);

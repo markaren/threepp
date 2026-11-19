@@ -1288,12 +1288,12 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // (foam_crest.comp, OCEAN_CLIMATE_LEVELS); take it at the map's
             // level here, cascade 1's (the waves the fold foam counts are
             // mostly its), linearly between levels and to none at 0.
-            const vec4  lv = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile);
+            const vec4  lv = textureGrad(oceanCrestFoam, (q + gShoreBend1) * invTile, gA * invTile, gX * invTile);
             const float L  = clamp(oceanClimate(oceanClimateMap, q).y, 0.0, 1.0) * 3.0;
             foamF = L >= 2.0 ? mix(lv.b, lv.r, L - 2.0) : L >= 1.0 ? mix(lv.a, lv.b, L - 1.0) : lv.a * L;
             foamFresh = lv.g * clamp(L / 3.0, 0.0, 1.0);
         } else {
-            const vec2 cf = textureGrad(oceanCrestFoam, q * invTile, gA * invTile, gX * invTile).rg;
+            const vec2 cf = textureGrad(oceanCrestFoam, (q + gShoreBend1) * invTile, gA * invTile, gX * invTile).rg;
             foamF     = cf.r;
             foamFresh = cf.g;
         }

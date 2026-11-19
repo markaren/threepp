@@ -192,6 +192,11 @@ layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
 // shadeWater (the crest foam). 1 off the shallows.
 #include "ocean_shore_depth.glsl"
 vec3 gShoreGain = vec3(1.0);
+// ... and its bend (ocean_shore_depth.glsl): cascade 1's departure W - x at
+// the pixel's rest point, where its crests came from; the crest foam, laid
+// over the unbent cascades' rest coordinates (foam_crest.comp), is read there
+// so the whitecaps ride the turned crests. 0 off the bed's reach.
+vec2 gShoreBend1 = vec2(0.0);
 // This pixel's read of it, taken once in main() where the ocean's fine normal
 // is built and used again by shadeWater (bubbles, film). Zero off a wake.
 vec4 gWake = vec4(0.0);

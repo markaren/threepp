@@ -51,6 +51,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 
 namespace threepp::vulkan {
@@ -97,6 +98,29 @@ namespace threepp::vulkan {
     // The shore's depth buffer's header (ocean_shore_depth.glsl's OceanShoreDepth
     // up to its depths): two windows' placements, the sea's statistics, res.
     constexpr uint32_t kShoreDepthHeader = 80;
+    // THE BEND (shore_refract.comp): the long cascades' turn over the bed,
+    // solved over each shore window on a lattice of at most kShoreBendRes
+    // cells a side (a whole number of its texels: 0.5 m and 4 m at the
+    // default 1024) and published after the depths in the same buffer, its
+    // own header (ocean_shore_depth.glsl's OceanShoreBendTable) then 4 floats
+    // a cell of each window. A solve marches kShoreBendRows rows of one sweep
+    // a frame, then lays its raw fields kShoreBendRawChunks frames.
+    constexpr uint32_t kShoreBendRes       = 512;
+    constexpr uint32_t kShoreBendRows      = 256;
+    constexpr uint32_t kShoreBendSweeps    = 8;// four directions, twice
+    constexpr uint32_t kShoreBendRawChunks = 4;
+    constexpr uint32_t kShoreBendHeader    = 48;
+    // The bend's cells a side for a field of `res` texels a side.
+    constexpr uint32_t shoreBendRes(uint32_t res) {
+        return res / ((res + kShoreBendRes - 1u) / kShoreBendRes);
+    }
+    // The shore's depth buffer, whole: the header, each window's depths, the bend's table.
+    constexpr VkDeviceSize shoreDepthBytes(uint32_t res) {
+        const VkDeviceSize b = shoreBendRes(res);
+        return VkDeviceSize(kShoreDepthHeader) + VkDeviceSize(kShoreLayers) * res * res * sizeof(float) +
+               kShoreBendHeader + VkDeviceSize(kShoreLayers) * b * b * 4u * sizeof(float) +
+               b * b * sizeof(uint32_t);// the chop's, the near window's (packHalf2x16)
+    }
     // = OCEAN_WAKE_MAX_PATCHES
     constexpr uint32_t kWakeTablePatches = DisplacedMesh::kMaxWakePatches + kShoreLayers;
 
@@ -174,6 +198,21 @@ namespace threepp::vulkan {
             VkDeviceAddress depthAddr;// State::shoreDepth
         };
 
+        // shore_refract.comp's (88 bytes).
+        struct ShoreRefractPush {
+            VkDeviceAddress depthAddr;// State::shoreDepth (the depths, km; the bend's table after them)
+            VkDeviceAddress workAddr; // State::bendWork (the window's slot)
+            VkDeviceAddress tempAddr; // State::bendTemp
+            uint32_t mode, window, res, depthRes;
+            float    originX, originZ, cell;
+            float    windX, windZ;
+            uint32_t sweep, row0, rows;
+            VkDeviceAddress chopAddr; // State::bendWork's chop region (the near window's)
+            uint32_t cascades;        // 2, 3 with the chop
+            uint32_t _pad;
+        };
+        static_assert(sizeof(ShoreRefractPush) == 88, "ShoreRefractPush must match shore_refract.comp's Pc");
+
         // What the shore's step needs of the frame and of its ocean.
         struct ShoreInputs {
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// the scene's, as the last frame left it
@@ -241,7 +280,24 @@ namespace threepp::vulkan {
             // waves over shallow water, in the geometry (water_displace.comp),
             // the shade and the source.
             Buffer shoreDepth{};
-            uint32_t depthLaid = 0;// windows' depths laid since the State was made (a version)
+            uint32_t depthLaid = 0;// windows' depths (and bends) laid since the State was made (a version)
+            // The bend (shore_refract.comp): the solve's own lattice, a slot a
+            // window (a cell's depth, and a cascade the phase's and the ray
+            // label's departures from the sea's plane wave) and the raw fields
+            // it publishes from. One window is solved at a time, the far one
+            // first (the near one's edge is seeded from its table), over
+            // kShoreBendSweeps * the rows' chunks + kShoreBendRawChunks frames;
+            // what is read meanwhile is the last published table, with its own
+            // placement.
+            Buffer   bendWork{};// a slot a window
+            Buffer   bendTemp{};
+            uint32_t bendRes   = 0;
+            std::array<bool, kShoreLayers>  bendDirty{};// window k wants solving (its depth was laid again, the sea changed)
+            std::array<float, kShoreLayers> bendX{}, bendZ{};// the placement window k's solve is of
+            int      bendJob  = -1;// the window being solved, -1 none
+            uint32_t bendStep = 0; // its chunks done (the start's in the first)
+            float    bendWindTheta = std::numeric_limits<float>::quiet_NaN();
+            float    bendWindSpeed = std::numeric_limits<float>::quiet_NaN();
             // Each map's seed count, for the host: a uint a window, a buffer a
             // frame in flight (read back when that frame's slot comes round,
             // its fence waited). A window whose map has no seed holds no
@@ -353,6 +409,13 @@ namespace threepp::vulkan {
         VkPipelineLayout      sourcePipeLayout_   = VK_NULL_HANDLE;
         VkPipeline            sourcePipeline_     = VK_NULL_HANDLE;
         VkDescriptorSetLayout sourceDisplaceLayout_ = VK_NULL_HANDLE;// the layout sourcePipeline_ was made with
+        VkPipelineLayout      refractPipeLayout_  = VK_NULL_HANDLE;// the bend (push constants only)
+        VkPipeline            refractPipeline_    = VK_NULL_HANDLE;
+
+        // The bend's part of recordShore: start, advance and publish a solve.
+        void recordBend(VkCommandBuffer cb, State& st, const ShoreInputs& in, uint32_t captureMask,
+                        const std::array<float, kShoreLayers>& ox, const std::array<float, kShoreLayers>& oz,
+                        const std::array<float, kShoreLayers>& texel);
 
         void createPipeline();
         void createShorePipelines();

@@ -1671,6 +1671,11 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_source.comp"
         kShoreSourceCompSpv
         _shore_source_spv_h)
+    # ... and the long waves' turn over the bed (the ray method, swept).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_refract.comp"
+        kShoreRefractCompSpv
+        _shore_refract_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/grass_wind.comp"
         kGrassWindCompSpv
