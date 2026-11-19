@@ -87,6 +87,7 @@
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/helpers/SonarSensor.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/vulkan/NoContraction.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -527,6 +528,9 @@ int main(int argc, char** argv) {
     bool noOccl = false;
     bool sceneEdit = false;
     bool withSonar = false;
+    // --no-contraction: vulkan::setNoContraction(true) before the renderer
+    // (shader float arithmetic evaluated as written); meta records it.
+    bool noContraction = false;
     int editAddFrame = 45, editRemoveFrame = 81;
     int idPre = 6, idPost = 15;// scan indices: frame 36 (pre-add), frame 90 (post-remove)
     for (int i = 1; i < argc; ++i) {
@@ -554,10 +558,11 @@ int main(int argc, char** argv) {
         else if (arg == "--noise-sigma" && i + 1 < argc) noiseSigma = float(std::atof(argv[++i]));
         else if (arg == "--no-lod") noLod = true;
         else if (arg == "--no-occl") noOccl = true;
+        else if (arg == "--no-contraction") noContraction = true;
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
     if (outDir.empty()) {
-        std::cout << "usage: vulkan_lidar_audit --frames N [--scene-edit] [--sonar] --out <dir>\n"
+        std::cout << "usage: vulkan_lidar_audit --frames N [--scene-edit] [--sonar] [--no-contraction] --out <dir>\n"
                   << "       vulkan_lidar_audit --compare <dirA> <dirB>\n"
                   << "       vulkan_lidar_audit --idstability <dir> [--pre N] [--post N]\n";
         return 1;
@@ -565,6 +570,7 @@ int main(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories(outDir, ec);
 
+    if (noContraction) vulkan::setNoContraction(true);
     Canvas canvas("vulkan_lidar_audit",
                   {{"vsync", false}, {"size", WindowSize{800, 600}}, {"headless", true}});
     VulkanRenderer renderer(canvas);
@@ -869,7 +875,8 @@ int main(int argc, char** argv) {
          << " editAdd=" << (sceneEdit ? editAddFrame : -1)
          << " editRemove=" << (sceneEdit ? editRemoveFrame : -1)
          << " yaw=" << (sceneEdit ? "fixed" : "orbit")
-         << " sonar=" << (withSonar ? 1 : 0);
+         << " sonar=" << (withSonar ? 1 : 0)
+         << " noContraction=" << (vulkan::noContraction() ? 1 : 0);
     if (withSonar) {
         const auto& sm = sonarSensor.model();
         meta << " sonarModel=Wide130 sonarBeams=" << sm.beams << " sonarSamples=" << sm.verticalSamples

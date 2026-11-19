@@ -932,6 +932,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/TransientPool.cpp"
             "threepp/renderers/vulkan/EdgeRefine.cpp"
             "threepp/renderers/vulkan/SpirvReflect.cpp"
+            "threepp/renderers/vulkan/SpirvNoContraction.cpp"
             "threepp/renderers/vulkan/DescriptorShadow.cpp"
             "threepp/renderers/vulkan/VulkanCoreInit.cpp"
             "threepp/renderers/vulkan/VulkanCoreGeometry.cpp"
