@@ -1,35 +1,26 @@
 // Portable parallel std::for_each.
 //
-// Uses the C++17 Parallel STL (std::execution::par) on MSVC, which ships native
-// support with no extra dependency. Everywhere else the call runs serially:
-// Apple's libc++ does not implement the parallel execution policies at all, and
-// libstdc++'s policies require Intel TBB to be linked. Gating on _MSC_VER (rather
-// than the __cpp_lib_parallel_algorithm feature-test macro) is deliberate —
-// libstdc++ advertises that macro even when TBB is absent, which would select the
-// parallel path and then fail to link.
+// Runs on threepp::ThreadPool::shared() (utils/ThreadPool.hpp), a pool of persistent threads that stays awake for a
+// moment between loops, on every platform that has threads; loops may run at once from several threads and inside
+// each other. Where there are no threads (the web build without pthreads) the call runs in order.
 //
-// Contract: each invocation of fn must write disjoint state, so the serial
-// fallback is behaviourally identical to the parallel path — only the threading
-// differs, never the result.
+// Contract: each invocation of fn must write disjoint state, so the serial path is behaviourally identical to the
+// parallel one: only the threading differs, never the result. The iterators must be random access.
 
 #ifndef THREEPP_UTILS_PARALLEL_HPP
 #define THREEPP_UTILS_PARALLEL_HPP
 
-#include <algorithm>
+#include "threepp/utils/ThreadPool.hpp"
+
+#include <iterator>
 #include <utility>
-#ifdef _MSC_VER
-#include <execution>
-#endif
 
 namespace threepp {
 
     template<class It, class Fn>
     void parallelForEach(It first, It last, Fn fn) {
-#ifdef _MSC_VER
-        std::for_each(std::execution::par, first, last, std::move(fn));
-#else
-        std::for_each(first, last, std::move(fn));
-#endif
+        const auto n = static_cast<int>(std::distance(first, last));
+        ThreadPool::shared().parallelFor(0, n, [&](int i) { fn(first[i]); }, 1);
     }
 
 }// namespace threepp

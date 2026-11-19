@@ -55,22 +55,55 @@ TEST_CASE("ThreadPool survives many short loops in a row") {
     for (int v : data) REQUIRE(v == 5000);
 }
 
-TEST_CASE("ThreadPool runs a nested loop in order on the calling thread") {
+TEST_CASE("ThreadPool runs nested loops, three deep") {
 
-    ThreadPool pool(3);
-    std::vector<int> outer(16, 0);
-    std::atomic<int> inner{0};
-    pool.parallelFor(0, 16, [&](int i) {
-        const auto self = std::this_thread::get_id();
-        bool sameThread = true;
-        pool.parallelFor(0, 10, [&](int) {
-            sameThread &= std::this_thread::get_id() == self;
-            inner.fetch_add(1);
+    ThreadPool pool(5);
+    std::vector<std::vector<std::vector<int>>> cells(12, std::vector<std::vector<int>>(10, std::vector<int>(40, 0)));
+    for (int round = 0; round < 50; ++round) {
+        pool.parallelFor(0, 12, [&](int a) {
+            pool.parallelFor(0, 10, [&](int b) {
+                pool.parallelFor(0, 40, [&](int c) { ++cells[a][b][c]; }, 1);
+            }, 1);
+        }, 1);
+    }
+    for (const auto& plane : cells)
+        for (const auto& row : plane)
+            for (int v : row) REQUIRE(v == 50);
+}
+
+TEST_CASE("ThreadPool takes nested loops from several threads at once") {
+
+    // the renderer's shape: a few threads each run a loop whose items open loops of their own
+    ThreadPool pool(6);
+    constexpr int callers = 4;
+    std::vector<std::vector<int>> out(callers, std::vector<int>(64 * 32, 0));
+    std::vector<std::thread> threads;
+    for (int t = 0; t < callers; ++t) {
+        threads.emplace_back([&, t] {
+            for (int round = 0; round < 100; ++round) {
+                pool.parallelFor(0, 64, [&](int a) {
+                    pool.parallelFor(0, 32, [&](int b) { ++out[t][a * 32 + b]; }, 4);
+                }, 1);
+            }
         });
-        outer[i] = sameThread ? 1 : 0;
-    });
-    CHECK(inner.load() == 160);
-    CHECK(std::accumulate(outer.begin(), outer.end(), 0) == 16);
+    }
+    for (auto& th : threads) th.join();
+    for (const auto& v : out)
+        for (int x : v) REQUIRE(x == 100);
+}
+
+TEST_CASE("ThreadPool runs a loop in order when every slot is taken") {
+
+    // more loops open at once than the pool has slots: the extra ones run on their callers' threads
+    ThreadPool pool(3);
+    std::vector<int> hits(ThreadPool::kSlots * 4 * 8, 0);
+    pool.parallelFor(0, ThreadPool::kSlots * 4, [&](int a) {
+        pool.parallelFor(0, 8, [&](int b) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+            ++hits[a * 8 + b];
+        }, 1);
+    }, 1);
+    for (int v : hits) REQUIRE(v == 1);
 }
 
 TEST_CASE("ThreadPool takes loops from two threads at once") {

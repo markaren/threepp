@@ -1,30 +1,36 @@
 // A small persistent thread pool for fork-join loops: parallelFor(begin, end, fn) calls fn(i) for every i in
 // [begin, end) on the pool's threads and the calling thread, and returns when every call has returned.
 //
-// It exists for loops that fork many times a frame (a simulation's passes, each a few hundred microseconds): its
-// workers stay awake for a moment after a loop (spinning, then sleeping on a condition variable), so the next fork
-// costs a few microseconds where the parallel STL or std::async cost tens. The items are handed out in chunks from an
-// atomic counter, so uneven items balance themselves.
+// It exists for loops that fork many times a frame (a simulation's passes, a renderer's per-entry walks, each a few
+// hundred microseconds): its workers stay awake for a moment after a loop (spinning, then sleeping on a condition
+// variable), so the next fork costs a few microseconds where std::async costs tens. The items are handed out in chunks
+// from an atomic counter, so uneven items balance themselves.
+//
+// Several loops can be open at once: one per caller, up to kSlots, from any threads, and a loop's fn may open a loop
+// of its own (nested). The workers take chunks from whichever loops are open; each caller works its own loop and then
+// waits only for the workers still inside one of its chunks. Past kSlots open loops a new one runs in order on its
+// caller's thread.
 //
 // Contract, as threepp::parallelForEach's: each fn(i) writes only its own state, so the result never depends on the
 // number of threads or on which thread ran which item. An exception from fn on the calling thread is passed on once
 // the workers have let go of the loop; one on a worker terminates, so fn should not throw.
 //
-// - A parallelFor called from inside a running one (from fn), or from a second thread while another thread's loop is
-//   running, runs its items in order on the calling thread: no deadlock, no waiting.
 // - With no hardware threads to spare, or on a platform without threads (the web build without pthreads), every loop
 //   runs in order on the calling thread.
-// - ThreadPool::shared() is one pool per module for everyone to use; it is never destroyed (at exit the operating
-//   system ends its threads; joining them from a static destructor can hang a DLL's unload).
+// - ThreadPool::shared() is one pool per module; it is never destroyed (at exit the operating system ends its threads;
+//   joining them from a static destructor can hang a DLL's unload). THREEPP_THREADS sets its total thread count (the
+//   caller included; 1: no workers), THREEPP_THREADS_SPIN_US how long its workers spin after a loop.
 
 #ifndef THREEPP_THREADPOOL_HPP
 #define THREEPP_THREADPOOL_HPP
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -40,9 +46,12 @@ namespace threepp {
     class ThreadPool {
 
     public:
-        // `workers` threads besides the caller's (default: one less than the hardware threads, at most 15: past
-        // sixteen threads a frame's loops gain little and every extra thread spins after each one)
-        explicit ThreadPool(int workers = -1) {
+        static constexpr int kSlots = 16;
+
+        // `workers` threads besides the callers (default: one less than the hardware threads, at most 15); `spin`:
+        // how long a worker spins for the next loop before it sleeps
+        explicit ThreadPool(int workers = -1, std::chrono::microseconds spin = std::chrono::microseconds(200))
+            : spin_(spin) {
             if (workers < 0) workers = std::min(15, static_cast<int>(std::thread::hardware_concurrency()) - 1);
 #if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
             workers = 0;
@@ -57,18 +66,14 @@ namespace threepp {
 
         ~ThreadPool() {
             stop_.store(true);
-            generation_.fetch_add(1);
-            {
-                std::lock_guard lock(sleep_);
-            }
-            wake_.notify_all();
+            wake();
             for (auto& t : threads_) t.join();
         }
 
         ThreadPool(const ThreadPool&) = delete;
         ThreadPool& operator=(const ThreadPool&) = delete;
 
-        // the threads a loop runs on: the workers and the caller
+        // the threads a loop can run on: the workers and the caller
         [[nodiscard]] int concurrency() const {
             return static_cast<int>(threads_.size()) + 1;
         }
@@ -80,11 +85,11 @@ namespace threepp {
             if (end <= begin) return;
             const int n = end - begin;
             if (grain <= 0) grain = std::max(1, n / (8 * concurrency()));
-            if (threads_.empty() || n <= grain || insideLoop() || !submit_.try_lock()) {
+            Slot* slot = threads_.empty() || n <= grain ? nullptr : claimSlot();
+            if (!slot) {
                 for (int i = begin; i < end; ++i) fn(i);
                 return;
             }
-            std::lock_guard lock(submit_, std::adopt_lock);
 
             auto call = [&fn](int i0, int i1) {
                 for (int i = i0; i < i1; ++i) fn(i);
@@ -96,32 +101,31 @@ namespace threepp {
             job.end = end;
             job.grain = grain;
 
-            // closes the job however this scope is left (an exception from fn included): no worker picks it up after
-            // this, and the ones that did have finished their chunks before the job (on this stack) goes
+            // closes the loop however this scope is left (an exception from fn included): no worker joins it after
+            // this, the ones inside one of its chunks finish first, and only then is the slot free again
             struct Close {
-                ThreadPool& pool;
+                Slot& slot;
                 ~Close() {
-                    pool.job_.store(nullptr);
-                    while (pool.inflight_.load() != 0) pause();
-                    insideLoop() = false;
+                    slot.job.store(closing());
+                    while (slot.refs.load() != 0) pause();
+                    slot.job.store(nullptr);
                 }
-            } close{*this};
+            } close{*slot};
 
-            job_.store(&job);
-            generation_.fetch_add(1);
-            if (sleeping_.load() > 0) {
-                // under the lock, so a worker between its last look and its sleep cannot miss the wake-up
-                std::lock_guard sleepLock(sleep_);
-            }
-            wake_.notify_all();
-
-            insideLoop() = true;
+            slot->job.store(&job);
+            wake();
             work(job);
         }
 
-        // one pool per module, never destroyed
+        // one pool per module, never destroyed (THREEPP_THREADS, THREEPP_THREADS_SPIN_US)
         static ThreadPool& shared() {
-            static ThreadPool* pool = new ThreadPool();
+            static ThreadPool* pool = [] {
+                int workers = -1;
+                if (const char* t = std::getenv("THREEPP_THREADS"); t && std::atoi(t) > 0) workers = std::atoi(t) - 1;
+                auto spin = std::chrono::microseconds(200);
+                if (const char* s = std::getenv("THREEPP_THREADS_SPIN_US"); s && std::atoi(s) >= 0) spin = std::chrono::microseconds(std::atoi(s));
+                return new ThreadPool(workers, spin);
+            }();
             return *pool;
         }
 
@@ -134,22 +138,25 @@ namespace threepp {
             int grain = 1;
         };
 
+        // A loop's place: `job` is null (free), closing() (its caller is waiting for the workers inside it) or the
+        // open job; `refs` counts the workers that have looked into it
+        struct Slot {
+            alignas(64) std::atomic<Job*> job{nullptr};
+            std::atomic<int> refs{0};
+        };
+
         std::vector<std::thread> threads_;
-        std::mutex submit_;
+        std::array<Slot, kSlots> slots_;
         std::mutex sleep_;
-        std::condition_variable wake_;
-        std::atomic<Job*> job_{nullptr};
+        std::condition_variable wakeup_;
         std::atomic<uint64_t> generation_{0};
-        std::atomic<int> inflight_{0};
         std::atomic<int> sleeping_{0};
         std::atomic<bool> stop_{false};
+        std::chrono::microseconds spin_;
 
-        // how long a worker spins for the next loop before it sleeps
-        static constexpr auto spinFor = std::chrono::microseconds(200);
-
-        static bool& insideLoop() {
-            thread_local bool inside = false;
-            return inside;
+        static Job* closing() {
+            static Job marker;
+            return &marker;
         }
 
         static void pause() {
@@ -160,36 +167,70 @@ namespace threepp {
 #endif
         }
 
-        static void work(Job& job) {
+        Slot* claimSlot() {
+            for (auto& s : slots_) {
+                Job* expected = nullptr;
+                // a placeholder until the job is filled in: workers skip it as they skip a closing slot
+                if (s.job.load(std::memory_order_relaxed) == nullptr && s.job.compare_exchange_strong(expected, closing())) return &s;
+            }
+            return nullptr;
+        }
+
+        void wake() {
+            generation_.fetch_add(1);
+            if (sleeping_.load() > 0) {
+                // under the lock, so a worker between its last look and its sleep cannot miss the wake-up
+                std::lock_guard lock(sleep_);
+            }
+            wakeup_.notify_all();
+        }
+
+        static bool work(Job& job) {
+            bool did = false;
             while (true) {
                 const int i0 = job.next.fetch_add(job.grain, std::memory_order_relaxed);
-                if (i0 >= job.end) return;
+                if (i0 >= job.end) return did;
                 job.run(job.ctx, i0, std::min(i0 + job.grain, job.end));
+                did = true;
             }
         }
 
+        // one pass over the slots, joining every open loop that still has items; whether any item was run
+        bool scan() {
+            bool did = false;
+            for (auto& s : slots_) {
+                if (s.job.load(std::memory_order_relaxed) == nullptr) continue;
+                // the count goes up before the job is read, and a caller marks its loop closing before it reads the
+                // count, so a job is never touched after its caller has let it go
+                s.refs.fetch_add(1);
+                Job* job = s.job.load();
+                if (job != nullptr && job != closing()) did |= work(*job);
+                s.refs.fetch_sub(1);
+            }
+            return did;
+        }
+
         void workerLoop(uint64_t seen) {
-            insideLoop() = true;
             while (true) {
                 // wait for a new generation: spin a little, then sleep
                 const auto t0 = std::chrono::steady_clock::now();
                 int spins = 0;
-                while (generation_.load() == seen) {
+                // (the stop is looked at too: a worker whose last scan began after the destructor's bump has that
+                // generation as `seen` already)
+                while (generation_.load() == seen && !stop_.load()) {
                     pause();
-                    if ((++spins & 255) == 0 && std::chrono::steady_clock::now() - t0 > spinFor) {
+                    if ((++spins & 255) == 0 && std::chrono::steady_clock::now() - t0 > spin_) {
                         std::unique_lock lock(sleep_);
                         sleeping_.fetch_add(1);
-                        wake_.wait(lock, [&] { return generation_.load() != seen; });
+                        wakeup_.wait(lock, [&] { return generation_.load() != seen || stop_.load(); });
                         sleeping_.fetch_sub(1);
                     }
                 }
-                seen = generation_.load();
                 if (stop_.load()) return;
-                // join the loop if it is still open: the count goes up before the job is read, and the caller closes
-                // the job before it reads the count, so a job is never touched after its caller has let it go
-                inflight_.fetch_add(1);
-                if (Job* job = job_.load()) work(*job);
-                inflight_.fetch_sub(1);
+                // take the generation before looking, so a loop opened during the scan is not slept through
+                do {
+                    seen = generation_.load();
+                } while (scan());
             }
         }
     };

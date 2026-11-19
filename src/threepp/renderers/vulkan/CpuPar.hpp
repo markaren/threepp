@@ -7,11 +7,15 @@
 // chunk into its own scratch and merges the chunks in order, so the bytes it
 // produces do not depend on how many chunks ran or on which thread.
 //
-// The chunks run on the MSVC parallel STL (threepp::parallelForEach);
+// The chunks run on threepp::ThreadPool through threepp::parallelForEach
+// (utils/Parallel.hpp), on every platform with threads;
 // THREEPP_VK_CPU_PAR=0 runs them one after the other on the frame thread,
-// through the same chunking, so the two paths produce the same bytes. On a
-// compiler whose parallel policy is serial (see utils/Parallel.hpp) the knob
-// changes nothing. THREEPP_VK_CPU_PAR_CHUNKS=<n> caps the chunk count
+// through the same chunking, so the two paths produce the same bytes.
+// Measured 2026-11-19 on the pine forest drive (32 hardware threads, the
+// pool at its default 16): the frame's median 17.3 -> 16.6 ms and p95
+// 24.2 -> 23.3 ms against the MSVC parallel STL this used before (a pool
+// of 8 threads: no gain), both forks off (THREEPP_VK_CPU_PAR=0 with
+// THREEPP_VK_CPU_TASKS=0, what other compilers got before): 18.5 ms. THREEPP_VK_CPU_PAR_CHUNKS=<n> caps the chunk count
 // (default: the hardware threads, at most 16); THREEPP_VK_CPU_PAR_MIN=<items>
 // is the smallest chunk worth a fork (default 1024 items): fewer items run
 // as one. Measured 2026-10-29 on the pine forest drive (63-81k entries):
