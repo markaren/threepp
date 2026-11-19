@@ -51,17 +51,18 @@
 // units, is the energy's spread along a crest (refraction's Kr = sqrt(b0 /
 // b)): higher on a point the rays gather on, lower in a bay they spread over.
 // UNDERSTATED, more than the shoaling: Kr^(1/4) = (b0 / b)^(1/8), between
-// kRefractMin and kRefractMax (a point's crests a little higher, a bay's
-// hardly lower: where the depth holds the drawn sea under its limit the
-// factor changes only how much of the incoming wave breaks, the breaking is a
-// threshold, and a bay's spread at a half power took half the breakers off a
-// cove open to the fjord's whole fetch, at an eighth power still a quarter). Where fronts meet psi jumps: its gradient is
-// taken one-sided there. THE LEE: a wind sea's
-// height grows with its fetch, so behind land the long cascades are lower,
-// by the open water upwind along the heading and either side of it (the
-// sea's directional spread fills a lee from its sides), the factor below. The
-// phase departure and the factor are then smoothed with sigma kSmoothWaves of
-// a wavelength (a normalised Gaussian over the water's cells).
+// kRefractMin and kRefractMax: a point's crests a little higher, a bay's
+// hardly lower. (Where the depth holds the drawn sea under its limit the
+// factor changes only how much of the incoming wave breaks, and the breaking
+// is a threshold: a bay's spread at a half power took half the breakers off
+// a cove open to the fjord's whole fetch, at an eighth power still a
+// quarter.) Where fronts meet psi jumps: its gradient is taken one-sided
+// there. THE LEE: a wind sea's height grows with its fetch, so behind land
+// the long cascades are lower, by the open water upwind along the heading
+// and either side of it (the sea's directional spread fills a lee from its
+// sides), the factor below. The phase departure is then smoothed with sigma
+// kSmoothWaves of a wavelength and the factor with twice that, kSmoothAmp at
+// least (normalised Gaussians over the water's cells).
 //
 // THE SOLVE. Fast sweeping (Zhao 2005, "A fast sweeping method for Eikonal
 // equations") with a semi-Lagrangian update: a sweep marches the window's
