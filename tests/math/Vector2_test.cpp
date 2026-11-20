@@ -130,3 +130,22 @@ TEST_CASE("Convertible to std::pair<float, float>") {
     REQUIRE_THAT(pair.first, Catch::Matchers::WithinRel(1.1f));
     REQUIRE_THAT(pair.second, Catch::Matchers::WithinRel(1.2f));
 }
+
+TEST_CASE("normalize and clampLength leave a zero vector zero") {
+
+    // three.js divides by (length() || 1); a division by the zero length gives NaN
+    Vector2 v(0, 0);
+    v.normalize();
+    CHECK(v.x == 0.f);
+    CHECK(v.y == 0.f);
+
+    Vector2 c(0, 0);
+    c.clampLength(1.f, 2.f);
+    CHECK(c.x == 0.f);
+    CHECK(c.y == 0.f);
+
+    Vector2 u(3, 4);
+    u.normalize();
+    REQUIRE_THAT(u.x, Catch::Matchers::WithinRel(0.6f));
+    REQUIRE_THAT(u.y, Catch::Matchers::WithinRel(0.8f));
+}

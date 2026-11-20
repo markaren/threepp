@@ -1,1 +1,2 @@
+add_test_executable(OrbitControls_test)
 add_test_executable(TrackballControls_test)

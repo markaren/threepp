@@ -217,6 +217,43 @@ TEST_CASE("An imported subtree can be stored as a reference to its source file")
         CHECK(again.toJson(*parsed, referenced) == text);
     }
 
+    SECTION("a turned, scaled placement and a turned node inside the asset save the same text after a load") {
+
+        // The placement goes through the placeholder the linked subtree is
+        // loaded onto, a node inside the asset through the override table: both
+        // must hand on the document's position, quaternion and scale as they
+        // are, not a matrix decomposed again.
+        imported->rotation.set(0.3f, 1.1f, -2.0f);
+        imported->scale.set(2.f, 2.f, 2.f);
+
+        auto flat = descendants(*imported);
+        REQUIRE_FALSE(flat.empty());
+        flat.front()->rotation.x = 1.5707964f;// a quarter turn
+        flat.front()->scale.set(1.f, -1.f, 3.f);
+
+        ObjectExporter exporter;
+        const auto first = exporter.toJson(*scene, referenced);
+
+        ObjectLoader loader;
+        loader.setResourcePath(dataFolder);
+        auto loaded = loader.parse(first);
+        REQUIRE(loaded != nullptr);
+        const auto second = exporter.toJson(*loaded, referenced);
+
+        auto reloaded = loader.parse(second);
+        REQUIRE(reloaded != nullptr);
+        const auto third = exporter.toJson(*reloaded, referenced);
+
+        CHECK(first == second);
+        CHECK(second == third);
+
+        auto* restored = loaded->children.front();
+        CHECK((restored->scale.x == 2.f && restored->scale.y == 2.f && restored->scale.z == 2.f));
+        auto restoredFlat = descendants(*restored);
+        REQUIRE_FALSE(restoredFlat.empty());
+        CHECK((restoredFlat.front()->scale.x == 1.f && restoredFlat.front()->scale.y == -1.f && restoredFlat.front()->scale.z == 3.f));
+    }
+
     SECTION("edits made after the import survive the round trip") {
 
         auto flat = descendants(*imported);

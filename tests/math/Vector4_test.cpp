@@ -73,3 +73,19 @@ TEST_CASE("setFromMatrixPosition") {
     CHECK(a.z == 37);
     CHECK(a.w == 53);
 }
+
+TEST_CASE("normalize leaves a zero vector zero") {
+
+    // three.js divides by (length() || 1); a division by the zero length gives NaN
+    Vector4 v(0, 0, 0, 0);
+    v.normalize();
+    CHECK(v.x == 0.f);
+    CHECK(v.y == 0.f);
+    CHECK(v.z == 0.f);
+    CHECK(v.w == 0.f);
+
+    Vector4 u(0, 0, 3, 4);
+    u.normalize();
+    CHECK(std::abs(u.z - 0.6f) < 1e-6f);
+    CHECK(std::abs(u.w - 0.8f) < 1e-6f);
+}

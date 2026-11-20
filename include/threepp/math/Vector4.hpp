@@ -231,8 +231,9 @@ namespace threepp {
         }
 
         Vector4& normalize() {
+            // a zero vector stays zero (three.js: length() || 1); dividing by its length would give NaN
             const auto len = this->length();
-            return this->divideScalar(std::isnan(len) ? 1 : len);
+            return this->divideScalar(len > 0 ? len : 1);
         }
 
         Vector4& setLength(float length) {

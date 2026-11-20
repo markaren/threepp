@@ -534,6 +534,65 @@ namespace {
         return flat;
     }
 
+    // A node's placement, in either form, as three.js' ObjectLoader reads it:
+    // "matrix" (decomposed into position, quaternion and scale), or without one
+    // "position", "rotation" (x, y, z and optionally the order), "quaternion"
+    // (x, y, z, w) and "scale", each on its own and in that order, so a
+    // quaternion has the last word over a rotation. ObjectExporter writes
+    // position, quaternion and scale (ObjectExporter.cpp, writeTransform, has
+    // the why); documents written before that carry a matrix on every node.
+    // The floats of the second form are taken as they are, and the node's
+    // matrix is composed from them. Returns whether the entry placed the node.
+    bool readTransform(const json& j, Object3D& object) {
+
+        if (j.contains("matrix")) {
+            object.matrix->copy(matrixFrom(j["matrix"]));
+            object.matrix->decompose(object.position, object.quaternion, object.scale);
+            object.rotation.setFromQuaternion(object.quaternion, std::nullopt, false);
+            return true;
+        }
+
+        const auto numbers = [&](const char* key, std::size_t count) -> const json* {
+            const auto it = j.find(key);
+            if (it == j.end() || !it->is_array() || it->size() < count) return nullptr;
+            for (std::size_t i = 0; i < count; ++i) {
+                if (!(*it)[i].is_number()) return nullptr;
+            }
+            return &*it;
+        };
+        const auto at = [](const json& a, std::size_t i) { return a[i].get<float>(); };
+
+        bool placed = false;
+        if (const auto* p = numbers("position", 3)) {
+            object.position.set(at(*p, 0), at(*p, 1), at(*p, 2));
+            placed = true;
+        }
+        if (const auto* r = numbers("rotation", 3)) {
+            std::optional<Euler::RotationOrders> order;
+            if (r->size() > 3 && (*r)[3].is_string()) {
+                static const std::pair<const char*, Euler::RotationOrders> orders[] = {
+                        {"XYZ", Euler::XYZ}, {"YZX", Euler::YZX}, {"ZXY", Euler::ZXY}, {"XZY", Euler::XZY}, {"YXZ", Euler::YXZ}, {"ZYX", Euler::ZYX}};
+                const auto name = (*r)[3].get<std::string>();
+                for (const auto& [text, value] : orders) {
+                    if (name == text) order = value;
+                }
+            }
+            object.rotation.set(at(*r, 0), at(*r, 1), at(*r, 2), order);
+            placed = true;
+        }
+        if (const auto* q = numbers("quaternion", 4)) {
+            object.quaternion.set(at(*q, 0), at(*q, 1), at(*q, 2), at(*q, 3));
+            placed = true;
+        }
+        if (const auto* s = numbers("scale", 3)) {
+            object.scale.set(at(*s, 0), at(*s, 1), at(*s, 2));
+            placed = true;
+        }
+
+        if (placed) object.updateMatrix();
+        return placed;
+    }
+
     // Replays the edits the document recorded on top of a freshly imported
     // subtree. Each entry carries the name the node had when the document was
     // written; a mismatch means the asset file has changed underneath and the
@@ -563,11 +622,7 @@ namespace {
                 continue;
             }
 
-            if (entry.contains("matrix")) {
-                node.matrix->copy(matrixFrom(entry["matrix"]));
-                node.matrix->decompose(node.position, node.quaternion, node.scale);
-                node.rotation.setFromQuaternion(node.quaternion);
-            }
+            readTransform(entry, node);
 
             node.visible = value(entry, "visible", true);
             node.castShadow = value(entry, "castShadow", false);
@@ -723,9 +778,12 @@ namespace {
         // root belongs to the asset file.
         imported->uuid = placeholder.uuid;
         imported->name = placeholder.name;
+        // The placeholder's own position, quaternion and scale, not its matrix
+        // decomposed: a decomposition gives other floats than the document's.
+        imported->position.copy(placeholder.position);
+        imported->quaternion.copy(placeholder.quaternion);
+        imported->scale.copy(placeholder.scale);
         imported->matrix->copy(*placeholder.matrix);
-        imported->matrix->decompose(imported->position, imported->quaternion, imported->scale);
-        imported->rotation.setFromQuaternion(imported->quaternion);
         imported->matrixAutoUpdate = placeholder.matrixAutoUpdate;
         imported->castShadow = placeholder.castShadow;
         imported->receiveShadow = placeholder.receiveShadow;
@@ -928,13 +986,9 @@ namespace {
         if (j.contains("uuid")) object->uuid = j["uuid"].get<std::string>();
         object->name = value<std::string>(j, "name", "");
 
-        if (j.contains("matrix")) {
-            const auto matrix = matrixFrom(j["matrix"]);
-            object->matrix->copy(matrix);
-            object->matrix->decompose(object->position, object->quaternion, object->scale);
-            object->rotation.setFromQuaternion(object->quaternion);
-            object->matrixAutoUpdate = value(j, "matrixAutoUpdate", true);
-        }
+        readTransform(j, *object);
+        // (only a node written as a matrix carries the flag, as in three.js)
+        if (j.contains("matrix")) object->matrixAutoUpdate = value(j, "matrixAutoUpdate", true);
 
         object->castShadow = value(j, "castShadow", false);
         object->receiveShadow = value(j, "receiveShadow", false);

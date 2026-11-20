@@ -84,6 +84,28 @@ namespace {
                                      Vector2(0.5f, -1.f), Vector2(0.8f, 0.f), Vector2(0.4f, 1.f)};
                              return LatheGeometry::create(pts, 12);
                          }});
+        // Profile points on the axis: every line of vertices has its own vertex
+        // there, and the faces on one side of it are without area.
+        cases.push_back({"Lathe(first point on the axis)", [] {
+                             std::vector<Vector2> pts{Vector2(0.f, -1.f), Vector2(1.f, 0.f)};
+                             return LatheGeometry::create(pts, 12);
+                         }});
+        cases.push_back({"Lathe(last point on the axis)", [] {
+                             std::vector<Vector2> pts{Vector2(1.f, 0.f), Vector2(0.f, 1.f)};
+                             return LatheGeometry::create(pts, 12);
+                         }});
+        cases.push_back({"Lathe(both ends on the axis)", [] {
+                             std::vector<Vector2> pts{Vector2(0.f, -1.f), Vector2(1.f, 0.f), Vector2(0.f, 1.f)};
+                             return LatheGeometry::create(pts, 12);
+                         }});
+        cases.push_back({"Lathe(both ends on the axis, half turn)", [] {
+                             std::vector<Vector2> pts{Vector2(0.f, -1.f), Vector2(1.f, 0.f), Vector2(0.f, 1.f)};
+                             return LatheGeometry::create(pts, 12, 0.f, math::PI);
+                         }});
+        cases.push_back({"Lathe(two neighbouring points on the axis)", [] {
+                             std::vector<Vector2> pts{Vector2(0.f, -1.f), Vector2(0.f, 0.f), Vector2(1.f, 1.f)};
+                             return LatheGeometry::create(pts, 12);
+                         }});
         cases.push_back({"Tube", [] { return TubeGeometry::create(makeCurve(), 16, 0.3f, 8); }});
         cases.push_back({"Shape", [] { return ShapeGeometry::create(makeSquareShape()); }});
         cases.push_back({"Extrude", [] {
@@ -348,5 +370,56 @@ TEST_CASE("Geometry groups stay within the index range") {
         CHECK(group.start >= 0);
         CHECK(group.count >= 0);
         CHECK(static_cast<size_t>(group.start) + static_cast<size_t>(group.count) <= indexCount);
+    }
+}
+
+TEST_CASE("LatheGeometry normals follow the profile") {
+
+    // a cylinder wall: every normal is the vertex's own direction from the axis
+    {
+        std::vector<Vector2> wall{Vector2(1.f, -1.f), Vector2(1.f, 1.f)};
+        auto g = LatheGeometry::create(wall, 16);
+        const auto* position = g->getAttribute<float>("position");
+        const auto* normal = g->getAttribute<float>("normal");
+        for (int i = 0; i < position->count(); ++i) {
+            CHECK(std::abs(normal->getX(i) - position->getX(i)) < 1e-5f);
+            CHECK(std::abs(normal->getY(i)) < 1e-5f);
+            CHECK(std::abs(normal->getZ(i) - position->getZ(i)) < 1e-5f);
+        }
+    }
+
+    // a spindle with both ends on the axis: every normal is on the outer side of
+    // the faces its vertex belongs to, and the two lines of the seam agree
+    {
+        std::vector<Vector2> spindle{Vector2(0.f, -1.f), Vector2(1.f, 0.f), Vector2(0.f, 1.f)};
+        const unsigned segments = 12;
+        auto g = LatheGeometry::create(spindle, segments);
+        const auto* position = g->getAttribute<float>("position");
+        const auto* normal = g->getAttribute<float>("normal");
+        const auto& index = g->getIndex()->array();
+
+        Vector3 a, b, c, n, face;
+        int faces = 0;
+        for (std::size_t f = 0; f + 2 < index.size(); f += 3) {
+            position->setFromBufferAttribute(a, static_cast<int>(index[f]));
+            position->setFromBufferAttribute(b, static_cast<int>(index[f + 1]));
+            position->setFromBufferAttribute(c, static_cast<int>(index[f + 2]));
+            face.crossVectors(b.clone().sub(a), c.clone().sub(a));
+            if (face.length() < 1e-6f) continue;// without area: one edge is on the axis
+            ++faces;
+            for (int k = 0; k < 3; ++k) {
+                normal->setFromBufferAttribute(n, static_cast<int>(index[f + k]));
+                INFO("face " << f / 3 << " corner " << k);
+                CHECK(n.dot(face) > 0.f);
+            }
+        }
+        CHECK(faces == static_cast<int>(segments) * 2);// of four a turn step, two have area
+
+        const int last = static_cast<int>(segments * spindle.size());
+        for (int j = 0; j < static_cast<int>(spindle.size()); ++j) {
+            CHECK(std::abs(normal->getX(j) - normal->getX(last + j)) < 1e-5f);
+            CHECK(std::abs(normal->getY(j) - normal->getY(last + j)) < 1e-5f);
+            CHECK(std::abs(normal->getZ(j) - normal->getZ(last + j)) < 1e-5f);
+        }
     }
 }

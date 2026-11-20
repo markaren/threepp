@@ -410,8 +410,9 @@ namespace threepp {
 
         // Convert this vector to a unit vector - that is, sets it equal to a vector with the same direction as this one, but length 1.
         Vector3& normalize() {
-            auto l = length();
-            this->divideScalar(std::isnan(l) ? 1 : l);
+            // a zero vector stays zero (three.js: length() || 1); dividing by its length would give NaN
+            const auto l = length();
+            this->divideScalar(l > 0 ? l : 1);
 
             return *this;
         }

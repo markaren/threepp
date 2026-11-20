@@ -21,6 +21,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -38,6 +39,8 @@
 #include "external/nlohmann/nlohmann/json.hpp"
 
 #include <any>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1341,4 +1344,296 @@ TEST_CASE("A REFERENCED image comes back the same way up it went in") {
     REQUIRE(parsedMaterial->map != nullptr);
 
     CHECK(parsedMaterial->map->image().data<unsigned char>() == original);
+}
+
+TEST_CASE("Node placements save the same text after a load") {
+
+    // A node is written as its position, quaternion and scale. Written as a
+    // matrix it changed on a save after a load: the matrix composed from the
+    // three decomposes to other floats (a scale of 0.99999994 after a quarter
+    // turn), and to other signs for a mirrored scale.
+    struct Case {
+        const char* label;
+        void (*apply)(Object3D&);
+    };
+
+    static constexpr float quarter = math::PI / 2;
+    const auto floats = [](const Quaternion& q) {
+        return std::array<float, 4>{static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z), static_cast<float>(q.w)};
+    };
+
+    const Case cases[] = {
+            {"no rotation", [](Object3D&) {}},
+            {"quarter turn about x", [](Object3D& o) { o.rotation.x = quarter; }},
+            {"quarter turn about y", [](Object3D& o) { o.rotation.y = quarter; }},
+            {"quarter turn about z", [](Object3D& o) { o.rotation.z = quarter; }},
+            {"minus a quarter turn about x", [](Object3D& o) { o.rotation.x = -quarter; }},
+            {"quarter turns about x and y", [](Object3D& o) { o.rotation.set(quarter, quarter, 0); }},
+            {"quarter turns about all three", [](Object3D& o) { o.rotation.set(quarter, quarter, quarter); }},
+            {"half turn about x", [](Object3D& o) { o.rotation.x = math::PI; }},
+            {"half turn about y", [](Object3D& o) { o.rotation.y = math::PI; }},
+            {"half turn about z", [](Object3D& o) { o.rotation.z = math::PI; }},
+            {"three quarters about y", [](Object3D& o) { o.rotation.y = 3 * quarter; }},
+            {"quaternion (1,0,0,0)", [](Object3D& o) { o.quaternion.set(1, 0, 0, 0); }},
+            {"quaternion (0,1,0,0)", [](Object3D& o) { o.quaternion.set(0, 1, 0, 0); }},
+            {"quaternion (0,0,1,0)", [](Object3D& o) { o.quaternion.set(0, 0, 1, 0); }},
+            {"euler (0.3, 1.1, -2.0)", [](Object3D& o) { o.rotation.set(0.3f, 1.1f, -2.0f); }},
+            {"euler (-2.9, 0.01, 3.1)", [](Object3D& o) { o.rotation.set(-2.9f, 0.01f, 3.1f); }},
+            {"euler y = 0.5", [](Object3D& o) { o.rotation.y = 0.5f; }},
+            {"euler (1.2, -0.7, 0.4) in order ZYX", [](Object3D& o) { o.rotation.set(1.2f, -0.7f, 0.4f, Euler::ZYX); }},
+            {"axis angle", [](Object3D& o) { o.quaternion.setFromAxisAngle(Vector3(1, 2, 3).normalize(), 1.234f); }},
+            {"a quaternion that is not of unit length", [](Object3D& o) { o.quaternion.set(0.2f, 0.4f, 0.1f, 0.7f); }},
+            {"non-uniform scale", [](Object3D& o) { o.scale.set(2.f, 0.5f, 3.f); }},
+            {"non-uniform scale, rotated", [](Object3D& o) {
+                 o.rotation.set(0.3f, 1.1f, -2.0f);
+                 o.scale.set(0.1f, 7.3f, 1.7f);
+             }},
+            {"non-uniform scale after a quarter turn", [](Object3D& o) {
+                 o.rotation.x = quarter;
+                 o.scale.set(3.f, 1.f, 0.25f);
+             }},
+            {"mirrored in x", [](Object3D& o) { o.scale.set(-1.f, 1.f, 1.f); }},
+            {"mirrored in y, rotated", [](Object3D& o) {
+                 o.rotation.set(0.3f, 1.1f, -2.0f);
+                 o.scale.set(1.f, -2.f, 3.f);
+             }},
+            {"mirrored in z after a quarter turn", [](Object3D& o) {
+                 o.rotation.y = quarter;
+                 o.scale.set(1.5f, 1.5f, -1.5f);
+             }},
+            {"two axes negative", [](Object3D& o) { o.scale.set(-2.f, -0.5f, 1.f); }},
+            {"all three axes negative", [](Object3D& o) {
+                 o.rotation.z = 0.8f;
+                 o.scale.set(-1.f, -1.f, -1.f);
+             }},
+            {"a zero scale", [](Object3D& o) {
+                 o.rotation.y = 0.5f;
+                 o.scale.set(1.f, 0.f, 1.f);
+             }},
+    };
+
+    for (const auto& c : cases) {
+
+        INFO(c.label);
+
+        // the case on a node, on a parent and on that parent's child
+        auto scene = Scene::create();
+        auto node = Group::create();
+        node->name = "node";
+        node->position.set(1.25f, -2.f, 3.1f);
+        c.apply(*node);
+        scene->add(node);
+
+        auto parent = Group::create();
+        parent->name = "parent";
+        c.apply(*parent);
+        auto child = Mesh::create(BoxGeometry::create(), MeshBasicMaterial::create());
+        child->name = "child";
+        child->position.set(0.1f, 0.2f, 0.3f);
+        c.apply(*child);
+        parent->add(child);
+        scene->add(parent);
+
+        const Vector3 position = node->position;
+        const auto quaternion = floats(node->quaternion);
+        const Vector3 scale = node->scale;
+
+        ObjectExporter exporter;
+        const auto first = exporter.toJson(*scene);
+
+        // the export leaves the node as it was
+        CHECK((node->position.x == position.x && node->position.y == position.y && node->position.z == position.z));
+        CHECK(floats(node->quaternion) == quaternion);
+        CHECK((node->scale.x == scale.x && node->scale.y == scale.y && node->scale.z == scale.z));
+
+        ObjectLoader loader;
+        auto loaded = loader.parse(first);
+        REQUIRE(loaded != nullptr);
+        const auto second = exporter.toJson(*loaded);
+
+        auto reloaded = loader.parse(second);
+        REQUIRE(reloaded != nullptr);
+        const auto third = exporter.toJson(*reloaded);
+
+        CHECK(first == second);
+        CHECK(second == third);
+
+        // the loaded node has the very floats of the one that was saved
+        auto* back = loaded->getObjectByName("node");
+        REQUIRE(back != nullptr);
+        CHECK((back->position.x == position.x && back->position.y == position.y && back->position.z == position.z));
+        CHECK(floats(back->quaternion) == quaternion);
+        CHECK((back->scale.x == scale.x && back->scale.y == scale.y && back->scale.z == scale.z));
+
+        // and its matrix is the one composed from them, without a render
+        Matrix4 composed;
+        composed.compose(node->position, node->quaternion, node->scale);
+        CHECK(back->matrix->elements == composed.elements);
+    }
+}
+
+TEST_CASE("A node is written as position, quaternion and scale; one with its own matrix as the matrix") {
+
+    auto scene = Scene::create();
+
+    auto placed = Group::create();
+    placed->name = "placed";
+    placed->position.set(1, 2, 3);
+    placed->rotation.x = math::PI / 2;
+    placed->scale.set(2, 2, 2);
+    scene->add(placed);
+
+    // matrixAutoUpdate off: the matrix is the node's placement, here with a shear no
+    // position, quaternion and scale can express
+    auto sheared = Group::create();
+    sheared->name = "sheared";
+    sheared->matrixAutoUpdate = false;
+    sheared->matrix->set(1, 0.5f, 0, 4,
+                         0, 1, 0, 5,
+                         0, 0.25f, 1, 6,
+                         0, 0, 0, 1);
+    scene->add(sheared);
+
+    ObjectExporter exporter;
+    const auto first = exporter.toJson(*scene);
+    const auto doc = nlohmann::json::parse(first);
+
+    const nlohmann::json* placedJson = nullptr;
+    const nlohmann::json* shearedJson = nullptr;
+    for (const auto& child : doc["object"]["children"]) {
+        if (child.value("name", "") == "placed") placedJson = &child;
+        if (child.value("name", "") == "sheared") shearedJson = &child;
+    }
+    REQUIRE(placedJson != nullptr);
+    REQUIRE(shearedJson != nullptr);
+
+    CHECK_FALSE(placedJson->contains("matrix"));
+    CHECK_FALSE(placedJson->contains("matrixAutoUpdate"));
+    CHECK((*placedJson)["position"] == nlohmann::json::array({1.f, 2.f, 3.f}));
+    CHECK((*placedJson)["scale"] == nlohmann::json::array({2.f, 2.f, 2.f}));
+    REQUIRE((*placedJson)["quaternion"].size() == 4);
+    CHECK((*placedJson)["quaternion"][0].get<float>() == static_cast<float>(placed->quaternion.x));// x, y, z, w
+    CHECK((*placedJson)["quaternion"][3].get<float>() == static_cast<float>(placed->quaternion.w));
+
+    CHECK(shearedJson->contains("matrix"));
+    CHECK((*shearedJson)["matrixAutoUpdate"] == false);
+    CHECK_FALSE(shearedJson->contains("position"));
+    CHECK_FALSE(shearedJson->contains("quaternion"));
+    CHECK_FALSE(shearedJson->contains("scale"));
+
+    ObjectLoader loader;
+    auto loaded = loader.parse(first);
+    REQUIRE(loaded != nullptr);
+    auto* back = loaded->getObjectByName("sheared");
+    REQUIRE(back != nullptr);
+    CHECK_FALSE(back->matrixAutoUpdate);
+    CHECK(back->matrix->elements == sheared->matrix->elements);
+
+    const auto second = exporter.toJson(*loaded);
+    CHECK(first == second);
+}
+
+TEST_CASE("A document that places its nodes by matrix loads, and is stable from its first save on") {
+
+    // the form ObjectExporter wrote before, and the one three.js' Object3D.toJSON writes:
+    // a quarter turn about x, scaled by 2, at (1, 2, 3)
+    const char* text = R"({
+        "metadata": {"version": 4.5, "type": "Object", "generator": "Object3D.toJSON"},
+        "object": {
+            "uuid": "00000000-0000-0000-0000-000000000001", "type": "Scene", "name": "scene",
+            "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+            "children": [
+                { "uuid": "00000000-0000-0000-0000-000000000002", "type": "Group", "name": "turned",
+                  "matrix": [2,0,0,0, 0,0,2,0, 0,-2,0,0, 1,2,3,1] },
+                { "uuid": "00000000-0000-0000-0000-000000000003", "type": "Group", "name": "fixed",
+                  "matrixAutoUpdate": false,
+                  "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 7,8,9,1] }
+            ]
+        }
+    })";
+
+    ObjectLoader loader;
+    auto loaded = loader.parse(text);
+    REQUIRE(loaded != nullptr);
+
+    auto* turned = loaded->getObjectByName("turned");
+    REQUIRE(turned != nullptr);
+    CHECK(turned->matrixAutoUpdate);
+    CHECK_THAT(turned->position.x, WithinAbs(1.0, 1e-6));
+    CHECK_THAT(turned->position.y, WithinAbs(2.0, 1e-6));
+    CHECK_THAT(turned->position.z, WithinAbs(3.0, 1e-6));
+    CHECK_THAT(turned->scale.x, WithinAbs(2.0, 1e-5));
+    CHECK_THAT(turned->scale.y, WithinAbs(2.0, 1e-5));
+    CHECK_THAT(turned->scale.z, WithinAbs(2.0, 1e-5));
+    CHECK_THAT(static_cast<float>(turned->rotation.x), WithinAbs(math::PI / 2, 1e-5));
+
+    auto* fixed = loaded->getObjectByName("fixed");
+    REQUIRE(fixed != nullptr);
+    CHECK_FALSE(fixed->matrixAutoUpdate);
+    CHECK(fixed->matrix->elements[12] == 7.f);
+
+    // its first save is in the new form (the one-time difference); every save after it is the same text
+    ObjectExporter exporter;
+    const auto first = exporter.toJson(*loaded);
+    CHECK(first.find("\"quaternion\"") != std::string::npos);
+
+    auto again = loader.parse(first);
+    REQUIRE(again != nullptr);
+    const auto second = exporter.toJson(*again);
+    auto oncemore = loader.parse(second);
+    REQUIRE(oncemore != nullptr);
+    const auto third = exporter.toJson(*oncemore);
+    CHECK(first == second);
+    CHECK(second == third);
+}
+
+TEST_CASE("position, rotation, quaternion and scale are read as three.js reads them") {
+
+    // without a matrix three.js' ObjectLoader reads the four keys, each on its own and in
+    // this order, so a quaternion has the last word over a rotation
+    const char* text = R"({
+        "metadata": {"version": 4.5, "type": "Object"},
+        "object": {
+            "uuid": "00000000-0000-0000-0000-000000000001", "type": "Scene", "name": "scene",
+            "children": [
+                { "uuid": "00000000-0000-0000-0000-000000000002", "type": "Group", "name": "moved",
+                  "position": [1, 2, 3] },
+                { "uuid": "00000000-0000-0000-0000-000000000003", "type": "Group", "name": "euler",
+                  "rotation": [0.5, 0, 0, "XYZ"], "scale": [1, -2, 3] },
+                { "uuid": "00000000-0000-0000-0000-000000000004", "type": "Group", "name": "both",
+                  "rotation": [0.5, 0, 0], "quaternion": [0, 1, 0, 0] },
+                { "uuid": "00000000-0000-0000-0000-000000000005", "type": "Group", "name": "none" }
+            ]
+        }
+    })";
+
+    ObjectLoader loader;
+    auto loaded = loader.parse(text);
+    REQUIRE(loaded != nullptr);
+
+    auto* moved = loaded->getObjectByName("moved");
+    REQUIRE(moved != nullptr);
+    CHECK((moved->position.x == 1.f && moved->position.y == 2.f && moved->position.z == 3.f));
+    CHECK((static_cast<float>(moved->quaternion.x) == 0.f && static_cast<float>(moved->quaternion.w) == 1.f));
+    CHECK((moved->scale.x == 1.f && moved->scale.y == 1.f && moved->scale.z == 1.f));
+    CHECK(moved->matrix->elements[12] == 1.f);
+    CHECK(moved->matrix->elements[13] == 2.f);
+    CHECK(moved->matrix->elements[14] == 3.f);
+
+    auto* euler = loaded->getObjectByName("euler");
+    REQUIRE(euler != nullptr);
+    CHECK(static_cast<float>(euler->rotation.x) == 0.5f);
+    CHECK_THAT(static_cast<float>(euler->quaternion.x), WithinAbs(std::sin(0.25), 1e-6));
+    CHECK_THAT(static_cast<float>(euler->quaternion.w), WithinAbs(std::cos(0.25), 1e-6));
+    CHECK((euler->scale.x == 1.f && euler->scale.y == -2.f && euler->scale.z == 3.f));
+
+    auto* both = loaded->getObjectByName("both");
+    REQUIRE(both != nullptr);
+    const std::array<float, 4> y180{static_cast<float>(both->quaternion.x), static_cast<float>(both->quaternion.y),
+                                    static_cast<float>(both->quaternion.z), static_cast<float>(both->quaternion.w)};
+    CHECK(y180 == std::array<float, 4>{0.f, 1.f, 0.f, 0.f});
+
+    auto* none = loaded->getObjectByName("none");
+    REQUIRE(none != nullptr);
+    CHECK((none->position.x == 0.f && static_cast<float>(none->quaternion.w) == 1.f && none->scale.x == 1.f));
 }
