@@ -257,6 +257,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -264,6 +296,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -285,7 +319,8 @@ namespace {
       "stencilWriteMask": 255,
       "stencilFunc": 519,
       "stencilRef": 0,
-      "stencilFuncMask": 255,
+    )JSON",
+            R"JSON(  "stencilFuncMask": 255,
       "stencilFail": 7680,
       "stencilZFail": 7680,
       "stencilZPass": 7680,
@@ -295,6 +330,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -312,8 +349,7 @@ namespace {
       "bumpScale": 1.0,
       "normalMapType": 0,
       "normalScale": [
-     )JSON",
-            R"JSON(   1.0,
+        1.0,
         1.0
       ],
       "displacementScale": 1.0,
@@ -322,6 +358,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -329,6 +397,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -360,6 +430,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -386,6 +458,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -393,6 +497,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -424,6 +530,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -450,6 +558,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -457,6 +597,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -483,11 +625,14 @@ namespace {
       "stencilZFail": 7680,
       "stencilZPass": 7680,
       "polygonOffset": false,
-      "polygonOffsetFactor": 0.0,
+      "polygonOffsetFac)JSON",
+            R"JSON(tor": 0.0,
       "polygonOffsetUnits": 0.0,
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -514,6 +659,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -521,6 +698,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -552,6 +731,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -578,6 +759,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -585,6 +798,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -600,8 +815,7 @@ namespace {
       "blendEquation": 100,
       "depthFunc": 3,
       "depthTest": true,
-      "dept)JSON",
-            R"JSON(hWrite": true,
+      "depthWrite": true,
       "colorWrite": true,
       "stencilWrite": false,
       "stencilWriteMask": 255,
@@ -617,6 +831,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -643,6 +859,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -650,6 +898,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -681,6 +931,9 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash)JSON",
+            R"JSON(": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -707,6 +960,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -714,6 +999,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -745,6 +1032,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -771,6 +1060,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -778,6 +1099,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -809,6 +1132,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -835,6 +1160,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -842,6 +1199,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -873,12 +1232,15 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
     },
     {
-      "uuid": "cacff1f8-496b-423a-982d-c5280d27eef3",
+      "uuid": "cacff1f8-496b-423a-982)JSON",
+            R"JSON(d-c5280d27eef3",
       "type": "MeshStandardMaterial",
       "color": 2479856,
       "roughness": 0.5,
@@ -889,8 +1251,7 @@ namespace {
       "aoMapIntensity": 1.0,
       "bumpScale": 1.0,
       "normalMapType": 0,
-      "no)JSON",
-            R"JSON(rmalScale": [
+      "normalScale": [
         1.0,
         1.0
       ],
@@ -900,6 +1261,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -907,6 +1300,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -938,6 +1333,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -964,6 +1361,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -971,6 +1400,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1002,6 +1433,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1028,6 +1461,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1035,6 +1500,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1066,6 +1533,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1077,7 +1546,8 @@ namespace {
       "roughness": 0.4000000059604645,
       "metalness": 0.0,
       "emissive": 2479856,
-      "emissiveIntensity": 1.7000000476837158,
+      "emissiveIntensity": 1.7000000476837)JSON",
+            R"JSON(158,
       "lightMapIntensity": 1.0,
       "aoMapIntensity": 1.0,
       "bumpScale": 1.0,
@@ -1092,6 +1562,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1099,6 +1601,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1130,6 +1634,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1156,6 +1662,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1163,6 +1701,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1179,8 +1719,7 @@ namespace {
       "depthFunc": 3,
       "depthTest": true,
       "depthWrite": true,
-      "colorWri)JSON",
-            R"JSON(te": true,
+      "colorWrite": true,
       "stencilWrite": false,
       "stencilWriteMask": 255,
       "stencilFunc": 519,
@@ -1195,6 +1734,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1221,6 +1762,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1228,6 +1801,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1259,6 +1834,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1280,11 +1857,44 @@ namespace {
         1.0
       ],
       "displacementScale": 1.0,
-      "displacementBias": 0.0,
+     )JSON",
+            R"JSON( "displacementBias": 0.0,
       "threeppDetailRepeat": 0.800000011920929,
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1292,6 +1902,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1323,6 +1935,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1349,6 +1963,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1356,6 +2002,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1387,6 +2035,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1413,6 +2063,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1420,6 +2102,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1451,6 +2135,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1468,8 +2154,7 @@ namespace {
       "bumpScale": 1.0,
       "normalMapType": 0,
       "normalScale": [
-    )JSON",
-            R"JSON(    1.0,
+        1.0,
         1.0
       ],
       "displacementScale": 1.0,
@@ -1477,7 +2162,40 @@ namespace {
       "threeppDetailRepeat": 0.800000011920929,
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
-      "threeppDetailRoughStrength": 0.6000000238418579,
+      "threepp)JSON",
+            R"JSON(DetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1485,6 +2203,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1516,6 +2236,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1542,6 +2264,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1549,6 +2303,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1580,6 +2336,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1606,6 +2364,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1613,6 +2403,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1644,6 +2436,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1670,6 +2464,39 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "three)JSON",
+            R"JSON(ppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1677,6 +2504,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1708,6 +2537,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1734,71 +2565,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
-      "threeppTranslucency": 0.0,
-      "threeppTranslucencyColor": 16777215,
-      "envMapIntensity": 1.0,
-      "refractionRatio": 0.9800000190734863,
-      "wireframe": false,
-      "wireframeLinewidth": 1.0,
-      "flatShading": false,
-      "vertexTangents": false,
-      "defines": {
-        "STANDARD": ""
-      },
-      "blending": 1,
-      "side": 0,
-      "vertexColors": false,
-      "opacity": 1.0,
-      "transparent": false,
-      "fog": true,
-      "blendSrc": 204,
-      "blendDst": 205,
-      "blendEquation": 100,
-      "depthFunc": 3,
-      "depthTest": true,
-)JSON",
-            R"JSON(      "depthWrite": true,
-      "colorWrite": true,
-      "stencilWrite": false,
-      "stencilWriteMask": 255,
-      "stencilFunc": 519,
-      "stencilRef": 0,
-      "stencilFuncMask": 255,
-      "stencilFail": 7680,
-      "stencilZFail": 7680,
-      "stencilZPass": 7680,
-      "polygonOffset": false,
-      "polygonOffsetFactor": 0.0,
-      "polygonOffsetUnits": 0.0,
-      "dithering": false,
-      "alphaTest": 0.0,
-      "alphaToCoverage": false,
-      "premultipliedAlpha": false,
-      "visible": true,
-      "toneMapped": true
-    },
-    {
-      "uuid": "a585be85-72d5-4175-b6fe-a51190cda04c",
-      "type": "MeshStandardMaterial",
-      "color": 857632,
-      "roughness": 0.5,
-      "metalness": 0.0,
-      "emissive": 2479856,
-      "emissiveIntensity": 0.09000000357627869,
-      "lightMapIntensity": 1.0,
-      "aoMapIntensity": 1.0,
-      "bumpScale": 1.0,
-      "normalMapType": 0,
-      "normalScale": [
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
         1.0,
         1.0
       ],
-      "displacementScale": 1.0,
-      "displacementBias": 0.0,
-      "threeppDetailRepeat": 0.800000011920929,
-      "threeppDetailStrength": 1.0,
-      "threeppDetailNormalScale": 1.0,
-      "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -1806,6 +2604,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -1837,6 +2637,108 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
+      "premultipliedAlpha": false,
+      "visible": true,
+      "toneMapped": true
+    },
+    {
+      "uuid": "a585be85-72d5-4175-b6fe-a51190cda04c",
+      "type": "MeshStandardMaterial",
+      "color": 857632,
+      "roughness": 0.5,
+      "metalness": 0.0,
+      "emissive": 2479856,
+      "emissiveIntensity": 0.09000000357627869,
+      "lightMapIntensity": 1.0,
+      "aoMapIntensity": 1.0,
+      "bumpScale": 1.0,
+      "normalMapType": 0,
+      "normalScale": [
+        1.0,
+        1.0
+      ],
+      "displacementScale": 1.0,
+      "displacementBias": 0.0,
+      "threeppDetailRepeat": 0.800000011920929,
+      "threeppDetailStrength": 1.0,
+      "threeppDetailNormalScale": 1.0,
+      "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
+      "threeppTranslucency": 0.0,
+      "threeppTranslucencyColor": 16777215,
+      "envMapIntensity": 1.0,
+      "refractionRatio": 0.9800000190734863,
+      "wireframe": false,
+      "wireframeLinewidth": 1.0,
+      "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
+      "vertexTangents": false,
+      "defines": {
+        "STANDARD": ""
+      },
+      "blending": 1,
+      "side": 0,
+      "vertexColors": false,
+      "opacity": 1.0,
+      "transparent": false,
+      "fog": true,
+      "blendSrc": 204,
+      "blendDst": 205,
+      "blendEquation": 100,
+      "depthFunc": 3,
+      "depthTest": true,
+      "depthWrite": true,
+      "colorWrite": true,
+      "stencilWrite": false,
+      "stencilWriteMask": 255,
+      "stencilFunc": 519,
+      "stencilRef": 0,
+      "stencilFuncMask": 255,
+      "stencilFail": 7680,
+      "stencilZFail": 7680,
+      "stencilZPass": 7680,
+      "polygonOffset": false,
+      "polygonOffsetFactor": 0.0,
+      "polygonOffsetUnits": 0.0,
+      "dithering": false,
+      "alphaTest": 0.0,
+      "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -1849,26 +2751,24 @@ namespace {
     "userData": {
       "editorFollow": "Drone",
       "editorView": "0,4.6,21@0,2.2,14",
-      "generatorSource": "# Hover Arena - the arena itself.\n#\n# Everything this builds is DERIVED: press Regenerate and the floor, the\n# perimeter, the pillar field and the kerb are rebuilt from SEED alone. The\n# drone, the five goal rings and the beacon are hand-placed and are NOT this\n# script's output, so a re-run never moves the course.\n#\n# set_user_data is what makes generated content playable: the flat\n# \"key=value;...\" string is exactly what the Physics section writes.\nimport math\nimport random\n\nimport threepp\nfrom threepp import editor\n\nSEED = 20260730\nHALF = 22.0            # arena half-width, metres\nWALL_HEIGHT = 7.0\nPILLARS = 15\nCRATES = 9\n\nSTATIC_BOX = \"body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05\"\n\nrandom.seed(SEED)\n\n# One geometry and one material per role, reused by every instance of it: the\n# saved document then carries each of them once.\nunit = threepp.BoxGeometry(1, 1, 1)\n\ndeck_material = threepp.MeshStandardMaterial()\ndeck_material.color = threepp.Color(0x39485c)\ndeck_material.roughness = 0.92\ndeck_material.metalness = 0.04\n\nwall_material = threepp.MeshStandardMaterial()\nwall_material.color = threepp.Color(0x445468)\nwall_material.roughness = 0.85\nwall_material.metalness = 0.08\n\npillar_material = threepp.MeshStandardMaterial()\npillar_material.color = threepp.Color(0x56657c)\npillar_material.roughness = 0.7\npillar_material.metalness = 0.18\n\nkerb_material = threepp.MeshStandardMaterial()\nkerb_material.color = threepp.Color(0x05070a)\nkerb_material.emissive = threepp.Color(0x25d6f0)\nkerb_material.emissive_intensity = 1.1\nkerb_material.roughness = 0.4\n\nband_material = threepp.MeshStandardMaterial()\nband_material.color = threepp.Color(0x05070a)\nband_material.emissive = threepp.Color(0x25d6f0)\nband_material.emissive_intensity = 0.7\nband_material.roughness = 0.4\n\n\ndef block(name, material, position, size, rotation=0.0, physics=STATIC_BOX,\n          shadows=True):\n    node = threepp.Mesh(unit, material)\n    node.name = name\n    node.position.set(position[0], position[1], position[2])\n    node.scale.set(size[0], size[1], size[2])\n    node.rotation.y = rotation\n    node.cast_shadow = shadows\n    node.receive_shadow = True\n    if physics:\n        node.set_user_data(\"physics\", physics)\n    return editor.add(node)\n\n\n# --- floor and perimeter ----------------------------------------------------\nfloor = block(\"Arena Floor\", deck_material, (0.0, -0.5, 0.0),\n              (2 * HALF, 1.0, 2 * HALF), shadows=False)\n\nfor i, (dx, dz) in enumerate(((1, 0), (-1, 0), (0, 1), (0, -1))):\n    block(\"Arena Wall %d\" % (i + 1), wall_material,\n          (dx * (HALF + 0.4), WALL_HEIGHT * 0.5, dz * (HALF + 0.4)),\n          (0.8 if dx else 2 * HALF + 1.6, WALL_HEIGHT, 0.8 if dz else 2 * HALF + 1.6))\n    # A lit kerb at the base of each wall. It is the horizon line of the whole\n    # scene: without it a dark floor and a dark wall meet in nothing.\n    block(\"Arena Kerb %d\" % (i + 1), kerb_material,\n          (dx * (HALF - 0.2), 0.09, dz * (HALF - 0.2)),\n          (0.35 if dx else 2 * HALF, 0.18, 0.35 if dz else 2 * HALF),\n          physics=None, shadows=False)\n\n# --- the pillar field -------------------------------------------------------\n# The course is kept clear by rejection: nothing is placed within KEEP of the\n# flight line the five rings describe, so a regenerate can never wall the\n# course off.\nCOURSE = ((0.0, 14.0), (0.0, 6.0), (-7.0, -2.0), (-2.0, -12.0),\n          (8.0, -8.0), (10.0, 4.0), (0.0, -20.0))\nKEEP = 5.0\n\n\ndef clear_of_course(x, z, margin):\n    for i in range(len(COURSE) - 1):\n        ax, az = COURSE[i]\n        bx, bz = COURSE[i + 1]\n        dx, dz = bx - ax, bz - az\n        span = dx * dx + dz * dz\n        t = 0.0 if span <= 0.0 else max(0.0, min(1.0, ((x - ax) * dx + (z - az) * dz) / span))\n        px, pz = ax + t * dx, az + t * dz\n        if (x - px) ** 2 + (z - pz) ** 2 < margin * margin:\n            return False\n    return True\n\n\ndef scatter(count, margin, inner, outer):\n    placed = []\n    tries = 0\n    while len(placed) < count and tries < 4000:\n        tries += 1\n        angle = random.uniform(0.0, 2.0 * math.pi)\n        radius = math.sqrt(random.uniform(inner * inner, outer * outer))\n        x, z = radius * math.cos(angle), radius * math.sin(angle)\n        if not clear_of_course(x, z, margin):\n            continue\n        if any((x - px) ** 2 + (z - pz) ** 2 < 4.5 * 4.5 for px, pz in placed):\n            continue\n        placed.append((x, z))\n    return placed\n\n\nfor i, (x, z) in enumerate(scatter(PILLARS, KEEP, 6.0, HALF - 2.5)):\n    height = random.uniform(3.5, 9.5)\n    width = random.uniform(1.1, 2.2)\n    depth = random.uniform(1.1, 2.2)\n    spin = random.uniform(0.0, math.pi)\n    block(\"Pillar %d\" % (i + 1), pillar_material, (x, height * 0.5, z),\n          (width, height, depth), spin)\n    # A lit band a little BELOW the top, not a lid on it: an emissive top face\n    # is a flat slab from every camera that looks down, and looking down is what\n    # a camera in an arena does.\n    block(\"Pillar %d Band\" % (i + 1), band_material, (x, height - 0.9, z),\n          (width * 1.02, 0.1, depth * 1.02), spin, physics=None, shadows=False)\n\n# The pad the drone stands over. Not decoration: a hovering machine with\n# nothing beneath it reads as a machine that is falling. Its own material,\n# because the ke)JSON",
-            R"JSON(rb's brightness over five square metres is a lightbox.\npad_material = threepp.MeshStandardMaterial()\npad_material.color = threepp.Color(0x0d1620)\npad_material.emissive = threepp.Color(0x25d6f0)\npad_material.emissive_intensity = 0.09\npad_material.roughness = 0.5\nblock(\"Start Pad\", pad_material, (COURSE[0][0], 0.05, COURSE[0][1]),\n      (4.0, 0.1, 4.0), physics=None, shadows=False)\n\nfor i, (x, z) in enumerate(scatter(CRATES, KEEP - 1.2, 4.0, HALF - 4.0)):\n    size = random.uniform(0.9, 1.7)\n    block(\"Crate %d\" % (i + 1), pillar_material, (x, size * 0.5, z),\n          (size, size, size * random.uniform(0.8, 1.3)), random.uniform(0.0, math.pi))\n"
+      "generatorSource": "# Hover Arena - the arena itself.\n#\n# Everything this builds is DERIVED: press Regenerate and the floor, the\n# perimeter, the pillar field and the kerb are rebuilt from SEED alone. The\n# drone, the five goal rings and the beacon are hand-placed and are NOT this\n# script's output, so a re-run never moves the course.\n#\n# set_user_data is what makes generated content playable: the flat\n# \"key=value;...\" string is exactly what the Physics section writes.\nimport math\nimport random\n\nimport threepp\nfrom threepp import editor\n\nSEED = 20260730\nHALF = 22.0            # arena half-width, metres\nWALL_HEIGHT = 7.0\nPILLARS = 15\nCRATES = 9\n\nSTATIC_BOX = \"body=static;shape=box;trigger=0)JSON",
+            R"JSON(;mass=1;friction=0.6;restitution=0.05\"\n\nrandom.seed(SEED)\n\n# One geometry and one material per role, reused by every instance of it: the\n# saved document then carries each of them once.\nunit = threepp.BoxGeometry(1, 1, 1)\n\ndeck_material = threepp.MeshStandardMaterial()\ndeck_material.color = threepp.Color(0x39485c)\ndeck_material.roughness = 0.92\ndeck_material.metalness = 0.04\n\nwall_material = threepp.MeshStandardMaterial()\nwall_material.color = threepp.Color(0x445468)\nwall_material.roughness = 0.85\nwall_material.metalness = 0.08\n\npillar_material = threepp.MeshStandardMaterial()\npillar_material.color = threepp.Color(0x56657c)\npillar_material.roughness = 0.7\npillar_material.metalness = 0.18\n\nkerb_material = threepp.MeshStandardMaterial()\nkerb_material.color = threepp.Color(0x05070a)\nkerb_material.emissive = threepp.Color(0x25d6f0)\nkerb_material.emissive_intensity = 1.1\nkerb_material.roughness = 0.4\n\nband_material = threepp.MeshStandardMaterial()\nband_material.color = threepp.Color(0x05070a)\nband_material.emissive = threepp.Color(0x25d6f0)\nband_material.emissive_intensity = 0.7\nband_material.roughness = 0.4\n\n\ndef block(name, material, position, size, rotation=0.0, physics=STATIC_BOX,\n          shadows=True):\n    node = threepp.Mesh(unit, material)\n    node.name = name\n    node.position.set(position[0], position[1], position[2])\n    node.scale.set(size[0], size[1], size[2])\n    node.rotation.y = rotation\n    node.cast_shadow = shadows\n    node.receive_shadow = True\n    if physics:\n        node.set_user_data(\"physics\", physics)\n    return editor.add(node)\n\n\n# --- floor and perimeter ----------------------------------------------------\nfloor = block(\"Arena Floor\", deck_material, (0.0, -0.5, 0.0),\n              (2 * HALF, 1.0, 2 * HALF), shadows=False)\n\nfor i, (dx, dz) in enumerate(((1, 0), (-1, 0), (0, 1), (0, -1))):\n    block(\"Arena Wall %d\" % (i + 1), wall_material,\n          (dx * (HALF + 0.4), WALL_HEIGHT * 0.5, dz * (HALF + 0.4)),\n          (0.8 if dx else 2 * HALF + 1.6, WALL_HEIGHT, 0.8 if dz else 2 * HALF + 1.6))\n    # A lit kerb at the base of each wall. It is the horizon line of the whole\n    # scene: without it a dark floor and a dark wall meet in nothing.\n    block(\"Arena Kerb %d\" % (i + 1), kerb_material,\n          (dx * (HALF - 0.2), 0.09, dz * (HALF - 0.2)),\n          (0.35 if dx else 2 * HALF, 0.18, 0.35 if dz else 2 * HALF),\n          physics=None, shadows=False)\n\n# --- the pillar field -------------------------------------------------------\n# The course is kept clear by rejection: nothing is placed within KEEP of the\n# flight line the five rings describe, so a regenerate can never wall the\n# course off.\nCOURSE = ((0.0, 14.0), (0.0, 6.0), (-7.0, -2.0), (-2.0, -12.0),\n          (8.0, -8.0), (10.0, 4.0), (0.0, -20.0))\nKEEP = 5.0\n\n\ndef clear_of_course(x, z, margin):\n    for i in range(len(COURSE) - 1):\n        ax, az = COURSE[i]\n        bx, bz = COURSE[i + 1]\n        dx, dz = bx - ax, bz - az\n        span = dx * dx + dz * dz\n        t = 0.0 if span <= 0.0 else max(0.0, min(1.0, ((x - ax) * dx + (z - az) * dz) / span))\n        px, pz = ax + t * dx, az + t * dz\n        if (x - px) ** 2 + (z - pz) ** 2 < margin * margin:\n            return False\n    return True\n\n\ndef scatter(count, margin, inner, outer):\n    placed = []\n    tries = 0\n    while len(placed) < count and tries < 4000:\n        tries += 1\n        angle = random.uniform(0.0, 2.0 * math.pi)\n        radius = math.sqrt(random.uniform(inner * inner, outer * outer))\n        x, z = radius * math.cos(angle), radius * math.sin(angle)\n        if not clear_of_course(x, z, margin):\n            continue\n        if any((x - px) ** 2 + (z - pz) ** 2 < 4.5 * 4.5 for px, pz in placed):\n            continue\n        placed.append((x, z))\n    return placed\n\n\nfor i, (x, z) in enumerate(scatter(PILLARS, KEEP, 6.0, HALF - 2.5)):\n    height = random.uniform(3.5, 9.5)\n    width = random.uniform(1.1, 2.2)\n    depth = random.uniform(1.1, 2.2)\n    spin = random.uniform(0.0, math.pi)\n    block(\"Pillar %d\" % (i + 1), pillar_material, (x, height * 0.5, z),\n          (width, height, depth), spin)\n    # A lit band a little BELOW the top, not a lid on it: an emissive top face\n    # is a flat slab from every camera that looks down, and looking down is what\n    # a camera in an arena does.\n    block(\"Pillar %d Band\" % (i + 1), band_material, (x, height - 0.9, z),\n          (width * 1.02, 0.1, depth * 1.02), spin, physics=None, shadows=False)\n\n# The pad the drone stands over. Not decoration: a hovering machine with\n# nothing beneath it reads as a machine that is falling. Its own material,\n# because the kerb's brightness over five square metres is a lightbox.\npad_material = threepp.MeshStandardMaterial()\npad_material.color = threepp.Color(0x0d1620)\npad_material.emissive = threepp.Color(0x25d6f0)\npad_material.emissive_intensity = 0.09\npad_material.roughness = 0.5\nblock(\"Start Pad\", pad_material, (COURSE[0][0], 0.05, COURSE[0][1]),\n      (4.0, 0.1, 4.0), physics=None, shadows=False)\n\nfor i, (x, z) in enumerate(scatter(CRATES, KEEP - 1.2, 4.0, HALF - 4.0)):\n    size = random.uniform(0.9, 1.7)\n    block(\"Crate %d\" % (i + 1), pillar_material, (x, size * 0.5, z),\n          (size, size, size * random.uniform(0.8, 1.3)), random.uniform(0.0, math.pi))\n"
     },
     "layers": 1,
-    "matrix": [
+    "position": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "quaternion": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
       1.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
       1.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      1.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
       1.0
     ],
     "background": 725274,
@@ -1885,22 +2785,20 @@ namespace {
         "name": "Key Light",
         "castShadow": true,
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
+        "position": [
           16.0,
           26.0,
-          12.0,
+          12.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "color": 14477311,
@@ -1932,22 +2830,20 @@ namespace {
         "type": "HemisphereLight",
         "name": "Sky Fill",
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
+        "position": [
           0.0,
           1.0,
+          0.0
+        ],
+        "quaternion": [
           0.0,
           0.0,
           0.0,
-          0.0,
+          1.0
+        ],
+        "scale": [
           1.0,
-          0.0,
-          0.0,
           1.0,
-          0.0,
           1.0
         ],
         "color": 4876946,
@@ -1959,22 +2855,20 @@ namespace {
         "type": "AmbientLight",
         "name": "Ambient Light",
         "layers": 1,
-        "matrix": [
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0
         ],
         "color": 3490650,
@@ -1987,32 +2881,31 @@ namespace {
         "castShadow": true,
         "receiveShadow": true,
         "userData": {
-          "physics": "body=dynamic;shape=auto;trigger=0;mass=1.4;friction=0.4;restitution=0.05;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
-          "scriptSource": "# Hover Arena - the drone.\n#\n# fixed_update runs once per physics substep with a constant dt, so the same\n# gains settle at the same height whatever the frame rate is doing. Altitude is\n# a short downward raycast with ignore=self (without it the ray starts inside\n# the hull and finds it at distance zero); the rate feedback is the AUTHORED\n# IMU's reading, which is noisy, seeded and rate-gated. The small wobble you\n# can see is that noise going round the loop - it is not a bug to tune out.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    # The PhysX-gated names are ABSENT from threepp.editor without the SDK,\n    # rather than present and answering None, so ask before reaching.\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass DroneController:\n\n    hover_height = 2.2       # m above whatever is under the drone\n    lift_p = 13.0            # thrust per metre of altitude error, per kg\n    lift_d = 5.5             # thrust per m/s of climb rate, per kg\n    level_p = 2.6            # N*m per radian of tilt\n    level_d = 0.55           # N*m per rad/s of body rate  <- reads the IMU\n    yaw_p = 0.9              # N*m of yaw command\n    yaw_d = 0.25             # N*m per rad/s of yaw rate\n    thrust = 5.0             # N of forward / strafe drive\n    climb_rate = 1.6         # m/s of commanded climb\n    drag = 1.4               # horizontal damping, per kg: a drone is not ice\n    probe = 16.0             # m the altimeter looks down\n    flash_seconds = 0.35\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.body = None\n        self.imu = None\n        self.cast = None\n        self.climb_hold = self.hover_height\n        self.flash = 0.0\n        self.imu_reads = 0\n        self.bumps = 0\n        material = obj.material\n        self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None\n        self.rest = self.material.emissive.get_hex() if self.material else 0\n\n        body_of = _verb(\"rigid_body_from_object\")\n        self.cast = _verb(\"raycast\")\n        imu_of = _verb(\"imu_from_object\")\n        if body_of is None or self.cast is None:\n            print(\"Hover Arena needs the PhysX build to fly - the drone will just sit there.\",\n                  flush=True)\n            return\n\n        self.body = body_of(obj)\n        if self.body is None:\n            print(\"Hover Arena: no rigid body on\", obj.name, \"- nothing to fly.\", flush=True)\n            return\n        if imu_of is not None:\n            self.imu = imu_of(obj)\n\n        print(\"Hover Arena - W/S fly, A/D yaw, Q/E strafe, R/F climb. \"\n              \"Fly through all five rings.\", flush=True)\n\n    # --- the controller, on the physics clock -------------------------------\n    def fixed_update(self, dt: float):\n        if self.body is None:\n            return\n\n        mass = self.body.mass\n        rotation = self.body.rotation\n        up = threepp.Vector3(0.0, 1.0, 0.0).apply_quaternion(rotation)\n        forward = threepp.Vector3(0.0, 0.0, -1.0).apply_quaternion(rotation)\n        right = threepp.Vector3(1.0, 0.0, 0.0).apply_quaternion(rotation)\n\n        # Rate feedback: the sensor if it has spoken, the solver's own number\n        # only until the first sample arrives. Both are rad/s; the IMU's is in\n        # the sensor frame, so it is rotated into the world the torque is in.\n        rate = None\n        if self.imu is not None:\n            sample = self.imu.latest()\n            if sample is not None:\n                rate = sample.angular_velocity.clone().apply_quaternion(rotation)\n                self.imu_reads += 1\n        if rate is None:\n            rate = self.body.angular_velocity\n\n        # --- altitude: what is under me, right now --------------------------\n        origin = self.body.position\n        hit = self.cast(origin, threepp.Vector3(0.0, -1.0, 0.0), self.probe, ignore=self.obj)\n        altitude = hit.distance if hit is not None else origin.y\n\n        keys = editor.is_key_down\n        climb = (1.0 if keys(\"R\") else 0.0) - (1.0 if keys(\"F\") else 0.0)\n        # The stick sets a HEIGHT, not a thrust: let go and it holds the last\n        # one, which is what makes threading a ring at 3.8 m possible at all.\n        self.climb_hold = max(0.8, min(9.0, self.climb_hold + climb * self.climb_rate * dt))\n\n        e)JSON",
-            R"JSON(rror = self.climb_hold - altitude\n        lift = mass * (9.81 + self.lift_p * error - self.lift_d * self.body.velocity.y)\n        # Along the hull's own up, divided by how much of it still points up:\n        # a tilted quad has to work harder to hold height, and that IS the feel.\n        lean = max(0.35, up.y)\n        lift = max(0.0, min(lift / lean, mass * 9.81 * 3.0))\n        self.body.apply_force(up.clone().multiply_scalar(lift))\n\n        # --- attitude: bring the hull's up back to the world's --------------\n        tilt = up.clone().cross(threepp.Vector3(0.0, 1.0, 0.0))\n        spin = rate.dot(up)\n        torque = tilt.multiply_scalar(self.level_p * mass)\n        # Damp the TILT rates only; the yaw rate has a command of its own below\n        # and would otherwise be fought by its own damper twice.\n        tilt_rate = rate.clone().sub(up.clone().multiply_scalar(spin))\n        torque.sub(tilt_rate.multiply_scalar(self.level_d * mass))\n\n        yaw = (1.0 if keys(\"A\") else 0.0) - (1.0 if keys(\"D\") else 0.0)\n        torque.add(up.clone().multiply_scalar(mass * (self.yaw_p * yaw - self.yaw_d * spin)))\n        self.body.apply_torque(torque)\n\n        # --- translation ----------------------------------------------------\n        drive = (1.0 if keys(\"W\") else 0.0) - (1.0 if keys(\"S\") else 0.0)\n        strafe = (1.0 if keys(\"E\") else 0.0) - (1.0 if keys(\"Q\") else 0.0)\n        push = forward.clone().multiply_scalar(drive * self.thrust * mass)\n        push.add(right.clone().multiply_scalar(strafe * self.thrust * mass))\n        velocity = self.body.velocity\n        push.add(threepp.Vector3(velocity.x, 0.0, velocity.z).multiply_scalar(-self.drag * mass))\n        self.body.apply_force(push)\n\n    # --- the frame's final word: what you can see ---------------------------\n    def update(self, dt: float):\n        if self.flash > 0.0 and self.material is not None:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xff3b1f)\n            self.material.emissive_intensity = 2.4 * level\n            if self.flash <= 0.0:\n                self.material.emissive = threepp.Color(self.rest)\n                self.material.emissive_intensity = 1.0\n\n    def on_collision_enter(self, contact):\n        self.bumps += 1\n        self.flash = self.flash_seconds\n        other = contact.other.name if contact.other is not None else \"the world\"\n        impulse = contact.impulse.length()\n        if impulse > 1.5:\n            print(\"Hover Arena: clipped %s (%.1f N*s)\" % (other, impulse), flush=True)\n",
+          "physics": "body=dynamic;s)JSON",
+            R"JSON(hape=auto;trigger=0;mass=1.4;friction=0.4;restitution=0.05;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
+          "scriptSource": "# Hover Arena - the drone.\n#\n# fixed_update runs once per physics substep with a constant dt, so the same\n# gains settle at the same height whatever the frame rate is doing. Altitude is\n# a short downward raycast with ignore=self (without it the ray starts inside\n# the hull and finds it at distance zero); the rate feedback is the AUTHORED\n# IMU's reading, which is noisy, seeded and rate-gated. The small wobble you\n# can see is that noise going round the loop - it is not a bug to tune out.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    # The PhysX-gated names are ABSENT from threepp.editor without the SDK,\n    # rather than present and answering None, so ask before reaching.\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass DroneController:\n\n    hover_height = 2.2       # m above whatever is under the drone\n    lift_p = 13.0            # thrust per metre of altitude error, per kg\n    lift_d = 5.5             # thrust per m/s of climb rate, per kg\n    level_p = 2.6            # N*m per radian of tilt\n    level_d = 0.55           # N*m per rad/s of body rate  <- reads the IMU\n    yaw_p = 0.9              # N*m of yaw command\n    yaw_d = 0.25             # N*m per rad/s of yaw rate\n    thrust = 5.0             # N of forward / strafe drive\n    climb_rate = 1.6         # m/s of commanded climb\n    drag = 1.4               # horizontal damping, per kg: a drone is not ice\n    probe = 16.0             # m the altimeter looks down\n    flash_seconds = 0.35\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.body = None\n        self.imu = None\n        self.cast = None\n        self.climb_hold = self.hover_height\n        self.flash = 0.0\n        self.imu_reads = 0\n        self.bumps = 0\n        material = obj.material\n        self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None\n        self.rest = self.material.emissive.get_hex() if self.material else 0\n\n        body_of = _verb(\"rigid_body_from_object\")\n        self.cast = _verb(\"raycast\")\n        imu_of = _verb(\"imu_from_object\")\n        if body_of is None or self.cast is None:\n            print(\"Hover Arena needs the PhysX build to fly - the drone will just sit there.\",\n                  flush=True)\n            return\n\n        self.body = body_of(obj)\n        if self.body is None:\n            print(\"Hover Arena: no rigid body on\", obj.name, \"- nothing to fly.\", flush=True)\n            return\n        if imu_of is not None:\n            self.imu = imu_of(obj)\n\n        print(\"Hover Arena - W/S fly, A/D yaw, Q/E strafe, R/F climb. \"\n              \"Fly through all five rings.\", flush=True)\n\n    # --- the controller, on the physics clock -------------------------------\n    def fixed_update(self, dt: float):\n        if self.body is None:\n            return\n\n        mass = self.body.mass\n        rotation = self.body.rotation\n        up = threepp.Vector3(0.0, 1.0, 0.0).apply_quaternion(rotation)\n        forward = threepp.Vector3(0.0, 0.0, -1.0).apply_quaternion(rotation)\n        right = threepp.Vector3(1.0, 0.0, 0.0).apply_quaternion(rotation)\n\n        # Rate feedback: the sensor if it has spoken, the solver's own number\n        # only until the first sample arrives. Both are rad/s; the IMU's is in\n        # the sensor frame, so it is rotated into the world the torque is in.\n        rate = None\n        if self.imu is not None:\n            sample = self.imu.latest()\n            if sample is not None:\n                rate = sample.angular_velocity.clone().apply_quaternion(rotation)\n                self.imu_reads += 1\n        if rate is None:\n            rate = self.body.angular_velocity\n\n        # --- altitude: what is under me, right now --------------------------\n        origin = self.body.position\n        hit = self.cast(origin, threepp.Vector3(0.0, -1.0, 0.0), self.probe, ignore=self.obj)\n        altitude = hit.distance if hit is not None else origin.y\n\n        keys = editor.is_key_down\n        climb = (1.0 if keys(\"R\") else 0.0) - (1.0 if keys(\"F\") else 0.0)\n        # The stick sets a HEIGHT, not a thrust: let go and it holds the last\n        # one, which is what makes threading a ring at 3.8 m possible at all.\n        self.climb_hold = max(0.8, min(9.0, self.climb_hold + climb * self.climb_rate * dt))\n\n        error = self.climb_hold - altitude\n        lift = mass * (9.81 + self.lift_p * error - self.lift_d * self.body.velocity.y)\n        # Along the hull's own up, divided by how much of it still points up:\n        # a tilted quad has to work harder to hold height, and that IS the feel.\n        lean = max(0.35, up.y)\n        lift = max(0.0, min(lift / lean, mass * 9.81 * 3.0))\n        self.body.apply_force(up.clone().multiply_scalar(lift))\n\n        # --- attitude: bring the hull's up back to the world's --------------\n        tilt = up.clone().cross(threepp.Vector3(0.0, 1.0, 0.0))\n        spin = rate.dot(up)\n        torque = tilt.multiply_scalar(self.level_p * mass)\n        # Damp the TILT rates only; the yaw rate has a command of its own below\n        # and would otherwise be fought by its own damper twice.\n        tilt_rate = rate.clone().sub(up.clone().multiply_scalar(spin))\n        torque.sub(tilt_rate.multiply_scalar(self.level_d * mass))\n\n        yaw = (1.0 if keys(\"A\") else 0.0) - (1.0 if keys(\"D\") else 0.0)\n        torque.add(up.clone().multiply_scalar(mass * (self.yaw_p * yaw - self.yaw_d * spin)))\n        self.body.apply_torque(torque)\n\n        # --- translation ----------------------------------------------------\n        drive = (1.0 if keys(\"W\") else 0.0) - (1.0 if keys(\"S\") else 0.0)\n        strafe = (1.0 if keys(\"E\") else 0.0) - (1.0 if keys(\"Q\") else 0.0)\n        push = forward.clone().multiply_scalar(drive * self.thrust * mass)\n        push.add(right.clone().multiply_scalar(strafe * self.thrust * mass))\n        velocity = self.body.velocity\n        push.add(threepp.Vector3(velocity.x, 0.0, velocity.z).multiply_scalar(-self.drag * mass))\n        self.body.apply_force(push)\n\n    # --- the frame's final word: what you can see ---------------------------\n    def update(self, dt: float):\n        if self.flash > 0.0 and self.material is not None:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xff3b1f)\n            self.material.emissive_intensity = 2.4 * level\n            if self.flash <= 0.0:\n                self.material.emissive = threepp.Color(self.rest)\n                self.material.emissive_intensity = 1.0\n\n    def on_collision_enter(self, contact):\n        self.bumps += 1\n        self.flash = self.flash_seconds\n        other = contact.other.name if contact.other is not None else \"the world\"\n        impulse = contact.impulse.length()\n        if impulse > 1.5:\n            print(\"Hover Arena: clipped %s (%.1f N*s)\" % (other, impulse), flush=True)\n",
           "sensor": "type=imu;rate=200;seed=11;gyrodensity=0.035;gyrowalk=0.0002;acceldensity=0.12;accelwalk=0.004;near=0.1;far=30;rangestddev=0.02;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=128;joint=;encoderres=0;contactthreshold=0"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
+        "position": [
           0.0,
           2.200000047683716,
-          14.0,
+          14.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "637aed0c-3383-4459-b66d-9246ac9e907c",
-        "material": "6c0da7ac-c0bb-4771-90b9-be10851a4b07",
+        "material": "6c0da7ac-c0bb-4771-90b9-be10)JSON",
+            R"JSON(851a4b07",
         "children": [
           {
             "uuid": "5dd9aab2-4c32-4996-b456-d6869fdb9a3d",
@@ -2021,23 +2914,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.7424620389938354,
+            "position": [
+              -0.40700000524520874,
               0.0,
-              0.742462158203125,
+              -0.40700000524520874
+            ],
+            "quaternion": [
               0.0,
+              -0.3826834559440613,
               0.0,
+              0.9238795042037964
+            ],
+            "scale": [
+              1.0499999523162842,
               0.11999999731779099,
-              0.0,
-              0.0,
-              -0.11313708871603012,
-              0.0,
-              0.11313707381486893,
-              0.0,
-              -0.40700000524520874,
-              0.0,
-              -0.40700000524520874,
-              1.0
+              0.1599999964237213
             ],
             "geometry": "ce02f87e-c1d2-462b-90bf-fda4176bb30d",
             "material": "c3771707-703f-430e-a8b7-d6f1c9cffb81"
@@ -2048,22 +2939,20 @@ namespace {
             "name": "Drone Rotor 1",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.960464477539063e-08,
-              -0.9999999403953552,
-              0.0,
-              0.0,
-              0.9999999403953552,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               -0.7400000095367432,
               0.10000000149011612,
-              -0.7400000095367432,
+              -0.7400000095367432
+            ],
+            "quaternion": [
+              -0.7071067690849304,
+              0.0,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "e5471310-a9f4-492e-86ba-992d597992a1",
@@ -2075,22 +2964,20 @@ namespace {
             "name": "Drone Hub 1",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               -0.7400000095367432,
               0.10000000149011612,
-              -0.7400000095367432,
+              -0.7400000095367432
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "661b6125-b5fa-4ec0-b49b-03d61091cafb",
@@ -2103,23 +2990,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.7424620389938354,
-              0.0,
-              -0.742462158203125,
-              0.0,
-              0.0,
-              0.11999999731779099,
-              0.0,
-              0.0,
-              0.11313708871603012,
-              0.0,
-              0.11313707381486893,
-              0.0,
+            "position": [
               0.40700000524520874,
               0.0,
-              -0.40700000524520874,
-              1.0
+              -0.40700000524520874
+            ],
+            "quaternion": [
+              0.0,
+              0.3826834559440613,
+              0.0,
+              0.9238795042037964
+            ],
+            "scale": [
+              1.0499999523162842,
+              0.11999999731779099,
+              0.1599999964237213
             ],
             "geometry": "ce02f87e-c1d2-462b-90bf-fda4176bb30d",
             "material": "c3771707-703f-430e-a8b7-d6f1c9cffb81"
@@ -2130,22 +3015,20 @@ namespace {
             "name": "Drone Rotor 2",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.960464477539063e-08,
-              -0.9999999403953552,
-              0.0,
-              0.0,
-              0.9999999403953552,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               0.7400000095367432,
               0.10000000149011612,
-              -0.7400000095367432,
+              -0.7400000095367432
+            ],
+            "quaternion": [
+              -0.7071067690849304,
+              0.0,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "e5471310-a9f4-492e-86ba-992d597992a1",
@@ -2157,26 +3040,23 @@ namespace {
             "name": "Drone Hub 2",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.7400000095367432,
               0.10000000149011612,
-              -0.7400000095367432,
+              -0.7400000095367432
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
             ],
-            "geometry": "661b6125-b5fa-4ec0-b49b-03d61091cafb)JSON",
-            R"JSON(",
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "geometry": "661b6125-b5fa-4ec0-b49b-03d61091cafb",
             "material": "4100214c-1c05-4699-b237-65d3d1aa09c1"
           },
           {
@@ -2186,23 +3066,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.7424620389938354,
-              0.0,
-              -0.742462158203125,
-              0.0,
-              0.0,
-              0.11999999731779099,
-              0.0,
-              0.0,
-              0.11313708871603012,
-              0.0,
-              0.11313707381486893,
-              0.0,
+            "position": [
               -0.40700000524520874,
               0.0,
-              0.40700000524520874,
-              1.0
+              0.40700000524520874
+            ],
+            "quaternion": [
+              0.0,
+              0.3826834559440613,
+              0.0,
+              0.9238795042037964
+            ],
+            "scale": [
+              1.0499999523162842,
+              0.11999999731779099,
+              0.1599999964237213
             ],
             "geometry": "ce02f87e-c1d2-462b-90bf-fda4176bb30d",
             "material": "c3771707-703f-430e-a8b7-d6f1c9cffb81"
@@ -2213,22 +3091,20 @@ namespace {
             "name": "Drone Rotor 3",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.960464477539063e-08,
-              -0.9999999403953552,
-              0.0,
-              0.0,
-              0.9999999403953552,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               -0.7400000095367432,
               0.10000000149011612,
-              0.7400000095367432,
+              0.7400000095367432
+            ],
+            "quaternion": [
+              -0.7071067690849304,
+              0.0,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "e5471310-a9f4-492e-86ba-992d597992a1",
@@ -2240,22 +3116,20 @@ namespace {
             "name": "Drone Hub 3",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               -0.7400000095367432,
               0.10000000149011612,
-              0.7400000095367432,
+              0.7400000095367432
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "661b6125-b5fa-4ec0-b49b-03d61091cafb",
@@ -2268,23 +3142,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.7424620389938354,
+            "position": [
+              0.40700000524520874,
               0.0,
-              0.742462158203125,
+              0.40700000524520874
+            ],
+            "quaternion": [
               0.0,
+              -0.3826834559440613,
               0.0,
+              0.9238795042037964
+            ],
+            "scale": [
+              1.0499999523162842,
               0.11999999731779099,
-              0.0,
-              0.0,
-              -0.11313708871603012,
-              0.0,
-              0.11313707381486893,
-              0.0,
-              0.40700000524520874,
-              0.0,
-              0.40700000524520874,
-              1.0
+              0.1599999964237213
             ],
             "geometry": "ce02f87e-c1d2-462b-90bf-fda4176bb30d",
             "material": "c3771707-703f-430e-a8b7-d6f1c9cffb81"
@@ -2295,24 +3167,23 @@ namespace {
             "name": "Drone Rotor 4",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.960464477539063e-08,
-              -0.9999999403953552,
-              0.0,
-              0.0,
-              0.9999999403953552,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               0.7400000095367432,
               0.10000000149011612,
-              0.7400000095367432,
-              1.0
+              0.7400000095367432
             ],
+            "quaternion": [
+              -0.7071067690849304,
+              0.0,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+      )JSON",
+            R"JSON(      ],
             "geometry": "e5471310-a9f4-492e-86ba-992d597992a1",
             "material": "067e9558-a06b-4ebc-b8dd-12be40260f70"
           },
@@ -2322,22 +3193,20 @@ namespace {
             "name": "Drone Hub 4",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.7400000095367432,
               0.10000000149011612,
-              0.7400000095367432,
+              0.7400000095367432
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "661b6125-b5fa-4ec0-b49b-03d61091cafb",
@@ -2350,23 +3219,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.550000011920929,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.2000000476837158,
-              0.0,
+            "position": [
               0.0,
               0.14000000059604645,
-              -0.05999999865889549,
+              -0.05999999865889549
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              1.0,
+              0.550000011920929,
+              1.2000000476837158
             ],
             "geometry": "4afee1bf-cc2f-44dc-b011-31a0622ac019",
             "material": "e71664cb-c5bf-418d-80c0-b41d4134f3fd"
@@ -2377,22 +3244,20 @@ namespace {
             "name": "Drone Nose",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               0.019999999552965164,
-              -0.6800000071525574,
+              -0.6800000071525574
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "514d8eb7-8c3d-43b2-84c3-e757e04e0a18",
@@ -2407,22 +3272,20 @@ namespace {
               "sensor": "type=lidar;rate=10;seed=23;gyrodensity=0.005;gyrowalk=0.00004;acceldensity=0.06;accelwalk=0.004;near=1.6;far=12;rangestddev=0.015;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=112;joint=;encoderres=0;contactthreshold=0"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               0.20000000298023224,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "a87c46e9-0781-4a86-90d3-a882a43a3d74",
@@ -2435,22 +3298,20 @@ namespace {
         "type": "Group",
         "name": "Ring 1",
         "layers": 1,
-        "matrix": [
-          -1.0,
+        "position": [
           0.0,
-          0.0,
-          0.0,
+          2.4000000953674316,
+          6.0
+        ],
+        "quaternion": [
           0.0,
           1.0,
           0.0,
-          0.0,
-          0.0,
-          0.0,
-          -1.0,
-          0.0,
-          0.0,
-          2.4000000953674316,
-          6.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -2459,23 +3320,20 @@ namespace {
             "type": "Mesh",
             "name": "Ring 1 Torus",
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              )JSON",
-            R"JSON(1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "ebc6baf9-3d00-4d03-a63b-104318c7620c",
@@ -2492,22 +3350,20 @@ namespace {
               "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "1968ac74-e426-48ba-8845-4f88c51c3def",
@@ -2516,26 +3372,25 @@ namespace {
         ]
       },
       {
-        "uuid": "40bc3cfc-23f6-4a89-905f-d31e4acbfa43",
+        ")JSON",
+            R"JSON(uuid": "40bc3cfc-23f6-4a89-905f-d31e4acbfa43",
         "type": "Group",
         "name": "Ring 2",
         "layers": 1,
-        "matrix": [
-          -0.7507137060165405,
-          1.862645149230957e-09,
-          0.6606278419494629,
-          0.0,
-          0.03960398584604263,
-          0.9982014298439026,
-          0.04500453919172287,
-          0.0,
-          -0.6594396829605103,
-          0.05994901806116104,
-          -0.7493635416030884,
-          0.0,
+        "position": [
           -7.0,
           3.0,
-          -2.0,
+          -2.0
+        ],
+        "quaternion": [
+          0.010587215423583984,
+          0.9351842999458313,
+          0.0280569177120924,
+          -0.35288968682289124
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -2544,22 +3399,20 @@ namespace {
             "type": "Mesh",
             "name": "Ring 2 Torus",
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "95e68e1d-66ae-40ca-ba4e-07946d16f132",
@@ -2573,26 +3426,23 @@ namespace {
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=2;torus=Ring 2 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock )JSON",
-            R"JSON(* 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "cfad1599-74d8-412a-a0f4-9c455f88c281",
@@ -2605,22 +3455,20 @@ namespace {
         "type": "Group",
         "name": "Ring 3",
         "layers": 1,
-        "matrix": [
-          -0.8924127817153931,
-          0.0,
-          -0.4512198567390442,
-          0.0,
-          -0.03159325197339058,
-          0.9975457787513733,
-          0.06248444691300392,
-          0.0,
-          0.4501124620437622,
-          0.07001742720603943,
-          -0.8902225494384766,
-          0.0,
+        "position": [
           -2.0,
           3.799999952316284,
-          -12.0,
+          -12.0
+        ],
+        "quaternion": [
+          -0.008124712854623795,
+          0.9721344113349915,
+          0.03407498821616173,
+          0.23179210722446442
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -2629,22 +3477,20 @@ namespace {
             "type": "Mesh",
             "name": "Ring 3 Torus",
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "2fe6912c-a537-4d10-a2d6-29aca93fdf78",
@@ -2658,25 +3504,24 @@ namespace {
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=3;torus=Ring 3 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        i)JSON",
+            R"JSON(f self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "757b86c9-5018-497a-9430-eab4d0f1cc80",
@@ -2689,22 +3534,20 @@ namespace {
         "type": "Group",
         "name": "Ring 4",
         "layers": 1,
-        "matrix": [
-          0.3609941601753235,
-          7.450580596923828e-09,
-          -0.9325681328773499,
-          0.0,
-          0.09304756671190262,
-          0.9950099587440491,
-          0.03601841628551483,
-          0.0,
-          0.927914559841156,
-          -0.09977562725543976,
-          0.35919272899627686,
-          0.0,
+        "position": [
           8.0,
           2.5999999046325684,
-          -8.0,
+          -8.0
+        ],
+        "quaternion": [
+          0.041205015033483505,
+          0.5645403265953064,
+          -0.028234126046299934,
+          0.8238927125930786
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -2713,22 +3556,20 @@ namespace {
             "type": "Mesh",
             "name": "Ring 4 Torus",
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "e5b45527-ab45-4d56-ae6e-80bc4f84fe1f",
@@ -2742,26 +3583,23 @@ namespace {
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=4;torus=Ring 4 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at a)JSON",
-            R"JSON(ll - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "1f5f1dd9-8cfd-4592-ac6a-a75147c52d39",
@@ -2774,22 +3612,20 @@ namespace {
         "type": "Group",
         "name": "Ring 5",
         "layers": 1,
-        "matrix": [
-          0.9871905446052551,
-          9.313225746154785e-10,
-          -0.15954583883285522,
-          0.0,
-          -0.009528537280857563,
-          0.9982150197029114,
-          -0.058957867324352264,
-          0.0,
-          0.1592610478401184,
-          0.059722885489463806,
-          0.9854283928871155,
-          0.0,
+        "position": [
           10.0,
           3.4000000953674316,
-          4.0,
+          4.0
+        ],
+        "quaternion": [
+          -0.02977895177900791,
+          0.07999388873577118,
+          0.002390866866335273,
+          0.9963476061820984
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -2798,22 +3634,20 @@ namespace {
             "type": "Mesh",
             "name": "Ring 5 Torus",
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "5382c714-d148-4d97-bea9-6a79b4559486",
@@ -2827,25 +3661,24 @@ namespace {
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=5;torus=Ring 5 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is o)JSON",
+            R"JSON(n the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "geometry": "612b9658-0157-451c-8089-c5a6ce83cbd1",
@@ -2854,8 +3687,7 @@ namespace {
         ]
       },
       {
-        "uuid": "0014b523-2109-4729-9018-f555e94a81)JSON",
-            R"JSON(be",
+        "uuid": "0014b523-2109-4729-9018-f555e94a81be",
         "type": "Mesh",
         "name": "Beacon",
         "castShadow": true,
@@ -2864,22 +3696,20 @@ namespace {
           "scriptSource": "# Hover Arena - the scoreboard.\n#\n# The rings call scored() on this instance through\n# threepp.editor.script_from_object. There is no event bus: the instance IS\n# the API, so a method call is the message.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass Scoreboard:\n\n    rings = 5\n    light = \"Beacon Light\"\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.score = 0\n        self.clock = 0.0\n        self.done = False\n        material = obj.material\n        self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None\n        self.lamp = None\n        self.gates = []\n        if editor is None:\n            return\n        scene = editor.scene()\n        self.lamp = scene.get_object_by_name(self.light)\n        for i in range(self.rings):\n            gate = scene.get_object_by_name(\"Ring %d Gate\" % (i + 1))\n            instance = editor.script_from_object(gate)\n            if instance is not None:\n                self.gates.append(instance)\n        print(\"Hover Arena: 0/%d rings\" % self.rings, flush=True)\n\n    def scored(self, index: int, who: threepp.Object3D):\n        self.score += 1\n        print(\"Hover Arena: %d/%d rings (ring %d by %s)\"\n              % (self.score, self.rings, index, who.name if who is not None else \"?\"),\n              flush=True)\n        if self.score >= self.rings and not self.done:\n            self.done = True\n            print(\"Hover Arena: course complete - every ring taken.\", flush=True)\n            for gate in self.gates:\n                gate.celebrating = True\n\n    def update(self, dt: float):\n        self.clock += dt\n        share = float(self.score) / float(max(1, self.rings))\n        # Cyan while there is work left, gold once there is not. The beacon is\n        # the one thing in the scene that reads the score from across the arena.\n        cold = threepp.Color(0x25d6f0)\n        warm = threepp.Color(0xff9430)\n        tint = cold.clone().lerp(warm, share)\n        pulse = 0.5 + 0.5 * math.sin(self.clock * (2.0 + 4.0 * share))\n        level = (1.4 + 2.2 * share) * (0.75 + 0.45 * pulse)\n        if self.material is not None:\n            self.material.emissive = tint\n            self.material.emissive_intensity = level\n        if self.lamp is not None:\n            self.lamp.color = tint\n            self.lamp.intensity = 6.0 + 26.0 * share * (0.7 + 0.5 * pulse)\n"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
+        "position": [
           0.0,
           3.5,
-          -20.0,
+          -20.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "8b50b286-1690-4079-b87a-9df82e41eaa7",
@@ -2892,22 +3722,20 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -3.200000047683716,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "bfa68977-e1db-4a5e-b4fc-ddec43986b65",
@@ -2918,22 +3746,20 @@ namespace {
             "type": "PointLight",
             "name": "Beacon Light",
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               1.2000000476837158,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "color": 2479856,
@@ -2953,7 +3779,8 @@ namespace {
                 "type": "PerspectiveCamera",
                 "layers": 1,
                 "fov": 90.0,
-                "zoom": 1.0,
+        )JSON",
+            R"JSON(        "zoom": 1.0,
                 "near": 0.5,
                 "far": 500.0,
                 "focus": 10.0,
@@ -2973,22 +3800,20 @@ namespace {
           "generated": "1"
         },
         "layers": 1,
-        "matrix": [
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0
         ],
         "children": [
@@ -3001,23 +3826,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              44.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              44.0,
-              0.0,
+            "position": [
               0.0,
               -0.5,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              44.0,
+              1.0,
+              44.0
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "190b2087-bc84-41dc-96e5-b37b7c2de709"
@@ -3032,23 +3855,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.800000011920929,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              7.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              45.599998474121094,
-              0.0,
+            "position": [
               22.399999618530273,
               3.5,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.800000011920929,
+              7.0,
+              45.599998474121094
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "068929a5-9583-4877-9c71-a7db070599de"
@@ -3059,27 +3880,24 @@ namespace {
             "name": "Arena Kerb 1",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3499999940395355,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.18000000715255737,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              44.0,
-              0.0,
+            "position": [
               21.799999237060547,
               0.09000000357627869,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
             ],
+            "scale": [
+              0.3499999940395355,
+              0.18000000715255737,
+              44.0
+            ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
- )JSON",
-            R"JSON(           "material": "8eaa0cc4-6db0-4a28-a45c-9d24d2622e28"
+            "material": "8eaa0cc4-6db0-4a28-a45c-9d24d2622e28"
           },
           {
             "uuid": "c546a34e-301b-41f0-9c89-227c3748462a",
@@ -3091,23 +3909,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.800000011920929,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              7.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              45.599998474121094,
-              0.0,
+            "position": [
               -22.399999618530273,
               3.5,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.800000011920929,
+              7.0,
+              45.599998474121094
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "068929a5-9583-4877-9c71-a7db070599de"
@@ -3118,23 +3934,21 @@ namespace {
             "name": "Arena Kerb 2",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3499999940395355,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.18000000715255737,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              44.0,
-              0.0,
+            "position": [
               -21.799999237060547,
               0.09000000357627869,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.3499999940395355,
+              0.18000000715255737,
+              44.0
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "8eaa0cc4-6db0-4a28-a45c-9d24d2622e28"
@@ -3149,23 +3963,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              45.599998474121094,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              7.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.800000011920929,
-              0.0,
+            "position": [
               0.0,
               3.5,
-              22.399999618530273,
+              22.399999618530273
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              45.599998474121094,
+              7.0,
+              0.800000011920929
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "068929a5-9583-4877-9c71-a7db070599de"
@@ -3176,23 +3988,21 @@ namespace {
             "name": "Arena Kerb 3",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              44.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.18000000715255737,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.3499999940395355,
-              0.0,
+            "position": [
               0.0,
               0.09000000357627869,
-              21.799999237060547,
+              21.799999237060547
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              44.0,
+              0.18000000715255737,
+              0.3499999940395355
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "8eaa0cc4-6db0-4a28-a45c-9d24d2622e28"
@@ -3207,23 +4017,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              45.599998474121094,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              7.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.800000011920929,
-              0.0,
+            "position": [
               0.0,
               3.5,
-              -22.399999618530273,
+              -22.399999618530273
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              45.599998474121094,
+              7.0,
+              0.800000011920929
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "068929a5-9583-4877-9c71-a7db070599de"
@@ -3234,23 +4042,21 @@ namespace {
             "name": "Arena Kerb 4",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              44.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.18000000715255737,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.3499999940395355,
-              0.0,
+            "position": [
               0.0,
               0.09000000357627869,
-              -21.799999237060547,
+              -21.799999237060547
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              44.0,
+              0.18000000715255737,
+              0.3499999940395355
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "8eaa0cc4-6db0-4a28-a45c-9d24d2622e28"
@@ -3261,27 +4067,26 @@ namespace {
             "name": "Pillar 1",
             "castShadow": true,
             "receiveShadow": true,
-            "userData": {
+           )JSON",
+            R"JSON( "userData": {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.5564333200454712,
-              0.0,
-              -1.1357945203781128,
-              0.0,
-              0.0,
-              4.65370512008667,
-              0.0,
-              0.0,
-              1.0797570943832397,
-              0.0,
-              0.5289801955223083,
-              0.0,
+            "position": [
               -5.902824401855469,
               2.326852560043335,
-              -18.158437728881836,
-              1.0
+              -18.158437728881836
+            ],
+            "quaternion": [
+              0.0,
+              0.5291749835014343,
+              0.0,
+              0.8485127091407776
+            ],
+            "scale": [
+              1.264771580696106,
+              4.65370512008667,
+              1.2023707628250122
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3292,23 +4097,21 @@ namespace {
             "name": "Pillar 1 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.5675619840621948,
-              0.0,
-              -1.158510446548462,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              1.1013522148132324,
-              0.0,
-              0.5395597815513611,
-              0.0,
+            "position": [
               -5.902824401855469,
               3.7537050247192383,
-              -18.158437728881836,
-              1.0
+              -18.158437728881836
+            ],
+            "quaternion": [
+              0.0,
+              0.5291749835014343,
+              0.0,
+              0.8485127091407776
+            ],
+            "scale": [
+              1.2900670766830444,
+              0.10000000149011612,
+              1.226418137550354
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3323,23 +4126,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.322852611541748,
-              0.0,
-              -0.006010463461279869,
-              0.0,
-              0.0,
-              6.731571674346924,
-              0.0,
-              0.0,
-              0.008513176813721657,
-              0.0,
-              1.8736788034439087,
-              0.0,
+            "position": [
               -7.46661376953125,
               3.365785837173462,
-              13.56879997253418,
-              1.0
+              13.56879997253418
+            ],
+            "quaternion": [
+              0.0,
+              0.0022717637475579977,
+              0.0,
+              0.9999974370002747
+            ],
+            "scale": [
+              1.3228662014007568,
+              6.731571674346924,
+              1.873698115348816
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3350,24 +4151,21 @@ namespace {
             "name": "Pillar 2 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.3493095636367798,
-              0.0,
-              -0.00613067)JSON",
-            R"JSON(2991275787,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.008683440275490284,
-              0.0,
-              1.9111523628234863,
-              0.0,
+            "position": [
               -7.46661376953125,
               5.831571578979492,
-              13.56879997253418,
-              1.0
+              13.56879997253418
+            ],
+            "quaternion": [
+              0.0,
+              0.0022717637475579977,
+              0.0,
+              0.9999974370002747
+            ],
+            "scale": [
+              1.3493235111236572,
+              0.10000000149011612,
+              1.9111720323562622
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3382,23 +4180,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.9221632480621338,
-              0.0,
-              -0.8419770002365112,
-              0.0,
-              0.0,
-              8.542205810546875,
-              0.0,
-              0.0,
-              0.5146014094352722,
-              0.0,
-              1.1747921705245972,
-              0.0,
+            "position": [
               -12.335973739624023,
               4.2711029052734375,
-              2.516740083694458,
-              1.0
+              2.516740083694458
+            ],
+            "quaternion": [
+              0.0,
+              0.2049671858549118,
+              0.0,
+              0.9787688255310059
+            ],
+            "scale": [
+              2.098484516143799,
+              8.542205810546875,
+              1.2825565338134766
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3409,23 +4205,21 @@ namespace {
             "name": "Pillar 3 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.9606064558029175,
-              0.0,
-              -0.8588165044784546,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.5248934626579285,
-              0.0,
-              1.1982879638671875,
-              0.0,
+            "position": [
               -12.335973739624023,
               7.642205715179443,
-              2.516740083694458,
-              1.0
+              2.516740083694458
+            ],
+            "quaternion": [
+              0.0,
+              0.2049671858549118,
+              0.0,
+              0.9787688255310059
+            ],
+            "scale": [
+              2.140454053878784,
+              0.10000000149011612,
+              1.308207631111145
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3440,23 +4234,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -0.7654961347579956,
-              0.0,
-              -1.9885936975479126,
-              0.0,
-              0.0,
-              5.081300258636475,
-              0.0,
-              0.0,
-              1.9549267292022705,
-              0.0,
-              -0.7525362372398376,
-              0.0,
+            "position": [
               -15.567715644836426,
               2.5406501293182373,
-              8.87553882598877,
-              1.0
+              8.87553882598877
+            ],
+            "quaternion": [
+              0.0,
+              0.8243924379348755,
+              0.0,
+              0.5660186409950256
+            ],
+            "scale": [
+              2.130842447280884,
+              5.081300258636475,
+              2.0947670936584473
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3467,23 +4259,21 @@ namespace {
             "name": "Pillar 4 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              -0.7808060646057129,
-              0.0,
-              -2.0283656120300293,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              1.9940252304077148,
-              0.0,
-              -0.7675869464874268,
-              0.0,
+            "position": [
               -15.567715644836426,
               4.181300163269043,
-              8.87553882598877,
-              1.0
+              8.87553882598877
+            ],
+            "quaternion": [
+              0.0,
+              0.8243924379348755,
+              0.0,
+              0.5660186409950256
+            ],
+            "scale": [
+              2.17345929145813,
+              0.10000000149011612,
+              2.136662483215332
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3498,23 +4288,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.48019683361053467,
-              0.0,
-              -1.3005996942520142,
-              0.0,
-              0.0,
-              5.950031757354736,
-              0.0,
-              0.0,
-              1.7906192541122437,
-              0.0,
-              0.6611178517341614,
-              0.0,
+            "position": [
               -10.846109390258789,
               2.975015878677368,
-              -12.253166198730469,
-              1.0
+              -12.253166198730469
+            ],
+            "quaternion": [
+              0.0,
+              0.5716823935508728,
+              0.0,
+              0.8204750418663025
+            ],
+            "scale": [
+              1.386415719985962,
+              5.950031757354736,
+              1.9087677001953125
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3525,23 +4313,22 @@ namespace {
             "name": "Pillar 5 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.4898007810115814,
-              0.0,
-              -1.3266117572784424,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              1.8264316320419312,
-              0.0,
-              0.6743402481079102,
-              0.0,
+            "position": [
               -10.846109390258789,
               5.050031661987305,
-              -12.253166198730469,
-              1.0
+              -12.253166198730469
+            ],
+            "quaternion": [
+              0.0,
+              0.5716823935508728,
+              0.0,
+              0.8204750418663025
+            ],
+            "scale": [
+)JSON",
+            R"JSON(              1.4141440391540527,
+              0.10000000149011612,
+              1.9469430446624756
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3556,23 +4343,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.630272626876831,
-              0.0,
-              -0.6863600015640259,
-              0.0,
-              0.0,
-              3.6467504501342773,
-              0.0,
-              0.0,
-              0.427643358707428,
-              0.0,
-              1.015757441520691,
-              0.0,
+            "position": [
               -17.338464736938477,
               1.8233752250671387,
-              4.495255470275879,
-              1.0
+              4.495255470275879
+            ],
+            "quaternion": [
+              0.0,
+              0.19792719185352325,
+              0.0,
+              0.9802167415618896
+            ],
+            "scale": [
+              1.7688637971878052,
+              3.6467504501342773,
+              1.1021080017089844
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3583,23 +4368,21 @@ namespace {
             "name": "Pillar 6 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.662878155708313,
-              0.0,
-              -0.7000872492790222,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.4361962378025055,
-              0.0,
-              1.0360726118087769,
-              0.0,
+            "position": [
               -17.338464736938477,
               2.746750593185425,
-              4.495255470275879,
-              1.0
+              4.495255470275879
+            ],
+            "quaternion": [
+              0.0,
+              0.19792719185352325,
+              0.0,
+              0.9802167415618896
+            ],
+            "scale": [
+              1.8042410612106323,
+              0.10000000149011612,
+              1.1241501569747925
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3614,24 +4397,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.0326670408248901,
-              0.0,
-    )JSON",
-            R"JSON(          -0.3852808177471161,
-              0.0,
-              0.0,
-              6.156509876251221,
-              0.0,
-              0.0,
-              0.40481480956077576,
-              0.0,
-              1.0850239992141724,
-              0.0,
+            "position": [
               14.998147964477539,
               3.0782549381256104,
-              4.310395240783691,
-              1.0
+              4.310395240783691
+            ],
+            "quaternion": [
+              0.0,
+              0.17760169506072998,
+              0.0,
+              0.9841024279594421
+            ],
+            "scale": [
+              1.1021989583969116,
+              6.156509876251221,
+              1.1580811738967896
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3642,23 +4422,21 @@ namespace {
             "name": "Pillar 7 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0533204078674316,
-              0.0,
-              -0.3929864168167114,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.4129111170768738,
-              0.0,
-              1.106724500656128,
-              0.0,
+            "position": [
               14.998147964477539,
               5.256509780883789,
-              4.310395240783691,
-              1.0
+              4.310395240783691
+            ],
+            "quaternion": [
+              0.0,
+              0.17760169506072998,
+              0.0,
+              0.9841024279594421
+            ],
+            "scale": [
+              1.124242901802063,
+              0.10000000149011612,
+              1.181242823600769
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3673,23 +4451,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.8013988733291626,
-              0.0,
-              -0.8498823046684265,
-              0.0,
-              0.0,
-              4.360202312469482,
-              0.0,
-              0.0,
-              0.8851827383041382,
-              0.0,
-              1.8762211799621582,
-              0.0,
+            "position": [
               17.768983840942383,
               2.180101156234741,
-              -3.5981175899505615,
-              1.0
+              -3.5981175899505615
+            ],
+            "quaternion": [
+              0.0,
+              0.2186327427625656,
+              0.0,
+              0.9758071899414063
+            ],
+            "scale": [
+              1.9918177127838135,
+              4.360202312469482,
+              2.0745491981506348
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3700,23 +4476,21 @@ namespace {
             "name": "Pillar 8 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.8374269008636475,
-              0.0,
-              -0.8668799996376038,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.9028864502906799,
-              0.0,
-              1.913745641708374,
-              0.0,
+            "position": [
               17.768983840942383,
               3.4602019786834717,
-              -3.5981175899505615,
-              1.0
+              -3.5981175899505615
+            ],
+            "quaternion": [
+              0.0,
+              0.2186327427625656,
+              0.0,
+              0.9758071899414063
+            ],
+            "scale": [
+              2.031654119491577,
+              0.10000000149011612,
+              2.1160402297973633
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3731,23 +4505,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.363610863685608,
-              0.0,
-              -1.1189733743667603,
-              0.0,
-              0.0,
-              8.470634460449219,
-              0.0,
-              0.0,
-              1.3944191932678223,
-              0.0,
-              1.6992765665054321,
-              0.0,
+            "position": [
               10.915146827697754,
               4.235317230224609,
-              9.06758975982666,
-              1.0
+              9.06758975982666
+            ],
+            "quaternion": [
+              0.0,
+              0.33686649799346924,
+              0.0,
+              0.9415524005889893
+            ],
+            "scale": [
+              1.7639546394348145,
+              8.470634460449219,
+              2.1981687545776367
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3758,23 +4530,21 @@ namespace {
             "name": "Pillar 9 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.390882968902588,
-              0.0,
-              -1.1413527727127075,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              1.4223076105117798,
-              0.0,
-              1.7332621812820435,
-              0.0,
+            "position": [
               10.915146827697754,
               7.570634365081787,
-              9.06758975982666,
-              1.0
+              9.06758975982666
+            ],
+            "quaternion": [
+              0.0,
+              0.33686649799346924,
+              0.0,
+              0.9415524005889893
+            ],
+            "scale": [
+              1.7992336750030518,
+              0.10000000149011612,
+              2.2421321868896484
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3789,50 +4559,47 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -1.8645291328430176,
-              0.0,
-              -0.2782526910305023,
-              0.0,
-              0.0,
-              6.810593605041504,
-              0.0,
-              0.0,
-              0.22791877388954163,
-              0.0,
-              -1.5272490978240967,
-              0.0,
+            "position": [
               -10.262965202331543,
               3.405296802520752,
-              9.310735702514648,
-              1.0
+              9.310735702514648
+            ],
+            "quaternion": [
+              0.0,
+              0.9972580075263977,
+              0.0,
+              0.07400305569171906
+            ],
+            "scale": [
+              1.8851773738861084,
+              6.810593605041504,
+              1.5441622734069824
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
           },
           {
-            "uuid": "923efb4f-638d-4d24-888d-2162bb8e7913",
+            "uuid": "9)JSON",
+            R"JSON(23efb4f-638d-4d24-888d-2162bb8e7913",
             "type": "Mesh",
             "name": "Pillar 10 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              -1.9018198251724243,
-              0.0,
-              -0.28381776809692383,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.23247714340686798,
-              0.0,
-              -1.5577940940856934,
-              0.0,
+            "position": [
               -10.262965202331543,
               5.910593509674072,
-              9.310735702514648,
-              1.0
+              9.310735702514648
+            ],
+            "quaternion": [
+              0.0,
+              0.9972580075263977,
+              0.0,
+              0.07400305569171906
+            ],
+            "scale": [
+              1.922881007194519,
+              0.10000000149011612,
+              1.5750454664230347
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3847,23 +4614,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -1.1022305488586426,
-              0.0,
-              -0.7022807598114014,
-              0.0,
-              0.0,
-              5.779395580291748,
-              0.0,
-              0.0,
-              0.7739059329032898,
-              0.0,
-              -1.214646339416504,
-              0.0,
+            "position": [
               2.1809661388397217,
               2.889697790145874,
-              18.792898178100586,
-              1.0
+              18.792898178100586
+            ],
+            "quaternion": [
+              0.0,
+              0.960042417049408,
+              0.0,
+              0.27985456585884094
+            ],
+            "scale": [
+              1.306946873664856,
+              5.779395580291748,
+              1.4402415752410889
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3874,24 +4639,21 @@ namespace {
             "name": "Pillar 11 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              -1.1242750883102417,
-              0.0,
-              -0.7163263559341431,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-    )JSON",
-            R"JSON(          0.7893840670585632,
-              0.0,
-              -1.2389392852783203,
-              0.0,
+            "position": [
               2.1809661388397217,
               4.879395484924316,
-              18.792898178100586,
-              1.0
+              18.792898178100586
+            ],
+            "quaternion": [
+              0.0,
+              0.960042417049408,
+              0.0,
+              0.27985456585884094
+            ],
+            "scale": [
+              1.3330857753753662,
+              0.10000000149011612,
+              1.4690464735031128
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3906,23 +4668,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.5194981098175049,
-              0.0,
-              -1.8179267644882202,
-              0.0,
-              0.0,
-              6.469147682189941,
-              0.0,
-              0.0,
-              1.2023215293884277,
-              0.0,
-              0.3435802757740021,
-              0.0,
+            "position": [
               16.663745880126953,
               3.2345738410949707,
-              -8.744040489196777,
-              1.0
+              -8.744040489196777
+            ],
+            "quaternion": [
+              0.0,
+              0.6021771430969238,
+              0.0,
+              0.7983624935150146
+            ],
+            "scale": [
+              1.8906972408294678,
+              6.469147682189941,
+              1.2504496574401855
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3933,23 +4693,21 @@ namespace {
             "name": "Pillar 12 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.5298880934715271,
-              0.0,
-              -1.8542852401733398,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              1.2263679504394531,
-              0.0,
-              0.35045188665390015,
-              0.0,
+            "position": [
               16.663745880126953,
               5.56914758682251,
-              -8.744040489196777,
-              1.0
+              -8.744040489196777
+            ],
+            "quaternion": [
+              0.0,
+              0.6021771430969238,
+              0.0,
+              0.7983624935150146
+            ],
+            "scale": [
+              1.928511142730713,
+              0.10000000149011612,
+              1.2754586935043335
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -3964,23 +4722,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.49860551953315735,
-              0.0,
-              -1.8542784452438354,
-              0.0,
-              0.0,
-              5.101361274719238,
-              0.0,
-              0.0,
-              1.6502094268798828,
-              0.0,
-              0.44373247027397156,
-              0.0,
+            "position": [
               -17.23186492919922,
               2.550680637359619,
-              -5.379762172698975,
-              1.0
+              -5.379762172698975
+            ],
+            "quaternion": [
+              0.0,
+              0.6084115505218506,
+              0.0,
+              0.7936216592788696
+            ],
+            "scale": [
+              1.92014479637146,
+              5.101361274719238,
+              1.708827018737793
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -3991,23 +4747,21 @@ namespace {
             "name": "Pillar 13 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.5085776448249817,
-              0.0,
-              -1.8913639783859253,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              1.6832135915756226,
-              0.0,
-              0.45260709524154663,
-              0.0,
+            "position": [
               -17.23186492919922,
               4.201361179351807,
-              -5.379762172698975,
-              1.0
+              -5.379762172698975
+            ],
+            "quaternion": [
+              0.0,
+              0.6084115505218506,
+              0.0,
+              0.7936216592788696
+            ],
+            "scale": [
+              1.9585477113723755,
+              0.10000000149011612,
+              1.743003487586975
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -4022,23 +4776,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -1.924551010131836,
-              0.0,
-              -0.9170039892196655,
-              0.0,
-              0.0,
-              7.566699028015137,
-              0.0,
-              0.0,
-              0.8902187347412109,
-              0.0,
-              -1.8683357238769531,
-              0.0,
+            "position": [
               -12.14051628112793,
               3.7833495140075684,
-              14.635796546936035,
-              1.0
+              14.635796546936035
+            ],
+            "quaternion": [
+              0.0,
+              0.9753871560096741,
+              0.0,
+              0.22049930691719055
+            ],
+            "scale": [
+              2.1318516731262207,
+              7.566699028015137,
+              2.0695812702178955
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4049,23 +4801,21 @@ namespace {
             "name": "Pillar 14 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              -1.9630420207977295,
-              0.0,
-              -0.9353440999984741,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.9080231189727783,
-              0.0,
-              -1.9057024717330933,
-              0.0,
+            "position": [
               -12.14051628112793,
               6.666698932647705,
-              14.635796546936035,
-              1.0
+              14.635796546936035
+            ],
+            "quaternion": [
+              0.0,
+              0.9753871560096741,
+              0.0,
+              0.22049930691719055
+            ],
+            "scale": [
+              2.1744887828826904,
+              0.10000000149011612,
+              2.1109728813171387
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -4080,23 +4830,22 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -0.9280193448066711,
-              0.0,
-              -1.528551459312439,
-              0.0,
-              0.0,
-              4.181188106536865,
-              0.0,
-              0.0,
-              1.6581929922103882,
-              0.0,
-              -1.0067278146743774,
-              0.0,
+            "position": [
               -13.80178451538086,
               2.0905940532684326,
-              -1.8067920207977295,
-              1.0
+              -1.8067920207977)JSON",
+            R"JSON(295
+            ],
+            "quaternion": [
+              0.0,
+              0.8714832067489624,
+              0.0,
+              0.49042531847953796
+            ],
+            "scale": [
+              1.7882084846496582,
+              4.181188106536865,
+              1.9398725032806396
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4107,23 +4856,21 @@ namespace {
             "name": "Pillar 15 Band",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              -0.9465796947479248,
-              0.0,
-              -1.5591224431991577,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              1.691356897354126,
-              0.0,
-              -1.0268622636795044,
-              0.0,
+            "position": [
               -13.80178451538086,
               3.2811877727508545,
-              -1.8067920207977295,
-              1.0
+              -1.8067920207977295
+            ],
+            "quaternion": [
+              0.0,
+              0.8714832067489624,
+              0.0,
+              0.49042531847953796
+            ],
+            "scale": [
+              1.8239725828170776,
+              0.10000000149011612,
+              1.9786698818206787
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "6ae844dc-a22c-405d-b8bd-5671a002122e"
@@ -4134,25 +4881,22 @@ namespace {
             "name": "Start Pad",
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              4.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              4.0,
-              0.0,
+            "position": [
               0.0,
               0.05000000074505806,
-              14.0,
+              14.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
-)JSON",
-            R"JSON(            ],
+            ],
+            "scale": [
+              4.0,
+              0.10000000149011612,
+              4.0
+            ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "a585be85-72d5-4175-b6fe-a51190cda04c"
           },
@@ -4166,23 +4910,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.6733859181404114,
-              0.0,
-              -0.794296145439148,
-              0.0,
-              0.0,
-              1.0413236618041992,
-              0.0,
-              0.0,
-              0.828352689743042,
-              0.0,
-              0.702258288860321,
-              0.0,
+            "position": [
               -6.877057075500488,
               0.5206618309020996,
-              -12.752528190612793,
-              1.0
+              -12.752528190612793
+            ],
+            "quaternion": [
+              0.0,
+              0.42031925916671753,
+              0.0,
+              0.9073762893676758
+            ],
+            "scale": [
+              1.0413236618041992,
+              1.0413236618041992,
+              1.0859718322753906
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4197,23 +4939,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.3415510654449463,
-              0.0,
-              -0.9713742733001709,
-              0.0,
-              0.0,
-              1.029672384262085,
-              0.0,
-              0.0,
-              0.9734355807304382,
-              0.0,
-              0.34227585792541504,
-              0.0,
+            "position": [
               -14.160256385803223,
               0.5148361921310425,
-              9.233094215393066,
-              1.0
+              9.233094215393066
+            ],
+            "quaternion": [
+              0.0,
+              0.5780534148216248,
+              0.0,
+              0.815998911857605
+            ],
+            "scale": [
+              1.029672384262085,
+              1.029672384262085,
+              1.0318573713302612
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4228,23 +4968,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.0077065518125891685,
-              0.0,
-              -1.3896442651748657,
-              0.0,
-              0.0,
-              1.3896656036376953,
-              0.0,
-              0.0,
-              1.3727922439575195,
-              0.0,
-              0.007613094989210367,
-              0.0,
+            "position": [
               -10.881277084350586,
               0.6948328018188477,
-              -0.601351797580719,
-              1.0
+              -0.601351797580719
+            ],
+            "quaternion": [
+              0.0,
+              0.705143392086029,
+              0.0,
+              0.709064781665802
+            ],
+            "scale": [
+              1.3896656036376953,
+              1.3896656036376953,
+              1.3728132247924805
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4259,23 +4997,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              0.901364803314209,
-              0.0,
-              -0.07867500185966492,
-              0.0,
-              0.0,
-              0.9047918319702148,
-              0.0,
-              0.0,
-              0.08113552629947662,
-              0.0,
-              0.9295545220375061,
-              0.0,
+            "position": [
               -9.057148933410645,
               0.4523959159851074,
-              8.036529541015625,
-              1.0
+              8.036529541015625
+            ],
+            "quaternion": [
+              0.0,
+              0.043518081307411194,
+              0.0,
+              0.9990526437759399
+            ],
+            "scale": [
+              0.9047918319702148,
+              0.9047918319702148,
+              0.9330887198448181
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4290,23 +5026,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.3103896379470825,
-              0.0,
-              -0.9647569060325623,
-              0.0,
-              0.0,
-              1.6272298097610474,
-              0.0,
-              0.0,
-              1.042593240737915,
-              0.0,
-              1.4161115884780884,
-              0.0,
+            "position": [
               9.913952827453613,
               0.8136149048805237,
-              -11.480022430419922,
-              1.0
+              -11.480022430419922
+            ],
+            "quaternion": [
+              0.0,
+              0.3120187520980835,
+              0.0,
+              0.9500759243965149
+            ],
+            "scale": [
+              1.6272298097610474,
+              1.6272298097610474,
+              1.7585142850875854
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4321,23 +5055,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -1.5015987157821655,
-              0.0,
-              -0.034611862152814865,
-              0.0,
-              0.0,
-              1.5019975900650024,
-              0.0,
-              0.0,
-              0.029596304520964622,
-              0.0,
-              -1.2840039730072021,
-              0.0,
+            "position": [
               -16.445039749145508,
               0.7509987950325012,
-              -2.497955799102783,
-              1.0
+              -2.497955799102783
+            ],
+            "quaternion": [
+              0.0,
+              0.9999336004257202,
+              0.0,
+              0.011522709392011166
+            ],
+            "scale": [
+              1.5019975900650024,
+              1.5019975900650024,
+              1.2843451499938965
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4352,23 +5084,22 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -1.4945547580718994,
-              0.0,
-              -0.5980647206306458,
-              0.0,
-              0.0,
-              1.6097750663757324,
-              0.0,
-              0.0,
-              0.49950993061065674,
-              0.0,
-              -1.2482677698135376,
-              0.0,
+            "position": [
               7.153808116912842,
               0.8048875331878662,
-              7.529664993286133,
-              1.0
+              7.529664993286133
+            ],
+            "quaternion": [
+     )JSON",
+            R"JSON(         0.0,
+              0.9819431304931641,
+              0.0,
+              0.1891762614250183
+            ],
+            "scale": [
+              1.6097750663757324,
+              1.6097750663757324,
+              1.34450101852417
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4383,23 +5114,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              -1.3558390140533447,
-              0.0,
-              -0.7553966045379639,
-              0.0,
-              0.0,
-              1.5520708560943604,
-              0.0,
-              0.0,
-              0.756072461605072,
-              0.0,
-              -1.357051968574524,
-              0.0,
+            "position": [
               12.42737865447998,
               0.7760354280471802,
-              10.913208961486816,
-              1.0
+              10.913208961486816
+            ],
+            "quaternion": [
+              0.0,
+              0.9678759574890137,
+              0.0,
+              0.25142809748649597
+            ],
+            "scale": [
+              1.5520708560943604,
+              1.5520708560943604,
+              1.5534594058990479
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"
@@ -4408,30 +5137,27 @@ namespace {
             "uuid": "b2acaaa8-75af-4dfb-b030-73c828f553f3",
             "type": "Mesh",
             "name": "Crate 9",
-)JSON",
-            R"JSON(            "castShadow": true,
+            "castShadow": true,
             "receiveShadow": true,
             "userData": {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
-            "matrix": [
-              1.0173490047454834,
-              0.0,
-              -0.7281159162521362,
-              0.0,
-              0.0,
-              1.2510602474212646,
-              0.0,
-              0.0,
-              0.8410658240318298,
-              0.0,
-              1.1751666069030762,
-              0.0,
+            "position": [
               -11.382733345031738,
               0.6255301237106323,
-              -13.891948699951172,
-              1.0
+              -13.891948699951172
+            ],
+            "quaternion": [
+              0.0,
+              0.30562275648117065,
+              0.0,
+              0.952152669429779
+            ],
+            "scale": [
+              1.2510602474212646,
+              1.2510602474212646,
+              1.4451326131820679
             ],
             "geometry": "52939566-3ecb-4aa8-ac99-51c762d00d43",
             "material": "434eaf3a-becf-4538-a822-a4ad76e4500c"

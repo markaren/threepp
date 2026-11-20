@@ -340,6 +340,42 @@ namespace {
         return json::array({noNegativeZero(v.x), noNegativeZero(v.y)});
     }
 
+    json toArray(const Vector3& v) {
+
+        return json::array({noNegativeZero(v.x), noNegativeZero(v.y), noNegativeZero(v.z)});
+    }
+
+    // x, y, z, w: the order of three.js' Quaternion.fromArray
+    json toArray(const Quaternion& q) {
+
+        return json::array({noNegativeZero(q.x), noNegativeZero(q.y), noNegativeZero(q.z), noNegativeZero(q.w)});
+    }
+
+    // A node's placement: "position", "quaternion" and "scale", the keys
+    // three.js' ObjectLoader reads for a node that has no "matrix". They are
+    // the node's own floats, so a load followed by a save writes the same
+    // text. A matrix does not: composed from the three and decomposed again on
+    // load it gives other floats (a scale of 0.99999994 after a quarter turn),
+    // and a document written as matrices changed on every save after a load
+    // (2026-11-20: 33 of the 88 nodes of the Hover Arena example on the first
+    // re-save, 22 on the second, 19 on the third).
+    //
+    // A node whose matrix is authoritative (matrixAutoUpdate off) is written
+    // as that matrix, which three.js' ObjectLoader also reads.
+    // Returns whether the matrix form was written.
+    bool writeTransform(json& out, const Object3D& object) {
+
+        if (!object.matrixAutoUpdate) {
+            out["matrix"] = toArray(*object.matrix);
+            return true;
+        }
+
+        out["position"] = toArray(object.position);
+        out["quaternion"] = toArray(object.quaternion);
+        out["scale"] = toArray(object.scale);
+        return false;
+    }
+
     unsigned int hex(const Color& c) {
 
         return c.getHex();
@@ -1327,8 +1363,7 @@ namespace {
             entry["i"] = i;
             entry["name"] = node.name;
 
-            if (node.matrixAutoUpdate) node.updateMatrix();
-            entry["matrix"] = toArray(*node.matrix);
+            writeTransform(entry, node);
 
             if (!node.visible) entry["visible"] = false;
             if (node.castShadow) entry["castShadow"] = true;
@@ -1564,9 +1599,7 @@ namespace {
         data["layers"] = object.layers.mask();
 
         if (includeMatrix) {
-            if (object.matrixAutoUpdate) object.updateMatrix();
-            data["matrix"] = toArray(*object.matrix);
-            if (!object.matrixAutoUpdate) data["matrixAutoUpdate"] = false;
+            if (writeTransform(data, object)) data["matrixAutoUpdate"] = false;
         }
 
         // ---- splat cloud
@@ -1832,8 +1865,7 @@ std::string ObjectExporter::write(Object3D& object, const ObjectExporterOptions&
         objectJson["type"] = "Object3D";
         if (!object.name.empty()) objectJson["name"] = object.name;
         objectJson["layers"] = object.layers.mask();
-        if (object.matrixAutoUpdate) object.updateMatrix();
-        objectJson["matrix"] = toArray(*object.matrix);
+        writeTransform(objectJson, object);
 
     } else {
 

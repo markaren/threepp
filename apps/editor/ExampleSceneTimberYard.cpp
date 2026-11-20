@@ -7191,6 +7191,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7198,6 +7230,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7229,6 +7263,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7255,6 +7291,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7262,6 +7330,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7293,6 +7363,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7319,6 +7391,39 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+     )JSON",
+            R"JSON( ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7326,6 +7431,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7357,6 +7464,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7382,8 +7491,39 @@ namespace {
       "threeppDetailRepeat": 0.800000011920929,
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
-      "threeppDetailRoug)JSON",
-            R"JSON(hStrength": 0.6000000238418579,
+      "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7391,6 +7531,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7422,6 +7564,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7448,6 +7592,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7455,6 +7631,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7486,6 +7664,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7512,6 +7692,39 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      ")JSON",
+            R"JSON(threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7519,6 +7732,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7550,6 +7765,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7576,6 +7793,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7583,6 +7832,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7614,6 +7865,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7641,6 +7894,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7648,6 +7933,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7671,8 +7958,7 @@ namespace {
       "stencilRef": 0,
       "stencilFuncMask": 255,
       "stencilFail": 7680,
-     )JSON",
-            R"JSON( "stencilZFail": 7680,
+      "stencilZFail": 7680,
       "stencilZPass": 7680,
       "polygonOffset": false,
       "polygonOffsetFactor": 0.0,
@@ -7680,6 +7966,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true,
@@ -7707,6 +7995,39 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "thr)JSON",
+            R"JSON(eeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7714,6 +8035,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7745,6 +8068,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7771,6 +8096,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7778,6 +8135,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7809,6 +8168,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7835,6 +8196,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7842,6 +8235,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7873,6 +8268,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7899,6 +8296,39 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+       )JSON",
+            R"JSON( 1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7906,6 +8336,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -7937,6 +8369,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -7961,9 +8395,40 @@ namespace {
       "displacementBias": 0.0,
       "threeppDetailRepeat": 0.800000011920929,
       "threeppDetailStrength": 1.0,
-     )JSON",
-            R"JSON( "threeppDetailNormalScale": 1.0,
+      "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -7971,6 +8436,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8002,6 +8469,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8028,6 +8497,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8035,6 +8536,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8066,6 +8569,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8092,13 +8597,48 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
-      "threeppTranslucencyColor": 16777215,
+)JSON",
+            R"JSON(      "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
       "refractionRatio": 0.9800000190734863,
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8130,6 +8670,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8156,6 +8698,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8163,6 +8737,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8194,6 +8770,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8220,6 +8798,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8227,6 +8837,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8251,14 +8863,15 @@ namespace {
       "stencilFuncMask": 255,
       "stencilFail": 7680,
       "stencilZFail": 7680,
- )JSON",
-            R"JSON(     "stencilZPass": 7680,
+      "stencilZPass": 7680,
       "polygonOffset": false,
       "polygonOffsetFactor": 0.0,
       "polygonOffsetUnits": 0.0,
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8285,13 +8898,48 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
       "refractionRatio": 0.9800000190734863,
       "wireframe": false,
       "wireframeLinewidth": 1.0,
-      "flatShading": false,
+      "flatShading")JSON",
+            R"JSON(: false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8323,6 +8971,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8349,6 +8999,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8356,6 +9038,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8387,6 +9071,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8413,6 +9099,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8420,6 +9138,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8451,6 +9171,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8477,6 +9199,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8484,12 +9238,15 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
       },
       "blending": 1,
-      "side": 0,
+      "side":)JSON",
+            R"JSON( 0,
       "vertexColors": false,
       "opacity": 1.0,
       "transparent": false,
@@ -8515,6 +9272,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8539,9 +9298,40 @@ namespace {
       "displacementBias": 0.0,
       "threeppDetailRepeat": 0.800000011920929,
       "threeppDetailStrength": 1.0,
-      "threeppDetailNormalScale": 1.)JSON",
-            R"JSON(0,
+      "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8549,6 +9339,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8580,6 +9372,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8606,6 +9400,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8613,6 +9439,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8644,6 +9472,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8670,6 +9500,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8677,6 +9539,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8690,7 +9554,8 @@ namespace {
       "blendSrc": 204,
       "blendDst": 205,
       "blendEquation": 100,
-      "depthFunc": 3,
+      )JSON",
+            R"JSON("depthFunc": 3,
       "depthTest": true,
       "depthWrite": true,
       "colorWrite": true,
@@ -8708,6 +9573,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8734,6 +9601,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8741,6 +9640,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8772,6 +9673,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8798,6 +9701,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8805,6 +9740,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8829,14 +9766,15 @@ namespace {
       "stencilFuncMask": 255,
       "stencilFail": 7680,
       "stencilZFail": 7680,
-      "stencilZPass)JSON",
-            R"JSON(": 7680,
+      "stencilZPass": 7680,
       "polygonOffset": false,
       "polygonOffsetFactor": 0.0,
       "polygonOffsetUnits": 0.0,
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8863,6 +9801,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8870,6 +9840,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8890,7 +9862,8 @@ namespace {
       "stencilWrite": false,
       "stencilWriteMask": 255,
       "stencilFunc": 519,
-      "stencilRef": 0,
+     )JSON",
+            R"JSON( "stencilRef": 0,
       "stencilFuncMask": 255,
       "stencilFail": 7680,
       "stencilZFail": 7680,
@@ -8901,6 +9874,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8927,6 +9902,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8934,6 +9941,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -8965,6 +9974,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -8991,6 +10002,38 @@ namespace {
       "threeppDetailStrength": 1.0,
       "threeppDetailNormalScale": 1.0,
       "threeppDetailRoughStrength": 0.6000000238418579,
+      "threeppTerrainBandRepeat": [
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "threeppTerrainBandRoughness": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "threeppTerrainBandStrength": 1.0,
+      "threeppTerrainBandNormalScale": 1.0,
+      "threeppTerrainBandRoughStrength": 0.6000000238418579,
+      "threeppTerrainHeightBlend": 6.0,
+      "threeppTerrainBandFarTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "threeppTerrainFarStart": 0.0,
+      "threeppTerrainFarEnd": 0.0,
       "threeppTranslucency": 0.0,
       "threeppTranslucencyColor": 16777215,
       "envMapIntensity": 1.0,
@@ -8998,6 +10041,8 @@ namespace {
       "wireframe": false,
       "wireframeLinewidth": 1.0,
       "flatShading": false,
+      "morphTargets": false,
+      "morphNormals": false,
       "vertexTangents": false,
       "defines": {
         "STANDARD": ""
@@ -9029,6 +10074,8 @@ namespace {
       "dithering": false,
       "alphaTest": 0.0,
       "alphaToCoverage": false,
+      "alphaHash": false,
+      "forceSinglePass": false,
       "premultipliedAlpha": false,
       "visible": true,
       "toneMapped": true
@@ -9064,7 +10111,6 @@ namespace {
       "magFilter": 1006,
       "anisotropy": 1,
       "flipY": false,
-      "premultiplyAlpha": false,
       "unpackAlignment": 1,
       "generateMipmaps": false,
       "image": "98badd09-bfe4-4e87-a067-1beaa3596438-image"
@@ -9085,22 +10131,20 @@ namespace {
       "editorView": "-4,9.5,21@-0.5,1.2,0"
     },
     "layers": 1,
-    "matrix": [
+    "position": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "quaternion": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
       1.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
       1.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      1.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
       1.0
     ],
     "background": 10467532,
@@ -9117,22 +10161,20 @@ namespace {
         "name": "Sun",
         "castShadow": true,
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
+        "position": [
           11.0,
           20.0,
-          17.0,
+          17.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "color": 16773852,
@@ -9142,8 +10184,8 @@ namespace {
           "normalBias": 0.0,
           "radius": 1.0,
           "mapSize": [
- )JSON",
-            R"JSON(           2048.0,
+      )JSON",
+            R"JSON(      2048.0,
             2048.0
           ],
           "camera": {
@@ -9165,22 +10207,20 @@ namespace {
         "type": "HemisphereLight",
         "name": "Sky Fill",
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
+        "position": [
           0.0,
           1.0,
+          0.0
+        ],
+        "quaternion": [
           0.0,
           0.0,
           0.0,
-          0.0,
+          1.0
+        ],
+        "scale": [
           1.0,
-          0.0,
-          0.0,
           1.0,
-          0.0,
           1.0
         ],
         "color": 10336468,
@@ -9192,22 +10232,20 @@ namespace {
         "type": "AmbientLight",
         "name": "Ambient Light",
         "layers": 1,
-        "matrix": [
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0
         ],
         "color": 6975584,
@@ -9222,23 +10260,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.7;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          90.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          90.0,
-          0.0,
+        "position": [
           0.0,
           -0.5,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          90.0,
+          1.0,
+          90.0
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "3589b700-adaa-4c51-b8e9-33f09714867a"
@@ -9249,23 +10285,21 @@ namespace {
         "name": "Yard Floor",
         "receiveShadow": true,
         "layers": 1,
-        "matrix": [
-          23.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.05999999865889549,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          11.0,
-          0.0,
+        "position": [
           -3.4000000953674316,
           0.029999999329447746,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          23.0,
+          0.05999999865889549,
+          11.0
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "64ed7038-6e67-417c-80fa-2059e3c9ab14"
@@ -9279,22 +10313,20 @@ namespace {
           "scriptSource": "# Timber Yard - the logs are not a diagram.\n#\n# Eight identical cylinders released down an identical slope roll as one row of\n# clones, which is the tell of a scene that was laid out rather than stacked. So\n# each log gets a small nudge and a small spin at Play.\n#\n# Seeded, not random: the seed is a hash of the log's OWN UUID, and this\n# document's uuids are derived by the author tool rather than drawn, so every\n# run of this scene wobbles identically. That is what lets the headless test\n# assert on how many logs arrive.\n#\n# It is applied as VELOCITY rather than as a pose because a dynamic body's pose\n# belongs to the solver: the play session has already built the bodies at their\n# authored transforms by the time start() runs, and the handle exposes velocity\n# and angular_velocity but no teleport.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass LogWobble:\n\n    prefix = \"Log\"\n    count = 8\n    nudge = 0.16# m/s along the rack\n    drift = 0.0 # ACROSS it: zero, deliberately - see start()\n    spin = 0.5  # rad/s of roll\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.wobbled = 0\n        if editor is None:\n            return\n        body_of = getattr(editor, \"rigid_body_from_object\", None)\n        if body_of is None:\n            return\n        scene = editor.scene()\n        for i in range(1, self.count + 1):\n            log = scene.get_object_by_name(\"%s %d\" % (self.prefix, i))\n            if log is None:\n                continue\n            a = self.unit(log.uuid, 0)\n            b = self.unit(log.uuid, 1)\n            c = self.unit(log.uuid, 2)\n            # BOTH halves get the SAME push. They are held together by a\n            # breakable joint that the saw is supposed to break, and nudging\n            # them apart at Play would spend part of its budget before the log\n            # has left the rack.\n            #\n            # And the push is along the rack ONLY. A sideways nudge walks a log\n            # off the blade's line, and a log that meets the blade off-centre is\n            # a log the saw does not cut - which showed up as four of eight\n            # logs reaching the stack in one piece.\n            for name in (\"%s %d\" % (self.prefix, i), \"%s %d Offcut\" % (self.prefix, i)):\n                body = body_of(scene.get_object_by_name(name))\n                if body is None:\n                    continue\n                body.velocity = threepp.Vector3(a * self.nudge, 0.0, b * self.drift)\n                body.angular_velocity = threepp.Vector3(0.0, 0.0, c * self.spin)\n                self.wobbled += 1\n\n    # FNV-1a over the uuid plus a channel, folded to -1..1. A hash rather than\n    # random.seed() so the channels of one log are independent without three\n    # generators.\n    def unit(self, text: str, channel: int):\n        h = 2166136261 ^ channel\n        for ch in text:\n            h = ((h ^ ord(ch)) * 16777619) & 0xffffffff\n        return (h & 0xffff) / 32767.5 - 1.0\n"
         },
         "layers": 1,
-        "matrix": [
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
           1.0
         ],
         "children": [
@@ -9308,23 +10340,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.32;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
             },
             "layers": 1,
-            "matrix": [
-              5.5630106925964355,
-              -0.6425814628601074,
-              0.0,
-              0.0,
-              0.029834138229489326,
-              0.2582826316356659,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              2.299999952316284,
-              0.0,
+            "position": [
               -9.800000190734863,
               1.2419999837875366,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.0,
+              -0.05746832117438316,
+              0.9983473420143127
+            ],
+            "scale": [
+              5.599999904632568,
+              0.25999999046325684,
+              2.299999952316284
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0802e756-bed5-4cc9-90c8-27adb2f5f323"
@@ -9339,24 +10369,22 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.3;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
             },
             "layers": 1,
-            "matrix": [
-              3.973579168319702,
-  )JSON",
-            R"JSON(            -0.458986759185791,
-              0.0,
-              0.0,
-              0.034424006938934326,
-              0.2980184555053711,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               -10.600000381469727,
               1.574407696723938,
-              1.149999976158142,
-              1.0
+              1.149999976158142
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              -0)JSON",
+            R"JSON(.05746832117438316,
+              0.9983473420143127
+            ],
+            "scale": [
+              4.0,
+              0.30000001192092896,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0802e756-bed5-4cc9-90c8-27adb2f5f323"
@@ -9371,23 +10399,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.3;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
             },
             "layers": 1,
-            "matrix": [
-              3.973579168319702,
-              -0.458986759185791,
-              0.0,
-              0.0,
-              0.034424006938934326,
-              0.2980184555053711,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               -10.600000381469727,
               1.574407696723938,
-              -1.149999976158142,
-              1.0
+              -1.149999976158142
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              -0.05746832117438316,
+              0.9983473420143127
+            ],
+            "scale": [
+              4.0,
+              0.30000001192092896,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0802e756-bed5-4cc9-90c8-27adb2f5f323"
@@ -9399,23 +10425,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.1599999964237213,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.4478424787521362,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               -12.700000762939453,
               0.7239212393760681,
-              -1.0499999523162842,
+              -1.0499999523162842
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.1599999964237213,
+              1.4478424787521362,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -9427,23 +10451,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.1599999964237213,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.7778863906860352,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               -6.900000095367432,
               0.3889431953430176,
-              -1.0499999523162842,
+              -1.0499999523162842
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.1599999964237213,
+              0.7778863906860352,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -9455,23 +10477,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.1599999964237213,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.4478424787521362,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               -12.700000762939453,
               0.7239212393760681,
-              1.0499999523162842,
+              1.0499999523162842
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.1599999964237213,
+              1.4478424787521362,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -9483,23 +10503,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.1599999964237213,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.7778863906860352,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               -6.900000095367432,
               0.3889431953430176,
-              1.0499999523162842,
+              1.0499999523162842
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.1599999964237213,
+              0.7778863906860352,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -9516,22 +10534,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -7.550000190734863,
           1.3129676580429077,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9546,22 +10562,20 @@ namespace {
               "jointBody": "Log 1 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -9577,22 +10591,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -7.550000190734863,
           1.3129676580429077,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9608,23 +10620,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-  )JSON",
-            R"JSON(        1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -7.970000267028809,
           1.361481785774231,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9633,28 +10642,27 @@ namespace {
           {
             "uuid": "8ffe7092-147f-43bb-aee2-f19d5dc8ef5b",
             "type": "Object3D",
-            "name": "Log 2 Cut",
+  )JSON",
+            R"JSON(          "name": "Log 2 Cut",
             "userData": {
               "joint": "type=fixed;limited=0;lower=-0.785398;upper=0.785398;coney=0.785398;conez=0.785398;stiffness=0;damping=0;maxforce=1000000;target=0;velocity=0;breakforce=650;breaktorque=600;collide=0",
               "jointBody": "Log 2 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -9670,22 +10678,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -7.970000267028809,
           1.361481785774231,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9701,22 +10707,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -8.390000343322754,
           1.4099957942962646,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9731,22 +10735,20 @@ namespace {
               "jointBody": "Log 3 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -9762,22 +10764,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -8.390000343322754,
           1.4099957942962646,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9793,22 +10793,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -8.8100004196167,
           1.458509922027588,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9823,22 +10821,20 @@ namespace {
               "jointBody": "Log 4 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -9854,22 +10850,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -8.8100004196167,
           1.458509922027588,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9882,26 +10876,23 @@ namespace {
         "castShadow": true,
         "receiveShadow": true,
         "userData": {
-          "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;)JSON",
-            R"JSON(friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
+          "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -9.230000495910645,
           1.5070239305496216,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9913,25 +10904,24 @@ namespace {
             "name": "Log 5 Cut",
             "userData": {
               "joint": "type=fixed;limited=0;lower=-0.785398;upper=0.785398;coney=0.785398;conez=0.785398;stiffness=0;damping=0;maxforce=1000000;target=0;velocity=0;breakforce=650;breaktorque=600;collide=0",
-              "jointBody": "Log 5 Offcut"
+              "joint)JSON",
+            R"JSON(Body": "Log 5 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -9947,22 +10937,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -9.230000495910645,
           1.5070239305496216,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -9978,22 +10966,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -9.649999618530273,
           1.5555379390716553,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -10008,22 +10994,20 @@ namespace {
               "jointBody": "Log 6 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -10039,22 +11023,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -9.649999618530273,
           1.5555379390716553,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -10070,22 +11052,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -10.069999694824219,
           1.604051947593689,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -10100,22 +11080,20 @@ namespace {
               "jointBody": "Log 7 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -10131,22 +11109,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -10.069999694824219,
           1.604051947593689,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -10154,8 +11130,7 @@ namespace {
       },
       {
         "uuid": "7690f9cb-8f3c-4a29-9048-0ef2e3a47fe9",
-    )JSON",
-            R"JSON(    "type": "Mesh",
+        "type": "Mesh",
         "name": "Log 8",
         "castShadow": true,
         "receiveShadow": true,
@@ -10163,22 +11138,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -10.489999771118164,
           1.6525660753250122,
-          0.3030000329017639,
+          0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -10193,22 +11166,21 @@ namespace {
               "jointBody": "Log 8 Offcut"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.3030000329017639,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0)JSON",
+            R"JSON(
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -10224,22 +11196,20 @@ namespace {
           "physics": "body=dynamic;shape=capsule;trigger=0;mass=13;friction=0.55;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          5.960464477539063e-08,
-          0.9999999403953552,
-          0.0,
-          0.0,
-          -0.9999999403953552,
-          5.960464477539063e-08,
-          0.0,
+        "position": [
           -10.489999771118164,
           1.6525660753250122,
-          -0.3030000329017639,
+          -0.3030000329017639
+        ],
+        "quaternion": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -10255,23 +11225,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          0.18000000715255737,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.18000000715255737,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.9000000953674316,
-          0.0,
+        "position": [
           -7.300000190734863,
           1.880000114440918,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          0.18000000715255737,
+          0.18000000715255737,
+          2.9000000953674316
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "0c6be250-0217-4e78-a8b7-05978c02e546",
@@ -10283,23 +11251,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              10.44444465637207,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.06199999898672104,
-              0.0,
+            "position": [
               0.0,
               -0.940000057220459,
-              0.46551722288131714,
+              0.46551722288131714
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              1.0,
+              10.44444465637207,
+              0.06199999898672104
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -10311,23 +11277,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              10.44444465637207,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.06199999898672104,
-              0.0,
+            "position": [
               0.0,
               -0.940000057220459,
-              -0.46551722288131714,
+              -0.46551722288131714
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              1.0,
+              10.44444465637207,
+              0.06199999898672104
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -10344,23 +11308,21 @@ namespace {
           "physics": "body=dynamic;shape=box;trigger=0;mass=18;friction=0.4;restitution=0.02;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          0.10000000149011612,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.6000000238418579,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.200000047683716,
-          0.0,
+        "position": [
           -7.300000190734863,
           1.4000000953674316,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          0.10000000149011612,
+          0.6000000238418579,
+          2.200000047683716
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "d5f4ec1f-7160-49c9-a0a2-e332c930a15a",
@@ -10373,27 +11335,25 @@ namespace {
               "joint": "type=revolute;limited=1;lower=-1.6;upper=0.04;coney=0.785398;conez=0.785398;stiffness=9000;damping=900;maxforce=300000;target=0;velocity=0;breakforce=0;breaktorque=0;collide=0",
               "jointBody": "Gate Post",
               "scriptFields": "counter=Bay Trigger",
-              "scriptSource": "# Timber Yard - the release gate.\n#\n# This is the whole reason the yard has a gate: ONE LOOP, read top to bottom,\n# that says what the gate does. Wait for the bay to be clear, drive open, hold\n# it open for six tenths of a SIMULATED second, drive shut, wait until the\n# encoder agrees it is shut. A state machine would need an enum, two timers and\n# the sequence scattered across update() and fixed_update().\n#\n# Three details worth knowing, all of them documented in doc/editor.md:\n#   * wait() is on the SIMULATED clock, so the gate holds open for the same\n#     number of substeps on a machine that renders half as fast;\n#   * the coroutine pump runs AFTER physics and after every script's update(),\n#     so an until() predicate reads the settled frame - the bay's occupancy is\n#     this frame's, not last frame's;\n#   * a raise in here disables this instance whole, so the predicates below\n#     answer False rather than reaching through a None.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    # The PhysX-gated names are ABSENT from threepp.editor without the SDK,\n    # rather than present and answering None, so ask before reaching.\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass GateKeeper:\n\n    counter = \"Bay Trigger\"# who knows whether the bay is clear\n    holdback = \"Holdback Hinge\"# the other half of the escapement\n    open_angle = -1.4      )JSON",
-            R"JSON(# rad; NEGATIVE is downstream, away from the pack\n    shut_angle = 0.0\n    clamp_angle = 1.05     # driven PAST the log, so the drive always pushes\n    lift_angle = 0.0       # the arm's authored, out-of-the-way pose\n    seat_seconds = 0.35    # SIM seconds to let the clamp bite before opening\n    open_seconds = 1.4     # SIM seconds the leaf stays up\n    shut_tolerance = 0.10  # rad the encoder may still read and count as shut\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.wanted = 0   # release requests, raised by the YardMaster\n        self.released = 0\n        self.cycles = 0\n        self.joint = None\n        self.clamp = None\n        self.encoder = None\n        self.bay_node = None\n        self.task = None\n        if editor is None:\n            return\n\n        self.bay_node = editor.scene().get_object_by_name(self.counter)\n\n        joint_of = _verb(\"joint_from_object\")\n        if joint_of is None:\n            print(\"Timber Yard needs the PhysX build to work the gate.\", flush=True)\n            return\n        self.joint = joint_of(obj)\n        if self.joint is None:\n            print(\"Timber Yard: no live joint on\", obj.name, flush=True)\n            return\n        self.clamp = joint_of(editor.scene().get_object_by_name(self.holdback))\n\n        # The encoder authored on THIS node reads THIS joint - a joint sensor on\n        # a joint node needs no name, the node is the reference.\n        encoder_of = _verb(\"encoder_from_object\")\n        if encoder_of is not None:\n            self.encoder = encoder_of(obj)\n\n        self.joint.set_drive_target(self.shut_angle)\n        if self.clamp is not None:\n            self.clamp.set_drive_target(self.lift_angle)\n        self.task = editor.start_coroutine(self.run())\n\n    # --- the gate cycle ------------------------------------------------------\n    # One loop, top to bottom, and every step of it is a sentence: pin the next\n    # log, lift the leaf, hold it up long enough for one log to get onto the\n    # belt, drop the leaf, wait until the encoder says it is really down, let the\n    # pack settle forward by one.\n    def run(self):\n        while True:\n            yield editor.until(self.clear_to_release)\n            # THE INTERLOCK, in one line. Held down, SPACE skips the hold-back\n            # entirely: the leaf lifts with nothing pinning the pack, and the\n            # whole rack pours onto the belt at once. That is the yard's one\n            # failure, and it is a person's doing - several logs reach the stop\n            # bar together and the joint holding it is not built for that.\n            forced = self.override()\n            if not forced:\n                self.hold(self.clamp_angle)\n                yield editor.wait(self.seat_seconds)\n            self.joint.set_drive_target(self.open_angle)\n            yield editor.wait(self.open_seconds * (3.0 if forced else 1.0))\n            self.joint.set_drive_target(self.shut_angle)\n            yield editor.until(self.shut)\n            self.hold(self.lift_angle)\n            self.released += 1\n            self.cycles += 1\n\n    def hold(self, angle):\n        if self.clamp is not None:\n            self.clamp.set_drive_target(angle)\n\n    # Asked once per frame by the until() above. The bay's live instance is\n    # looked up HERE rather than cached: script_from_object is a lookup, and a\n    # predicate that resolves what it reads cannot go stale.\n    def clear_to_release(self):\n        if self.wanted <= self.released:\n            return False\n        if self.override():\n            return True\n        bay = editor.script_from_object(self.bay_node)\n        return bay is None or bay.occupancy <= 0\n\n    # The manual override. Holding SPACE skips the interlock, which is how a\n    # person makes the yard fail on purpose: two logs into the bay together is\n    # what the stop bar is not built for.\n    def override(self):\n        return editor.is_key_down(\"SPACE\")\n\n    def shut(self):\n        if self.encoder is not None:\n            sample = self.encoder.latest()\n            if sample is not None:\n                return abs(sample.position - self.shut_angle) < self.shut_tolerance\n        return abs(self.joint.position - self.shut_angle) < self.shut_tolerance\n\n    # What the YardMaster calls to ask for one log.\n    def request(self):\n        self.wanted += 1\n",
+              "scriptSource": "# Timber Yard - the release gate.\n#\n# This is the whole reason the yard has a gate: ONE LOOP, read top to bottom,\n# that says what the gate does. Wait for the bay to be clear, drive open, hold\n# it open for six tenths of a SIMULATED second, drive shut, wait until the\n# encoder agrees it is shut. A state machine would need an enum, two timers and\n# the sequence scattered across update() and fixed_update().\n#\n# Three details worth knowing, all of them documented in doc/editor.md:\n#   * wait() is on the SIMULATED clock, so the gate holds open for the same\n#     number of substeps on a machine that renders half as fast;\n#   * the coroutine pump runs AFTER physics and after every script's update(),\n#     so an until() predicate reads the settled frame - the bay's occupancy is\n#     this frame's, not last frame's;\n#   * a raise in here disables this instance whole, so the predicates below\n#     answer False rather than reaching through a None.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    # The PhysX-gated names are ABSENT from threepp.editor without the SDK,\n    # rather than present and answering None, so ask before reaching.\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass GateKeeper:\n\n    counter = \"Bay Trigger\"# who knows whether the bay is clear\n    holdback = \"Holdback Hinge\"# the other half of the escapement\n    open_angle = -1.4      # rad; NEGATIVE is downstream, away from the pack\n    shut_angle = 0.0\n    clamp_angle = 1.05     # driven PAST the log, so the drive always pushes\n    lift_angle = 0.0       # the arm's authored, out-of-the-way pose\n    seat_seconds = 0.35    # SIM seconds to let the clamp bite before opening\n    open_seconds = 1.4     # SIM seconds the leaf stays up\n    shut_tolerance = 0.10  # rad the encoder may still read and count as shut\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.wanted = 0   # release requests, raised by the YardMaster\n        self.released = 0\n        self.cycles = 0\n        self.joint = None\n        self.clamp = None\n        self.encoder = None\n        self.bay_node = None\n        self.task = None\n        if editor is None:\n            return\n\n        self.bay_node = editor.scene().get_object_by_name(self.counter)\n\n        joint_of = _verb(\"joint_from_object\")\n        if joint_of is None:\n            print(\"Timber Yard needs the PhysX build to work the gate.\", flush=True)\n            return\n        self.joint = joint_of(obj)\n        if self.joint is None:\n            print(\"Timber Yard: no live joint on\", obj.name, flush=True)\n            return\n        self.clamp = joint_of(editor.scene().get_object_by_name(self.holdback))\n\n        # The encoder authored on THIS node reads THIS joint - a joint sensor on\n        # a joint node needs no name, the node is the reference.\n        encoder_of = _verb(\"encoder_from_object\")\n        if encoder_of is not None:\n            self.encoder = encoder_of(obj)\n\n        self.joint.set_drive_target(self.shut_angle)\n        if self.clamp is not None:\n            self.clamp.set_drive_target(self.lift_angle)JSON",
+            R"JSON()\n        self.task = editor.start_coroutine(self.run())\n\n    # --- the gate cycle ------------------------------------------------------\n    # One loop, top to bottom, and every step of it is a sentence: pin the next\n    # log, lift the leaf, hold it up long enough for one log to get onto the\n    # belt, drop the leaf, wait until the encoder says it is really down, let the\n    # pack settle forward by one.\n    def run(self):\n        while True:\n            yield editor.until(self.clear_to_release)\n            # THE INTERLOCK, in one line. Held down, SPACE skips the hold-back\n            # entirely: the leaf lifts with nothing pinning the pack, and the\n            # whole rack pours onto the belt at once. That is the yard's one\n            # failure, and it is a person's doing - several logs reach the stop\n            # bar together and the joint holding it is not built for that.\n            forced = self.override()\n            if not forced:\n                self.hold(self.clamp_angle)\n                yield editor.wait(self.seat_seconds)\n            self.joint.set_drive_target(self.open_angle)\n            yield editor.wait(self.open_seconds * (3.0 if forced else 1.0))\n            self.joint.set_drive_target(self.shut_angle)\n            yield editor.until(self.shut)\n            self.hold(self.lift_angle)\n            self.released += 1\n            self.cycles += 1\n\n    def hold(self, angle):\n        if self.clamp is not None:\n            self.clamp.set_drive_target(angle)\n\n    # Asked once per frame by the until() above. The bay's live instance is\n    # looked up HERE rather than cached: script_from_object is a lookup, and a\n    # predicate that resolves what it reads cannot go stale.\n    def clear_to_release(self):\n        if self.wanted <= self.released:\n            return False\n        if self.override():\n            return True\n        bay = editor.script_from_object(self.bay_node)\n        return bay is None or bay.occupancy <= 0\n\n    # The manual override. Holding SPACE skips the interlock, which is how a\n    # person makes the yard fail on purpose: two logs into the bay together is\n    # what the stop bar is not built for.\n    def override(self):\n        return editor.is_key_down(\"SPACE\")\n\n    def shut(self):\n        if self.encoder is not None:\n            sample = self.encoder.latest()\n            if sample is not None:\n                return abs(sample.position - self.shut_angle) < self.shut_tolerance\n        return abs(self.joint.position - self.shut_angle) < self.shut_tolerance\n\n    # What the YardMaster calls to ask for one log.\n    def request(self):\n        self.wanted += 1\n",
               "sensor": "type=encoder;rate=120;seed=7;gyrodensity=0.005;gyrowalk=0.00004;acceldensity=0.06;accelwalk=0.004;near=0.1;far=30;rangestddev=0.02;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=128;joint=;encoderres=0.002;contactthreshold=0"
             },
             "layers": 1,
-            "matrix": [
-              5.960464477539063e-08,
-              0.0,
-              0.9999999403953552,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              -0.9999999403953552,
-              0.0,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               0.0,
               0.30000001192092896,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              -0.7071067690849304,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -10409,23 +11369,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          0.18000000715255737,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.18000000715255737,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.799999952316284,
-          0.0,
+        "position": [
           -8.749800682067871,
           2.299999952316284,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          0.18000000715255737,
+          0.18000000715255737,
+          2.799999952316284
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -10437,23 +11395,21 @@ namespace {
         "castShadow": true,
         "receiveShadow": true,
         "layers": 1,
-        "matrix": [
-          0.14000000059604645,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.299999952316284,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.14000000059604645,
-          0.0,
+        "position": [
           -8.749800682067871,
           1.149999976158142,
-          1.3200000524520874,
+          1.3200000524520874
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
           1.0
+        ],
+        "scale": [
+          0.14000000059604645,
+          2.299999952316284,
+          0.14000000059604645
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -10465,23 +11421,21 @@ namespace {
         "castShadow": true,
         "receiveShadow": true,
         "layers": 1,
-        "matrix": [
-          0.14000000059604645,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.299999952316284,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.14000000059604645,
-          0.0,
+        "position": [
           -8.749800682067871,
           1.149999976158142,
-          -1.3200000524520874,
+          -1.3200000524520874
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
           1.0
+        ],
+        "scale": [
+          0.14000000059604645,
+          2.299999952316284,
+          0.14000000059604645
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -10496,24 +11450,21 @@ namespace {
           "physics": "body=dynamic;shape=box;trigger=0;mass=9;friction=0.8;restitution=0.02;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          0.8999999761581421,
-          0.0,
-  )JSON",
-            R"JSON(        0.0,
-          0.0,
-          0.0,
-          0.12999999523162842,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.100000023841858,
-          0.0,
+        "position": [
           -8.079800605773926,
           2.299999952316284,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          0.8999999761581421,
+          0.12999999523162842,
+          1.100000023841858
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "4eb371b8-efa9-46a5-846f-9f281a5a7e37",
@@ -10527,22 +11478,20 @@ namespace {
               "jointBody": "Clamp Head"
             },
             "layers": 1,
-            "matrix": [
-              5.960464477539063e-08,
-              0.0,
-              0.9999999403953552,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              -0.9999999403953552,
-              0.0,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               -0.5,
               0.0,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              -0.7071067690849304,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -10556,46 +11505,43 @@ namespace {
           "conveyor": "width=1.5;speed=1.15;reverse=0;smooth=0;separator=0;wallHeight=0.5;rollerRadius=0.05;cleatHeight=0.15;cleatSpacing=0.6;samples=4;frame=1"
         },
         "layers": 1,
-        "matrix": [
-          1.0,
+        "position": [
           0.0,
           0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
+          0.0
+        ],
+        "quaternion": [
           0.0,
           0.0,
           0.0,
           1.0
         ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
         "children": [
           {
             "uuid": "9284c341-8637-401b-90da-0d2a2bd66a0c",
-            "type": "Object3D",
+            "type")JSON",
+            R"JSON(: "Object3D",
             "name": "Waypoint 1",
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               -7.0,
               0.8500000238418579,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           },
@@ -10604,22 +11550,20 @@ namespace {
             "type": "Object3D",
             "name": "Waypoint 2",
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               0.8500000238418579,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           },
@@ -10628,22 +11572,20 @@ namespace {
             "type": "Object3D",
             "name": "Waypoint 3",
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               1.7999999523162842,
               0.8500000238418579,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           },
@@ -10655,22 +11597,20 @@ namespace {
               "conveyorDerived": "1"
             },
             "layers": 1,
-            "matrix": [
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
               1.0
             ],
             "children": [
@@ -10684,22 +11624,20 @@ namespace {
                   "conveyorRole": "belt"
                 },
                 "layers": 1,
-                "matrix": [
+                "position": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
                   1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
                   1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
                   1.0
                 ],
                 "geometry": "ac85d891-10ad-4689-88e2-0fcbdf93c40d",
@@ -10715,22 +11653,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
+                "position": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
                   1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
                   1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
                   1.0
                 ],
                 "geometry": "09336e39-6018-40ac-8485-f992ceada212",
@@ -10746,22 +11682,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
+                "position": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
                   1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
                   1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
                   1.0
                 ],
                 "geometry": "d7286e39-6012-40ac-a041-24df5ea260d0",
@@ -10777,22 +11711,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   -6.699999809265137,
                   0.32500001788139343,
-                  -0.8100000023841858,
+                  -0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -10802,29 +11734,26 @@ namespace {
                 "uuid": "bcd495ea-b2eb-49f8-a87b-d6cd16c3ae78",
                 "type": "Mesh",
                 "name": "Leg 2",
-              )JSON",
-            R"JSON(  "castShadow": true,
+                "castShadow": true,
                 "receiveShadow": true,
                 "userData": {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   -6.699999809265137,
                   0.32500001788139343,
-                  0.8100000023841858,
+                  0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -10840,22 +11769,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   -3.9666666984558105,
                   0.32500001788139343,
-                  -0.8100000023841858,
+                  -0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -10871,22 +11798,21 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   -3.9666666984558105,
                   0.32500001788139343,
-                  0.8100000023841858,
+                  0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1)JSON",
+            R"JSON(.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -10902,22 +11828,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   -1.2333331108093262,
                   0.32500001788139343,
-                  -0.8100000023841858,
+                  -0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -10933,22 +11857,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   -1.2333331108093262,
                   0.32500001788139343,
-                  0.8100000023841858,
+                  0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -10964,22 +11886,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   1.5,
                   0.32500001788139343,
-                  -0.8100000023841858,
+                  -0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -10995,22 +11915,20 @@ namespace {
                   "conveyorRole": "frame"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.6500000357627869,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  1.0,
-                  0.0,
+                "position": [
                   1.5,
                   0.32500001788139343,
-                  0.8100000023841858,
+                  0.8100000023841858
+                ],
+                "quaternion": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "scale": [
+                  1.0,
+                  0.6500000357627869,
                   1.0
                 ],
                 "geometry": "40c1fc38-bbfb-433a-9089-b7e9d80f9b8b",
@@ -11026,22 +11944,20 @@ namespace {
                   "conveyorRole": "drum"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  5.960464477539063e-08,
-                  0.9999999403953552,
-                  0.0,
-                  0.0,
-                  -0.9999999403953552,
-                  5.960464477539063e-08,
-                  0.0,
+                "position": [
                   -7.0,
                   0.6550000309944153,
+                  0.0
+                ],
+                "quaternion": [
+                  0.7071067690849304,
                   0.0,
+                  0.0,
+                  0.7071067690849304
+                ],
+                "scale": [
+                  1.0,
+                  1.0,
                   1.0
                 ],
                 "geometry": "ee827019-2a32-4f72-bc4d-f3f1e7c90b49",
@@ -11057,23 +11973,20 @@ namespace {
                   "conveyorRole": "drum"
                 },
                 "layers": 1,
-                "matrix": [
-                  1.0,
-                  0.0,
-          )JSON",
-            R"JSON(        0.0,
-                  0.0,
-                  0.0,
-                  5.960464477539063e-08,
-                  0.9999999403953552,
-                  0.0,
-                  0.0,
-                  -0.9999999403953552,
-                  5.960464477539063e-08,
-                  0.0,
+                "position": [
                   1.7999999523162842,
                   0.6550000309944153,
+                  0.0
+                ],
+                "quaternion": [
+                  0.7071067690849304,
                   0.0,
+                  0.0,
+                  0.7071067690849304
+                ],
+                "scale": [
+                  1.0,
+                  1.0,
                   1.0
                 ],
                 "geometry": "ee827019-2a32-4f72-bc4d-f3f1e7c90b49",
@@ -11092,23 +12005,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.08;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          8.100000381469727,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.4000000059604645,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.10000000149011612,
-          0.0,
+        "position": [
           -2.25,
           1.0500000715255737,
-          0.8299999833106995,
+          0.8299999833106995
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
           1.0
+        ],
+        "scale": [
+          8.100000381469727,
+          0.4000000059604645,
+          0.10000000149011612
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "fa7c0df5-d41a-4fd6-acf0-f0861d56691b"
@@ -11122,23 +12033,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.08;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          8.100000381469727,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.4000000059604645,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.10000000149011612,
-          0.0,
+        "position": [
           -2.25,
           1.0500000715255737,
-          -0.8299999833106995,
+          -0.8299999833106995
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          0.0,
           1.0
+        ],
+        "scale": [
+          8.100000381469727,
+          0.4000000059604645,
+          0.10000000149011612
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "477b0df5-d419-4fd6-8637-9b536bbfa7ad"
@@ -11152,23 +12061,22 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.05;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.2999998331069946,
-          -0.47999992966651917,
-          0.0,
-          0.0,
-          0.08312977105379105,
-          0.22514314949512482,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.799999952316284,
-          0.0,
-          2.3499999046325684,
+        "position": [
+          2.349999904632)JSON",
+            R"JSON(5684,
           0.41999995708465576,
+          0.0
+        ],
+        "quaternion": [
           0.0,
-          1.0
+          0.0,
+          -0.17593112587928772,
+          0.9844024777412415
+        ],
+        "scale": [
+          1.3857848644256592,
+          0.23999999463558197,
+          2.799999952316284
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "0fe0a6dd-f064-4dd8-9e8a-aa9fc478b191"
@@ -11182,23 +12090,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.05;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          4.11258602142334,
-          -0.2470516860485077,
-          0.0,
-          0.0,
-          0.014391360804438591,
-          0.23956812918186188,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.799999952316284,
-          0.0,
+        "position": [
           4.940000057220459,
           0.056251488626003265,
+          0.0
+        ],
+        "quaternion": [
           0.0,
-          1.0
+          0.0,
+          -0.029995499178767204,
+          0.9995500445365906
+        ],
+        "scale": [
+          4.119999885559082,
+          0.23999999463558197,
+          2.799999952316284
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "755ade53-5081-4e12-a0aa-4984d6065e42"
@@ -11213,23 +12119,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.3;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.2999998331069946,
-          -0.47999992966651917,
-          0.0,
-          0.0,
-          0.07620229572057724,
-          0.20638121664524078,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.14000000059604645,
-          0.0,
+        "position": [
           2.3499999046325684,
           0.6499999761581421,
-          1.5,
-          1.0
+          1.5
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          -0.17593112587928772,
+          0.9844024777412415
+        ],
+        "scale": [
+          1.3857848644256592,
+          0.2199999988079071,
+          0.14000000059604645
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "e642eb75-f1fd-4e06-a813-e48e636e1198"
@@ -11244,23 +12148,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.3;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          1.2999998331069946,
-          -0.47999992966651917,
-          0.0,
-          0.0,
-          0.07620229572057724,
-          0.20638121664524078,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.14000000059604645,
-          0.0,
+        "position": [
           2.3499999046325684,
           0.6499999761581421,
-          -1.5,
-          1.0
+          -1.5
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          -0.17593112587928772,
+          0.9844024777412415
+        ],
+        "scale": [
+          1.3857848644256592,
+          0.2199999988079071,
+          0.14000000059604645
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "3341eb75-f1fc-4e06-bc1c-9557ec5cd26e"
@@ -11275,23 +12177,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.3;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          4.11258602142334,
-          -0.2470516860485077,
-          0.0,
-          0.0,
-          0.01319208089262247,
-          0.21960411965847015,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.14000000059604645,
-          0.0,
+        "position": [
           4.940000057220459,
           0.2862514853477478,
-          1.5,
-          1.0
+          1.5
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          -0.029995499178767204,
+          0.9995500445365906
+        ],
+        "scale": [
+          4.119999885559082,
+          0.2199999988079071,
+          0.14000000059604645
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "743d84f8-bc7b-4544-b0f4-8d05c6f179f2"
@@ -11306,23 +12206,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.3;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          4.11258602142334,
-          -0.2470516860485077,
-          0.0,
-          0.0,
-          0.01319208089262247,
-          0.21960411965847015,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.14000000059604645,
-          0.0,
+        "position": [
           4.940000057220459,
           0.2862514853477478,
-          -1.5,
-          1.0
+          -1.5
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
+          -0.029995499178767204,
+          0.9995500445365906
+        ],
+        "scale": [
+          4.119999885559082,
+          0.2199999988079071,
+          0.14000000059604645
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "8d4284f8-bc7e-4544-8a38-f68d5b756304"
@@ -11330,31 +12228,28 @@ namespace {
       {
         "uuid": "c06f9e2c-352f-4904-b05b-6efa0895acf3",
         "type": "Mesh",
-        "name)JSON",
-            R"JSON(": "Stack Berm",
+        "name": "Stack Berm",
         "castShadow": true,
         "receiveShadow": true,
         "userData": {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          0.30000001192092896,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.699999988079071,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.799999952316284,
-          0.0,
+        "position": [
           6.900000095367432,
           0.3085101842880249,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          0.30000001192092896,
+          0.699999988079071,
+          2.799999952316284
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "aa8ba9e9-c897-47b2-ac5b-f8c507a929c7"
@@ -11367,26 +12262,25 @@ namespace {
         "userData": {
           "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
           "scriptFields": "ignore=Offcut;box_x=1.3;box_y=1.6;box_z=2.4",
-          "scriptSource": "# Timber Yard - the saw bay counter.\n#\n# This rides an invisible TRIGGER volume: a static body with trigger=1 collides\n# with nothing and reports what passes through it, which is exactly a counter.\n# Every arrival is stamped with threepp.editor.time.sim_time - the SIMULATED\n# clock, the same one that stamps sensor samples - so the throughput below is a\n# property of the yard and not of the frame rate.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass BayCounter:\n\n    cargo = \"Log\"       # name prefix that counts as cargo\n    ignore = \"Offcut\"   # ...except this half of a sawn one\n    flash_seconds = 0.45\n    box_x = 1.3         # the volume this script is drawn as, full extents\n    box_y = 1.6\n    box_z = 2.4\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.count = 0\n        self.occupancy = 0    # how many are in the bay RIGHT NOW\n        self.first_at = None\n        self.last_at = None\n        self.arrivals = []\n        self.seen = set()     # names already counted - see on_trigger_enter\n        self.flash = 0.0\n\n    # A log is TWO bodies (see the saw), and both of them cross this volume\n    # whether the blade parted them or not. Counting cargo means counting one\n    # named half and skipping the other, or every log arrives twice.\n    def counts(self, other: threepp.Object3D):\n        return (other is not None and other.name.startswith(self.cargo)\n                and self.ignore not in other.name)\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if not self.counts(other):\n            return\n        self.occupancy += 1\n        # Occupancy is about RIGHT NOW and counts every crossing; the tally is\n        # about how many logs the yard has sawn, and a log is one log however\n        # many times it crosses. It can cross more than once: the saw is in this\n        # volume, and a log being wedged apart by a blade jostles. Latching on\n        # the name is what makes \"13 logs sawn out of 8\" impossible.\n        if other.name in self.seen:\n            return\n        self.seen.add(other.name)\n        self.count += 1\n        now = editor.time.sim_time if editor is not None else 0.0\n        self.arrivals.append(now)\n        if self.first_at is None:\n            self.first_at = now\n        self.last_at = now\n        self.flash = self.flash_seconds\n        print(\"Timber Yard: log %d in the bay at %.2f s (sim)\" % (self.count, now), flush=True)\n\n    def on_trigger_exit(self, other: threepp.Object3D):\n        if not self.counts(other):\n            return\n        self.occupancy = max(0, self.occupancy - 1)\n\n    # Logs per SIMULATED second, measured across the arrivals themselves: the\n    # settle time before the first one is not the yard being slow.\n    def throughput(self):\n        if self.count < 2 or self.first_at is None:\n            return 0.0\n        span = self.last_at - self.first_at\n        return 0.0 if span <= 0.0 else (self.count - 1) / span\n\n    def update(self, dt: float):\n        if self.flash <= 0.0 or editor is None:\n            return\n        self.flash = max(0.0, self.flash - dt)\n        # Debug draw is frame-scoped furniture: called every frame while it\n        # lasts, never saved, and invisible to the sensors.\n        editor.draw_box(self.obj.position,\n                        threepp.Vector3(self.box_x, self.box_y, self.box_z),\n                        0xffc23a)\n"
+          "scriptSource": "# Timber Yard - the saw bay counter.\n#\n# This rides an invisible TRIGGER volume: a static body with trigger=1 collides\n# with nothing and reports what passes through it, which is exactly a counter.\n# Every arrival is stamped with threepp.editor.time.sim_time - the SIMULATED\n# clock, the same one that stamps sensor samples - so the throughput below is a\n# property of the yard and not of the frame rate.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass BayCounter:\n\n    cargo = \"Log\"       # name prefix that counts as cargo\n    ignore = \"Offcut\"   # ...except this half of a sawn one\n    flash_seconds = 0.45\n    box_x = 1.3         # the volume this script is drawn as, full extents\n    box_y = 1.6\n    box_z = 2.4\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.count = 0\n        self.occupancy = 0    # how many are in the bay RIGHT NOW\n        self.first_at = None\n        self.last_at = None\n        self.arrivals = []\n        self.seen = set()     # names already counted - see on_trigger_enter\n        self.flash = 0.0\n\n    # A log is TWO bodies (see the saw), and both of them cross this volume\n    # whether the blade parted them or not. Counting cargo means counting one\n    # named half and skipping the other, or every log arrives twice.\n    def counts(self, other: threepp.Object3D):\n        return (other is not None and other.name.startswith(self.cargo)\n                and self.ignore not in other.name)\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if not self.counts(other):\n            return\n        self.occupancy += 1\n        # Occupancy is about RIGHT NOW and counts every crossing; the tally is)JSON",
+            R"JSON(\n        # about how many logs the yard has sawn, and a log is one log however\n        # many times it crosses. It can cross more than once: the saw is in this\n        # volume, and a log being wedged apart by a blade jostles. Latching on\n        # the name is what makes \"13 logs sawn out of 8\" impossible.\n        if other.name in self.seen:\n            return\n        self.seen.add(other.name)\n        self.count += 1\n        now = editor.time.sim_time if editor is not None else 0.0\n        self.arrivals.append(now)\n        if self.first_at is None:\n            self.first_at = now\n        self.last_at = now\n        self.flash = self.flash_seconds\n        print(\"Timber Yard: log %d in the bay at %.2f s (sim)\" % (self.count, now), flush=True)\n\n    def on_trigger_exit(self, other: threepp.Object3D):\n        if not self.counts(other):\n            return\n        self.occupancy = max(0, self.occupancy - 1)\n\n    # Logs per SIMULATED second, measured across the arrivals themselves: the\n    # settle time before the first one is not the yard being slow.\n    def throughput(self):\n        if self.count < 2 or self.first_at is None:\n            return 0.0\n        span = self.last_at - self.first_at\n        return 0.0 if span <= 0.0 else (self.count - 1) / span\n\n    def update(self, dt: float):\n        if self.flash <= 0.0 or editor is None:\n            return\n        self.flash = max(0.0, self.flash - dt)\n        # Debug draw is frame-scoped furniture: called every frame while it\n        # lasts, never saved, and invisible to the sensors.\n        editor.draw_box(self.obj.position,\n                        threepp.Vector3(self.box_x, self.box_y, self.box_z),\n                        0xffc23a)\n"
         },
         "layers": 1,
-        "matrix": [
-          1.2999999523162842,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.600000023841858,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.4000000953674316,
-          0.0,
+        "position": [
           -1.5,
           1.2000000476837158,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          1.2999999523162842,
+          1.600000023841858,
+          2.4000000953674316
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "8256dfa8-a9d4-465e-b874-a8bbce36d143"
@@ -11396,22 +12290,20 @@ namespace {
         "type": "Group",
         "name": "Saw Gantry",
         "layers": 1,
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
+        "position": [
           -1.5,
           0.0,
+          0.0
+        ],
+        "quaternion": [
           0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -11422,23 +12314,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.1599999964237213,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              2.200000047683716,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               0.0,
               1.100000023841858,
-              1.7000000476837158,
+              1.7000000476837158
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.1599999964237213,
+              2.200000047683716,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -11450,23 +12340,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.1599999964237213,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              2.200000047683716,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.1599999964237213,
-              0.0,
+            "position": [
               0.0,
               1.100000023841858,
-              -1.7000000476837158,
+              -1.7000000476837158
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.1599999964237213,
+              2.200000047683716,
+              0.1599999964237213
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -11478,29 +12366,26 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.2199999988079071,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.2199999988079071,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              3.700000047683716,
-              0.0,
+            "position": [
               0.0,
               2.2799999713897705,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.2199999988079071,
+              0.2199999988079071,
+              3.700000047683716
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
           },
-   )JSON",
-            R"JSON(       {
+          {
             "uuid": "9c9b8da4-53e9-4100-881a-63e1de52484d",
             "type": "Mesh",
             "name": "Saw Blade",
@@ -11509,25 +12394,24 @@ namespace {
             "userData": {
               "physics": "body=dynamic;shape=auto;trigger=0;mass=8;friction=0.4;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "logs=8;x=-1.5",
-              "scriptSource": "# Timber Yard - the saw.\n#\n# The blade does not do the cutting in code: it is a driven body on a revolute\n# joint (a motor - zero stiffness, a velocity target through damping) and it\n# meets each log on the inner faces of its two halves, which is a wedge. What\n# this script does is WATCH: every log carries a breakable fixed joint holding\n# its halves together, and a joint that has gone is a log that has been sawn.\n#\n# It reads the spindle too. A saw fighting a log slows down, and because the\n# motor is a real drive against a real contact, that dip is physics rather than\n# an animation somebody keyframed.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass SawMill:\n\n    logs = 8\n    spindle = \"Saw Spindle\"\n    flash_seconds = 0.3\n    x = -1.5 # where the cut happens, in world terms: this script's object is a\n    y = 1.05 # child of the gantry, so its own position is not the answer\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.cuts = 0\n        self.flash = 0.0\n        self.speed = 0.0\n        self.pending = []\n        self.joint = None\n        if editor is None:\n            return\n        joint_of = _verb(\"joint_from_object\")\n        if joint_of is None:\n            print(\"Timber Yard needs the PhysX build to run the saw.\", flush=True)\n            return\n        scene = editor.scene()\n        self.joint = joint_of(scene.get_object_by_name(self.spindle))\n        for i in range(1, self.logs + 1):\n            node = scene.get_object_by_name(\"Log %d Cut\" % i)\n            cut = joint_of(node) if node is not None else None\n            if cut is not None:\n                self.pending.append([i, cut])\n\n    def update(self, dt: float):\n        if editor is None:\n            return\n        if self.joint is not None:\n            self.speed = abs(self.joint.velocity)\n\n        # A joint that has gone is a log that has been sawn. Rebuilt rather than\n        # removed from in place: mutating the list being walked is how you miss\n        # every second cut.\n        still = []\n        for index, cut in self.pending:\n            if cut.broken:\n                self.cuts += 1\n                self.flash = self.flash_seconds\n                print(\"Timber Yard: log %d cut (blade at %.0f rpm)\"\n                      % (index, self.speed * 9.5493), flush=True)\n            else:\n                still.append([index, cut])\n        self.pending = still\n\n        if self.flash <= 0.0:\n            return\n        # Sawdust, for the frame it lasts: debug draw is furniture, never saved\n        # and invisible to the sensors.\n        self.flash = max(0.0, self.flash - dt)\n        level = self.flash / self.flash_seconds\n        centre = threepp.Vector3(self.x, self.y, 0.0)\n        editor.draw_box(centre, threepp.Vector3(0.5, 0.5, 0.9), 0xffd27a)\n        for i in range(6):\n            a = (i * 1.0472) + self.cuts\n            spread = 0.35 + 0.5 * level\n            editor.draw_line(centre,\n                             threepp.Vector3(self.x + spread * 0.7,\n                                             self.y + spread * (0.5 - 0.2 * i),\n                                             spread * (0.5 - 0.2 * (i % 3))),\n                             0xffbf5a)\n"
+              "scriptSource": "# Timber Yard - the saw.\n#\n# The blade does not do the cutting in code: it is a driven body on a revolute\n# joint (a motor - zero stiffness, a velocity target through damping) and it\n# meets each log on the inner faces of its two halves, which is a wedge. What\n# this script does is WATCH: every log carries a breakable fixed joint holding\n# its halves together, and a joint that has gone is a log that has been sawn.\n#\n# It reads the spindle too. A saw fighting a log slows down, and because the\n# motor is a real drive against a real contact, that dip is physics rather than\n# an animation somebody keyframed.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass SawMill:\n\n    logs = 8\n    spindle = \"Saw Spindle\"\n    flash_seconds = 0.3\n    x = -1.5 # where the cut happens, in world terms: this script's object is a\n    y = 1.05 # child of the gantry, so its own position is not the answer\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.cuts = 0\n        self.flash = 0.0\n        self.speed = 0.0\n        self.pending = []\n        self.joint = None\n        if editor is None:\n            return\n        joint_of = _verb(\"joint_from_object\")\n        if joint_of is None:\n            print(\"Timber Yard needs the PhysX build to run the saw.\", flush=True)\n            return\n        scene = editor.scene()\n        self.joint = joint_of(scene.get_object_by_name(self.spindle))\n        for i in range(1, self.logs + 1):\n            node = scene.get_object_by_name(\"Log %d Cut\" % i)\n            cut = joint_of(node) if node is not None else None\n            if cut is not None:\n                self.pending.append([i, cut])\n\n    def update(self, dt: float):\n        if editor is None:\n            return\n        if self.joint is not None:\n            self.speed = abs(self.joint.velocity)\n\n        # A joint that has gone is a log that has been sawn. Rebuilt rather than\n        # removed from in place: mutating the list being walked is how you miss\n        # every second cut.\n        still = []\n        for index, cut in self.pending:\n            if cut.broken:\n                self.cuts += 1\n                self.flash = self.flash_seconds\n                print(\"Timber Yard: log %d cut (blade at %.0f rpm)\"\n                      % (index, self.speed * 9.5493), flush=True)\n            else:\n                still.append([index, cut])\n        self.pending = still\n\n        if self.flash <= 0.0:\n            return\n    )JSON",
+            R"JSON(    # Sawdust, for the frame it lasts: debug draw is furniture, never saved\n        # and invisible to the sensors.\n        self.flash = max(0.0, self.flash - dt)\n        level = self.flash / self.flash_seconds\n        centre = threepp.Vector3(self.x, self.y, 0.0)\n        editor.draw_box(centre, threepp.Vector3(0.5, 0.5, 0.9), 0xffd27a)\n        for i in range(6):\n            a = (i * 1.0472) + self.cuts\n            spread = 0.35 + 0.5 * level\n            editor.draw_line(centre,\n                             threepp.Vector3(self.x + spread * 0.7,\n                                             self.y + spread * (0.5 - 0.2 * i),\n                                             spread * (0.5 - 0.2 * (i % 3))),\n                             0xffbf5a)\n"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.960464477539063e-08,
-              0.9999999403953552,
-              0.0,
-              0.0,
-              -0.9999999403953552,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               0.0,
               1.5099999904632568,
+              0.0
+            ],
+            "quaternion": [
+              0.7071067690849304,
               0.0,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "8bf8e8b0-2c15-4522-945f-778bfb9504bd",
@@ -11542,22 +12426,20 @@ namespace {
                   "jointBody": "Saw Motor"
                 },
                 "layers": 1,
-                "matrix": [
-                  5.960464477539063e-08,
-                  0.9999999403953552,
+                "position": [
                   0.0,
                   0.0,
-                  -0.9999999403953552,
-                  5.960464477539063e-08,
+                  0.0
+                ],
+                "quaternion": [
                   0.0,
                   0.0,
-                  0.0,
-                  0.0,
+                  0.7071067690849304,
+                  0.7071067690849304
+                ],
+                "scale": [
                   1.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
+                  1.0,
                   1.0
                 ]
               }
@@ -11573,23 +12455,21 @@ namespace {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
             },
             "layers": 1,
-            "matrix": [
-              0.4399999976158142,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.41999998688697815,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.5,
-              0.0,
+            "position": [
               0.0,
               2.0199999809265137,
-              -0.36000001430511475,
+              -0.36000001430511475
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.4399999976158142,
+              0.41999998688697815,
+              0.5
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "454c49c8-4ea7-4df8-b4d9-866b191508ad"
@@ -11606,23 +12486,21 @@ namespace {
           "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          0.18000000715255737,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.18000000715255737,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          2.9000000953674316,
-          0.0,
+        "position": [
           1.600000023841858,
           2.0799999237060547,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          0.18000000715255737,
+          0.18000000715255737,
+          2.9000000953674316
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "0c6be250-0217-4e78-a8b7-05978c02e546",
@@ -11634,24 +12512,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
+            "position": [
+              0.0,
+              -5.777777194976807,
+              0.48275861144065857
+            ],
+            "quaternion": [
               0.0,
               0.0,
               0.0,
-              0.0,
-              11.555554389953613,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.054999999701976776,
-              0.0,
-              0.0,
-   )JSON",
-            R"JSON(           -5.777777194976807,
-              0.48275861144065857,
               1.0
+            ],
+            "scale": [
+              1.0,
+              11.555554389953613,
+              0.054999999701976776
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -11663,23 +12538,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              11.555554389953613,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.054999999701976776,
-              0.0,
+            "position": [
               0.0,
               -5.777777194976807,
-              -0.48275861144065857,
+              -0.48275861144065857
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              1.0,
+              11.555554389953613,
+              0.054999999701976776
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0c6be250-0217-4e78-a8b7-05978c02e546"
@@ -11696,23 +12569,21 @@ namespace {
           "physics": "body=dynamic;shape=box;trigger=0;mass=10;friction=0.45;restitution=0.02;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000"
         },
         "layers": 1,
-        "matrix": [
-          0.10000000149011612,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          0.9200000166893005,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.399999976158142,
-          0.0,
+        "position": [
           1.600000023841858,
           1.459999918937683,
+          0.0
+        ],
+        "quaternion": [
+          0.0,
+          0.0,
           0.0,
           1.0
+        ],
+        "scale": [
+          0.10000000149011612,
+          0.9200000166893005,
+          1.399999976158142
         ],
         "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
         "material": "9f14d743-dd90-4906-a038-5df6f8253cf1",
@@ -11725,26 +12596,25 @@ namespace {
               "joint": "type=revolute;limited=1;lower=-1.7;upper=0.04;coney=0.785398;conez=0.785398;stiffness=90;damping=430;maxforce=50000;target=0;velocity=0;breakforce=6000;breaktorque=2500;collide=0",
               "jointBody": "Stop Post",
               "scriptFields": "master=Yard Sign;limit=240",
-              "scriptSource": "# Timber Yard - the stop bar.\n#\n# The bar at the end of the bay is held by a BREAKABLE joint, and the joint\n# carries a force/torque sensor - the load cell reads PxConstraint::getForce,\n# the actual force the solver is spending to hold the bar on. One log leaning on\n# it is routine. Two logs arriving together is what the yard is not built for,\n# and then on_break() fires: once, on this node, because the script sits on the\n# joint. The load that snapped it is joint.break_force - latched from the\n# breaking step's solver result, the sample no stream used to have.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass StopBar:\n\n    master = \"Yard Sign\"# who is told when this goes\n    draw_scale = 0.004  # metres of arrow per newton\n    limit = 240.0       # N; roughly what the joint is authored to survive\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.joint = None\n        self.load = None\n        self.peak = 0.0\n        self.newtons = 0.0\n        self.broken = False\n        self.force = threepp.Vector3(0.0, 0.0, 0.0)\n        joint_of = _verb(\"joint_from_object\")\n        load_of = _verb(\"force_torque_from_object\")\n        if joint_of is not None:\n            self.joint = joint_of(obj)\n        if load_of is not None:\n            self.load = load_of(obj)\n\n    # On the PHYSICS clock, because the load is a physics quantity: reading it\n    # per frame would sample it at whatever rate the window happens to run at.\n    # Stops reading once broken - the stream is honestly zero from there, and\n    # the drawn arrow should freeze at the failure load, not collapse.\n    def fixed_update(self, dt: float):\n        if self.load is None or self.broken:\n            return\n        sample = self.load.latest()\n        if sample is None:\n            return\n        self.force = sample.force\n        self.newtons = (self.force.x ** 2 + self.force.y ** 2 + self.force.z ** 2) ** 0.5\n        self.peak = max(self.peak, self.newtons)\n\n    def update(self, dt: float):\n        if editor is None:\n            return\n        # The load, as a line out of the mount: green while a log is leaning on\n        # the bar, red once it is over what the joint is authored to take.\n        #\n        # Drawn only under MEANINGFUL load (a quarter of the limit) - idle it\n        # said nothing and read as stray debug geometry, which is exactly what\n        # the user called it. An instrument that only appears when something is\n        # actually pushing explains itself.\n        #\n        # WORLD position, not .position: draw_line takes world space, and the\n        # joint node's local position put the line under the conveyor - a real\n        # authored-in-the-wild bug, worth this comment.\n        if not self.broken and self.newtons < self.limit * 0.25:\n            return\n        anchor = self.obj.get_world_position()\n        tip = threepp.Vector3(anchor.x + self.force.x * self.draw_scale,\n                              anchor.y + self.force.y * self.draw_scale,\n                              anchor.z + self.force.z * self.draw_scale)\n        hot = self.broken or self.newtons > self.limit\n        editor.draw_line(anchor, tip, 0xff3b1f if hot else 0x39e07a)\n\n    # Called once, when the constraint gives way. Only a script ON the joint\n    # node gets this. break_force is the breaking step's solver force - the\n    # TRUE failure load, past the threshold, latched at the break - where\n    # self.peak is only the biggest sample the load cell managed to take (by\n    # now the stream reads zero: a broken joint transmits nothing). The load\n    # cell's final non-zero sample carries the same latched wrench, so the two\n    # figures agree unless the sensor's rate gate skipped the breaking substep.\n    def on_break(self):\n        self.broken = True\n        snapped = self.peak\n        if self.joint is not None:\n            f = self.joint.break_force\n            snapped = (f.x ** 2 + f.y ** 2 + f.z ** 2) ** 0.5\n            # Freeze the drawn arrow at the failure wrench.\n            self.force = f\n            self.newtons = snapped\n        print(\"Timber Yard: the stop bar SNAPPED at %.0f N (peak sampled %.0f N)\"\n              % (snapped, self.peak), flush=True)\n        if editor is None:\n            return\n        master = editor.script_from_object(editor.scene().get_object_by_name(self.master))\n        if master is not None:\n            master.fail(\"the stop bar snapped - two logs reached the bay together\")\n",
+              "scriptSource": "# Timber Yard - the stop bar.\n#\n# The bar at the end of the bay is held by a BREAKABLE joint, and the joint\n# carries a force/torque sensor - the load cell reads PxConstraint::getForce,\n# the actual force the solver is spending to hold the bar on. One log leaning on\n# it is routine. Two logs arriving together is what the yard is not built for,\n# and then on_break() fires: once, on this node, because the script sits on the\n# joint. The load that snapped it is joint.break_force - latched from the\n# breaking step's solver result, the sample no stream used to have.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass StopBar:\n\n    master = \"Yard Sign\"# who is told when this goes\n    draw_scale = 0.004  # metres of arrow per newton\n    limit = 240.0       # N; roughly what the joint is authored to survive\n\n    def start(self, obj: threepp.Object3D))JSON",
+            R"JSON(:\n        self.obj = obj\n        self.joint = None\n        self.load = None\n        self.peak = 0.0\n        self.newtons = 0.0\n        self.broken = False\n        self.force = threepp.Vector3(0.0, 0.0, 0.0)\n        joint_of = _verb(\"joint_from_object\")\n        load_of = _verb(\"force_torque_from_object\")\n        if joint_of is not None:\n            self.joint = joint_of(obj)\n        if load_of is not None:\n            self.load = load_of(obj)\n\n    # On the PHYSICS clock, because the load is a physics quantity: reading it\n    # per frame would sample it at whatever rate the window happens to run at.\n    # Stops reading once broken - the stream is honestly zero from there, and\n    # the drawn arrow should freeze at the failure load, not collapse.\n    def fixed_update(self, dt: float):\n        if self.load is None or self.broken:\n            return\n        sample = self.load.latest()\n        if sample is None:\n            return\n        self.force = sample.force\n        self.newtons = (self.force.x ** 2 + self.force.y ** 2 + self.force.z ** 2) ** 0.5\n        self.peak = max(self.peak, self.newtons)\n\n    def update(self, dt: float):\n        if editor is None:\n            return\n        # The load, as a line out of the mount: green while a log is leaning on\n        # the bar, red once it is over what the joint is authored to take.\n        #\n        # Drawn only under MEANINGFUL load (a quarter of the limit) - idle it\n        # said nothing and read as stray debug geometry, which is exactly what\n        # the user called it. An instrument that only appears when something is\n        # actually pushing explains itself.\n        #\n        # WORLD position, not .position: draw_line takes world space, and the\n        # joint node's local position put the line under the conveyor - a real\n        # authored-in-the-wild bug, worth this comment.\n        if not self.broken and self.newtons < self.limit * 0.25:\n            return\n        anchor = self.obj.get_world_position()\n        tip = threepp.Vector3(anchor.x + self.force.x * self.draw_scale,\n                              anchor.y + self.force.y * self.draw_scale,\n                              anchor.z + self.force.z * self.draw_scale)\n        hot = self.broken or self.newtons > self.limit\n        editor.draw_line(anchor, tip, 0xff3b1f if hot else 0x39e07a)\n\n    # Called once, when the constraint gives way. Only a script ON the joint\n    # node gets this. break_force is the breaking step's solver force - the\n    # TRUE failure load, past the threshold, latched at the break - where\n    # self.peak is only the biggest sample the load cell managed to take (by\n    # now the stream reads zero: a broken joint transmits nothing). The load\n    # cell's final non-zero sample carries the same latched wrench, so the two\n    # figures agree unless the sensor's rate gate skipped the breaking substep.\n    def on_break(self):\n        self.broken = True\n        snapped = self.peak\n        if self.joint is not None:\n            f = self.joint.break_force\n            snapped = (f.x ** 2 + f.y ** 2 + f.z ** 2) ** 0.5\n            # Freeze the drawn arrow at the failure wrench.\n            self.force = f\n            self.newtons = snapped\n        print(\"Timber Yard: the stop bar SNAPPED at %.0f N (peak sampled %.0f N)\"\n              % (snapped, self.peak), flush=True)\n        if editor is None:\n            return\n        master = editor.script_from_object(editor.scene().get_object_by_name(self.master))\n        if master is not None:\n            master.fail(\"the stop bar snapped - two logs reached the bay together\")\n",
               "sensor": "type=forcetorque;rate=120;seed=5;gyrodensity=0.005;gyrowalk=0.00004;acceldensity=0.06;accelwalk=0.004;near=0.1;far=30;rangestddev=0.02;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=128;joint=;encoderres=0;contactthreshold=0"
             },
             "layers": 1,
-            "matrix": [
-              5.960464477539063e-08,
-              0.0,
-              0.9999999403953552,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              -0.9999999403953552,
-              0.0,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               0.0,
               0.5,
+              0.0
+            ],
+            "quaternion": [
               0.0,
+              -0.7071067690849304,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ]
           }
@@ -11754,28 +12624,26 @@ namespace {
         "uuid": "2db3ab80-cb72-4c4a-a6c7-94c1cd0e8333",
         "type": "Group",
         "name": "Yard Sign",
-    )JSON",
-            R"JSON(    "userData": {
+        "userData": {
           "scriptFields": "logs=8;gate=Gate Hinge;counter=Bay Trigger",
-          "scriptSource": "# Timber Yard - the yard master.\n#\n# The mission, as a sequence rather than as a state machine. The outer coroutine\n# settles, then releases eight logs; releasing ONE is a generator of its own,\n# yielded from the outer one - a yielded generator costs no frame of its own, so\n# `yield self.release_one(i)` reads like the call it is.\n#\n# SPACE is the manual override, folded into the until() below: it stops the\n# mission waiting for the log that is still on its way and asks for the next one\n# now. The gate honours it too, and two logs arriving in the bay together is\n# what breaks the stop bar - which is the yard's one failure, and it is a\n# person's doing.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass YardMaster:\n\n    logs = 8\n    gate = \"Gate Hinge\"\n    counter = \"Bay Trigger\"\n    settle_seconds = 1.5# SIM seconds before the first release\n    patience = 25.0     # SIM seconds to wait for one log before giving up\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.failed = False\n        self.reason = \"\"\n        self.done = False\n        self.delivered = 0\n        self.task = None\n        self.gate_node = None\n        self.counter_node = None\n        if editor is None:\n            return\n        scene = editor.scene()\n        self.gate_node = scene.get_object_by_name(self.gate)\n        self.counter_node = scene.get_object_by_name(self.counter)\n        print(\"Timber Yard: %d logs to run through the saw bay. \"\n              \"Hold SPACE to override the gate interlock.\" % self.logs, flush=True)\n        self.task = editor.start_coroutine(self.mission())\n\n    # --- the mission ---------------------------------------------------------\n    def mission(self):\n        yield editor.wait(self.settle_seconds)\n        for i in range(self.logs):\n            if self.failed:\n                break\n            self.delivered = yield self.release_one(i + 1)\n        self.done = True\n        self.report()\n\n    # One log: ask the gate for it, then wait for the bay to say it arrived.\n    # This is a generator, so the `yield` in the caller resumes with what it\n    # returns.\n    def release_one(self, index: int):\n        gate = editor.script_from_object(self.gate_node)\n        counter = editor.script_from_object(self.counter_node)\n        if gate is None or counter is None:\n            return 0\n        target = counter.count + 1\n        gate.request()\n        deadline = editor.time.sim_time + self.patience\n        # SPACE is the override; self.failed and the deadline are the two ways\n        # this stops waiting for a log that is not coming.\n        yield editor.until(lambda: counter.count >= target\n                           or self.failed\n                           or editor.is_key_down(\"SPACE\")\n                           or editor.time.sim_time > deadline)\n        return counter.count\n\n    # Called by the stop bar when the joint gives way.\n    def fail(self, reason: str):\n        if self.failed:\n            return\n        self.failed = True\n        self.reason = reason\n        print(\"Timber Yard: MISSION FAILED -\", reason, flush=True)\n\n    # BOTH clocks, side by side. They do not agree and they never catch up: a\n    # frame that hitches advances wall_time in full and simulates at most a few\n    # substeps. The throughput is quoted on the simulated one, because that is\n    # the one that describes the yard.\n    def report(self):\n        counter = editor.script_from_object(self.counter_node)\n        count = counter.count if counter is not None else 0\n        rate = counter.throughput() if counter is not None else 0.0\n        t = editor.time\n        print(\"Timber Yard: %d/%d logs sawn%s\" %\n              (count, self.logs, \" (mission failed)\" if self.failed else \"\"), flush=True)\n        print(\"Timber Yard: %.1f s simulated in %.1f s of wall clock (%d substeps), \"\n              \"%.2f logs per simulated second\"\n              % (t.sim_time, t.wall_time, t.steps, rate), flush=True)\n"
+          "scriptSource": "# Timber Yard - the yard master.\n#\n# The mission, as a sequence rather than as a state machine. The outer coroutine\n# settles, then releases eight logs; releasing ONE is a generator of its own,\n# yielded from the outer one - a yielded generator costs no frame of its own, so\n# `yield self.release_one(i)` reads like the call it is.\n#\n# SPACE is the manual override, folded into the until() below: it stops the\n# mission waiting for the log that is still on its way and asks for the next one\n# now. The gate honours it too, and two logs arriving in the bay together is\n# what breaks the stop bar - which is the yard's one failure, and it is a\n# person's doing.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass YardMaster:\n\n    logs = 8\n    gate = \"Gate Hinge\"\n    counter = \"Bay Trigger\"\n    settle_seconds = 1.5# SIM seconds before the first release\n    patience = 25.0     # SIM seconds to wait for one log before giving up\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.failed = False\n        self.reason = \"\"\n        self.done = False\n        self.delivered = 0\n        self.task = None\n        self.gate_node = None\n        self.counter_node = None\n        if editor is None:\n            return\n        scene = editor.scene()\n        self.gate_node = scene.get_object_by_name(self.gate)\n        self.counter_node = scene.get_object_by_name(self.counter)\n        print(\"Timber Yard: %d logs to run through the saw bay. \"\n              \"Hold SPACE to override the gate interlock.\" % self.logs, flush=True)\n        self.task = editor.start_coroutine(self.mission())\n\n    # --- the mission ---------------------------------------------------------\n    def mission(self):\n        yield editor.wait(self.settle_seconds)\n        for i in range(self.logs):\n            if self.failed:\n                break\n            self.delivered = yield self.release_one(i + 1)\n        self.done = True\n        self.report()\n\n    # One log: ask the gate for it, then wait for the bay to say it arrived.\n    # This is a generator, so the `yield` in the caller resumes with what it\n    # returns.\n    def release_one(self, index: int):\n        gate = editor.script_from_object(self.gate_node)\n        counter = editor.script_from_object(self.counter_node)\n        if gate is None or counter is None:\n            return 0\n        target = counter.count + 1\n        gate.request()\n        deadline = editor.time.sim_time + self.patience\n        # SPACE is the override; self.failed and the deadline are the two ways\n        # this stops waiting for a log that is not coming.\n        yield editor.until(lambda: counter.count >= target\n                           or self.failed\n                           or editor.is_key_down(\"SPACE\")\n                           or editor.time.sim_time > deadline)\n        return counter.count\n\n    # Called by the stop bar when the joint gives way.\n    def fail(self, reason: str):\n        if self.failed:\n            return\n        self.failed = True\n        self.reason = reason\n        print(\"Timber Yard: MISSION FAILED -\", reason, flush=True)\n\n    # BOTH clocks, side by side. They do not agree and they never catch up: a\n    # frame that hitches advances wall_time in full and simulates at most a few\n    # substeps. Th)JSON",
+            R"JSON(e throughput is quoted on the simulated one, because that is\n    # the one that describes the yard.\n    def report(self):\n        counter = editor.script_from_object(self.counter_node)\n        count = counter.count if counter is not None else 0\n        rate = counter.throughput() if counter is not None else 0.0\n        t = editor.time\n        print(\"Timber Yard: %d/%d logs sawn%s\" %\n              (count, self.logs, \" (mission failed)\" if self.failed else \"\"), flush=True)\n        print(\"Timber Yard: %.1f s simulated in %.1f s of wall clock (%d substeps), \"\n              \"%.2f logs per simulated second\"\n              % (t.sim_time, t.wall_time, t.steps, rate), flush=True)\n"
         },
         "layers": 1,
-        "matrix": [
-          0.9758974313735962,
-          0.0,
-          -0.21822962164878845,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.21822962164878845,
-          0.0,
-          0.9758974313735962,
-          0.0,
+        "position": [
           -5.900000095367432,
           1.5499999523162842,
-          2.9000000953674316,
+          2.9000000953674316
+        ],
+        "quaternion": [
+          0.0,
+          0.10977829992771149,
+          0.0,
+          0.9939560890197754
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -11786,23 +12654,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              2.019129991531372,
+            "position": [
               0.0,
               0.0,
-              0.0,
-              0.0,
-              0.6022099852561951,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.07000000029802322,
-              0.0,
+              0.0
+            ],
+            "quaternion": [
               0.0,
               0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              2.019129991531372,
+              0.6022099852561951,
+              0.07000000029802322
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "014f53e5-a9f9-4c64-8c1d-bc8d3c491494"
@@ -11816,22 +12682,20 @@ namespace {
               "textParams": "size=0.17;depth=0;curveSegments=2;align=center"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               0.08500000089406967,
-              0.05000000074505806,
+              0.05000000074505806
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "fe6fd402-67f6-490d-9031-60d0994bf746",
@@ -11846,22 +12710,20 @@ namespace {
               "textParams": "size=0.075;depth=0;curveSegments=2;align=center"
             },
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
+            "position": [
               0.0,
               -0.11500000208616257,
-              0.05000000074505806,
+              0.05000000074505806
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "44ce99fc-5b0b-47b3-802a-500a906a1ccc",
@@ -11874,23 +12736,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.09000000357627869,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.851104974746704,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.09000000357627869,
-              0.0,
+            "position": [
               0.919564962387085,
               -0.7749999761581421,
-              -0.07500000298023224,
+              -0.07500000298023224
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.09000000357627869,
+              1.851104974746704,
+              0.09000000357627869
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0802e756-bed5-4cc9-90c8-27adb2f5f323"
@@ -11899,27 +12759,24 @@ namespace {
             "uuid": "997dd596-fd22-4ee7-b658-129b51492660",
             "type": "Mesh",
             "name": "Sign Post 2",
-  )JSON",
-            R"JSON(          "castShadow": true,
+            "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.09000000357627869,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.851104974746704,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.09000000357627869,
-              0.0,
+            "position": [
               -0.919564962387085,
               -0.7749999761581421,
-              -0.07500000298023224,
+              -0.07500000298023224
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.09000000357627869,
+              1.851104974746704,
+              0.09000000357627869
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "0802e756-bed5-4cc9-90c8-27adb2f5f323"
@@ -11931,22 +12788,20 @@ namespace {
         "type": "Group",
         "name": "Yard Office",
         "layers": 1,
-        "matrix": [
-          0.9130889177322388,
-          0.0,
-          -0.4077604413032532,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.4077604413032532,
-          0.0,
-          0.9130889177322388,
-          0.0,
+        "position": [
           -8.199999809265137,
           0.0,
-          -7.599999904632568,
+          -7.599999904632568
+        ],
+        "quaternion": [
+          0.0,
+          0.20845989882946014,
+          0.0,
+          0.9780309200286865
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -11957,23 +12812,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              4.900000095367432,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.2800000011920929,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              3.700000047683716,
-              0.0,
+            "position": [
               0.0,
               0.14000000059604645,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              4.900000095367432,
+              0.2800000011920929,
+              3.700000047683716
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "e395b9f1-23fc-403c-88f9-e6983152ba49"
@@ -11985,23 +12838,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              4.5,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              2.200000047683716,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              3.299999952316284,
-              0.0,
+            "position": [
               0.0,
               1.3799999952316284,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              4.5,
+              2.200000047683716,
+              3.299999952316284
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "f6c7e8dd-93d5-48ff-a88c-e9454b4d2cf1"
@@ -12013,23 +12864,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              2.4653401374816895,
-              1.100953221321106,
-              0.0,
-              0.0,
-              -0.057086460292339325,
-              0.12783244252204895,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              3.9000000953674316,
-              0.0,
+            "position": [
               -1.1799999475479126,
               2.859999895095825,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.0,
+              0.20845989882946014,
+              0.9780309200286865
+            ],
+            "scale": [
+              2.700000047683716,
+              0.14000000059604645,
+              3.9000000953674316
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "97cec33f-3127-4ec0-aa02-cd9469f50cb9"
@@ -12041,23 +12890,22 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              2.4653401374816895,
-              -1.100953221321106,
-              0.0,
-              0.0,
-              0.057086460292339325,
-              0.12783244252204895,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              3.9000000953674316,
-              0.0,
+            "position": [
               1.1799999475479126,
               2.859999895095825,
+         )JSON",
+            R"JSON(     0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.0,
+              -0.20845989882946014,
+              0.9780309200286865
+            ],
+            "scale": [
+              2.700000047683716,
+              0.14000000059604645,
+              3.9000000953674316
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "97cec33f-3127-4ec0-aa02-cd9469f50cb9"
@@ -12069,23 +12917,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.8999999761581421,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.7200000286102295,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              3.319999933242798,
-              0.0,
+            "position": [
               0.0,
               2.7200000286102295,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.8999999761581421,
+              0.7200000286102295,
+              3.319999933242798
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "f6c7e8dd-93d5-48ff-a88c-e9454b4d2cf1"
@@ -12097,23 +12943,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.949999988079071,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              2.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.07999999821186066,
-              0.0,
+            "position": [
               0.0,
               1.0499999523162842,
-              1.6699999570846558,
+              1.6699999570846558
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.949999988079071,
+              2.0,
+              0.07999999821186066
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "97cec33f-3127-4ec0-aa02-cd9469f50cb9"
@@ -12125,23 +12969,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.8500000238418579,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.6499999761581421,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.07999999821186066,
-              0.0,
+            "position": [
               -1.5,
               1.75,
-              1.6699999570846558,
+              1.6699999570846558
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.8500000238418579,
+              0.6499999761581421,
+              0.07999999821186066
             ],
             "geometry": "b0b3990c-49f1-4217-b03c-fae5ddc136fc",
             "material": "e395b9f1-23fc-403c-88f9-e6983152ba49"
@@ -12153,23 +12995,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.10000000149011612,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.2999999523162842,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.10000000149011612,
-              0.0,
+            "position": [
               1.100000023841858,
               3.3499999046325684,
-              -0.8999999761581421,
+              -0.8999999761581421
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
+              0.0,
               1.0
+            ],
+            "scale": [
+              0.10000000149011612,
+              1.2999999523162842,
+              0.10000000149011612
             ],
             "geometry": "729866a2-eba8-4218-b835-ede96d930067",
             "material": "e395b9f1-23fc-403c-88f9-e6983152ba49"
@@ -12181,25 +13021,22 @@ namespace {
         "type": "Group",
         "name": "Timber Stack",
         "layers": 1,
-        "matrix": [
-          0.9130889177322388,
-          0.0,
-          -0.4077604413032532,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.4077604413032532,
-          0.0,
-          0.9130889177322388,
-          0.0,
+        "position": [
           -3.5999999046325684,
           0.0,
-          -5.599999904632568,
+          -5.599999904632568
+        ],
+        "quaternion": [
+          0.0,
+          0.20845989882946014,
+          0.0,
+          0.9780309200286865
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
-       )JSON",
-            R"JSON( ],
+        ],
         "children": [
           {
             "uuid": "38f58462-18b9-4a60-908f-cd8d7a54daba",
@@ -12208,22 +13045,20 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.998200535774231,
-              -0.059964001178741455,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              -0.059964001178741455,
-              -0.998200535774231,
-              0.0,
-              0.0,
+            "position": [
               0.0,
               0.20000000298023224,
-              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.7067885994911194,
+              -0.021210020408034325,
+              -0.021210020408034325,
+              0.7067885994911194
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -12236,22 +13071,20 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.960464477539063e-08,
-              0.9999999403953552,
-              0.0,
-              0.0,
-              -0.9999999403953552,
-              5.960464477539063e-08,
-              0.0,
+            "position": [
               0.41999998688697815,
               0.20000000298023224,
+              0.0
+            ],
+            "quaternion": [
+              0.7071067690849304,
               0.0,
+              0.0,
+              0.7071067690849304
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -12264,22 +13097,20 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.998200535774231,
-              0.059964001178741455,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              0.059964001178741455,
-              -0.998200535774231,
-              0.0,
-              0.0,
+            "position": [
               0.8399999737739563,
               0.20000000298023224,
-              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.7067885994911194,
+              0.021210020408034325,
+              0.021210020408034325,
+              0.7067885994911194
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -12292,22 +13123,20 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.9995500445365906,
-              0.029995499178767204,
-              0.0,
-              0.0,
-              0.0,
-              -1.1920928955078125e-07,
-              1.0000001192092896,
-              0.0,
-              0.029995499178767204,
-              -0.9995501041412354,
-              -1.1920928955078125e-07,
-              0.0,
+            "position": [
               0.20999999344348907,
               0.5799999833106995,
-              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.7070272564888,
+              0.010606203228235245,
+              0.010606203228235245,
+              0.7070272564888
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -12320,22 +13149,20 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.998200535774231,
-              -0.059964001178741455,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0,
-              0.0,
-              -0.059964001178741455,
-              -0.998200535774231,
-              0.0,
-              0.0,
+            "position": [
               0.6299999952316284,
               0.5799999833106995,
-              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.7067885994911194,
+              -0.021210020408034325,
+              -0.021210020408034325,
+              0.7067885994911194
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -12348,22 +13175,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.9995500445365906,
-              -0.029995499178767204,
-              0.0,
-              0.0,
-              0.0,
-              -1.1920928955078125e-07,
-              1.0000001192092896,
-              0.0,
-              -0.029995499178767204,
-              -0.9995501041412354,
-              -1.1920928955078125e-07,
-              0.0,
-              0.41999998688697815,
+            "position": [
+        )JSON",
+            R"JSON(      0.41999998688697815,
               0.9599999785423279,
-              0.0,
+              0.0
+            ],
+            "quaternion": [
+              0.7070272564888,
+              -0.010606203228235245,
+              -0.010606203228235245,
+              0.7070272564888
+            ],
+            "scale": [
+              1.0,
+              1.0,
               1.0
             ],
             "geometry": "84228647-43a7-4bb2-a876-085fcb766d41",
@@ -12376,22 +13202,20 @@ namespace {
         "type": "Group",
         "name": "Spruce 1",
         "layers": 1,
-        "matrix": [
-          0.9209573864936829,
-          0.014999437145888805,
-          -0.3893745243549347,
-          0.0,
-          -0.013815396465361118,
-          0.9998875260353088,
-          0.0058410558849573135,
-          0.0,
-          0.3894183337688446,
-          0.0,
-          0.9210609793663025,
-          0.0,
+        "position": [
           -17.5,
           0.0,
-          -9.5,
+          -9.5
+        ],
+        "quaternion": [
+          0.0014900059904903173,
+          0.19866374135017395,
+          0.007350430358201265,
+          0.9800390005111694
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -12402,23 +13226,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3400000035762787,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              6.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.3400000035762787,
-              0.0,
+            "position": [
               0.0,
               3.0,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.3400000035762787,
+              6.0,
+              0.3400000035762787
             ],
             "geometry": "729866a2-eba8-4218-b835-ede96d930067",
             "material": "4ce0a394-ca87-41de-a0b7-017fdd94c6dd"
@@ -12430,23 +13252,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.156000018119812,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.25,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.156000018119812,
-              0.0,
+            "position": [
               0.0,
               3.750000238418579,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              1.156000018119812,
+              5.25,
+              1.156000018119812
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12458,23 +13278,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.79075688123703,
-              0.0,
-              -0.45275720953941345,
-              0.0,
-              0.0,
-              4.5,
-              0.0,
-              0.0,
-              0.45275720953941345,
-              0.0,
-              0.79075688123703,
-              0.0,
+            "position": [
               0.0,
               6.375,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.2570805549621582,
+              0.0,
+              0.9663899540901184
+            ],
+            "scale": [
+              0.9112000465393066,
+              4.5,
+              0.9112000465393066
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12485,25 +13303,22 @@ namespace {
             "name": "Needles 3",
             "castShadow": true,
             "receiveShadow": true,
-     )JSON",
-            R"JSON(       "layers": 1,
-            "matrix": [
-              0.3373452425003052,
-              0.0,
-              -0.5747061371803284,
-              0.0,
-              0.0,
-              3.749999761581421,
-              0.0,
-              0.0,
-              0.5747061371803284,
-              0.0,
-              0.3373452425003052,
-              0.0,
+            "layers": 1,
+            "position": [
               0.0,
               9.0,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.49688011407852173,
+              0.0,
+              0.8678191900253296
+            ],
+            "scale": [
+              0.6664000153541565,
+              3.749999761581421,
+              0.6664000153541565
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12515,22 +13330,20 @@ namespace {
         "type": "Group",
         "name": "Spruce 2",
         "layers": 1,
-        "matrix": [
-          -0.32322514057159424,
-          -0.019998667761683464,
-          -0.9461108446121216,
-          0.0,
-          -0.00646536098793149,
-          0.9998000264167786,
-          -0.018924741074442863,
-          0.0,
-          0.9463001489639282,
-          0.0,
-          -0.32328975200653076,
-          0.0,
+        "position": [
           -5.5,
           0.0,
-          -14.5,
+          -14.5
+        ],
+        "quaternion": [
+          -0.008134019561111927,
+          0.8133748769760132,
+          -0.005816733930259943,
+          0.5816540122032166
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -12541,23 +13354,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.4000000059604645,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              7.199999809265137,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.4000000059604645,
-              0.0,
+            "position": [
               0.0,
               3.5999999046325684,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.4000000059604645,
+              7.199999809265137,
+              0.4000000059604645
             ],
             "geometry": "729866a2-eba8-4218-b835-ede96d930067",
             "material": "4ce0a394-ca87-41de-a0b7-017fdd94c6dd"
@@ -12569,23 +13380,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.3600000143051147,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              6.299999713897705,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.3600000143051147,
-              0.0,
+            "position": [
               0.0,
               4.5,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              1.3600000143051147,
+              6.299999713897705,
+              1.3600000143051147
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12597,23 +13406,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.9303022027015686,
-              0.0,
-              -0.5326555371284485,
-              0.0,
-              0.0,
-              5.399999618530273,
-              0.0,
-              0.0,
-              0.5326555371284485,
-              0.0,
-              0.9303022027015686,
-              0.0,
+            "position": [
               0.0,
               7.649999618530273,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.2570805549621582,
+              0.0,
+              0.9663899540901184
+            ],
+            "scale": [
+              1.0720000267028809,
+              5.399999618530273,
+              1.0720000267028809
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12625,23 +13432,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3968767523765564,
-              0.0,
-              -0.6761249303817749,
-              0.0,
-              0.0,
-              4.499999523162842,
-              0.0,
-              0.0,
-              0.6761249303817749,
-              0.0,
-              0.3968767523765564,
-              0.0,
+            "position": [
               0.0,
               10.800000190734863,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.49688011407852173,
+              0.0,
+              0.8678191900253296
+            ],
+            "scale": [
+              0.784000039100647,
+              4.499999523162842,
+              0.784000039100647
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12653,22 +13458,20 @@ namespace {
         "type": "Group",
         "name": "Spruce 3",
         "layers": 1,
-        "matrix": [
-          -0.903789758682251,
-          0.024997396394610405,
-          -0.4272462725639343,
-          0.0,
-          0.02259944938123226,
-          0.9996874928474426,
-          0.010683382861316204,
-          0.0,
-          0.427379846572876,
-          0.0,
-          -0.9040722846984863,
-          0.0,
+        "position": [
           8.5,
           0.0,
-          -12.5,
+          -12.5
+        ],
+        "quaternion": [
+          0.012196224182844162,
+          0.9756471514701843,
+          0.00273751188069582,
+          0.2189895510673523
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -12676,26 +13479,25 @@ namespace {
             "uuid": "7cf0f590-708f-4945-b826-1aa8cc1f898e",
             "type": "Mesh",
             "name": "Bole",
-            "castShadow": true,
+            "castShadow)JSON",
+            R"JSON(": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3100000023841858,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.519999980926514,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.3100000023841858,
-              0.0,
+            "position": [
               0.0,
               2.759999990463257,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.3100000023841858,
+              5.519999980926514,
+              0.3100000023841858
             ],
             "geometry": "729866a2-eba8-4218-b835-ede96d930067",
             "material": "4ce0a394-ca87-41de-a0b7-017fdd94c6dd"
@@ -12707,23 +13509,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.0540000200271606,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              4.829999923706055,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.0540000200271606,
-              0.0,
+            "position": [
               0.0,
               3.450000047683716,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              1.0540000200271606,
+              4.829999923706055,
+              1.0540000200271606
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12735,23 +13535,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.7209842205047607,
-              0.0,
-              -0.41280806064605713,
-              0.0,
-              0.0,
-              4.139999866485596,
-              0.0,
-              0.0,
-              0.41280806064605713,
-              0.0,
-              0.7209842205047607,
-              0.0,
+            "position": [
               0.0,
               5.864999771118164,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.2570805549621582,
+              0.0,
+              0.9663899540901184
+            ],
+            "scale": [
+              0.8308000564575195,
+              4.139999866485596,
+              0.8308000564575195
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12763,23 +13561,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.30757948756217957,
-              0.0,
-              -0.5239968299865723,
-              0.0,
-              0.0,
-              3.4499998092651367,
-              0.0,
-              0.0,
-              0.5239968299865723,
-              0.0,
-              0.30757948756217957,
-              0.0,
+            "position": [
               0.0,
               8.280000686645508,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.49688011407852173,
+              0.0,
+              0.8678191900253296
+            ],
+            "scale": [
+              0.6076000332832336,
+              3.4499998092651367,
+              0.6076000332832336
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12787,27 +13583,24 @@ namespace {
         ]
       },
       {
-        "u)JSON",
-            R"JSON(uid": "e2e2305d-3a7a-4a58-905e-7ad216e7bc5d",
+        "uuid": "e2e2305d-3a7a-4a58-905e-7ad216e7bc5d",
         "type": "Group",
         "name": "Spruce 4",
         "layers": 1,
-        "matrix": [
-          0.6215789318084717,
-          -0.009999833069741726,
-          -0.7832877039909363,
-          0.0,
-          0.006215996108949184,
-          0.9999499917030334,
-          -0.007833138108253479,
-          0.0,
-          0.7833269238471985,
-          0.0,
-          0.6216100454330444,
-          0.0,
+        "position": [
           17.5,
           0.0,
-          -3.5,
+          -3.5
+        ],
+        "quaternion": [
+          -0.0021748184226453304,
+          0.4349600672721863,
+          -0.004502216819673777,
+          0.9004358649253845
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -12818,23 +13611,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3700000047683716,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              6.480000019073486,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.3700000047683716,
-              0.0,
+            "position": [
               0.0,
               3.240000009536743,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.3700000047683716,
+              6.480000019073486,
+              0.3700000047683716
             ],
             "geometry": "729866a2-eba8-4218-b835-ede96d930067",
             "material": "4ce0a394-ca87-41de-a0b7-017fdd94c6dd"
@@ -12846,23 +13637,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.2580000162124634,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.669999599456787,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.2580000162124634,
-              0.0,
+            "position": [
               0.0,
               4.050000190734863,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              1.2580000162124634,
+              5.669999599456787,
+              1.2580000162124634
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12874,23 +13663,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.8605295419692993,
-              0.0,
-              -0.4927063584327698,
-              0.0,
-              0.0,
-              4.859999656677246,
-              0.0,
-              0.0,
-              0.4927063584327698,
-              0.0,
-              0.8605295419692993,
-              0.0,
+            "position": [
               0.0,
               6.884999752044678,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.2570805549621582,
+              0.0,
+              0.9663899540901184
+            ],
+            "scale": [
+              0.9916000366210938,
+              4.859999656677246,
+              0.9916000366210938
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12902,23 +13689,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3671109974384308,
-              0.0,
-              -0.6254155039787292,
-              0.0,
-              0.0,
-              4.049999713897705,
-              0.0,
-              0.0,
-              0.6254155039787292,
-              0.0,
-              0.3671109974384308,
-              0.0,
+            "position": [
               0.0,
               9.720000267028809,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.49688011407852173,
+              0.0,
+              0.8678191900253296
+            ],
+            "scale": [
+              0.7251999974250793,
+              4.049999713897705,
+              0.7251999974250793
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -12930,22 +13715,20 @@ namespace {
         "type": "Group",
         "name": "Spruce 5",
         "layers": 1,
-        "matrix": [
-          -0.9666049480438232,
-          0.019998665899038315,
-          0.25549012422561646,
-          0.0,
-          0.01933467388153076,
-          0.9998000264167786,
-          -0.005110483150929213,
-          0.0,
-          -0.25554120540618896,
-          0.0,
-          -0.9667983055114746,
-          0.0,
+        "position": [
           19.5,
           0.0,
-          10.5,
+          10.5
+        ],
+        "quaternion": [
+          0.009916482493281364,
+          0.9916152358055115,
+          -0.001288423896767199,
+          -0.12883810698986053
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
@@ -12956,23 +13739,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.33000001311302185,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.759999752044678,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.33000001311302185,
-              0.0,
+            "position": [
               0.0,
               2.879999876022339,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.33000001311302185,
+              5.759999752044678,
+              0.33000001311302185
             ],
             "geometry": "729866a2-eba8-4218-b835-ede96d930067",
             "material": "4ce0a394-ca87-41de-a0b7-017fdd94c6dd"
@@ -12984,23 +13765,22 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.1220000982284546,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.039999961853027,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.1220000982284546,
-              0.0,
+            "position": [
               0.0,
               3.6000001430511475,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "s)JSON",
+            R"JSON(cale": [
+              1.1220000982284546,
+              5.039999961853027,
+              1.1220000982284546
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -13012,23 +13792,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.7674993276596069,
-              0.0,
-              -0.43944084644317627,
-              0.0,
-              0.0,
-              4.319999694824219,
-              0.0,
-              0.0,
-              0.43944084644317627,
-              0.0,
-              0.7674993276596069,
-              0.0,
+            "position": [
               0.0,
               6.119999885559082,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.2570805549621582,
+              0.0,
+              0.9663899540901184
+            ],
+            "scale": [
+              0.8844000697135925,
+              4.319999694824219,
+              0.8844000697135925
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -13040,23 +13818,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3274233341217041,
-              0.0,
-              -0.5578030347824097,
-              0.0,
-              0.0,
-              3.5999999046325684,
-              0.0,
-              0.0,
-              0.5578030347824097,
-              0.0,
-              0.3274233341217041,
-              0.0,
+            "position": [
               0.0,
               8.640000343322754,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.49688011407852173,
+              0.0,
+              0.8678191900253296
+            ],
+            "scale": [
+              0.6468000411987305,
+              3.5999999046325684,
+              0.6468000411987305
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -13068,50 +13844,45 @@ namespace {
         "type": "Group",
         "name": "Spruce 6",
         "layers": 1,
-        "matrix": [
-          0.37785953283309937,
-          -0.024997394531965256,
-          0.925525426864624,
-          0.0,
-          0.009448456577956676,
-          0.9996874928474426,
-          0.02314295619726181,
-          0.0,
-          -0.9258147478103638,
-          0.0,
-          0.3779776096343994,
-          0.0,
+        "position": [
           -19.5,
           0.0,
-          11.5,
+          11.5
+        ],
+        "quaternion": [
+          -0.006970865186303854,
+          0.5576401948928833,
+          0.010375398211181164,
+          -0.8299886584281921
+        ],
+        "scale": [
+          1.0,
+          1.0,
           1.0
         ],
         "children": [
           {
-            "uuid": "65707d59-0bcb-46dc-aa48-0)JSON",
-            R"JSON(b1897af0c3e",
+            "uuid": "65707d59-0bcb-46dc-aa48-0b1897af0c3e",
             "type": "Mesh",
             "name": "Bole",
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.3799999952316284,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              6.71999979019165,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.3799999952316284,
-              0.0,
+            "position": [
               0.0,
               3.359999895095825,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              0.3799999952316284,
+              6.71999979019165,
+              0.3799999952316284
             ],
             "geometry": "729866a2-eba8-4218-b835-ede96d930067",
             "material": "4ce0a394-ca87-41de-a0b7-017fdd94c6dd"
@@ -13123,23 +13894,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              1.2920000553131104,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              5.87999963760376,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              1.2920000553131104,
-              0.0,
+            "position": [
               0.0,
               4.200000286102295,
+              0.0
+            ],
+            "quaternion": [
+              0.0,
+              0.0,
               0.0,
               1.0
+            ],
+            "scale": [
+              1.2920000553131104,
+              5.87999963760376,
+              1.2920000553131104
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -13151,23 +13920,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.8837870359420776,
-              0.0,
-              -0.5060226917266846,
-              0.0,
-              0.0,
-              5.039999961853027,
-              0.0,
-              0.0,
-              0.5060226917266846,
-              0.0,
-              0.8837870359420776,
-              0.0,
+            "position": [
               0.0,
               7.139999866485596,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.2570805549621582,
+              0.0,
+              0.9663899540901184
+            ],
+            "scale": [
+              1.018399953842163,
+              5.039999961853027,
+              1.018399953842163
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
@@ -13179,23 +13946,21 @@ namespace {
             "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
-            "matrix": [
-              0.37703293561935425,
-              0.0,
-              -0.6423186659812927,
-              0.0,
-              0.0,
-              4.199999809265137,
-              0.0,
-              0.0,
-              0.6423186659812927,
-              0.0,
-              0.37703293561935425,
-              0.0,
+            "position": [
               0.0,
               10.079999923706055,
+              0.0
+            ],
+            "quaternion": [
               0.0,
-              1.0
+              0.49688011407852173,
+              0.0,
+              0.8678191900253296
+            ],
+            "scale": [
+              0.7448000311851501,
+              4.199999809265137,
+              0.7448000311851501
             ],
             "geometry": "0e2ff253-275e-4013-a8a4-a2ff2d5a3e16",
             "material": "4bbefd67-fc2d-4148-b8e7-fb5f8f259ff1"
