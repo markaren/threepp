@@ -12,6 +12,7 @@ add_test_executable(EditorFlockConfig_test)
 add_test_executable(EditorDocument_test)
 add_test_executable(EditorJointConfig_test)
 add_test_executable(EditorLights_test)
+add_test_executable(EditorOrthoClipFit_test)
 add_test_executable(EditorParticleConfig_test)
 add_test_executable(EditorPlaySession_test)
 add_test_executable(EditorRenderConfig_test)
@@ -191,7 +192,8 @@ foreach (name
         EditorCharacterConfig_test EditorCommands_test EditorConvexDecomp_test
         EditorConveyorConfig_test EditorConveyor_test EditorDocument_test
         EditorExampleScene_test EditorFlockConfig_test EditorGranular_test
-        EditorJointConfig_test EditorJointPlay_test EditorParticleConfig_test
+        EditorJointConfig_test EditorJointPlay_test EditorOrthoClipFit_test
+        EditorParticleConfig_test
         EditorPhysicsPlay_test EditorPlaySession_test EditorRenderConfig_test
         EditorRobotTransplant_test EditorScriptClock_test EditorScriptCollision_test
         EditorScriptCoroutine_test EditorScriptFixedUpdate_test EditorScriptLookup_test

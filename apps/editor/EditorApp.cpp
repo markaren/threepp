@@ -11,6 +11,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
+#include "threepp/extras/editor/OrthoClipFit.hpp"
 #include "threepp/extras/editor/FlockPlaySession.hpp"
 #include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
@@ -1012,6 +1013,9 @@ void EditorApp::frame(float dt) {
     // The nudge that keeps the grid off a coplanar ground is measured against
     // the camera, so it is re-derived every frame rather than on view changes.
     updateGridPlacement();
+    // After the grid has its place for this view: the grid is part of what the
+    // clip range has to hold.
+    updateOrthoClip();
 
     refreshSelectionHelpers(dt);
 
@@ -3884,10 +3888,8 @@ Vector3 EditorApp::viewPresetDirection(ViewPreset preset) {
     }
 }
 
-float EditorApp::sceneClearDistance(const Vector3& from) const {
+Box3 EditorApp::documentBounds() const {
 
-    // Everything the document holds, without the overlay: the grid is 40 units
-    // across and would otherwise set the distance for every scene.
     Box3 bounds;
     for (const auto& child : document_.scene().children) {
         if (!child || child == overlay_.get()) continue;
@@ -3896,11 +3898,40 @@ float EditorApp::sceneClearDistance(const Vector3& from) const {
         childBounds.setFromObject(*child);
         if (!childBounds.isEmpty()) bounds.union_(childBounds);
     }
+    return bounds;
+}
+
+float EditorApp::sceneClearDistance(const Vector3& from) const {
+
+    // Everything the document holds, without the overlay: the grid is 40 units
+    // across and would otherwise set the distance for every scene.
+    const Box3 bounds = documentBounds();
     if (bounds.isEmpty()) return 0.f;
 
     // Half-diagonal, so the answer holds whichever way the camera is pointing.
     const float radius = bounds.getSize().length() * 0.5f;
     return radius + from.distanceTo(bounds.getCenter()) + 1.f;
+}
+
+void EditorApp::updateOrthoClip() {
+
+    if (!orthographic_) return;
+
+    // The grid is 40 units across. Its place for this frame is already set
+    // (updateGridPlacement), stood up into the plane an axis view looks at.
+    OrthoClipFit::Sheet grid;
+    const bool showsGrid = grid_ && grid_->visible;
+    if (showsGrid) {
+        grid.centre.copy(grid_->position);
+        grid.normal.set(0, 1, 0).applyQuaternion(grid_->quaternion);
+        grid.radius = 20.f * std::sqrt(2.f);
+    }
+
+    const float fitted = OrthoClipFit::farPlane(ortho_, documentBounds(), showsGrid ? &grid : nullptr);
+    if (fitted != ortho_.farPlane) {
+        ortho_.farPlane = fitted;
+        ortho_.updateProjectionMatrix();
+    }
 }
 
 void EditorApp::setOrthoHeight(float height) {

@@ -40,6 +40,7 @@ add_library(threepp_editor_core STATIC
         src/JointConfig.cpp
         src/MaterialTextureSlots.cpp
         src/ObjectFactory.cpp
+        src/OrthoClipFit.cpp
         src/ParticleFieldConfig.cpp
         src/PhysicsConfig.cpp
         src/PlaySession.cpp

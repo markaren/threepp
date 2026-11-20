@@ -918,6 +918,13 @@ namespace threepp::editor {
         // whole document in front of its near plane. Ortho framing does not
         // depend on the distance, only the clipping does.
         [[nodiscard]] float sceneClearDistance(const Vector3& from) const;
+        // The document's world bounds, without the editor's own overlay.
+        [[nodiscard]] Box3 documentBounds() const;
+        // Fits the ortho camera's far plane to what it can show. A parallel
+        // projection spends its depth buffer evenly from near to far, so a far
+        // plane kilometres behind a scene a metre deep leaves steps too coarse
+        // to tell a printed label from the board under it.
+        void updateOrthoClip();
         // World units per screen pixel at `world`, for whichever projection is
         // active. Constant-screen-size overlays size themselves with this.
         [[nodiscard]] float viewportWorldPerPixel(const Vector3& world) const;
