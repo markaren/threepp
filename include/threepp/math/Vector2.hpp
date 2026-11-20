@@ -219,7 +219,7 @@ namespace threepp {
         Vector2& clampLength(float min, float max) {
             const auto length = this->length();
 
-            return this->divideScalar(std::isnan(length) ? 1 : length).multiplyScalar(std::max(min, std::min(max, length)));
+            return this->divideScalar(length > 0 ? length : 1).multiplyScalar(std::max(min, std::min(max, length)));
         }
 
         Vector2& floor() {
@@ -278,8 +278,9 @@ namespace threepp {
         }
 
         Vector2& normalize() {
+            // a zero vector stays zero (three.js: length() || 1); dividing by its length would give NaN
             const auto len = this->length();
-            return this->divideScalar(std::isnan(len) ? 1 : len);
+            return this->divideScalar(len > 0 ? len : 1);
         }
 
         [[nodiscard]] float angle() const;

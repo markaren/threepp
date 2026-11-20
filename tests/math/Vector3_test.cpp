@@ -153,3 +153,19 @@ TEST_CASE("conversion") {
     CHECK(v.y == Catch::Approx(p.y));
     CHECK(v.z == Catch::Approx(p.z));
 }
+
+TEST_CASE("normalize leaves a zero vector zero") {
+
+    // three.js divides by (length() || 1); a division by the zero length gives NaN
+    Vector3 v(0, 0, 0);
+    v.normalize();
+    CHECK(v.x == 0.f);
+    CHECK(v.y == 0.f);
+    CHECK(v.z == 0.f);
+
+    Vector3 u(0, 3, 4);
+    u.normalize();
+    CHECK(u.x == Catch::Approx(0.f));
+    CHECK(u.y == Catch::Approx(0.6f));
+    CHECK(u.z == Catch::Approx(0.8f));
+}
