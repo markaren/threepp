@@ -2670,15 +2670,7 @@ class DisplacedMesh(Mesh):
         """
         The site's wave climate: an H x W x 4 float32 map over the rectangle [origin_x, origin_x + size_x] x [origin_z, origin_z + size_z] of the ocean's XZ, row j along z, column i along x, read bilinearly between texel centres and clamped at its edges. Channels 0, 1, 2 scale cascades 0, 1, 2 (height and horizontal displacement, per vertex and per pixel; the crest foam and sample_height follow); channel 3 is not read. 1 everywhere is the sea without a map. Set it before the first render for the crest foam to follow it.
         """
-    def vessel(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.Vessel:
-        """
-        Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion. Vessel 0 is the mesh's own hull_exclusion. A vessel takes part while its half_length > 0.
-        """
-    def wake_patch(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.WakePatch:
-        """
-        Patch `index` (0..MAX_WAKE_PATCHES-1) of the wake field.
-        """
-    def shore_bend(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple:
+    def shore_bend(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple[float, float, float, float, float, float, float, float, float, float, float, float, float, float, float]:
         """
         The two long cascades' turn over the bed at a rest point, under shore_gain's opt-in: (dx0, dz0, dx1, dz1, amp0, amp1, cos0, sin0, cos1, sin1, dx2, dz2, amp2, cos2, sin2). Cascade c is read at (x + dxc, z + dzc), where the waves that reach (x, z) came from (its crests turned toward the shore and shortened over the bed), its displacement turned by (cosc, sinc); ampc is its refraction factor. Cascade 2, the chop, is bent near the camera only (the shore's near window). (0, 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0) in the open sea.
         """
@@ -2689,6 +2681,14 @@ class DisplacedMesh(Mesh):
     def shore_gain(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple[float, float, float]:
         """
         The three cascade gains over the shore's depth at a rest point (Vulkan; read back under sample_height's opt-in, so 1, 1, 1 until sample_height has been called and a frame or two rendered): each cascade shoaled a little and held under the breaking limit over shallow water, the two long ones also spread or gathered by their turn over the bed (lower in a lee, higher on a point), as the drawn sea and sample_height scale them.
+        """
+    def vessel(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.Vessel:
+        """
+        Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion. Vessel 0 is the mesh's own hull_exclusion. A vessel takes part while its half_length > 0.
+        """
+    def wake_patch(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.WakePatch:
+        """
+        Patch `index` (0..MAX_WAKE_PATCHES-1) of the wake field.
         """
     def wave_climate_gain(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> tuple[float, float, float]:
         """
@@ -7411,6 +7411,54 @@ class MeshStandardMaterial(Material):
         ...
     @env_map_intensity.setter
     def env_map_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def flow(self) -> float:
+        """
+        Running water whose mesh carries its own flow (Vulkan deferred G-buffer only): > 0 turns the flow mode on. The geometry's 'uv2' holds the water's velocity (m/s along world x, z), its 'uv' x the foam (0..1). The normal map, laid over world XZ at flow_tile metres a tile, is carried along the velocity in two crossfaded phases of flow_period s; flow scales its tilt (which grows with the speed too). Foam, broken up by the normal map's alpha, whitens the surface toward flow_foam_albedo and takes flow_foam of a transmissive material's transmission. Set flow_time (s) every frame with needs_update(). 0 (default) = off.
+        """
+    @flow.setter
+    def flow(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def flow_foam(self) -> float:
+        """
+        Share of a transmissive material's transmission the flow mode's foam takes (default 1: full foam is opaque).
+        """
+    @flow_foam.setter
+    def flow_foam(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def flow_foam_albedo(self) -> float:
+        """
+        The flow mode's foam albedo (linear grey, default 0.8).
+        """
+    @flow_foam_albedo.setter
+    def flow_foam_albedo(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def flow_period(self) -> float:
+        """
+        Seconds of each of the flow mode's two crossfaded phases (default 1).
+        """
+    @flow_period.setter
+    def flow_period(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def flow_tile(self) -> float:
+        """
+        Metres of water surface per tile of the normal map in flow mode (default 0.5).
+        """
+    @flow_tile.setter
+    def flow_tile(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def flow_time(self) -> float:
+        """
+        The flow mode's clock in seconds: set it every frame (with needs_update()).
+        """
+    @flow_time.setter
+    def flow_time(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def metalness(self) -> float:
