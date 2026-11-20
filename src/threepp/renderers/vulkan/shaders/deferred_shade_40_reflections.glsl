@@ -342,7 +342,7 @@ vec3 paneHitGather(vec3 hitP, vec3 hitN, bool doShadows, float maxLod, inout uin
                                     + hitN * sqrt(max(0.0, 1.0 - u1)));
         bool fMissed;
         // envInt 1.0: transmitted light, not the pane's IBL.
-        vec3 gi = giRadiance(fOrg, fd, doShadows, maxLod, seed, fMissed, 1.0);
+        vec3 gi = giRadiance(fOrg, hitN, fd, doShadows, maxLod, seed, fMissed, 1.0);
         const float gl = max(max(gi.r, gi.g), gi.b);
         if (gl > 6.0) gi *= 6.0 / gl;// the gather's firefly cap
         sum += gi;
@@ -945,7 +945,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                                     + hitN * sqrt(max(0.0, 1.0 - u1)));
                         bool fMissed;
                         // envInt 1.0: the replaced env fill is unscaled as well.
-                        vec3 gi = giRadiance(fOrg, fd, doShadows, maxLod, seed, fMissed, 1.0);
+                        vec3 gi = giRadiance(fOrg, hitN, fd, doShadows, maxLod, seed, fMissed, 1.0);
                         const float gl = max(max(gi.r, gi.g), gi.b);
                         if (gl > 6.0) gi *= 6.0 / gl;// the gather's firefly cap
                         gSum += gi;
@@ -1159,7 +1159,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 // Diffuse GI is what the cosine gather integrates anyway. The hit gets NO env
 // fill: the 2nd-bounce sky comes from the gather's OWN rays that MISS — so
 // enclosed scenes don't leak sky while open scenes still get it.
-vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed, float envInt) {
+// orgN: the geometric normal of the surface the ray leaves, on the side it
+// leaves from (the probe term of a short hit is looked up there).
+vec3 giRadiance(vec3 origin, vec3 orgN, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed, float envInt) {
     missed = false;
     gGiRayHitMoved = false;// set below on a 1-bounce hit on a MOVING mesh (GI dwell cut)
     rayQueryEXT rq;
@@ -1218,7 +1220,9 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     // direct terms above stay authoritative; the probe stores neither the
     // analytic direct at the hit nor emitter emission, so nothing double-
     // counts (see probe_common.glsl). vec3(0) when probeGrid.enabled == 0.
-    lit += diff * probeIrradiance(hitP, hitN);
+    // A hit facing the origin across a gap the grid cannot resolve takes the
+    // lower of its own lookup and the origin's (probeIrradianceAtHit).
+    lit += diff * probeIrradianceAtHit(hitP, hitN, origin, orgN, tHit);
     // A glow-only emissive (setEmissiveCastsLight, kGeomFlagGlowOnly) is in no
     // emitter list, so neither ReSTIR DI nor any NEE above carries its light:
     // a GI ray that lands on it is the one path its glow has to what is near

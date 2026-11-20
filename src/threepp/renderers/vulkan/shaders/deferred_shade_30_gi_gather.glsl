@@ -80,7 +80,7 @@ vec3 gatherEnv(vec3 P, vec3 N, vec3 Ng, ivec2 px, uint frame, bool doShadows, bo
             const float dg   = dot(dir, Ng);
             if (dg < 0.0) dir -= (2.0 * dg) * Ng;// under the traced surface: mirror above it
             bool missed;
-            vec3 gi = giRadiance(orig, dir, doShadows, maxLod, seed, missed, envInt);// cheap 1-bounce; cosine pdf cancels
+            vec3 gi = giRadiance(orig, Ng, dir, doShadows, maxLod, seed, missed, envInt);// cheap 1-bounce; cosine pdf cancels
             if (missed) missN += 1.0;
             // FIREFLY CLAMP (safety) — giRadiance has no specular sun-catch and its
             // emitter NEE is internally clamped, so the diffuse GI is already

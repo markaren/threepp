@@ -291,17 +291,24 @@ vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, vec3 Ng, out float conf, 
 //     not a lighting change. Beyond the coarsest window conf → 0 and the
 //     caller's fallback (gather / env) stands, as it did outside the scene-fit
 //     grid.
-vec3 probeIrradianceConf(vec3 P, vec3 N, vec3 Ng, out float conf) {
-    conf = 0.0;
-    if (PROBE_GRID_OFF) return vec3(0.0);
-    float edge;
-    if (probeGrid.cascadeCount <= 1) return probeIrradianceCascadeConf(0, P, N, Ng, conf, edge);
+// The finest cascade window whose probes surround P (the coarsest when none
+// does; 0 for the scene-fit grid).
+int probeWindowAt(vec3 P) {
     int c = 0;
     for (; c < probeGrid.cascadeCount - 1; ++c) {
         const vec3 g   = (P - probeGrid.cOrigin[c].xyz) / probeGrid.cSpacing[c].xyz;
         const vec3 ein = min(g, vec3(probeGrid.dims) - 1.0 - g);
         if (min(ein.x, min(ein.y, ein.z)) > 0.0) break;
     }
+    return c;
+}
+
+vec3 probeIrradianceConf(vec3 P, vec3 N, vec3 Ng, out float conf) {
+    conf = 0.0;
+    if (PROBE_GRID_OFF) return vec3(0.0);
+    float edge;
+    if (probeGrid.cascadeCount <= 1) return probeIrradianceCascadeConf(0, P, N, Ng, conf, edge);
+    const int c = probeWindowAt(P);
     float confF;
     const vec3 eF = probeIrradianceCascadeConf(c, P, N, Ng, confF, edge);
     if (c + 1 >= probeGrid.cascadeCount) {
@@ -342,4 +349,48 @@ float probeBeyondWindows(vec3 P, vec3 N) {
 vec3 probeIrradiance(vec3 P, vec3 N) {
     float conf;
     return probeIrradianceConf(P, N, conf);
+}
+
+// The probe light at the hit of a ray traced from a surface: hitN faces the
+// ray, orgP / orgN are where the ray left and that surface's geometric normal
+// on the side it left from.
+//
+// A hit that FACES the surface the ray left, closer to it than the grid
+// resolves, sits in a gap the probes cannot see into, and neither lookup is
+// right there. The hit's own fades out every probe on the origin's side (behind
+// its tangent plane) and keeps the ones beyond the origin's surface, and an
+// 8x8 depth map cannot tell a gap of a few centimetres from that surface: the
+// Chebyshev test passes them, so the gap gets whatever lies past the surface.
+// The origin's lookup sits on the side the ray came from; evaluated along hitN
+// it gives the light the room sends at the origin's surface, which an open gap
+// gets and a deep one does not. The gap is no brighter than either, so it
+// takes the lower of the two.
+//
+// Cases. The research-scenes classroom: sticky notes curled 2 to 5 cm off a
+// corkboard 6 cm in front of a wall, with open sky behind the wall. The hit's
+// own lookup lit the notes' undersides with that sky, and Ray Reconstruction,
+// which integrates the one gather ray a pixel takes, drew it as a bright rim
+// along every note's lifted edges; the origin's lookup is the lower there.
+// bathroom2: the closed space behind a wall mirror, and a folded towel's
+// layers. Past those surfaces lies nothing lit, the hit's own lookup is the
+// lower and the gap stays dark, as a 16k-sample path trace has it (the
+// origin's alone lit the wall along the mirror's edge).
+//
+// Only a facing hit: in a concave corner (hitN along the origin's surface)
+// half the hit's own probes are on the origin's side and its lookup stands.
+// Taking the origin's there as well moved every room corner of the classroom,
+// against the path trace as often away from it as toward it. The hit's own
+// lookup takes over between a quarter and a whole cell, where the grid starts
+// to resolve the distance (the classroom's cells are 0.4 m).
+vec3 probeIrradianceAtHit(vec3 hitP, vec3 hitN, vec3 orgP, vec3 orgN, float tHit) {
+    if (PROBE_GRID_OFF) return vec3(0.0);
+    const vec3  eHit = probeIrradiance(hitP, hitN);
+    const vec3  sp   = probeGrid.cSpacing[probeWindowAt(hitP)].xyz;
+    const float cell = min(sp.x, min(sp.y, sp.z));
+    // 1 = the hit's own lookup alone; below it the gap's lower estimate.
+    const float w = max(smoothstep(0.25 * cell, cell, tHit), 1.0 - smoothstep(0.5, 0.85, -dot(hitN, orgN)));
+    if (w >= 1.0) return eHit;
+    float conf;
+    const vec3 eOrg = probeIrradianceConf(orgP, hitN, orgN, conf);
+    return mix(min(eHit, eOrg), eHit, w);
 }
