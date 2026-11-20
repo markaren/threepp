@@ -43,7 +43,8 @@ layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex;    // .xyz = n*0.
 layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;     // .x = Vulkan NDC z (reversed-Z)
 layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;       // .x = instanceId+1 (0 = sky), .z = flags
 layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
-layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;    // .rg = NDC motion, .b = prev NDC depth
+layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;    // .rg = NDC motion, .ba = prev NDC depth
+#include "motion_prev_depth.glsl"// motionPrevDepth
 layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world normals (disocclusion)
 layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // prev depth (disocclusion)
 layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;     // 64x64 R8 void-and-cluster
@@ -247,7 +248,7 @@ void main() {
     float histLen   = 1.0;
     float outSq     = curAo * curAo;
     if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
-        const float surfD = texelFetch(gbufMotionTex, pf, 0).b;    // this surface's prev NDC depth
+        const float surfD = motionPrevDepth(texelFetch(gbufMotionTex, pf, 0));// this surface's prev NDC depth
         const vec4  svh = cam.projInverse * vec4(prevNDC, surfD, 1.0);
         const float svz = svh.z / svh.w;
         // JOINT normal+depth test over the 3x3 PREV neighbourhood, the same

@@ -34,6 +34,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0) uniform sampler2D taaInputTex;
 layout(set = 0, binding = 1) uniform sampler2D taaHistoryReadTex;
 layout(set = 0, binding = 2) uniform sampler2D gbufMotionTex;
+#include "motion_prev_depth.glsl"// motionPrevDepth
 // No format qualifier: the bound image is VK_FORMAT_B8G8R8A8_UNORM (matches the
 // swapchain channel order) but GLSL has no BGRA8 format qualifier. Writing
 // without a format requires shaderStorageImageWriteWithoutFormat — channel
@@ -399,7 +400,7 @@ void main() {
     // is genuinely moving. depthLin all-zero ⇒ disabled (no camera params).
     float depthDisocc = 0.0;
     if (reprojValid && (pc.depthLin.z != 0.0 || pc.depthLin.w != 0.0)) {
-        const float surfD = texture(gbufMotionTex, uvInJ).b;              // this surface's prev NDC depth
+        const float surfD = motionPrevDepth(texture(gbufMotionTex, uvInJ));// this surface's prev NDC depth
         const float bufD  = texture(gbufDepthPrevTex, prevUv * inScale).x;// prev depth buffer at reproject
         const float svz   = linZ(surfD);
         const bool  mismatch = abs(svz - linZ(bufD)) > 0.1 * max(abs(svz), 1e-3);

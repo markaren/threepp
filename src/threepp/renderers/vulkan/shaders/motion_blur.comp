@@ -27,7 +27,8 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D resolvedTex;  // post-TAA frame (output extent)
-layout(set = 0, binding = 1) uniform sampler2D gbufMotionTex;// RENDER extent, rg = NDC delta, b = prev NDC depth
+layout(set = 0, binding = 1) uniform sampler2D gbufMotionTex;// RENDER extent, rg = NDC delta, ba = prev NDC depth
+#include "motion_prev_depth.glsl"// motionPrevDepth
 layout(set = 0, binding = 2) uniform sampler2D tileMaxTex;   // tilesX × tilesY dominant velocities
 // Swapchain (bgra8) or the pre-RCAS intermediate — no format qualifier,
 // same convention as taa_resolve.comp's swapchain store.
@@ -58,7 +59,7 @@ const int kSamples = 15;// odd — center tap sits between the two half-lines
 // come out negative); smaller = closer either way. Sky stores 0 (reversed-Z
 // far) and maps to the largest distance, as it must.
 float viewDist(vec2 uv) {
-    const float d = texture(gbufMotionTex, uv).b;
+    const float d = motionPrevDepth(texture(gbufMotionTex, uv));
     if (pc.depthLin.z == 0.0 && pc.depthLin.w == 0.0)
         return (1.0 - d) * 1e4;// no camera terms → monotonic pseudo-depth
     return abs((pc.depthLin.x * d + pc.depthLin.y) /

@@ -280,16 +280,16 @@ void main() {
     }
     if (demodIndirect && !kRR) {
         // ONE motion tap for both halves of the reproject: .rg is the NDC delta and
-        // .b this surface's prev NDC depth, and the depth gate below samples the
+        // .ba this surface's prev NDC depth, and the depth gate below samples the
         // same texel at the same uv, so a second fetch returns the same bits.
-        const vec3 mot  = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rgb;
+        const vec4 mot  = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv));
         const vec2 mv   = mot.rg;
         const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
         const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
         float ph = 0.0;// prev histLen at the reprojected pixel (0 = off-screen / disoccluded ⇒ fresh)
         if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
             const vec3  pn = texture(gbufNormalPrevTex, paneToPhys(gbufNormalPrevTex, pUv)).xyz * 2.0 - 1.0;
-            const float surfD = mot.b;    // this surface's prev NDC depth
+            const float surfD = motionPrevDepth(mot);// this surface's prev NDC depth
             const float bufD  = texture(gbufDepthPrevTex, paneToPhys(gbufDepthPrevTex, pUv)).x;// prev depth buffer at the reproject
             const vec4  svh = cam.projInverse * vec4(pNdc, surfD, 1.0);
             const vec4  bvh = cam.projInverse * vec4(pNdc, bufD, 1.0);
@@ -1440,7 +1440,7 @@ void main() {
             // reprojected neighbourhood last frame? A truly vacated pixel has
             // no matching texel → still resets; a jitter-rounded edge finds
             // its surface one texel over → history survives.
-            const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;// this surface's prev NDC depth
+            const float surfD = motionPrevDepth(texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)));// this surface's prev NDC depth
             const vec4  svh   = cam.projInverse * vec4(prevNDC, surfD, 1.0);
             const float svz   = svh.z / svh.w;
             bool found = false;
@@ -1705,7 +1705,7 @@ void main() {
                 // copy inside its `if (valid)` block; giFlagsZ (the source flag) is
                 // still in scope here so this is the same bit test, not a new heuristic.
                 const bool  dsided  = ifDoubleSided(giFlagsZ);
-                const float surfD   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;// this surface's prev NDC depth (shared by all 4 taps)
+                const float surfD   = motionPrevDepth(texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)));// this surface's prev NDC depth (shared by all 4 taps)
                 const vec4  svh     = cam.projInverse * vec4(prevNDC, surfD, 1.0);
                 const float svz     = svh.z / svh.w;
                 // Nearest tap = what the old `texture()` NEAREST fetch would have

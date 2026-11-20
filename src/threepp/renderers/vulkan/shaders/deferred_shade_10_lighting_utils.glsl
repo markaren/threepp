@@ -46,10 +46,10 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
 // for rough, down to 1 (reset) as roughness → mirror. Thresholds use a
 // view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
 bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, out float histCap) {
-    // ONE motion tap for both halves of the reproject: .rg is the NDC delta and .b
+    // ONE motion tap for both halves of the reproject: .rg is the NDC delta and .ba
     // this surface's prev NDC depth (read by the depth gate below at the same uv),
     // so the second fetch this function used to make returned the same bits.
-    const vec3 mot  = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rgb;
+    const vec4 mot  = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv));
     const vec2 mv   = mot.rg;
     const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
     pUv = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
@@ -66,7 +66,7 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
         // mismatch means the reproject crossed the silhouette onto a DIFFERENT surface
         // ⇒ reject ⇒ the edge resets to a fresh (noisy, un-smeared) reflection. Normal
         // loosened to 0.7 to match the GI (depth is now the primary disocclusion gate).
-        const float surfD = mot.b;                                                       // this surface's prev NDC depth
+        const float surfD = motionPrevDepth(mot);                                        // this surface's prev NDC depth
         const float bufD  = texture(gbufDepthPrevTex, paneToPhys(gbufDepthPrevTex, pUv)).x; // prev depth buffer at the reproject
         const vec4  svh   = cam.projInverse * vec4(pNdc, surfD, 1.0);
         const vec4  bvh   = cam.projInverse * vec4(pNdc, bufD,  1.0);

@@ -36,6 +36,7 @@
 
 #include "raster_camera_ubo.glsl"
 #include "downwash.glsl"
+#include "motion_prev_depth.glsl"// motionPackPrevDepth: outMotion.ba
 
 layout(set = 0, binding = 2, scalar) readonly buffer GbufMatBuf {
     MaterialDesc gbufMats[];
@@ -984,14 +985,16 @@ void main() {
     // frame. Tested adding a (curr_jitter - prev_jitter) delta here; sign
     // flip didn't change behavior. Motion vec stays jitter-free.
     vec2 motion = prevNDC - currNDC;
-    // .b = this surface's OWN previous NDC depth (same convention as the depth
-    // buffer: both are (VP·worldPos).z/w). The deferred GI disocclusion compares
+    // .ba = this surface's OWN previous NDC depth (same convention as the depth
+    // buffer: both are (VP·worldPos).z/w), split over the two half floats so it
+    // survives a linear orthographic depth (motion_prev_depth.glsl; readers
+    // take it with motionPrevDepth). The deferred GI disocclusion compares
     // it against what the prev depth BUFFER actually held at the reprojected spot —
     // they MATCH for a correctly-reprojected moving/deforming surface (skinned
     // mesh) so it does NOT false-reset, but DIFFER for a real disocclusion (a
     // trail revealing another surface). Comparing curr-vs-prev depth instead would
     // wrongly reset any surface that moves in depth → dust on animated meshes.
-    outMotion = vec4(motion, vPrevClip.z / vPrevClip.w, 0.0);
+    outMotion = vec4(motion, motionPackPrevDepth(vPrevClip.z / vPrevClip.w));
 
     // .x = per-frame visible index +1 (clear-to-0 = sky, matches
     // deferred_shade.comp's gbufIdsTex.x convention). .y = stable per-object id (host-assigned; 0 when

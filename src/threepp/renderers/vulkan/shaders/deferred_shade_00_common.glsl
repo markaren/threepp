@@ -247,7 +247,8 @@ layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
 // = 1-frame history), the motion vector, and the prev world NORMALS for the
 // geometric disocclusion (NOT IDs — those are draw-order, see binding setup).
 layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
-layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion
+layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion, .ba = prev NDC depth
+#include "motion_prev_depth.glsl"// motionPrevDepth
 // setFogMarchHalfRes: fog_march.comp's half-res sun march for this frame,
 // (in-scatter rgb, leg length); read by fogDirPrimary while flags bit 30 is set.
 layout(set = 0, binding = 86) uniform sampler2D fogHalfTex;
