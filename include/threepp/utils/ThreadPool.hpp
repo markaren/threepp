@@ -25,12 +25,13 @@
 #define THREEPP_THREADPOOL_HPP
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -146,7 +147,10 @@ namespace threepp {
         };
 
         std::vector<std::thread> threads_;
-        std::array<Slot, kSlots> slots_;
+        // On the heap (aligned operator new), so the pool itself has no extended alignment and can be a local or a
+        // member anywhere: GCC 11's AddressSanitizer with detect_stack_use_after_return=1 placed a local pool that
+        // held the slots at a 32-byte boundary, which UBSan reports.
+        std::unique_ptr<Slot[]> slots_ = std::make_unique<Slot[]>(kSlots);
         std::mutex sleep_;
         std::condition_variable wakeup_;
         std::atomic<uint64_t> generation_{0};
@@ -168,7 +172,8 @@ namespace threepp {
         }
 
         Slot* claimSlot() {
-            for (auto& s : slots_) {
+            for (int k = 0; k < kSlots; ++k) {
+                Slot& s = slots_[k];
                 Job* expected = nullptr;
                 // a placeholder until the job is filled in: workers skip it as they skip a closing slot
                 if (s.job.load(std::memory_order_relaxed) == nullptr && s.job.compare_exchange_strong(expected, closing())) return &s;
@@ -198,7 +203,8 @@ namespace threepp {
         // one pass over the slots, joining every open loop that still has items; whether any item was run
         bool scan() {
             bool did = false;
-            for (auto& s : slots_) {
+            for (int k = 0; k < kSlots; ++k) {
+                Slot& s = slots_[k];
                 if (s.job.load(std::memory_order_relaxed) == nullptr) continue;
                 // the count goes up before the job is read, and a caller marks its loop closing before it reads the
                 // count, so a job is never touched after its caller has let it go
@@ -234,6 +240,8 @@ namespace threepp {
             }
         }
     };
+
+    static_assert(alignof(ThreadPool) <= alignof(std::max_align_t), "ThreadPool must not need extended alignment");
 
 }// namespace threepp
 
