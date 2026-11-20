@@ -63,6 +63,10 @@ namespace threepp {
 
         OrbitControls(Camera& camera, PeripheralsEventSource& eventSource);
 
+        // Places the camera on its orbit about target. Writes to camera.position,
+        // target or camera.up made since the previous call are taken as the new
+        // orbit. Returns true when the camera moved, turned or zoomed since the last
+        // call that returned true.
         bool update();
 
         [[nodiscard]] float getAutoRotationAngle() const;

@@ -2,11 +2,14 @@
 #include "threepp/controls/OrbitControls.hpp"
 
 #include "threepp/input/PeripheralsEventSource.hpp"
+#include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Spherical.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -64,6 +67,16 @@ struct OrbitControls::Impl {
     Vector2 dollyEnd;
     Vector2 dollyDelta;
 
+    // what the previous update wrote; a difference means an outside write
+    bool derived = false;
+    Vector3 writtenPosition;
+    Vector3 writtenTarget;
+    Vector3 writtenUp;
+
+    // the pose the last true return of update() reported
+    Vector3 lastPosition;
+    Quaternion lastQuaternion;
+
     Impl(OrbitControls& scope, PeripheralsEventSource& canvas, Camera& camera)
         : scope(scope), canvas(canvas), camera(camera),
           keyListener(std::make_unique<MyKeyListener>(scope)),
@@ -83,18 +96,32 @@ struct OrbitControls::Impl {
         const auto quat = Quaternion().setFromUnitVectors(camera.up, {0, 1, 0});
         auto quatInverse = Quaternion().copy(quat).invert();
 
-        Vector3 lastPosition;
-        Quaternion lastQuaternion;
-
         auto& position = this->camera.position;
 
-        offset.copy(position).sub(scope.target);
+        // The spherical state is kept between updates and re-derived from the camera
+        // only when the camera position, the target or camera.up differ from what the
+        // previous update left. At the polar clamp the heading is carried by a
+        // horizontal offset of radius * 1e-6, which a float position no longer holds
+        // once the target is away from the origin, so reading it back from the
+        // camera on every update lost it.
+        if (!derived || position != writtenPosition || scope.target != writtenTarget || camera.up != writtenUp) {
 
-        // rotate offset to "y-axis-is-up" space
-        offset.applyQuaternion(quat);
+            offset.copy(position).sub(scope.target);
 
-        // angle from z-axis around y-axis
-        spherical.setFromVector3(offset);
+            // rotate offset to "y-axis-is-up" space
+            offset.applyQuaternion(quat);
+
+            // angle from z-axis around y-axis
+            spherical.setFromVector3(offset);
+
+            derived = true;
+
+        } else {
+
+            // the range the re-derivation (atan2) gives, so the azimuth limits see
+            // the same values and the angle keeps its precision under autoRotate
+            spherical.theta = std::remainder(spherical.theta, math::TWO_PI);
+        }
 
         if (scope.autoRotate && state == NONE) {
 
@@ -120,11 +147,6 @@ struct OrbitControls::Impl {
 
         spherical.makeSafe();
 
-        spherical.radius *= scale;
-
-        // restrict radius to be between desired limits
-        spherical.radius = std::max(scope.minDistance, std::min(scope.maxDistance, spherical.radius));
-
         // move target to panned location
 
         if (scope.enableDamping) {
@@ -136,6 +158,13 @@ struct OrbitControls::Impl {
             scope.target.add(panOffset);
         }
 
+        spherical.radius *= scale;
+
+        // restrict radius to be between desired limits, and keep it above the
+        // resolution of a float position next to the target (see minimumRadius)
+        const auto minRadius = std::max(scope.minDistance, minimumRadius(scope.target));
+        spherical.radius = std::max(minRadius, std::min(scope.maxDistance, spherical.radius));
+
         offset.setFromSpherical(spherical);
 
         // rotate offset back to "camera-up-vector-is-up" space
@@ -143,7 +172,11 @@ struct OrbitControls::Impl {
 
         position.copy(scope.target).add(offset);
 
-        this->camera.lookAt(scope.target);
+        orient(quatInverse);
+
+        writtenPosition.copy(position);
+        writtenTarget.copy(scope.target);
+        writtenUp.copy(camera.up);
 
         if (scope.enableDamping) {
 
@@ -177,6 +210,50 @@ struct OrbitControls::Impl {
         }
 
         return false;
+    }
+
+    // Below this distance a float position next to the target cannot resolve the
+    // offset: with every coordinate at most m in magnitude, a position is
+    // quantised to about m * 2^-24, and 2^-16 * m keeps that error under 1/256 of
+    // the radius. Without it, dollying in with minDistance = 0 shrinks the radius
+    // until position - target rounds to zero. The absolute 1e-18 is where the
+    // squared length of an offset leaves the float range, which reads back as a
+    // distance of zero.
+    static float minimumRadius(const Vector3& target) {
+
+        const auto magnitude = std::max({std::abs(target.x), std::abs(target.y), std::abs(target.z)});
+
+        return std::max(1e-18f, magnitude * (1.f / 65536.f));
+    }
+
+    // The orientation lookAt(target) gives in exact arithmetic, built from the
+    // spherical angles instead of from position - target. At the polar clamp the
+    // float offset no longer carries theta, and lookAt() from straight above has
+    // no defined roll; the angles carry it at every phi, and the right vector,
+    // (cos theta, 0, -sin theta) in "y-axis-is-up" space, depends on theta alone,
+    // so turning the view while looking straight down rolls the picture smoothly
+    // and crossing in and out of the clamp is continuous.
+    void orient(const Quaternion& quatInverse) {
+
+        // the world-matrix refresh lookAt() performs, kept for code that reads
+        // camera.matrix between updates
+        camera.updateWorldMatrix(true, false);
+
+        // A parent that moves the camera makes lookAt() aim from the world position
+        // at the target as a world point, which the spherical angles do not describe;
+        // that case keeps the lookAt() it always had.
+        if (camera.parent && !camera.parent->matrixWorld->equals(Matrix4())) {
+
+            camera.lookAt(scope.target);
+            return;
+        }
+
+        Quaternion azimuth;
+        azimuth.setFromAxisAngle({0, 1, 0}, spherical.theta);
+        Quaternion polar;
+        polar.setFromAxisAngle({1, 0, 0}, spherical.phi - math::PI / 2);
+
+        camera.quaternion.copy(quatInverse).multiply(azimuth).multiply(polar);
     }
 
     [[nodiscard]] float getDistance() const {
