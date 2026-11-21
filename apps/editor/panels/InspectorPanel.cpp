@@ -986,29 +986,15 @@ void EditorApp::drawGeometrySection(Object3D& object) {
 
 void EditorApp::drawGeneratorSection(Object3D& object) {
 
-    // Offered on the SCENE by default — a generated scene's rule belongs to the
-    // scene — and on a Group, for a scene wanting several independently
-    // re-runnable ones. Not on a mesh: generated content goes in a child, and a
-    // mesh with a generated child is a confusing thing to have built by accident.
+    // Offered on the SCENE only: a generated scene's rule belongs to the scene,
+    // and the root is where you look for it. Offering it on every Group put an
+    // empty Generator section on imported model nodes, splines, conveyors and
+    // trees alike, none of which wanted one. A generator already stored on some
+    // other node (a hand-edited file) still shows, so it can be seen and cleared
+    // rather than ride along invisibly.
     const bool isScene = &object == &document_.scene();
-    // Not on generated output: a generator there would be wiped by the next run of
-    // the generator above it, which is a trap rather than a feature.
-    const bool isGeneratedOutput =
-            object.userData.find(GeneratorConfig::generatedKey) != object.userData.end();
-    // Not on an object that already carries an authoring rule of its own. A
-    // tree is not a generic container: it HAS a generator, a specific one, and
-    // a second generic one on top would put a `generated` child beside Trunk
-    // and Leaves meaning something else entirely. The generic pattern is for
-    // things that have no pattern.
-    //
-    // Splines and conveyors are Groups with exactly the same claim and are
-    // still offered one, which is a wrinkle older than this predicate; left
-    // alone deliberately rather than missed.
-    const bool ownAuthoring = TreeConfig::isTree(object);
-    const bool eligible =
-            !isGeneratedOutput && !ownAuthoring && (isScene || object.as<Group>() != nullptr);
     const auto stored = GeneratorConfig::read(object);
-    if (!eligible && !stored) return;
+    if (!isScene && !stored) return;
     if (!section("Generator", stored.has_value())) return;
 
     auto* target = &object;
@@ -1024,8 +1010,7 @@ void EditorApp::drawGeneratorSection(Object3D& object) {
     };
 
     if (!stored) {
-        ImGui::TextColored(theme::muted(), "Build this %s with a Python script.",
-                           isScene ? "scene" : "group");
+        ImGui::TextColored(theme::muted(), "Build this scene with a Python script.");
         if (ImGui::Button("Add generator script")) {
             GeneratorConfig fresh;
             fresh.source = generatorTemplate();

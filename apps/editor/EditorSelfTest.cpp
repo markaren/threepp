@@ -8784,35 +8784,25 @@ int EditorApp::runSelfTest() {
         check(restored && restored->field("count") == "12", "and its exposed parameter");
         check(GeneratorConfig::isGenerator(document_.scene()), "and reports as a generator");
 
-        // A generator on a plain Group, since the config is object-agnostic.
-        auto scoped = Group::create();
-        scoped->name = "Scoped Generator";
-        GeneratorConfig scopedConfig;
-        scopedConfig.source = "pass\n";
-        scopedConfig.setField("n", "3");
-        scopedConfig.write(*scoped);
-        document_.scene().add(scoped);
-        step();
-        check(GeneratorConfig::isGenerator(*scoped), "a Group can carry one too");
-        check(GeneratorConfig::generatedChild(*scoped) == nullptr,
+        check(GeneratorConfig::generatedChild(document_.scene()) == nullptr,
               "with no output before it has run");
 
         // The tagged-output contract: whichever child carries the mark is the one
         // a regenerate replaces.
         auto output = Group::create();
         output->userData[GeneratorConfig::generatedKey] = std::string("1");
-        scoped->add(output);
+        document_.scene().add(output);
         step();
-        check(GeneratorConfig::generatedChild(*scoped) == output.get(),
+        check(GeneratorConfig::generatedChild(document_.scene()) == output.get(),
               "and finds its tagged output once there is one");
+        document_.scene().remove(*output);
 
         // Clearing leaves no trace, so a document does not carry a dead key.
-        GeneratorConfig::erase(*scoped);
-        check(!GeneratorConfig::isGenerator(*scoped), "erasing a generator clears it");
-        check(scoped->userData.find(GeneratorConfig::fieldsKey) == scoped->userData.end(),
-              "fields included");
-
         GeneratorConfig::erase(document_.scene());
+        check(!GeneratorConfig::isGenerator(document_.scene()), "erasing a generator clears it");
+        check(document_.scene().userData.find(GeneratorConfig::fieldsKey) ==
+                      document_.scene().userData.end(),
+              "fields included");
     }
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON

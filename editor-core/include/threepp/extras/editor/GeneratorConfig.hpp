@@ -4,11 +4,10 @@
 // root serialises as an object of type "Scene", so its userData (newlines and
 // all) comes back from a save or a play/stop like any other node's.
 //
-// Nothing here is scene-specific though: read/write take any Object3D, so a
-// Group can carry its own generator when a scene wants several independently
-// re-runnable ones (props, then clutter on top). Same rules, narrower scope. The
-// scene root is the default because one rule per scene is the common case, not
-// because the others are excluded.
+// The editor offers it on the scene root only. read/write still take any
+// Object3D, since nothing in the storage is scene-specific, but no other node is
+// given a Generator section: offered on every Group, it landed on imported model
+// nodes, splines and trees that never wanted one.
 //
 // The distinction from ScriptConfig is what the code is for, and it changes
 // everything about when it runs. A ScriptConfig script is behaviour: a class

@@ -2271,11 +2271,10 @@ no business creating a window, and the editor already owns the ones that exist.
 ### Generators in `userData`
 
 A **generator** is inline Python that AUTHORS content, as opposed to a script,
-which is behaviour that runs during Play. It normally belongs to the **scene** — a
-generated scene's rule is a property of that scene, and the root is where you
-would look for it — so select `Scene` in the hierarchy and the inspector offers a
-Generator section. Any `Group` can carry one too, for a scene that wants several
-independently re-runnable ones (props, then clutter on top).
+which is behaviour that runs during Play. It belongs to the **scene**: a generated
+scene's rule is a property of that scene, and the root is where you would look for
+it. Select `Scene` in the hierarchy and the inspector offers a Generator section;
+no other node does.
 
 ```
 userData["generatorSource"]  count = 400\nfor i in range(count): ...
