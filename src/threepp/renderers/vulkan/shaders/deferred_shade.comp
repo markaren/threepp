@@ -222,11 +222,24 @@ void main() {
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
         const float distW = length(worldPos - camPos);
-        wcol = applyParticleFog(
-                       applyMurk((clouds.heteroActive > 0.5)
-                                 ? applyHeteroSurfaceFog(wcol, uv, distW, camPos, worldPos)
-                                 : applySceneFog(wcol, camPos, worldPos), camPos, worldPos),
-                       camPos, (worldPos - camPos) / max(distW, 1e-6), distW) * domWeight;
+        // The murk is the water's, and the leg to the water's own surface from
+        // an eye in the air never enters it: it ends where the water begins.
+        // The murk's clip is a level plane (fog.waterSurfaceY) and the surface
+        // is not: where a point of it lies under the plane (a trough, or all
+        // the far sea when the scene sets the plane by the wave under the
+        // camera and a crest is passing there), the plane's rule read the end
+        // of the leg as submerged, and at a grazing angle that is a long way:
+        // a point 0.1 m under the plane, 500 m from an eye 3.4 m up, took 14 m
+        // of murk. The far sea went to the murk's colour, with the shafts'
+        // glow on top, and came back as the wave passed. So the leg takes the
+        // murk and its shafts only where the eye is in the water (this pixel's
+        // port point, camUnderwater(): the surface seen from below, and the
+        // wet half of a waterline frame).
+        const bool wetLeg = camUnderwater();
+        wcol = (clouds.heteroActive > 0.5) ? applyHeteroSurfaceFog(wcol, uv, distW, camPos, worldPos)
+                                           : applySceneFog(wcol, camPos, worldPos);
+        if (wetLeg) wcol = applyMurk(wcol, camPos, worldPos);
+        wcol = applyParticleFog(wcol, camPos, (worldPos - camPos) / max(distW, 1e-6), distW) * domWeight;
         if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc, camPos);
         // Volumetric in-scatter — the SAME three terms the opaque path adds
         // below: froxel clustered point-light glow, per-pixel spot beams, and
@@ -241,8 +254,8 @@ void main() {
         wcol = compositeClouds(wcol, px, length(worldPos - camPos));// depth-aware cloud layer in front of the water
         wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)
-              + fogDirPrimary(camPos, -V, length(worldPos - camPos), px)
-              + murkSunScatter(camPos, -V, length(worldPos - camPos), px);// shafts under the surface
+              + fogDirPrimary(camPos, -V, length(worldPos - camPos), px);
+        if (wetLeg) wcol += murkSunScatter(camPos, -V, length(worldPos - camPos), px);// shafts under the surface
         imageStore(outImage, px, vec4(applyMeniscus(wcol * uintBitsToFloat(pc.preExpBits),
                                                     uintBitsToFloat(pc.preExpBits)), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
