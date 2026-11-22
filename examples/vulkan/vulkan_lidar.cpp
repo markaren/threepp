@@ -401,6 +401,7 @@ int main(int argc, char** argv) {
 
     IOCapture capture;
     capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
+    capture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     canvas.setIOCapture(&capture);
 
     canvas.onWindowResize([&](WindowSize size) {

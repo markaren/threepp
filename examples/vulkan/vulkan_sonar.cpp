@@ -357,6 +357,12 @@ int main(int argc, char** argv) {
         ImGui::End();
     });
 
+    // Clicks, drags and wheel over the panel go to ImGui, not the OrbitControls.
+    IOCapture capture{};
+    capture.preventMouseEvent = [&] { return ui && ImGui::GetIO().WantCaptureMouse; };
+    capture.preventScrollEvent = [&] { return ui && ImGui::GetIO().WantCaptureMouse; };
+    canvas.setIOCapture(&capture);
+
     SonarImage image;
     std::array<std::vector<float>, 3> history;
     std::vector<float> persisted;

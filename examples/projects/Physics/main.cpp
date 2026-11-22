@@ -289,6 +289,7 @@ int main() {
 
     IOCapture capture{};
     capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
+    capture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     capture.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
     canvas.setIOCapture(&capture);
 

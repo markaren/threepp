@@ -1776,6 +1776,7 @@ int main(int argc, char** argv) {
     cap.preventMouseEvent = [] {
         return ImGui::GetIO().WantCaptureMouse;
     };
+    cap.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     canvas.setIOCapture(&cap);
 
     // ── Live capture of a SITL flight (--rec DIR) ───────────────────────────

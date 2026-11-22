@@ -113,6 +113,7 @@ int main() {
     capture.preventMouseEvent = [] {
         return ImGui::GetIO().WantCaptureMouse;
     };
+    capture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     canvas.setIOCapture(&capture);
 
     // Controls
