@@ -43,6 +43,7 @@ namespace {
             "defines",              // hashed separately by GLPrograms
             "vertexShader",         // hashed separately by GLPrograms
             "fragmentShader",       // hashed separately by GLPrograms
+            "customProgramCacheKey",// hashed separately by GLPrograms, also for raw shaders
             "isRawShaderMaterial",  // implied by the shader text itself
             "precision",            // constant in practice; changing it needs a full reload
             "maxBones",             // derived from skinning + capabilities
