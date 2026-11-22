@@ -487,6 +487,7 @@ set(sources
 
         "threepp/extras/ShapeUtils.cpp"
         "threepp/extras/terrain/TerrainGenerator.cpp"
+        "threepp/extras/terrain/MountainBackdrop.cpp"
         "threepp/extras/terrain/GeoTerrainPack.cpp"
         "threepp/extras/uav/DownwashEffect.cpp"
         "threepp/extras/uav/MavlinkOut.cpp"
