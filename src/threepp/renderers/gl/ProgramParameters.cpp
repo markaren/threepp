@@ -84,6 +84,12 @@ ProgramParameters::ProgramParameters(
 
     shaderName = material->type();
 
+    // three.js keys a hooked program by the hook's source text; C++ has none to read, so a
+    // material that names no key gets a program of its own.
+    if (material->onBeforeCompile) {
+        customProgramCacheKey = "onBeforeCompile:" + (material->customProgramCacheKey.empty() ? material->uuid() : material->customProgramCacheKey);
+    }
+
     vertexShader = vShader;
     fragmentShader = fShader;
 

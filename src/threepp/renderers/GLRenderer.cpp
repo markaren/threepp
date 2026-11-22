@@ -999,7 +999,23 @@ struct GLRenderer::Impl {
 
             // material.onBuild( parameters, this );
 
-            // material.onBeforeCompile( parameters, this );
+            if (material->onBeforeCompile) {
+                Shader shader;
+                if (parameters.uniforms) shader.uniforms = *parameters.uniforms;
+                for (const auto& [name, u] : material->customUniforms) shader.uniforms.insert_or_assign(name, u);
+                shader.vertexShader = parameters.vertexShader;
+                shader.fragmentShader = parameters.fragmentShader;
+                material->onBeforeCompile(shader);
+                parameters.vertexShader = std::move(shader.vertexShader);
+                parameters.fragmentShader = std::move(shader.fragmentShader);
+                // The built-in maps are shared by every material of a type, so the hook's own
+                // uniforms live on the material; values already set there are kept.
+                for (auto& [name, u] : shader.uniforms) {
+                    if (!parameters.uniforms || !parameters.uniforms->contains(name)) {
+                        material->customUniforms.try_emplace(name, u);
+                    }
+                }
+            }
 
             program = programCache.acquireProgram(scope, parameters, programCacheKey);
             programs[programCacheKey] = program;
@@ -1299,6 +1315,14 @@ struct GLRenderer::Impl {
             refreshMaterial = true;
         }
 
+        // A hook's uniforms change between frames with no other sign, so a hooked material
+        // re-uploads every draw (the built-in ones too: their texture units are reassigned
+        // in the same pass).
+        if (!material->customUniforms.empty()) {
+
+            refreshMaterial = true;
+        }
+
         if (refreshProgram || _currentCamera != camera) {
 
             p_uniforms->setValue("projectionMatrix", camera->projectionMatrix);
@@ -1473,6 +1497,11 @@ struct GLRenderer::Impl {
             }
 
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
+
+            if (!material->customUniforms.empty()) {
+                auto customList = gl::GLUniforms::seqWithValue(p_uniforms->seq, material->customUniforms);
+                gl::GLUniforms::upload(customList, material->customUniforms, &textures);
+            }
         }
 
         if (isShaderMaterial) {

@@ -30,6 +30,9 @@ namespace threepp {
             std::string vertexShader;
             std::string fragmentShader;
 
+            // Material::onBeforeCompile's share key (empty: no hook).
+            std::string customProgramCacheKey;
+
             bool isRawShaderMaterial{};
 
             std::string precision = "highp";

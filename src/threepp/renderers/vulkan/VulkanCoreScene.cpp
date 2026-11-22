@@ -5511,6 +5511,12 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
             {
                 const auto mat = en.mesh->material();
                 useVtxColor = rec.color.handle != VK_NULL_HANDLE && mat && mat->vertexColors;
+                static bool warnedHook = false;
+                if (mat && mat->onBeforeCompile && !warnedHook) {
+                    warnedHook = true;
+                    std::cerr << "VulkanRenderer: Material::onBeforeCompile is a GLRenderer feature; "
+                                 "it is not run here, so a hooked material renders without its GLSL" << std::endl;
+                }
             }
             gdesc.colorAddress = useVtxColor ? rec.color.address : 0ull;
             setGeomInstanceColor(gdesc, en);

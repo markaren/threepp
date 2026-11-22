@@ -53,6 +53,10 @@ void Material::copyInto(Material& m) const {
 
     m.name = name;
 
+    m.onBeforeCompile = onBeforeCompile;
+    m.customProgramCacheKey = customProgramCacheKey;
+    m.customUniforms = customUniforms;
+
     m.fog = fog;
 
     m.blending = blending;

@@ -97,7 +97,9 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const Pro
         array.emplace_back(std::to_string(as_integer(renderer.outputColorSpace)));
     }
 
-    //    array.emplace_back(parameters.customProgramCacheKey);
+    if (!parameters.customProgramCacheKey.empty()) {
+        array.emplace_back(parameters.customProgramCacheKey);
+    }
 
     return utils::join(array);
 }

@@ -5,10 +5,12 @@
 
 #include "threepp/constants.hpp"
 #include "threepp/core/EventDispatcher.hpp"
+#include "threepp/core/Shader.hpp"
 #include "threepp/core/Uniform.hpp"
 #include "threepp/math/Plane.hpp"
 
 #include <atomic>
+#include <functional>
 #include <optional>
 #include <variant>
 
@@ -109,6 +111,25 @@ namespace threepp {
         bool visible = true;
 
         bool toneMapped = true;
+
+        // GLRenderer only (VulkanRenderer ignores it and says so once). Runs when a program
+        // is compiled for this material, on the built-in shader's sources and uniforms:
+        // edit the GLSL (replace a chunk include such as "#include <begin_vertex>" with
+        // itself plus your code) and declare extra uniforms. Uniforms added here are kept
+        // in customUniforms, where their values can change every frame:
+        //
+        //   material->onBeforeCompile = [](Shader& s) {
+        //       s.uniforms["uTime"] = Uniform(0.f);
+        //       s.vertexShader = "uniform float uTime;\n" + s.vertexShader; ...
+        //   };
+        //   material->customUniforms["uTime"].setValue(t);// each frame
+        std::function<void(Shader&)> onBeforeCompile;
+        // Materials whose onBeforeCompile does the same thing should share one key, so
+        // they share one program; empty gives each such material a program of its own.
+        // Call needsUpdate() after changing the hook or the key.
+        std::string customProgramCacheKey;
+        // Values for the uniforms the onBeforeCompile code declares; uploaded every draw.
+        UniformMap customUniforms;
 
         std::unordered_map<std::string, UniformValue> defaultAttributeValues;
 
