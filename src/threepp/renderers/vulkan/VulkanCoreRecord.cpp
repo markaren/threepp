@@ -4575,6 +4575,14 @@ void VulkanRenderer::Impl::prepareParticleLighting() {
 
                 const auto& w = en.worldMatrix;// column-major world transform
                 const auto& p = posAttr->array();
+                // The phase's anisotropy rides in .w: the material's "anisotropy" uniform
+                // (ParticleSprites sets one) or the fixed forward lean every particle had.
+                float g = 0.35f;
+                if (auto* sm = dynamic_cast<ShaderMaterial*>(en.mesh->material().get())) {
+                    if (auto it = sm->uniforms.find("anisotropy"); it != sm->uniforms.end() && it->second.hasValue()) {
+                        if (const auto* v = std::get_if<float>(&it->second.value())) g = std::clamp(*v, -0.9f, 0.9f);
+                    }
+                }
                 particleCenterScratch_.resize(static_cast<size_t>(base + particles) * 4);
                 float* dst = particleCenterScratch_.data() + static_cast<size_t>(base) * 4;
                 for (uint32_t i = 0; i < particles; ++i) {
@@ -4584,7 +4592,7 @@ void VulkanRenderer::Impl::prepareParticleLighting() {
                     dst[i * 4u + 0u] = w[0] * x + w[4] * y + w[8] * z + w[12];
                     dst[i * 4u + 1u] = w[1] * x + w[5] * y + w[9] * z + w[13];
                     dst[i * 4u + 2u] = w[2] * x + w[6] * y + w[10] * z + w[14];
-                    dst[i * 4u + 3u] = 0.f;
+                    dst[i * 4u + 3u] = g;
                 }
                 particleLitBase_[en.mesh] = base;
                 base += particles;

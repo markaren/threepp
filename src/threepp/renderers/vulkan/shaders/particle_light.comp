@@ -111,11 +111,13 @@ layout(push_constant) uniform Pc {
 
 const float PI = 3.14159265358979;
 
-// Fixed forward-leaning particle phase (NOT the medium's fog.anisotropy — the
-// puff is its own dense medium). ×4π-normalized: 1.0 for an isotropic lobe, so
-// a front-lit puff keeps the calibrated albedo×light/π brightness and a backlit
-// one brightens toward its silver lining.
-const float kParticleHgG = 0.35;
+// The particle's own phase (NOT the medium's fog.anisotropy — the puff is its
+// own medium): its HG g rides in centers[].w, 0.35 (forward-leaning) unless the
+// material says otherwise (ParticleSprites::setAnisotropy; a dense billow is
+// lit like a body, brightest with the sun behind the camera, so it leans back).
+// ×4π-normalized: 1.0 for an isotropic lobe, so a front-lit puff keeps the
+// calibrated albedo×light/π brightness and a backlit one brightens toward its
+// silver lining.
 
 #define FROXEL_GRID_LADDER_ONLY
 #include "froxel_grid.glsl"// kFroxelZMin/Max: the LUT's slice ladder
@@ -182,6 +184,7 @@ void main() {
     if (i >= pc.count) return;
 
     const vec3 P      = centers[pc.centerBase + i].xyz;
+    const float kParticleHgG = centers[pc.centerBase + i].w;
     // The view ray that reaches this particle. Under a PARALLEL projection every
     // ray shares the camera's forward and the origin is the particle's own
     // footprint on the near plane, so the direction is known outright and the

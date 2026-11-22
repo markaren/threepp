@@ -500,6 +500,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # A sprite texture freed and a new one made at its address draws the new
     # one; the world-sprite and HUD caches free dead textures' images and keep
     # live ones (headless). Strict validation catches an image freed too early.
+    # ParticleSprites on Vulkan's particle pass: drawn square on a wide canvas, and its
+    # anisotropy reaches the particle lighting (gl/GLParticleSprites_test is the GL twin).
+    add_executable(VulkanParticleSprites_test VulkanParticleSprites_test.cpp)
+    target_link_libraries(VulkanParticleSprites_test PRIVATE threepp)
+    add_test(NAME VulkanParticleSprites_test COMMAND VulkanParticleSprites_test)
+    set_tests_properties(VulkanParticleSprites_test PROPERTIES SKIP_RETURN_CODE 42)
+
     add_executable(VulkanSpriteTextureReuse_test VulkanSpriteTextureReuse_test.cpp)
     target_link_libraries(VulkanSpriteTextureReuse_test PRIVATE threepp)
     add_test(NAME VulkanSpriteTextureReuse_test COMMAND VulkanSpriteTextureReuse_test)
