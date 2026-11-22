@@ -11,6 +11,7 @@
 //   full-window canvas                   Canvas, resizable; camera and renderer follow the window
 //   requestAnimationFrame + delta time   Canvas::animate + Clock::getDelta (clamped)
 //   GLSL snow and tread shaders          ShaderMaterial built from the engine's physical shader chunks
+//   powder and drift particles           ParticleSprites (lit soft billboards, no shader of our own)
 //   mouse/touch orbit and zoom           OrbitControls (a touch screen arrives as mouse input)
 //   click-to-focus                       Raycaster on a click (press and release without a drag)
 //   no text, logos or overlays           no ImGui, no HUD
@@ -32,7 +33,7 @@
 //
 // Headless (stills for review):
 //   glacier_walker --shot out.png [--time T] [--size WxH]
-//                  [--view opening|wide|hatch|knee|ram|foot|prints|crew|hopper|below]
+//                  [--view opening|wide|hatch|knee|ram|foot|prints|crew|hopper|below|powder:<deg>]
 //                  [--click x,y]   the live click path at that pixel, then 1.5 s of follow
 //                  [--bench N]     N live frames timed before the still is written
 //   glacier_walker --film <dir> [--seconds 20] [--size 1920x1080]   PNG frames at 30 fps
@@ -41,6 +42,7 @@
 #include "threepp/extras/terrain/MountainBackdrop.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/input/MouseListener.hpp"
+#include "threepp/objects/ParticleSprites.hpp"
 #include "threepp/renderers/gl/PMREMGenerator.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
@@ -1785,93 +1787,14 @@ void main() {
 
     // ================================================================== particles
 
-    const char* kPuffVert = R"(
-attribute float aSize;
-attribute float aAlpha;
-uniform float uScale;
-uniform vec3 uSunDir;
-varying float vAlpha;
-varying float vFwd;
-#include <common>
-#include <fog_pars_vertex>
-void main() {
-	vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
-	gl_Position = projectionMatrix * mvPosition;
-	gl_PointSize = clamp( aSize * uScale / - mvPosition.z, 0.0, 512.0 );
-	vAlpha = aAlpha;
-	vec3 sunV = normalize( ( viewMatrix * vec4( uSunDir, 0.0 ) ).xyz );
-	vFwd = max( dot( normalize( mvPosition.xyz ), sunV ), 0.0 );
-	#include <fog_vertex>
-}
-)";
-
-    const char* kDriftVert = R"(
-attribute float aSize;
-attribute float aAlpha;
-attribute float aSeed;
-uniform float uScale;
-uniform vec3 uSunDir;
-uniform vec3 uOrigin;
-uniform vec3 uWind;
-uniform vec3 uBox;
-uniform float uTime;
-varying float vAlpha;
-varying float vFwd;
-#include <common>
-#include <fog_pars_vertex>
-void main() {
-	vec3 p = position + uWind * uTime * ( 0.7 + 0.6 * aSeed );
-	p.xz = uOrigin.xz + mod( p.xz - uOrigin.xz + 0.5 * uBox.xz, uBox.xz ) - 0.5 * uBox.xz;
-	p.y = uOrigin.y + position.y + 0.25 * sin( uTime * ( 0.8 + aSeed ) + aSeed * 40.0 );
-	vec4 mvPosition = modelViewMatrix * vec4( p, 1.0 );
-	gl_Position = projectionMatrix * mvPosition;
-	gl_PointSize = clamp( aSize * uScale / - mvPosition.z, 0.0, 512.0 );
-	vec2 rel = abs( p.xz - uOrigin.xz ) / uBox.xz;
-	vAlpha = aAlpha * ( 1.0 - smoothstep( 0.36, 0.5, max( rel.x, rel.y ) ) );
-	vec3 sunV = normalize( ( viewMatrix * vec4( uSunDir, 0.0 ) ).xyz );
-	vFwd = max( dot( normalize( mvPosition.xyz ), sunV ), 0.0 );
-	#include <fog_vertex>
-}
-)";
-
-    const char* kPuffFrag = R"(
-uniform vec3 uSunColor;
-uniform vec3 uSkyColor;
-varying float vAlpha;
-varying float vFwd;
-#include <common>
-#include <fog_pars_fragment>
-void main() {
-	vec2 c = gl_PointCoord * 2.0 - 1.0;
-	float r2 = dot( c, c );
-	if ( r2 > 1.0 ) discard;
-	float a = vAlpha * ( 1.0 - r2 ) * ( 1.0 - r2 );
-	vec3 col = uSkyColor + uSunColor * ( 0.35 + 1.6 * pow( vFwd, 6.0 ) );
-	gl_FragColor = vec4( col, a );
-	#include <tonemapping_fragment>
-	#include <encodings_fragment>
-	#include <fog_fragment>
-}
-)";
-
-    std::shared_ptr<ShaderMaterial> makePuffMaterial(const char* vert, const Vector3& sunDir, const Color& sun, const Color& sky) {
-        auto m = ShaderMaterial::create();
-        m->uniforms = shaders::UniformsLib::instance().fog;
-        m->uniforms["uScale"] = Uniform(500.f);
-        m->uniforms["uSunDir"] = Uniform(sunDir);
-        m->uniforms["uSunColor"] = Uniform(sun);
-        m->uniforms["uSkyColor"] = Uniform(sky);
-        m->uniforms["uOrigin"] = Uniform(Vector3());
-        m->uniforms["uWind"] = Uniform(Vector3(3.2f, 0.f, 1.4f));
-        m->uniforms["uBox"] = Uniform(Vector3(90.f, 8.f, 90.f));
-        m->uniforms["uTime"] = Uniform(0.f);
-        m->vertexShader = vert;
-        m->fragmentShader = kPuffFrag;
-        m->transparent = true;
-        m->depthWrite = false;
-        m->fog = true;
-        return m;
-    }
+    // All of it is ParticleSprites: soft billboards lit by the scene's sun and sky, drawn by
+    // either renderer. The code here only says where each one is, how big and how faint.
+    // Grains and thin drift scatter forward (brighter looking toward the sun). A billow is
+    // dense: it is lit like a body, brightest with the sun behind you, and a sprite takes
+    // the full sun where a billow shades much of itself, so its albedo is lower.
+    const Color kGrainAlbedo(0.92f, 0.94f, 0.97f);
+    const Color kBillowAlbedo(0.40f, 0.47f, 0.60f);
+    constexpr float kBillowAnisotropy = -0.2f;
 
     // Powder thrown up where a foot comes down: soft billows that spread and settle, and
     // clods that fly out and drop.
@@ -1880,22 +1803,22 @@ void main() {
         struct P {
             Vector3 x, v;
             float age = 0, life = 0, s0 = 0, s1 = 0, a0 = 0, drag = 0, grav = 0;
+            bool billow = false;
         };
         std::vector<P> ps;
         int cursor = 0;
-        std::shared_ptr<BufferGeometry> geo;
-        std::shared_ptr<Points> points;
+        // particle i lives in one of the two, by its kind
+        std::shared_ptr<ParticleSprites> billows = ParticleSprites::create(N);
+        std::shared_ptr<ParticleSprites> grains = ParticleSprites::create(N);
         std::mt19937 rng{99};
 
-        explicit Powder(const std::shared_ptr<Material>& mat) {
+        Powder() {
             ps.resize(N);
-            geo = BufferGeometry::create();
-            geo->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(N * 3, 0.f), 3));
-            geo->setAttribute("aSize", FloatBufferAttribute::create(std::vector<float>(N, 0.f), 1));
-            geo->setAttribute("aAlpha", FloatBufferAttribute::create(std::vector<float>(N, 0.f), 1));
-            points = Points::create(geo, mat);
-            points->frustumCulled = false;
-            points->renderOrder = 2;
+            billows->setAnisotropy(kBillowAnisotropy);
+            for (auto* s : {billows.get(), grains.get()}) {
+                s->hideAll();
+                s->mesh().renderOrder = 2;
+            }
         }
 
         float u() { return std::uniform_real_distribution<float>(0.f, 1.f)(rng); }
@@ -1932,6 +1855,7 @@ void main() {
                     p.a0 = 0.3f + 0.3f * u();
                     p.drag = 1.7f;
                     p.grav = 0.5f;
+                    p.billow = true;
                 }
                 spawn(p);
                 ++made;
@@ -1955,14 +1879,11 @@ void main() {
         }
 
         void update(float dt, const Vector3& wind) {
-            auto& pa = geo->getAttribute<float>("position")->array();
-            auto& sa = geo->getAttribute<float>("aSize")->array();
-            auto& aa = geo->getAttribute<float>("aAlpha")->array();
             for (int i = 0; i < N; ++i) {
                 P& p = ps[i];
                 if (p.age >= p.life) {
-                    sa[i] = 0;
-                    aa[i] = 0;
+                    billows->hide(i);
+                    grains->hide(i);
                     continue;
                 }
                 p.age += dt;
@@ -1976,40 +1897,58 @@ void main() {
                     p.v.multiplyScalar(0.2f);
                 }
                 const float f = clamp01(p.age / p.life);
-                pa[3 * i] = p.x.x;
-                pa[3 * i + 1] = p.x.y;
-                pa[3 * i + 2] = p.x.z;
-                sa[i] = mixf(p.s0, p.s1, std::sqrt(f));
-                aa[i] = p.a0 * (1.f - f) * smoothstepf(0.f, 0.06f, f);
+                const float size = mixf(p.s0, p.s1, std::sqrt(f)), alpha = p.a0 * (1.f - f) * smoothstepf(0.f, 0.06f, f);
+                if (p.billow) {
+                    billows->set(i, p.x, size, alpha, kBillowAlbedo);
+                    grains->hide(i);
+                } else {
+                    grains->set(i, p.x, size, alpha, kGrainAlbedo);
+                    billows->hide(i);
+                }
             }
-            geo->getAttribute<float>("position")->needsUpdate();
-            geo->getAttribute<float>("aSize")->needsUpdate();
-            geo->getAttribute<float>("aAlpha")->needsUpdate();
+            billows->commit();
+            grains->commit();
         }
     };
 
-    std::shared_ptr<Points> makeDrift(const std::shared_ptr<Material>& mat) {
-        const int N = 5000;
-        std::mt19937 rng(5);
-        std::uniform_real_distribution<float> u(0.f, 1.f);
-        std::vector<float> pos, size, alpha, seed;
-        for (int i = 0; i < N; ++i) {
-            const bool wisp = i % 10 == 0;
-            pos.insert(pos.end(), {(u(rng) - 0.5f) * 90.f, wisp ? 0.3f + 1.2f * u(rng) : 0.05f + 2.5f * std::pow(u(rng), 3.f), (u(rng) - 0.5f) * 90.f});
-            size.push_back(wisp ? 2.5f + 4.f * u(rng) : 0.03f + 0.05f * u(rng));
-            alpha.push_back(wisp ? 0.05f + 0.05f * u(rng) : 0.35f + 0.4f * u(rng));
-            seed.push_back(u(rng));
+    // Snow blowing over the surface round the point the camera looks at: grains low down and
+    // a few broad faint wisps. Each lives in a box that follows that point, carried by the
+    // wind and wrapped round inside it, fading out toward the box's edge.
+    struct Drift {
+        static constexpr int N = 5000;
+        Vector3 wind{3.2f, 0.f, 1.4f};
+        Vector3 box{90.f, 8.f, 90.f};
+        std::vector<Vector3> base;
+        std::vector<float> size, alpha, seed;
+        std::shared_ptr<ParticleSprites> sprites = ParticleSprites::create(N);
+
+        Drift() {
+            std::mt19937 rng(5);
+            std::uniform_real_distribution<float> u(0.f, 1.f);
+            for (int i = 0; i < N; ++i) {
+                const bool wisp = i % 10 == 0;
+                base.emplace_back((u(rng) - 0.5f) * 90.f, wisp ? 0.3f + 1.2f * u(rng) : 0.05f + 2.5f * std::pow(u(rng), 3.f), (u(rng) - 0.5f) * 90.f);
+                size.push_back(wisp ? 2.5f + 4.f * u(rng) : 0.03f + 0.05f * u(rng));
+                alpha.push_back(wisp ? 0.05f + 0.05f * u(rng) : 0.35f + 0.4f * u(rng));
+                seed.push_back(u(rng));
+            }
+            sprites->mesh().renderOrder = 1;
         }
-        auto g = BufferGeometry::create();
-        g->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        g->setAttribute("aSize", FloatBufferAttribute::create(size, 1));
-        g->setAttribute("aAlpha", FloatBufferAttribute::create(alpha, 1));
-        g->setAttribute("aSeed", FloatBufferAttribute::create(seed, 1));
-        auto p = Points::create(g, mat);
-        p->frustumCulled = false;
-        p->renderOrder = 1;
-        return p;
-    }
+
+        void update(float t, const Vector3& origin) {
+            auto wrap = [](float v, float span) { return v - span * std::floor(v / span); };
+            for (int i = 0; i < N; ++i) {
+                const float s = seed[i];
+                Vector3 p = base[i] + wind * (t * (0.7f + 0.6f * s));
+                p.x = origin.x + wrap(p.x - origin.x + 0.5f * box.x, box.x) - 0.5f * box.x;
+                p.z = origin.z + wrap(p.z - origin.z + 0.5f * box.z, box.z) - 0.5f * box.z;
+                p.y = origin.y + base[i].y + 0.25f * std::sin(t * (0.8f + s) + s * 40.f);
+                const float rel = std::max(std::abs(p.x - origin.x) / box.x, std::abs(p.z - origin.z) / box.z);
+                sprites->set(i, p, size[i], alpha[i] * (1.f - smoothstepf(0.36f, 0.5f, rel)), kGrainAlbedo);
+            }
+            sprites->commit();
+        }
+    };
 
     // ================================================================== the walker
 
@@ -2739,19 +2678,20 @@ int main(int argc, char** argv) {
     };
 
     // powder and drifting snow
-    auto puffMat = makePuffMaterial(kPuffVert, sunDir, sunColor, skyFill);
-    auto driftMat = makePuffMaterial(kDriftVert, sunDir, sunColor, skyFill);
-    Powder powder(puffMat);
-    scene->add(powder.points);
-    auto drift = makeDrift(driftMat);
-    scene->add(drift);
+    Powder powder;
+    scene->add(powder.billows);
+    scene->add(powder.grains);
+    Drift drift;
+    scene->add(drift.sprites);
 
     // ---- simulation -----------------------------------------------------------------------
 
     int stampSeed = 0;
     bool withParticles = true;
     ContactSink sink;
+    Vector3 lastLanding;
     sink.landed = [&](int, const Vector3& p, const Vector3& f) {
+        lastLanding = p;
         track.stampFoot(kit.sole, p, f, kit.sink, ++stampSeed);
         if (withParticles) powder.burst(kit.sole, Vector3(p.x, p.y + kit.sink, p.z), f);
     };
@@ -2838,13 +2778,9 @@ int main(int argc, char** argv) {
 
         skyMat->uniforms["uTime"].setValue(t);
         sky->position.copy(camera->position);
-        const float pxScale = static_cast<float>(canvas.size().height()) / (2.f * std::tan(deg(camera->fov * 0.5f)));
-        puffMat->uniforms["uScale"].setValue(pxScale);
-        driftMat->uniforms["uScale"].setValue(pxScale);
-        driftMat->uniforms["uTime"].setValue(t);
         Vector3 origin = controls.target;
         origin.y = groundHeight(origin.x, origin.z);
-        driftMat->uniforms["uOrigin"].setValue(origin);
+        drift.update(t, origin);
     };
 
     Director director(*camera, controls);
@@ -3028,6 +2964,18 @@ int main(int argc, char** argv) {
             Vector3 hf;
             hoppers[0].root->localToWorld(hf);
             director.inspect(hoppers[0].root.get(), p, 16.f, 140.f, 10.f, w.fwd, w.right);
+        } else if (view.rfind("powder", 0) == 0) {
+            // the last footfall's powder, seen from <deg> round from the sun's bearing:
+            // 0 = the sun behind the camera, 180 = looking into it
+            const float az = view.size() > 7 ? deg(std::stof(view.substr(7))) : 0.f;
+            const Vector3 toSun = unit(Vector3(sunDir.x, 0.f, sunDir.z));
+            const Vector3 dir(toSun.x * std::cos(az) - toSun.z * std::sin(az), 0.f, toSun.x * std::sin(az) + toSun.z * std::cos(az));
+            const Vector3 target = lastLanding + Vector3(0.f, 1.2f, 0.f);
+            Vector3 eye = target + dir * 16.f;
+            eye.y = std::max(eye.y + 2.f, groundHeight(eye.x, eye.z) + 1.7f);
+            director.inspect(nullptr, target, eye.distanceTo(target), 0.f, 0.f, w.fwd, w.right);
+            camera->position.copy(eye);
+            camera->lookAt(target);
         } else if (view == "below") {
             // from the snow under the belly, looking up past the hull
             const Vector3 target = w.bodyCentre() - w.fwd * 1.5f;
