@@ -837,8 +837,13 @@ struct Canvas::Impl {
 
     void animate(const std::function<void()>& f) {
 #ifdef __EMSCRIPTEN__
-        FunctionWrapper wrapper(f, frameEndCallback_);
-        emscripten_set_main_loop_arg(&emscriptenLoop, &wrapper, 0, true);
+        // On the heap, and never freed: the browser calls the loop for the
+        // rest of the page's life. A stack wrapper is only safe while nothing
+        // rewinds the stack, and a build with C++ exceptions does: its invoke
+        // wrappers restore the stack pointer as the simulated infinite loop
+        // unwinds, and the next frame's calls then overwrite the wrapper.
+        auto* wrapper = new FunctionWrapper(f, frameEndCallback_);
+        emscripten_set_main_loop_arg(&emscriptenLoop, wrapper, 0, true);
 #else
         while (animateOnce(f)) {}
 #endif
