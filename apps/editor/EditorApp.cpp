@@ -5,6 +5,7 @@
 #include "ExampleScenes.hpp"
 #include "ImportFormats.hpp"
 #include "PanelLayout.hpp"
+#include "WebFiles.hpp"
 
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
 #include "threepp/extras/editor/ConveyorConfig.hpp"
@@ -944,7 +945,9 @@ EditorApp::~EditorApp() {
 
 int EditorApp::run() {
 
-    Clock clock;
+    // Owned by the loop, not by this stack frame: on the web the loop outlives
+    // run() (the browser keeps calling it after the stack has unwound).
+    auto clock = std::make_shared<Clock>();
 
     if (options_.selfTest) return runSelfTest();
     if (options_.bench > 0) return runBench();
@@ -954,11 +957,11 @@ int EditorApp::run() {
 
     if (options_.maxFrames > 0) {
         for (int i = 0; i < options_.maxFrames; ++i) {
-            if (!canvas_.animateOnce([&] { frame(clock.getDelta()); })) break;
+            if (!canvas_.animateOnce([&] { frame(clock->getDelta()); })) break;
         }
     } else {
-        canvas_.animate([&] {
-            frame(clock.getDelta());
+        canvas_.animate([this, clock] {
+            frame(clock->getDelta());
         });
     }
 
@@ -1652,6 +1655,10 @@ void EditorApp::saveSceneAs(const std::filesystem::path& path) {
     settings_.addRecentFile(path);
     settings_.sceneDir = path.parent_path().string();
     log("saved " + path.filename().string());
+#ifdef __EMSCRIPTEN__
+    // Written to the page's in-memory disk; the visitor's copy is the download.
+    web::offerDownload(path);
+#endif
 }
 
 void EditorApp::setImageStorage(ImageStorage storage) {
@@ -1745,7 +1752,14 @@ void EditorApp::pollImports(float dt) {
 #endif
         // Loader exceptions surface through the future and are rethrown on
         // the main thread in the get() below.
-        activeImport_->future = std::async(std::launch::async, [path, args, vulkanBackend]() -> std::shared_ptr<Object3D> {
+        // A web build has no threads: the import is deferred and runs inside
+        // the get() below instead, on the frame that collects it.
+#ifdef __EMSCRIPTEN__
+        constexpr auto importLaunch = std::launch::deferred;
+#else
+        constexpr auto importLaunch = std::launch::async;
+#endif
+        activeImport_->future = std::async(importLaunch, [path, args, vulkanBackend]() -> std::shared_ptr<Object3D> {
             if (isDescription(path)) {
                 URDFLoader loader;
                 if (!args.empty()) loader.setArgs(args);
@@ -1791,7 +1805,9 @@ void EditorApp::pollImports(float dt) {
     // Finishing during play would add into a scene the stop-restore throws
     // away (and leave a dangling undo entry); park the result until stopped.
     if (isPlaying()) return;
-    if (activeImport_->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    // A deferred future (the web) never reports ready: it is ready to run.
+    if (const auto status = activeImport_->future.wait_for(std::chrono::seconds(0));
+        status != std::future_status::ready && status != std::future_status::deferred) return;
 
     const auto path = activeImport_->path;
     const auto elapsed = activeImport_->elapsed;
@@ -2998,6 +3014,9 @@ void EditorApp::savePrefab(Object3D& object, const std::filesystem::path& path) 
     }
     logWarnings();
     log("saved prefab " + path.filename().string());
+#ifdef __EMSCRIPTEN__
+    web::offerDownload(path);
+#endif
 }
 
 void EditorApp::beginAddPrefab(Object3D& parent) {

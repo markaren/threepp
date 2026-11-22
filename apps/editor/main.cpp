@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -43,6 +44,16 @@ namespace {
 int main(int argc, char** argv) {
 
     threepp::editor::EditorApp::Options options;
+
+#ifdef __EMSCRIPTEN__
+    // A page starts in "/", among the in-memory file system's /dev and /proc.
+    // The dialogs open in the working directory, so make that the user's home.
+    {
+        std::error_code ec;
+        std::filesystem::create_directories("/home/web_user", ec);
+        std::filesystem::current_path("/home/web_user", ec);
+    }
+#endif
 
     for (int i = 1; i < argc; ++i) {
         const char* argument = argv[i];

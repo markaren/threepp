@@ -4,6 +4,10 @@
 
 #include <imgui.h>
 
+#ifdef __EMSCRIPTEN__
+#include "WebFiles.hpp"
+#endif
+
 #include <algorithm>
 #include <cstring>
 
@@ -126,6 +130,36 @@ bool FileBrowser::draw(float scale) {
         if (!ImGui::IsPopupOpen(title_.c_str())) open_ = false;
         return false;
     }
+
+#ifdef __EMSCRIPTEN__
+    // The page's disk is in memory and starts empty: what there is to open
+    // comes from the visitor's computer, into the folder being shown. One file
+    // that fits the filter is opened at once; several (a .gltf and its .bin)
+    // are listed, with the first that fits selected.
+    if (mode_ == Mode::Open) {
+        if (ImGui::Button("Upload from your computer...")) web::requestUpload(directory_);
+        ImGui::SameLine();
+        ImGui::TextDisabled("files are kept in this page until it is closed");
+        if (const auto uploaded = web::takeUploaded(); !uploaded.empty()) {
+            refresh();
+            std::vector<std::filesystem::path> fitting;
+            for (const auto& path : uploaded) {
+                if (matches(path)) fitting.push_back(path);
+            }
+            if (fitting.size() == 1 && uploaded.size() == 1) {
+                confirm(fitting.front());
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                return true;
+            }
+            if (!fitting.empty()) {
+                copyInto(nameBuffer_, sizeof(nameBuffer_), fitting.front().filename().string());
+            }
+        }
+    } else {
+        ImGui::TextDisabled("saving also downloads the file to your computer");
+    }
+#endif
 
     // --- location bar -------------------------------------------------------
     if (ImGui::Button("Up")) {

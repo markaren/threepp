@@ -111,7 +111,12 @@ endif ()
 # ON by default and quietly self-disabling, so nobody has to opt in to get it —
 # but explicit, because embedding CPython is a deployment decision: the binary
 # then needs that exact Python installation on every machine it runs on.
-option(THREEPP_EDITOR_WITH_PYTHON "Build the editor's Python scripting support" ON)
+# Never on the web: a page cannot embed CPython.
+if (DEFINED EMSCRIPTEN)
+    set(THREEPP_EDITOR_WITH_PYTHON OFF)
+else ()
+    option(THREEPP_EDITOR_WITH_PYTHON "Build the editor's Python scripting support" ON)
+endif ()
 
 if (THREEPP_EDITOR_WITH_PYTHON)
     # Development.Embed, not Development.Module: the editor EMBEDS CPython
@@ -246,4 +251,35 @@ elseif (THREEPP_EDITOR_WITH_PYTHON)
     message(STATUS "threepp_editor: Python3 Development.Embed not found, scripting disabled")
 else ()
     message(STATUS "threepp_editor: Python scripting disabled by option")
+endif ()
+
+# --- Web (Emscripten) --------------------------------------------------------
+# The editor as a page: the examples' WebGL2 link flags and shell, plus room the
+# examples do not need. ImGui, the document JSON and the importers recurse far
+# deeper than Emscripten's 64 KB default stack, and a scene with imported models
+# outgrows a small first heap. PhysX comes with the wasm-physx preset; Python
+# never does.
+if (DEFINED EMSCRIPTEN)
+    target_link_options(threepp_editor PRIVATE
+            --bind -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB
+            -sNO_DISABLE_EXCEPTION_CATCHING -sWASM=1
+            "-sEXPORTED_RUNTIME_METHODS=[requestFullscreen,HEAPF32]"
+            -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3
+            -sSTACK_SIZE=8MB -sINITIAL_MEMORY=256MB
+            "--shell-file=${PROJECT_SOURCE_DIR}/examples/emshell.html"
+            "$<$<CONFIG:Debug>:-sASSERTIONS>")
+    # The editor recovers from a bad file by catching what the loaders throw;
+    # Emscripten compiles catch blocks away unless asked.
+    target_compile_options(threepp_editor PRIVATE -fexceptions)
+    target_compile_options(threepp_editor_core PRIVATE -fexceptions)
+    # The library too: its loaders answer questions by catching their own
+    # throws (SogLoader::isSog is "did resolve() throw?"), and with the catch
+    # compiled away the throw escaped into the editor as an import failure -
+    # every dropped .glb was "not a SOG asset". Only in a build that asked for
+    # the editor, so the examples' pages keep the lighter no-exceptions code.
+    target_compile_options(threepp PRIVATE -fexceptions)
+    # File ▸ Open and Save move files through the browser (WebFiles).
+    target_sources(threepp_editor PRIVATE WebFiles.cpp)
+    target_link_options(threepp_editor PRIVATE -sFORCE_FILESYSTEM)
+    set_target_properties(threepp_editor PROPERTIES SUFFIX ".html")
 endif ()

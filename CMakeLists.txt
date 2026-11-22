@@ -52,9 +52,16 @@ cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" 
 
 # The scene editor application (apps/editor). Needs a window, so it follows
 # THREEPP_WITH_GLFW; otherwise it defaults on for anyone building the project
-# itself, exactly like the examples.
+# itself, exactly like the examples. A web build can have it too (a page, with
+# PhysX from the wasm-physx preset and no Python), but asks for it: the
+# examples' web builds should not grow a 70k-line app they did not ask for.
+if (DEFINED EMSCRIPTEN)
+    set(_threepp_editor_default OFF)
+else ()
+    set(_threepp_editor_default ${PROJECT_IS_TOP_LEVEL})
+endif ()
 cmake_dependent_option(THREEPP_BUILD_EDITOR "Build the threepp scene editor"
-        ${PROJECT_IS_TOP_LEVEL} "THREEPP_WITH_GLFW AND NOT DEFINED EMSCRIPTEN" OFF)
+        ${_threepp_editor_default} "THREEPP_WITH_GLFW" OFF)
 
 cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" ON "THREEPP_BUILD_EXAMPLES" OFF)
 
@@ -174,8 +181,11 @@ if (THREEPP_BUILD_EDITOR)
     add_subdirectory(apps/editor)
     # threepp_player: the same play runtime with no editing machinery, for
     # policy validation and data generation. After apps/editor, not beside it —
-    # the Python scripting library it links is declared there.
-    add_subdirectory(apps/player)
+    # the Python scripting library it links is declared there. A desktop tool:
+    # not on the web.
+    if (NOT DEFINED EMSCRIPTEN)
+        add_subdirectory(apps/player)
+    endif ()
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN AND THREEPP_BUILD_TESTS)
