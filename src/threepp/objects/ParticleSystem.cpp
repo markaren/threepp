@@ -63,8 +63,9 @@ namespace {
 
                     // Scale by size with distance attenuation, offset in clip space.
                     // projectionMatrix[1][1] = 2/(top-bottom) ≈ 1/tan(fov/2),
-                    // so multiplying by it converts from world-like units to NDC.
-                    float scale = pSize * projectionMatrix[1][1] / length(mvPosition.xyz);
+                    // so multiplying by it converts from world-like units to NDC. x takes
+                    // projectionMatrix[0][0] (= [1][1] / aspect) so the quad stays square.
+                    vec2 scale = vec2(projectionMatrix[0][0], projectionMatrix[1][1]) * pSize / length(mvPosition.xyz);
                     clipPos.xy += rotated * scale * clipPos.w;
 
                     gl_Position = clipPos;

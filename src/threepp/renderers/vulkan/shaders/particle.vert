@@ -78,7 +78,9 @@ void main() {
     // proj[1][1] is the Y scale (≈ 1/tan(fov/2)); reverse-Z only rewrites the
     // depth row, so this matches the GL billboard scale term exactly. Multiply
     // by clipPos.w to offset in clip space (perspective-correct billboard size).
-    float scale = pSize * pc.proj[1][1] / length(mvPosition.xyz);
+    // Each axis takes its own scale (proj[0][0] = proj[1][1] / aspect), so the sprite is
+    // square on screen; one scale for both stretched it sideways by the aspect ratio.
+    vec2 scale = vec2(pc.proj[0][0], pc.proj[1][1]) * pSize / length(mvPosition.xyz);
     clipPos.xy += rotated * scale * clipPos.w;
 
     // threepp projection follows the GL NDC convention (Y up); Vulkan NDC is Y
