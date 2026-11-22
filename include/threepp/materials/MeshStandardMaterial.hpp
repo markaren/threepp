@@ -128,8 +128,9 @@ namespace threepp {
         // > 0 makes the G-buffer normal take the downwash's concentric rings
         // and its struck disc's roughness, scaled by this value (1 = as
         // tuned). 0 (default) = off. Vulkan deferred G-buffer only; ray hits
-        // on the surface and the GL renderer see the plain normal. Changed
-        // after the first render: needsUpdate(), as for any material value.
+        // on the surface and the GL renderer see the plain normal. An edit
+        // after the first render shows on the next frame, as for any
+        // material value.
         float ripples = 0.f;
 
         // Running water whose mesh carries its own flow (a shallow-water
@@ -144,9 +145,9 @@ namespace threepp {
         // pattern carried with the ripples), turns the surface white toward
         // flowFoamAlbedo and rough, and on a transmissive material takes
         // flowFoam of its transmission (white water is opaque). flowTime is
-        // the clock in seconds: set it every frame (with needsUpdate(), the
-        // cheap material patch). 0 (default) = off; the GL renderer ignores
-        // it.
+        // the clock in seconds: set it every frame (the renderer sees the
+        // edit and patches the material). 0 (default) = off; the GL renderer
+        // ignores it.
         float flow = 0.f;
         float flowTile = 0.5f;
         float flowPeriod = 1.f;

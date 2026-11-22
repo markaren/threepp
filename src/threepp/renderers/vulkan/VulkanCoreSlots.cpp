@@ -238,7 +238,7 @@ void VulkanRenderer::Impl::slotFillRow(size_t i, const MeshEntry& be, const Mesh
             if (rec) {
                 // The record of the mesh's material, derived once per edit
                 // however many rows share it; the row's own instance colour.
-                const uint32_t matIdx = matTableSlot(fp0.matTyped, md0);
+                const uint32_t matIdx = matTableSlot(fp0.matTyped, md0, *be.mesh);
                 assignEntryGeom(i, gd, matIdx);
                 setGeomInstanceColor(geomDescsCached_[i], be);
                 lastVisibleCullMode_[i] = slotCullOf(matTable_[matIdx]);
@@ -1544,7 +1544,7 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                 md.materialAssetIdx = slotMaterialAssetIdx(mat);
                 const GeometryDesc gd = buildGeometryDesc(entries[sp.first], rec, selectLodGeom(rec, 0));
                 for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
-                    const uint32_t matIdx = matTableSlot(mat, md);
+                    const uint32_t matIdx = matTableSlot(mat, md, m);
                     assignEntryGeom(i, gd, matIdx);
                     setGeomInstanceColor(geomDescsCached_[i], entries[i]);
                     lastVisibleCullMode_[i] = cullOf(matTable_[matIdx]);

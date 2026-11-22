@@ -1795,9 +1795,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             diffLeanEntries(sb);
             fingerprintEntries(sb);
             scanDeformers(sb, camera);
-            if (updateSceneInPlace(sb)) return;
-
-            rebuildScene(sb, camera);
+            if (!updateSceneInPlace(sb)) rebuildScene(sb, camera);
+            // The materials the entries draw now are the ones the next frames
+            // read for edits.
+            watchTableMaterials(scene);
         }
 
 // The build's opening: the displacement focus and epoch, the deform queues the last
@@ -1850,6 +1851,10 @@ void VulkanRenderer::Impl::prepareSceneBuild(SceneBuildFrame& sb, Object3D& scen
             // DataTexture re-baked via setData + needsUpdate). Cheap version
             // scan; only re-uploads + rewrites descriptors when something changed.
             refreshDirtyMaterialTextures();
+            // And live edits to material values and maps, as the GL renderer
+            // shows them: a changed material is needsUpdate()d here, before
+            // the snapshot checks and diffs below read the versions.
+            pollMaterialEdits(scene);
 
             std::fill(meshMovedBits_.begin(), meshMovedBits_.end(), 0u);
             std::fill(drawRowFlagBits_.begin(), drawRowFlagBits_.end(), 0u);
@@ -4032,7 +4037,7 @@ void VulkanRenderer::Impl::patchMaterialDescs(SceneBuildFrame& sb) {
                     // per pass however many entries share it; the entry's
                     // GeometryDesc when it lands on another record or its
                     // instance color changed.
-                    setEntryMat(i, matTableSlot(mat, memoMd));
+                    setEntryMat(i, matTableSlot(mat, memoMd, *m));
                     {
                         GeometryDesc& gd = geomDescsCached_[i];
                         float was[3];
@@ -5199,7 +5204,7 @@ void VulkanRenderer::Impl::admitRebuildEntries(SceneBuildFrame& sb, Camera& came
                 }
                 // The memo holds the material's desc, which is its table
                 // record; the entry's instance color is in its GeometryDesc.
-                const uint32_t matIdx = matTableSlot(matKey, memoIt->second);
+                const uint32_t matIdx = matTableSlot(matKey, memoIt->second, *m);
                 setGeomMatIdx(geomDescs[i], matIdx);
                 matTableRef(matIdx);// geomDescs becomes geomDescsCached_ below
                 const MaterialDesc& md = matTable_[matIdx];
@@ -5528,7 +5533,12 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
         }
 
 VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::buildMaterialDesc(Mesh& m) {
-            MaterialDesc md = materialFromMesh(m);
+            // materialFromMesh's two halves, so the views stay for the table
+            // record this desc is about to be (matTableSlot).
+            const auto mat = m.material();
+            const MaterialViews views = mat ? materialViewsOf(*mat) : MaterialViews{};
+            MaterialDesc md = materialDescOf(mat.get(), views);
+            if (mat) builtViews_.insert_or_assign(MatTableKey{mat.get(), mat->id}, views);
             if (auto tex = albedoTexOf(m)) {
                 md.albedoTexIndex = ensureMaterialTexture(tex);
                 copyTexUvTransform(md.uvTransform, tex);
@@ -6086,6 +6096,10 @@ void VulkanRenderer::Impl::matTableReset() {
             matTable_.assign(1, MaterialDesc{});
             matTableKeys_.assign(1, MatTableKey{});
             matTableRefs_.assign(1, 0u);
+            matTableMats_.assign(1, {});
+            matTableViews_.assign(1, {});
+            matTableTouched_.clear();
+            matTableWatchAll_ = true;// the rebuild refills the table: every watch is checked
             matTableStamp_.assign(1, 0u);
             matTableDormant_.clear();
             matTableDormantSeq_.assign(1, 0u);
@@ -6093,7 +6107,7 @@ void VulkanRenderer::Impl::matTableReset() {
             matTableBeginPass();
         }
 
-uint32_t VulkanRenderer::Impl::matTableSlot(const Material* mat, const MaterialDesc& md) {
+uint32_t VulkanRenderer::Impl::matTableSlot(const Material* mat, const MaterialDesc& md, const Mesh& owner) {
             MatTableKey key;
             key.mat = mat;
             key.matId = mat ? mat->id : 0u;
@@ -6101,7 +6115,14 @@ uint32_t VulkanRenderer::Impl::matTableSlot(const Material* mat, const MaterialD
             // matTableAcquire never reclaims the record it names).
             if (matTableMemoSlot_ != 0u && key == matTableMemoKey_) return matTableMemoSlot_;
             const auto it = matTableIndex_.find(key);
-            const uint32_t s = it != matTableIndex_.end() ? it->second : matTableAcquire(key);
+            uint32_t s = 0u;
+            if (it != matTableIndex_.end()) {
+                s = it->second;
+            } else {
+                s = matTableAcquire(key);
+                if (auto held = owner.material(); held.get() == mat) matTableMats_[s] = held;
+                if (const auto vit = builtViews_.find(key); vit != builtViews_.end()) matTableViews_[s] = vit->second;
+            }
             if (matTableStamp_[s] != matTableEpoch_) {
                 matTableStamp_[s] = matTableEpoch_;
                 // Bytes, not fields: the record is what the GPU reads, and a
@@ -6126,6 +6147,8 @@ uint32_t VulkanRenderer::Impl::matTableAcquire(const MatTableKey& key) {
                         continue;
                     matTableIndex_.erase(matTableKeys_[s]);
                     matTableKeys_[s] = key;
+                    matTableMats_[s].reset();
+                    matTableViews_[s] = MaterialViews{};
                     matTable_[s] = MaterialDesc{};
                     matTableIndex_.emplace(key, s);
                     return s;
@@ -6136,6 +6159,8 @@ uint32_t VulkanRenderer::Impl::matTableAcquire(const MatTableKey& key) {
             matTable_.push_back(MaterialDesc{});
             matTableKeys_.push_back(key);
             matTableRefs_.push_back(0u);
+            matTableMats_.emplace_back();
+            matTableViews_.emplace_back();
             matTableStamp_.push_back(0u);
             matTableDormantSeq_.push_back(0u);
             matTableIndex_.emplace(key, s);
@@ -6145,6 +6170,7 @@ uint32_t VulkanRenderer::Impl::matTableAcquire(const MatTableKey& key) {
 void VulkanRenderer::Impl::matTableUnref(uint32_t idx) {
             if (idx == 0u || idx >= matTableRefs_.size() || matTableRefs_[idx] == 0u) return;
             if (--matTableRefs_[idx] != 0u) return;
+            matTableTouched_.push_back(matTableKeys_[idx]);// leaves the live-edit watch
             // No entry names it any more: dormant, kept for its key's return.
             matTableDormant_.emplace_back(idx, ++matTableDormantSeq_[idx]);
         }
@@ -6257,112 +6283,149 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
             return out;
         }
 
+VulkanRenderer::Impl::MaterialViews VulkanRenderer::Impl::materialViewsOf(const Material& mat) {
+            MaterialViews v;
+            v.col = dynamic_cast<const MaterialWithColor*>(&mat);
+            v.map = dynamic_cast<const MaterialWithMap*>(&mat);
+            v.rough = dynamic_cast<const MaterialWithRoughness*>(&mat);
+            v.metal = dynamic_cast<const MaterialWithMetalness*>(&mat);
+            v.emis = dynamic_cast<const MaterialWithEmissive*>(&mat);
+            v.normal = dynamic_cast<const MaterialWithNormalMap*>(&mat);
+            v.trans = dynamic_cast<const MaterialWithTransmission*>(&mat);
+            v.coat = dynamic_cast<const MaterialWithClearcoat*>(&mat);
+            v.atten = dynamic_cast<const MaterialWithAttenuation*>(&mat);
+            v.env = dynamic_cast<const MaterialWithEnvMap*>(&mat);
+            v.standard = dynamic_cast<const MeshStandardMaterial*>(&mat);
+            v.ao = dynamic_cast<const MaterialWithAoMap*>(&mat);
+            v.thick = dynamic_cast<const MaterialWithThickness*>(&mat);
+            v.detail = dynamic_cast<const MaterialWithDetailMap*>(&mat);
+            v.terrain = dynamic_cast<const MaterialWithTerrainMaps*>(&mat);
+            v.spec = dynamic_cast<const MaterialWithPbrSpecular*>(&mat);
+            v.transl = dynamic_cast<const MaterialWithTranslucency*>(&mat);
+            v.sheen = dynamic_cast<const MaterialWithSheen*>(&mat);
+            v.irid = dynamic_cast<const MaterialWithIridescence*>(&mat);
+            v.disp = dynamic_cast<const MaterialWithDisplacementMap*>(&mat);
+            v.basic = dynamic_cast<const MeshBasicMaterial*>(&mat) != nullptr;
+            v.taken = true;
+            return v;
+        }
+
 VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const Mesh& m) {
-            MaterialDesc d{};
-            d.albedo[0] = d.albedo[1] = d.albedo[2] = 0.8f;
-            d.roughness = 0.5f;
-            d.metalness = 0.0f;
-            d.emissive[0] = d.emissive[1] = d.emissive[2] = 0.0f;
-            d.emissiveIntensity = 1.0f;
-            d.albedoTexIndex = -1;
-            d.roughnessTexIndex = -1;
-            d.metalnessTexIndex = -1;
-            d.normalTexIndex = -1;
-            d.normalScale[0] = 1.0f;
-            d.normalScale[1] = 1.0f;
-            d.alphaCutoff = 0.0f;// disabled by default; any-hit short-circuits on alphaCutoff <= 0
-            d.transmission = 0.0f;// opaque by default
-            d.ior          = 1.5f;// glass-typical default; only consulted when transmission > 0
+            const auto mat = m.material();
+            return mat ? materialDescOf(mat.get(), materialViewsOf(*mat)) : materialDescOf(nullptr, MaterialViews{});
+        }
+
+VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialDescOf(const Material* mat, const MaterialViews& v) {
+            // The defaults, built once: the record is 600-odd bytes, and the
+            // live-edit poll derives one per watched material per frame.
+            static const MaterialDesc kDefaults = [] {
+                MaterialDesc d{};
+                d.albedo[0] = d.albedo[1] = d.albedo[2] = 0.8f;
+                d.roughness = 0.5f;
+                d.metalness = 0.0f;
+                d.emissive[0] = d.emissive[1] = d.emissive[2] = 0.0f;
+                d.emissiveIntensity = 1.0f;
+                d.albedoTexIndex = -1;
+                d.roughnessTexIndex = -1;
+                d.metalnessTexIndex = -1;
+                d.normalTexIndex = -1;
+                d.normalScale[0] = 1.0f;
+                d.normalScale[1] = 1.0f;
+                d.alphaCutoff = 0.0f;// disabled by default; any-hit short-circuits on alphaCutoff <= 0
+                d.transmission = 0.0f;// opaque by default
+                d.ior          = 1.5f;// glass-typical default; only consulted when transmission > 0
+                d.transmissionTexIndex = -1;
+                d.clearcoat = 0.0f;// no coat by default; lobe is skipped when clearcoat == 0
+                d.clearcoatRoughness = 0.0f;
+                d.clearcoatTexIndex = -1;
+                d.clearcoatRoughnessTexIndex = -1;
+                d.attenuationColor[0] = d.attenuationColor[1] = d.attenuationColor[2] = 1.0f;
+                d.attenuationDistance = 0.0f;
+                d.scatterColor[0] = d.scatterColor[1] = d.scatterColor[2] = 0.0f;
+                d.scatterDistance = 0.0f;// 0 = in-scatter off; shader keeps the old path
+                d.emissiveTexIndex = -1;
+                d.specularIntensity = 1.0f;
+                d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
+                d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
+                d.sheenRoughness = 0.0f;
+                d.iridescence = 0.0f;             // off by default; lobe is skipped when iridescence == 0
+                d.iridescenceIOR = 1.3f;
+                d.iridescenceThicknessNm = 400.0f;
+                d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
+                d.thickness = 0.0f;               // the volume under a transmissive surface (MaterialWithThickness)
+                d.thinWalled = 1;                 // derived from thickness below: 1 = a sheet seen straight through
+                d.occlusionTexIndex = -1;
+                d.detailTexIndex = -1;
+                d.detailRepeat = 0.f;
+                d.detailStrength = 0.f;
+                d.detailNormalTexIndex = -1;
+                d.detailNormalScale = 1.f;
+                d.detailRoughStrength = 0.f;
+                d.ripples = 0.f;
+                d.flow = 0.f;// running water off (MeshStandardMaterial::flow)
+                d.flowTile = 1.f;
+                d.flowPeriod = 1.f;
+                d.flowTime = 0.f;
+                d.flowFoam = 0.f;
+                d.flowFoamAlbedo = 0.f;
+                d.terrainWeightTexIndex = -1;
+                d.terrainNormalTexIndex = -1;
+                d.terrainBandStrength = 0.f;
+                d.terrainNormalScale = 1.f;
+                d.terrainRoughStrength = 0.f;
+                d.terrainHeightBlend = 0.f;
+                d.envMapIntensity = 1.f;// unscaled IBL: what every material that never sets it carries
+                d.aoMapIntensity = 1.f;
+                for (int bi = 0; bi < 4; ++bi) {
+                    d.terrainBandAlbedoTex[bi] = -1;
+                    d.terrainBandNormalTex[bi] = -1;
+                    d.terrainBandRepeat[bi] = 1.f;
+                    d.terrainBandRough[bi] = 0.9f;
+                }
+                std::fill(std::begin(d.terrainBandFarTint), std::end(d.terrainBandFarTint), 1.f);
+                d.terrainFarStart = 0.f;
+                d.terrainFarInvRange = 0.f;// no far tint
+                d.translucency = 0.f;             // off by default; deferred sun/ambient translucency term is skipped when 0
+                d.translucencyColor[0] = d.translucencyColor[1] = d.translucencyColor[2] = 1.0f;
+                static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
+                std::copy(kIdent, kIdent+9, d.uvTransform);
+                std::copy(kIdent, kIdent+9, d.uvTransformNormal);
+                std::copy(kIdent, kIdent+9, d.uvTransformRoughMetal);
+                std::copy(kIdent, kIdent+9, d.uvTransformEmissive);
+                std::copy(kIdent, kIdent+9, d.uvTransformOcclusion);
+                std::copy(kIdent, kIdent+9, d.uvTransformClearcoat);
+                std::copy(kIdent, kIdent+9, d.uvTransformClearcoatRough);
+                std::copy(kIdent, kIdent+9, d.uvTransformTransmission);
+                return d;
+            }();
             // ior of a surface that is NOT refractive at all (flat alpha blend,
             // additive glow). Shader twin: isFlatAlphaBlend().
             constexpr float kFlatBlendIor = 0.0f;
-            d.transmissionTexIndex = -1;
-            d.clearcoat = 0.0f;// no coat by default; lobe is skipped when clearcoat == 0
-            d.clearcoatRoughness = 0.0f;
-            d.clearcoatTexIndex = -1;
-            d.clearcoatRoughnessTexIndex = -1;
-            d.attenuationColor[0] = d.attenuationColor[1] = d.attenuationColor[2] = 1.0f;
-            d.attenuationDistance = 0.0f;
-            d.scatterColor[0] = d.scatterColor[1] = d.scatterColor[2] = 0.0f;
-            d.scatterDistance = 0.0f;// 0 = in-scatter off; shader keeps the old path
-            d.emissiveTexIndex = -1;
-            d.specularIntensity = 1.0f;
-            d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
-            d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
-            d.sheenRoughness = 0.0f;
-            d.iridescence = 0.0f;             // off by default; lobe is skipped when iridescence == 0
-            d.iridescenceIOR = 1.3f;
-            d.iridescenceThicknessNm = 400.0f;
-            d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
-            d.thickness = 0.0f;               // the volume under a transmissive surface (MaterialWithThickness)
-            d.thinWalled = 1;                 // derived from thickness below: 1 = a sheet seen straight through
-            d.occlusionTexIndex = -1;
-            d.detailTexIndex = -1;
-            d.detailRepeat = 0.f;
-            d.detailStrength = 0.f;
-            d.detailNormalTexIndex = -1;
-            d.detailNormalScale = 1.f;
-            d.detailRoughStrength = 0.f;
-            d.ripples = 0.f;
-            d.flow = 0.f;// running water off (MeshStandardMaterial::flow)
-            d.flowTile = 1.f;
-            d.flowPeriod = 1.f;
-            d.flowTime = 0.f;
-            d.flowFoam = 0.f;
-            d.flowFoamAlbedo = 0.f;
-            d.terrainWeightTexIndex = -1;
-            d.terrainNormalTexIndex = -1;
-            d.terrainBandStrength = 0.f;
-            d.terrainNormalScale = 1.f;
-            d.terrainRoughStrength = 0.f;
-            d.terrainHeightBlend = 0.f;
-            d.envMapIntensity = 1.f;// unscaled IBL: what every material that never sets it carries
-            d.aoMapIntensity = 1.f;
-            for (int bi = 0; bi < 4; ++bi) {
-                d.terrainBandAlbedoTex[bi] = -1;
-                d.terrainBandNormalTex[bi] = -1;
-                d.terrainBandRepeat[bi] = 1.f;
-                d.terrainBandRough[bi] = 0.9f;
-            }
-            std::fill(std::begin(d.terrainBandFarTint), std::end(d.terrainBandFarTint), 1.f);
-            d.terrainFarStart = 0.f;
-            d.terrainFarInvRange = 0.f;// no far tint
-            d.translucency = 0.f;             // off by default; deferred sun/ambient translucency term is skipped when 0
-            d.translucencyColor[0] = d.translucencyColor[1] = d.translucencyColor[2] = 1.0f;
-            static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
-            std::copy(kIdent, kIdent+9, d.uvTransform);
-            std::copy(kIdent, kIdent+9, d.uvTransformNormal);
-            std::copy(kIdent, kIdent+9, d.uvTransformRoughMetal);
-            std::copy(kIdent, kIdent+9, d.uvTransformEmissive);
-            std::copy(kIdent, kIdent+9, d.uvTransformOcclusion);
-            std::copy(kIdent, kIdent+9, d.uvTransformClearcoat);
-            std::copy(kIdent, kIdent+9, d.uvTransformClearcoatRough);
-            std::copy(kIdent, kIdent+9, d.uvTransformTransmission);
-            auto mat = m.material();
+            MaterialDesc d = kDefaults;
             if (!mat) return d;
             d.alphaCutoff = mat->alphaTest;
-            if (auto* col = dynamic_cast<MaterialWithColor*>(mat.get())) {
+            if (auto* col = v.col) {
                 d.albedo[0] = col->color.r;
                 d.albedo[1] = col->color.g;
                 d.albedo[2] = col->color.b;
             }
-            if (auto* rg = dynamic_cast<MaterialWithRoughness*>(mat.get())) {
+            if (auto* rg = v.rough) {
                 d.roughness = rg->roughness;
             }
-            if (auto* mt = dynamic_cast<MaterialWithMetalness*>(mat.get())) {
+            if (auto* mt = v.metal) {
                 d.metalness = mt->metalness;
             }
-            if (auto* em = dynamic_cast<MaterialWithEmissive*>(mat.get())) {
+            if (auto* em = v.emis) {
                 d.emissive[0] = em->emissive.r;
                 d.emissive[1] = em->emissive.g;
                 d.emissive[2] = em->emissive.b;
                 d.emissiveIntensity = em->emissiveIntensity;
             }
-            if (auto* nm = dynamic_cast<MaterialWithNormalMap*>(mat.get())) {
+            if (auto* nm = v.normal) {
                 d.normalScale[0] = nm->normalScale.x;
                 d.normalScale[1] = nm->normalScale.y;
             }
-            if (auto* tr = dynamic_cast<MaterialWithTransmission*>(mat.get())) {
+            if (auto* tr = v.trans) {
                 d.transmission = tr->transmission;
                 d.ior          = std::max(1.0f, tr->ior);
                 d.dispersion   = std::max(0.0f, tr->dispersion);
@@ -6437,7 +6500,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             if (mat->transparent && d.alphaCutoff == 0.0f) {
                 if (d.transmission == 0.0f) {
                     d.alphaCutoff = (!mat->depthWrite && mat->polygonOffset) ? -2.0f : -1.0f;
-                } else if (auto* mm = dynamic_cast<MaterialWithMap*>(mat.get()); mm && mm->map) {
+                } else if (auto* mm = v.map; mm && mm->map) {
                     // BLEND with BOTH a flat opacity/transmission (handled above)
                     // AND a texture: the texel alpha is still the surface's
                     // coverage (a ground-fog card = opacity 0.87 over a soft
@@ -6449,7 +6512,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                     d.alphaCutoff = -1.0f;
                 }
             }
-            if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
+            if (auto* cc = v.coat) {
                 // THREEPP_VK_DIAG_NOCOAT=1: diagnostic only, never a default. Every
                 // material uploads without its coat: the A/B for the opaque shade's
                 // clearcoat lobe in one binary (it also drops the water glint's and
@@ -6458,7 +6521,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 d.clearcoat = noCoat ? 0.0f : cc->clearcoat;
                 d.clearcoatRoughness = cc->clearcoatRoughness;
             }
-            if (auto* att = dynamic_cast<MaterialWithAttenuation*>(mat.get())) {
+            if (auto* att = v.atten) {
                 d.attenuationColor[0] = att->attenuationColor.r;
                 d.attenuationColor[1] = att->attenuationColor.g;
                 d.attenuationColor[2] = att->attenuationColor.b;
@@ -6469,7 +6532,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 // Negative would make sigma_s negative (radiance sink); clamp.
                 d.scatterDistance = std::max(0.0f, att->scatterDistance);
             }
-            if (auto* em = dynamic_cast<MaterialWithEnvMap*>(mat.get())) {
+            if (auto* em = v.env) {
                 // The deferred path has no per-material env MAP — one scene
                 // environment lights everything — so only the INTENSITY is
                 // meaningful here, and only where this material is the primary
@@ -6477,7 +6540,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 // so the knob is clamped at zero and left open above 1.
                 d.envMapIntensity = std::max(0.f, em->envMapIntensity);
             }
-            if (auto* st = dynamic_cast<MeshStandardMaterial*>(mat.get())) {
+            if (auto* st = v.standard) {
                 d.ripples = std::max(0.f, st->ripples);
                 if (st->flow > 0.f) {
                     d.flow = st->flow;
@@ -6488,13 +6551,13 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                     d.flowFoamAlbedo = std::clamp(st->flowFoamAlbedo, 0.f, 1.f);
                 }
             }
-            if (auto* ao = dynamic_cast<MaterialWithAoMap*>(mat.get())) {
+            if (auto* ao = v.ao) {
                 // The index is bound at the texture-index fill sites
                 // (occlusionTexOf). Negative would brighten the indirect light
                 // through the map; above 1 deepens it, as in three.js.
                 d.aoMapIntensity = std::max(0.f, ao->aoMapIntensity);
             }
-            if (auto* th = dynamic_cast<MaterialWithThickness*>(mat.get())) {
+            if (auto* th = v.thick) {
                 d.thickness  = std::max(0.0f, th->thickness);
                 // three.js and glTF (KHR_materials_volume): no thickness = thin-
                 // walled, a window or a lens seen straight through; a thickness =
@@ -6502,7 +6565,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 // trace the mesh for the volume's depth, so they only need which.
                 d.thinWalled = d.thickness > 0.0f ? 0 : 1;
             }
-            if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
+            if (auto* dm = v.detail) {
                 // texIndex stays -1 here; the texture-index fill sites bind it
                 // (detailTexOf gates on detailMap && strength > 0).
                 d.detailRepeat        = dm->detailRepeat;
@@ -6510,7 +6573,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 d.detailNormalScale   = dm->detailNormalScale;
                 d.detailRoughStrength = std::clamp(dm->detailRoughStrength, 0.f, 1.f);
             }
-            if (auto* tm = dynamic_cast<MaterialWithTerrainMaps*>(mat.get())) {
+            if (auto* tm = v.terrain) {
                 // Indices stay -1 here; the texture-index fill sites bind them
                 // (terrainWeightTexOf gates on the weight map + a band set).
                 d.terrainBandStrength  = std::clamp(tm->terrainBandStrength, 0.f, 1.f);
@@ -6533,25 +6596,25 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                     d.terrainFarInvRange = 1.f / (tm->terrainFarEnd - farStart);
                 }
             }
-            if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
+            if (auto* sp = v.spec) {
                 d.specularIntensity   = sp->specularIntensity;
                 d.specularColor[0]    = sp->specularColor.r;
                 d.specularColor[1]    = sp->specularColor.g;
                 d.specularColor[2]    = sp->specularColor.b;
             }
-            if (auto* tl = dynamic_cast<MaterialWithTranslucency*>(mat.get())) {
+            if (auto* tl = v.transl) {
                 d.translucency         = std::clamp(tl->translucency, 0.f, 1.f);
                 d.translucencyColor[0] = tl->translucencyColor.r;
                 d.translucencyColor[1] = tl->translucencyColor.g;
                 d.translucencyColor[2] = tl->translucencyColor.b;
             }
-            if (auto* sh = dynamic_cast<MaterialWithSheen*>(mat.get())) {
+            if (auto* sh = v.sheen) {
                 d.sheenColor[0]  = sh->sheenColor.r;
                 d.sheenColor[1]  = sh->sheenColor.g;
                 d.sheenColor[2]  = sh->sheenColor.b;
                 d.sheenRoughness = sh->sheenRoughness;
             }
-            if (auto* ir = dynamic_cast<MaterialWithIridescence*>(mat.get())) {
+            if (auto* ir = v.irid) {
                 d.iridescence            = ir->iridescence;
                 d.iridescenceIOR         = std::max(1.0f, ir->iridescenceIOR);
                 d.iridescenceThicknessNm = std::max(0.0f, ir->iridescenceThicknessNm);
@@ -6563,9 +6626,221 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             // MeshBasicMaterial is unlit: emit base color directly with no
             // PBR shading or bounce. Use roughness < 0 as the shader sentinel
             // (avoids growing the MaterialDesc layout).
-            if (dynamic_cast<MeshBasicMaterial*>(mat.get())) {
+            if (v.basic) {
                 d.roughness = -1.0f;
             }
             return d;
+        }
+
+namespace {
+
+    // Whether two byte ranges differ, n a multiple of 4: a word at a time and
+    // with no early exit, so the loop vectorises (the poll compares a 704-byte
+    // record per material per frame; memcmp calls were most of its cost).
+    bool bytesDiffer(const void* a, const void* b, size_t n) {
+        const auto* pa = static_cast<const unsigned char*>(a);
+        const auto* pb = static_cast<const unsigned char*>(b);
+        uint64_t acc = 0;
+        size_t i = 0;
+        for (; i + 8 <= n; i += 8) {
+            uint64_t x, y;
+            std::memcpy(&x, pa + i, 8);
+            std::memcpy(&y, pb + i, 8);
+            acc |= x ^ y;
+        }
+        for (; i + 4 <= n; i += 4) {
+            uint32_t x, y;
+            std::memcpy(&x, pa + i, 4);
+            std::memcpy(&y, pb + i, 4);
+            acc |= x ^ y;
+        }
+        return acc != 0;
+    }
+
+}// namespace
+
+void VulkanRenderer::Impl::readMaterialWatch(MaterialWatch& w, const Material& mat, bool& changed) {
+            const MaterialViews& v = w.views;// views of `mat`
+            // Its values, through the same derivation the record takes, and
+            // compared as the record's bytes (as matTableSlot compares them).
+            const MaterialDesc d = materialDescOf(&mat, v);
+            if (bytesDiffer(&d, &w.desc, sizeof(MaterialDesc))) {
+                w.desc = d;
+                changed = true;
+            }
+            // Its maps, by address and id, the transformed ones first.
+            static const std::shared_ptr<Texture> kNone;
+            const MaterialWithTerrainMaps* tm = v.terrain;
+            const std::array<const std::shared_ptr<Texture>*, kWatchedMaps> maps{
+                    v.map ? &v.map->map : &kNone,
+                    v.rough ? &v.rough->roughnessMap : &kNone,
+                    v.metal ? &v.metal->metalnessMap : &kNone,
+                    v.normal ? &v.normal->normalMap : &kNone,
+                    v.trans ? &v.trans->transmissionMap : &kNone,
+                    v.coat ? &v.coat->clearcoatMap : &kNone,
+                    v.coat ? &v.coat->clearcoatRoughnessMap : &kNone,
+                    v.emis ? &v.emis->emissiveMap : &kNone,
+                    v.ao ? &v.ao->aoMap : &kNone,
+                    v.disp ? &v.disp->displacementMap : &kNone,// the last transformed one
+                    v.detail ? &v.detail->detailMap : &kNone,
+                    v.detail ? &v.detail->detailNormalMap : &kNone,
+                    tm ? &tm->terrainWeightMap : &kNone,
+                    tm ? &tm->terrainNormalMap : &kNone,
+                    tm ? &tm->terrainBandAlbedo[0] : &kNone,
+                    tm ? &tm->terrainBandAlbedo[1] : &kNone,
+                    tm ? &tm->terrainBandAlbedo[2] : &kNone,
+                    tm ? &tm->terrainBandAlbedo[3] : &kNone,
+                    tm ? &tm->terrainBandNormalRough[0] : &kNone,
+                    tm ? &tm->terrainBandNormalRough[1] : &kNone,
+                    tm ? &tm->terrainBandNormalRough[2] : &kNone,
+                    tm ? &tm->terrainBandNormalRough[3] : &kNone,
+            };
+            static_assert(MaterialWithTerrainMaps::kTerrainBands == 4);
+            for (size_t i = 0; i < kWatchedMaps; ++i) {
+                const Texture* t = maps[i]->get();
+                const unsigned int id = t ? t->id : 0u;
+                if (t == w.maps[i] && id == w.mapIds[i]) continue;
+                w.maps[i] = t;
+                w.mapIds[i] = id;
+                changed = true;
+                // A transformed map's key starts over with the map it holds.
+                if (i < kWatchedXformMaps) std::fill_n(&w.xforms[i * 10], 10, 0.f);
+            }
+            // The transformed maps' uv transforms: the inputs of the matrix
+            // (copyTexUvTransform derives it from them), not the matrix. An
+            // absent map's key stays zero (it was cleared when the map went).
+            for (size_t i = 0; i < kWatchedXformMaps; ++i) {
+                const Texture* t = maps[i]->get();
+                if (!t) continue;
+                float k[10];
+                if (t->matrixAutoUpdate) {
+                    k[0] = t->offset.x;
+                    k[1] = t->offset.y;
+                    k[2] = t->repeat.x;
+                    k[3] = t->repeat.y;
+                    k[4] = t->center.x;
+                    k[5] = t->center.y;
+                    k[6] = t->rotation;
+                    k[7] = k[8] = 0.f;
+                    k[9] = 1.f;
+                } else {
+                    std::copy(t->matrix.elements.begin(), t->matrix.elements.end(), k);
+                    k[9] = 0.f;
+                }
+                float* was = &w.xforms[i * 10];
+                if (!bytesDiffer(k, was, sizeof(k))) continue;
+                std::memcpy(was, k, sizeof(k));
+                changed = true;
+            }
+            // The displacement, which re-displaces the geometry: its scale and
+            // bias, and the map's pixels (a texture needsUpdate()).
+            if (!v.disp) return;
+            const float ds = v.disp->displacementScale;
+            const float db = v.disp->displacementBias;
+            const unsigned int dv = v.disp->displacementMap ? v.disp->displacementMap->version() : 0u;
+            if (bytesDiffer(&ds, &w.dispScale, sizeof(float)) || bytesDiffer(&db, &w.dispBias, sizeof(float)) ||
+                dv != w.dispMapVersion) {
+                w.dispScale = ds;
+                w.dispBias = db;
+                w.dispMapVersion = dv;
+                changed = true;
+            }
+        }
+
+void VulkanRenderer::Impl::pollMaterialEdits(Object3D& scene) {
+            if (materialWatch_.empty()) return;
+            THREEPP_CPUPROF("scene.1b_materialEdits");
+            // The scene's structure as the list was settled: every watched
+            // material is still held by one of its meshes (MaterialWatch).
+            const bool standing = !versionsDisabled() && materialWatchScene_ == &scene &&
+                                  materialWatchSceneId_ == scene.id && materialWatchSceneVer_ == scene.structureVersion();
+            // Each material is watched once, so the chunks touch disjoint
+            // materials; their maps are only read. The read is bound by the
+            // memory a material spreads its fields over (a cold one costs
+            // 0.2 to 0.4 us), so it shares out finer than the entry walks do:
+            // a chunk per 256 materials, up to the pool's chunk count.
+            // Measured 2026-11-22 on 5000 boxes of 5000 materials, headless:
+            // 1.1 ms on one thread, 0.21 ms in chunks.
+            const size_t n = materialWatch_.size();
+            const unsigned chunks =
+                    n < 512 ? 1u : static_cast<unsigned>(std::min<size_t>(vulkan::par::config().chunks, n / 256));
+            vulkan::par::run(chunks, [&](unsigned c) {
+                const size_t end = n * (c + 1u) / chunks;
+                for (size_t i = n * c / chunks; i < end; ++i) {
+                    MaterialWatch& w = materialWatch_[i];
+                    std::shared_ptr<Material> held;
+                    Material* mat = w.mat;
+                    if (!standing) {
+                        held = w.ref.lock();
+                        if (!held) continue;// gone with the meshes that held it
+                        mat = held.get();
+                    }
+                    bool changed = false;
+                    readMaterialWatch(w, *mat, changed);
+                    if (changed) mat->needsUpdate();
+                }
+            });
+        }
+
+void VulkanRenderer::Impl::addMaterialWatch(uint32_t record) {
+            const MatTableKey& key = matTableKeys_[record];
+            // Drawn by this build's entries, so alive; locked all the same
+            // for the non-const material the poll needsUpdate()s.
+            const std::shared_ptr<Material> mat = matTableMats_[record].lock();
+            if (!key.mat || !mat || mat.get() != key.mat) return;
+            MaterialWatch& w = materialWatch_.emplace_back();
+            w.mat = mat.get();
+            w.matId = key.matId;
+            w.ref = mat;
+            w.views = matTableViews_[record].taken ? matTableViews_[record] : materialViewsOf(*mat);
+            bool unused = false;
+            readMaterialWatch(w, *mat, unused);// what this build read for it
+            materialWatchIndex_.emplace(key, static_cast<uint32_t>(materialWatch_.size() - 1u));
+        }
+
+void VulkanRenderer::Impl::removeMaterialWatch(uint32_t watch) {
+            // Only its key is read: its material may be gone.
+            materialWatchIndex_.erase(MatTableKey{materialWatch_[watch].mat, materialWatch_[watch].matId});
+            if (watch + 1u != materialWatch_.size()) {
+                materialWatch_[watch] = std::move(materialWatch_.back());
+                materialWatchIndex_[MatTableKey{materialWatch_[watch].mat, materialWatch_[watch].matId}] = watch;
+            }
+            materialWatch_.pop_back();
+        }
+
+void VulkanRenderer::Impl::watchTableMaterials(Object3D& scene) {
+            materialWatchScene_ = &scene;
+            materialWatchSceneId_ = scene.id;
+            materialWatchSceneVer_ = scene.structureVersion();
+            builtViews_.clear();// this build's; the records took theirs
+            if (!matTableWatchAll_ && matTableTouched_.empty()) return;
+            THREEPP_CPUPROF("scene.9_materialWatch");
+            const auto liveRecord = [&](const MatTableKey& k) -> uint32_t {
+                const auto it = matTableIndex_.find(k);
+                return it != matTableIndex_.end() && matTableRefs_[it->second] != 0u ? it->second : 0u;
+            };
+            if (matTableWatchAll_) {
+                // The table was refilled: a watch whose material no entry draws
+                // any more goes, a drawn material without one gets one. A watch
+                // that stays keeps what it held the frame before.
+                for (uint32_t i = static_cast<uint32_t>(materialWatch_.size()); i-- > 0;) {
+                    if (liveRecord(MatTableKey{materialWatch_[i].mat, materialWatch_[i].matId}) == 0u)
+                        removeMaterialWatch(i);
+                }
+                for (uint32_t s = 1; s < matTableRefs_.size(); ++s) {
+                    if (matTableRefs_[s] != 0u && !materialWatchIndex_.contains(matTableKeys_[s])) addMaterialWatch(s);
+                }
+                matTableWatchAll_ = false;
+            } else {
+                // The keys that gained their first entry or lost their last,
+                // as they stand now (a key may have done both since).
+                for (const MatTableKey& k : matTableTouched_) {
+                    const uint32_t s = liveRecord(k);
+                    const auto wit = materialWatchIndex_.find(k);
+                    if (s != 0u && wit == materialWatchIndex_.end()) addMaterialWatch(s);
+                    else if (s == 0u && wit != materialWatchIndex_.end()) removeMaterialWatch(wit->second);
+                }
+            }
+            matTableTouched_.clear();
         }
 }// namespace threepp

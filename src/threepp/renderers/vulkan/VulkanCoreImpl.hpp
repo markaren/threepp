@@ -562,14 +562,16 @@ namespace threepp {
         void matTableReset();
         // The record for `mat`, created when new; `md` is its desc. Written and
         // dirtied only when its content changes. Counts no reference: the
-        // caller hands the index to setEntryMat / assignEntryGeom.
-        uint32_t matTableSlot(const Material* mat, const MaterialDesc& md);
+        // caller hands the index to setEntryMat / assignEntryGeom. `owner` is
+        // a mesh drawing `mat`, for the record's weak reference to it.
+        uint32_t matTableSlot(const Material* mat, const MaterialDesc& md, const Mesh& owner);
         // A record for `key`: a new one while the GPU buffers have room, else
         // the longest-dormant one, else a new one after a growth.
         uint32_t matTableAcquire(const MatTableKey& key);
         void matTableGrow(uint32_t capacity);
         void matTableRef(uint32_t idx) {
-            if (idx != 0u) ++matTableRefs_[idx];
+            // A record's first entry: its material joins the live-edit watch.
+            if (idx != 0u && matTableRefs_[idx]++ == 0u) matTableTouched_.push_back(matTableKeys_[idx]);
         }
         void matTableUnref(uint32_t idx);
         // The record entry `i` draws with.
@@ -2374,6 +2376,21 @@ namespace threepp {
         // default so meshes lacking a material still render. albedoTexIndex
         // stays at -1 here — caller patches it after `ensureMaterialTexture`.
         static MaterialDesc materialFromMesh(const Mesh& m);
+        // The same desc from a material's typed views (materialViewsOf, the
+        // dynamic_casts taken once); a null material gives the defaults.
+        static MaterialDesc materialDescOf(const Material* mat, const MaterialViews& v);
+        static MaterialViews materialViewsOf(const Material& mat);
+
+        // Live material edits (MaterialState::materialWatch_): read every
+        // watched material and needsUpdate() the ones that changed since the
+        // last frame, ahead of the scene diffs that act on versions; and, at
+        // the end of every build, settle the watch list with the material
+        // table's records that gained their first entry or lost their last.
+        void pollMaterialEdits(Object3D& scene);
+        void watchTableMaterials(Object3D& scene);
+        void addMaterialWatch(uint32_t record);
+        void removeMaterialWatch(uint32_t watch);
+        static void readMaterialWatch(MaterialWatch& w, const Material& mat, bool& changed);
 
         // three.js parity: InstancedMesh::instanceColor multiplies the
         // material's diffuse color per instance (color_vertex.glsl). Carried

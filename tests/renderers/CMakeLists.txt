@@ -452,6 +452,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(VulkanAoMap_test VulkanAoMap_nort_test PROPERTIES SKIP_RETURN_CODE 42)
     set_tests_properties(VulkanAoMap_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
 
+    # A material edited after its first frame (a colour, an emission, a map's
+    # offset, a map swapped, an edit while hidden) shows without needsUpdate(),
+    # as under the GL renderer.
+    add_executable(VulkanMaterialEdits_test VulkanMaterialEdits_test.cpp)
+    target_link_libraries(VulkanMaterialEdits_test PRIVATE threepp)
+    add_test(NAME VulkanMaterialEdits_test COMMAND VulkanMaterialEdits_test)
+    add_test(NAME VulkanMaterialEdits_nort_test COMMAND VulkanMaterialEdits_test)
+    set_tests_properties(VulkanMaterialEdits_test VulkanMaterialEdits_nort_test PROPERTIES SKIP_RETURN_CODE 42)
+    set_tests_properties(VulkanMaterialEdits_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+
     # A mesh removed and freed between two frames: the calls that walk the last
     # frame's entries (setEmissiveCastsLight, setStableCorrespondence,
     # enableVertexInterop) never read it, and a freed skinned clone's GPU state

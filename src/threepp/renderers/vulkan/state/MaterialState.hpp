@@ -9,6 +9,10 @@
 
 #include "StateCommon.hpp"
 
+namespace threepp {
+    class MeshStandardMaterial;// MaterialViews holds a pointer to one
+}
+
 namespace threepp::vulkan::impl {
 
     struct MaterialState {
@@ -78,6 +82,9 @@ namespace threepp::vulkan::impl {
         std::vector<MaterialDesc> matTable_;
         std::vector<MatTableKey> matTableKeys_;// per record; meaningless where the count is 0
         std::vector<uint32_t> matTableRefs_;   // entries naming each record (record 0 uncounted)
+        // Per record, its material, not held: the live-edit watch locks it on
+        // a frame the scene's structure moved (MaterialWatch).
+        std::vector<std::weak_ptr<Material>> matTableMats_;
         // The pass a record was last derived in (matTableSlot): a record is
         // derived once per pass however many entries share it, and is not
         // reclaimed in that pass (its entries may not have been written yet).
@@ -190,6 +197,107 @@ namespace threepp::vulkan::impl {
         std::unordered_map<const Texture*, PreparingTexture> preparingTextures_;
 
         int bc7Supported_ = -1;
+
+        // ── Live material edits ─────────────────────────────────────────────
+        // The GL renderer reads a material's values every time it draws it,
+        // so an edit (a colour, a roughness, a map's offset, a map swapped for
+        // another) shows on the next frame. Here a material's record is
+        // re-derived only when its version() moves. So that the same edits
+        // need no needsUpdate() here either, every distinct material the scene
+        // holds is read once a frame (pollMaterialEdits) and compared with
+        // what it held the frame before; a material that changed is given the
+        // needsUpdate() it would otherwise need, and the version-driven paths
+        // take it from there (the value patch, or the rebuild a swapped map
+        // needs).
+        //
+        // A material's typed views (its MaterialWith* interfaces) are taken
+        // once, when it is first watched (materialFromMesh's dynamic_casts,
+        // run per entry per frame, were about 30 ms of a Bistro frame before
+        // the version gate). What the poll costs is the read itself, the
+        // memory a material spreads its fields over: about 0.3 us for a cold
+        // one, 0.065 ms of a Bistro frame (206 materials, measured 2026-11-22,
+        // hidden behind its GPU wait).
+        struct MaterialViews {
+            const MaterialWithColor* col = nullptr;
+            const MaterialWithMap* map = nullptr;
+            const MaterialWithRoughness* rough = nullptr;
+            const MaterialWithMetalness* metal = nullptr;
+            const MaterialWithEmissive* emis = nullptr;
+            const MaterialWithNormalMap* normal = nullptr;
+            const MaterialWithTransmission* trans = nullptr;
+            const MaterialWithClearcoat* coat = nullptr;
+            const MaterialWithAttenuation* atten = nullptr;
+            const MaterialWithEnvMap* env = nullptr;
+            const MeshStandardMaterial* standard = nullptr;
+            const MaterialWithAoMap* ao = nullptr;
+            const MaterialWithThickness* thick = nullptr;
+            const MaterialWithDetailMap* detail = nullptr;
+            const MaterialWithTerrainMaps* terrain = nullptr;
+            const MaterialWithPbrSpecular* spec = nullptr;
+            const MaterialWithTranslucency* transl = nullptr;
+            const MaterialWithSheen* sheen = nullptr;
+            const MaterialWithIridescence* irid = nullptr;
+            const MaterialWithDisplacementMap* disp = nullptr;
+            bool basic = false;// MeshBasicMaterial: unlit
+            bool taken = false;// materialViewsOf filled these
+        };
+        // Per material table record, the views the build that created it took
+        // (buildMaterialDesc's, handed on through builtViews_, which the end
+        // of each build clears: the slot path derives a batch of descs before
+        // it fills their rows), so the watch its material gets at the end of
+        // the build takes no casts of its own.
+        std::vector<MaterialViews> matTableViews_;
+        std::unordered_map<MatTableKey, MaterialViews, MatTableKeyHash> builtViews_;
+        // The maps a watch compares by address: the nine of MaterialTexSet,
+        // the displacement map, the detail pair and the terrain set. The
+        // first kWatchedXformMaps of them also have their uv transform
+        // compared (the maps whose transform buildMaterialDesc or the
+        // displacement copies).
+        static constexpr size_t kWatchedMaps = 22;
+        static constexpr size_t kWatchedXformMaps = 10;
+        struct MaterialWatch {
+            // Not held: a material the scene drops goes, its maps with it, and
+            // the build's texture prune reclaims their slots as it did. While
+            // the scene's structure stands as the list was settled, its meshes
+            // still hold every watched material (setMaterial moves the
+            // version), so `mat` is read as it is; on a frame it moved, only
+            // through `ref`. (mat, matId) is the material table's key.
+            Material* mat = nullptr;
+            unsigned int matId = 0;
+            std::weak_ptr<Material> ref;
+            MaterialViews views;
+            MaterialDesc desc{};// its values as last read (texture indices -1)
+            // Each map as last read: its address and its id (a new map at a
+            // freed one's address has another id).
+            std::array<const Texture*, kWatchedMaps> maps{};
+            std::array<unsigned int, kWatchedMaps> mapIds{};
+            // Per transformed map: offset, repeat, center, rotation and 1 when
+            // the matrix is derived from them, else the matrix and 0.
+            std::array<float, kWatchedXformMaps * 10> xforms{};
+            // The displacement inputs the material record does not carry: the
+            // scale, the bias and the map's pixel version (a re-displacement).
+            float dispScale = 0.f, dispBias = 0.f;
+            unsigned int dispMapVersion = 0;
+        };
+        // The watched materials are the material table's live records: one
+        // per material an entry draws (hidden ones included), a mesh shown
+        // for the first time being read in full by the build that places it.
+        // The list follows the table edit by edit: a record's key that gained
+        // its first entry or lost its last is noted here (matTableRef /
+        // matTableUnref) and settled at the end of the build
+        // (watchTableMaterials), so an edit that keeps the set of materials
+        // (an instanced count, a moved cell) costs nothing; a reset of the
+        // table checks every watch.
+        std::vector<MaterialWatch> materialWatch_;
+        std::unordered_map<MatTableKey, uint32_t, MatTableKeyHash> materialWatchIndex_;// key -> watch
+        std::vector<MatTableKey> matTableTouched_;
+        bool matTableWatchAll_ = true;
+        // The scene the list was settled for, by address, id and structure
+        // version: while all three hold, every watched material is still held
+        // by one of its meshes.
+        const Object3D* materialWatchScene_ = nullptr;
+        unsigned int materialWatchSceneId_ = 0;
+        uint64_t materialWatchSceneVer_ = 0;
     };
 
 }// namespace threepp::vulkan::impl
