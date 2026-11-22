@@ -10,3 +10,4 @@ add_example(NAME "transmission" LINK_IMGUI WEB WEB_EMBED
 )
 add_example(NAME "gltf_dump")
 add_example(NAME "showpiece" WEB)
+add_example(NAME "glacier_walker")
