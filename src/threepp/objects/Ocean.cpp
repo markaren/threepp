@@ -167,8 +167,16 @@ namespace threepp {
         // The patches follow the camera, wherever the bounds say they are.
         ocean->frustumCulled = false;
 
+        // The open sea's large tile holds six of its longest waves
+        // (openSeaTile); bounded water keeps its size: it cannot hold a wave
+        // longer than itself. A swell set before the first frame is counted
+        // when the renderer first sees the ocean.
+        const bool modes = longWaveModes();
+        const float tile0 = options.horizon ? openSeaTile(scaleRef, options.windSpeed, options.fetch, 0.f, 0.f)
+                                            : scaleRef;
+
         auto& p = ocean->params;
-        p.tileSize0 = scaleRef;
+        p.tileSize0 = tile0;
         p.tileSize1 = tile1;
         p.tileSize2 = tile2;
         p.windTheta = options.windTheta;
@@ -182,7 +190,8 @@ namespace threepp {
 
         // Per-cascade FFT resolution, derived from the band each cascade
         // actually carries. The renderer band-passes cascade 0 to
-        // λ ∈ [tileSize1, size] and cascade 1 to λ ∈ [tileSize2, tileSize1],
+        // λ ∈ [tileSize1 / 6, tile] and cascade 1 to λ ∈ [tileSize2, tileSize1 / 6]
+        // (longWaveHandoff),
         // so the resolution only has to sample the SHORTEST wavelength in the
         // band well (~10 texels per wavelength keeps the bicubic B-spline
         // reconstruction within ~2% amplitude at the band edge). Running them
@@ -198,7 +207,10 @@ namespace threepp {
             return n;
         };
         if (tile1 > 0.f) {
-            p.textureSize0 = bandRes(scaleRef, tile1, options.fftSize);
+            // Cascade 0 at most 512 a side: where that binds (a large tile),
+            // the hand-off moves up to eight of its texels instead.
+            p.textureSize0 = modes ? bandRes(tile0, tile1 / 6.f, std::min<uint32_t>(options.fftSize, 512u))
+                                   : bandRes(scaleRef, tile1, options.fftSize);
             if (tile2 > 0.f) {
                 p.textureSize1 = bandRes(tile1, tile2, half);
                 p.textureSize2 = half;

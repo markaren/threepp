@@ -190,8 +190,10 @@ namespace threepp {
             // spreading; sources in phillips_spectrum.comp). swellHeight is
             // its significant height in metres; 0 (the default) = no swell.
             // It lives on cascade 0 only, so its peak wavelength g Tp^2 / 2 pi
-            // must lie between tileSize1 and tileSize0 / 2 (9 to 18 s on the
-            // default 1 km ocean, 9.5 to 17.5 s with a margin); outside that
+            // must lie between the cascade 0 -> 1 hand-off (longWaveHandoff,
+            // a sixth of tileSize1) and tileSize0 / 2 (4 to 18 s on the
+            // default 1 km ocean; an open Ocean made with a swell grows its
+            // cascade-0 tile to six swell wavelengths); outside that
             // it is not drawn and the renderer says so once. swellTheta is
             // the direction it travels toward (radians, as windTheta).
             // swellSpread is s: ~25 for swell from a nearby storm, ~75 from a
@@ -221,10 +223,11 @@ namespace threepp {
             // FFT texture resolution per cascade (must be power of two).
             // Band-passed cascades need only enough texels to resolve their
             // own wavelength band (~10 samples per shortest wavelength) — the
-            // renderer's band-pass caps cascade 0 at λ ≥ tileSize1 and
+            // renderer's band-pass caps cascade 0 at λ ≥ longWaveHandoff (a
+            // sixth of tileSize1, never under 8 of its own texels) and
             // cascade 1 at λ ≥ tileSize2, so running them at cascade-2-like
             // resolutions is pure waste. Typical trio for 1 km / 127 m /
-            // 9.3 m tiles: {128, 256, 512} (Ocean::create derives exactly
+            // 9.3 m tiles: {512, 256, 512} (Ocean::create derives exactly
             // this from its tile sizes).
             uint32_t textureSize0 = 256;
             uint32_t textureSize1 = 256;
@@ -267,6 +270,29 @@ namespace threepp {
         // fraction of the middle cascade's tile (3 m of 127 m), never under
         // five of its texels.
         static constexpr float kShortWaveHandoff = 3.0f / 127.0f;
+        // The cascade 0 -> 1 hand-off wavelength (m): a sixth of the middle
+        // cascade's tile (21 m of 127 m), never under eight of cascade 0's
+        // texels. Every cascade then holds several repeats of its longest
+        // wave, and the spectral peak lies on many modes of the large tile
+        // (a short-crested, irregular sea) instead of on one or two of the
+        // middle tile (long, evenly ruled crests that repeat every tile).
+        // 0 when either tile is off.
+        static float longWaveHandoff(float tileSize0, uint32_t textureSize0, float tileSize1);
+        // The spectral peak's wavelength (m) of the wind sea the renderer
+        // draws for this wind speed and fetch (phillips_spectrum.comp's
+        // length scale; 0 = fully developed).
+        static float peakWavelength(float windSpeed, float fetch);
+        // An open sea's large tile for its sea state: tileSize0, or, when the
+        // peak (the wind sea's, or the swell's if swellHeight > 0) is longer
+        // than a sixth of it, the next multiple of 250 m at or above six peak
+        // wavelengths, so the dominant waves lie on many modes and repeat no
+        // sooner than six of them.
+        static float openSeaTile(float tileSize0, float windSpeed, float fetch,
+                                 float swellHeight, float swellPeriod);
+        // Judging switch for the hand-off above and Ocean::create's cascade-0
+        // resolution and tile (THREEPP_OCEAN_NIGHT_MODES = 0: the hand-off at
+        // the middle tile, as before). Read once.
+        static bool longWaveModes();
 
         // Hull exclusion zone: suppresses wave displacement inside a
         // world-space oriented rectangle so the ocean doesn't clip through

@@ -3415,6 +3415,20 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 st.appliedSwell[1] = dm.params.swellPeriod;
                 st.appliedSwell[2] = dm.params.swellTheta;
                 st.appliedSwell[3] = dm.params.swellSpread;
+                // An open sea sizes its large tile for the peak it was made
+                // with (Ocean::create); a peak grown past a sixth of it stays
+                // on that tile, as resizing would make the field jump.
+                if (st.lodSlots > 0u && dm.lod.halfX == 0.f && dm.lod.halfZ == 0.f && DisplacedMesh::longWaveModes()) {
+                    float peak = DisplacedMesh::peakWavelength(dm.params.windSpeed, dm.params.fetch);
+                    if (dm.params.swellHeight > 0.f && dm.params.swellPeriod > 0.f)
+                        peak = std::max(peak, 9.81f * dm.params.swellPeriod * dm.params.swellPeriod / 6.2831853f);
+                    if (peak > dm.params.tileSize0 / 6.f) {
+                        THREEPP_LOG_ONCE(vulkan::kLogOcean, Warn)
+                                << "the sea's peak wavelength (" << int(peak) << " m) is now over a sixth of its "
+                                << int(dm.params.tileSize0) << " m wave tile, which is kept: the longest waves "
+                                   "repeat sooner. Create the ocean with this wind or swell to size the tile for it";
+                    }
+                }
             }
 
             // The wave-model switches (DisplacedMesh::Params, each forced by
@@ -5576,6 +5590,15 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             //   cascade 2 (smallest):     kNyq of cascade 2 → ∞
             // where kNyq_i = π·N / tileSize_i. Cascade 0 is required;
             // tileSize1/tileSize2 == 0 disable the corresponding band.
+            // An open sea (the patch mesh without an edge) sizes its large
+            // tile for the sea it first shows, a swell set since
+            // Ocean::create included (DisplacedMesh::openSeaTile); after
+            // this the tile stays, as resizing would make the field jump.
+            if (patchMesh && dm.lod.halfX == 0.f && dm.lod.halfZ == 0.f) {
+                dm.params.tileSize0 = DisplacedMesh::openSeaTile(dm.params.tileSize0, dm.params.windSpeed,
+                                                                 dm.params.fetch, dm.params.swellHeight,
+                                                                 dm.params.swellPeriod);
+            }
             const float tileSizes[3] = {
                     dm.params.tileSize0,
                     dm.params.tileSize1,
@@ -5586,22 +5609,28 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                     dm.params.textureSize1,
                     dm.params.textureSize2,
             };
-            // Hand-off k between adjacent cascades = the SMALLER tile's lowest
-            // natural k = 2π / tileSize_(smaller). Each cascade then covers
-            // wavelengths between its own tile and the next-smaller tile:
-            //   cascade 0: λ ∈ [tileSize_1, tileSize_0]
-            //   cascade 1: λ ∈ [tileSize_2, tileSize_1]
+            // Hand-off k between adjacent cascades, each cascade covering
+            // wavelengths well inside its own tile:
+            //   cascade 0: λ ∈ [tileSize_1 / 6, tileSize_0]
+            //              (DisplacedMesh::longWaveHandoff)
+            //   cascade 1: λ ∈ [tileSize_2, tileSize_1 / 6]
             //   cascade 2: λ ∈ [<tileSize_2]  (down to its own Nyquist)
             //
             // Why not split at the larger tile's Nyquist (k = π·N / L_larger)?
             // Because that boundary is at the mesh's resolving limit — it
             // hands all the mesh-resolvable wavelengths to cascade 0 alone,
             // and cascades 1 and 2 emit only sub-mesh wavelengths that
-            // alias as displacement noise. The 2π/L_smaller scheme reserves
-            // a real, mesh-displayable band for each intermediate cascade.
+            // alias as displacement noise.
+            // Why not at the middle tile itself (2π / tileSize_1, as it was)?
+            // Then the middle cascade carries waves as long as its tile: a
+            // 10 m/s sea's 85 m peak lay on one or two lattice modes of the
+            // 127 m tile, a near-sinusoid with long, evenly ruled crests that
+            // repeat every tile. A sixth of it puts the peak on dozens of
+            // modes of the large tile, which beat into short crests and
+            // groups as a wind sea does.
             constexpr float kTwoPi = 6.28318530717958647692f;
-            const float kHandoff01 = (tileSizes[0] > 0.f && tileSizes[1] > 0.f)
-                    ? kTwoPi / tileSizes[1] : 0.f;
+            const float handoff01Metres = DisplacedMesh::longWaveHandoff(tileSizes[0], textureSizes[0], tileSizes[1]);
+            const float kHandoff01 = handoff01Metres > 0.f ? kTwoPi / handoff01Metres : 0.f;
             // Short waves as geometry (DisplacedMesh::Params::shortWaves): the
             // cascade 1 -> 2 hand-off moves from the fine tile down to
             // kShortWaveHandoff of the middle tile, never under five of the

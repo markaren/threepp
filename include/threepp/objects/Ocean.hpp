@@ -65,7 +65,10 @@ namespace threepp {
             // Water extent in metres along local X, centred on the mesh's
             // origin, or on the warp's centre once one is set (unless
             // `horizon`). The LARGER of size/sizeZ doubles as
-            // the cascade-0 FFT tile, i.e. the wavelength of the largest swell.
+            // the cascade-0 FFT tile, i.e. the wavelength of the largest swell;
+            // an open sea (`horizon`) whose wind sea or swell peaks longer
+            // than a sixth of it gets a larger one, six peak wavelengths
+            // (DisplacedMesh::openSeaTile).
             float size = 1000.0f;
 
             // Mesh extent along local Z. 0 (default) = square (`size`). A
@@ -127,11 +130,11 @@ namespace threepp {
             float tileSize2 = -1.0f;
 
             // FFT resolution CAP (power of two). Cascade 0 and 1 are band-
-            // passed by the renderer (cascade 0 carries only λ ≥ tileSize1,
+            // passed by the renderer (cascade 0 carries only λ ≥ tileSize1 / 6,
             // cascade 1 only λ ≥ tileSize2), so create() derives their actual
             // resolutions from the band (~10 samples per shortest wavelength,
-            // clamped to this cap / half of it) — with the default tiles that
-            // is {128, 256} instead of {1024, 512}, at identical wave content.
+            // clamped to this cap and 512 / half of it) — with the default
+            // tiles that is {512, 256} instead of {1024, 512}.
             // The open-band fine cascade always runs at fftSize / 2.
             uint32_t fftSize = 1024;
 

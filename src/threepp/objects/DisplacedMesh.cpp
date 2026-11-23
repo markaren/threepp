@@ -60,6 +60,43 @@ namespace threepp {
         return env < 0 ? params.hullContact : env == 1;
     }
 
+    bool DisplacedMesh::longWaveModes() {
+        static const int env = envSwitch("THREEPP_OCEAN_NIGHT_MODES");
+        return env != 0;
+    }
+
+    float DisplacedMesh::longWaveHandoff(float tileSize0, uint32_t textureSize0, float tileSize1) {
+        if (!(tileSize0 > 0.f && tileSize1 > 0.f)) return 0.f;
+        if (!longWaveModes()) return tileSize1;
+        // The large tile's grid cannot hold a wave shorter than eight of its
+        // texels as anything but a few points (the B-spline read loses most
+        // of it), so a coarse cascade 0 hands off higher up.
+        const float texels = textureSize0 > 0u ? 8.f * tileSize0 / float(textureSize0) : 0.f;
+        return std::min(std::max(tileSize1 / 6.f, texels), tileSize1);
+    }
+
+    float DisplacedMesh::peakWavelength(float windSpeed, float fetch) {
+        // phillips_spectrum.comp: L = 1.1624764 U^2 / g (its Hs fix), times
+        // (fetch / Ffd)^(2/3) for a young sea; the peak is at k L = 0.894.
+        if (!(windSpeed > 0.f)) return 0.f;
+        double L = 1.1624764 * double(windSpeed) * windSpeed / 9.81;
+        if (fetch > 0.f) {
+            const double ffd = 1609.0 * double(windSpeed) * windSpeed;
+            L *= std::pow(std::clamp(double(fetch) / ffd, 0.005, 1.0), 2.0 / 3.0);
+        }
+        return static_cast<float>(2.0 * 3.14159265358979 * L / 0.894);
+    }
+
+    float DisplacedMesh::openSeaTile(float tileSize0, float windSpeed, float fetch,
+                                     float swellHeight, float swellPeriod) {
+        if (!longWaveModes()) return tileSize0;
+        float peak = peakWavelength(windSpeed, fetch);
+        if (swellHeight > 0.f && swellPeriod > 0.f)
+            peak = std::max(peak, static_cast<float>(9.81 * swellPeriod * swellPeriod / (2.0 * 3.14159265358979)));
+        if (!(peak > tileSize0 / 6.f)) return tileSize0;
+        return 250.f * std::ceil(6.f * peak / 250.f);
+    }
+
     float DisplacedMesh::effectiveChoppiness() const {
         return cwmOn() ? 1.f : params.choppiness;
     }

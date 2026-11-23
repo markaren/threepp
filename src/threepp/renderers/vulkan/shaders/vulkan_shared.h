@@ -226,8 +226,8 @@ static_assert(((kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFl
               "GeometryDesc.flags: a kGeomFlag* bit reaches into the material index.");
 #endif
 
-// Ocean cascade-1 sample-domain rotation. The mid cascade carries only ~a
-// dozen Fourier modes per axis (band-passed to λ ∈ [tileSize2, tileSize1]),
+// Ocean cascade-1 sample-domain rotation. The mid cascade carries only a few
+// dozen Fourier modes per axis (band-passed to λ ∈ [tileSize2, tileSize1 / 6]),
 // so its tile repeats as a visible axis-aligned plaid across the ocean.
 // Rotating WHERE cascade 1 is sampled (domain q = R·worldXZ) turns its
 // repeat lattice diagonal — decorrelated from cascade 0's wind-aligned
