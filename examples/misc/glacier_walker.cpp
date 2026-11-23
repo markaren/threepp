@@ -2194,11 +2194,14 @@ void main() {
     // All of it is ParticleSprites: soft billboards lit by the scene's sun and sky, drawn by
     // either renderer. The code here only says where each one is, how big and how faint.
     // Grains and thin drift scatter forward (brighter looking toward the sun). A billow is
-    // dense: it is lit like a body, brightest with the sun behind you, and a sprite takes
-    // the full sun where a billow shades much of itself, so its albedo is lower.
+    // dense: it is lit like a body, brightest with the sun behind you. A sprite takes the
+    // full sun over its disc where a billow shades much of itself, so 40 % of the sun is
+    // kept off it (self-shadowing). Light from all round still reaches all of it: in the
+    // shadow of a foot it stays as light as the shadowed snow it lies on.
     const Color kGrainAlbedo(0.92f, 0.94f, 0.97f);
-    const Color kBillowAlbedo(0.40f, 0.47f, 0.60f);
+    const Color kBillowAlbedo(0.667f, 0.783f, 1.f);
     constexpr float kBillowAnisotropy = -0.2f;
+    constexpr float kBillowSelfShadowing = 0.4f;
 
     // Powder thrown up where a foot comes down: soft billows that spread and settle, and
     // clods that fly out and drop.
@@ -2219,6 +2222,7 @@ void main() {
         Powder() {
             ps.resize(N);
             billows->setAnisotropy(kBillowAnisotropy);
+            billows->setSelfShadowing(kBillowSelfShadowing);
             for (auto* s : {billows.get(), grains.get()}) {
                 s->hideAll();
                 s->mesh().renderOrder = 2;
@@ -2295,7 +2299,11 @@ void main() {
                 p.v = wind + (p.v - wind) * k;
                 p.v.y -= p.grav * dt;
                 p.x += p.v * dt;
-                const float floor = groundHeight(p.x.x, p.x.z) - 0.25f;
+                // A billow comes to rest on the snow (a print's rim stands up to 0.09 m proud).
+                // Its centre is where VulkanRenderer lights it, and a centre down in the snow
+                // is in the snow's shadow: the whole sprite would go dark. A clod sinks in and
+                // is gone.
+                const float floor = groundHeight(p.x.x, p.x.z) + (p.billow ? 0.15f : -0.25f);
                 if (p.x.y < floor) {
                     p.x.y = floor;
                     p.v.multiplyScalar(0.2f);
