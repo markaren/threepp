@@ -26,23 +26,32 @@
 // shape of the sole that made it (pad, toes and cleats); a ShaderMaterial displaces the
 // snow by it and shades the packed snow apart from fresh powder.
 //
+// --vulkan runs it on VulkanRenderer (ray-traced shadows and GI), which has no path for a
+// ShaderMaterial, so the three custom shaders get stock-material stand-ins there: the sky
+// is baked into an HDR panorama (background and environment), the ranges bake their snow
+// and rock into maps (MountainBackdrop's Textured mode) and Vulkan's height fog is the
+// haze, and the snow is StockSnow: the walk ring cut into sectors whose vertices the prints
+// press down and whose own normal, colour and roughness maps carry the print detail.
+//
 // Mouse:  drag = orbit, wheel = zoom, right drag = pan
 //         click any part (walker, crew, hopper, snow) to fly in and follow it;
 //         click the sky to return to the tracking shot
 // Keys:   Space = pause, C = tracking shot
 //
-// Headless (stills for review):
-//   glacier_walker --shot out.png [--time T] [--size WxH]
+// Headless (stills for review), on either renderer:
+//   glacier_walker [--vulkan] --shot out.png [--time T] [--size WxH]
 //                  [--view opening|wide|hatch|knee|ram|foot|prints|crew|hopper|below|powder:<deg>]
 //                  [--click x,y]   the live click path at that pixel, then 1.5 s of follow
 //                  [--bench N]     N live frames timed before the still is written
-//   glacier_walker --film <dir> [--seconds 20] [--size 1920x1080]   PNG frames at 30 fps
+//   glacier_walker [--vulkan] --film <dir> [--seconds 20] [--size 1920x1080]   PNG frames at 30 fps
 // A Windows desktop clamps even a hidden window: keep portrait stills within it (608x1080).
 
 #include "threepp/extras/terrain/MountainBackdrop.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/input/MouseListener.hpp"
 #include "threepp/objects/ParticleSprites.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/utils/ThreadPool.hpp"
 #include "threepp/renderers/gl/PMREMGenerator.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
@@ -56,6 +65,7 @@
 #include <cstdio>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
@@ -1422,6 +1432,8 @@ namespace {
         float rIn, rOut;
         std::shared_ptr<DataTexture> tex;
         bool dirty = false;
+        // told the texels [i0, i1] x [j0, j1] each stamp wrote (i unwrapped round the ring)
+        std::function<void(int i0, int i1, int j0, int j1)> onStamp;
 
         TrackMap(float rin, float rout): rIn(rin), rOut(rout) {
             tex = DataTexture::create(ImageData(std::vector<unsigned char>(static_cast<size_t>(W) * H * 2, 0)), W, H);
@@ -1467,6 +1479,7 @@ namespace {
                 }
             }
             dirty = true;
+            if (onStamp) onStamp(i0, i1, j0, j1);
         }
 
         void stampFoot(const Sole& sole, const Vector3& p, const Vector3& fwd, float sink, int seed) {
@@ -1693,6 +1706,314 @@ float snowRelief( vec2 p, float detail ) {
     }
 
 
+    // ================================================================== snow from stock materials
+
+    // Value noise whose lattice repeats every px cells along x and py along y.
+    float pnoise(float x, float y, int px, int py, int seed) {
+        const float fx = std::floor(x), fy = std::floor(y);
+        const int ix = static_cast<int>(fx), iy = static_cast<int>(fy);
+        const float tx = x - fx, ty = y - fy;
+        const float ux = tx * tx * (3 - 2 * tx), uy = ty * ty * (3 - 2 * ty);
+        auto h = [&](int a, int b) { return hash3(((a % px) + px) % px, ((b % py) + py) % py, seed); };
+        return mixf(mixf(h(ix, iy), h(ix + 1, iy), ux), mixf(h(ix, iy + 1), h(ix + 1, iy + 1), ux), uy);
+    }
+
+    // The wind-carved relief of the snow shader, made to tile every kReliefTile metres in a
+    // frame turned to the wind (q.x along it), so one texture covers the open glacier.
+    constexpr float kReliefTile = 16.f;
+    // The stock snow's normal maps are drawn this much steeper than the shader's slopes:
+    // matched by eye against GL under the same light (the cleat rings on a print's floor).
+    // The shader shades each pixel from the footprint map's own gradient; a normal map is
+    // filtered and mipmapped first, and at the grazing angles snow is seen at that softens it.
+    constexpr float kStockSnowRelief = 2.5f;
+    Vector2 windFrame(float x, float z) { return {0.8f * x + 0.6f * z, 0.6f * x - 0.8f * z}; }
+    float relief(const Vector2& q) {
+        return 0.035f * pnoise(q.x * 0.25f, q.y * 0.875f, 4, 14, 31) +
+               0.02f * pnoise(q.x * 0.875f + 7.f, q.y * 2.625f + 7.f, 14, 42, 32) +
+               0.006f * pnoise(q.x * 9.f, q.y * 9.f, 144, 144, 33);
+    }
+
+    unsigned char toUnit(float v) { return toByte(0.5f + 0.5f * v); }
+
+    std::shared_ptr<DataTexture> rgbaData(int w, int h, bool mips) {
+        auto tex = DataTexture::create(ImageData(std::vector<unsigned char>(static_cast<size_t>(w) * h * 4, 255)), w, h);
+        tex->format = Format::RGBA;
+        tex->type = Type::UnsignedByte;
+        tex->wrapS = tex->wrapT = TextureWrapping::ClampToEdge;
+        tex->magFilter = Filter::Linear;
+        tex->minFilter = mips ? Filter::LinearMipmapLinear : Filter::Linear;
+        tex->generateMipmaps = mips;
+        tex->anisotropy = 8;
+        return tex;
+    }
+
+    // The glacier from stock materials, for a renderer that cannot run the snow shader
+    // (VulkanRenderer). The walk ring's band is cut into sectors: each is a mesh whose
+    // vertices the footprint map presses down, with its own normal, colour and roughness
+    // maps at the footprint map's resolution carrying the print detail (cleats, rims, packed
+    // snow) and the wind relief. Inside and outside the band the ground is static, with the
+    // relief as one tiling normal map. Only sectors a print touches are rebuilt.
+    struct StockSnow {
+        static constexpr int S = 6144;// segments round the ring, as buildSnowGeometry
+        static constexpr int C = 64;  // sectors
+        static constexpr int K = S / C;
+        static constexpr int TW = TrackMap::W / C, TH = TrackMap::H;
+
+        struct Sector {
+            std::shared_ptr<BufferGeometry> geo;
+            std::shared_ptr<DataTexture> normal, color, rough;
+            int s0 = TW, s1 = -1, t0 = TH, t1 = -1;// texels to redraw
+        };
+
+        const TrackMap& track;
+        std::vector<float> band;// ring radii across the band, rIn .. rOut
+        std::vector<Sector> sectors{C};
+        std::shared_ptr<Group> root = Group::create();
+
+        static float angleOf(int i) { return static_cast<float>(i) / S * kTau - kPi; }
+
+        explicit StockSnow(const TrackMap& t): track(t) {
+            for (float r = track.rIn; r < track.rOut - 0.065f; r += 0.13f) band.push_back(r);
+            band.push_back(track.rOut);
+
+            // the open glacier: a disc inside the band and the plain out to the ranges
+            std::vector<float> inner, outer;
+            {
+                float r = track.rIn, step = 0.2f;
+                while (r > step) {
+                    r -= step;
+                    inner.push_back(r);
+                    step *= 1.07f;
+                }
+                inner.push_back(0.f);
+                std::reverse(inner.begin(), inner.end());
+                inner.push_back(track.rIn);
+                for (float rr = track.rOut, st = 0.2f; rr < 2800.f; rr += st, st *= 1.03f) outer.push_back(rr);
+                outer.push_back(2800.f);
+            }
+            auto plainMat = MeshStandardMaterial::create();
+            plainMat->color = Color(0.93f, 0.95f, 0.98f);
+            plainMat->roughness = 0.86f;
+            plainMat->normalMap = reliefTile();
+            plainMat->normalScale = Vector2(kStockSnowRelief, kStockSnowRelief);
+            for (const auto* rings : {&inner, &outer}) {
+                auto mesh = Mesh::create(ringGeometry(*rings, 0, S, true), plainMat);
+                mesh->receiveShadow = true;
+                // spaced for distance already: Vulkan's auto-LOD spent seconds simplifying
+                // these rings at start-up and gained nothing per frame
+                mesh->autoLod = false;
+                root->add(mesh);
+            }
+
+            for (int c = 0; c < C; ++c) {
+                Sector& sc = sectors[c];
+                sc.geo = ringGeometry(band, c * K, K, false);
+                sc.normal = rgbaData(TW, TH, true);
+                sc.color = rgbaData(TW, TH, true);
+                sc.rough = rgbaData(TW, TH, true);
+                auto m = MeshStandardMaterial::create();
+                m->map = sc.color;
+                m->normalMap = sc.normal;
+                m->roughnessMap = sc.rough;
+                m->roughness = 1.f;
+                m->normalScale = Vector2(kStockSnowRelief, kStockSnowRelief);
+                auto mesh = Mesh::create(sc.geo, m);
+                mesh->receiveShadow = true;
+                mesh->castShadow = true;// the rims shade the prints
+                // Vulkan's automatic LOD would simplify the walls of the prints into teeth
+                mesh->autoLod = false;
+                root->add(mesh);
+                sc.s0 = 0, sc.s1 = TW - 1, sc.t0 = 0, sc.t1 = TH - 1;
+            }
+            flush();
+        }
+
+        // Rings `rings` x segments [i0, i0 + n] (closed round when `closed`), on the glacier's
+        // surface, with uv = the wind frame / tile (plain) or the sector's own 0..1 (band).
+        std::shared_ptr<BufferGeometry> ringGeometry(const std::vector<float>& rings, int i0, int n, bool closed) const {
+            const int cols = closed ? n : n + 1;
+            std::vector<float> pos, nrm, uv;
+            pos.reserve(rings.size() * cols * 3);
+            for (size_t j = 0; j < rings.size(); ++j)
+                for (int k = 0; k < cols; ++k) {
+                    const float a = angleOf(i0 + k), r = rings[j];
+                    const float x = r * std::cos(a), z = r * std::sin(a);
+                    const Vector3 nn = groundNormal(x, z);
+                    pos.insert(pos.end(), {x, groundHeight(x, z), z});
+                    nrm.insert(nrm.end(), {nn.x, nn.y, nn.z});
+                    if (closed) {
+                        const Vector2 q = windFrame(x, z);
+                        uv.insert(uv.end(), {q.x / kReliefTile, q.y / kReliefTile});
+                    } else {
+                        uv.insert(uv.end(), {static_cast<float>(k) / n, (r - track.rIn) / (track.rOut - track.rIn)});
+                    }
+                }
+            std::vector<unsigned int> idx;
+            for (size_t j = 0; j + 1 < rings.size(); ++j)
+                for (int k = 0; k < n; ++k) {
+                    const auto row = static_cast<unsigned int>(j * cols), next = static_cast<unsigned int>((j + 1) * cols);
+                    const unsigned int k1 = closed ? static_cast<unsigned int>((k + 1) % n) : static_cast<unsigned int>(k + 1);
+                    const unsigned int a = row + k, b = row + k1, c = next + k, d = next + k1;
+                    idx.insert(idx.end(), {a, b, c, b, d, c});
+                }
+            auto g = BufferGeometry::create();
+            g->setAttribute("position", FloatBufferAttribute::create(std::move(pos), 3));
+            g->setAttribute("normal", FloatBufferAttribute::create(std::move(nrm), 3));
+            g->setAttribute("uv", FloatBufferAttribute::create(std::move(uv), 2));
+            g->setIndex(std::move(idx));
+            g->computeBoundingSphere();
+            return g;
+        }
+
+        // The relief's normal map, one tile (u along the wind, v across it).
+        static std::shared_ptr<DataTexture> reliefTile() {
+            const int N = 512;
+            auto tex = rgbaData(N, N, true);
+            tex->wrapS = tex->wrapT = TextureWrapping::Repeat;
+            auto& d = tex->image().data<unsigned char>();
+            const float px = kReliefTile / N;
+            ThreadPool::shared().parallelFor(0, N, [&](int y) {
+                for (int x = 0; x < N; ++x) {
+                    const Vector2 q((x + 0.5f) * px, (y + 0.5f) * px);
+                    const float gu = (relief(q + Vector2(px, 0.f)) - relief(q - Vector2(px, 0.f))) / (2 * px);
+                    const float gv = (relief(q + Vector2(0.f, px)) - relief(q - Vector2(0.f, px))) / (2 * px);
+                    const Vector3 n = unit(Vector3(-gu, -gv, 1.f));
+                    unsigned char* p = d.data() + (static_cast<size_t>(y) * N + x) * 4;
+                    p[0] = toUnit(n.x);
+                    p[1] = toUnit(n.y);
+                    p[2] = toUnit(n.z);
+                }
+            });
+            tex->needsUpdate();
+            return tex;
+        }
+
+        // the footprint map's height at texel (i, j), i wrapping round the ring
+        [[nodiscard]] float trackAt(int i, int j) const {
+            if (j < 0 || j >= TrackMap::H) return 0.f;
+            i = ((i % TrackMap::W) + TrackMap::W) % TrackMap::W;
+            const auto& d = track.tex->image().data<unsigned char>();
+            const size_t k = (static_cast<size_t>(j) * TrackMap::W + i) * 2;
+            return -d[k] / 255.f * TrackMap::kDepth + d[k + 1] / 255.f * TrackMap::kRim;
+        }
+
+        // ... and between texels, at a point on the glacier (snowTrackHeight)
+        [[nodiscard]] float trackHeight(float x, float z) const {
+            const float r = std::hypot(x, z);
+            const float v = (r - track.rIn) / (track.rOut - track.rIn);
+            if (v <= 0.f || v >= 1.f) return 0.f;
+            const float fx = (std::atan2(z, x) / kTau + 0.5f) * TrackMap::W - 0.5f, fy = v * TrackMap::H - 0.5f;
+            const int ix = static_cast<int>(std::floor(fx)), iy = static_cast<int>(std::floor(fy));
+            const float tx = fx - ix, ty = fy - iy;
+            return mixf(mixf(trackAt(ix, iy), trackAt(ix + 1, iy), tx), mixf(trackAt(ix, iy + 1), trackAt(ix + 1, iy + 1), tx), ty);
+        }
+
+        // The texels [i0, i1] x [j0, j1] of the footprint map changed (i unwrapped).
+        void touched(int i0, int i1, int j0, int j1) {
+            const int m = 6;// the gradients and the vertex filter reach this far
+            j0 = std::max(0, j0 - m);
+            j1 = std::min(TH - 1, j1 + m);
+            for (int i = i0 - m; i <= i1 + m;) {
+                const int w = ((i % TrackMap::W) + TrackMap::W) % TrackMap::W;
+                const int c = w / TW, s = w % TW;
+                const int run = std::min(TW - s, i1 + m - i + 1);
+                Sector& sc = sectors[c];
+                sc.s0 = std::min(sc.s0, s);
+                sc.s1 = std::max(sc.s1, s + run - 1);
+                sc.t0 = std::min(sc.t0, j0);
+                sc.t1 = std::max(sc.t1, j1);
+                i += run;
+            }
+        }
+
+        // Redraws what changed: the sectors' texels and the vertices over them.
+        void flush() {
+            std::vector<int> dirty;
+            for (int c = 0; c < C; ++c)
+                if (sectors[c].s1 >= sectors[c].s0) dirty.push_back(c);
+            ThreadPool::shared().parallelFor(0, static_cast<int>(dirty.size()), [&](int n) { redraw(dirty[n]); });
+            for (int c : dirty) {
+                Sector& sc = sectors[c];
+                sc.normal->needsUpdate();
+                sc.color->needsUpdate();
+                sc.rough->needsUpdate();
+                sc.geo->getAttribute<float>("position")->needsUpdate();
+                sc.s0 = TW, sc.s1 = -1, sc.t0 = TH, sc.t1 = -1;
+            }
+        }
+
+        void redraw(int c) {
+            Sector& sc = sectors[c];
+            auto& nd = sc.normal->image().data<unsigned char>();
+            auto& cd = sc.color->image().data<unsigned char>();
+            auto& rd = sc.rough->image().data<unsigned char>();
+            const float dr = (track.rOut - track.rIn) / TrackMap::H;
+            for (int t = sc.t0; t <= sc.t1; ++t) {
+                const float r = track.rIn + (t + 0.5f) * dr;
+                const float ds = r * kTau / TrackMap::W;
+                for (int s = sc.s0; s <= sc.s1; ++s) {
+                    const int i = c * TW + s;
+                    const float a = ((i + 0.5f) / TrackMap::W - 0.5f) * kTau;
+                    const float ca = std::cos(a), sa = std::sin(a);
+                    const float x = r * ca, z = r * sa;
+                    const auto& d = track.tex->image().data<unsigned char>();
+                    const size_t k = (static_cast<size_t>(t) * TrackMap::W + i) * 2;
+                    const float depth = d[k] / 255.f * TrackMap::kDepth, rim = d[k + 1] / 255.f * TrackMap::kRim;
+                    const float pack = smoothstepf(0.012f, 0.08f, depth);
+
+                    // slope along the ring (T) and across it (B): the prints, then the relief
+                    float gT = (trackAt(i + 1, t) - trackAt(i - 1, t)) / (2 * ds);
+                    float gB = (trackAt(i, t + 1) - trackAt(i, t - 1)) / (2 * dr);
+                    const float e = 0.05f;
+                    const float rx = (relief(windFrame(x + e, z)) - relief(windFrame(x - e, z))) / (2 * e);
+                    const float rz = (relief(windFrame(x, z + e)) - relief(windFrame(x, z - e))) / (2 * e);
+                    const float keep = 1.f - 0.85f * pack;
+                    gT += keep * (-sa * rx + ca * rz);
+                    gB += keep * (ca * rx + sa * rz);
+                    const Vector3 n = unit(Vector3(-gT, -gB, 1.f));
+
+                    Vector3 col = Vector3(0.93f, 0.95f, 0.98f) + (Vector3(0.80f, 0.85f, 0.92f) - Vector3(0.93f, 0.95f, 0.98f)) * pack;
+                    col *= 1.f - 0.16f * smoothstepf(0.1f, 0.4f, depth);
+                    const float blue = smoothstepf(0.18f, 0.4f, depth);
+                    col = Vector3(col.x * (1 - 0.14f * blue), col.y * (1 - 0.07f * blue), col.z);
+                    col *= 1.f + 0.04f * smoothstepf(0.f, 0.08f, rim);
+
+                    const size_t o = (static_cast<size_t>(t) * TW + s) * 4;
+                    nd[o] = toUnit(n.x);
+                    nd[o + 1] = toUnit(n.y);
+                    nd[o + 2] = toUnit(n.z);
+                    cd[o] = toByte(col.x);
+                    cd[o + 1] = toByte(col.y);
+                    cd[o + 2] = toByte(col.z);
+                    rd[o + 1] = toByte(mixf(0.86f, 0.5f, pack));
+                }
+            }
+
+            // the vertices over the redrawn texels: pressed down by the prints, averaged over
+            // twice the mesh spacing (the shader's snowTrackHeightSoft averages over one: its
+            // per-pixel normals hide the steps a print's wall makes on the grid; here the
+            // normal map can only shade them, so the wall itself is softened)
+            auto& pos = sc.geo->getAttribute<float>("position")->array();
+            const int cols = K + 1;
+            const int k0 = std::max(0, static_cast<int>(std::floor(sc.s0 * static_cast<float>(K) / TW)) - 1);
+            const int k1 = std::min(K, static_cast<int>(std::ceil((sc.s1 + 1) * static_cast<float>(K) / TW)) + 1);
+            for (size_t j = 0; j < band.size(); ++j) {
+                const float tj = (band[j] - track.rIn) / dr;
+                if (tj < sc.t0 - 3 || tj > sc.t1 + 3) continue;
+                for (int kk = k0; kk <= k1; ++kk) {
+                    float* p = pos.data() + (j * cols + kk) * 3;
+                    constexpr float w[5] = {1.f, 4.f, 6.f, 4.f, 1.f};
+                    float h = 0.f;
+                    for (int dj = -2; dj <= 2; ++dj)
+                        for (int di = -2; di <= 2; ++di)
+                            h += w[di + 2] * w[dj + 2] * trackHeight(p[0] + di * 0.08f, p[2] + dj * 0.08f);
+                    p[1] = groundHeight(p[0], p[2]) + h / 256.f;
+                }
+            }
+        }
+    };
+
+
     const char* kSkyVert = R"(
 varying vec3 vDir;
 void main() {
@@ -1783,6 +2104,89 @@ void main() {
         m->depthWrite = false;
         m->fog = false;
         return m;
+    }
+
+    // The same sky as kSkyFrag (at uTime = 0), evaluated on the CPU into a float panorama,
+    // for VulkanRenderer: it takes an HDR equirect as the background and the environment, and
+    // has no path for a ShaderMaterial. u = 0.5 + atan(z, x) / 2pi, v = 0.5 + asin(y) / pi.
+    std::shared_ptr<DataTexture> bakeSkyPanorama(const Vector3& sunDir, const Color& sun, const Color& horizon, int W = 2048, int H = 1024) {
+        auto fract = [](float x) { return x - std::floor(x); };
+        auto hash = [&](float px, float py) {
+            float x = fract(px * 0.1031f), y = fract(py * 0.1031f), z = fract(px * 0.1031f);
+            const float d = x * (y + 33.33f) + y * (z + 33.33f) + z * (x + 33.33f);
+            x += d;
+            y += d;
+            z += d;
+            return fract((x + y) * z);
+        };
+        auto noise = [&](float px, float py) {
+            const float ix = std::floor(px), iy = std::floor(py), fx = px - ix, fy = py - iy;
+            const float ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+            return mixf(mixf(hash(ix, iy), hash(ix + 1, iy), ux), mixf(hash(ix, iy + 1), hash(ix + 1, iy + 1), ux), uy);
+        };
+        auto fbm = [&](float px, float py) {
+            float s = 0, a = 0.5f;
+            for (int i = 0; i < 6; ++i) {
+                s += a * noise(px, py);
+                px = px * 2.03f + 1.7f;
+                py = py * 2.03f + 9.2f;
+                a *= 0.5f;
+            }
+            return s / 0.984f;
+        };
+        const Vector3 zenith(0.22f, 0.31f, 0.46f), hor(horizon.r, horizon.g, horizon.b), sc(sun.r, sun.g, sun.b);
+        const Vector3 sunFlat = unit(Vector3(sunDir.x, 0.f, sunDir.z));
+        auto lerp3 = [](const Vector3& a, const Vector3& b, float t) { return a + (b - a) * t; };
+
+        std::vector<float> px(static_cast<size_t>(W) * H * 4);
+        ThreadPool::shared().parallelFor(0, H, [&](int row) {
+            const float lat = ((row + 0.5f) / H - 0.5f) * kPi;
+            for (int col = 0; col < W; ++col) {
+                const float lon = ((col + 0.5f) / W - 0.5f) * kTau;
+                const Vector3 d(std::cos(lat) * std::cos(lon), std::sin(lat), std::cos(lat) * std::sin(lon));
+                const float h = d.y;
+                const float mu = std::max(d.dot(sunDir), 0.f);
+                const float az = unit(Vector3(d.x, 0.f, d.z) + Vector3(1e-5f, 1e-5f, 1e-5f)).dot(sunFlat);
+                const float gap = smoothstepf(-0.25f, 0.85f, az) * (1.f - smoothstepf(0.05f, 0.45f, h));
+                const float glow = std::pow(mu, 4.f);
+                Vector3 clear = lerp3(hor * 1.05f, zenith, std::pow(clamp01(h), 0.5f));
+                clear = lerp3(clear, sc * (0.42f + 0.9f * glow), gap * (1.f - smoothstepf(0.f, 0.32f, h)));
+                clear += sc * (0.35f * std::pow(mu, 16.f) + 1.6f * std::pow(mu, 160.f));
+                Vector3 c3 = clear;
+                if (h > 0.f) {
+                    const float n = fbm(d.x / (h + 0.1f) * 0.9f * 1.4f, d.z / (h + 0.1f) * 0.9f * 1.4f);
+                    const float cover = mixf(0.86f, 0.28f, gap);
+                    const float c = smoothstepf(1.f - cover - 0.1f, 1.f - cover + 0.16f, n);
+                    const float thick = smoothstepf(0.42f, 0.9f, n);
+                    const Vector3 base = lerp3(Vector3(0.40f, 0.44f, 0.52f), Vector3(0.17f, 0.20f, 0.26f), thick);
+                    const float edge = (1.f - thick) * c;
+                    const Vector3 lit = sc * (((0.3f + 1.2f * glow) * edge + 0.25f * glow) * (0.15f + 0.85f * gap));
+                    c3 = lerp3(clear, base + lit, c * smoothstepf(0.f, 0.06f, h));
+                    // the disc, a little wider than in the shader so the panorama's texels catch it
+                    const float disc = smoothstepf(0.99930f, 0.99960f, mu);
+                    c3 += sc * (20.f * disc * (1.f - c));
+                } else {
+                    c3 = lerp3(hor, Vector3(0.74f, 0.78f, 0.85f), smoothstepf(0.f, -0.08f, h));
+                }
+                const Vector3 haze = lerp3(hor, sc * 0.75f, 0.5f * gap * (0.4f + 0.6f * glow));
+                c3 = lerp3(c3, haze, std::exp(-std::max(h, 0.f) * 34.f) * 0.8f);
+                float* p = px.data() + (static_cast<size_t>(row) * W + col) * 4;
+                p[0] = c3.x;
+                p[1] = c3.y;
+                p[2] = c3.z;
+                p[3] = 1.f;
+            }
+        });
+        auto tex = DataTexture::create(ImageData(std::move(px)), W, H);
+        tex->format = Format::RGBA;
+        tex->type = Type::Float;
+        tex->mapping = Mapping::EquirectangularReflection;
+        tex->wrapS = TextureWrapping::Repeat;
+        tex->magFilter = Filter::Linear;
+        tex->minFilter = Filter::Linear;
+        tex->generateMipmaps = false;
+        tex->needsUpdate();
+        return tex;
     }
 
     // ================================================================== particles
@@ -2457,6 +2861,7 @@ int main(int argc, char** argv) {
     int benchFrames = 0;
     std::string filmDir;
     float filmSeconds = 20.f;
+    bool vulkan = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -2465,6 +2870,7 @@ int main(int argc, char** argv) {
         else if (a == "--bench" && i + 1 < argc) benchFrames = std::max(1, std::atoi(argv[++i]));
         else if (a == "--film" && i + 1 < argc) filmDir = argv[++i];
         else if (a == "--seconds" && i + 1 < argc) filmSeconds = std::stof(argv[++i]);
+        else if (a == "--vulkan") vulkan = true;
         else if (a == "--click" && i + 1 < argc) {
             float cx = 0, cy = 0;
             if (std::sscanf(argv[++i], "%f,%f", &cx, &cy) == 2) clickAt = Vector2(cx, cy);
@@ -2479,11 +2885,25 @@ int main(int argc, char** argv) {
                           .antialiasing(8)
                           .vsync(!headless)
                           .headless(headless));
-    GLRenderer renderer(canvas);
+    // GL draws the custom snow, sky and mountain shaders; Vulkan (ray-traced shadows, its own
+    // fog and environment) gets stock-material stand-ins for them, built below.
+    std::unique_ptr<Renderer> rendererOwner;
+    GLRenderer* gl = nullptr;
+    VulkanRenderer* vk = nullptr;
+    if (vulkan) {
+        auto r = std::make_unique<VulkanRenderer>(canvas);
+        vk = r.get();
+        rendererOwner = std::move(r);
+    } else {
+        auto r = std::make_unique<GLRenderer>(canvas);
+        r->shadowMap().enabled = true;
+        r->shadowMap().type = ShadowMap::PFC;
+        gl = r.get();
+        rendererOwner = std::move(r);
+    }
+    Renderer& renderer = *rendererOwner;
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.1f;
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFC;
 
     // light: a cold overcast day with the sun low in a break to the south-west
     const Vector3 sunDir = unit(Vector3(0.93f, 0.26f, -0.25f));
@@ -2505,11 +2925,34 @@ int main(int argc, char** argv) {
 
     // sky dome (and the same sky, small, baked into the reflection environment)
     const Color skySun(1.0f, 0.64f, 0.28f);
-    auto skyMat = makeSkyMaterial(sunDir, skySun, horizon);
-    auto sky = Mesh::create(SphereGeometry::create(15000, 64, 32), skyMat);
-    sky->frustumCulled = false;
-    sky->renderOrder = -10;
-    scene->add(sky);
+    std::shared_ptr<ShaderMaterial> skyMat;
+    std::shared_ptr<Mesh> sky;
+    if (vk) {
+        scene->background = std::shared_ptr<Texture>(bakeSkyPanorama(sunDir, skySun, horizon));// also its environment
+        // Vulkan's air is one medium (FogExp2's density is its extinction per metre at the
+        // ground), thinning with height like real air: in a uniform medium a sky ray never
+        // leaves the fog, and the in-scatter along it veils the whole sky however thin the
+        // fog is. The panorama already carries its own horizon haze, so the layer is low.
+        scene->fog = FogExp2(horizon, 1.f / 7000.f);
+        VulkanRenderer::HeightFogSettings air;
+        air.density = 0.f;// the profile only: scene.fog gives the density
+        air.baseY = 0.f;
+        air.falloff = 300.f;
+        air.noiseAmount = 0.f;
+        vk->setHeightFog(air);
+        // The snow's relief and prints are normal-map detail seen at grazing angles; the
+        // Toksvig damping that keeps glossy normal maps from shimmering erases them past a
+        // few metres, and rough snow has no highlight to shimmer.
+        vk->setNormalMapToksvig(false);
+        // the snow's traced bounce light, and the haze over the sky, add what GL leaves out
+        renderer.toneMappingExposure = 0.9f;
+    } else {
+        skyMat = makeSkyMaterial(sunDir, skySun, horizon);
+        sky = Mesh::create(SphereGeometry::create(15000, 64, 32), skyMat);
+        sky->frustumCulled = false;
+        sky->renderOrder = -10;
+        scene->add(sky);
+    }
 
     auto sun = DirectionalLight::create(sunColor, 7.5f);
     sun->castShadow = true;
@@ -2536,9 +2979,16 @@ int main(int argc, char** argv) {
     // the glacier, its footprint record, and the ranges
     const CirclePath leadPath{kRingR, 0.f, 0.8f};
     TrackMap track(leadPath.R - 16.f, leadPath.R + 16.f);
-    auto snow = Mesh::create(buildSnowGeometry(track.rIn, track.rOut), makeSnowMaterial(track));
-    snow->receiveShadow = true;
-    scene->add(snow);
+    std::unique_ptr<StockSnow> stockSnow;
+    if (vk) {
+        stockSnow = std::make_unique<StockSnow>(track);
+        track.onStamp = [&](int i0, int i1, int j0, int j1) { stockSnow->touched(i0, i1, j0, j1); };
+        scene->add(stockSnow->root);
+    } else {
+        auto snow = Mesh::create(buildSnowGeometry(track.rIn, track.rOut), makeSnowMaterial(track));
+        snow->receiveShadow = true;
+        scene->add(snow);
+    }
 
     // the big massif stands behind the opening shot, a little right of the break
     Vector3 hero;
@@ -2556,11 +3006,14 @@ int main(int argc, char** argv) {
     ranges.hazeColor = horizon;
     ranges.hazeSunColor = skySun;
     ranges.sunDirection = sunDir;
+    if (vk) ranges.shading = terrain::MountainBackdropOptions::Shading::Textured;// Vulkan's fog is the haze
     auto mountains = terrain::MountainBackdrop::create(ranges);
+    mountains->mesh()->autoLod = false;// as the plain snow: rings spaced for distance already
     scene->add(mountains);
 
-    // reflections: the same sky, the ranges and the glacier, lit by the same lights
-    {
+    // reflections: the same sky, the ranges and the glacier, lit by the same lights (Vulkan
+    // takes the sky panorama as its environment and traces the rest)
+    if (gl) {
         auto envScene = Scene::create();
         envScene->add(Mesh::create(SphereGeometry::create(11000, 64, 32), makeSkyMaterial(sunDir, skySun, horizon)));
         envScene->add(Mesh::create(mountains->mesh()->geometry(), mountains->mesh()->material()));
@@ -2574,7 +3027,7 @@ int main(int argc, char** argv) {
         envSun->position.copy(sunDir * 1000.f);
         envScene->add(envSun);
         envScene->add(HemisphereLight::create(skyFill, Color(0.80f, 0.83f, 0.88f), 1.3f));
-        PMREMGenerator pmrem(renderer);
+        PMREMGenerator pmrem(*gl);
         PMREMGenerator::Options opt;
         opt.position = Vector3(0.f, 14.f, 0.f);
         scene->environment = pmrem.fromScene(*envScene, 0.f, 1.f, 14000.f, opt);
@@ -2762,7 +3215,8 @@ int main(int argc, char** argv) {
 
     auto frameUpdate = [&](float t) {
         if (track.dirty && (t - lastUpload > 0.25f || headless)) {
-            track.tex->needsUpdate();
+            if (stockSnow) stockSnow->flush();
+            else track.tex->needsUpdate();
             track.dirty = false;
             lastUpload = t;
         }
@@ -2776,8 +3230,11 @@ int main(int argc, char** argv) {
         sunTarget->position.copy(snapped);
         sun->position.copy(snapped + sunDir * 250.f);
 
-        skyMat->uniforms["uTime"].setValue(t);
-        sky->position.copy(camera->position);
+        if (sky) {
+            skyMat->uniforms["uTime"].setValue(t);
+            sky->position.copy(camera->position);
+        }
+        if (vk) vk->setSimTime(t);// pins Vulkan's clock (TAA, denoisers) to the scene's
         Vector3 origin = controls.target;
         origin.y = groundHeight(origin.x, origin.z);
         drift.update(t, origin);
@@ -3005,22 +3462,55 @@ int main(int argc, char** argv) {
         int frames = 0;
         float benchT = startTime;
         Clock benchClock;
+        // where a bench frame goes: the scene's own CPU work, and on Vulkan the renderer's
+        // CPU time and GPU passes (averaged after a warm-up)
+        const int warm = std::min(60, benchFrames / 4);
+        double sceneMs = 0, cpuMs = 0, gpuMs = 0, renderWallMs = 0, ensureMs = 0, recordMs = 0;
+        std::map<std::string, double> passMs;
+        Clock steadyClock;
         canvas.animate([&] {
             if (frames < benchFrames) {
                 if (frames == 0) benchClock.start();
+                if (frames == warm) steadyClock.start();
+                Clock sc;
+                sc.start();
                 benchT += dt;
                 step(benchT, dt);
                 scene->updateMatrixWorld(true);
                 director.update(benchT, dt, w, aspect);
                 frameUpdate(benchT);
+                if (frames >= warm) sceneMs += 1000.0 * sc.getElapsedTime();
             }
+            Clock rc;
+            rc.start();
             renderer.render(*scene, *camera);
+            if (frames >= warm && frames < benchFrames) renderWallMs += 1000.0 * rc.getElapsedTime();
+            if (vk && frames >= warm && frames < benchFrames) {
+                const auto ft = vk->lastFrameTimings();
+                cpuMs += ft.cpuFrameMs;
+                ensureMs += ft.cpuEnsureSceneMs;
+                recordMs += ft.cpuRecordMs;
+                gpuMs += ft.gpuTotalMs;
+                for (const auto& p : ft.passes) passMs[p.name] += p.gpuMs;
+            }
             if (++frames == benchFrames) {
                 renderer.writeFramebuffer(shotPath);
                 std::printf("bench: %d frames, %.2f ms/frame\n", benchFrames, 1000.f * benchClock.getElapsedTime() / static_cast<float>(benchFrames));
+                const double n = std::max(1, benchFrames - warm);
+                std::printf("  warm-up %.2f s\n", benchClock.getElapsedTime() - steadyClock.getElapsedTime());
+                std::printf("  after %d warm-up frames: %.2f ms/frame; scene update (CPU) %.2f ms, render() call %.2f ms\n", warm,
+                            1000.0 * steadyClock.getElapsedTime() / n, sceneMs / n, renderWallMs / n);
+                if (vk) {
+                    std::printf("  vulkan render() CPU %.2f ms (scene sync %.2f, record %.2f), GPU span %.2f ms\n", cpuMs / n, ensureMs / n, recordMs / n, gpuMs / n);
+                    std::vector<std::pair<double, std::string>> rows;
+                    for (const auto& [name, ms] : passMs) rows.emplace_back(ms / n, name);
+                    std::sort(rows.rbegin(), rows.rend());
+                    for (size_t i = 0; i < std::min<size_t>(rows.size(), 16); ++i) std::printf("    %6.2f ms  %s\n", rows[i].first, rows[i].second.c_str());
+                }
                 std::exit(0);
             }
-            if (benchFrames == 0 && frames >= 3) {
+            // Vulkan's temporal passes settle over a few dozen frames of the still
+            if (benchFrames == 0 && frames >= (vk ? 48 : 3)) {
                 renderer.writeFramebuffer(shotPath);
                 std::cout << "wrote " << shotPath << std::endl;
                 std::exit(0);
