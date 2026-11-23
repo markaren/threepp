@@ -222,11 +222,21 @@ void VulkanRenderer::Impl::refreshDirtyMaterialTextures() {
             // frames provably complete — VulkanRetireQueue.hpp) and swap the
             // freshly-built image into the same bindless slot. Was a
             // vkDeviceWaitIdle stall on every live DataTexture edit.
+            // The uploads go in one batch submitted without a host wait (each on its
+            // own was a submit and a queue wait): the frame recorded next is submitted
+            // after it on the same queue, as the slot path's uploads are.
+            const bool ownBatch = !oneShotBatch_;
+            if (ownBatch) beginOneShotBatch();
             for (auto& kv : textureCache) {
                 const auto sp = kv.second.ref.lock();
                 if (!sp || sp->version() == kv.second.version) continue;
                 if (kv.second.slot >= materialTextures.size()) continue;
-                Image2D rebuilt = buildMaterialImage2D(kv.first);
+                // An edited texture is a live one (a DataTexture redrawn as a scene runs)
+                // and will most likely be edited again: upload it as RGBA8, mipmapped on
+                // the GPU, rather than through the load-time BC7 transcode, which builds
+                // and encodes every level on the CPU (milliseconds for each 256x512 map,
+                // paid on every edit) to save VRAM a texture that changes cannot keep.
+                Image2D rebuilt = createPreparedImage(prepareMaterialImage(kv.first, /*bc7Ok=*/false));
                 if (!rebuilt.view) continue;// keep the old image on failure
                 retire(std::move(materialTextures[kv.second.slot]));
                 materialTextures[kv.second.slot] = rebuilt;// same slot index, new view
@@ -238,6 +248,10 @@ void VulkanRenderer::Impl::refreshDirtyMaterialTextures() {
                                 ? 1u
                                 : 0u;
                 kv.second.version = sp->version();
+            }
+            if (ownBatch) {
+                if (asyncPilot_) flushOneShotBatch();// the async-compute pilot waits, as the slot path does
+                else flushOneShotBatchAsync();
             }
             // The bindless material array is referenced by the deferred-compute
             // set (binding 11) and the gbuffer raster set (binding 3). Neither
