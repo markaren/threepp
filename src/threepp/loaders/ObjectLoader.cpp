@@ -89,9 +89,6 @@ namespace {
         // say which archive it came from — see resolveLinkedAsset.
         const ZipReader* archive{nullptr};
         const std::filesystem::path& archivePath;
-        // ObjectLoader::setSplatCloudResolver, consulted before a splat cloud
-        // is loaded from its file. Null or empty means always load.
-        const ObjectLoader::SplatCloudResolver* splatResolver{nullptr};
     };
 
     std::shared_ptr<BufferGeometry> lookupGeometry(const json& j, const ParseContext& ctx) {
@@ -865,10 +862,9 @@ namespace {
     }
 
     // A splat cloud, from the `threeppSplat` block ObjectExporter wrote: the
-    // live object the resolver hands back (the play snapshot's case), else
-    // the file loaded by its content — a SOG asset, a 3DGS .ply or a colour
-    // point cloud — with the importer's ops replayed. Anything that fails
-    // leaves a plain Object3D placeholder, placed and named, with a warning.
+    // file loaded by its content — a SOG asset, a 3DGS .ply or a colour point
+    // cloud — with the importer's ops replayed. Anything that fails leaves a
+    // plain Object3D placeholder, placed and named, with a warning.
     std::shared_ptr<Object3D> createSplatCloud(const json& j, const ParseContext& ctx) {
 
         const std::string name = value<std::string>(j, "name", value<std::string>(j, "uuid", "?"));
@@ -885,17 +881,9 @@ namespace {
         const float pointMix = value(ref, "pointMix", 0.f);
         const float pointSize = value(ref, "pointSize", 2.f);
 
-        if (ctx.splatResolver && *ctx.splatResolver) {
-            if (auto live = (*ctx.splatResolver)(value<std::string>(j, "uuid", ""))) {
-                live->setPointMix(pointMix);
-                live->setPointSize(pointSize);
-                return live;
-            }
-        }
-
         const auto stored = value<std::string>(ref, "path", "");
         if (stored.empty()) {
-            return placeholder("the document carries no file for it (a snapshot without its live object?)");
+            return placeholder("the document carries no file for it");
         }
 
         std::optional<TempAsset> extracted;
@@ -1145,11 +1133,6 @@ void ObjectLoader::setResourcePath(const std::filesystem::path& path) {
     resourcePath_ = path;
 }
 
-void ObjectLoader::setSplatCloudResolver(SplatCloudResolver resolver) {
-
-    splatResolver_ = std::move(resolver);
-}
-
 const std::vector<std::string>& ObjectLoader::warnings() const {
 
     return warnings_;
@@ -1185,7 +1168,7 @@ std::shared_ptr<Object3D> ObjectLoader::parse(const std::string& jsonText) {
     const auto materials = parseMaterials(j.contains("materials") ? j["materials"] : json(), textures, warnings);
 
     const ParseContext ctx{geometries, materials, textures, animations, warnings,
-                           resourcePath_, archive_.get(), archivePath_, &splatResolver_};
+                           resourcePath_, archive_.get(), archivePath_};
 
     auto object = parseObject(j["object"], ctx);
 

@@ -4,8 +4,8 @@
 // A description that takes arguments is not one robot: `ur_type:=ur5e` and
 // `ur_type:=ur10e` are different machines out of the same file. The editor asks
 // once, at import, and the answer has to survive everything that rebuilds the
-// robot afterwards — a play/stop cycle, a scene reload, a linked-asset
-// re-import — or a saved UR5e quietly comes back as something else.
+// robot afterwards — a scene reload, a linked-asset re-import — or a saved
+// UR5e quietly comes back as something else.
 //
 // PhysX-free: RobotConfig, URDFLoader and ObjectLoader only, so it runs
 // everywhere.
@@ -13,7 +13,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "threepp/extras/editor/RobotConfig.hpp"
-#include "threepp/extras/editor/SceneSnapshot.hpp"
 #include "threepp/loaders/AssetSource.hpp"
 #include "threepp/loaders/ObjectExporter.hpp"
 #include "threepp/loaders/ObjectLoader.hpp"
@@ -33,6 +32,23 @@ using namespace threepp;
 using namespace threepp::editor;
 
 namespace {
+
+    // Saved and opened again, as File > Save and File > Open do: the whole
+    // scene through the three.js JSON the document is written as, models
+    // embedded so nothing is re-read from the robot's file.
+    std::shared_ptr<Scene> saveAndReopen(Object3D& scene, std::string* text = nullptr) {
+
+        ObjectExporter exporter;
+        ObjectExporterOptions options;
+        options.images = ImageStorage::Omit;
+        options.models = ModelStorage::Embed;
+        options.prettyPrint = false;
+        const auto json = exporter.toJson(scene, options);
+        if (text) *text = json;
+
+        ObjectLoader loader;
+        return std::dynamic_pointer_cast<Scene>(loader.parse(json));
+    }
 
     struct TempDir {
 
@@ -252,19 +268,17 @@ TEST_CASE("an argument that changes the robot survives re-articulation") {
         CHECK(rebuilt->numDOF() == 2);
     }
 
-    SECTION("through a play/stop round trip, which is how the editor rebuilds") {
+    SECTION("through a save and reopen") {
 
         Scene scene;
         robot->name = "arm";
         scene.add(robot);
 
-        SceneSnapshot snapshot;
-        std::string error;
-        REQUIRE(snapshot.capture(scene, &error));
-        const auto restored = snapshot.restore(&error);
+        std::string json;
+        const auto restored = saveAndReopen(scene, &json);
         REQUIRE(restored);
 
-        // The document carries the joint table now, so Stop hands back a live
+        // The document carries the joint table, so a reopen hands back a live
         // robot and never re-reads the file. The arguments still have to be on
         // it: the physics session builds its articulation from them, and so does
         // any later rebuild of a document written before that block existed.

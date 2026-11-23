@@ -16,7 +16,7 @@ namespace {
                 << "  usage: threepp_player scene.json [options]\n"
                 << "\n"
                 << "  --episodes=N   play the document N times back to back. Each episode is a\n"
-                << "                 full play/stop cycle, and stop restores the snapshot, so\n"
+                << "                 full play/stop cycle on a copy of the scene that stop drops, so\n"
                 << "                 episodes are independent (default 1)\n"
                 << "  --frames=N     stop each episode after N frames\n"
                 << "  --seconds=N    stop each episode after N simulated seconds. With both,\n"

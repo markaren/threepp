@@ -318,7 +318,7 @@ TEST_CASE("newScene replaces the scene and notifies", "[editor]") {
     populate(document.scene());
 
     Scene* notified = nullptr;
-    document.onSceneReplaced([&](Scene& scene) { notified = &scene; });
+    document.onSceneReplaced([&](Scene& scene, SceneChange) { notified = &scene; });
 
     auto* previous = &document.scene();
     document.newScene();

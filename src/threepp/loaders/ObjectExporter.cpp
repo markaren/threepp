@@ -228,10 +228,8 @@ namespace {
     //                    same rule as a linked model, and ModelStorage does not
     //                    change it: embedding gigabytes into JSON is not a mode
     //   no file, a dir   a sidecar splats/<uuid>.ply next to the document
-    //   neither          a pathless block. The play snapshot is this case, and
-    //                    it hands the live object back through
-    //                    ObjectLoader::setSplatCloudResolver; a plain load has
-    //                    nothing to read and says so
+    //   neither          a pathless block; a load has nothing to read and
+    //                    says so
     //
     // The point-mode look rides along; the sort, LOD and everything else are
     // derived from the data again on load.

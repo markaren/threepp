@@ -28,8 +28,9 @@ namespace threepp {
         // one that lived inside a .glb/.fbx and never existed as its own file.
         Reference,
 
-        // No image entry at all. For callers that keep the live Texture objects
-        // themselves and only need the graph — see editor::SceneSnapshot.
+        // No image entry at all. For callers that only need the graph and not
+        // a document that reloads: comparing two scenes' text, as the editor's
+        // play-copy test does.
         Omit,
     };
 

@@ -290,9 +290,9 @@ bool PlayerApp::playEpisode(int index) {
         return false;
     }
 
-    // The scene is rebuilt by each stop(), so the followed object is a different
-    // pointer every episode. Re-resolve here, against the graph play() just
-    // started on.
+    // Each play() runs on a new copy of the scene, so the followed object is a
+    // different pointer every episode. Re-resolve here, against the copy play()
+    // just started on.
     follow_ = followName_.empty() ? nullptr : core_.scene().getObjectByName(followName_);
     followSeeded_ = false;
     if (!followName_.empty() && !follow_) {
@@ -345,8 +345,8 @@ bool PlayerApp::playEpisode(int index) {
     }
 
     const auto result = core_.endEpisode();
-    // stop() replaced the scene the subject lived in. Let go before the pointer
-    // is a pointer into a freed graph rather than after.
+    // stop() dropped the play copy the subject lived in. Let go before the
+    // pointer is a pointer into a freed graph rather than after.
     follow_ = nullptr;
     followSeeded_ = false;
     // The cloud's "keep the last frame" rule must not cross an episode

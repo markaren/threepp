@@ -10,7 +10,7 @@
 // Editor-only scene content (grid, axes, selection outline, transform gizmo)
 // hangs off a single overlay Group that is registered with the SceneDocument
 // as editor-only, so it renders but is detached from the scene for the duration
-// of every save and every play snapshot.
+// of every save and while the play copy is built.
 
 #ifndef THREEPP_EDITOR_EDITORAPP_HPP
 #define THREEPP_EDITOR_EDITORAPP_HPP
@@ -547,8 +547,9 @@ namespace threepp::editor {
         //
         // Called from the OPEN paths only (openScene, openExample, the file on
         // the command line) and never from the scene-replaced listener: Stop
-        // restores a snapshot, and a Stop that teleports the camera away from
-        // wherever the user drove it is worse than no framing at all.
+        // swaps back to the authored scene, and a Stop that teleports the
+        // camera away from wherever the user drove it is worse than no framing
+        // at all.
         //
         // Returns whether a view was applied, which is what tells openExample
         // whether it still has to frame the document itself. A malformed value
@@ -666,9 +667,9 @@ namespace threepp::editor {
         void redo();
 
         // The gate every document-mutating operation passes through. Play runs
-        // on a snapshot and Stop rebuilds the authored scene from it, so an edit
-        // made while playing is thrown away on Stop while leaving an undo entry
-        // rebound against the restored graph. Worse, PlaySession's contract is
+        // on a copy of the scene that Stop drops, so an edit made while playing
+        // is thrown away on Stop while leaving an undo entry that points into a
+        // graph that no longer exists. Worse, PlaySession's contract is
         // that "the editor does not touch the graph while playing" — a delete
         // pulls a node out from under a live PhysX actor. Refusing centrally is
         // what makes that a contract rather than a hope; the disabled menu items
@@ -1019,17 +1020,11 @@ namespace threepp::editor {
         // call into console_.
         void drainLibraryLog();
         void logWarnings();
-        // Says, in the console and the status bar, that any splat cloud in the
-        // scene is about to be dropped by `action` ("Play", "Save"). Splat
-        // clouds are not serialized yet, and both operations go through
-        // ObjectExporter — Play because Stop restores from a snapshot in the
-        // same format the save file uses. Losing the object is accepted for
-        // now; losing it silently is not. Returns how many were found.
 
         void applyGizmoMode();
         // Whether the transform handles belong on screen at all: something is
         // selected, the toolbar is not in Select mode, and play is stopped.
-        // Play runs on a snapshot the simulation owns, so a gizmo inviting a
+        // Play runs on a copy the simulation owns, so a gizmo inviting a
         // transform edit on a moving body is an invitation to nothing — the
         // edit would be refused, and dragging handles across a falling crate
         // is not a thing anyone means to do. One predicate, because

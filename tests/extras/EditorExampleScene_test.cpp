@@ -36,7 +36,6 @@
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
-#include "threepp/extras/editor/SceneSnapshot.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
@@ -401,11 +400,12 @@ namespace {
             return !json.empty() && document.openJson(json, &error);
         }
 
-        // Play, as the editor plays it: the document is SNAPSHOT first, and the
-        // snapshot is what Stop puts back. Without that half, "Stop restores the
-        // document" is a claim about a step nothing in the test performed.
+        // Play, as the editor plays it: the document swaps to its play copy
+        // first, and Stop swaps back to the authored scene. Without that half,
+        // "Stop restores the document" is a claim about a step nothing in the
+        // test performed.
         void start() {
-            REQUIRE(document.capture(snapshot));
+            REQUIRE(document.beginPlay());
             physics.start(scene());
             conveyors.start(scene());
             sensors.start(scene());
@@ -426,10 +426,9 @@ namespace {
             sensors.stop();
             conveyors.stop();
             physics.stop();
-            REQUIRE(document.restore(snapshot));
+            document.endPlay();
+            REQUIRE(document.warnings().empty());
         }
-
-        SceneSnapshot snapshot;
 
         Object3D* node(const char* name) { return scene().getObjectByName(name); }
 
@@ -714,7 +713,7 @@ TEST_CASE("Timber Yard runs itself, and the saw bay counts", "[editor][example]"
 
     rig.stop();
 
-    // Stop puts the document back — the play snapshot is what makes an example
+    // Stop puts the document back — the play copy is what makes an example
     // something you can press Play on twice. Every log is on the rack again,
     // and every instance is gone.
     REQUIRE(rig.logsPast(kPastGate) == 0);

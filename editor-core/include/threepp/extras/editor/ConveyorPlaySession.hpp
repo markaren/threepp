@@ -164,11 +164,15 @@ namespace threepp::editor {
         void stop() override { release(); }
 
     private:
-        // A belt ribbon material whose texture is scrolled each frame.
+        // A belt ribbon material whose texture is scrolled each frame. The
+        // material is the play copy's own; the texture is shared with the
+        // authored scene (a copy would re-upload the image), so its offset at
+        // start is put back at stop.
         struct BeltVisual {
             std::shared_ptr<Texture> texture;
             std::shared_ptr<Material> material;// version-bumped so the scroll re-uploads
             float scrollRate = 0.f;            // d(offset.y)/dt at speedScale 1
+            Vector2 authoredOffset;
         };
 
         // Rollers / drums of one conveyor, spun in step with its belt.
@@ -212,7 +216,8 @@ namespace threepp::editor {
                         // speed [m/s] * repeat.y [tiles/m]; negative drags the
                         // pattern along travel, flipped for a reversed belt.
                         beltVisuals_.push_back({withMap->map, material,
-                                                direction * config.speed * withMap->map->repeat.y});
+                                                direction * config.speed * withMap->map->repeat.y,
+                                                withMap->map->offset});
                     }
                 } else if (role == "roller") {
                     rollers.parts.push_back({&mesh, mesh.quaternion});
@@ -274,6 +279,11 @@ namespace threepp::editor {
                 for (auto& mesh : track.meshes) mesh->removeFromParent();
             }
             barMeshes_.clear();
+            // Last first: two belts sharing one texture both recorded the
+            // offset it had before either scrolled.
+            for (auto it = beltVisuals_.rbegin(); it != beltVisuals_.rend(); ++it) {
+                it->texture->offset.copy(it->authoredOffset);
+            }
             beltVisuals_.clear();
             spinners_.clear();
             scene_ = nullptr;

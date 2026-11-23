@@ -39,6 +39,7 @@
 #include "threepp/extras/editor/GranularConfig.hpp"
 #include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
+#include "threepp/extras/editor/PlayCopy.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
@@ -1604,8 +1605,9 @@ namespace threepp::editor {
         // A deformable volume: PhysX cooks a tetrahedral mesh from the object's
         // own geometry and then writes the deformed vertices back into it every
         // step, so the visual mesh IS the simulation output. addSoftBody bakes
-        // the world matrix into the geometry and zeroes the local transform —
-        // the play snapshot puts both back on Stop.
+        // the world matrix into the geometry and zeroes the local transform.
+        // The transform is the play copy's; the geometry is shared with the
+        // authored mesh until PlayCopy::ownGeometry gives the played one its own.
         bool createSoftBody(Object3D& object, const PhysicsConfig& config) {
 #if !THREEPP_PHYSX_GPU
             // gpu_ is never set here: PhysxWorld refuses enableGpuDynamics where
@@ -1651,6 +1653,10 @@ namespace threepp::editor {
             if (isUnit(scale.x) && isUnit(scale.y) && isUnit(scale.z)) {
                 cacheKey = geometry->uuid;
             }
+
+            // Keyed above by the SHARED geometry, so N copies of one authored
+            // geometry still cook once although each now writes its own.
+            PlayCopy::ownGeometry(*mesh);
 
             try {
                 const auto* body = world_->addSoftBody(

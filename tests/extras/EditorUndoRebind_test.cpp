@@ -5,6 +5,7 @@
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#include "threepp/loaders/ObjectLoader.hpp"
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -13,13 +14,15 @@ using namespace threepp;
 using namespace threepp::editor;
 using Catch::Matchers::WithinAbs;
 
-// Undo across Play. Stopping play restores the scene from a JSON snapshot,
-// which destroys the graph every recorded command points into. The editor
-// wires CommandStack::rebind into SceneDocument::onSceneReplaced so commands
-// re-resolve their targets by uuid (stable through the snapshot round trip)
-// — or are dropped when they cannot. That wiring is reproduced here; before
-// it existed, undoing a pre-play edit after stop wrote through dangling
-// pointers.
+// Undo across a scene swap. A reload (the external-edit reload, any
+// replaceScene) parses the document into a new graph, which destroys the graph
+// every recorded command points into. The editor wires CommandStack::rebind
+// into SceneDocument::onSceneReplaced so commands re-resolve their targets by
+// uuid (stable through the document round trip) — or are dropped when they
+// cannot. Play is NOT such a swap for the command stack: it runs on a copy and
+// the authored graph the commands point into stays alive behind it, so the
+// editor rebinds only on SceneChange::Replaced, and the history survives Play
+// and Stop whole. That wiring is reproduced here.
 
 namespace {
 
@@ -30,17 +33,32 @@ namespace {
         PlayController controller;
 
         Harness() {
-            document.onSceneReplaced([this](Scene& scene) { stack.rebind(scene); });
+            document.onSceneReplaced([this](Scene& scene, SceneChange change) {
+                if (change == SceneChange::Replaced) stack.rebind(scene);
+            });
         }
 
         Scene& scene() { return document.scene(); }
 
-        // One full play round: snapshot, an idle update, stop-restore.
+        // One full play round: the copy, an idle update, back to the authored
+        // scene.
         void playRound() {
             std::string error;
             REQUIRE(controller.play(document, &error));
             controller.update(0.1f);
             REQUIRE(controller.stop(document, &error));
+        }
+
+        // The document written out and parsed back into a new graph, which
+        // replaces the old one.
+        void reloadRound() {
+            std::string error;
+            const auto json = document.toJson(false, &error);
+            REQUIRE(!json.empty());
+            ObjectLoader loader;
+            auto parsed = std::dynamic_pointer_cast<Scene>(loader.parse(json));
+            REQUIRE(parsed);
+            document.replaceScene(parsed);
         }
     };
 
@@ -54,7 +72,7 @@ namespace {
 }// namespace
 
 
-TEST_CASE("undoing a pre-play transform targets the restored instance", "[editor]") {
+TEST_CASE("undoing a pre-reload transform targets the restored instance", "[editor]") {
 
     Harness h;
     auto box = named("Box");
@@ -68,10 +86,10 @@ TEST_CASE("undoing a pre-play transform targets the restored instance", "[editor
     h.stack.execute(std::make_unique<SetTransformCommand>(*box, before, after, "Move"));
     CHECK_THAT(box->position.x, WithinAbs(4.f, 1e-5));
 
-    // Keep the pre-play scene alive so we can prove the undo did NOT go
+    // Keep the pre-reload scene alive so we can prove the undo did NOT go
     // through the old pointer (and so comparing against it stays legal).
     const auto oldScene = h.document.scenePtr();
-    h.playRound();
+    h.reloadRound();
     REQUIRE(&h.scene() != oldScene.get());
 
     auto* restored = findByUuid(h.scene(), uuid);
@@ -101,17 +119,17 @@ TEST_CASE("property commands are dropped on scene replace instead of dangling", 
     CHECK(box->name == "Crate");
     CHECK(h.stack.canUndo());
 
-    h.playRound();
+    h.reloadRound();
 
     // The setter captured a raw pointer into the old graph; the stack dropped
     // the command rather than let undo write through it.
     CHECK_FALSE(h.stack.canUndo());
     CHECK_FALSE(h.stack.undo());
-    // The rename itself was captured by the snapshot and survives.
+    // The rename itself was in the document and survives.
     CHECK(h.scene().getObjectByName("Crate") != nullptr);
 }
 
-TEST_CASE("undoing a pre-play delete reinserts the retained subtree", "[editor]") {
+TEST_CASE("undoing a pre-reload delete reinserts the retained subtree", "[editor]") {
 
     Harness h;
     auto keeper = named("Keeper");
@@ -126,10 +144,10 @@ TEST_CASE("undoing a pre-play delete reinserts the retained subtree", "[editor]"
     h.stack.execute(std::move(remove));
     CHECK(h.scene().children.size() == 1);
 
-    h.playRound();
+    h.reloadRound();
     CHECK(h.scene().getObjectByName("Doomed") == nullptr);
 
-    // The deleted subtree was never in the snapshot; the command retained the
+    // The deleted subtree was never in the document; the command retained the
     // ORIGINAL instance, children and all, and reinserts it into the new
     // scene under the uuid-resolved parent.
     REQUIRE(h.stack.undo());
@@ -144,7 +162,7 @@ TEST_CASE("undoing a pre-play delete reinserts the retained subtree", "[editor]"
     CHECK(h.scene().getObjectByName("Doomed") == nullptr);
 }
 
-TEST_CASE("undoing a pre-play add removes the restored instance", "[editor]") {
+TEST_CASE("undoing a pre-reload add removes the restored instance", "[editor]") {
 
     Harness h;
     auto added = named("Added");
@@ -152,7 +170,7 @@ TEST_CASE("undoing a pre-play add removes the restored instance", "[editor]") {
     const auto uuid = added->uuid;
 
     const auto oldScene = h.document.scenePtr();
-    h.playRound();
+    h.reloadRound();
 
     auto* restored = findByUuid(h.scene(), uuid);
     REQUIRE(restored != nullptr);
@@ -168,7 +186,7 @@ TEST_CASE("undoing a pre-play add removes the restored instance", "[editor]") {
     CHECK(findByUuid(h.scene(), uuid) == restored);
 }
 
-TEST_CASE("undoing a pre-play reparent restores the original parent by uuid", "[editor]") {
+TEST_CASE("undoing a pre-reload reparent restores the original parent by uuid", "[editor]") {
 
     Harness h;
     auto group = Group::create();
@@ -188,7 +206,7 @@ TEST_CASE("undoing a pre-play reparent restores the original parent by uuid", "[
     const auto objectUuid = object->uuid;
     const auto groupUuid = group->uuid;
 
-    h.playRound();
+    h.reloadRound();
 
     auto* restoredObject = findByUuid(h.scene(), objectUuid);
     auto* restoredGroup = findByUuid(h.scene(), groupUuid);
@@ -205,7 +223,7 @@ TEST_CASE("undoing a pre-play reparent restores the original parent by uuid", "[
     CHECK_THAT(restoredObject->position.x, WithinAbs(-9.f, 1e-4));
 }
 
-TEST_CASE("commands undone before play redo onto the restored scene", "[editor]") {
+TEST_CASE("commands undone before a reload redo onto the restored scene", "[editor]") {
 
     Harness h;
     auto box = named("Box");
@@ -216,10 +234,10 @@ TEST_CASE("commands undone before play redo onto the restored scene", "[editor]"
     auto after = before;
     after.position.y = 2.f;
     h.stack.execute(std::make_unique<SetTransformCommand>(*box, before, after, "Move"));
-    REQUIRE(h.stack.undo());// parked on the redo stack across play
+    REQUIRE(h.stack.undo());// parked on the redo stack across the reload
     CHECK_THAT(box->position.y, WithinAbs(0.f, 1e-5));
 
-    h.playRound();
+    h.reloadRound();
 
     REQUIRE(h.stack.canRedo());
     REQUIRE(h.stack.redo());
@@ -249,7 +267,7 @@ TEST_CASE("unresolvable commands are pruned, the rest keep working", "[editor]")
     h.stack.execute(std::make_unique<SetTransformCommand>(*box, t2, t3, "Move"));
 
     CHECK(h.stack.undoCount() == 3);
-    h.playRound();
+    h.reloadRound();
     // The property command in the middle is gone; both transforms survive.
     CHECK(h.stack.undoCount() == 2);
 
@@ -259,4 +277,32 @@ TEST_CASE("unresolvable commands are pruned, the rest keep working", "[editor]")
     CHECK_THAT(restored->position.x, WithinAbs(1.f, 1e-5));
     REQUIRE(h.stack.undo());
     CHECK_THAT(restored->position.x, WithinAbs(0.f, 1e-5));
+}
+
+TEST_CASE("the undo history survives play and stop whole", "[editor]") {
+
+    Harness h;
+    auto box = named("Box");
+    h.scene().add(box);
+    auto* authored = &h.scene();
+
+    auto t1 = SetTransformCommand::read(*box);
+    auto t2 = t1;
+    t2.position.x = 1.f;
+    h.stack.execute(std::make_unique<SetTransformCommand>(*box, t1, t2, "Move"));
+
+    // A raw capture, which a rebind would have to drop.
+    auto* raw = box.get();
+    h.stack.execute(makeProperty<std::string>(
+            "Rename", {}, [raw](const std::string& v) { raw->name = v; }, "Box", "Crate"));
+    REQUIRE(h.stack.undoCount() == 2);
+
+    h.playRound();
+
+    CHECK(&h.scene() == authored);
+    CHECK(h.stack.undoCount() == 2);
+    REQUIRE(h.stack.undo());
+    CHECK(box->name == "Box");
+    REQUIRE(h.stack.undo());
+    CHECK_THAT(box->position.x, WithinAbs(0.f, 1e-5));
 }

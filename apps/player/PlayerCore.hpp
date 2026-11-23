@@ -18,10 +18,11 @@
 // the editor gates it on, so a build without PhysX, audio or Python drops
 // exactly the same sessions in both front ends.
 //
-// An EPISODE is one full play -> step* -> stop cycle. Stop restores the snapshot
-// PlayController took at play(), so the document an episode starts from is
-// byte-for-byte the one the last episode started from: episodes are independent
-// by construction, not by anybody remembering to reset something.
+// An EPISODE is one full play -> step* -> stop cycle. play() runs the episode
+// on a fresh copy of the authored scene and stop() drops it, so the document an
+// episode starts from is byte-for-byte the one the last episode started from:
+// episodes are independent by construction, not by anybody remembering to
+// reset something.
 
 #ifndef THREEPP_PLAYER_PLAYERCORE_HPP
 #define THREEPP_PLAYER_PLAYERCORE_HPP
@@ -182,8 +183,8 @@ namespace threepp::player {
         [[nodiscard]] Scene& scene() const { return document_.scene(); }
 
         // Where a front end parents what it draws but must never save: it is
-        // registered with the document as editor-only (so it survives the
-        // snapshot/restore of every episode without ever entering one) and is
+        // registered with the document as editor-only (so it follows the scene
+        // to every episode's play copy and back without ever entering one) and is
         // handed to the sensor session as hidden-during-scan, so a lidar cannot
         // range against somebody's debug arrow.
         [[nodiscard]] Group* overlay() const;
@@ -203,7 +204,7 @@ namespace threepp::player {
         // — what a --seconds budget must be checked against, precisely because it
         // is not the sum of the deltas the caller has been stepping.
         [[nodiscard]] float episodeSeconds() const { return current_.seconds; }
-        // Stops the sessions, restores the snapshot and returns the finished
+        // Stops the sessions, drops the play copy and returns the finished
         // result, which is also appended to results().
         EpisodeResult endEpisode();
 

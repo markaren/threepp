@@ -158,7 +158,7 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
 
     const bool selected = selection_.get() == &object;
     const bool leaf = object.children.empty();
-    // Play runs on a snapshot Stop discards, so the tree is a viewer then, not
+    // Play runs on a copy of the scene Stop discards, so the tree is a viewer then, not
     // an editor: selection, expansion and Focus stay, everything that changes
     // the graph goes grey. EditorApp::rejectWhilePlaying() is the actual gate.
     const bool editable = !isPlaying();

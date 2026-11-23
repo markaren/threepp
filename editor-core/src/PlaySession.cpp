@@ -28,7 +28,7 @@ bool PlayController::play(SceneDocument& document, std::string* error) {
         return true;
     }
 
-    if (!document.capture(snapshot_, error)) return false;
+    if (!document.beginPlay(error)) return false;
 
     elapsed_ = 0.f;
     state_ = State::Playing;
@@ -38,8 +38,8 @@ bool PlayController::play(SceneDocument& document, std::string* error) {
             sessions_[i]->start(document.scene());
         } catch (const std::exception& e) {
             if (error) *error = sessions_[i]->name() + ": " + e.what();
-            // Unwind the ones that did start, then leave the editor exactly as
-            // it was — the scene has not been touched yet at this point.
+            // Unwind the ones that did start, then hand the document back to
+            // the authored scene, which no session has seen.
             for (std::size_t j = i; j-- > 0;) {
                 try {
                     sessions_[j]->stop();
@@ -47,7 +47,7 @@ bool PlayController::play(SceneDocument& document, std::string* error) {
                 }
             }
             state_ = State::Stopped;
-            snapshot_.clear();
+            document.endPlay();
             return false;
         }
     }
@@ -74,21 +74,18 @@ void PlayController::togglePause() {
     }
 }
 
-bool PlayController::stop(SceneDocument& document, std::string* error) {
+bool PlayController::stop(SceneDocument& document, std::string* /*error*/) {
 
     if (state_ == State::Stopped) return true;
 
-    // Sessions first: they may hold pointers into the scene that is about to be
-    // replaced.
+    // Sessions first: they hold pointers into the play copy, which endPlay()
+    // drops.
     stopSessions();
     state_ = State::Stopped;
     elapsed_ = 0.f;
 
-    if (!snapshot_.valid()) return true;
-
-    const bool ok = document.restore(snapshot_, error);
-    snapshot_.clear();
-    return ok;
+    document.endPlay();
+    return true;
 }
 
 void PlayController::update(float dt) {
@@ -117,7 +114,7 @@ void PlayController::stopSessions() {
             sessions_[i]->stop();
         } catch (...) {
             // A runtime that fails to shut down cleanly must not strand the
-            // editor in Play mode with no way back to the snapshot.
+            // editor in Play mode with no way back to the authored scene.
         }
     }
 }

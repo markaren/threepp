@@ -46,8 +46,8 @@ namespace threepp::player {
         std::filesystem::path scene;
 
         // How many times to play the document, back to back. Each one is a full
-        // play -> run -> stop cycle, and stop restores the snapshot, so they are
-        // independent by construction.
+        // play -> run -> stop cycle on a copy of the scene that stop drops, so
+        // they are independent by construction.
         int episodes = 1;
 
         // Per-episode budget. Zero means unbounded; a windowed run then plays
@@ -120,7 +120,8 @@ namespace threepp::player {
         PerspectiveCamera camera_{55.f, 16.f / 9.f, 0.05f, 5000.f};
 
         // scene.userData["editorFollow"] — the object the camera chases, by
-        // name, re-resolved every episode because stop() rebuilds the scene.
+        // name, re-resolved every episode because play() and stop() swap the
+        // scene between the authored graph and its play copy.
         std::string followName_;
         Object3D* follow_ = nullptr;
         Vector3 followLast_;

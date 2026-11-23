@@ -3,10 +3,13 @@
 //
 // A PlaySession is three calls. It gets the live Scene on start(), a delta on
 // every frame, and stop() when the user is done. In between it may do ANYTHING
-// to the scene — move objects, swap materials, add and delete nodes — because
-// the editor took a full snapshot before starting and rebuilds the scene from it
-// afterwards (see SceneSnapshot). No session has to be reversible, and none has
-// to cooperate with any other.
+// to the scene's nodes — move objects, swap materials, add and delete nodes —
+// because the scene it is given is a play copy of the authored one (see
+// PlayCopy), dropped at Stop. No session has to be reversible, and none has to
+// cooperate with any other. The one thing a session must not do is write into
+// a shared asset in place: geometry and textures are shared with the authored
+// scene, so a session that writes vertices takes its own geometry first
+// (PlayCopy::ownGeometry).
 //
 // Adding a runtime is therefore: implement three methods, hand an instance to
 // PlayController::addSession(). PhysicsPlaySession (PhysX) is the one that
@@ -15,8 +18,6 @@
 
 #ifndef THREEPP_EDITOR_PLAYSESSION_HPP
 #define THREEPP_EDITOR_PLAYSESSION_HPP
-
-#include "threepp/extras/editor/SceneSnapshot.hpp"
 
 #include <memory>
 #include <string>
@@ -46,15 +47,16 @@ namespace threepp::editor {
         // (update is simply not called then).
         virtual void update(float dt) = 0;
 
-        // Release everything acquired in start(). Called before the scene is
-        // restored, so the session must not hold pointers into it afterwards.
+        // Release everything acquired in start(). Called before the play copy
+        // is dropped, so the session must not hold pointers into it afterwards.
         virtual void stop() = 0;
 
         [[nodiscard]] virtual std::string name() const { return "PlaySession"; }
     };
 
 
-    // Owns the play state machine and the snapshot that makes Stop lossless.
+    // Owns the play state machine. Stop is lossless because the sessions only
+    // ever see the document's play copy (SceneDocument::beginPlay).
     class PlayController {
 
     public:
@@ -72,17 +74,19 @@ namespace threepp::editor {
         [[nodiscard]] bool stopped() const { return state_ == State::Stopped; }
         [[nodiscard]] bool paused() const { return state_ == State::Paused; }
 
-        // Snapshot the document, then start every session. A session that throws
-        // is reported through `error` and the whole play attempt is rolled back —
-        // half-started physics is worse than no physics.
+        // Swap the document to its play copy, then start every session. A
+        // refused copy or a session that throws is reported through `error` and
+        // the whole play attempt is rolled back — half-started physics is worse
+        // than no physics.
         bool play(SceneDocument& document, std::string* error = nullptr);
 
         void pause();
         void resume();
         void togglePause();
 
-        // Stop the sessions and restore the snapshot. `document` gets a fresh
-        // Scene; the caller re-resolves its selection by uuid afterwards.
+        // Stop the sessions and swap the document back to the authored scene
+        // (SceneDocument::endPlay). Cannot fail: true, and `error` is left
+        // alone; the geometry audit's findings are in document.warnings().
         bool stop(SceneDocument& document, std::string* error = nullptr);
 
         // No-op unless playing. Sessions are updated in registration order.
@@ -95,7 +99,6 @@ namespace threepp::editor {
         void stopSessions();
 
         std::vector<std::shared_ptr<PlaySession>> sessions_;
-        SceneSnapshot snapshot_;
         State state_ = State::Stopped;
         float elapsed_ = 0.f;
     };

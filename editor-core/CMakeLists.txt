@@ -43,11 +43,11 @@ add_library(threepp_editor_core STATIC
         src/OrthoClipFit.cpp
         src/ParticleFieldConfig.cpp
         src/PhysicsConfig.cpp
+        src/PlayCopy.cpp
         src/PlaySession.cpp
         src/RenderConfig.cpp
         src/RobotConfig.cpp
         src/SceneDocument.cpp
-        src/SceneSnapshot.cpp
         src/ScriptConfig.cpp
         src/ScriptWorkspace.cpp
         src/Selection.cpp

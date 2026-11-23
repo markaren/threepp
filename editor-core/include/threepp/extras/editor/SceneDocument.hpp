@@ -31,13 +31,31 @@ namespace threepp {
 
 namespace threepp::editor {
 
-    class SceneSnapshot;
+    class PlayCopy;
+
+    // Why the document's scene changed, for the scene-changed listeners.
+    // Replaced: a different document (open, new, reload); nothing of the
+    // outgoing graph survives. PlayBegan: scene() is now the play copy of the
+    // authored scene, which stays alive and untouched behind it. PlayEnded:
+    // scene() is the authored scene again and the play copy is dropped right
+    // after the listeners return.
+    enum class SceneChange {
+        Replaced,
+        PlayBegan,
+        PlayEnded
+    };
 
     class SceneDocument {
 
     public:
         SceneDocument();
+        ~SceneDocument();
 
+        SceneDocument(const SceneDocument&) = delete;
+        SceneDocument& operator=(const SceneDocument&) = delete;
+
+        // While playing, the play copy: nothing reached through the document
+        // can touch the authored scene then.
         [[nodiscard]] Scene& scene() const { return *scene_; }
         [[nodiscard]] std::shared_ptr<Scene> scenePtr() const { return scene_; }
 
@@ -93,14 +111,16 @@ namespace threepp::editor {
         // The document as it would be written, without touching the filesystem.
         [[nodiscard]] std::string toJson(bool prettyPrint, std::string* error = nullptr);
 
-        // Swap in a different scene (a reload, or the restored play snapshot).
-        // Registered editor-only objects are re-attached to the new scene and
-        // listeners are fired. Does not change the path or the dirty flag.
+        // Swap in a different scene (a reload). Registered editor-only objects
+        // are re-attached to the new scene and listeners are fired with
+        // SceneChange::Replaced. Does not change the path or the dirty flag.
+        // A play in progress is dropped first, its clouds handed back.
         void replaceScene(std::shared_ptr<Scene> scene);
 
-        // Fired after replaceScene(). The application uses this to re-point its
-        // camera controls, re-resolve the selection by uuid and reattach helpers.
-        int onSceneReplaced(std::function<void(Scene&)> listener);
+        // Fired after every swap of scene(): replaceScene(), beginPlay() and
+        // endPlay(). The application uses this to re-point its camera controls,
+        // re-resolve the selection by uuid and reattach helpers.
+        int onSceneReplaced(std::function<void(Scene&, SceneChange)> listener);
         void removeListener(int id);
 
         // --- editor-only objects ------------------------------------------------
@@ -110,9 +130,24 @@ namespace threepp::editor {
         void removeEditorOnly(Object3D& object);
         [[nodiscard]] bool isEditorOnly(const Object3D& object) const;
 
-        // --- play snapshots -----------------------------------------------------
-        bool capture(SceneSnapshot& snapshot, std::string* error = nullptr);
-        bool restore(const SceneSnapshot& snapshot, std::string* error = nullptr);
+        // --- play ---------------------------------------------------------------
+        // Build the play copy of the scene (see PlayCopy) with the editor-only
+        // objects detached, swap scene() over to it, re-attach them there and
+        // fire the listeners with SceneChange::PlayBegan. False with `error`
+        // set when the copy is refused; nothing has changed then.
+        bool beginPlay(std::string* error = nullptr);
+
+        // Give the play copy back (the lent clouds go home, the geometry audit
+        // runs), swap scene() back to the authored scene, fire the listeners
+        // with SceneChange::PlayEnded, then drop the copy. Audit findings are
+        // left in warnings(). The path and the dirty flag do not move across a
+        // play. No-op when not playing.
+        void endPlay();
+
+        [[nodiscard]] bool playing() const { return playCopy_ != nullptr; }
+
+        // The play copy while playing, else nullptr.
+        [[nodiscard]] PlayCopy* playCopy() const { return playCopy_.get(); }
 
         // Warnings produced by the last export/import ("skipping userData entry
         // ...", "texture has no CPU-side image"). Shown in the console panel.
@@ -129,8 +164,12 @@ namespace threepp::editor {
 
         void detachEditorOnly();
         void attachEditorOnly();
+        void notify(SceneChange change);
 
         std::shared_ptr<Scene> scene_;
+        // While playing: the authored scene, kept alive behind the copy.
+        std::shared_ptr<Scene> authored_;
+        std::unique_ptr<PlayCopy> playCopy_;
         std::filesystem::path path_;
         ImageStorage imageStorage_ = ImageStorage::Embed;
         ModelStorage modelStorage_ = ModelStorage::Embed;
@@ -140,7 +179,7 @@ namespace threepp::editor {
 
         struct Listener {
             int id;
-            std::function<void(Scene&)> fn;
+            std::function<void(Scene&, SceneChange)> fn;
         };
         std::vector<Listener> listeners_;
         int nextListenerId_ = 1;

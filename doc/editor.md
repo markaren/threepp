@@ -54,7 +54,7 @@ on:
 | `SetTransformCommand`, `PropertyCommand<T>`, `AddObjectCommand`, `RemoveObjectCommand`, `ReparentCommand`, `SetMaterialMapCommand` | the concrete edits |
 | `Selection` | the current object + change notifications |
 | `SceneDocument` | the open Scene, its path, its dirty flag, save/open |
-| `SceneSnapshot` | scene ⇄ JSON, with live textures preserved |
+| `PlayCopy` | the in-memory copy of the scene that Play runs on |
 | `ObjectFactory` | primitives, lights, groups, cameras with unique names |
 | `PlaySession`, `PlayController` | the play-mode state machine |
 | `PhysicsConfig` | per-object rigid-body and soft-body authoring, stored in `userData` |
@@ -3124,15 +3124,21 @@ playController.addSession(std::make_shared<MyRuntime>());
 ```
 
 **Your session does not have to be reversible.** Before any session starts, the
-editor captures the whole scene with `SceneSnapshot`; on Stop it parses that
-snapshot back into a fresh `Scene` and hands it to the document. Move objects,
-retarget materials, delete half the graph — none of it survives Stop.
+document builds a `PlayCopy` of the scene and swaps over to it; on Stop it swaps
+back to the untouched authored scene and drops the copy. Move objects, retarget
+materials, delete half the graph — none of it survives Stop.
 
-Two details that make this cheap and lossless:
+Details that make this cheap and lossless:
 
-* The snapshot does **not** embed images. It keeps the live
-  `std::shared_ptr<Texture>` objects keyed by uuid and re-binds them into the
-  restored materials, so no texture is ever re-decoded or re-uploaded.
+* Instances are copied, assets are shared. Every node and every material is a
+  new object with the same uuid; geometry, textures and animation clips are the
+  same objects, so nothing is re-uploaded on Play or Stop. Skeletons, light
+  targets, LOD levels and robots are rebuilt over the copied nodes. A splat cloud
+  is lent to the copy and handed back with its authored state.
+* Because geometry is shared, a session that writes vertices takes its own
+  first with `PlayCopy::ownGeometry`. Stop compares every shared geometry's
+  attribute versions with those at Play and warns, by mesh name, about one that
+  was written in place anyway.
 * Sessions start in registration order. If one throws from `start()`, the ones
   that already started are stopped again and the whole play attempt is
   abandoned — the editor never ends up half-playing.

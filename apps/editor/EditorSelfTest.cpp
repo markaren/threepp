@@ -1477,10 +1477,10 @@ int EditorApp::runSelfTest() {
         step();
         check(!inScene(box), "redo removes Box again");
 
-        // Undo across play: stop replaces the whole scene from the snapshot, so a
-        // pre-play edit must re-resolve by uuid instead of writing through a
-        // pointer into the destroyed graph. `box`/`ground` are stale after this
-        // block — every lookup below goes through the current scene.
+        // Undo across play: play runs on a copy and stop swaps back to the
+        // authored scene the commands point into, so a pre-play edit is still
+        // undoable afterwards. Every lookup below goes through the current
+        // scene.
         commands_.undo();// Box back in the scene for the drive
         step();
         if (auto* target = document_.scene().getObjectByName("Box")) {
@@ -9331,10 +9331,9 @@ int EditorApp::runSelfTest() {
         bottomPanelOpen_ = consoleWasOpen;
         stepFixed();
 
-        // Play/Stop restores from a snapshot in the same format the save file
-        // uses. The snapshot writes the cloud as a reference and keeps the
-        // live object (SceneSnapshot + ObjectLoader::setSplatCloudResolver),
-        // so Stop hands back the SAME cloud, re-placed, with no reload.
+        // Play runs on a copy of the scene and LENDS the cloud to it (a scan
+        // cannot exist twice), so Stop hands back the SAME cloud, re-placed
+        // and with its authored look, with no reload (PlayCopy).
         const Vector3 authoredPosition = cloud->position;
         cloud->setPointMix(0.6f);
         startPlay();

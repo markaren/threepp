@@ -27,7 +27,7 @@ void EditorApp::drawMenuBar() {
 
         menuHeight_ = ImGui::GetWindowSize().y;
 
-        // Play runs on a snapshot that Stop throws away, so nothing that edits
+        // Play runs on a copy of the scene that Stop throws away, so nothing that edits
         // or writes the document is offered while it does — see
         // EditorApp::rejectWhilePlaying(), which is what actually enforces it.
         // Greying the items here is so the reason is visible before the click.

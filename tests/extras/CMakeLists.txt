@@ -165,6 +165,13 @@ if (TARGET threepp_editor_scripting)
             target_link_libraries(EditorExampleScene_test
                     PRIVATE threepp_editor_examples threepp_editor_scripting
                     unofficial::omniverse-physx-sdk::sdk)
+
+            # The play copy against every shipped example, and the timber yard
+            # played through the same sessions as above.
+            add_test_executable(EditorPlayCopy_test)
+            target_link_libraries(EditorPlayCopy_test
+                    PRIVATE threepp_editor_examples threepp_editor_scripting
+                    unofficial::omniverse-physx-sdk::sdk)
         endif ()
     endif ()
 else ()
@@ -195,7 +202,7 @@ foreach (name
         EditorExampleScene_test EditorFlockConfig_test EditorGranular_test
         EditorJointConfig_test EditorJointPlay_test EditorOrthoClipFit_test
         EditorParticleConfig_test
-        EditorPhysicsPlay_test EditorPlaySession_test EditorRenderConfig_test
+        EditorPhysicsPlay_test EditorPlayCopy_test EditorPlaySession_test EditorRenderConfig_test
         EditorRobotTransplant_test EditorScriptClock_test EditorScriptCollision_test
         EditorScriptCoroutine_test EditorScriptFixedUpdate_test EditorScriptLookup_test
         EditorScriptPhysics_test EditorScriptPlay_test EditorScriptRaycast_test

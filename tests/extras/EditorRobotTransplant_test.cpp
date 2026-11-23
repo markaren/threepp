@@ -1,17 +1,18 @@
-// Re-articulation: what the editor does to a robot on Stop, and what has to
-// survive it.
+// Re-articulation: what the editor does to a robot it reads back from a
+// document, and what has to survive it.
 //
-// The rule these cases pin is one sentence: A PLAY/STOP CYCLE MUST NOT REBUILD
-// THE ROBOT'S SUBTREE FROM ITS URDF. It used to, and everything authored into
-// the robot — a camera bolted to the wrist, a sensor on the unnamed mesh a
-// viewport click lands on, a collider deleted — was deleted with it, on every
-// Stop.
+// The rule these cases pin is one sentence: SAVING AND OPENING A SCENE MUST NOT
+// REBUILD THE ROBOT'S SUBTREE FROM ITS URDF, or everything authored into the
+// robot — a camera bolted to the wrist, a sensor on the unnamed mesh a viewport
+// click lands on, a collider deleted — is deleted with it. (Play does not go
+// through the document: it runs on a copy of the scene, see PlayCopy and
+// EditorPlayCopy_test.)
 //
 // Two mechanisms, tested here in that order:
 //
 //   1. Documents carry the joint table (ObjectExporter's "threeppRobot" block),
-//      so the snapshot round trip hands back a LIVE Robot and never reads the
-//      file at all. This is the path every current document takes.
+//      so a save and reopen hands back a LIVE Robot and never reads the file
+//      at all. This is the path every current document takes.
 //   2. transplantRobot, for documents written before that block existed. It
 //      re-imports the URDF for its joint table ONLY and moves that onto the
 //      subtree the document carries, rather than planting the file's subtree
@@ -23,7 +24,8 @@
 
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
-#include "threepp/extras/editor/SceneSnapshot.hpp"
+#include "threepp/loaders/ObjectExporter.hpp"
+#include "threepp/loaders/ObjectLoader.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Robot.hpp"
@@ -40,6 +42,23 @@ using namespace threepp;
 using namespace threepp::editor;
 
 namespace {
+
+    // Saved and opened again, as File > Save and File > Open do: the whole
+    // scene through the three.js JSON the document is written as, models
+    // embedded so nothing is re-read from the robot's file.
+    std::shared_ptr<Scene> saveAndReopen(Object3D& scene, std::string* text = nullptr) {
+
+        ObjectExporter exporter;
+        ObjectExporterOptions options;
+        options.images = ImageStorage::Omit;
+        options.models = ModelStorage::Embed;
+        options.prettyPrint = false;
+        const auto json = exporter.toJson(scene, options);
+        if (text) *text = json;
+
+        ObjectLoader loader;
+        return std::dynamic_pointer_cast<Scene>(loader.parse(json));
+    }
 
     // A two-link arm: a base and one link on a revolute joint. Primitive geometry
     // only, so it needs no external mesh files.
@@ -82,10 +101,10 @@ namespace {
 }// namespace
 
 
-TEST_CASE("a play/stop round trip hands back a live robot, without reading the URDF") {
+TEST_CASE("a save and reopen hands back a live robot, without reading the URDF") {
 
     // The premise of the whole fix: the document carries the joint table, so
-    // Stop restores an articulated robot from the document alone. The urdf path
+    // an articulated robot comes back from the document alone. The urdf path
     // here names a file that does not exist — if anything on this path still
     // reads it, this case says so.
     Scene scene;
@@ -106,14 +125,12 @@ TEST_CASE("a play/stop round trip hands back a live robot, without reading the U
     const auto keptUuid = robot->uuid;
     const auto reference = robot->computeEndEffectorTransform({0.9f});
 
-    SceneSnapshot snapshot;
-    std::string error;
-    REQUIRE(snapshot.capture(scene, &error));
-    const auto restored = snapshot.restore(&error);
+    std::string json;
+    const auto restored = saveAndReopen(scene, &json);
     REQUIRE(restored);
 
     // The joint table really is in the document, not reconstructed from the file.
-    CHECK(snapshot.json().find("\"threeppRobot\"") != std::string::npos);
+    CHECK(json.find("\"threeppRobot\"") != std::string::npos);
 
     auto* found = findByUuid(*restored, keptUuid);
     REQUIRE(found != nullptr);
@@ -141,11 +158,11 @@ TEST_CASE("a play/stop round trip hands back a live robot, without reading the U
     CHECK(std::abs(live->getJointValue(0) - (-0.6f)) < 1e-4f);
 }
 
-TEST_CASE("repeated play/stop cycles neither drift nor accumulate") {
+TEST_CASE("repeated save and reopen cycles neither drift nor accumulate") {
 
     // A cycle is not a one-shot: the pose is re-derived from the stored rest
     // pose every time, so a rest pose that drank the driven one would compound
-    // visibly by the third Stop, and a table appended to rather than rebuilt
+    // visibly by the third reopen, and a table appended to rather than rebuilt
     // would double the DOF count.
     auto robot = loadArm();
     REQUIRE(robot);
@@ -170,10 +187,7 @@ TEST_CASE("repeated play/stop cycles neither drift nor accumulate") {
 
     for (int cycle = 0; cycle < 3; ++cycle) {
 
-        SceneSnapshot snapshot;
-        std::string error;
-        REQUIRE(snapshot.capture(*stage, &error));
-        stage = snapshot.restore(&error);
+        stage = saveAndReopen(*stage);
         REQUIRE(stage);
 
         Robot* live = nullptr;
@@ -207,10 +221,8 @@ TEST_CASE("a restored robot co-owns its joint nodes") {
     robot->name = "arm";
     scene.add(robot);
 
-    SceneSnapshot snapshot;
-    std::string error;
-    REQUIRE(snapshot.capture(scene, &error));
-    const auto restored = snapshot.restore(&error);
+    std::string json;
+    const auto restored = saveAndReopen(scene, &json);
     REQUIRE(restored);
 
     auto* link = findByName(*restored, "upper_link");
@@ -232,11 +244,11 @@ TEST_CASE("a restored robot co-owns its joint nodes") {
     CHECK(std::abs(live->getJointValue(0) - 0.5f) < 1e-4f);
 }
 
-TEST_CASE("a sensor on an unnamed node survives a play/stop round trip") {
+TEST_CASE("a sensor on an unnamed node survives a save and reopen") {
 
     // The node a viewport click actually lands on inside a robot is the unnamed
     // Mesh under a link's unnamed visual group, so that is where an authored
-    // sensor sits — and it used to be thrown away on every Stop, because the
+    // sensor sits — and it used to be thrown away on every reload, because the
     // rebuild had no way to name the node it belonged to.
     Scene scene;
 
@@ -263,11 +275,8 @@ TEST_CASE("a sensor on an unnamed node survives a play/stop round trip") {
 
     scene.add(robot);
 
-    // Play captures, Stop restores.
-    SceneSnapshot snapshot;
-    std::string error;
-    REQUIRE(snapshot.capture(scene, &error));
-    const auto restored = snapshot.restore(&error);
+    std::string json;
+    const auto restored = saveAndReopen(scene, &json);
     REQUIRE(restored);
 
     std::size_t sensors = 0;
@@ -286,11 +295,11 @@ TEST_CASE("a sensor on an unnamed node survives a play/stop round trip") {
     CHECK(readString(*carrier, "sensor") == "type=depth;width=160;height=120");
 }
 
-TEST_CASE("a child authored under a robot link survives a play/stop round trip") {
+TEST_CASE("a child authored under a robot link survives a save and reopen") {
 
     // Authoring INTO an imported robot — a camera on the wrist, a marker on the
     // base — is the natural way to build a robot cell. The nodes have to still be
-    // there after Stop, still where they were put, and the robot has to still
+    // there after a reload, still where they were put, and the robot has to still
     // drive them.
     Scene scene;
 
@@ -320,10 +329,8 @@ TEST_CASE("a child authored under a robot link survives a play/stop round trip")
 
     scene.add(robot);
 
-    SceneSnapshot snapshot;
-    std::string error;
-    REQUIRE(snapshot.capture(scene, &error));
-    const auto restored = snapshot.restore(&error);
+    std::string json;
+    const auto restored = saveAndReopen(scene, &json);
     REQUIRE(restored);
 
     auto* camera = findByName(*restored, "WristCamera");

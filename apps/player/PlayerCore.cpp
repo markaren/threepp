@@ -50,9 +50,9 @@ PlayerCore::PlayerCore() {
 
     // Two nodes the document carries but never saves. Registered as
     // editor-only, which means SceneDocument detaches them for every export AND
-    // for every play snapshot, and re-attaches them to the scene each episode's
-    // stop() restores — so they survive an arbitrary number of episodes without
-    // ever becoming part of one.
+    // while it builds each episode's play copy, and re-attaches them to the
+    // copy at play() and to the authored scene at stop() — so they survive an
+    // arbitrary number of episodes without ever becoming part of one.
     overlay_ = Group::create();
     overlay_->name = "__player_overlay";
     document_.addEditorOnly(*overlay_);
@@ -283,8 +283,8 @@ bool PlayerCore::beginEpisode(int index, std::string* error) {
     //
     // The per-episode subdirectory is not decoration. SensorPlaySession names a
     // file for the sensor's label and the first 8 characters of its uuid, and
-    // opens it with std::ios::trunc. Those are stable across episodes (the
-    // snapshot restores the same uuids, which is the point of episodes being
+    // opens it with std::ios::trunc. Those are stable across episodes (every
+    // play copy carries the authored uuids, which is the point of episodes being
     // independent), so a second episode recording into the same directory would
     // silently overwrite the first one's rows and a --episodes=100 run would
     // leave exactly one episode's data behind.
@@ -383,6 +383,8 @@ EpisodeResult PlayerCore::endEpisode() {
     if (!play_.stop(document_, &error)) {
         current_.error = error.empty() ? "stop failed" : error;
     }
+    // The geometry audit: a shared mesh a session or a script wrote in place.
+    for (const auto& warning : document_.warnings()) logWarn(warning);
 
     // AFTER stop(), and this is the only correct moment. A script's own stop()
     // can raise, so reading before it would miss the last error of the episode;

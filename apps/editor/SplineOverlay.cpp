@@ -10,7 +10,7 @@
 // Rebuilt only when something it depends on moved: a hash over the point count,
 // their local positions and the encoded config. Control points number in the
 // tens, so hashing every frame is cheaper than tracking dirty flags through the
-// gizmo, the command stack and the play snapshot.
+// gizmo, the command stack and the swap to and from the play copy.
 //
 // The generated mesh (config.mesh) runs off the SAME hash, because it is a
 // function of exactly the same inputs. Unlike the curve line it is a real

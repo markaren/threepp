@@ -366,7 +366,7 @@ void EditorApp::drawScriptTab(ScriptEditorState& state) {
             ImGui::TextColored(theme::warning(), "- applied when you press Stop");
         }
     } else if (playing) {
-        // Same rule as the inspector: the play snapshot is put back on Stop, so
+        // Same rule as the inspector: play runs on a copy that Stop drops, so
         // an edit made now would be thrown away without a word.
         ImGui::TextColored(theme::warning(), "Read-only while playing");
     } else {

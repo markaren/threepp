@@ -6,7 +6,6 @@
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
-#include "threepp/extras/editor/SceneSnapshot.hpp"
 
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
@@ -100,18 +99,19 @@ namespace {
 }// namespace
 
 
-TEST_CASE("a snapshot restores the scene after arbitrary mutation", "[editor]") {
+TEST_CASE("play runs on a copy, and stop puts the authored scene back after arbitrary mutation", "[editor]") {
 
     SceneDocument document;
     populate(document.scene());
 
+    auto* authored = &document.scene();
     const auto boxUuid = document.scene().getObjectByName("Box")->uuid;
     const auto childCount = document.scene().children.size();
 
-    SceneSnapshot snapshot;
     std::string error;
-    REQUIRE(document.capture(snapshot, &error));
-    REQUIRE(snapshot.valid());
+    REQUIRE(document.beginPlay(&error));
+    REQUIRE(document.playing());
+    CHECK(&document.scene() != authored);
 
     // Wreck the scene.
     auto& live = document.scene();
@@ -122,9 +122,12 @@ TEST_CASE("a snapshot restores the scene after arbitrary mutation", "[editor]") 
     extra->name = "Extra";
     live.add(extra);
 
-    REQUIRE(document.restore(snapshot, &error));
+    document.endPlay();
+    CHECK_FALSE(document.playing());
+    CHECK(document.warnings().empty());
 
     auto& restored = document.scene();
+    CHECK(&restored == authored);
     CHECK(restored.children.size() == childCount);
 
     auto* box = restored.getObjectByName<Mesh>("Box");
@@ -283,22 +286,4 @@ TEST_CASE("stopping without playing is harmless", "[editor]") {
     CHECK(controller.stopped());
     controller.update(0.1f);// no-op
     CHECK(document.scene().getObjectByName("Box") != nullptr);
-}
-
-TEST_CASE("snapshots keep live texture instances rather than re-decoding", "[editor]") {
-
-    SceneDocument document;
-    populate(document.scene());
-
-    // No textures in this scene, but the API contract still holds: collect
-    // returns nothing and rebind is a no-op.
-    std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
-    SceneSnapshot::collectTextures(document.scene(), textures);
-    CHECK(textures.empty());
-
-    SceneSnapshot snapshot;
-    REQUIRE(document.capture(snapshot));
-    auto restored = snapshot.restore();
-    REQUIRE(restored);
-    CHECK(restored->getObjectByName("Box") != nullptr);
 }

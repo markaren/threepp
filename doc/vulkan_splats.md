@@ -478,10 +478,9 @@ written by `SplatLoader::writePly`. `ObjectLoader` re-imports by content
 (SOG, 3DGS `.ply`, or a colour point cloud), replays the cull unless a LOD
 table is resident, and re-stamps the source mark with this machine's path or
 the archive-and-entry mark. A file that is gone leaves a placed, named
-`Object3D` and a warning. The editor's play snapshot is the one document
-that carries neither a path nor bytes: it keeps the live clouds by uuid and
-hands them back through `ObjectLoader::setSplatCloudResolver`, so Stop
-re-places the same object instead of reloading a gigabyte.
+`Object3D` and a warning. The editor's Play does not go through a document
+at all: it lends the live cloud to its play copy of the scene and Stop hands
+the same object back, re-placed, instead of reloading a gigabyte.
 `ObjectExporterSplat_test` covers the reference, sidecar, archive, pathless
 and missing-file cases.
 

@@ -566,11 +566,17 @@ EditorApp::EditorApp(const Options& options)
 
     canvas_.onDrop([this](std::vector<std::string> paths) { handleFileDrop(paths); });
 
-    // A restored or reloaded scene is a different Scene object; everything that
-    // pointed into the old one has to be re-resolved.
-    document_.onSceneReplaced([this](Scene& scene) {
-        // The previewed nodes lived in the old scene; restoring would write
-        // through dangling pointers. Discard only.
+    // Every swap of the document's scene: a reload (Replaced), Play swapping
+    // to the play copy (PlayBegan) and Stop swapping back to the authored
+    // scene (PlayEnded). Each time the incoming graph is a different set of
+    // objects, so everything that pointed into the outgoing one has to be
+    // re-resolved. On a play swap the authored graph stays alive throughout,
+    // which is what the three exceptions below rely on.
+    document_.onSceneReplaced([this](Scene& scene, SceneChange change) {
+        const bool playSwap = change != SceneChange::Replaced;
+        // The previewed nodes lived in the outgoing scene; restoring would
+        // write into a graph that is about to go. Discard only. (startPlay has
+        // already stopped a preview with its pose restored.)
         stopAnimationPreview(false);
         // Markers, spline curves and the frustum helper point into the outgoing
         // graph too. Drop them before anything can dereference an owner that is
@@ -597,14 +603,17 @@ EditorApp::EditorApp(const Options& options)
         // Same for the sensor cloud: world-space points from sensors the play
         // session has already dropped, hanging off an overlay that survives.
         clearSensorOverlay();
-        // Thumbnails are keyed by texture uuid, and the restored scene rebuilds
-        // its textures — same uuid, different object. Nothing stale survives.
-        clearThumbnailCache();
-        // Baked scan surfaces are keyed by cloud uuid. A cloud that survives
-        // the swap — a Play/Stop hands the same live object back — keeps its
-        // entry warm; the pruning happens below, once the new graph is here.
-        splatBakeNode_.clear();
-        splatBakeStats_.clear();
+        // Thumbnails are keyed by texture uuid, and a reloaded scene rebuilds
+        // its textures — same uuid, different object. A play copy shares the
+        // authored textures, so a play swap keeps them.
+        if (!playSwap) clearThumbnailCache();
+        // Baked scan surfaces are keyed by cloud uuid. A play swap lends the
+        // same live clouds to the copy and back, so the bake stays warm; a
+        // reload prunes below, once the new graph is here.
+        if (!playSwap) {
+            splatBakeNode_.clear();
+            splatBakeStats_.clear();
+        }
         // The previews drew those meshes, and they hang off the surviving
         // overlay rather than off the outgoing graph.
         clearSplatSurfacePreviews();
@@ -613,11 +622,9 @@ EditorApp::EditorApp(const Options& options)
             cameraHelper_.reset();
             cameraHelperFor_ = nullptr;
         }
-        // Recorded commands point into the old scene too. Re-resolve their
-        // targets by uuid against the new graph; commands that cannot (raw
-        // captures in property setters) are dropped rather than left dangling.
         // Everything below points into the outgoing graph, so note what has to
-        // come back before letting go of it.
+        // come back before letting go of it. The selection is re-resolved by
+        // uuid in the incoming graph: during play it is the played node.
         const auto uuid = selection_.uuid();
         selection_.set(nullptr);
         gizmo_->detach();
@@ -636,14 +643,25 @@ EditorApp::EditorApp(const Options& options)
         selectedInstance_.reset();
         instanceBox_.makeEmpty();
 
-        // Before rebinding: this replaces nodes, and the command stack should
-        // resolve its targets against the final graph.
-        rearticulateRobots(scene);
+        if (!playSwap) {
+            // Before rebinding: this replaces nodes, and the command stack
+            // should resolve its targets against the final graph. A play copy
+            // carries live robots already.
+            rearticulateRobots(scene);
 
-        // Entries for clouds that did not come back are unreachable megabytes.
-        if (splatSurfaces_) splatSurfaces_->retainClouds(scene);
+            // Entries for clouds that did not come back are unreachable
+            // megabytes. A play swap lends the same clouds, so none are lost.
+            if (splatSurfaces_) splatSurfaces_->retainClouds(scene);
 
-        commands_.rebind(scene);
+            // Recorded commands point into the old scene too. Re-resolve their
+            // targets by uuid against the new graph; commands that cannot (raw
+            // captures in property setters) are dropped rather than left
+            // dangling. Not on a play swap: the commands keep pointing at the
+            // authored graph, which is alive the whole play, so the history
+            // survives Play and Stop whole (undo and redo are refused while
+            // playing, see undo()).
+            commands_.rebind(scene);
+        }
         if (!uuid.empty()) {
             Object3D* found = nullptr;
             scene.traverse([&](Object3D& o) {
@@ -1069,8 +1087,8 @@ bool EditorApp::usingVulkan() const {
 
 void EditorApp::restartOnBackend(bool vulkan) {
 
-    // Play runs on a snapshot; the restart would reopen the authored document
-    // and silently end the session. Stop first, as for Open.
+    // Play runs on a copy of the scene; the restart would reopen the authored
+    // document and silently end the session. Stop first, as for Open.
     if (rejectWhilePlaying("Switch Backend")) return;
 
     Options next = options_;
@@ -2151,7 +2169,8 @@ void EditorApp::drawImportToast() {
 
 void EditorApp::setEnvironment(const std::filesystem::path& path, bool alsoBackground) {
 
-    // The snapshot carries the environment, so this would be undone by Stop.
+    // While playing this would land on the play copy and be dropped with it
+    // on Stop.
     if (rejectWhilePlaying("Set Environment")) return;
 
     std::shared_ptr<Texture> texture;
@@ -4314,7 +4333,7 @@ void EditorApp::startPlay() {
         return;
     }
 
-    // The play snapshot must capture the authored pose, not the preview's.
+    // The play copy must be made of the authored pose, not the preview's.
     stopAnimationPreview();
     // An audition talking over the scene's own sounds helps nobody.
     stopAudition();
@@ -4341,12 +4360,14 @@ void EditorApp::startPlay() {
     }
 
     // Park the gizmo for the session — after the session is known to have
-    // started, so a refused Play leaves the editor exactly as it was. Hiding it
-    // would not be enough: attached, it keeps riding a body the simulation is
-    // moving and keeps offering handles that the edit gate would only refuse.
-    // It comes back on Stop through the scene-replaced listener, which
-    // re-resolves the selection by uuid and re-attaches on the way; the mode,
-    // the space and the snap are the editor's own state and were never touched.
+    // started, so a refused Play leaves the editor exactly as it was. The
+    // scene-changed listener has just re-selected the played copy of the
+    // selection and attached the gizmo to it; hiding it would not be enough:
+    // attached, it keeps riding a body the simulation is moving and keeps
+    // offering handles that the edit gate would only refuse. It comes back on
+    // Stop through the same listener, which re-resolves the selection by uuid
+    // in the authored scene and re-attaches on the way; the mode, the space and
+    // the snap are the editor's own state and were never touched.
     gizmo_->detach();
     applyGizmoMode();
 
@@ -4518,6 +4539,8 @@ void EditorApp::stopPlay() {
         return;
     }
     log("play stopped, scene restored");
+    // The geometry audit: a shared mesh a session or a script wrote in place.
+    logWarnings();
 
     // The chase camera put itself over the character; Stop puts the scene back,
     // so the view goes back with it. Otherwise the camera is left staring at

@@ -256,58 +256,32 @@ TEST_CASE("a cloud with no source file gets a sidecar next to the document", "[s
     CHECK(backEmpty->splatCount() == 0);
 }
 
-TEST_CASE("a pathless block: the resolver hands the live cloud back, a plain load gets a placeholder", "[splats]") {
+TEST_CASE("a pathless block loads as a placeholder", "[splats]") {
 
     const auto data = generated(200, 3u);
     auto scene = Scene::create();
     auto cloud = SplatCloud::create(data);
-    cloud->name = "snapshot me";
+    cloud->name = "no file";
     cloud->position.set(4.f, 5.f, 6.f);
     cloud->setPointMix(0.25f);
     scene->add(cloud);
 
-    // No resourcePath, no archive: what the play snapshot does.
+    // No resourcePath, no archive, no source file: nothing to write a path to.
     ObjectExporter exporter;
     const auto json = exporter.toJson(*scene);
     CHECK(json.find("threeppSplat") != std::string::npos);
     CHECK((json.find("\"path\":\"\"") != std::string::npos || json.find("\"path\": \"\"") != std::string::npos));
 
-    SECTION("plain load") {
-
-        ObjectLoader loader;
-        auto restored = loader.parse(json);
-        REQUIRE(restored);
-        CHECK(mentions(loader.warnings(), "snapshot me"));
-        CHECK(mentions(loader.warnings(), "could not be restored"));
-        REQUIRE(restored->children.size() == 1);
-        // Placed and named, just not a cloud.
-        CHECK(restored->children.front()->as<SplatCloud>() == nullptr);
-        CHECK(restored->children.front()->name == "snapshot me");
-        CHECK(restored->children.front()->position.equals({4.f, 5.f, 6.f}));
-    }
-
-    SECTION("with the resolver") {
-
-        // The "session" moves the cloud and changes its look; the restore must
-        // put the captured state back onto the SAME object.
-        cloud->position.set(0.f, 0.f, 0.f);
-        cloud->setPointMix(1.f);
-
-        ObjectLoader loader;
-        loader.setSplatCloudResolver([&](const std::string& uuid) -> std::shared_ptr<SplatCloud> {
-            return uuid == cloud->uuid ? cloud : nullptr;
-        });
-        auto restored = loader.parse(json);
-        REQUIRE(restored);
-        CHECK(loader.warnings().empty());
-        REQUIRE(restored->children.size() == 1);
-        CHECK(restored->children.front() == cloud.get());
-        CHECK(cloud->parent == restored.get());
-        CHECK(scene->children.empty());// moved, not copied
-        CHECK(cloud->position.equals({4.f, 5.f, 6.f}));
-        CHECK(cloud->pointMix() == Approx(0.25f));
-        CHECK(cloud->splatCount() == 200);
-    }
+    ObjectLoader loader;
+    auto restored = loader.parse(json);
+    REQUIRE(restored);
+    CHECK(mentions(loader.warnings(), "no file"));
+    CHECK(mentions(loader.warnings(), "could not be restored"));
+    REQUIRE(restored->children.size() == 1);
+    // Placed and named, just not a cloud.
+    CHECK(restored->children.front()->as<SplatCloud>() == nullptr);
+    CHECK(restored->children.front()->name == "no file");
+    CHECK(restored->children.front()->position.equals({4.f, 5.f, 6.f}));
 }
 
 TEST_CASE("a .tpz carries the scan's bytes and reloads self-contained", "[splats]") {

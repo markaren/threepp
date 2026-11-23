@@ -45,19 +45,8 @@ namespace threepp {
         // parse.
         [[nodiscard]] const std::vector<std::string>& warnings() const;
 
-        // A splat cloud is written as a reference to its file, and reading a
-        // scan back is seconds and a gigabyte. A caller that still HOLDS the
-        // cloud the document describes — the editor's play snapshot, which
-        // restores a scene it captured a moment ago — installs this to hand it
-        // back by uuid instead; the loader then applies the document's
-        // placement, look and userData to that object as if it had loaded it.
-        // Return nullptr to fall through to the file.
-        using SplatCloudResolver = std::function<std::shared_ptr<SplatCloud>(const std::string& uuid)>;
-        void setSplatCloudResolver(SplatCloudResolver resolver);
-
     private:
         std::filesystem::path resourcePath_;
-        SplatCloudResolver splatResolver_;
         // Set only for the duration of an archive load(); parse() on its own has
         // nothing but the text it was handed. The path travels with the reader
         // because a subtree re-imported out of the archive has to record which

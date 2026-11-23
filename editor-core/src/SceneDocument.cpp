@@ -1,7 +1,7 @@
 
 #include "threepp/extras/editor/SceneDocument.hpp"
 
-#include "threepp/extras/editor/SceneSnapshot.hpp"
+#include "threepp/extras/editor/PlayCopy.hpp"
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/loaders/ObjectExporter.hpp"
@@ -50,6 +50,10 @@ SceneDocument::SceneDocument()
 
     scene_->name = "Scene";
 }
+
+// Out of line: PlayCopy is incomplete in the header. A document destroyed
+// while playing hands its lent clouds back on the way out.
+SceneDocument::~SceneDocument() = default;
 
 std::string SceneDocument::displayName() const {
 
@@ -225,15 +229,69 @@ void SceneDocument::replaceScene(std::shared_ptr<Scene> scene) {
 
     if (!scene) return;
 
+    if (playCopy_) {
+        detachEditorOnly();
+        playCopy_->giveBack();
+        playCopy_.reset();
+        authored_.reset();
+    }
+
     scene_ = std::move(scene);
     // Helpers follow the document, not the old scene object.
     attachEditorOnly();
 
-    const auto snapshot = listeners_;
-    for (const auto& listener : snapshot) listener.fn(*scene_);
+    notify(SceneChange::Replaced);
 }
 
-int SceneDocument::onSceneReplaced(std::function<void(Scene&)> listener) {
+void SceneDocument::notify(SceneChange change) {
+
+    const auto listeners = listeners_;
+    for (const auto& listener : listeners) listener.fn(*scene_, change);
+}
+
+bool SceneDocument::beginPlay(std::string* error) {
+
+    if (playCopy_) {
+        if (error) *error = "already playing";
+        return false;
+    }
+
+    std::unique_ptr<PlayCopy> copy;
+    {
+        // The copy is built from the document as it would be saved: no grid,
+        // no gizmo, no overlay.
+        detachEditorOnly();
+        ExportScope scope([this] { attachEditorOnly(); });
+        copy = PlayCopy::build(*scene_, error);
+        if (!copy) return false;
+
+        authored_ = scene_;
+        scene_ = copy->scenePtr();
+        playCopy_ = std::move(copy);
+        // The scope re-attaches the helpers, now to the copy.
+    }
+
+    notify(SceneChange::PlayBegan);
+    return true;
+}
+
+void SceneDocument::endPlay() {
+
+    if (!playCopy_) return;
+
+    detachEditorOnly();
+    warnings_ = playCopy_->giveBack();
+    scene_ = std::move(authored_);
+    authored_.reset();
+    attachEditorOnly();
+
+    // The listeners let go of whatever they held in the copy; only then is it
+    // dropped.
+    notify(SceneChange::PlayEnded);
+    playCopy_.reset();
+}
+
+int SceneDocument::onSceneReplaced(std::function<void(Scene&, SceneChange)> listener) {
 
     if (!listener) return 0;
     const int id = nextListenerId_++;
@@ -269,23 +327,6 @@ bool SceneDocument::isEditorOnly(const Object3D& object) const {
         if (std::find(editorOnly_.begin(), editorOnly_.end(), o) != editorOnly_.end()) return true;
     }
     return false;
-}
-
-bool SceneDocument::capture(SceneSnapshot& snapshot, std::string* error) {
-
-    detachEditorOnly();
-    ExportScope scope([this] { attachEditorOnly(); });
-
-    return snapshot.capture(*scene_, error);
-}
-
-bool SceneDocument::restore(const SceneSnapshot& snapshot, std::string* error) {
-
-    auto scene = snapshot.restore(error);
-    if (!scene) return false;
-
-    replaceScene(std::move(scene));
-    return true;
 }
 
 void SceneDocument::detachEditorOnly() {
