@@ -4571,6 +4571,9 @@ void VulkanRenderer::Impl::prepareParticleLighting() {
                 if (!geom) continue;
                 auto* posAttr = geom->getAttribute<float>("position");
                 if (!posAttr) continue;
+                // normal = {size, angle, opacity}: the size spreads the sun's visibility over
+                // the sprite, a zero opacity (hidden) skips the particle
+                auto* nrmAttr = geom->getAttribute<float>("normal");
                 const uint32_t vtx = static_cast<uint32_t>(posAttr->count());
                 const uint32_t particles = vtx / 4u;// 4 coincident verts per particle
                 if (particles == 0) continue;
@@ -4578,24 +4581,37 @@ void VulkanRenderer::Impl::prepareParticleLighting() {
 
                 const auto& w = en.worldMatrix;// column-major world transform
                 const auto& p = posAttr->array();
+                const float* nrm = (nrmAttr && nrmAttr->count() >= vtx) ? nrmAttr->array().data() : nullptr;
                 // The phase's anisotropy rides in .w: the material's "anisotropy" uniform
                 // (ParticleSprites sets one) or the fixed forward lean every particle had.
                 float g = 0.35f;
+                // The material's "selfShadow" uniform (ParticleSprites::setSelfShadowing): the
+                // share of the light from one direction a dense puff keeps from itself.
+                float selfShadow = 0.f;
                 if (auto* sm = dynamic_cast<ShaderMaterial*>(en.mesh->material().get())) {
                     if (auto it = sm->uniforms.find("anisotropy"); it != sm->uniforms.end() && it->second.hasValue()) {
                         if (const auto* v = std::get_if<float>(&it->second.value())) g = std::clamp(*v, -0.9f, 0.9f);
                     }
+                    if (auto it = sm->uniforms.find("selfShadow"); it != sm->uniforms.end() && it->second.hasValue()) {
+                        if (const auto* v = std::get_if<float>(&it->second.value())) selfShadow = std::clamp(*v, 0.f, 0.95f);
+                    }
                 }
-                particleCenterScratch_.resize(static_cast<size_t>(base + particles) * 4);
-                float* dst = particleCenterScratch_.data() + static_cast<size_t>(base) * 4;
+                // two vec4 per particle: {world centre, g}, {size, opacity, selfShadow, 0}
+                particleCenterScratch_.resize(static_cast<size_t>(base + particles) * 8);
+                float* dst = particleCenterScratch_.data() + static_cast<size_t>(base) * 8;
                 for (uint32_t i = 0; i < particles; ++i) {
                     const float x = p[i * 12u + 0u];// vertex 4i of particle i
                     const float y = p[i * 12u + 1u];
                     const float z = p[i * 12u + 2u];
-                    dst[i * 4u + 0u] = w[0] * x + w[4] * y + w[8] * z + w[12];
-                    dst[i * 4u + 1u] = w[1] * x + w[5] * y + w[9] * z + w[13];
-                    dst[i * 4u + 2u] = w[2] * x + w[6] * y + w[10] * z + w[14];
-                    dst[i * 4u + 3u] = g;
+                    float* d = dst + i * 8u;
+                    d[0] = w[0] * x + w[4] * y + w[8] * z + w[12];
+                    d[1] = w[1] * x + w[5] * y + w[9] * z + w[13];
+                    d[2] = w[2] * x + w[6] * y + w[10] * z + w[14];
+                    d[3] = g;
+                    d[4] = nrm ? nrm[i * 12u + 0u] : 0.f;// size, world units across
+                    d[5] = nrm ? nrm[i * 12u + 2u] : 1.f;// opacity
+                    d[6] = selfShadow;
+                    d[7] = 0.f;
                 }
                 particleLitBase_[en.mesh] = base;
                 base += particles;

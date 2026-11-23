@@ -5,7 +5,8 @@
 //    axes and came out twice as wide as tall);
 //  - the material's anisotropy reaches the particle lighting: with the sun behind the
 //    camera a dense billow (g < 0) is brighter than thin haze (g > 0), and looking into
-//    the sun the other way round.
+//    the sun the other way round;
+//  - self-shadowing reaches it too: it dims the sun on a sprite, and not the ambient light.
 //
 // Plain exit-code program, like the other Vulkan tests here. Exits 42 (CTest "Skipped")
 // when no Vulkan GPU is available. Headless: no window opens.
@@ -102,6 +103,26 @@ int main() {
                                                  " brighter than thin " + std::to_string(behindThin));
     check(aheadThin > aheadDense + 30, "looking into the sun: thin " + std::to_string(aheadThin) +
                                                " brighter than dense " + std::to_string(aheadDense));
+
+    std::printf("self-shadowing: the sun on a grey sprite, then an ambient light\n");
+    const auto selfShadowed = [&](float k) {
+        sprites->setAnisotropy(0.35f);
+        sprites->setSelfShadowing(k);
+        sprites->set(0, Vector3(), 2.f, 1.f, Color(0.5f, 0.5f, 0.5f));
+        sprites->commit();
+        frames(6);
+        return lum(r.readRGBPixels(), kW / 2, kH / 2);
+    };
+    sun->position.set(0.f, 0.f, 10.f);
+    const int sunOpen = selfShadowed(0.f), sunDense = selfShadowed(0.5f);
+    check(sunOpen > sunDense + 30, "sun: open " + std::to_string(sunOpen) + " brighter than self-shadowed " +
+                                           std::to_string(sunDense));
+    scene.remove(*sun);
+    auto fill = AmbientLight::create(Color(1, 1, 1), 1.5f);
+    scene.add(fill);
+    const int ambOpen = selfShadowed(0.f), ambDense = selfShadowed(0.9f);
+    check(ambOpen > 30 && std::abs(ambOpen - ambDense) <= 3,
+          "ambient: open " + std::to_string(ambOpen) + ", self-shadowed " + std::to_string(ambDense) + " (the same)");
 
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

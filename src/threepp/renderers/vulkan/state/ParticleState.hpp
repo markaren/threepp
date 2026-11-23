@@ -40,12 +40,12 @@ namespace threepp::vulkan::impl {
         // particle across ALL visible systems, in overlay draw order) + the
         // per-particle {light,T}/{fogAdd} results the compute pass writes and
         // particle.vert reads (set 1 binding 1 of the billboard pipeline).
-        // Eagerly allocated in createParticlePipeline (fixed footprint, ~1.5 MB
+        // Eagerly allocated in createParticlePipeline (fixed footprint, ~2 MB
         // total). Systems past kMaxLitParticles fall back to the unlit path via
         // the kUnlitBase firstInstance sentinel (KEEP IN SYNC with particle.vert).
         static constexpr uint32_t kMaxLitParticles = 16384;
         static constexpr uint32_t kUnlitBase       = 0x40000000u;
-        std::array<Buffer, kFramesInFlight> particleCenterBufs_{};// host-visible SSBO, kMaxLitParticles × vec4
+        std::array<Buffer, kFramesInFlight> particleCenterBufs_{};// host-visible SSBO, kMaxLitParticles × 2 × vec4 (centre + g, size + opacity)
         std::array<Buffer, kFramesInFlight> particleLightBufs_{}; // device-local SSBO, kMaxLitParticles × 2 × vec4
         VkDescriptorPool particleIoDescPool_ = VK_NULL_HANDLE;    // particle_light.comp set 1
         std::array<VkDescriptorSet, kFramesInFlight> particleIoDescSets_{};

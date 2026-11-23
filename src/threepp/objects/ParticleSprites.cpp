@@ -50,6 +50,7 @@ void main() {
 uniform sampler2D tex;
 uniform float lit;
 uniform float anisotropy;
+uniform float selfShadow;
 varying vec4 vColor;
 varying vec2 vUv;
 varying vec3 vViewDir;
@@ -84,6 +85,8 @@ void main() {
 			direct += directionalLights[ i ].color * spritePhase( dot( vViewDir, directionalLights[ i ].direction ) );
 		}
 		#endif
+		// a dense puff keeps part of the light from one direction from itself
+		direct *= 1.0 - selfShadow;
 		#ifdef USE_LEGACY_LIGHTS
 		ambient *= PI;
 		direct *= PI;
@@ -150,6 +153,7 @@ struct ParticleSprites::Impl {
         material->uniforms["tex"] = Uniform(texture.get());
         material->uniforms["lit"] = Uniform(1.f);
         material->uniforms["anisotropy"] = Uniform(0.35f);
+        material->uniforms["selfShadow"] = Uniform(0.f);
         material->lights = true;
         material->fog = true;
         material->vertexColors = true;
@@ -207,6 +211,14 @@ void ParticleSprites::setAnisotropy(float g) {
 
 float ParticleSprites::anisotropy() const {
     return pimpl_->material->uniforms.at("anisotropy").value<float>();
+}
+
+void ParticleSprites::setSelfShadowing(float k) {
+    pimpl_->material->uniforms["selfShadow"].setValue(std::clamp(k, 0.f, 0.95f));
+}
+
+float ParticleSprites::selfShadowing() const {
+    return pimpl_->material->uniforms.at("selfShadow").value<float>();
 }
 
 void ParticleSprites::commit() {

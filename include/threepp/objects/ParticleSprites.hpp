@@ -49,6 +49,16 @@ namespace threepp {
 
         [[nodiscard]] float anisotropy() const;
 
+        // How much of the light from one direction (the sun, a lamp) a sprite keeps from
+        // itself, in [0, 0.95]. A sprite takes that light over its whole disc. A thin puff
+        // does (0, the default). A dense billow does not: its far side is in its own shade.
+        // Light from all round (sky, ambient) is not reduced, since a white body lit evenly
+        // from every side is as bright as its albedo. So a dense billow keeps a snow-white
+        // colour, and still does not glare in the sun or go dark in a shadow.
+        void setSelfShadowing(float k);
+
+        [[nodiscard]] float selfShadowing() const;
+
         // Sends this frame's writes to the GPU.
         void commit();
 

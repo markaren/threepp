@@ -1,6 +1,7 @@
 // ParticleSprites on the GL renderer: sprites are drawn where they are set, square on
 // screen at any aspect ratio, hidden ones draw nothing, and the anisotropy decides from
-// which side a lit sprite is brightest. VulkanParticleSprites_test checks the same on Vulkan.
+// which side a lit sprite is brightest, and self-shadowing dims the sun on a sprite but not
+// the light from all round. VulkanParticleSprites_test checks the same on Vulkan.
 
 #include "gl_test_helpers.hpp"
 
@@ -97,6 +98,34 @@ TEST_CASE("Anisotropy decides from which side a lit sprite is brightest") {
     CHECK(aheadThin > aheadDense + 30);
 }
 
+TEST_CASE("Self-shadowing dims the sun on a sprite, not the ambient light") {
+
+    // centre brightness of one grey sprite, lit by a sun (or an ambient light) alone
+    auto centre = [](bool sunLit, float k) {
+        Setup s(1.f);
+        if (sunLit) {
+            auto sun = DirectionalLight::create(Color(1, 1, 1), 0.6f);
+            sun->position.set(0, 0, 10);
+            s.scene->add(sun);
+        } else {
+            s.scene->add(AmbientLight::create(Color(1, 1, 1), 1.5f));
+        }
+        s.sprites->setSelfShadowing(k);
+        s.sprites->set(0, Vector3(), 2.f, 1.f, Color(0.5f, 0.5f, 0.5f));
+        s.sprites->commit();
+        GLRenderer renderer(glCanvas());
+        renderer.render(*s.scene, *s.camera);
+        return lum(renderer.readRGBPixels(), 32, 32);
+    };
+
+    const int sunOpen = centre(true, 0.f), sunDense = centre(true, 0.5f);
+    const int ambOpen = centre(false, 0.f), ambDense = centre(false, 0.9f);
+    INFO("sun: " << sunOpen << " -> " << sunDense << "; ambient: " << ambOpen << " -> " << ambDense);
+    CHECK(sunOpen > sunDense + 30);
+    CHECK(std::abs(ambOpen - ambDense) <= 3);
+    CHECK(ambOpen > 30);
+}
+
 TEST_CASE("ParticleSprites keeps its settings in range") {
 
     auto s = ParticleSprites::create(3);
@@ -104,6 +133,11 @@ TEST_CASE("ParticleSprites keeps its settings in range") {
     CHECK(s->anisotropy() == 0.35f);
     s->setAnisotropy(-4.f);
     CHECK(s->anisotropy() == -0.9f);
+    CHECK(s->selfShadowing() == 0.f);
+    s->setSelfShadowing(2.f);
+    CHECK(s->selfShadowing() == 0.95f);
+    s->setSelfShadowing(-1.f);
+    CHECK(s->selfShadowing() == 0.f);
     s->set(3, Vector3(), 1.f, 1.f);// past the end: ignored
     s->hide(7);
     CHECK_THROWS(ParticleSprites::create(0));

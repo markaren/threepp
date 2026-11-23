@@ -11,7 +11,8 @@
 // world-space CENTER, the same light field the froxel/deferred stack shades the
 // scene with —
 //   • every directional sun × an RT shadow ray (opaque mask — a puff behind the
-//     barn is dark) × the cloud-shadow map, with a forward-leaning HG phase
+//     barn is dark; averaged over the sprite's extent, spriteSunVis, so a big
+//     puff half in a shadow is half lit) × the cloud-shadow map, with an HG phase
 //     toward the camera (backlit smoke gets its silver lining),
 //   • the CLUSTERED point/spot list at the particle's screen cell (uncapped,
 //     the same attenuation/cone/phase terms froxel_inject injects per froxel —
@@ -96,8 +97,9 @@ layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 #include "vulkan_shared.h"// kMaxShadow*
 #include "shadow_maps.glsl"
 
-// Particle IO (set 1) — centers written by the CPU per render call (world
-// space, one vec4 per particle), light/fog results read by particle.vert.
+// Particle IO (set 1) — written by the CPU per render call, two vec4 per
+// particle: [0] = world-space centre + the phase g, [1] = {size (world units
+// across), opacity, self-shadowing, 0}; light/fog results read by particle.vert.
 layout(set = 1, binding = 0, scalar) readonly buffer ParticleCenters { vec4 centers[]; };
 layout(set = 1, binding = 1, scalar) writeonly buffer ParticleLightOut { vec4 plight[]; };
 
@@ -144,6 +146,25 @@ float sunVis(uint d, vec3 P, vec3 L) {
     return shadowVis(P, L, 1e30);
 }
 
+// The sun's visibility over the whole sprite, not at its centre alone. A sprite
+// stands for a puff `size` across; lit by its centre only, a 2-3 m billow whose
+// centre drifts into the thin shadow of a post or leg (or settles a little into
+// the snow) goes dark all at once, a dark disc where most of the puff is in
+// sunlight. The centre and six points round it at the soft disc's opacity-
+// weighted rms radius (a quarter of the size: ParticleSprites::softDisc, alpha
+// (1 - rho^2)^2) give the lit fraction, so a puff crossing a shadow edge dims
+// smoothly. A sprite under 0.2 m keeps the one sample.
+float spriteSunVis(uint d, vec3 P, vec3 L, float size) {
+    const float r = 0.25 * size;
+    const float c = sunVis(d, P, L);
+    if (r < 0.05) return c;
+    float v = c;
+    v += sunVis(d, P + vec3(r, 0.0, 0.0), L) + sunVis(d, P - vec3(r, 0.0, 0.0), L);
+    v += sunVis(d, P + vec3(0.0, r, 0.0), L) + sunVis(d, P - vec3(0.0, r, 0.0), L);
+    v += sunVis(d, P + vec3(0.0, 0.0, r), L) + sunVis(d, P - vec3(0.0, 0.0, r), L);
+    return v * (1.0 / 7.0);
+}
+
 #include "cloud_shadow_sample.glsl"
 
 // Closed-form exponential-height-fog optical depth over [a,b], clipped at the
@@ -183,8 +204,20 @@ void main() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= pc.count) return;
 
-    const vec3 P      = centers[pc.centerBase + i].xyz;
-    const float kParticleHgG = centers[pc.centerBase + i].w;
+    const uint  slot  = (pc.centerBase + i) * 2u;
+    const vec3  P     = centers[slot].xyz;
+    const float kParticleHgG = centers[slot].w;
+    const float pSize    = centers[slot + 1u].x;
+    const float pOpacity = centers[slot + 1u].y;
+    // ParticleSprites::setSelfShadowing: the share of the light from one direction
+    // (suns, lamps) a dense puff keeps from itself; the ambient below is not reduced.
+    const float pSelfShadow = centers[slot + 1u].z;
+    // Hidden (zero opacity): the billboard draws nothing, so nothing to light.
+    if (pOpacity <= 0.0) {
+        plight[i * 2u + 0u] = vec4(0.0, 0.0, 0.0, 1.0);
+        plight[i * 2u + 1u] = vec4(0.0);
+        return;
+    }
     // The view ray that reaches this particle. Under a PARALLEL projection every
     // ray shares the camera's forward and the origin is the particle's own
     // footprint on the near plane, so the direction is known outright and the
@@ -218,7 +251,7 @@ void main() {
     vec3 direct = vec3(0.0);
     for (uint d = 0u; d < lights.dirCount; ++d) {
         const vec3  L   = normalize(lights.dirLights[d].direction);
-        const float vis = sunVis(d, P, L);
+        const float vis = spriteSunVis(d, P, L, pSize);
         if (vis <= 0.0) continue;
         const float phase4 = hgPhase(dot(L, rd), kParticleHgG) * 4.0 * PI;
         direct += lights.dirLights[d].color * (vis * cloudShadowSample(P) * phase4);
@@ -270,7 +303,7 @@ void main() {
         ambient = lights.ambient + mix(envAmb, (eUp + eDn) * (0.5 / PI), conf);
     }
 
-    const vec3 light = ambient + direct * (1.0 / PI);
+    const vec3 light = ambient + direct * ((1.0 - pSelfShadow) / PI);
 
     // ── Fog over the camera→particle leg: the surface path's three terms ────
     // (extinction + ambient in-scatter, froxel point glow, sun march) so a puff

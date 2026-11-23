@@ -2755,11 +2755,12 @@ void VulkanRenderer::Impl::createParticlePipeline() {
                                          VMA_ALLOCATION_CREATE_MAPPED_BIT);
             }
             // Lit-particle buffers (eager, fixed footprint): host-written
-            // world-space centers in, particle_light.comp's light/fog results
-            // out (device-local; compute writes, particle.vert reads).
+            // world-space centers in (two vec4 per particle: centre + phase g,
+            // size + opacity), particle_light.comp's light/fog results out
+            // (device-local; compute writes, particle.vert reads).
             for (auto& b : particleCenterBufs_) {
                 b = createBuffer(ctx->allocator(), ctx->device(),
-                                 VkDeviceSize(kMaxLitParticles) * 4 * sizeof(float),
+                                 VkDeviceSize(kMaxLitParticles) * 8 * sizeof(float),
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
                                  VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             }
