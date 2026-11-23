@@ -266,6 +266,19 @@ namespace threepp::vulkan::impl {
     };
     static_assert(sizeof(GpuOverlayFogUbo) == 96);
 
+    // Deferred binding 94 (deferred_shade_00_common.glsl, WaterMirrorUbo): the
+    // water's mirror view's camera, which the no-ray-query water marches.
+    // std140: four mat4 and a vec4. info.x = 1 while the mirror's G-buffer is
+    // live this frame, .yz its extent; an all-zero block is "no mirror".
+    struct GpuWaterMirrorUbo {
+        float viewInverse[16];// its world matrix (det -1: a reflection)
+        float projInverse[16];// inverse of proj
+        float view[16];       // world -> view
+        float proj[16];       // reverse-Z, x mirrored, jittered as it rasterised
+        float info[4];
+    };
+    static_assert(sizeof(GpuWaterMirrorUbo) == 272);
+
     // Host mirror of gbuffer_indirect.vert's DrawInfo struct. Tight-
     // packed (144 bytes — the static_assert below is the authority — all
     // members naturally aligned to ≤ 8) so it matches the GLSL `scalar`

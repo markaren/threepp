@@ -2906,7 +2906,7 @@ void VulkanRenderer::Impl::scanDeformers(SceneBuildFrame& sb, Camera& camera) {
             // the shade reads (the first displaced mesh without that), the
             // world's without one.
             {
-                Vector3 up(0.f, 1.f, 0.f), ax(1.f, 0.f, 0.f);
+                Vector3 up(0.f, 1.f, 0.f), ax(1.f, 0.f, 0.f), origin;
                 bool exact = false, any = false;
                 for (const auto& sp : entrySpans_) {
                     if (exact || !entries[sp.first].isDisplaced) continue;
@@ -2920,11 +2920,14 @@ void VulkanRenderer::Impl::scanDeformers(SceneBuildFrame& sb, Camera& camera) {
                     if (exact || !any) {
                         up.copy(y).normalize();
                         ax.copy(x).normalize();
+                        origin.set(w[12], w[13], w[14]);
                     }
                     any = true;
                 }
-                oceanWaterUp_ = up;
-                oceanWaterX_ = ax;
+                oceanWaterUp_     = up;
+                oceanWaterX_      = ax;
+                oceanWaterOrigin_ = origin;
+                oceanPresent_     = any;
             }
             auto& bonesDirtyAny = sb.bonesDirtyAny;
             auto& displacedDirtyAny = sb.displacedDirtyAny;

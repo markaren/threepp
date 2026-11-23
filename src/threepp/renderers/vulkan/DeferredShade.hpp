@@ -210,6 +210,15 @@ namespace threepp::vulkan {
             const VkImageView* shadowSpots    = nullptr;// [framesInFlight]
             const VkImageView* shadowPoints   = nullptr;// [framesInFlight]
             const VkBuffer*    shadowUbo      = nullptr;// [framesInFlight]
+            // The water's mirror view (bindings 94-98, the no-ray-query
+            // water's reflection): its GpuWaterMirrorUbo and its G-buffer, in
+            // the layouts the raster leaves them in. For a view without one,
+            // the all-zero block and the view's own G-buffer.
+            const VkBuffer*    waterMirrorUbo    = nullptr;// [framesInFlight]
+            const VkImageView* waterMirrorNormal = nullptr;// [framesInFlight]
+            const VkImageView* waterMirrorDepth  = nullptr;// [framesInFlight] (depth-aspect view)
+            const VkImageView* waterMirrorIds    = nullptr;// [framesInFlight] (usampler2D)
+            const VkImageView* waterMirrorAlbedo = nullptr;// [framesInFlight]
         };
         // onlyFrame >= 0 rewrites just that frame-in-flight slot's set (the
         // caller has fence-proven that slot is idle — used by the per-FIF

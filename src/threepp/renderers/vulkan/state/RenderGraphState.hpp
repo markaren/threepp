@@ -85,6 +85,9 @@ namespace threepp::vulkan::impl {
             ViewPrepOut  out;
         };
         std::vector<ViewRecordState> viewRecordStates_;
+        // The water's mirror view's, applied by its own "view" pass inside
+        // the primary's run of passes (addWaterMirrorPasses).
+        ViewRecordState waterMirrorRecordState_;
 
         std::map<std::string, std::string> rgDumped_;
         std::set<std::string> rgDiagnosticsReported_;

@@ -1030,6 +1030,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // THIS frame's refit sites (VulkanCoreImpl::blasRebuildThisFrame_).
             blasRebuildThisFrame_ = forceBlasRebuild_;
             forceBlasRebuild_     = false;
+            // The water's mirror view: added, re-sized or removed here, so the
+            // view change it asks for is applied in the block below.
+            updateWaterMirror(camera);
             if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingViewChanges_ ||
                 pendingProbeCascades_ >= 0) {
                 vkDeviceWaitIdle(d);
@@ -1454,7 +1457,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // recording of every pass is frame.J2_execute below).
                 THREEPP_CPUPROF("frame.J1_graphBuild");
                 addViewEnterPass(g, 0);
+                waterMirrorSrc_ = &camera;// addWaterMirrorPasses mirrors it
                 addPrimaryViewPasses(g, imageIndex);
+                waterMirrorSrc_ = nullptr;
                 saveViewRecordState(viewRecordStates_[0]);
             }
 
@@ -2179,6 +2184,21 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
 
             const VkDeviceSize before = vmaAllocatedBytes();
 
+            // The water's mirror view: camera UBOs and a G-buffer, nothing
+            // else (the primary's shade reads it; it shades nothing itself).
+            // The reservoir pair too, small at its extent: clearGbufImages,
+            // which every accumulation reset runs on every live view, barriers
+            // them without asking.
+            if (v.waterMirror) {
+                createCameraUbos();
+                createReservoirImages();
+                ensureHybridResources();
+                clearGbufImages();
+                v.allocatedBytes = vmaAllocatedBytes() - before;
+                curView_ = saved;
+                return;
+            }
+
             // Colour target: the "swapchain of one" this view's TaaResolve
             // resolves into. Swapchain FORMAT so the entire post/TAA tail
             // writes it exactly as it writes the real swapchain (the shader
@@ -2299,8 +2319,12 @@ void VulkanRenderer::Impl::applyPendingViewChanges() {
 
             // Destroys first, so a remove+add in the same gap frees before it
             // allocates rather than peaking at both.
+            // A water mirror made or freed changes what the primary's shade
+            // set names (bindings 94-98): rewritten below, the device drained.
+            bool mirrorChanged = false;
             for (size_t i = views_.size(); i-- > 1;) {
                 if (!views_[i]->pendingDestroy) continue;
+                mirrorChanged = mirrorChanged || views_[i]->waterMirror;
                 // Re-anchor BEFORE destroying: curView_ may still point at the
                 // view whose storage is about to go away.
                 curView_ = views_[0].get();
@@ -2311,6 +2335,7 @@ void VulkanRenderer::Impl::applyPendingViewChanges() {
             for (auto& v : views_) {
                 if (!v->pendingCreate) continue;
                 v->pendingCreate = false;
+                mirrorChanged = mirrorChanged || v->waterMirror;
                 createSecondaryViewResources(*v);
                 THREEPP_LOGF(vulkan::kLogFrame, Debug, "view %u: %ux%u, %.1f MB",
                              v->id, v->outExt.width, v->outExt.height,
@@ -2326,6 +2351,7 @@ void VulkanRenderer::Impl::applyPendingViewChanges() {
                 ensureSplatTarget();
             }
             curView_ = views_[0].get();
+            if (mirrorChanged) rewriteDeferredDescriptors();
             pendingViewChanges_ = false;
         }
 
@@ -3551,4 +3577,157 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
             }
             std::fflush(stderr);
         }
+// ── The water's mirror view (no ray query) ──────────────────────────────────
+//
+// Without ray query the water's reflection ray has no scene to hit: the shade
+// marched it through the primary's own G-buffer (ssrWaterReflect), which holds
+// only what the camera sees, so a mast above the frame, the far side of a
+// hull or the underside of a quay mirrored as sky. The mirror view is the
+// primary camera reflected about the water's rest plane, rasterised into a
+// G-buffer of its own at half the primary's render extent, with everything
+// under the plane clipped away (RasterCameraData::clipPlane) and the water
+// itself left out. Its G-buffer holds exactly what a level water surface
+// reflects; the shade marches the water's reflection ray through it
+// (mirrorWaterReflect) and lights the hit from it, as the screen march did.
+//
+// It is a secondary view in views_ (so every scene-wide invalidation reaches
+// its raster descriptor sets) with a G-buffer and camera UBOs only: no shade,
+// TAA or post, which is what keeps the secondary-view loops passing it by.
+// Its passes are built inside the primary's run (addPrimaryViewPasses, after
+// the primary's G-buffer), so the primary's shade, later in the same graph,
+// reads this frame's mirror.
+
+namespace {
+    // How much wider than the camera's the mirror view's field is, each way.
+    constexpr float kWaterMirrorOverscan = 1.2f;
+}// namespace
+
+void VulkanRenderer::Impl::ensureWaterMirrorUbos() {
+            if (waterMirrorUboOff_.handle != VK_NULL_HANDLE) return;
+            const auto make = [&] {
+                Buffer b = createBuffer(ctx->allocator(), ctx->device(), sizeof(GpuWaterMirrorUbo),
+                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                const GpuWaterMirrorUbo zero{};// info.x = 0: no mirror
+                uploadHostVisible(ctx->allocator(), b, &zero, sizeof(zero));
+                return b;
+            };
+            waterMirrorUboOff_ = make();
+            for (auto& b : waterMirrorUbos_) b = make();
+        }
+
+void VulkanRenderer::Impl::updateWaterMirror(Camera& camera) {
+            // Wanted: a device without ray query, a displaced water mesh in the
+            // scene, a perspective camera, and the G-buffer pipeline built.
+            // Half the primary's pixel density over a field kWaterMirrorOverscan
+            // wider (addWaterMirrorPasses).
+            const VkExtent2D pr   = primaryRenderExtent();
+            const float      sc   = 0.5f * kWaterMirrorOverscan;
+            const VkExtent2D want{std::max(8u, uint32_t(float(pr.width) * sc + 0.5f)),
+                                  std::max(8u, uint32_t(float(pr.height) * sc + 0.5f))};
+            const bool wanted = !ctx->rayQuerySupported() && oceanPresent_ &&
+                                camera.is<PerspectiveCamera>() && rasterGbufPipeline != VK_NULL_HANDLE &&
+                                pr.width > 0u && pr.height > 0u;
+            if (waterMirrorView_ != 0u) {
+                const bool fits = wanted && waterMirrorExt_.width == want.width &&
+                                  waterMirrorExt_.height == want.height;
+                if (fits) return;
+                removeViewImpl(waterMirrorView_);
+                waterMirrorView_ = 0u;
+            }
+            if (!wanted) return;
+            if (!waterMirrorCam_) {
+                waterMirrorCam_ = std::make_unique<PerspectiveCamera>();
+                waterMirrorCam_->matrixAutoUpdate = false;
+            }
+            waterMirrorExt_  = want;
+            waterMirrorView_ = addViewImpl(*waterMirrorCam_, want.width, want.height, want.width, want.height);
+            if (ViewContext* v = findView(waterMirrorView_)) v->waterMirror = true;
+        }
+
+void VulkanRenderer::Impl::addWaterMirrorPasses(rg::RenderGraph& g) {
+            if (waterMirrorView_ == 0u || waterMirrorSrc_ == nullptr) return;
+            ViewContext* mv = findView(waterMirrorView_);
+            if (!mv || mv->pendingCreate || mv->pendingDestroy) return;
+            Camera& src = *waterMirrorSrc_;
+            src.updateMatrixWorld(true);
+
+            // The plane: through the water mesh's origin, normal its +Y.
+            const Vector3& n = oceanWaterUp_;
+            const float    d = -n.dot(oceanWaterOrigin_);
+            waterMirrorPlane_[0] = n.x;
+            waterMirrorPlane_[1] = n.y;
+            waterMirrorPlane_[2] = n.z;
+            waterMirrorPlane_[3] = d;
+
+            // The mirror camera: the reflection R (p' = p - 2 (n.p + d) n)
+            // applied to the source camera's world matrix, and the source's
+            // projection with clip x negated. R alone has determinant -1 and
+            // would turn every triangle's winding; the x flip turns it back,
+            // so the shared G-buffer pipelines cull as they do for any view.
+            // The picture comes out mirrored left to right, which nothing
+            // minds: the shade reaches it through these same matrices.
+            PerspectiveCamera& mc = *waterMirrorCam_;
+            Matrix4 refl;
+            refl.set(1.f - 2.f * n.x * n.x, -2.f * n.x * n.y, -2.f * n.x * n.z, -2.f * d * n.x,
+                     -2.f * n.y * n.x, 1.f - 2.f * n.y * n.y, -2.f * n.y * n.z, -2.f * d * n.y,
+                     -2.f * n.z * n.x, -2.f * n.z * n.y, 1.f - 2.f * n.z * n.z, -2.f * d * n.z,
+                     0.f, 0.f, 0.f, 1.f);
+            mc.matrix->multiplyMatrices(refl, *src.matrixWorld);
+            mc.matrixWorldNeedsUpdate = true;
+            // ...and a field kWaterMirrorOverscan wider each way: a wave tilts a
+            // reflection ray off the mirror of its own pixel, and at the frame's
+            // edges such a ray left the mirror's picture and fell back to the
+            // sky (bright bands down both sides).
+            mc.projectionMatrix = src.projectionMatrix;
+            for (int c = 0; c < 4; ++c) {
+                auto& e = mc.projectionMatrix.elements;
+                e[c * 4]     = -e[c * 4] / kWaterMirrorOverscan;
+                e[c * 4 + 1] = e[c * 4 + 1] / kWaterMirrorOverscan;
+            }
+            mc.projectionMatrixInverse.copy(mc.projectionMatrix).invert();
+            mc.layers = src.layers;
+            if (const auto* sp = src.as<PerspectiveCamera>()) {
+                mc.nearPlane = sp->nearPlane;
+                mc.farPlane  = sp->farPlane;
+            }
+
+            // The primary's build state, put back once the mirror's is built.
+            ViewRecordState primaryMid;
+            saveViewRecordState(primaryMid);
+
+            curView_         = mv;
+            regionRenderExt_ = mv->renderExt;
+            regionSwapExt_   = mv->outExt;
+            regionDstX_      = 0;
+            regionDstY_      = 0;
+            mv->orthoFrame_  = false;
+            // The secondary views' serial prep (addSecondaryViewPasses), less
+            // the shadow maps: the mirror's hits are lit by the primary's.
+            updateCameraUbo(currentFrame, mc);
+            ensureHybridResources();
+            cullEntriesAgainstFrustum(mc);
+            // The water itself stays out of its own mirror: a crest standing
+            // above the plane would hide what it mirrors.
+            {
+                auto& cull = mv->inFrustum;
+                if (cull.size() != lastVisibleEntries_.size()) cull.assign(lastVisibleEntries_.size(), uint8_t{1});
+                for (const auto& sp : entrySpans_) {
+                    if (lastVisibleEntries_[sp.first].isDisplaced)
+                        std::fill_n(cull.begin() + sp.first, sp.count, uint8_t{0});
+                }
+            }
+            uploadRasterCameraUbo(currentFrame, mc);
+            buildIndirectDrawData(currentFrame);
+
+            g.setGroup(mv->id);
+            g.addPass("view.waterMirror", [this](VkCommandBuffer) { applyViewRecordState(waterMirrorRecordState_); });
+            addGbufferPasses(g);
+            saveViewRecordState(waterMirrorRecordState_);
+            g.setGroup(0u);
+            g.addPass("view.primary", [this](VkCommandBuffer) { applyViewRecordState(viewRecordStates_[0]); });
+
+            applyViewRecordState(primaryMid);
+        }
+
 }// namespace threepp

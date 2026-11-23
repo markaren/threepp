@@ -42,6 +42,9 @@ layout(set = RASTER_CAM_SET, binding = RASTER_CAM_BINDING) uniform RasterCameraU
                           // source count; all 0 = no downwash (gbuffer.frag)
     vec4 eye;             // .xyz = the camera's world position (gbuffer.frag: the
                           // ground's far tint goes by the distance from it)
+    vec4 clipPlane;       // world plane (n, d): gl_ClipDistance[0] = dot(clipPlane,
+                          // vec4(p, 1)) clips what lies under it. All zero (every
+                          // view but the water's mirror) keeps everything.
 } RASTER_CAM_NAME;
 
 #endif// RASTER_CAMERA_UBO_GLSL

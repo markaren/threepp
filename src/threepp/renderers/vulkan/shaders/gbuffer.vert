@@ -100,5 +100,8 @@ void main() {
     // boundary. vCurrClipUnjit / vPrevClip are kept in GL convention so
     // motion vectors stay self-consistent (taa_resolve.comp Y-flips on read).
     gl_Position    = cam.currVPjittered * worldPos;
+    // The water's mirror view (no ray query) clips what lies under the
+    // water plane; every other view's plane is zero and keeps all.
+    gl_ClipDistance[0] = dot(cam.clipPlane, worldPos);
     gl_Position.y  = -gl_Position.y;
 }

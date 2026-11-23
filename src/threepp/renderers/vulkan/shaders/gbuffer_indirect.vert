@@ -121,6 +121,9 @@ void main() {
     vColor         = (d.colorAddr != 0ul) ? fetchColor(d.colorAddr, d.packedAttrs, vid) : vec3(1.0);
 
     gl_Position    = cam.currVPjittered * worldPos;
+    // The water's mirror view (no ray query) clips what lies under the
+    // water plane; every other view's plane is zero and keeps all.
+    gl_ClipDistance[0] = dot(cam.clipPlane, worldPos);
     // Per-mesh polygon offset (decals): bias clip-z so the fragment's NDC depth
     // shifts toward NEAR (reverse-Z) → wins the depth test against coplanar
     // geometry and renders on top, no z-fighting. 0 for normal meshes.

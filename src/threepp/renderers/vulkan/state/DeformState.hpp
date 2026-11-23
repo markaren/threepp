@@ -62,6 +62,11 @@ namespace threepp::vulkan::impl {
         // scanDeformers.
         Vector3 oceanWaterUp_{0.f, 1.f, 0.f};
         Vector3 oceanWaterX_{1.f, 0.f, 0.f};
+        // The same mesh's origin (its rest plane passes through it), and
+        // whether the scene has a displaced water mesh at all: the water's
+        // mirror view (no ray query) mirrors about that plane.
+        Vector3 oceanWaterOrigin_{};
+        bool    oceanPresent_ = false;
 
         // ── GPU skinning compute pipeline ──────────────────────────────────
         // Replaces the cpuSkin() loop. One dispatch per skinned mesh per

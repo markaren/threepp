@@ -378,6 +378,11 @@ namespace threepp::vulkan::impl {
         // of the PRIMARY's frame, so it takes the primary's display stage
         // (sharpening, motion blur) where a measurement camera stays plain.
         bool     lensRigFace = false;
+        // The water's mirror view (OceanState::waterMirrorView_): a secondary
+        // with a G-buffer and camera UBOs only. No shade, TAA or post of its
+        // own, so the secondary-view loops pass it by; the primary's shade
+        // reads its G-buffer.
+        bool     waterMirror = false;
         uint32_t id        = 0;// stable handle handed to the public API
         // addView / removeView are routinely called from inside the
         // animate callback, i.e. with a frame already open and its command
@@ -732,6 +737,10 @@ namespace threepp::vulkan::impl {
                                   // (gbuffer.frag's rings, MeshStandardMaterial::ripples)
         float eye[4];             // .xyz = the camera's world position (gbuffer.frag: the
                                   // ground's far tint goes by the distance from it)
+        float clipPlane[4];       // world plane (n, d): the vertex shaders write
+                                  // gl_ClipDistance[0] = dot(n, p) + d, so what lies
+                                  // under it is clipped. All zero keeps everything;
+                                  // only the water's mirror view sets one.
     };
 
 }// namespace threepp::vulkan::impl

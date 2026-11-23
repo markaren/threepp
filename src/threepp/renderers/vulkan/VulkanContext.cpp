@@ -1223,6 +1223,14 @@ namespace threepp::vulkan {
             features2.features.imageCubeArray = VK_TRUE;
             depthClamp_ = sup.depthClamp == VK_TRUE;
             features2.features.depthClamp = depthClamp_ ? VK_TRUE : VK_FALSE;
+            // The G-buffer vertex shaders write gl_ClipDistance[0]: the water's
+            // mirror view (no ray query) clips what lies under the water plane
+            // away; every other view passes a plane that keeps everything.
+            // Core 1.0, on every desktop GPU and lavapipe.
+            if (sup.shaderClipDistance != VK_TRUE) {
+                throw std::runtime_error("[VulkanContext] the device lacks shaderClipDistance");
+            }
+            features2.features.shaderClipDistance = VK_TRUE;
         }
         // Per-attachment color-blend on the gbuffer MRT: the decal pipeline
         // blends only the albedo attachment (SRC_ALPHA) while the other targets

@@ -439,6 +439,8 @@ VulkanRenderer::Impl::~Impl() {
                 for (auto& img : vp->reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
                 for (auto& img : vp->reservoirWImagesPP)   destroyImage2D(ctx->allocator(), d, img);
             }
+            for (auto& b : waterMirrorUbos_) destroyBuffer(ctx->allocator(), b);
+            destroyBuffer(ctx->allocator(), waterMirrorUboOff_);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : rayCountBufs_) destroyBuffer(ctx->allocator(), b);
             for (auto& b : rayCountReadback_) destroyBuffer(ctx->allocator(), b);

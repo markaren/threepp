@@ -2643,7 +2643,7 @@ void VulkanRenderer::Impl::ensureFieldBillboardHdrLayer() {
             // overlay pass or splat stamp).
             for (std::size_t i = 1; i < views_.size(); ++i) {
                 ViewContext* v = views_[i].get();
-                if (!v) continue;
+                if (!v || v->waterMirror) continue;
                 if (!v->bbLayer_) {
                     v->bbLayer_ = std::make_unique<vulkan::BillboardHdrLayer>(
                             *ctx, cmdPool, kFramesInFlight, *bbLayerPipes_, /*secondaryView=*/true);
@@ -3969,6 +3969,9 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
                 asyncSplits_[0] = static_cast<uint32_t>(g.passCount());
             }
             addGbufferPasses(g);
+            // The water's mirror view's G-buffer (no ray query), ahead of the
+            // shade that marches it.
+            addWaterMirrorPasses(g);
             if (asyncFrame_) asyncSplits_[1] = static_cast<uint32_t>(g.passCount());
 
             // Hybrid debug view: the chosen G-buffer channel is resolved

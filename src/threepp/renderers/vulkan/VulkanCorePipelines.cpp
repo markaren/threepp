@@ -558,6 +558,11 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                     VK_IMAGE_USAGE_TRANSFER_DST_BIT;// clearGbufImages zeroes every slot
             // The transient pool's spans for the images below (see the "current
             // frame only" comment at atrousA/B).
+            // The water's mirror view allocates outside the transient pool: its
+            // G-buffer is drawn INSIDE the primary's phases (addWaterMirrorPasses),
+            // which the pool's view-after-view spans cannot express, so a pooled
+            // image of it landed on the primary's live ones (its uv on theirs).
+            vulkan::TransientPool* const gbufPool = view().waterMirror ? nullptr : transientPool_.get();
             const auto filterSpan = vulkan::transientGroup(vulkan::TransientPhase::Filter, view().id);
             const auto lightFilterSpan = vulkan::transientSpan(vulkan::TransientPhase::Light,
                                                                vulkan::TransientPhase::Filter, view().id);
@@ -635,7 +640,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // the tail's).
                 g.uv     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                   N("uv"), VK_SAMPLE_COUNT_1_BIT, transientPool_.get(),
+                                                   N("uv"), VK_SAMPLE_COUNT_1_BIT, gbufPool,
                                                    vulkan::transientSpan(vulkan::TransientPhase::Gbuffer,
                                                                          vulkan::TransientPhase::Light, view().id),
                                                    vulkan::transientSlot(static_cast<uint32_t>(fi)));
@@ -688,11 +693,11 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                     g.atrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                         VK_IMAGE_USAGE_STORAGE_BIT,
                                                         VK_IMAGE_ASPECT_COLOR_BIT, N("atrousA"),
-                                                        VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), filterSpan);
+                                                        VK_SAMPLE_COUNT_1_BIT, gbufPool, filterSpan);
                     g.atrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                         VK_IMAGE_USAGE_STORAGE_BIT,
                                                         VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"),
-                                                        VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), filterSpan);
+                                                        VK_SAMPLE_COUNT_1_BIT, gbufPool, filterSpan);
                 }
                 // Sharp mirror-ray reflection radiance — written by the shade, then
                 // roughness-blurred + recombined by the reflection denoise pass.
@@ -725,15 +730,15 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                     g.demodColor = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                            VK_IMAGE_USAGE_STORAGE_BIT,
                                                            VK_IMAGE_ASPECT_COLOR_BIT, N("demodColor"),
-                                                           VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), lightFilterSpan);
+                                                           VK_SAMPLE_COUNT_1_BIT, gbufPool, lightFilterSpan);
                     g.shadowAtrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
                                                               VK_IMAGE_USAGE_STORAGE_BIT,
                                                               VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousA"),
-                                                              VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), filterSpan);
+                                                              VK_SAMPLE_COUNT_1_BIT, gbufPool, filterSpan);
                     g.shadowAtrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
                                                               VK_IMAGE_USAGE_STORAGE_BIT,
                                                               VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousB"),
-                                                              VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), filterSpan);
+                                                              VK_SAMPLE_COUNT_1_BIT, gbufPool, filterSpan);
                 }
                 // Froxel volumetrics — FIXED-size 3D volumes (independent of
                 // the render extent; recreated here anyway on resize, which
@@ -747,7 +752,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 if (fi == 0) {
                     g.froxelLut = createImage3D(kFroxelGridX, kFroxelGridY, kFroxelGridZ, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                                N("froxelLut"), transientPool_.get(), lightFilterSpan);
+                                                N("froxelLut"), gbufPool, lightFilterSpan);
                 } else {
                     // The shared scratch of slot 0 (all created above by now).
                     const auto& g0 = view().rasterGbufs[0];

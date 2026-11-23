@@ -4167,6 +4167,15 @@ namespace threepp {
         void applyViewRecordState(const ViewRecordState& s);
         // The "view" pass that applies viewRecordStates_[index] at record time.
         void addViewEnterPass(vulkan::rg::RenderGraph& g, size_t index);
+
+        // ── The water's mirror view (no ray query; VulkanCoreFrame.cpp) ──────
+        // OceanState::waterMirrorView_. The UBOs of deferred binding 94, made
+        // once; the view's lifecycle, at the frame boundary (adds, re-sizes or
+        // removes it); and its G-buffer passes, inside the primary's run of
+        // passes and ahead of the shade that reads them.
+        void ensureWaterMirrorUbos();
+        void updateWaterMirror(Camera& camera);
+        void addWaterMirrorPasses(vulkan::rg::RenderGraph& g);
         // Execute a graph; with THREEPP_LOG=vulkan.rendergraph:trace also print its passes and
         // barriers to stderr whenever they differ from what was last printed
         // under the same name (a pass appearing, a layout changing).

@@ -114,35 +114,59 @@ float gWaterSunVis0 = -1.0;
 
 
 #ifdef THREEPP_NO_RAY_QUERY
-// ── The water's mirror on a device without ray query: a screen-space march ──
+// ── The water's mirror on a device without ray query ────────────────────────
 // traceRadiance has no scene to hit there (every ray misses, ray_query_stub),
 // so the water mirrored the environment alone: no hull, no quay, no shore
-// trees. This marches the water's one mirror ray against the G-buffer's depth
-// instead: what stands on screen above the waterline mirrors; what is off
-// screen or hidden stays the environment. A hit is lit from the G-buffer as a
-// cheap traced hit is (shadeDiffuseDirect with the sun through the shadow map,
-// the sky and ambient fills, the murk over a submerged hit), so the two paths
-// agree where both can see. The march is perspective-correct (1/w is linear
-// along the screen segment), jittered per pixel (TAA averages), passes
-// through water pixels as the traced ray passes through crests, and fades at
-// the screen's edge into the environment. Returns false on a miss: the caller
-// keeps its environment path, byte for byte what it was. A multisampled frame
-// (the overlay's MSAA) has no single-sample G-buffer to march: no mirror.
-bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float envInt, bool doShadows,
-                     inout uint seed, out vec3 radiance, out float hitT, out bool hitMoved) {
+// trees. The water's one mirror ray is marched against a G-buffer's depth
+// instead, and two G-buffers serve:
+//
+// • The mirror view's (VulkanCoreFrame.cpp, addWaterMirrorPasses): the camera
+//   reflected about the water's rest plane, everything under the plane
+//   clipped away and the water left out. It holds what a level surface
+//   reflects, whether or not the camera sees it: a mast above the frame, the
+//   far side of a hull, the underside of a quay. Used whenever it is live.
+// • The primary's own (the fallback, and a device whose scene has no mirror):
+//   what stands on screen above the waterline mirrors; what is off screen or
+//   hidden stays the environment.
+//
+// A hit is lit from that G-buffer as a cheap traced hit is (shadeDiffuseDirect
+// with the sun through the shadow map, the sky and ambient fills, the murk
+// over a submerged hit), so the paths agree where both can see. The march is
+// perspective-correct (1/w is linear along the screen segment), jittered per
+// pixel (TAA averages), passes through water pixels as the traced ray passes
+// through crests, and fades at the screen's edge into the environment.
+// Returns false on a miss: the caller keeps its environment path, byte for
+// byte what it was. A multisampled frame (the overlay's MSAA) has no
+// single-sample G-buffer to march: no mirror.
+
+// Binding 94: the mirror view's camera (GpuWaterMirrorUbo); info.x = 1 while
+// its G-buffer (95-98) is live this frame, .yz its extent. All zero = none.
+layout(set = 0, binding = 94) uniform WaterMirrorUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    mat4 view;
+    mat4 proj;
+    vec4 info;
+} waterMirror;
+layout(set = 0, binding = 95) uniform sampler2D  mirrorNormalTex;
+layout(set = 0, binding = 96) uniform sampler2D  mirrorDepthTex;
+layout(set = 0, binding = 97) uniform usampler2D mirrorIdsTex;
+layout(set = 0, binding = 98) uniform sampler2D  mirrorAlbedoTex;
+
+// The march against one G-buffer, named by its camera (view, proj and their
+// inverses, reverse-Z, the raster's clip y up) and its four images.
+bool marchWaterReflect(vec3 origin, vec3 dir, float missLod, float envInt, bool doShadows, inout uint seed,
+                       mat4 view, mat4 proj, mat4 projInv, mat4 viewInv, bool ortho, vec2 res, float kReach,
+                       sampler2D depthT, usampler2D idsT, sampler2D normalT, sampler2D albedoT,
+                       out vec3 radiance, out float hitT, out bool hitMoved) {
     radiance = vec3(0.0);
     hitT     = -1.0;
     hitMoved = false;
-    if (((effFlags() >> 5u) & 0x3u) != 0u) return false;
-    const bool ortho = cam.camAux.x > 0.5;
-    const mat4 view  = inverse(cam.viewInverse);
-    const mat4 proj  = inverse(cam.projInverse);
-    const vec3 o     = (view * vec4(origin, 1.0)).xyz;// view space, -z forward
-    const vec3 d     = (view * vec4(dir, 0.0)).xyz;
+    const vec3 o = (view * vec4(origin, 1.0)).xyz;// view space, -z forward
+    const vec3 d = (view * vec4(dir, 0.0)).xyz;
     // The reach: kReach metres, cut short of the near plane for a ray that
     // comes toward the camera.
-    const float kReach = 4000.0;
-    float       tMax   = kReach;
+    float tMax = kReach;
     if (d.z > 1e-6) tMax = min(tMax, (-0.05 - o.z) / d.z);
     if (tMax <= 1e-3) return false;
     const vec4 c0 = proj * vec4(o, 1.0);
@@ -153,32 +177,39 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
     const vec2 s0 = vec2(n0.x * 0.5 + 0.5, 0.5 - n0.y * 0.5);
     const vec2 s1 = vec2(n1.x * 0.5 + 0.5, 0.5 - n1.y * 0.5);
     const vec2 ds = s1 - s0;
-    // The segment clipped to the screen.
-    float kEnd = 1.0;
+    // The segment clipped to the screen; a start off it (the mirror's frustum
+    // does not hold every water pixel's reflection) clips its front too.
+    float kBeg = 0.0, kEnd = 1.0;
     for (int a = 0; a < 2; ++a) {
-        if (abs(ds[a]) > 1e-6) kEnd = min(kEnd, ((ds[a] > 0.0 ? 1.0 : 0.0) - s0[a]) / ds[a]);
+        if (abs(ds[a]) > 1e-6) {
+            const float k0 = (0.0 - s0[a]) / ds[a], k1 = (1.0 - s0[a]) / ds[a];
+            kBeg = max(kBeg, min(k0, k1));
+            kEnd = min(kEnd, max(k0, k1));
+        } else if (s0[a] < 0.0 || s0[a] > 1.0) {
+            return false;
+        }
     }
-    if (kEnd <= 0.0) return false;
-    const vec2  res   = vec2(float(pc.width), float(pc.height));
-    const float lenPx = length(ds * kEnd * res);
+    if (kEnd <= kBeg) return false;
+    const float lenPx = length(ds * (kEnd - kBeg) * res);
     const int   steps = int(clamp(ceil(lenPx / 4.0), 4.0, 48.0));// ~4 px a step
     const float jit   = rnd(seed);// per pixel AND per frame: TAA averages the march's phase
     // Perspective-correct depth along the screen segment: 1/w is linear in k;
     // an orthographic view interpolates z itself.
     const float iw0 = 1.0 / c0.w, iw1 = 1.0 / c1.w;
     const float z0 = o.z, z1 = o.z + d.z * tMax;
-    float kPrev = 0.0, kHit = -1.0, zRayPrev = z0;
+    float kPrev = kBeg, kHit = -1.0;
+    float zRayPrev = ortho ? mix(z0, z1, kBeg) : -1.0 / mix(iw0, iw1, kBeg);
     for (int i = 0; i < steps; ++i) {
-        const float k     = kEnd * (float(i) + jit) / float(steps);
+        const float k     = kBeg + (kEnd - kBeg) * (float(i) + jit) / float(steps);
         const vec2  s     = s0 + ds * k;
         const ivec2 px    = ivec2(clamp(s * res, vec2(0.0), res - 1.0));
-        const float depth = texelFetch(gbufDepthTex, px, 0).x;
+        const float depth = texelFetch(depthT, px, 0).x;
         if (depth > 0.0) {// reverse-Z: 0 = sky
-            const uint id = texelFetch(gbufIdsTex, px, 0).x;
+            const uint id = texelFetch(idsT, px, 0).x;
             if (id != 0u && geoms[id - 1u].foamAddress == 0ul) {// not water: a crest is passed through
                 const float zRay  = ortho ? mix(z0, z1, k) : -1.0 / mix(iw0, iw1, k);
                 const vec2  ndcS  = vec2(s.x * 2.0 - 1.0, -(s.y * 2.0 - 1.0));
-                const vec4  vh    = cam.projInverse * vec4(ndcS, depth, 1.0);
+                const vec4  vh    = projInv * vec4(ndcS, depth, 1.0);
                 const float zS    = vh.z / vh.w;// the surface's view z (negative)
                 // Thick enough that a crossing between two samples registers
                 // (the ray's own depth advance), never thinner than the surface.
@@ -192,6 +223,24 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
         }
         kPrev = k;
     }
+    // The segment's far end, always: a ray that runs nearly along the view
+    // (the mirror view's, off level water, covers a pixel or two) gets the
+    // fewest steps, spaced by 1/w so all of them lie near the camera, and a
+    // surface beyond the last one (the fjord's walls) went unmet.
+    if (kHit < 0.0) {
+        const vec2  s     = s0 + ds * kEnd;
+        const ivec2 px    = ivec2(clamp(s * res, vec2(0.0), res - 1.0));
+        const float depth = texelFetch(depthT, px, 0).x;
+        const uint  id    = depth > 0.0 ? texelFetch(idsT, px, 0).x : 0u;
+        if (id != 0u && geoms[id - 1u].foamAddress == 0ul) {
+            const float zRay  = ortho ? mix(z0, z1, kEnd) : -1.0 / mix(iw0, iw1, kEnd);
+            const vec2  ndcS  = vec2(s.x * 2.0 - 1.0, -(s.y * 2.0 - 1.0));
+            const vec4  vh    = projInv * vec4(ndcS, depth, 1.0);
+            const float zS    = vh.z / vh.w;
+            const float thick = max(max(0.3, 0.03 * -zS), 1.5 * abs(zRay - zRayPrev));
+            if (zRay < zS && zRay > zS - thick) kHit = kEnd;
+        }
+    }
     if (kHit < 0.0) return false;
     // Refine between the last free sample and the hit (four bisections).
     float kLo = kPrev, kHi = kHit;
@@ -199,12 +248,12 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
         const float km    = 0.5 * (kLo + kHi);
         const vec2  s     = s0 + ds * km;
         const ivec2 px    = ivec2(clamp(s * res, vec2(0.0), res - 1.0));
-        const float depth = texelFetch(gbufDepthTex, px, 0).x;
+        const float depth = texelFetch(depthT, px, 0).x;
         bool behind = false;
         if (depth > 0.0) {
             const float zRay = ortho ? mix(z0, z1, km) : -1.0 / mix(iw0, iw1, km);
             const vec2  ndcS = vec2(s.x * 2.0 - 1.0, -(s.y * 2.0 - 1.0));
-            const vec4  vh   = cam.projInverse * vec4(ndcS, depth, 1.0);
+            const vec4  vh   = projInv * vec4(ndcS, depth, 1.0);
             behind           = zRay < vh.z / vh.w;
         }
         if (behind) kHi = km;
@@ -212,14 +261,14 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
     }
     const vec2  sH  = s0 + ds * kHi;
     const ivec2 pxH = ivec2(clamp(sH * res, vec2(0.0), res - 1.0));
-    const uint  idH = texelFetch(gbufIdsTex, pxH, 0).x;
+    const uint  idH = texelFetch(idsT, pxH, 0).x;
     if (idH == 0u) return false;
-    const float depthH = texelFetch(gbufDepthTex, pxH, 0).x;
+    const float depthH = texelFetch(depthT, pxH, 0).x;
     const vec2  ndcH   = vec2(sH.x * 2.0 - 1.0, -(sH.y * 2.0 - 1.0));
-    const vec4  vhH    = cam.projInverse * vec4(ndcH, depthH, 1.0);
-    const vec3  P      = (cam.viewInverse * vec4(vhH.xyz / vhH.w, 1.0)).xyz;
-    const vec4  nTap   = texelFetch(gbufNormalTex, pxH, 0);
-    const vec4  aTap   = texelFetch(gbufAlbedoTex, pxH, 0);
+    const vec4  vhH    = projInv * vec4(ndcH, depthH, 1.0);
+    const vec3  P      = (viewInv * vec4(vhH.xyz / vhH.w, 1.0)).xyz;
+    const vec4  nTap   = texelFetch(normalT, pxH, 0);
+    const vec4  aTap   = texelFetch(albedoT, pxH, 0);
     const MaterialDesc hm = entryMat(idH - 1u);
     const vec3  V      = -dir;
     vec3        N      = normalize(nTap.xyz * 2.0 - 1.0);
@@ -244,6 +293,30 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
     const float edge = smoothstep(0.0, 0.08, min(eb.x, eb.y));
     radiance         = mix(sampleEnvLod(dir, missLod) * envInt, shade, edge);
     return true;
+}
+
+bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float envInt, bool doShadows,
+                     inout uint seed, out vec3 radiance, out float hitT, out bool hitMoved) {
+    radiance = vec3(0.0);
+    hitT     = -1.0;
+    hitMoved = false;
+    if (((effFlags() >> 5u) & 0x3u) != 0u) return false;
+    // The mirror view, when this frame has one: what a level surface reflects.
+    if (waterMirror.info.x > 0.5) {
+        return marchWaterReflect(origin, dir, missLod, envInt, doShadows, seed,
+                                 waterMirror.view, waterMirror.proj, waterMirror.projInverse,
+                                 waterMirror.viewInverse, /*ortho=*/false, waterMirror.info.yz,
+                                 /*kReach=*/20000.0,
+                                 mirrorDepthTex, mirrorIdsTex, mirrorNormalTex, mirrorAlbedoTex,
+                                 radiance, hitT, hitMoved);
+    }
+    // Otherwise the primary's own G-buffer: what stands on screen.
+    return marchWaterReflect(origin, dir, missLod, envInt, doShadows, seed,
+                             inverse(cam.viewInverse), inverse(cam.projInverse), cam.projInverse,
+                             cam.viewInverse, cam.camAux.x > 0.5, vec2(float(pc.width), float(pc.height)),
+                             /*kReach=*/4000.0,
+                             gbufDepthTex, gbufIdsTex, gbufNormalTex, gbufAlbedoTex,
+                             radiance, hitT, hitMoved);
 }
 #endif// THREEPP_NO_RAY_QUERY
 

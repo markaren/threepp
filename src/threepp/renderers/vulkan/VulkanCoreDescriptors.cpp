@@ -471,6 +471,30 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.shadowSpots    = smSpot.data();
             in.shadowPoints   = smPoint.data();
             in.shadowUbo      = smUbo.data();
+            // The water's mirror view (94-98): the primary's shade reads the
+            // mirror's camera and G-buffer while one exists; every other view,
+            // and the primary without one, reads the all-zero block and its
+            // own G-buffer (never sampled: the block says there is no mirror).
+            ensureWaterMirrorUbos();
+            const ViewContext* mirror = (!view().secondary && waterMirrorView_ != 0u) ? findView(waterMirrorView_) : nullptr;
+            if (mirror && (mirror->pendingCreate || mirror->pendingDestroy ||
+                           mirror->rasterGbufs[0].depth.view == VK_NULL_HANDLE))
+                mirror = nullptr;
+            std::array<VkBuffer, kFramesInFlight> mirrorUbo{};
+            std::array<VkImageView, kFramesInFlight> mirrorN{}, mirrorD{}, mirrorI{}, mirrorA{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                const auto& gb = mirror ? mirror->rasterGbufs[f] : view().rasterGbufs[f];
+                mirrorUbo[f] = mirror ? waterMirrorUbos_[f].handle : waterMirrorUboOff_.handle;
+                mirrorN[f]   = gb.normal.view;
+                mirrorD[f]   = gb.depth.view;
+                mirrorI[f]   = gb.ids.view;
+                mirrorA[f]   = gb.albedo.view;
+            }
+            in.waterMirrorUbo    = mirrorUbo.data();
+            in.waterMirrorNormal = mirrorN.data();
+            in.waterMirrorDepth  = mirrorD.data();
+            in.waterMirrorIds    = mirrorI.data();
+            in.waterMirrorAlbedo = mirrorA.data();
             view().deferredShade_->rewriteDescriptors(in, onlyFrame);
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 if (onlyFrame < 0 || static_cast<uint32_t>(onlyFrame) == f) view().shadowBoundGen[f] = smBind[f].gen;

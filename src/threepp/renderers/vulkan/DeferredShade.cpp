@@ -41,7 +41,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 91;
+    constexpr uint32_t kDeferredBindingCount = 96;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -301,6 +301,15 @@ namespace threepp::vulkan {
         // kOceanClimate permutation: its map with the header row, or the foam
         // dummy while off.
         set(93, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // oceanClimate (RGBA32F)
+        // The water's mirror view (no ray query; VulkanCoreMirror.cpp): its
+        // camera block and its G-buffer, which the water's reflection marches.
+        // Always bound: the all-zero block (no mirror) and this view's own
+        // G-buffer as stand-ins, and read only by the no-ray-query shade.
+        set(94, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // GpuWaterMirrorUbo
+        set(95, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // mirror gbuf normal+rough
+        set(96, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // mirror gbuf depth
+        set(97, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // mirror gbuf ids
+        set(98, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // mirror gbuf albedo+metal
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -1168,6 +1177,24 @@ namespace threepp::vulkan {
             climateInfo.imageView   = in.oceanClimateView;
             climateInfo.imageLayout = in.oceanClimateLayout;
             setw(90, 93, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &climateInfo, nullptr);
+            // The water's mirror view (94-98): its camera block and G-buffer,
+            // or the all-zero block and this view's own G-buffer.
+            VkDescriptorBufferInfo mirrorUboInfo{};
+            mirrorUboInfo.buffer = in.waterMirrorUbo[f];
+            mirrorUboInfo.offset = 0;
+            mirrorUboInfo.range  = VK_WHOLE_SIZE;
+            const VkImageView* const mirrorViews[4] = {in.waterMirrorNormal, in.waterMirrorDepth,
+                                                       in.waterMirrorIds, in.waterMirrorAlbedo};
+            VkDescriptorImageInfo mirrorInfo[4]{};
+            for (uint32_t i = 0; i < 4; ++i) {
+                mirrorInfo[i].sampler     = gbufSampler_;
+                mirrorInfo[i].imageView   = mirrorViews[i][f];
+                mirrorInfo[i].imageLayout = i == 1 ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
+            setw(91, 94, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &mirrorUboInfo);
+            for (uint32_t i = 0; i < 4; ++i)
+                setw(92 + static_cast<int>(i), 95u + i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &mirrorInfo[i], nullptr);
             // Without ray query the layout has no binding 8: drop its write.
             uint32_t writeCount = static_cast<uint32_t>(w.size());
             if (!ctx_.rayQuerySupported()) {

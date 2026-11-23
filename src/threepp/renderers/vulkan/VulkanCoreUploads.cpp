@@ -1134,6 +1134,27 @@ namespace threepp {
         ubo.eye[1] = camera.matrixWorld->elements[13];
         ubo.eye[2] = camera.matrixWorld->elements[14];
         ubo.eye[3] = 1.f;
+        // The water's mirror view clips what lies under the water plane; every
+        // other view keeps the zero plane (keeps everything).
+        if (view().waterMirror) {
+            for (int i = 0; i < 4; ++i) ubo.clipPlane[i] = waterMirrorPlane_[i];
+            // ...and hands the primary's shade its camera (binding 94): the
+            // jittered projection it rasterised with, so a depth it stored
+            // unprojects onto the surface it drew. The inverses are taken here
+            // once rather than per pixel.
+            const VkExtent2D mext = renderExtent();
+            Matrix4 projInv = projJ;
+            projInv.invert();
+            GpuWaterMirrorUbo mu{};
+            std::memcpy(mu.viewInverse, camera.matrixWorld->elements.data(), 64);
+            std::memcpy(mu.projInverse, projInv.elements.data(), 64);
+            std::memcpy(mu.view, viewMat.elements.data(), 64);
+            std::memcpy(mu.proj, projJ.elements.data(), 64);
+            mu.info[0] = 1.f;
+            mu.info[1] = static_cast<float>(mext.width);
+            mu.info[2] = static_cast<float>(mext.height);
+            uploadHostVisible(ctx->allocator(), waterMirrorUbos_[frame], &mu, sizeof(mu));
+        }
 
         uploadHostVisible(ctx->allocator(), view().rasterCameraUbos[frame], &ubo, sizeof(ubo));
 

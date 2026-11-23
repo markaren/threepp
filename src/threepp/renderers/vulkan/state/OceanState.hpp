@@ -58,6 +58,29 @@ namespace threepp::vulkan::impl {
         // Its ripples' slopes (binding 79), or the same dummy.
         VkImageView oceanRippleView = VK_NULL_HANDLE;
 
+        // ── The water's mirror view (no ray query; VulkanCoreMirror.cpp) ───
+        // Without ray query the water's reflection ray has no scene to hit.
+        // The mirror view is the primary camera reflected about the water's
+        // rest plane, a G-buffer-only view (no shade, no post) rasterised
+        // before the primary's shade with everything under the plane clipped
+        // away; the water's reflection marches its depth. Handle in views_
+        // (0 = none), the extent it was made at, its camera.
+        uint32_t                           waterMirrorView_ = 0u;
+        VkExtent2D                         waterMirrorExt_{0, 0};
+        std::unique_ptr<PerspectiveCamera> waterMirrorCam_;
+        // The plane (n, d) in the world, n up out of the water, as the
+        // vertex shaders take it (RasterCameraData::clipPlane).
+        float waterMirrorPlane_[4]{};
+        // Deferred binding 94 (GpuWaterMirrorUbo): the mirror camera and
+        // whether its G-buffer is live this frame, per frame in flight, for
+        // the primary's shade; every other view's set names the all-zero one.
+        using GpuWaterMirrorUbo = vulkan::impl::GpuWaterMirrorUbo;
+        std::array<Buffer, kFramesInFlight> waterMirrorUbos_{};
+        Buffer                              waterMirrorUboOff_{};
+        // The camera the frame renders (beginDeferredFrame sets it around
+        // the primary's build): addWaterMirrorPasses mirrors it.
+        Camera* waterMirrorSrc_ = nullptr;
+
         // Tileable foam detail texture (deferred shade foam binding).
         // R = micro bubble brightness (three value-noise octaves matching the
         // old procedural micro look over a 4 m world mapping), G = ridged
