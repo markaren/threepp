@@ -3,6 +3,7 @@
 #include "threepp/extras/terrain/MountainBackdrop.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include <cmath>
 
@@ -77,21 +78,40 @@ TEST_CASE("The mesh samples heightAt and spaces its rings like its segments") {
     CHECK(std::hypot(p[3 * (rings - 1) * S], p[3 * (rings - 1) * S + 2]) < o.outerRadius);
 }
 
-TEST_CASE("Shading picks the material: per-pixel shader or vertex colours") {
+TEST_CASE("Shading picks the material: per-pixel shader or baked maps") {
     auto o = small();
     const auto perPixel = MountainBackdrop::create(o);
     CHECK(perPixel->mesh()->material()->as<ShaderMaterial>() != nullptr);
     CHECK(perPixel->mesh()->geometry()->hasAttribute("aCavity"));
-    CHECK_FALSE(perPixel->mesh()->geometry()->hasAttribute("color"));
+    CHECK_FALSE(perPixel->mesh()->geometry()->hasAttribute("uv"));
 
-    o.shading = MountainBackdropOptions::Shading::VertexColour;
-    const auto vertex = MountainBackdrop::create(o);
-    const auto* standard = vertex->mesh()->material()->as<MeshStandardMaterial>();
+    o.shading = MountainBackdropOptions::Shading::Textured;
+    o.texelsPerSegment = 2;
+    const auto textured = MountainBackdrop::create(o);
+    const auto* standard = textured->mesh()->material()->as<MeshStandardMaterial>();
     REQUIRE(standard != nullptr);
-    CHECK(standard->vertexColors);
-    CHECK(vertex->mesh()->geometry()->hasAttribute("color"));
+    REQUIRE(standard->map);
+    REQUIRE(standard->normalMap);
+    CHECK(standard->map->image().width() == static_cast<unsigned>(o.segments * 2));
+    CHECK(standard->map->colorSpace == ColorSpace::sRGB);
+    CHECK(standard->normalMap->colorSpace == ColorSpace::NoColorSpace);
 
-    const auto& cav = vertex->mesh()->geometry()->getAttribute<float>("aCavity")->array();
+    // one seam column more than segments, its u at 1, on the same ground as the first
+    const auto& p = textured->mesh()->geometry()->getAttribute<float>("position")->array();
+    const auto& uv = textured->mesh()->geometry()->getAttribute<float>("uv")->array();
+    const size_t cols = static_cast<size_t>(o.segments) + 1;
+    REQUIRE(p.size() % (cols * 3) == 0);
+    CHECK(uv[2 * (cols - 1)] == 1.f);
+    CHECK(p[3 * (cols - 1)] == p[0]);
+    CHECK(p[3 * (cols - 1) + 1] == p[1]);
+
+    // the normal map leans the surface, it does not overturn it
+    const auto& n = standard->normalMap->image().data<unsigned char>();
+    size_t up = 0;
+    for (size_t i = 2; i < n.size(); i += 4) up += n[i] > 180;
+    CHECK(up == n.size() / 4);
+
+    const auto& cav = textured->mesh()->geometry()->getAttribute<float>("aCavity")->array();
     bool hollow = false, crest = false;
     for (float c : cav) {
         CHECK(c >= -1.f);

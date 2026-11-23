@@ -17,9 +17,11 @@
 // bare; rock is banded by strata, with snow on the ledges between bands. An exponential
 // aerial haze fades range behind range into the sky's horizon colour, warmer toward the
 // sun; it replaces scene fog for this mesh.
-// Shading::VertexColour: the same snow/rock rule per vertex (no relief, no strata) on a
-// MeshStandardMaterial, with scene fog. It works under every renderer; VulkanRenderer's
-// deferred path does not shade a ShaderMaterial, so use this one there.
+// Shading::Textured: the same rule baked once into a colour and a normal map over the ring
+// (texelsPerSegment texels across each segment, so a few metres at five kilometres, finer
+// nearer) on a MeshStandardMaterial, with scene fog for the haze. It works under every
+// renderer; VulkanRenderer's deferred path does not shade a ShaderMaterial, so use this one
+// there. It costs the two maps (48 MB each at the defaults) and a second or so to bake.
 //
 //   terrain::MountainBackdropOptions o;
 //   o.ground = [](float x, float z) { return glacierHeight(x, z); };
@@ -55,7 +57,7 @@ namespace threepp::terrain {
     struct MountainBackdropOptions {
         enum class Shading {
             PerPixel,
-            VertexColour
+            Textured
         };
 
         float innerRadius = 1250;// the ranges begin to rise here (m from the world origin)
@@ -75,6 +77,7 @@ namespace threepp::terrain {
         float sink = 4;
 
         Shading shading = Shading::PerPixel;
+        int texelsPerSegment = 3;// Textured: map resolution
         float snowSlope = 0.16f;// slope (1 - normal.y) up to which snow lies on open ground
         Color snowColor{0.86f, 0.89f, 0.95f};
         Color rockColor{0.018f, 0.019f, 0.022f};// the darker strata
@@ -102,7 +105,7 @@ namespace threepp::terrain {
 
         [[nodiscard]] const MountainBackdropOptions& options() const;
 
-        // PerPixel only: retune the haze (no-op for VertexColour).
+        // PerPixel only: retune the haze (no-op for Textured, which takes scene fog).
         void setHaze(const Color& color, const Color& sunColor, const Vector3& sunDirection, float distance);
 
     private:

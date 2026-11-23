@@ -6,6 +6,7 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
+#include "threepp/textures/DataTexture.hpp"
 #include "threepp/utils/ThreadPool.hpp"
 
 #include <algorithm>
@@ -92,20 +93,37 @@ namespace {
         return a;
     }
 
-    // Plain value-noise fBm in [0, 1] (the per-vertex snow line's wiggle).
-    float fbm01(float x, float y, int seed) {
-        float s = 0, a = 0.5f, norm = 0;
-        for (int i = 0; i < 4; ++i) {
-            float v, dx, dy;
-            vnoiseD(x, y, seed + 31 * i, v, dx, dy);
-            s += a * (0.5f + 0.5f * v);
-            norm += a;
-            a *= 0.5f;
-            x *= 2.f;
-            y *= 2.f;
-        }
-        return s / norm;
+    // CPU copies of the per-pixel shader's rHash / rNoise / rFbm / rRelief (below), for the
+    // textured mode, which bakes the same rule.
+    float fract(float x) { return x - std::floor(x); }
+    float rHash(float px, float py) {
+        float x = fract(px * 0.1031f), y = fract(py * 0.1031f), z = x;
+        const float d = x * (y + 33.33f) + y * (z + 33.33f) + z * (x + 33.33f);
+        x += d;
+        y += d;
+        z += d;
+        return fract((x + y) * z);
     }
+    float rNoise(float px, float py) {
+        const float ix = std::floor(px), iy = std::floor(py), fx = px - ix, fy = py - iy;
+        const float ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+        return mixf(mixf(rHash(ix, iy), rHash(ix + 1, iy), ux), mixf(rHash(ix, iy + 1), rHash(ix + 1, iy + 1), ux), uy);
+    }
+    float rFbm(float px, float py) {
+        float s = 0, a = 0.5f;
+        for (int i = 0; i < 4; ++i) {
+            s += a * rNoise(px, py);
+            const float x2 = 1.6f * px - 1.2f * py, y2 = 1.2f * px + 1.6f * py;
+            px = x2;
+            py = y2;
+            a *= 0.5f;
+        }
+        return s;
+    }
+    float rRelief(float px, float py, float f1, float f2) {
+        return f1 * 30.f * rFbm(px / 80.f, py / 80.f) + f2 * 5.f * rFbm(px / 15.f + 3.f, py / 15.f + 3.f);
+    }
+
 
     std::string hook(std::string s, const std::string& what, const std::string& with) {
         const auto p = s.find(what);
@@ -241,39 +259,44 @@ MountainBackdrop::MountainBackdrop(MountainBackdropOptions options)
 
     const auto& o = options_;
     const int S = std::max(16, o.segments);
+    const bool textured = o.shading == MountainBackdropOptions::Shading::Textured;
+    // Textured: one more column, a copy of the first at u = 1, so the maps do not wrap
+    // backwards across the last segment.
+    const int cols = textured ? S + 1 : S;
     std::vector<float> radii;
     for (float r = std::min(o.innerRadius, o.fullRadius) - 50.f; r < o.outerRadius; r += r * kTau / static_cast<float>(S)) {
         radii.push_back(std::max(r, 1.f));
     }
     const int R = static_cast<int>(radii.size());
 
-    std::vector<float> pos(static_cast<size_t>(R) * S * 3);
+    std::vector<float> pos(static_cast<size_t>(R) * cols * 3);
     ThreadPool::shared().parallelFor(0, R, [&](int j) {
-        for (int i = 0; i < S; ++i) {
-            const float a = (static_cast<float>(i) + 0.5f) / static_cast<float>(S) * kTau;
+        for (int i = 0; i < cols; ++i) {
+            const float a = (static_cast<float>(i % S) + 0.5f) / static_cast<float>(S) * kTau;
             const float x = radii[j] * std::cos(a), z = radii[j] * std::sin(a);
-            const size_t k = (static_cast<size_t>(j) * S + i) * 3;
+            const size_t k = (static_cast<size_t>(j) * cols + i) * 3;
             pos[k] = x;
             pos[k + 1] = heightAt(x, z);
             pos[k + 2] = z;
         } }, 1);
 
     // hollows (above zero) and crests (below) against the ground a few rings and segments away
-    std::vector<float> cavity(static_cast<size_t>(R) * S, 0.f);
+    std::vector<float> cavity(static_cast<size_t>(R) * cols, 0.f);
     const int k = std::min(8, std::max(1, (R - 1) / 2));
     for (int j = k; j < R - k; ++j)
-        for (int i = 0; i < S; ++i) {
-            auto H = [&](int jj, int ii) { return pos[(static_cast<size_t>(jj) * S + ((ii + S) % S)) * 3 + 1]; };
+        for (int i = 0; i < cols; ++i) {
+            auto H = [&](int jj, int ii) { return pos[(static_cast<size_t>(jj) * cols + ((ii + S) % S)) * 3 + 1]; };
             const float avg = 0.25f * (H(j - k, i) + H(j + k, i) + H(j, i - k) + H(j, i + k));
-            cavity[static_cast<size_t>(j) * S + i] = std::clamp((avg - H(j, i)) / 40.f, -1.f, 1.f);
+            cavity[static_cast<size_t>(j) * cols + i] = std::clamp((avg - H(j, i % S)) / 40.f, -1.f, 1.f);
         }
 
     std::vector<unsigned int> idx;
     idx.reserve(static_cast<size_t>(std::max(0, R - 1)) * S * 6);
     for (int j = 0; j + 1 < R; ++j)
         for (int i = 0; i < S; ++i) {
-            const auto a = static_cast<unsigned int>(j * S + i), b = static_cast<unsigned int>(j * S + (i + 1) % S);
-            const auto c = static_cast<unsigned int>((j + 1) * S + i), d = static_cast<unsigned int>((j + 1) * S + (i + 1) % S);
+            const int i1 = textured ? i + 1 : (i + 1) % S;
+            const auto a = static_cast<unsigned int>(j * cols + i), b = static_cast<unsigned int>(j * cols + i1);
+            const auto c = static_cast<unsigned int>((j + 1) * cols + i), d = static_cast<unsigned int>((j + 1) * cols + i1);
             idx.insert(idx.end(), {a, b, c, b, d, c});
         }
 
@@ -285,29 +308,105 @@ MountainBackdrop::MountainBackdrop(MountainBackdropOptions options)
     geometry->computeBoundingSphere();
 
     std::shared_ptr<Material> material;
-    if (o.shading == MountainBackdropOptions::Shading::PerPixel) {
+    if (!textured) {
         material = perPixelMaterial(o);
     } else {
-        // the per-pixel rule, per vertex: no relief finer than the mesh, no strata
-        const auto& n = geometry->getAttribute<float>("normal")->array();
-        std::vector<float> col(pos.size());
-        for (size_t v = 0; v < pos.size() / 3; ++v) {
-            const float x = pos[3 * v], y = pos[3 * v + 1], z = pos[3 * v + 2];
-            const float slope = 1.f - n[3 * v + 1];
-            const float cav = cavity[v];
-            const float line = o.snowSlope + 0.12f * fbm01(x / 170.f, z / 170.f, static_cast<int>(o.seed) + 5) +
-                               0.05f * smoothstepf(200.f, 1200.f, y) + 0.24f * std::max(cav, 0.f) - 0.2f * std::max(-cav, 0.f);
-            const float snow = 1.f - smoothstepf(line - 0.04f, line + 0.04f, slope);
-            const float band = fbm01(x / 30.f, z / 30.f, static_cast<int>(o.seed) + 9);
-            Color rock(mixf(o.rockColor.r, o.rockBandColor.r, band), mixf(o.rockColor.g, o.rockBandColor.g, band), mixf(o.rockColor.b, o.rockBandColor.b, band));
-            col[3 * v] = mixf(rock.r, o.snowColor.r, snow);
-            col[3 * v + 1] = mixf(rock.g, o.snowColor.g, snow);
-            col[3 * v + 2] = mixf(rock.b, o.snowColor.b, snow);
-        }
-        geometry->setAttribute("color", FloatBufferAttribute::create(std::move(col), 3));
+        // The per-pixel rule baked into a colour and a normal map: u round the ring, v by
+        // ring index, so a texel is as square as a segment at every distance.
+        const int tps = std::max(1, o.texelsPerSegment);
+        const int W = S * tps, H = std::max(2, (R - 1) * tps);
+        std::vector<float> uv(static_cast<size_t>(R) * cols * 2);
+        for (int j = 0; j < R; ++j)
+            for (int i = 0; i < cols; ++i) {
+                uv[(static_cast<size_t>(j) * cols + i) * 2] = static_cast<float>(i) / static_cast<float>(S);
+                uv[(static_cast<size_t>(j) * cols + i) * 2 + 1] = static_cast<float>(j) / static_cast<float>(R - 1);
+            }
+        geometry->setAttribute("uv", FloatBufferAttribute::create(std::move(uv), 2));
+
+        const auto& nrm = geometry->getAttribute<float>("normal")->array();
+        std::vector<unsigned char> colPx(static_cast<size_t>(W) * H * 4, 255), nrmPx(static_cast<size_t>(W) * H * 4, 255);
+        const float snowR = o.snowColor.r, snowG = o.snowColor.g, snowB = o.snowColor.b;
+        ThreadPool::shared().parallelFor(0, H, [&](int y) {
+            const float jf = (static_cast<float>(y) + 0.5f) / static_cast<float>(H) * static_cast<float>(R - 1);
+            const int j0 = std::min(static_cast<int>(jf), R - 2);
+            const float tj = jf - static_cast<float>(j0);
+            const float r = mixf(radii[j0], radii[j0 + 1], tj);
+            const float texel = r * kTau / static_cast<float>(W);
+            // relief finer than a texel is left out, as the shader leaves out what is finer than a pixel
+            const float f1 = 1.f - smoothstepf(5.f, 20.f, texel), f2 = 1.f - smoothstepf(1.f, 5.f, texel);
+            for (int x = 0; x < W; ++x) {
+                const float uf = (static_cast<float>(x) + 0.5f) / static_cast<float>(tps);
+                const int i0 = std::min(static_cast<int>(uf), S - 1);
+                const float ti = uf - static_cast<float>(i0);
+                auto at = [&](const std::vector<float>& a, int stride, int c) {
+                    auto v = [&](int jj, int ii) { return a[(static_cast<size_t>(jj) * cols + ii) * stride + c]; };
+                    return mixf(mixf(v(j0, i0), v(j0, i0 + 1), ti), mixf(v(j0 + 1, i0), v(j0 + 1, i0 + 1), ti), tj);
+                };
+                const float a = (uf + 0.5f) / static_cast<float>(S) * kTau;
+                const float ca = std::cos(a), sa = std::sin(a);
+                const float px = r * ca, pz = r * sa, alt = at(pos, 3, 1);
+                Vector3 N(at(nrm, 3, 0), at(nrm, 3, 1), at(nrm, 3, 2));
+                N.normalize();
+
+                const float e = 2.5f;
+                const float r0 = rRelief(px, pz, f1, f2);
+                const float gx = (rRelief(px + e, pz, f1, f2) - r0) / e, gz = (rRelief(px, pz + e, f1, f2) - r0) / e;
+                const float steep0 = smoothstepf(0.12f, 0.45f, 1.f - N.y);
+                Vector3 n = N + Vector3(-gx, 0.f, -gz) * (0.2f + 0.8f * steep0);
+                n.normalize();
+                const float slope = 1.f - n.y;
+                const float rN = rFbm(px / 170.f, pz / 170.f);
+                const float cav = std::clamp(at(cavity, 1, 0), -1.f, 1.f);
+                const float line = o.snowSlope + 0.12f * rN + 0.05f * smoothstepf(200.f, 1200.f, alt) + 0.24f * std::max(cav, 0.f) - 0.2f * std::max(-cav, 0.f);
+                float snow = 1.f - smoothstepf(line - 0.03f, line + 0.03f, slope);
+                const float strata = smoothstepf(0.25f, 0.75f, 0.5f + 0.5f * std::sin(alt / 12.f + rN * 7.f));
+                const float grain = 0.7f + 0.6f * rNoise(px / 30.f, pz / 30.f);
+                const float ledge = (1.f - strata) * smoothstepf(0.55f, 0.75f, rNoise(px / 10.f, pz / 10.f)) * (1.f - smoothstepf(0.45f, 0.75f, slope));
+                snow = std::max(snow, 0.8f * ledge);
+                const float rr = mixf(o.rockColor.r, o.rockBandColor.r, strata) * grain;
+                const float rg = mixf(o.rockColor.g, o.rockBandColor.g, strata) * grain;
+                const float rb = mixf(o.rockColor.b, o.rockBandColor.b, strata) * grain;
+
+                // the normal in the frame the renderer builds from the uvs: T round the ring
+                // (u), B = N x T outward (v)
+                Vector3 T(-sa, 0.f, ca);
+                T.sub(Vector3(N).multiplyScalar(T.dot(N))).normalize();
+                Vector3 B = Vector3().crossVectors(N, T);
+                const float nx = n.dot(T), ny = n.dot(B), nz = n.dot(N);
+
+                const size_t k = (static_cast<size_t>(y) * W + x) * 4;
+                auto srgb = [](float c) {
+                    c = std::clamp(c, 0.f, 1.f);
+                    c = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f;
+                    return static_cast<unsigned char>(std::lround(c * 255.f));
+                };
+                colPx[k] = srgb(mixf(rr, snowR, snow));
+                colPx[k + 1] = srgb(mixf(rg, snowG, snow));
+                colPx[k + 2] = srgb(mixf(rb, snowB, snow));
+                auto unit8 = [](float c) { return static_cast<unsigned char>(std::lround(std::clamp(0.5f + 0.5f * c, 0.f, 1.f) * 255.f)); };
+                nrmPx[k] = unit8(nx);
+                nrmPx[k + 1] = unit8(ny);
+                nrmPx[k + 2] = unit8(nz);
+            }
+        });
+        auto makeTex = [&](std::vector<unsigned char> px, ColorSpace cs) {
+            auto tex = DataTexture::create(ImageData(std::move(px)), W, H);
+            tex->format = Format::RGBA;
+            tex->type = Type::UnsignedByte;
+            tex->colorSpace = cs;
+            tex->wrapS = TextureWrapping::Repeat;
+            tex->wrapT = TextureWrapping::ClampToEdge;
+            tex->magFilter = Filter::Linear;
+            tex->minFilter = Filter::LinearMipmapLinear;
+            tex->generateMipmaps = true;
+            tex->anisotropy = 8;
+            tex->needsUpdate();
+            return tex;
+        };
         auto m = MeshStandardMaterial::create();
-        m->vertexColors = true;
-        m->roughness = 0.9f;
+        m->map = makeTex(std::move(colPx), ColorSpace::sRGB);
+        m->normalMap = makeTex(std::move(nrmPx), ColorSpace::NoColorSpace);
+        m->roughness = 0.88f;
         m->metalness = 0.f;
         material = m;
     }
