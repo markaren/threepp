@@ -1604,7 +1604,7 @@ vec3 oceanNormal(int hitId, vec3 P, vec3 N, vec3 V, out vec4 wk) {
     if (geoms[hitId].foamAddress > 1ul) {
         const uint64_t wt = geoms[hitId].foamAddress;
         wk = oceanWakeSample(wt, P.xz, 0.0);
-        g *= 1.0 - 0.9 * clamp(wk.a, 0.0, 1.0);
+        g *= 1.0 - 0.9 * oceanWakeLane(wt, wk.a, wk.b);
         if (wk.b > 2e-3) {
             const float t   = WakeTable(wt).timeSec;
             const float amp = min(1.1 * wk.b, 0.24);

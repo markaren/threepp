@@ -60,7 +60,7 @@ struct WakeSource {
     float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
 };
 
-// 84-byte header, then the patches (the producers' and the shore's), then the
+// 88-byte header, then the patches (the producers' and the shore's), then the
 // sources of this step.
 layout(buffer_reference, scalar) readonly buffer WakeTable {
     uint  patchCount;
@@ -83,9 +83,21 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
     uvec2 shoreDepth;       // the shore's depth (ocean_shore_depth.glsl's OceanShoreDepth), as two
                             // 32-bit halves (packUint2x32); 0 = none
     vec2  shoreEye;         // the camera the shore's windows were placed round (oceanWakeSample)
+    float laneFade;         // the lane's last share of its life, over which it opens (oceanWakeLane);
+                            // 0 = the lane is a strength that dies exponentially
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
     WakeSource sources[];
 };
+
+// How far the short waves are taken away (0..1) where the field reads lane
+// `a` and turbulence `turb` (m/s). The lane holds the time it has left as a
+// share of laneLife (wake_field.comp): it is calm until its last laneFade of
+// that, then opens linearly, so its sides keep the soft profile it was laid
+// with. Churned water is calm for exactly as long as the churn lasts.
+float oceanWakeLane(uint64_t tableAddr, float a, float turb) {
+    const float fade = WakeTable(tableAddr).laneFade;
+    return fade > 0.0 ? max(clamp(a / fade, 0.0, 1.0), smoothstep(0.01, 0.12, turb)) : clamp(a, 0.0, 1.0);
+}
 
 #ifdef OCEAN_WAKE_SAMPLER
 // Value noise over (x, y, time): (value in -1..1, d/dx, d/dy), quintic fade.

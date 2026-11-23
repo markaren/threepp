@@ -233,7 +233,17 @@ void main() {
     s.r *= exp(-dt * thin * mix(tb.foamThinning, 1.0, clamp(s.r, 0.0, 1.0)) / tb.foamLife);
     s.g *= exp(-dt * mix(2.0, 1.0, clamp(s.g, 0.0, 1.0)) / tb.aerationLife);// a thin cloud clears first
     s.b *= exp(-dt / tb.turbulenceLife);
-    s.a *= exp(-dt / tb.laneLife);
+    // The lane is the time the calm has left, as a share of laneLife: it
+    // counts down and the short waves are back when it has run out
+    // (oceanWakeLane). A step shorter than half a half-float step of the
+    // channel would round away, so the count is dithered to it: the lane runs
+    // out at its own rate whatever the frame rate.
+    const bool laneLeft = tb.laneFade > 0.0;
+    if (laneLeft) {
+        s.a = max(s.a - dt / tb.laneLife, 0.0);
+    } else {
+        s.a *= exp(-dt / tb.laneLife);
+    }
     // A shore window (WakePatch::shore) is fed by shore_source.comp after this
     // step and by nothing here: its flow is the foam's drift off the solid and
     // downwind, which is not a stream through still water, and the sea round a
@@ -246,7 +256,10 @@ void main() {
     // A stream through still water is turbulent at about a quarter of its
     // speed, and turbulent water has lost its short waves.
     s.b = max(s.b, 0.25 * length(v));
-    s.a = max(s.a, smoothstep(0.01, 0.12, s.b));
+    // Turbulent water has lost its short waves. (The lane that counts down
+    // holds only what a producer laid: its readers take the churn from the
+    // turbulence itself, oceanWakeLane.)
+    if (!laneLeft) s.a = max(s.a, smoothstep(0.01, 0.12, s.b));
 
     // Where the ripples' own waves break (WakeField::rippleBreaking): their
     // slope, read at this texel from last step's ripples (the same sea the
@@ -292,8 +305,23 @@ void main() {
         s.r = max(s.r, sc.foam * w * smoothstep(0.32, 0.68, gulp));
         s.g = max(s.g, sc.aeration * w * mix(0.15, 1.0, smoothstep(0.30, 0.70, gulp)));
         s.b = max(s.b, sc.turbulence * w * mix(0.6, 1.0, puff));
-        s.a = max(s.a, sc.lane * wl);
+        // The turbulent wake of a hull dies over a time that scales with her
+        // breadth, and the short waves are back once it has: laneLife is the
+        // life behind a source of kLaneRefRadius (a hull 10 m wide), a
+        // narrower one's in proportion. The time is laid over the lane's
+        // 1.6-radius reach: with the strength a straight ramp over the last
+        // quarter of the life, a full share is half strength at about 2.3
+        // radii with a shoulder out to 3.5, a band as broad as the wake and
+        // soft at its sides, which narrows to its centre line as it runs out.
+        const float kLaneRefRadius = 5.0;
+        const float share = laneLeft ? clamp(sc.radius / kLaneRefRadius, 0.04, 1.0) : 1.0;
+        s.a = max(s.a, sc.lane * wl * share);
         v = mix(v, sc.vel, min(w, 1.0));
+    }
+    if (laneLeft && s.a > 0.0) {
+        // (the dither of the count above: half a step of the rgba16f channel at s.a either way)
+        const float ulp = exp2(floor(log2(s.a)) - 10.0);
+        s.a += (wkHash(ivec3(px, int(tb.timeSec * 977.0) + li * 131)) - 0.5) * ulp;
     }
     imageStore(dstState, dst, max(s, vec4(0.0)));
     imageStore(dstVel, dst, vec4(v, 0.0, 0.0));

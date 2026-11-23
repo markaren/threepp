@@ -249,7 +249,7 @@
             // own foam does and the two never slide over each other.
             gWake = oceanWakeSample(geoms[id - 1u].foamAddress, wPos - gCrestDisp,
                                     clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
-            wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
+            wakeCalm = 1.0 - 0.9 * oceanWakeLane(geoms[id - 1u].foamAddress, gWake.a, gWake.b);
             gKept *= wakeCalm;
             if (gWake.b > 2e-3) {
                 // Slope of the boil, by the turbulent speed (m/s), capped. Two
@@ -533,7 +533,7 @@
             // own foam does and the two never slide over each other.
             gWake = oceanWakeSample(geoms[id - 1u].foamAddress, wPos - gCrestDisp,
                                     clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
-            wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
+            wakeCalm = 1.0 - 0.9 * oceanWakeLane(geoms[id - 1u].foamAddress, gWake.a, gWake.b);
             gKept *= wakeCalm;
             if (gWake.b > 2e-3) {
                 // Slope of the boil, by the turbulent speed (m/s), capped. Two

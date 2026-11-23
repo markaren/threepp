@@ -733,6 +733,10 @@ namespace threepp::vulkan {
             tb.shoreEyeX     = st.eyeX;
             tb.shoreEyeZ     = st.eyeZ;
         }
+        // The lane holds the time it has left (wake_field.comp). THREEPP_OCEAN_NIGHT_LANE=0
+        // is the old lane, for judging: 0 here.
+        static const bool kLaneLeft = env::flag("THREEPP_OCEAN_NIGHT_LANE", true);
+        tb.laneFade = kLaneLeft ? 0.25f : 0.0f;
 
         uint32_t liveMask = 0;
         for (uint32_t i = 0; i < st.appLayers; ++i) {

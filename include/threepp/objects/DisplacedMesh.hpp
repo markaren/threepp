@@ -408,7 +408,8 @@ namespace threepp {
         //   aeration    bubbles under the surface, the pale water     (0..1)
         //   turbulence  rms turbulent speed of the water (m/s): it stirs
         //               everything here and ruffles the surface
-        //   lane        how far the short wind waves are damped       (0..1)
+        //   lane        the time the calm where the short wind waves are
+        //               taken away has left, as a share of laneLife (0..1)
         //   velocity    the water's own mean flow (m/s, world x/z)
         //
         // and every frame the field is carried by its own velocity plus a
@@ -481,6 +482,11 @@ namespace threepp {
             // seconds; the few that are small enough to stay are not seen.
             float aerationLife   = 4.5f;
             float turbulenceLife = 5.0f;
+            // The calm lane behind a producer 10 m wide (a source of radius
+            // 5 m) lasts this long; a narrower one's is shorter in proportion
+            // (a 1 m hull's about 4 s), as the turbulent wake that took the
+            // short waves away dies over a time that scales with her breadth.
+            // Churned water stays calm while the churn lasts.
             float laneLife       = 40.0f;
             float velocityLife   = 2.5f;
             // Large eddies of the turbulent flow, in texels, for a patch that
