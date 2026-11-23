@@ -422,7 +422,7 @@ int main(int argc, char** argv) {
     }
 
     Canvas canvas("VulkanRenderer — The Jewel Room (ReSTIR test)",
-                  {{"vsync", false}});
+                  {{"vsync", false}, {"headless", !shotPath.empty()}});
 
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;

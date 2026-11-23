@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
         else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
     }
 
-    Canvas canvas("Vulkan Deferred - Fog", {{"vsync", false}});
+    Canvas canvas("Vulkan Deferred - Fog", {{"vsync", false}, {"headless", !shotPath.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.9f;

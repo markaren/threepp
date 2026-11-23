@@ -21,6 +21,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
+#include "uniform_environment.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -138,7 +139,7 @@ int main(int argc, char** argv) {
     const int shotFrames = args.frames.value_or(90);
     int shotFrame = 0;
 
-    Canvas canvas("Vulkan Deferred - Ridge fog", {{"vsync", false}});
+    Canvas canvas("Vulkan Deferred - Ridge fog", {{"vsync", false}, {"headless", !shotPath.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.75f;
@@ -148,6 +149,7 @@ int main(int argc, char** argv) {
     const Color sky(0.62f, 0.72f, 0.82f);
     renderer.setClearColor(sky);
     scene.background = sky;
+    scene.environment = uniformEnvironment(sky);// the sky lights the slopes and the fog, not only the backdrop
     scene.fog = FogExp2(Color(0.82f, 0.87f, 0.91f), 0.03f);// the medium's colour; setHeightFog's density wins
 
     scene.add(makeTerrain());
@@ -157,7 +159,7 @@ int main(int argc, char** argv) {
     auto sun = DirectionalLight::create(Color(1.0f, 0.82f, 0.62f), 3.6f);
     sun->position.set(-600.f, 150.f, -250.f);
     scene.add(sun);
-    scene.add(AmbientLight::create(Color(0.62f, 0.72f, 0.82f), 0.18f));
+    scene.add(AmbientLight::create(Color(0.62f, 0.72f, 0.82f), 0.18f * math::PI));// irradiance (three.js r155+)
 
     renderer.setHeightFog(hf);
     if (pinnedTime >= 0.0) renderer.setSimTime(pinnedTime);

@@ -62,6 +62,7 @@
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
+#include "uniform_environment.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -341,6 +342,7 @@ namespace {
         const Color sky = rain ? Color(0.26f, 0.29f, 0.34f) : Color(0.50f, 0.53f, 0.58f);
         renderer.setClearColor(sky);
         scene.background = sky;
+        scene.environment = uniformEnvironment(sky);// the overcast is the light, not only the backdrop
         // ONE DirectionalLight (one-sun policy). Overcast: weak, high, and cool
         // — the light in a snowstorm comes from the whole sky, so the ambient
         // carries most of it and the sun only shapes the props.
@@ -348,7 +350,7 @@ namespace {
         sun.intensity = rain ? 0.45f : 0.85f;
         sun.position.set(-4.f, 12.f, 6.f);
         ambient.color.setRGB(0.66f, 0.71f, 0.80f);
-        ambient.intensity = rain ? 0.35f : 0.50f;
+        ambient.intensity = (rain ? 0.35f : 0.50f) * math::PI;// irradiance (three.js r155+)
 
         VulkanRenderer::HeightFogSettings hf;
         hf.baseY       = 0.0f;

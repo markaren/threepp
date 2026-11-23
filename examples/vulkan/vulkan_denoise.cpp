@@ -17,6 +17,7 @@
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/threepp.hpp"
+#include "uniform_environment.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -143,7 +144,7 @@ int main(int argc, char** argv) {
         else if (a == "--seqn" && i + 1 < argc) seqN = std::atoi(argv[++i]);
     }
 
-    Canvas canvas("Vulkan Deferred - Denoiser Showcase", {{"vsync", false}});
+    Canvas canvas("Vulkan Deferred - Denoiser Showcase", {{"vsync", false}, {"headless", !shotPath.empty()}});
 
     VulkanRenderer renderer(canvas);
     if (optMsaa > 1) renderer.setGbufferMsaa(static_cast<uint32_t>(optMsaa));
@@ -163,7 +164,12 @@ int main(int argc, char** argv) {
 
     // ---- Scene ----
     Scene scene;
-    scene.background = Color(0.02f, 0.02f, 0.05f);
+    const Color night(0.02f, 0.02f, 0.05f);
+    scene.background = night;
+    // The night outside is also the room's light from everywhere: the faint blue the walls
+    // and the glossy spheres pick up from the open side. A background only draws; the
+    // environment lights and is reflected (as in three.js).
+    scene.environment = uniformEnvironment(night);
     if (fogDensity > 0.f) {// --fog: key-spot beam + ring-light glow through the medium
         scene.fog = FogExp2(Color(0.35f, 0.38f, 0.45f), fogDensity);
         renderer.setFogAnisotropy(0.4f);

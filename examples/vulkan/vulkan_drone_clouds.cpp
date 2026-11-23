@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
         else if (a == "--heightfog") heightFog = true;
     }
 
-    Canvas canvas("Vulkan Deferred - Volumetric Clouds", {{"vsync", false}});
+    Canvas canvas("Vulkan Deferred - Volumetric Clouds", {{"vsync", false}, {"headless", !shotPath.empty()}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.setAutoExposure(true);
