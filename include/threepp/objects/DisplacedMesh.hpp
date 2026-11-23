@@ -483,10 +483,13 @@ namespace threepp {
             float aerationLife   = 4.5f;
             float turbulenceLife = 5.0f;
             // The calm lane behind a producer 10 m wide (a source of radius
-            // 5 m) lasts this long; a narrower one's is shorter in proportion
-            // (a 1 m hull's about 4 s), as the turbulent wake that took the
-            // short waves away dies over a time that scales with her breadth.
-            // Churned water stays calm while the churn lasts.
+            // 5 m) lasts this long in a calm; a narrower one's is shorter in
+            // proportion (a 1 m hull's about 4 s), as the turbulent wake that
+            // took the short waves away dies over a time that scales with her
+            // breadth. The wind grows the short waves back: it shortens the
+            // lane (by 1 + (U/5)^2: 16 s at 6 m/s) and makes it shallower, so
+            // a blow leaves no mirror astern. Churned water is calmed while
+            // the churn lasts, as far as the wind allows.
             float laneLife       = 40.0f;
             float velocityLife   = 2.5f;
             // Large eddies of the turbulent flow, in texels, for a patch that

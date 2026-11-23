@@ -307,12 +307,12 @@ void main() {
         s.b = max(s.b, sc.turbulence * w * mix(0.6, 1.0, puff));
         // The turbulent wake of a hull dies over a time that scales with her
         // breadth, and the short waves are back once it has: laneLife is the
-        // life behind a source of kLaneRefRadius (a hull 10 m wide), a
-        // narrower one's in proportion. The time is laid over the lane's
-        // 1.6-radius reach: with the strength a straight ramp over the last
-        // quarter of the life, a full share is half strength at about 2.3
-        // radii with a shoulder out to 3.5, a band as broad as the wake and
-        // soft at its sides, which narrows to its centre line as it runs out.
+        // life behind a source of kLaneRefRadius (a hull 10 m wide) in a
+        // calm, a narrower one's in proportion; the wind shortens it and
+        // makes it shallower (tb.laneLife, tb.laneFade, set on the CPU). The
+        // time is laid over the lane's 1.6-radius reach and the strength is
+        // the share of life left: full only on the centre line just astern,
+        // soft at its sides, fading in a straight line over the life.
         const float kLaneRefRadius = 5.0;
         const float share = laneLeft ? clamp(sc.radius / kLaneRefRadius, 0.04, 1.0) : 1.0;
         s.a = max(s.a, sc.lane * wl * share);

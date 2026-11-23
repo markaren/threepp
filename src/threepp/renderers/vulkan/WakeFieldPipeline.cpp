@@ -735,8 +735,26 @@ namespace threepp::vulkan {
         }
         // The lane holds the time it has left (wake_field.comp). THREEPP_OCEAN_NIGHT_LANE=0
         // is the old lane, for judging: 0 here.
+        // The lane is where the turbulence has taken the short waves away, and
+        // the wind grows them back at a rate that rises steeply with its
+        // speed; in a rough sea the metre waves also run in from the sides
+        // within seconds. So a turbulent wake is a long smooth strip in a
+        // light air and is gone in seconds in a blow (a ship's wake is a long
+        // dark lane in a radar image at low winds and hardly shows above
+        // about 10 m/s). The wind U shortens the lane, laneLife / (1 + (U/5)^2)
+        // (behind a 10 m hull: 40 s in a calm, 16 s at 6 m/s, 8 s at 10), and
+        // makes it shallower: the reader divides its strength by laneFade =
+        // 1 + (U/8)^2, so the most it takes away is 1 / laneFade of the short
+        // waves (0.64 at 6 m/s, 0.39 at 10): no mirror on a rough sea. In a
+        // calm the strength is the share of life left.
         static const bool kLaneLeft = env::flag("THREEPP_OCEAN_NIGHT_LANE", true);
-        tb.laneFade = kLaneLeft ? 0.25f : 0.0f;
+        if (kLaneLeft) {
+            const float U = std::max(dm.params.windSpeed, 0.0f);
+            tb.laneLife   = std::max(wf.laneLife / (1.0f + (U / 5.0f) * (U / 5.0f)), 1e-3f);
+            tb.laneFade   = 1.0f + (U / 8.0f) * (U / 8.0f);
+        } else {
+            tb.laneFade = 0.0f;
+        }
 
         uint32_t liveMask = 0;
         for (uint32_t i = 0; i < st.appLayers; ++i) {

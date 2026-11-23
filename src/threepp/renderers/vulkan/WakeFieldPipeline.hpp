@@ -152,7 +152,7 @@ namespace threepp::vulkan {
         uint32_t shoreDepth[2];// the shore's depth buffer's address, low half first (0 = none)
         float    shoreEyeX;    // the camera the shore's windows were placed round (the ocean's frame):
         float    shoreEyeZ;    // the shade goes over from the near window to the far one by the distance from it
-        float    laneFade;     // the lane's last share of its life, over which it opens (0 = the old lane)
+        float    laneFade;     // what the lane's strength is divided by, 1 + (U/8)^2 (0 = the old lane)
         WakePatchGpu patches[kWakeTablePatches];
     };
     static_assert(offsetof(WakeTableGpu, laneFade) == 84 && offsetof(WakeTableGpu, patches) == 88,

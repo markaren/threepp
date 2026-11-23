@@ -276,8 +276,9 @@ namespace threepp_py {
                                "e-folding time (s) of the turbulence.")
                 .def_readwrite("lane_life", &DisplacedMesh::WakeField::laneLife,
                                "How long (s) the lane where the short waves are flattened lasts behind a producer 10 m wide "
-                               "(a source of radius 5 m); a narrower one's is shorter in proportion, and churned "
-                               "water stays calm while the churn lasts.")
+                               "(a source of radius 5 m) in a calm; a narrower one's is shorter in proportion, and the "
+                               "wind shortens it and makes it shallower (it grows the short waves back), so a rough sea "
+                               "keeps no mirror astern.")
                 .def_readwrite("velocity_life", &DisplacedMesh::WakeField::velocityLife,
                                "e-folding time (s) of the water's mean flow (a race slowing down).")
                 .def_readwrite("eddy_texels", &DisplacedMesh::WakeField::eddyTexels,
