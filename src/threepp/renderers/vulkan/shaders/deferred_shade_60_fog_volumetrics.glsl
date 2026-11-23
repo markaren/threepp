@@ -425,7 +425,7 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
                 * (lit / wsum));
     }
     const vec3 amb = lights.ambient
-                   + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+                   + sampleEnvAirLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     // ── EVERYTHING THIS MEDIUM ADDS IS STILL BEHIND THE AIR ─────────────────
     // The invariant: radiance a medium adds to the frame must be attenuated by
     // every medium between it and the camera. The caller has already fogged
@@ -556,7 +556,7 @@ vec3 applyMurk(vec3 col, vec3 ro, vec3 hit) {
     if (d <= 0.0) return col;
     const vec3  tr = exp(-fog.murkSigma * d);
     const vec3  fogLight = lights.ambient
-                         + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+                         + sampleEnvAirLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     // The in-scatter must be graded by view ELEVATION exactly as applyMurkSky
     // grades the saturated limit (1.55 looking up, 1.0 at the horizon, 0.30
     // looking down): a lit column is fed from above, so a downward leg sees
@@ -659,7 +659,7 @@ const float kMurkShaftGain = 1.5;
 vec3 applyMurkSky(vec3 dir) {
     const vec3  up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
     const vec3  fogLight = lights.ambient
-                         + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+                         + sampleEnvAirLod(up, float(max(pc.envMipCount, 1u) - 1u));
     const float elev = clamp(dot(dir, up), -1.0, 1.0);
     // ANCHORED AT THE HORIZON, exactly 1.0 there — the same convergence rule
     // applySkyFog follows for air. A murk-saturated distant SURFACE fades to
@@ -718,7 +718,7 @@ vec3 applyMeniscus(vec3 col, float tintScale) {
     const float w0 = 1.0 - smoothstep(0.0, kMeniscusWidth, s);
     const float w  = w0 * w0;
     const vec3  fogLight = lights.ambient
-                         + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+                         + sampleEnvAirLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     const float lum  = dot(col, vec3(0.2126, 0.7152, 0.0722));
     const vec3  band = mix(col, vec3(lum), kMeniscusDesat * w) * mix(1.0, kMeniscusLift, w);
     return mix(band, fog.murkColor * fogLight * tintScale, kMeniscusPull * w);
@@ -940,7 +940,7 @@ vec3 murkAmbient(vec3 amb, vec3 P, vec3 dir) {
     const vec3  tr = exp(-fog.murkSigma * (fog.murkAmbientK * depth));
     const vec3  up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
     const vec3  fogLight = lights.ambient
-                         + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+                         + sampleEnvAirLod(up, float(max(pc.envMipCount, 1u) - 1u));
     const float elev  = clamp(dot(dir, up), -1.0, 1.0);
     const float grade = (elev >= 0.0) ? mix(1.0, 1.37, elev) : mix(1.0, 0.53, -elev);
     return amb * tr + fog.murkColor * fogLight * grade * (vec3(1.0) - tr);

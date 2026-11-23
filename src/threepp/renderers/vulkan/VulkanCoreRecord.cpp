@@ -1372,7 +1372,7 @@ void VulkanRenderer::Impl::addSplatPasses(rg::RenderGraph& g) {
             // Getting this wrong is invisible until the physical camera is on,
             // and then the splats are wrong by the whole exposure gain.
             p.preExposure = preExposure();
-            p.bgIsSolidColor = envIsBgColor;
+            p.bgIsSolidColor = bgSolid_;
             p.checksum       = splatChecksum_;
 
             p.timings        = gpuTimings_.get();// per-stage split, from inside
@@ -1581,7 +1581,7 @@ void VulkanRenderer::Impl::addSecondaryViewSplatPasses(rg::RenderGraph& g) {
             if (noMotionEnv) p.motionVectors = false;
             if (noFogEnv)    p.fog = false;
             p.preExposure    = preExposure();
-            p.bgIsSolidColor = envIsBgColor;
+            p.bgIsSolidColor = bgSolid_;
 
             auto pass = g.addPass("splats", [this, p, f = currentFrame](VkCommandBuffer c) {
                 splat_->record(c, f, p);
@@ -1733,7 +1733,7 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity, sprites](VkCommandBuffer c) {
                     view().post_->recordDispatch(c, f, regionSwapExt_.width, regionSwapExt_.height,
                                                  static_cast<uint32_t>(toneMapping_),
-                                                 exposureBits, preExpBits_, envIsBgColor,
+                                                 exposureBits, preExpBits_, bgSolid_,
                                                  effBloomIntensity,
                                                  regionRenderExt_.width, regionRenderExt_.height,
                                                  /*hdrMode=*/true, sprites);
@@ -1991,7 +1991,7 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                 auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity](VkCommandBuffer c) {
                     view().post_->recordDispatch(c, f, regionRenderExt_.width, regionRenderExt_.height,
                                                  static_cast<uint32_t>(toneMapping_),
-                                                 exposureBits, preExpBits_, envIsBgColor,
+                                                 exposureBits, preExpBits_, bgSolid_,
                                                  effBloomIntensity, 0, 0, /*hdrMode=*/false);
                 });
                 post.use(sceneHdr, rg::sampled(kGeneral))

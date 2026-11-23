@@ -41,6 +41,7 @@
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
@@ -215,7 +216,12 @@ int main(int argc, char** argv) {
     auto sun = DirectionalLight::create(0xffffff, 2.5f);
     sun->position.set(-2.f, 10.f, 3.f);
     scene.add(sun);
-    scene.add(HemisphereLight::create(Color(0.6f, 0.7f, 0.9f), Color(0.35f, 0.28f, 0.2f), 0.6f));
+    // The flat fill the edges are measured against. Ambient and hemisphere intensities are
+    // irradiance (three.js r155+), so pi x the radiance the scene was tuned with; the
+    // AmbientLight is the light the clear colour's sky gave before a background colour
+    // stopped lighting surfaces (it lights none in three.js or GLRenderer).
+    scene.add(HemisphereLight::create(Color(0.6f, 0.7f, 0.9f), Color(0.35f, 0.28f, 0.2f), 0.6f * math::PI));
+    scene.add(AmbientLight::create(Color(0.55f, 0.68f, 0.85f), math::PI));
 
     auto groundMat       = MeshStandardMaterial::create();
     groundMat->color     = Color(0.62f, 0.46f, 0.32f);
@@ -262,10 +268,11 @@ int main(int argc, char** argv) {
     flame->position.set(0.45f, 0.45f, -5.75f);
     scene.add(flame);
 
-    // A dark post far behind the focus plane: the far field must blur it.
-    auto postMat       = MeshStandardMaterial::create();
-    postMat->color     = Color(0.03f, 0.03f, 0.03f);
-    postMat->roughness = 1.f;
+    // A dark post far behind the focus plane: the far field must blur it. Unlit, so its
+    // two visible faces are one flat black: a lit one shades its faces apart, and a face
+    // that lands between 10 and 90 % of the step counts as edge without any blur.
+    auto postMat       = MeshBasicMaterial::create();
+    postMat->color     = Color(0.f, 0.f, 0.f);
     auto post          = Mesh::create(BoxGeometry::create(1.0f, 8.f, 1.0f), postMat);
     post->position.set(-9.f, 4.f, -40.f);
     scene.add(post);

@@ -83,7 +83,13 @@ namespace threepp::vulkan::impl {
         float    bgIntensity;
         float    bgBlurriness;
         uint32_t envKnobFlags;
-        float    envKnobPad[2];
+        // The environment's intensity for the AIR (fog, haze, clouds), which sampleEnvAirLod
+        // reads. Equal to envIntensity, except while the environment is only the stand-in
+        // made from a background colour: that lights no surface (envIntensity 0, as GL and
+        // three.js light nothing with scene.background) but still lights the air, which
+        // Vulkan shades as a lit medium where GL blends to a fixed fog colour.
+        float    airEnvIntensity;
+        float    envKnobPad;
         // The deferred shade's ray budget, appended LAST (lights_ubo.glsl):
         // sunSoftDistance (m, setSunSoftDistance; 0 = full refinement
         // everywhere), fogMarchSteps (setFogMarchSteps), fogMarchRtRange (m,
@@ -95,6 +101,10 @@ namespace threepp::vulkan::impl {
         float    rayBudgetPad;
         uint64_t rayCountAddr;
         uint64_t rayCountPad;
+        // The background when it is a colour (bgSolid_): rgb = the colour, a = 1; a = 0 for a
+        // texture background or a Sky, which sampleBackground reads from the environment
+        // image. Appended LAST.
+        float    bgSolid[4];
     };
     static_assert(sizeof(GpuDirLight)   == 24);
     static_assert(sizeof(GpuPointLight) == 40);
@@ -103,7 +113,7 @@ namespace threepp::vulkan::impl {
     // splat_common.glsl declares a prefix of this block and skips to the
     // environment knobs with a float array sized from it: a size change here
     // moves that skip (it ends 96 bytes before the end).
-    static_assert(sizeof(GpuLightsUbo)  == 1424);
+    static_assert(sizeof(GpuLightsUbo)  == 1440);
 
     struct GpuClusterLight {
         float position[3];   float range;         // range 0 = infinite (three.js)

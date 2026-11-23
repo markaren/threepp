@@ -18,6 +18,9 @@ namespace threepp::vulkan::impl {
         // resets the accumulator (tone mapping is display-only).
         ToneMapping toneMapping_ = ToneMapping::None;
         float       toneMappingExposure_ = 1.f;
+        // Renderer::useLegacyLights: ambient and hemisphere lights in the pre-r155 units
+        // (updateLightsUbo).
+        bool        useLegacyLights_ = false;
 
         // ── Physical camera exposure (setPhysicalCamera) ────────────────────
         // While enabled, exposure is derived from real camera parameters

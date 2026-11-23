@@ -1349,11 +1349,17 @@ namespace threepp {
 
         // The census's lights: a hidden parent prunes its child lights too.
         // (A LightProbe is one and falls through the chain unhandled.)
+        // An AmbientLight's or HemisphereLight's colour x intensity is IRRADIANCE (three.js
+        // r155+, GLRenderer): a white surface under a white 1.0 reflects 1/pi. The shading
+        // here adds lights.ambient to the environment's RADIANCE, so it carries E/pi. With
+        // Renderer::useLegacyLights GL multiplies the irradiance by pi, which is the value
+        // as it is.
+        const float ambientScale = useLegacyLights_ ? 1.f : 1.f / math::PI;
         const auto gatherLight = [&](Object3D& o) {
             if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
-                ubo.ambient[0] += a->color.r * a->intensity;
-                ubo.ambient[1] += a->color.g * a->intensity;
-                ubo.ambient[2] += a->color.b * a->intensity;
+                ubo.ambient[0] += a->color.r * a->intensity * ambientScale;
+                ubo.ambient[1] += a->color.g * a->intensity * ambientScale;
+                ubo.ambient[2] += a->color.b * a->intensity * ambientScale;
             } else if (auto* hl = dynamic_cast<HemisphereLight*>(&o)) {
                 // GL parity (Lights.cpp / lights_pars_begin.glsl): irradiance
                 // = mix(ground, sky, 0.5*dot(N,up)+0.5), up = the light's
@@ -1370,12 +1376,9 @@ namespace threepp {
                 if (up.lengthSq() < 1e-12f) up.set(0.f, 1.f, 0.f);
                 up.normalize();
                 const float upv[3] = {up.x, up.y, up.z};
-                const float sky[3] = {hl->color.r * hl->intensity,
-                                      hl->color.g * hl->intensity,
-                                      hl->color.b * hl->intensity};
-                const float gnd[3] = {hl->groundColor.r * hl->intensity,
-                                      hl->groundColor.g * hl->intensity,
-                                      hl->groundColor.b * hl->intensity};
+                const float k = hl->intensity * ambientScale;
+                const float sky[3] = {hl->color.r * k, hl->color.g * k, hl->color.b * k};
+                const float gnd[3] = {hl->groundColor.r * k, hl->groundColor.g * k, hl->groundColor.b * k};
                 for (int c = 0; c < 3; ++c) {
                     ubo.ambient[c] += 0.5f * (sky[c] + gnd[c]);
                     ubo.hemiDeltaR[c] += 0.5f * (sky[0] - gnd[0]) * upv[c];
@@ -1578,8 +1581,14 @@ namespace threepp {
         // The knobs themselves, for sampleEnvLod and the sky (the UBO's tail).
         vulkan::SceneEnvKnobs::worldToEnvColumns(envKnobs_.envToWorld, ubo.envRot);
         vulkan::SceneEnvKnobs::worldToEnvColumns(envKnobs_.bgToWorld, ubo.bgRot);
-        ubo.envIntensity = envKnobs_.envIntensity;
+        // A background colour's stand-in environment lights the air only (airEnvIntensity).
+        ubo.envIntensity    = envIsBgColor ? 0.f : envKnobs_.envIntensity;
+        ubo.airEnvIntensity = envKnobs_.envIntensity;
         ubo.bgIntensity  = envKnobs_.bgIntensity;
+        ubo.bgSolid[0] = bgSolidColor_.r;
+        ubo.bgSolid[1] = bgSolidColor_.g;
+        ubo.bgSolid[2] = bgSolidColor_.b;
+        ubo.bgSolid[3] = bgSolid_ ? 1.f : 0.f;
         ubo.bgBlurriness = envKnobs_.bgBlurriness;
         ubo.envKnobFlags = (envKnobs_.envRotActive ? 1u : 0u) | (envKnobs_.bgRotActive ? 2u : 0u);
 

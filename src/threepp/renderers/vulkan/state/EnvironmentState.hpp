@@ -22,6 +22,13 @@ namespace threepp::vulkan::impl {
         bool envIsDefault  = true;
         bool envIsBgColor  = false;
         Color envBgColor{0.f, 0.f, 0.f};
+        // The frame's background is a COLOUR (scene.background a Color, or none: the clear
+        // colour), whatever lights the scene: three.js draws it as that exact colour, and an
+        // environment texture set beside it lights and is reflected but is not drawn behind
+        // the scene. False for a texture background and for a visible threepp::Sky.
+        // Set at the top of refreshEnvTextureFromScene.
+        bool  bgSolid_ = false;
+        Color bgSolidColor_{0.f, 0.f, 0.f};
         // threepp::Sky (vulkan/SkyBake): the visible Sky the last full scene
         // expansion met, if any (its box builds no entry), and whether envImage
         // is a NON-OWNING copy of the bake's persistent image — dropEnvImage

@@ -585,6 +585,8 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
 
 bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
             auto* sc = dynamic_cast<Scene*>(&scene);
+            bgSolid_ = sc && !sc->background.isTexture() && !skySeen_;
+            bgSolidColor_ = (sc && sc->background.isColor()) ? sc->background.color() : clearColor;
             std::shared_ptr<Texture> tex;
             if (sc) tex = sc->environment;
             if (!tex && skySeen_) {

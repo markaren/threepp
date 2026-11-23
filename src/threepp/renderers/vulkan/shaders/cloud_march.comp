@@ -84,7 +84,7 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     if ((lights.envKnobFlags & 1u) != 0u) dir = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * dir;
     const float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
-    return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.airEnvIntensity;// clouds are air
 }
 #include "hg_phase.glsl"
 

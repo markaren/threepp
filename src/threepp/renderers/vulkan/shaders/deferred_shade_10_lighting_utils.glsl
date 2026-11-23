@@ -367,13 +367,21 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
 // away from it, where the sphere mean gave one colour all round and drew a band
 // at the horizon wherever the sky was not that colour. A ray straight up or down
 // has no azimuth and keeps the mean.
+// The environment as the AIR sees it: sampleEnvLod at airEnvIntensity, which keeps lighting
+// the fog with a background colour's stand-in environment that lights no surface.
+vec3 sampleEnvAirLod(vec3 dir, float lod) {
+    if ((lights.envKnobFlags & 1u) != 0u) dir = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * dir;
+    const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.airEnvIntensity;
+}
 vec3 hazeSkyLight(vec3 rd) {
     const float top  = float(max(pc.envMipCount, 1u) - 1u);
-    const vec3  mean = sampleEnvLod(vec3(0.0, 1.0, 0.0), top);
+    const vec3  mean = sampleEnvAirLod(vec3(0.0, 1.0, 0.0), top);
     const float hl   = length(rd.xz);
     if (hl < 1e-4) return mean;
     const vec3  low  = normalize(vec3(rd.x / hl, 0.2, rd.z / hl));
-    return mix(mean, sampleEnvLod(low, 0.7 * top), smoothstep(0.0, 0.5, hl / max(length(rd), 1e-6)));
+    return mix(mean, sampleEnvAirLod(low, 0.7 * top), smoothstep(0.0, 0.5, hl / max(length(rd), 1e-6)));
 }
 
 // The environment as a DIFFUSE surface sees it. The last prefiltered mip,
@@ -402,6 +410,8 @@ vec3 sampleEnvDiffuse(vec3 n) {
 // roughness). GLRenderer's cube_frag does the same. Not scaled by
 // environmentIntensity, which is a lighting knob. Defaults: LOD 0, x1.
 vec3 sampleBackground(vec3 dir) {
+    // a colour background is that colour, whatever environment lights the scene
+    if (lights.bgSolid.a > 0.5) return lights.bgSolid.rgb;
     if ((lights.envKnobFlags & 2u) != 0u) dir = mat3(lights.bgRotC0, lights.bgRotC1, lights.bgRotC2) * dir;
     const float u   = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v   = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;

@@ -546,6 +546,7 @@ vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
 float heightFogOpticalDepth(vec3 a, vec3 b);// deferred_shade_60_fog_volumetrics.glsl
 vec3  sampleEnvLod(vec3 dir, float lod);
 vec3  hazeSkyLight(vec3 rd);
+vec3  sampleEnvAirLod(vec3 dir, float lod);
 vec3  sampleEnvDiffuse(vec3 n);    // deferred_shade_10_lighting_utils.glsl
 vec3  sampleBackground(vec3 dir);           // deferred_shade_10_lighting_utils.glsl
 // Composite the upsampled half-res cloud layer (binding 61) over `col` at this

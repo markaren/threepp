@@ -52,7 +52,8 @@ layout(set = 0, binding = LIGHTS_UBO_BINDING, scalar) uniform LightsUbo {
     float      bgIntensity;
     float      bgBlurriness;
     uint       envKnobFlags;
-    vec2       envKnobPad;
+    float      airEnvIntensity;// the environment's intensity for the air (VulkanGpuLayouts.hpp)
+    float      envKnobPad;
     // The deferred shade's ray budget (GpuLightsUbo tail): setSunSoftDistance,
     // setFogMarchSteps, setFogMarchRtRange, and the setCountRays buffer's
     // device address (0 = off).
@@ -62,6 +63,8 @@ layout(set = 0, binding = LIGHTS_UBO_BINDING, scalar) uniform LightsUbo {
     float      rayBudgetPad;
     uvec2      rayCountAddr;
     uvec2      rayCountPad;
+    // The background when it is a colour: rgb, a = 1 (a = 0: read the environment image).
+    vec4       bgSolid;
 } lights;
 
 #endif// LIGHTS_UBO_GLSL

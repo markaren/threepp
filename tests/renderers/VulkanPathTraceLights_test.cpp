@@ -358,7 +358,9 @@ int main() {
     {
         // A grey sphere under a white AmbientLight, then under a hemisphere
         // light of white sky and black ground, nothing else: the centre
-        // faces sideways (half the sky), the top up.
+        // faces sideways (half the sky), the top up. Their intensities are
+        // irradiance (three.js r155+, GLRenderer): pi lights a Lambert surface
+        // at its albedo.
         Scene scene;
         scene.environment = black;
         scene.background  = black;
@@ -374,7 +376,7 @@ int main() {
         const auto top    = [&](const std::vector<float>& img) { return lum(img, kW / 2 - 6, kW / 2 + 6, kH / 2 - 44, kH / 2 - 36); };
         const auto bottom = [&](const std::vector<float>& img) { return lum(img, kW / 2 - 6, kW / 2 + 6, kH / 2 + 36, kH / 2 + 44); };
 
-        auto ambient = AmbientLight::create(Color(1.f, 1.f, 1.f), 1.f);
+        auto ambient = AmbientLight::create(Color(1.f, 1.f, 1.f), math::PI);
         scene.add(ambient);
         const auto amb = tr.trace(scene, *camera, 128, 2, "3_ambient_on");
         setEnv("THREEPP_PT_AMBIENT_LIGHTS", "0");
@@ -382,9 +384,9 @@ int main() {
         setEnv("THREEPP_PT_AMBIENT_LIGHTS", "1");
         scene.remove(*ambient);
         std::printf("  ambient: sphere centre %.4f (old %.4f)\n", centre(amb), centre(ambOld));
-        check(centre(amb) > 0.46 && centre(amb) < 0.60, "an ambient light of 1 lights the sphere at its albedo (0.5)");
+        check(centre(amb) > 0.46 && centre(amb) < 0.60, "an ambient light of pi lights the sphere at its albedo (0.5)");
 
-        auto hemi = HemisphereLight::create(Color(1.f, 1.f, 1.f), Color(0.f, 0.f, 0.f), 1.f);
+        auto hemi = HemisphereLight::create(Color(1.f, 1.f, 1.f), Color(0.f, 0.f, 0.f), math::PI);
         scene.add(hemi);
         const auto hem = tr.trace(scene, *camera, 128, 2, "3_hemi_on");
         setEnv("THREEPP_PT_AMBIENT_LIGHTS", "0");

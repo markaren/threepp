@@ -2126,7 +2126,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                     // shows that colour display-referred and tone-mapping it
                     // in the pane would make the two views disagree.
                     overlayPass_->setPaneEnvironment(
-                            (!envIsDefault && !envIsBgColor) ? envImage.view : VK_NULL_HANDLE,
+                            (!envIsDefault && !envIsBgColor && !bgSolid_) ? envImage.view : VK_NULL_HANDLE,
                             envImage.sampler, currentExposure());
                     overlayPass_->record(frameCb(), currentFrame, frameImageIndex_,
                                          scene, sceneCensus(scene).sprites, camera, /*screenSpaceOnly=*/false, rx, ry, rw, rh);

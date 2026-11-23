@@ -628,6 +628,7 @@ namespace threepp {
         // can flip toneMapping / toneMappingExposure freely between frames.
         core()->toneMapping_         = toneMapping;
         core()->toneMappingExposure_ = toneMappingExposure;
+        core()->useLegacyLights_     = useLegacyLights;
         core()->autoClear_           = autoClear;
         // A split-screen secondary pane — a second perspective render() into a
         // scissor sub-rect while a frame is already in flight — composes

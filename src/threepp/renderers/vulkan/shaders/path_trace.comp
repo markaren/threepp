@@ -309,6 +309,14 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
 }
+// The environment as the air sees it (the deferred shade's sampleEnvAirLod): a background
+// colour's stand-in environment lights the medium, not surfaces.
+vec3 sampleEnvAirLod(vec3 dir, float lod) {
+    if ((lights.envKnobFlags & 1u) != 0u) dir = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * dir;
+    const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.airEnvIntensity;
+}
 // The deferred shade's procedural star field (proceduralStars): hashed stars
 // in direction space over the sky, faded into the horizon. Camera rays only.
 float starHash(vec2 p) {
@@ -337,6 +345,7 @@ vec3 proceduralStars(vec3 dir) {
 // and backgroundBlurriness as a level of the prefiltered chain. Lighting
 // rays read the environment (sampleEnvLod) instead.
 vec3 sampleBackground(vec3 dir) {
+    if (lights.bgSolid.a > 0.5) return lights.bgSolid.rgb;// a colour background is that colour
     if ((lights.envKnobFlags & 2u) != 0u) dir = mat3(lights.bgRotC0, lights.bgRotC1, lights.bgRotC2) * dir;
     const float u   = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v   = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
@@ -360,17 +369,17 @@ vec3 airAlbedo() { return fog.enabled > 0.5 ? fog.color : vec3(1.0); }
 // The light the deferred shade lights the medium's ambient part with
 // (applySceneFog's fogLight): the scene's ambient plus the environment's mean.
 vec3 airAmbientLight(vec3 up) {
-    return lights.ambient + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+    return lights.ambient + sampleEnvAirLod(up, float(max(pc.envMipCount, 1u) - 1u));
 }
 // The sky's light on the air along a leg, as the deferred shade's hazeSkyLight:
 // the sky low over the horizon in the leg's own azimuth, the mean straight up or down.
 vec3 airSkyLight(vec3 rd) {
     const float top  = float(max(pc.envMipCount, 1u) - 1u);
-    const vec3  mean = sampleEnvLod(vec3(0.0, 1.0, 0.0), top);
+    const vec3  mean = sampleEnvAirLod(vec3(0.0, 1.0, 0.0), top);
     const float hl   = length(rd.xz);
     if (hl < 1e-4) return lights.ambient + mean;
     const vec3  low  = normalize(vec3(rd.x / hl, 0.2, rd.z / hl));
-    return lights.ambient + mix(mean, sampleEnvLod(low, 0.7 * top), smoothstep(0.0, 0.5, hl / max(length(rd), 1e-6)));
+    return lights.ambient + mix(mean, sampleEnvAirLod(low, 0.7 * top), smoothstep(0.0, 0.5, hl / max(length(rd), 1e-6)));
 }
 vec3 airUp() {
     return dot(fog.worldUp, fog.worldUp) > 1e-6 ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
