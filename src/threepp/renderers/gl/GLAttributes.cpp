@@ -129,7 +129,10 @@ void GLAttributes::update(BufferAttribute* attribute, GLenum bufferType) {
 
         if (data.version < attribute->version) {
             updateBuffer(data.buffer, attribute, bufferType, data.bytesPerElement);
-            ++data.version;
+            // The buffer now holds this version, however many needsUpdate()
+            // calls led to it. Counting up by one instead uploaded the same
+            // data again on each following frame until the count caught up.
+            data.version = attribute->version;
         }
     }
 }
