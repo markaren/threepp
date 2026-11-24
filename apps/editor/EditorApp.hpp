@@ -734,11 +734,20 @@ namespace threepp::editor {
         // is never saved and never picked.
         void syncSplineOverlays();
         void clearSplineOverlays();
+        // For a play swap: re-point each record at the node with its owner's
+        // uuid in `incoming`, keeping its hash. A record that is merely
+        // cleared is rebuilt on the next sync, and that sync regenerates the
+        // owner's derived mesh in the scene; during play that would replace
+        // meshes a play session has already taken pointers to.
+        void retargetSplineOverlays(Scene& incoming);
         // --- conveyor overlay (apps/editor/ConveyorOverlay.cpp) -------------
         // One Line per conveyor path, plus the derived-group regeneration —
         // the conveyor twin of the spline overlay pass.
         void syncConveyorOverlays();
         void clearConveyorOverlays();
+        // The conveyor twin of retargetSplineOverlays: the conveyor session
+        // spins the rollers and drums of the derived group it found at start.
+        void retargetConveyorOverlays(Scene& incoming);
         // --- particle previews (apps/editor/ParticleOverlay.cpp) ------------
         // One ParticleField per authored node, built through the same
         // ParticleFieldBuild the play session uses and advanced on the editor's
@@ -1272,6 +1281,9 @@ namespace threepp::editor {
             // Vertices the position attribute can hold. The attribute is only
             // replaced when the curve outgrows it — see writeSamples().
             int capacity = 0;
+            // The owner's uuid, which is how the record finds its owner again
+            // in the play copy and back (see retargetSplineOverlays).
+            std::string ownerUuid;
         };
         std::shared_ptr<Group> splines_;
         std::vector<SplineOverlay> splineOverlays_;
@@ -1291,6 +1303,7 @@ namespace threepp::editor {
             std::shared_ptr<LineSegments> aids;
             std::size_t aidsKey = 0;
             int aidsCapacity = 0;
+            std::string ownerUuid;
         };
         std::vector<ConveyorOverlay> conveyorOverlays_;
 

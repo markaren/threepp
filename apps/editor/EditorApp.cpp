@@ -582,8 +582,17 @@ EditorApp::EditorApp(const Options& options)
         // graph too. Drop them before anything can dereference an owner that is
         // gone.
         clearViewportMarkers();
-        clearSplineOverlays();
-        clearConveyorOverlays();
+        // The spline and conveyor records regenerate their owner's derived
+        // mesh when they are new. On a play swap the incoming graph already
+        // holds the same derived meshes, and a play session has taken pointers
+        // into them, so the records follow their owners instead.
+        if (playSwap) {
+            retargetSplineOverlays(scene);
+            retargetConveyorOverlays(scene);
+        } else {
+            clearSplineOverlays();
+            clearConveyorOverlays();
+        }
         // Keyed by the outgoing scene's uuids, and each preview field is a
         // structural scene change the next sync rebuilds from whatever the new
         // graph authored.

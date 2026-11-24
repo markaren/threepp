@@ -286,6 +286,7 @@ void EditorApp::syncConveyorOverlays() {
             conveyors_->add(aids);
             conveyorOverlays_.push_back(ConveyorOverlay{owner, line, material, 0, 0, aids});
             it = std::prev(conveyorOverlays_.end());
+            it->ownerUuid = owner->uuid;
         }
 
         const auto config = ConveyorConfig::read(*owner).value_or(ConveyorConfig{});
@@ -422,6 +423,35 @@ void EditorApp::clearConveyorOverlays() {
     // A scene replace mid-drag would otherwise leave the transaction open and
     // every later command merging into it.
     if (radiusDrag_.active) endConveyorRadiusDrag();
+}
+
+void EditorApp::retargetConveyorOverlays(Scene& incoming) {
+
+    // The handle and a drag in progress belong to the outgoing graph either
+    // way, as in clearConveyorOverlays.
+    if (conveyorRadiusHandle_) conveyorRadiusHandle_->visible = false;
+    if (radiusDrag_.active) endConveyorRadiusDrag();
+
+    if (conveyorOverlays_.empty()) return;
+
+    // By the uuid the record kept, never through the old owner pointer: a
+    // script may have deleted that node during play.
+    std::unordered_map<std::string, Object3D*> byUuid;
+    incoming.traverse([&byUuid](Object3D& object) { byUuid.emplace(object.uuid, &object); });
+
+    for (auto it = conveyorOverlays_.begin(); it != conveyorOverlays_.end();) {
+        const auto found = byUuid.find(it->ownerUuid);
+        if (found == byUuid.end()) {
+            it->line->removeFromParent();
+            it->aids->removeFromParent();
+            it = conveyorOverlays_.erase(it);
+        } else {
+            it->owner = found->second;
+            // The aids depend on the selection, which the swap re-resolves.
+            it->aidsKey = 0;
+            ++it;
+        }
+    }
 }
 
 // --- the radius drag ---------------------------------------------------------

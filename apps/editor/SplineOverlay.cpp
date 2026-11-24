@@ -254,6 +254,7 @@ void EditorApp::syncSplineOverlays() {
             splines_->add(line);
             splineOverlays_.push_back(SplineOverlay{owner, line, material, 0});
             it = std::prev(splineOverlays_.end());
+            it->ownerUuid = owner->uuid;
         }
 
         const auto config = SplineConfig::read(*owner).value_or(SplineConfig{});
@@ -304,4 +305,25 @@ void EditorApp::clearSplineOverlays() {
 
     for (auto& overlay : splineOverlays_) overlay.line->removeFromParent();
     splineOverlays_.clear();
+}
+
+void EditorApp::retargetSplineOverlays(Scene& incoming) {
+
+    if (splineOverlays_.empty()) return;
+
+    // By the uuid the record kept, never through the old owner pointer: a
+    // script may have deleted that node during play.
+    std::unordered_map<std::string, Object3D*> byUuid;
+    incoming.traverse([&byUuid](Object3D& object) { byUuid.emplace(object.uuid, &object); });
+
+    for (auto it = splineOverlays_.begin(); it != splineOverlays_.end();) {
+        const auto found = byUuid.find(it->ownerUuid);
+        if (found == byUuid.end()) {
+            it->line->removeFromParent();
+            it = splineOverlays_.erase(it);
+        } else {
+            it->owner = found->second;
+            ++it;
+        }
+    }
 }
