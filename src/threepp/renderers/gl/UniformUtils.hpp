@@ -18,12 +18,21 @@ namespace threepp::gl {
         }
     }
 
+    // The scratch array for n floats. The cache only grows: resizing it down
+    // to a shorter array's length freed the scratch of every longer one, which
+    // the next long array then allocated again.
+    inline std::vector<float>& arrayCacheSlotF32(int n) {
+
+        if (arrayCacheF32.size() <= static_cast<size_t>(n)) arrayCacheF32.resize(static_cast<size_t>(n) + 1);
+
+        return arrayCacheF32[n];
+    }
+
     template<class ArrayLike>
     std::vector<float>& flatten(const ArrayLike& array, int nBlocks, int blockSize) {
 
         const auto n = nBlocks * blockSize;
-        arrayCacheF32.resize(n + 1);
-        auto& r = arrayCacheF32[n];
+        auto& r = arrayCacheSlotF32(n);
 
         if (r.empty()) r.resize(n + 1);
 
@@ -44,8 +53,7 @@ namespace threepp::gl {
     std::vector<float>& flattenP(const ArrayLike& array, int nBlocks, int blockSize) {
 
         const auto n = nBlocks * blockSize;
-        arrayCacheF32.resize(n + 1);
-        auto& r = arrayCacheF32[n];
+        auto& r = arrayCacheSlotF32(n);
 
         if (r.empty()) r.resize(n + 1);
 

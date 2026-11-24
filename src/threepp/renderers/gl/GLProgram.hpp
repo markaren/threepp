@@ -34,7 +34,7 @@ namespace threepp {
 
             GLUniforms* getUniforms();
 
-            std::unordered_map<std::string, int> getAttributes();
+            const std::unordered_map<std::string, int>& getAttributes();
 
             void destroy();
 

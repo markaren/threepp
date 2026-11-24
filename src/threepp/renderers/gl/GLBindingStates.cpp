@@ -130,16 +130,11 @@ struct GLBindingStates::Impl {
 
         for (const auto& [key, value] : geometryAttributes) {
 
-            if (!cachedAttributes.contains(key)) return true;
+            const auto cached = cachedAttributes.find(key);
 
+            if (cached == cachedAttributes.end()) return true;
 
-            const auto& geometryAttribute = geometryAttributes.at(key);
-
-            if (!cachedAttributes.contains(key)) return true;
-
-            const auto& cachedAttribute = cachedAttributes.at(key);
-
-            if (cachedAttribute != geometryAttribute.get()) return true;
+            if (cached->second != value.get()) return true;
 
             //          if (cachedAttribute.data != geometryAttribute.data) return true;
 
