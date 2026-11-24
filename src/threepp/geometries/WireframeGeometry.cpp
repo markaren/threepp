@@ -1,7 +1,9 @@
 
 #include "threepp/geometries/WireframeGeometry.hpp"
 
-#include <unordered_map>
+#include <algorithm>
+#include <cstdint>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -12,11 +14,6 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
     // buffer
 
     std::vector<float> vertices;
-
-    // helper variables
-
-    std::pair<unsigned int, unsigned int> edge;
-    std::unordered_map<std::string, std::pair<int, int>> edges;
 
     Vector3 vertex;
 
@@ -32,7 +29,10 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
             groups = {GeometryGroup{0, indices->count(), 0}};
         }
 
-        // create a data structure that contains all eges without duplicates
+        // every edge once, in the order the triangles first name it
+
+        std::vector<std::pair<unsigned int, unsigned int>> edges;
+        std::unordered_set<std::uint64_t> seen;
 
         for (const auto& group : groups) {
 
@@ -43,16 +43,14 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
                 for (int j = 0; j < 3; j++) {
 
-                    const auto edge1 = indices->getX(i + j);
-                    const auto edge2 = indices->getX(i + (j + 1) % 3);
-                    edge.first = std::min(edge1, edge2);// sorting prevents duplicates
-                    edge.second = std::max(edge1, edge2);
+                    const unsigned int edge1 = indices->getX(i + j);
+                    const unsigned int edge2 = indices->getX(i + (j + 1) % 3);
+                    const unsigned int first = std::min(edge1, edge2);// sorting prevents duplicates
+                    const unsigned int second = std::max(edge1, edge2);
 
-                    std::string key = std::to_string(edge.first) + ',' + std::to_string(edge.second);
+                    if (seen.insert((static_cast<std::uint64_t>(first) << 32u) | second).second) {
 
-                    if (!edges.contains(key)) {
-
-                        edges[key] = edge;
+                        edges.emplace_back(first, second);
                     }
                 }
             }
@@ -60,13 +58,15 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
         // generate vertices
 
-        for (const auto& [key, e] : edges) {
+        vertices.reserve(edges.size() * 6);
+
+        for (const auto& e : edges) {
 
             position->setFromBufferAttribute(vertex, e.first);
-            vertices.insert(vertices.begin(), {vertex.x, vertex.y, vertex.z});
+            vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
 
             position->setFromBufferAttribute(vertex, e.second);
-            vertices.insert(vertices.begin(), {vertex.x, vertex.y, vertex.z});
+            vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
         }
 
     } else {
@@ -75,7 +75,10 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
         auto position = geometry.getAttribute<float>("position");
 
-        for (int i = 0, l = (position->count() / 3); i < l; i++) {
+        const int triangles = position->count() / 3;
+        vertices.reserve(static_cast<size_t>(triangles) * 18);
+
+        for (int i = 0; i < triangles; i++) {
 
             for (int j = 0; j < 3; j++) {
 
@@ -84,18 +87,18 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
                 const auto index1 = 3 * i + j;
                 position->setFromBufferAttribute(vertex, index1);
-                vertices.insert(vertices.begin(), {vertex.x, vertex.y, vertex.z});
+                vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
 
                 const auto index2 = 3 * i + ((j + 1) % 3);
                 position->setFromBufferAttribute(vertex, index2);
-                vertices.insert(vertices.begin(), {vertex.x, vertex.y, vertex.z});
+                vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
             }
         }
     }
 
     // build geometry
 
-    setAttribute("position", FloatBufferAttribute::create(vertices, 3));
+    setAttribute("position", FloatBufferAttribute::create(std::move(vertices), 3));
 }
 
 const std::string& WireframeGeometry::type() const {

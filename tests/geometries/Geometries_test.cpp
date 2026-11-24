@@ -311,6 +311,43 @@ TEST_CASE("Edges and wireframe geometries derive valid line lists") {
     }
 }
 
+// A wireframe is every edge of the mesh once, each a segment from its lower to
+// its higher vertex index, in the order the triangles first name it: the order
+// three.js emits, and one that does not depend on a hash table's iteration.
+TEST_CASE("WireframeGeometry lists each edge once, in the order the triangles name it") {
+
+    const std::vector<float> corners{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
+
+    SECTION("indexed: two triangles sharing the diagonal of a quad") {
+        auto quad = BufferGeometry::create();
+        quad->setAttribute("position", FloatBufferAttribute::create(corners, 3));
+        quad->setIndex(std::vector<unsigned int>{0, 1, 2, 0, 2, 3});
+
+        auto wire = WireframeGeometry::create(*quad);
+        // (0,1) (1,2) (0,2) from the first triangle, then (2,3) (0,3) from the
+        // second, whose (0,2) is the diagonal again.
+        const std::vector<float> expected{
+                0, 0, 0, 1, 0, 0,
+                1, 0, 0, 1, 1, 0,
+                0, 0, 0, 1, 1, 0,
+                1, 1, 0, 0, 1, 0,
+                0, 0, 0, 0, 1, 0};
+        CHECK(wire->getAttribute<float>("position")->array() == expected);
+    }
+
+    SECTION("non-indexed: the three edges of each triangle, as they stand") {
+        auto tri = BufferGeometry::create();
+        tri->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 1, 0, 0, 1, 1, 0}, 3));
+
+        auto wire = WireframeGeometry::create(*tri);
+        const std::vector<float> expected{
+                0, 0, 0, 1, 0, 0,
+                1, 0, 0, 1, 1, 0,
+                1, 1, 0, 0, 0, 0};
+        CHECK(wire->getAttribute<float>("position")->array() == expected);
+    }
+}
+
 // Vertex/index counts for the parametric generators, pinned against the
 // documented three.js formulas so a segment-loop off-by-one is caught rather
 // than silently changing tessellation.
