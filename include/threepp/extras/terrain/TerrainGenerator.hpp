@@ -205,9 +205,10 @@ namespace threepp::terrain {
             const int vcount = pos->count();
             const bool haveField = (static_cast<size_t>(vcount) == field_.size());
 
-            std::vector<int> idx(static_cast<size_t>(vcount));
-            std::iota(idx.begin(), idx.end(), 0);
-            parallelForEach(idx.begin(), idx.end(), [&](int i) {
+            // The vertices in the pool's own chunks. One vertex is a few
+            // operations: taken an item at a time (parallelForEach), every one
+            // of them went through the pool's shared counter.
+            ThreadPool::shared().parallelFor(0, vcount, [&](int i) {
                 const float x = a[i * 3 + 0];
                 const float z = a[i * 3 + 2];
                 // field cell index == vertex index (built in the same order).

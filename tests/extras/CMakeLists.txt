@@ -46,6 +46,7 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(EchoSensorsVulkan_test PROPERTIES
             SKIP_REGULAR_EXPRESSION "no Vulkan ray tracing device")
 endif ()
+add_test_executable(TerrainGenerator_test)
 add_test_executable(TerrainTilesShutdown_test)
 
 # extras/uav: SITL wire codec, loopback socket path, and the NED<->threepp
