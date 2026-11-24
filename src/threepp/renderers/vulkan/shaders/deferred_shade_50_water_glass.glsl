@@ -284,6 +284,20 @@ bool marchWaterReflect(vec3 origin, vec3 dir, float missLod, float envInt, bool 
     const vec2  ndcH   = vec2(sH.x * 2.0 - 1.0, -(sH.y * 2.0 - 1.0));
     const vec4  vhH    = projInv * vec4(ndcH, depthH, 1.0);
     const vec3  P      = (viewInv * vec4(vhH.xyz / vhH.w, 1.0)).xyz;
+    // The hit must lie on the ray. The march compares depths along this
+    // G-buffer's own line of sight only, and the mirror view's camera stands
+    // under the water's rest plane: a ray off level water passes through it
+    // and the test is exact, but one from a crest a metre above the plane
+    // projects to a segment that runs "behind" whatever that camera sees
+    // there, while the real ray goes well over it (a box swamped by 2 m seas
+    // was mirrored onto the face of the crest in front of it, and specks of
+    // it onto the far crests). Off the ray by more than the depth test's own
+    // thickness, it is not this ray's hit: the environment, as on a miss.
+    {
+        const vec3  oh    = P - origin;
+        const float along = dot(oh, dir);
+        if (along <= 0.0 || length(oh - dir * along) > max(0.3, 0.03 * along)) return false;
+    }
     const vec4  nTap   = texelFetch(normalT, pxH, 0);
     const vec4  aTap   = texelFetch(albedoT, pxH, 0);
     const MaterialDesc hm = entryMat(idH - 1u);
