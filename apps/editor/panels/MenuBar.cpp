@@ -79,10 +79,26 @@ void EditorApp::drawMenuBar() {
             if (ImGui::MenuItem("Save", "Ctrl+S", false, editable)) saveScene();
             if (ImGui::MenuItem("Save As...", nullptr, false, editable)) {
                 pendingDialog_ = PendingDialog::SaveAs;
+                // A document keeps its container: one opened from a .json
+                // proposes .json first, an untitled one the archive.
                 fileBrowser_.open("Save Scene As", FileBrowser::Mode::Save,
-                                  settings_.sceneDir, formats::scenes(),
+                                  settings_.sceneDir, formats::scenesFor(document_.path()),
                                   document_.hasPath() ? document_.path().filename().string()
-                                                      : std::string("scene.json"));
+                                                      : untitledSceneFileName());
+            }
+
+            if (ImGui::BeginMenu("Export", editable)) {
+                // The loose three.js document, for diffing or for three.js
+                // itself. Not a save: the document keeps its path and its
+                // unsaved-changes mark.
+                if (ImGui::MenuItem("three.js JSON...")) {
+                    pendingDialog_ = PendingDialog::ExportJson;
+                    const auto stem = document_.hasPath() ? document_.path().stem().string()
+                                                          : std::string("scene");
+                    fileBrowser_.open("Export three.js JSON", FileBrowser::Mode::Save,
+                                      settings_.sceneDir, {".json"}, stem + ".json");
+                }
+                ImGui::EndMenu();
             }
 
             // A prefab is written by the same exporter into the same format —

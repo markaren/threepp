@@ -210,15 +210,21 @@ leave a small one with no viewport at all. The hierarchy also scrolls
 horizontally, because a deep tree indents past any fixed width and the panel
 cannot be widened past the screen.
 
-**Files.** New / Open / Save / Save As, Import Model, Set Environment
-(.hdr / .exr), Recent Files. All dialogs are a first-party ImGui file browser — no native
-dialog library. Drag-and-drop onto the window works too: `.json` opens a scene,
+**Files.** New / Open / Save / Save As, Export ▸ three.js JSON, Import Model, Set
+Environment (.hdr / .exr), Recent Files. A new document saves as a `.tpz` archive (the
+three.js document beside its images and binary geometry: on two real models 30 ms / 65 ms
+to save against 467 ms / 5732 ms as JSON, and 3 to 4 times smaller); a document opened
+from a `.json` keeps saving to that `.json`. Export ▸ three.js JSON writes the loose
+document anywhere without changing which file the document saves to. All dialogs are a
+first-party ImGui file browser — no native dialog library. Drag-and-drop onto the window
+works too: `.tpz` or `.json` opens a scene,
 `.hdr`/`.exr` becomes the environment, model files are imported, `.py` attaches to the
 selected object as a script, and image files become the selected mesh's
 base-colour map.
 
-**Play mode.** ▶ snapshots the scene and starts the runtimes, ⏸ suspends
-stepping, ⏹ stops them and restores the snapshot. The inspector is read-only
+**Play mode.** ▶ swaps to an in-memory copy of the scene and starts the
+runtimes on it, ⏸ suspends stepping, ⏹ stops them and swaps back to the
+untouched authored scene. The inspector is read-only
 while playing and a banner sits over the viewport.
 
 The **transform gizmo is parked for the whole session**: Play detaches it, and

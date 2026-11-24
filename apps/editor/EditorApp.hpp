@@ -566,6 +566,12 @@ namespace threepp::editor {
         void applyDocumentRender();
         void saveScene();
         void saveSceneAs(const std::filesystem::path& path);
+        // File ▸ Export ▸ three.js JSON: the open document as loose JSON at
+        // `path`, leaving the document's own path and dirty flag alone.
+        void exportSceneJson(const std::filesystem::path& path);
+        // What the Save dialog proposes for an untitled document: an archive
+        // (see formats::scenes()).
+        [[nodiscard]] static std::string untitledSceneFileName() { return "scene.tpz"; }
         void importModel(const std::filesystem::path& path);
         // Save-time storage choices. Applied to the document and remembered in
         // the settings file, so the preference outlives the session.
@@ -1498,6 +1504,7 @@ namespace threepp::editor {
             None,
             Open,
             SaveAs,
+            ExportJson,
             ImportModel,
             Environment,
             Texture,

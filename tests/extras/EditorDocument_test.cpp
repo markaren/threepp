@@ -14,6 +14,8 @@
 #include "threepp/scenes/Scene.hpp"
 
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -277,6 +279,42 @@ TEST_CASE("save and open round-trip a scene through a file", "[editor]") {
     CHECK(PhysicsConfig::read(*box).has_value());
 
     std::filesystem::remove(path);
+}
+
+TEST_CASE("export as three.js JSON leaves the path and the dirty flag alone", "[editor]") {
+
+    const auto saved = scratchDir() / "export_source.tpz";
+    const auto exported = scratchDir() / "export_target.tpz";
+    std::filesystem::remove(saved);
+    std::filesystem::remove(exported);
+
+    SceneDocument document;
+    populate(document.scene());
+    std::string error;
+    REQUIRE(document.saveAs(saved, &error));
+    document.setDirty(true);
+
+    // Named .tpz on purpose: the export is JSON whatever the name says.
+    REQUIRE(document.exportJson(exported, &error));
+    CHECK(document.path() == saved);
+    CHECK(document.dirty());
+
+    std::ifstream in(exported, std::ios::binary);
+    REQUIRE(in);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    REQUIRE_FALSE(text.empty());
+    CHECK(text.front() == '{');
+
+    ObjectLoader loader;
+    auto parsed = loader.parse(text);
+    REQUIRE(parsed);
+    auto* box = parsed->getObjectByName<Mesh>("Box");
+    REQUIRE(box);
+    CHECK(PhysicsConfig::read(*box).has_value());
+
+    std::filesystem::remove(saved);
+    std::filesystem::remove(exported);
 }
 
 TEST_CASE("a dirty document is marked in its title", "[editor]") {

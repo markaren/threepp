@@ -1213,6 +1213,10 @@ void EditorApp::drawUi() {
                 settings_.sceneDir = fileBrowser_.directory().string();
                 saveSceneAs(path);
                 break;
+            case PendingDialog::ExportJson:
+                settings_.sceneDir = fileBrowser_.directory().string();
+                exportSceneJson(path);
+                break;
             case PendingDialog::ImportModel:
                 settings_.modelDir = fileBrowser_.directory().string();
                 importModel(path);
@@ -1647,7 +1651,7 @@ void EditorApp::saveScene() {
     if (!document_.hasPath()) {
         pendingDialog_ = PendingDialog::SaveAs;
         fileBrowser_.open("Save Scene As", FileBrowser::Mode::Save,
-                          settings_.sceneDir, formats::scenes(), "scene.json");
+                          settings_.sceneDir, formats::scenes(), untitledSceneFileName());
         return;
     }
     saveSceneAs(document_.path());
@@ -1675,6 +1679,26 @@ void EditorApp::saveSceneAs(const std::filesystem::path& path) {
     log("saved " + path.filename().string());
 #ifdef __EMSCRIPTEN__
     // Written to the page's in-memory disk; the visitor's copy is the download.
+    web::offerDownload(path);
+#endif
+}
+
+void EditorApp::exportSceneJson(const std::filesystem::path& path) {
+
+    // The same rule as Save: while playing, the scene is the simulation.
+    if (rejectWhilePlaying("Export")) return;
+
+    // What Save would write, render block included.
+    RenderConfig::capture(*renderer_).write(document_.scene(), renderDefaults_);
+
+    std::string error;
+    if (!document_.exportJson(path, &error)) {
+        logError("export failed: " + error);
+        return;
+    }
+    logWarnings();
+    log("exported " + path.filename().string());
+#ifdef __EMSCRIPTEN__
     web::offerDownload(path);
 #endif
 }
@@ -2967,7 +2991,8 @@ namespace {
         while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
         if (out.empty()) out = "prefab";
 
-        return out + ".json";
+        // An archive, as for a scene (formats::scenes()).
+        return out + ".tpz";
     }
 
     // Fresh identity for a just-loaded prefab, and the reason the feature works

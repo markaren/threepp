@@ -5154,6 +5154,16 @@ int EditorApp::runSelfTest() {
         newScene();
         step(2);
 
+        // The archive is the default container: what an untitled Save
+        // proposes, and the extension a name typed without one adopts. A
+        // document opened from a .json keeps .json first.
+        check(formats::extensionOf(untitledSceneFileName()) == ".tpz",
+              "an untitled Save proposes a .tpz");
+        check(!formats::scenes().empty() && formats::scenes().front() == ".tpz",
+              "and an extensionless name becomes a .tpz");
+        check(formats::scenesFor("old.json").front() == ".json",
+              "while a .json document keeps saving as .json");
+
         auto* subject = document_.scene().children.empty() ? nullptr : document_.scene().children.front();
         const auto uuid = subject ? subject->uuid : std::string{};
 

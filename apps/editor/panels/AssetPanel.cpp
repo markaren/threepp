@@ -29,7 +29,9 @@ namespace {
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-        if (extension == ".json") return AssetKind::Scene;
+        // Either container of a scene document: the archive Save writes, or
+        // the loose three.js JSON.
+        if (formats::contains(formats::scenes(), extension)) return AssetKind::Scene;
         if (formats::contains(formats::importable(), extension)) return AssetKind::Model;
         if (formats::isEnvironment(extension)) return AssetKind::Environment;
         if (formats::isImage(extension)) return AssetKind::Image;

@@ -96,6 +96,12 @@ namespace threepp::editor {
         // the dirty flag are deliberately untouched.
         bool exportSubtree(Object3D& object, const std::filesystem::path& path, std::string* error = nullptr);
 
+        // Write the whole document as loose three.js JSON to `path`, whatever
+        // its name — File ▸ Export ▸ three.js JSON. Same exporter, storage
+        // options and editor-only detach as saveAs(); like exportSubtree() it
+        // is not a save, so path_ and the dirty flag are untouched.
+        bool exportJson(const std::filesystem::path& path, std::string* error = nullptr);
+
         // How much of the scene the file carries itself. The default embeds
         // everything, which is what a document you might hand to someone else
         // wants; referencing trades that for files that save and open in a

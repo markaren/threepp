@@ -199,6 +199,32 @@ bool SceneDocument::exportSubtree(Object3D& object, const std::filesystem::path&
     return true;
 }
 
+bool SceneDocument::exportJson(const std::filesystem::path& path, std::string* error) {
+
+    warnings_.clear();
+
+    detachEditorOnly();
+    ExportScope scope([this] { attachEditorOnly(); });
+
+    ObjectExporter exporter;
+    ObjectExporterOptions options;
+    options.images = imageStorage_;
+    options.models = modelStorage_;
+    options.format = DocumentFormat::Json;
+    options.prettyPrint = true;
+
+    try {
+        exporter.save(*scene_, path, options);
+    } catch (const std::exception& e) {
+        if (error) *error = e.what();
+        warnings_ = exporter.warnings();
+        return false;
+    }
+
+    warnings_ = exporter.warnings();
+    return true;
+}
+
 std::string SceneDocument::toJson(bool prettyPrint, std::string* error) {
 
     warnings_.clear();

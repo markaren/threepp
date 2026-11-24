@@ -108,15 +108,29 @@ namespace threepp::editor::formats {
     }
 
     // Scene documents — what File ▸ Save writes and File ▸ Open reads: the
-    // loose three.js JSON, or the .tpz archive carrying the same document next
-    // to its images and geometry. One document, two containers; ObjectLoader
-    // tells them apart by sniffing and ObjectExporter by the name it is given.
+    // .tpz archive carrying the three.js document next to its images and
+    // geometry, or the loose three.js JSON. One document, two containers;
+    // ObjectLoader tells them apart by sniffing and ObjectExporter by the name
+    // it is given.
     //
-    // ".json" stays FIRST: a Save dialog adopts the first extension when no
-    // extension is typed, and the loose document is the one that diffs.
+    // ".tpz" is FIRST: a Save dialog adopts the first extension when no
+    // extension is typed, and the archive is the one that saves and opens
+    // fast. Measured on two real models, saving took 30 ms / 65 ms as .tpz
+    // against 467 ms / 5732 ms as JSON, and the file was 3 to 4 times smaller.
+    // JSON stays readable and is an explicit File ▸ Export.
     inline const std::vector<std::string>& scenes() {
 
-        static const std::vector<std::string> list{".json", ".tpz"};
+        static const std::vector<std::string> list{".tpz", ".json"};
+        return list;
+    }
+
+    // scenes(), with `current`'s extension first when it is one of them: a
+    // document opened from a .json keeps saving as a .json.
+    inline std::vector<std::string> scenesFor(const std::filesystem::path& current) {
+
+        auto list = scenes();
+        const auto it = std::find(list.begin(), list.end(), extensionOf(current));
+        if (it != list.end()) std::rotate(list.begin(), it, it + 1);
         return list;
     }
 

@@ -6,7 +6,6 @@
 #include "threepp/utils/ZipReader.hpp"
 
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,7 +13,6 @@
 namespace threepp {
 
     class Object3D;
-    class SplatCloud;
 
     // Reads three.js' "Object" JSON scene format (metadata.version 4.5) —
     // geometries, materials, textures, images, skeletons, animations and the
