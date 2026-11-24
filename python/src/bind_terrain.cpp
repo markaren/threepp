@@ -2,6 +2,7 @@
 
 #include "threepp/constants.hpp"
 #include "threepp/extras/terrain/GeoScene.hpp"
+#include "threepp/extras/terrain/MountainBackdrop.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -9,8 +10,12 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace threepp_py {
 
@@ -350,6 +355,109 @@ namespace threepp_py {
                      "(hidden cells shown) by the last update(), prefetched (cells attached hidden ahead of "
                      "their ring, stream_prefetch), total_builds, total_removes, total_evictions. All 0 for a layer the pack "
                      "does not stream.");
+
+        // ── MountainBackdrop ──────────────────────────────────────────────────
+        // Distant ranges round a play area, one ring mesh. The C++ options take the ground
+        // as a std::function, but the ring is built on worker threads, where a Python
+        // callable would need the GIL the constructor's caller holds; the ground comes in
+        // as a height grid instead, sampled in C++.
+        using MBO = MountainBackdropOptions;
+        py::class_<Massif>(m, "Massif",
+                           "A big peak placed on purpose: a Gaussian bump (radius = sigma) shaped by the ranges' own "
+                           "noise, so it reads as part of them.")
+                .def(py::init([](float x, float z, float radius, float height) {
+                         Massif ms;
+                         ms.centre.set(x, z);
+                         ms.radius = radius;
+                         ms.height = height;
+                         return ms;
+                     }),
+                     py::arg("x") = 0.f, py::arg("z") = 0.f, py::arg("radius") = 1600.f, py::arg("height") = 1100.f)
+                .def_readwrite("centre", &Massif::centre, "World (x, z) of the peak (m), as a Vector2.")
+                .def_readwrite("radius", &Massif::radius, "Gaussian sigma (m).")
+                .def_readwrite("height", &Massif::height, "Added at the centre (m).")
+                .def("__repr__", [](const Massif& ms) {
+                    return "Massif(x=" + std::to_string(ms.centre.x) + ", z=" + std::to_string(ms.centre.y) +
+                           ", radius=" + std::to_string(ms.radius) + ", height=" + std::to_string(ms.height) + ")";
+                });
+
+        py::class_<MBO> mbo(m, "MountainBackdropOptions",
+                            "Options for MountainBackdrop. Radii are metres from the world origin.");
+        py::enum_<MBO::Shading>(mbo, "Shading")
+                .value("PerPixel", MBO::Shading::PerPixel)
+                .value("Textured", MBO::Shading::Textured);
+        mbo.def(py::init<>())
+                .def_readwrite("inner_radius", &MBO::innerRadius, "The ranges begin to rise here (m).")
+                .def_readwrite("full_radius", &MBO::fullRadius, "Full height from here outward (m).")
+                .def_readwrite("outer_radius", &MBO::outerRadius, "Edge of the mesh (m).")
+                .def_readwrite("segments", &MBO::segments, "Around the ring; the ring spacing follows.")
+                .def_readwrite("seed", &MBO::seed)
+                .def_readwrite("height", &MBO::height, "Typical height of a range (m).")
+                .def_readwrite("crest_height", &MBO::crestHeight, "The thin ridged layer along the crests (m).")
+                .def_readwrite("feature_scale", &MBO::featureScale, "Metres per base-noise period.")
+                .def_readwrite("massifs", &MBO::massifs,
+                               "List of Massif (a copy: assign a new list to change it).")
+                .def_readwrite("sink", &MBO::sink,
+                               "Inside inner_radius the ranges sit this far (m) under the ground, out of sight.")
+                .def_readwrite("shading", &MBO::shading,
+                               "PerPixel (GLRenderer only: a ShaderMaterial with its own aerial haze) or Textured "
+                               "(the same rule baked into a colour and a normal map on a MeshStandardMaterial, scene "
+                               "fog for the haze; every renderer, and the one to use on VulkanRenderer).")
+                .def_readwrite("texels_per_segment", &MBO::texelsPerSegment, "Textured: the maps' resolution.")
+                .def_readwrite("snow_slope", &MBO::snowSlope,
+                               "Slope (1 - normal.y) up to which 'snow' lies on open ground. Give snow_color a "
+                               "forest's colour and the rule reads as wooded ridges with bare crags.")
+                .def_readwrite("snow_color", &MBO::snowColor)
+                .def_readwrite("rock_color", &MBO::rockColor, "The darker strata.")
+                .def_readwrite("rock_band_color", &MBO::rockBandColor, "The lighter strata.")
+                .def_readwrite("haze_distance", &MBO::hazeDistance, "PerPixel: e-folding distance of the haze (m).")
+                .def_readwrite("haze_color", &MBO::hazeColor, "PerPixel: the sky's colour at the horizon.")
+                .def_readwrite("haze_sun_color", &MBO::hazeSunColor, "PerPixel: the haze's tint toward the sun.")
+                .def_readwrite("sun_direction", &MBO::sunDirection, "PerPixel: toward the sun.")
+                .def("set_ground_grid",
+                     [](MBO& o, const py::array_t<float, py::array::c_style | py::array::forcecast>& heights,
+                        float x0, float z0, float cell) {
+                         if (heights.ndim() != 2) throw py::value_error("heights must be a 2-D array [nz, nx]");
+                         const auto nz = static_cast<int>(heights.shape(0)), nx = static_cast<int>(heights.shape(1));
+                         if (nx < 2 || nz < 2) throw py::value_error("heights must be at least 2 x 2");
+                         if (!(cell > 0.f)) throw py::value_error("cell must be > 0");
+                         auto h = std::make_shared<std::vector<float>>(heights.data(), heights.data() + static_cast<size_t>(nx) * nz);
+                         o.ground = [h, nx, nz, x0, z0, cell](float x, float z) {
+                             const float fx = std::clamp((x - x0) / cell, 0.f, static_cast<float>(nx - 1));
+                             const float fz = std::clamp((z - z0) / cell, 0.f, static_cast<float>(nz - 1));
+                             const int ix = std::min(static_cast<int>(fx), nx - 2), iz = std::min(static_cast<int>(fz), nz - 2);
+                             const float tx = fx - static_cast<float>(ix), tz = fz - static_cast<float>(iz);
+                             const float* d = h->data() + static_cast<size_t>(iz) * nx + ix;
+                             return (d[0] * (1.f - tx) + d[1] * tx) * (1.f - tz) + (d[nx] * (1.f - tx) + d[nx + 1] * tx) * tz;
+                         };
+                     },
+                     py::arg("heights"), py::arg("x0"), py::arg("z0"), py::arg("cell"),
+                     "The surface the ranges stand on, as a height grid: heights[j, i] is the ground at world "
+                     "(x0 + i * cell, z0 + j * cell), bilinear between, the edge's value beyond. Without one the "
+                     "ground is flat at 0. Copied, so the array can be dropped.")
+                .def("clear_ground", [](MBO& o) { o.ground = nullptr; }, "Back to flat ground at 0.")
+                .def_property_readonly("has_ground", [](const MBO& o) { return static_cast<bool>(o.ground); });
+
+        py::class_<MountainBackdrop, Group, std::shared_ptr<MountainBackdrop>>(
+                m, "MountainBackdrop",
+                "Distant mountain ranges round a play area: one ring of terrain from a kilometre or two out to the "
+                "horizon (derivative-damped, warped fBm with sharp crests, smooth flanks and gullies; massifs where "
+                "a shot needs them). Add it to a scene; on VulkanRenderer use Shading.Textured.")
+                .def(py::init([](const MBO& o) {
+                         py::gil_scoped_release nogil;// the ring and the Textured bake run on the thread pool
+                         return MountainBackdrop::create(o);
+                     }),
+                     py::arg("options") = MBO{})
+                .def("height_at", &MountainBackdrop::heightAt, py::arg("x"), py::arg("z"),
+                     "Height of the ranges at world (x, z); the mesh samples exactly this.")
+                .def_property_readonly("mesh", [](const MountainBackdrop& b) { return b.mesh(); },
+                                       "The ring itself (share its geometry and material to put the ranges in a "
+                                       "second scene).")
+                .def_property_readonly("options", [](const MountainBackdrop& b) { return b.options(); },
+                                       "A copy of the options it was built with.")
+                .def("set_haze", &MountainBackdrop::setHaze, py::arg("color"), py::arg("sun_color"),
+                     py::arg("sun_direction"), py::arg("distance"),
+                     "PerPixel only: retune the haze (no-op for Textured, which takes scene fog).");
 
         // ── Free functions ────────────────────────────────────────────────────
         m.def("apply_terrain_preset",

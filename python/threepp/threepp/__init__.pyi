@@ -9,7 +9,7 @@ import os
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cloth', 'ClothMesh', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'LogLevel', 'LogRecord', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Weather', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'capture_log', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rain_specific_attenuation', 'rain_volume_reflectivity', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'sea_state_from_wave_height', 'select_lod', 'set_log_level', 'set_log_levels', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'take_log', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_no_contraction', 'vulkan_set_no_contraction', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AcousticMaterial', 'AcousticMaterials', 'AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrayTaper', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cloth', 'ClothMesh', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DecalGeometry', 'DeformableAttachment', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'Downwash', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_PHYSX_GPU', 'HAS_USD', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImagingSonar', 'ImagingSonarModel', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'LogLevel', 'LogRecord', 'Loner', 'Loop', 'Mapping', 'MarineRadar', 'MarineRadarModel', 'Massif', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'MountainBackdrop', 'MountainBackdropOptions', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlanarReflection', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'PulseKind', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RadarMaterial', 'RadarMaterials', 'RadarPolarImage', 'RadarPolarization', 'RadarPpiDisplay', 'RadarPpiStyle', 'RainCell', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'Sky', 'SoftBody', 'SogLoader', 'SonarEchoKind', 'SonarFanDisplay', 'SonarFrame', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformBatch', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'WaterProperties', 'Weather', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'capture_log', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'douglas_wave_height', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'nrl_sea_clutter_db', 'rad_to_deg', 'rain_specific_attenuation', 'rain_volume_reflectivity', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'sea_state_from_wave_height', 'select_lod', 'set_log_level', 'set_log_levels', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'take_log', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_no_contraction', 'vulkan_set_no_contraction', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AcousticMaterial:
     """
     Backscatter per unit area: Lambert mu cos^2 plus a Kirchhoff facet glint.
@@ -2490,7 +2490,7 @@ class DisplacedMesh(Mesh):
         @property
         def lane_life(self) -> float:
             """
-            e-folding time (s) of the lane where the short waves are flattened.
+            How long (s) the lane where the short waves are flattened lasts behind a producer 10 m wide (a source of radius 5 m) in a calm; a narrower one's is shorter in proportion, and the wind shortens it and makes it shallower (it grows the short waves back), so a rough sea keeps no mirror astern.
             """
         @lane_life.setter
         def lane_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -6421,6 +6421,38 @@ class MarineRadarModel:
     @property
     def wavelength(self) -> float:
         ...
+class Massif:
+    """
+    A big peak placed on purpose: a Gaussian bump (radius = sigma) shaped by the ranges' own noise, so it reads as part of them.
+    """
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex = 0.0, z: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 1600.0, height: typing.SupportsFloat | typing.SupportsIndex = 1100.0) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def centre(self) -> Vector2:
+        """
+        World (x, z) of the peak (m), as a Vector2.
+        """
+    @centre.setter
+    def centre(self, arg0: Vector2) -> None:
+        ...
+    @property
+    def height(self) -> float:
+        """
+        Added at the centre (m).
+        """
+    @height.setter
+    def height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def radius(self) -> float:
+        """
+        Gaussian sigma (m).
+        """
+    @radius.setter
+    def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class Material:
     alpha_hash: bool
     blending: Blending
@@ -7600,6 +7632,235 @@ class ModelLoader:
         Load a model (.obj/.gltf/.glb/.stl/.dae/.json) as a Group. .json is a three.js scene document - what the threepp editor saves - with the document root adopted as the group's child, so a Scene root keeps its environment and userData and is reachable with group.children[0].
         """
     def set_ignore_up_direction(self, ignore: bool) -> None:
+        ...
+class MountainBackdrop(Group):
+    """
+    Distant mountain ranges round a play area: one ring of terrain from a kilometre or two out to the horizon (derivative-damped, warped fBm with sharp crests, smooth flanks and gullies; massifs where a shot needs them). Add it to a scene; on VulkanRenderer use Shading.Textured.
+    """
+    def __init__(self, options: MountainBackdropOptions = ...) -> None:
+        ...
+    def height_at(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> float:
+        """
+        Height of the ranges at world (x, z); the mesh samples exactly this.
+        """
+    def set_haze(self, color: Color, sun_color: Color, sun_direction: Vector3, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        PerPixel only: retune the haze (no-op for Textured, which takes scene fog).
+        """
+    @property
+    def mesh(self) -> Mesh:
+        """
+        The ring itself (share its geometry and material to put the ranges in a second scene).
+        """
+    @property
+    def options(self) -> MountainBackdropOptions:
+        """
+        A copy of the options it was built with.
+        """
+class MountainBackdropOptions:
+    """
+    Options for MountainBackdrop. Radii are metres from the world origin.
+    """
+    class Shading:
+        """
+        Members:
+        
+          PerPixel
+        
+          Textured
+        """
+        PerPixel: typing.ClassVar[MountainBackdropOptions.Shading]  # value = <Shading.PerPixel: 0>
+        Textured: typing.ClassVar[MountainBackdropOptions.Shading]  # value = <Shading.Textured: 1>
+        __members__: typing.ClassVar[dict[str, MountainBackdropOptions.Shading]]  # value = {'PerPixel': <Shading.PerPixel: 0>, 'Textured': <Shading.Textured: 1>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    snow_color: Color
+    def __init__(self) -> None:
+        ...
+    def clear_ground(self) -> None:
+        """
+        Back to flat ground at 0.
+        """
+    def set_ground_grid(self, heights: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], x0: typing.SupportsFloat | typing.SupportsIndex, z0: typing.SupportsFloat | typing.SupportsIndex, cell: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        The surface the ranges stand on, as a height grid: heights[j, i] is the ground at world (x0 + i * cell, z0 + j * cell), bilinear between, the edge's value beyond. Without one the ground is flat at 0. Copied, so the array can be dropped.
+        """
+    @property
+    def crest_height(self) -> float:
+        """
+        The thin ridged layer along the crests (m).
+        """
+    @crest_height.setter
+    def crest_height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def feature_scale(self) -> float:
+        """
+        Metres per base-noise period.
+        """
+    @feature_scale.setter
+    def feature_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def full_radius(self) -> float:
+        """
+        Full height from here outward (m).
+        """
+    @full_radius.setter
+    def full_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def has_ground(self) -> bool:
+        ...
+    @property
+    def haze_color(self) -> Color:
+        """
+        PerPixel: the sky's colour at the horizon.
+        """
+    @haze_color.setter
+    def haze_color(self, arg0: Color) -> None:
+        ...
+    @property
+    def haze_distance(self) -> float:
+        """
+        PerPixel: e-folding distance of the haze (m).
+        """
+    @haze_distance.setter
+    def haze_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def haze_sun_color(self) -> Color:
+        """
+        PerPixel: the haze's tint toward the sun.
+        """
+    @haze_sun_color.setter
+    def haze_sun_color(self, arg0: Color) -> None:
+        ...
+    @property
+    def height(self) -> float:
+        """
+        Typical height of a range (m).
+        """
+    @height.setter
+    def height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def inner_radius(self) -> float:
+        """
+        The ranges begin to rise here (m).
+        """
+    @inner_radius.setter
+    def inner_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def massifs(self) -> list[Massif]:
+        """
+        List of Massif (a copy: assign a new list to change it).
+        """
+    @massifs.setter
+    def massifs(self, arg0: collections.abc.Sequence[Massif]) -> None:
+        ...
+    @property
+    def outer_radius(self) -> float:
+        """
+        Edge of the mesh (m).
+        """
+    @outer_radius.setter
+    def outer_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rock_band_color(self) -> Color:
+        """
+        The lighter strata.
+        """
+    @rock_band_color.setter
+    def rock_band_color(self, arg0: Color) -> None:
+        ...
+    @property
+    def rock_color(self) -> Color:
+        """
+        The darker strata.
+        """
+    @rock_color.setter
+    def rock_color(self, arg0: Color) -> None:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def segments(self) -> int:
+        """
+        Around the ring; the ring spacing follows.
+        """
+    @segments.setter
+    def segments(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def shading(self) -> MountainBackdropOptions.Shading:
+        """
+        PerPixel (GLRenderer only: a ShaderMaterial with its own aerial haze) or Textured (the same rule baked into a colour and a normal map on a MeshStandardMaterial, scene fog for the haze; every renderer, and the one to use on VulkanRenderer).
+        """
+    @shading.setter
+    def shading(self, arg0: MountainBackdropOptions.Shading) -> None:
+        ...
+    @property
+    def sink(self) -> float:
+        """
+        Inside inner_radius the ranges sit this far (m) under the ground, out of sight.
+        """
+    @sink.setter
+    def sink(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def snow_slope(self) -> float:
+        """
+        Slope (1 - normal.y) up to which 'snow' lies on open ground. Give snow_color a forest's colour and the rule reads as wooded ridges with bare crags.
+        """
+    @snow_slope.setter
+    def snow_slope(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def sun_direction(self) -> Vector3:
+        """
+        PerPixel: toward the sun.
+        """
+    @sun_direction.setter
+    def sun_direction(self, arg0: Vector3) -> None:
+        ...
+    @property
+    def texels_per_segment(self) -> int:
+        """
+        Textured: the maps' resolution.
+        """
+    @texels_per_segment.setter
+    def texels_per_segment(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
 class NoiseModel:
     """
