@@ -93,10 +93,13 @@ float cloudDensity(vec3 p, float time) {
 // Exponential height falloff × wind-scrolled 3D-noise modulation → drifting
 // ground-mist patches. Returns σ_t (1/m). REQUIRES the height-fog fields on the
 // `clouds` block (hfDensity/hfBaseY/hfFalloff/hfNoiseAmount). Zero when off.
+// The uniform air under the profile (hfAir) is added unmodulated: the noise
+// shapes the mist's patches, not the thin air above them.
 float heightFogDensity(vec3 p, float time) {
     if (clouds.hfDensity <= 0.0) return 0.0;
+    const float air = max(clouds.hfAir, 0.0);
     const float h = (p.y - clouds.hfBaseY) / max(clouds.hfFalloff, 1e-3);
-    if (h > 24.0) return 0.0;// e^-24 ≈ 0 — nothing left this high
+    if (h > 24.0) return air;// e^-24 ≈ 0 — no mist left this high
     const float base = clouds.hfDensity * exp(-max(h, 0.0));
     const float amt  = clamp(clouds.hfNoiseAmount, 0.0, 1.0);
     // Smooth fog, no churn: mix(1, n·2, 0) is exactly 1 for any finite n, so
@@ -104,11 +107,11 @@ float heightFogDensity(vec3 p, float time) {
     // on every scene that leaves hfNoiseAmount at its default, which is most of
     // them, once per froxel in BOTH froxel passes. amt is a UBO scalar, so the
     // branch is uniform across the dispatch and costs nothing where it fails.
-    if (amt <= 0.0) return max(base, 0.0);
+    if (amt <= 0.0) return max(base, 0.0) + air;
     // Wind-scrolled fBm churns the patches (shares the cloud wind vector).
     const vec3  wind = vec3(clouds.wind.x, 0.0, clouds.wind.z) * time;
     const float n    = cloudValueFbm((p + wind) * 0.02);// ~50 m mist features
-    return max(base * mix(1.0, n * 2.0, amt), 0.0);
+    return max(base * mix(1.0, n * 2.0, amt), 0.0) + air;
 }
 
 // σ per unit cloud density — KEEP IN SYNC with cloud_march.comp's sigmaMul so

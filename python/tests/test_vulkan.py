@@ -2527,3 +2527,64 @@ def test_ray_budget_knobs_round_trip_and_count_rays(vk_renderer):
         r.fog_march_half_res = False
         r.set_height_fog(density=0.0)
     assert "rays_sun" not in r.frame_timings
+
+
+def test_scene_fog_is_air_under_an_explicit_height_fog(vk_renderer):
+    """scene.fog under an explicit height fog stays in the medium as uniform air
+    (GpuFogUbo::hfAir) instead of being dropped: a wall 300 m off and far above a
+    ground mist fades as it does under scene.fog alone, where the mist alone
+    leaves it clear. The air's sun glow is the environment sky's own, so a sun in
+    front of the camera does not veil the sky in the medium's colour."""
+    r = vk_renderer
+    scene = tp.Scene()
+    scene.background = tp.Color(0.30, 0.45, 0.80)
+    scene.add(tp.HemisphereLight(0xffffff, 0x404040, 1.5))
+    mat = tp.MeshStandardMaterial()
+    mat.color = tp.Color(0.9, 0.08, 0.08)
+    mat.roughness = 1.0
+    wall = tp.Mesh(tp.BoxGeometry(400.0, 120.0, 2.0), mat)
+    wall.position.set(0.0, 60.0, -300.0)                 # 0 .. 120 m high, the mist is under 10 m
+    scene.add(wall)
+    cam = tp.PerspectiveCamera(50, W / H, 0.1, 2000)
+    cam.position.set(0.0, 1.5, 0.0)
+    cam.look_at(0.0, 40.0, -300.0)                       # the top rows are sky
+    grey = tp.Color(0.8, 0.8, 0.8)
+
+    def shot():
+        """(the wall, the sky above it) as mean RGB."""
+        r.reset_temporal_history()
+        for _ in range(6):
+            r.render(scene, cam)
+        img = r.read_pixels().astype(np.float64)
+        return (img[H // 2 - 10:H // 2 + 10, W // 2 - 20:W // 2 + 20].reshape(-1, 3).mean(0),
+                img[2:12, W // 2 - 20:W // 2 + 20].reshape(-1, 3).mean(0))
+
+    def mist():
+        r.set_height_fog(density=0.03, base_y=0.0, falloff=1.5, noise_amount=0.0)
+
+    try:
+        mist()
+        scene.clear_fog()
+        wall_mist, sky_mist = shot()
+        scene.set_fog_exp2(grey, 0.01)                   # optical depth 3 to the wall
+        wall_air, sky_air = shot()
+        r.disable_height_fog()
+        wall_fog, _ = shot()
+        assert np.abs(wall_air - wall_mist).max() > 40.0, "the air under the mist left the far wall clear"
+        assert np.abs(wall_air - wall_fog).max() < np.abs(wall_air - wall_mist).max() / 3.0, \
+            (wall_mist, wall_air, wall_fog)
+
+        # a sun ahead: the mist's shafts glow, the air's sun glow stays the sky's own
+        sun = tp.DirectionalLight(0xffffff, 3.0)
+        sun.position.set(0.0, 200.0, -600.0)
+        scene.add(sun)
+        mist()
+        scene.clear_fog()
+        _, sky_mist_sun = shot()
+        scene.set_fog_exp2(grey, 0.01)
+        _, sky_air_sun = shot()
+        assert np.abs(sky_air_sun - sky_mist_sun).max() < 25.0, \
+            f"the air veiled the sky: {sky_mist_sun} -> {sky_air_sun}"
+    finally:
+        scene.clear_fog()
+        r.disable_height_fog()

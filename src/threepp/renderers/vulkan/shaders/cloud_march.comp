@@ -62,6 +62,7 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
     float hfNoiseAmount;
     float shadowActive;
     float epoch;             // history generation — bumped on enable/reconfigure
+    float hfAir;             // uniform air σ_t under the height fog (cloud_density.glsl reads it)
 } clouds;
 
 // Cloud march outputs (half-res) + temporal history (other FIF).

@@ -49,7 +49,7 @@ float heightFogBaseYAt(vec3 p) {
 }
 float heightFogOpticalDepth(vec3 a, vec3 b) {
     return heightFogLegOpticalDepth(a, b, clouds.hfDensity, clouds.hfFalloff,
-                                    heightFogBaseYAt(b), fog.waterSurfaceY);
+                                    heightFogBaseYAt(b), clouds.hfAir, fog.waterSurfaceY);
 }
 // Surface fog in heterogeneous mode: CLOSED-FORM height-fog extinction over the
 // WHOLE camera→surface leg + the ambient/skylight in-scatter fade toward the haze.
@@ -998,6 +998,11 @@ vec3 applySkyFog(vec3 sky, vec3 dir) {
     float T;
     if (hetero && clouds.hfFalloff < 4000.0) {
         T = exp(-min(heightFogSkyOpticalDepth(dir), 80.0));// saturate: no Inf into exp
+        // The uniform air under the layer (hfAir): its column to infinity is
+        // infinite, so it takes the bounded horizon band a uniform scene fog
+        // gets below, and the distant surfaces' closed-form haze closes the
+        // horizon as it does there.
+        if (clouds.hfAir > 0.0) T *= 1.0 - exp(-elev * 2.5) * (1.0 - exp(-clouds.hfAir * 45.0));
     } else {
         const float band     = exp(-elev * 2.5);            // haze concentrated near the horizon
         const float strength = 1.0 - exp(-sigma * 45.0);    // density → how much sky is obscured
@@ -1202,6 +1207,12 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px, float dustAt, 
     // distance; the per-step `trCam` break below is the exact cutoff, this only
     // sizes dt. σ at the ray origin (camera height, small floor) is the near-end
     // density that dominates the leg.
+    // The uniform air under the layer (hfAir) is NOT marched: it scatters the
+    // sky's light (applyHeteroSurfaceFog's fogLight, the sky band) and dims the
+    // layer's shafts (trCam below), but its sun in-scatter is already in the
+    // environment's sky. Marched, a sky pixel's leg in air that never thins
+    // reaches optical depth 6 whatever the density, and the sun's glow veils
+    // the whole sky in the medium's colour.
     const float sigmaRef = max(clouds.hfDensity * exp(-max(ro.y - clouds.hfBaseY, 0.0) / H), 1e-6);
     const float tEnd = min(tMax, tStart + 6.0 / sigmaRef);
     if (tEnd <= tStart) return vec3(0.0);
@@ -1251,7 +1262,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px, float dustAt, 
         // below share the base height at x, so the layer the step scatters in
         // is the one its transmittance was integrated through.
         const float baseX  = heightFogBaseYAt(x);
-        const float sigmaX = clouds.hfDensity * exp(-max(x.y - baseX, 0.0) / H);
+        const float sigmaX = clouds.hfDensity * exp(-max(x.y - baseX, 0.0) / H);// the layer only (sigmaRef)
         if (sigmaX <= 1e-7) continue;
         // The air medium stops at the waterline (heightFogOpticalDepth is clipped
         // the same way, so trCam below already agrees): a submerged step scatters
@@ -1260,7 +1271,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px, float dustAt, 
         // at the air medium's full base density.
         if (fog.waterSurfaceY < 1e29 && x.y < fog.waterSurfaceY) continue;
         const float trCam = exp(-heightFogLegOpticalDepth(ro, x, clouds.hfDensity, clouds.hfFalloff,
-                                                          baseX, fog.waterSurfaceY));// closed-form camera → x over the WHOLE leg
+                                                          baseX, clouds.hfAir, fog.waterSurfaceY));// closed-form camera → x over the WHOLE leg
         // Remaining contribution negligible. With a displaced top the base
         // height differs per step, trCam is no longer monotone along the ray,
         // and a later step under a lower top can still be visible.

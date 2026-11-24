@@ -201,8 +201,13 @@ namespace threepp::vulkan::impl {
         // world's own without one.
         float waterUp[3];
         float waterX[3];
+        // Uniform air under an explicit height fog (scene.fog's density when
+        // both are set; 0 otherwise): σ_t(y) = hfAir + hfDensity · profile(y).
+        // Nonzero only while hfDensity is, so every "hfDensity <= 0 → no air
+        // medium" test still holds. Appended, as murkSigma was.
+        float hfAir;
     };
-    static_assert(sizeof(GpuFogUbo) == 136);
+    static_assert(sizeof(GpuFogUbo) == 140);
 
     // Volumetric cloud layer (VulkanRenderer::setClouds) + near-field
     // heterogeneous height fog (VulkanRenderer::setHeightFog). Both ride the
@@ -229,8 +234,9 @@ namespace threepp::vulkan::impl {
         float shadowActive; // 1.0 = cloud shadow map valid this frame (clouds on)
         float epoch;        // history generation — cloud_march rejects prev-epoch
                             // history (first-enable garbage, reconfigured decks)
+        float hfAir;        // uniform air under the height fog (GpuFogUbo::hfAir)
     };
-    static_assert(sizeof(GpuCloudUbo) == 68);
+    static_assert(sizeof(GpuCloudUbo) == 72);
 
     struct DebugResolvePC {
         uint32_t view;      // 1 = normal, 2 = motion, 3 = ids, 4 = albedo
@@ -249,7 +255,7 @@ namespace threepp::vulkan::impl {
         float murkDensity;   // underwater-murk σ_t (0 = off)
         float waterSurfaceY; // world Y of the water surface (murk clip)
         float camWorldY;     // camera world Y
-        float _pad0;
+        float hfAir;         // uniform air under the height fog (GpuFogUbo::hfAir)
         float viewToWorldY[3];// world-Y row of the inverse-view
         float _pad1;
         float fogInscatter[3];// LINEAR air-fog in-scatter radiance (fade target)

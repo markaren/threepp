@@ -379,7 +379,7 @@ namespace threepp::vulkan {
         // which makes a `lit` field fall back to pure ambient rather than go
         // black.
         float         sunDir[3];     // 48  world space, TOWARD the sun
-        float         _pad0;         // 60
+        float         hfAir;         // 60  uniform air under the height fog (GpuFogUbo::hfAir)
         float         sunRadiance[3];// 64  linear, colour x intensity
         float         _pad1;         // 76
         float         ambient[3];    // 80  the scene's summed AmbientLights

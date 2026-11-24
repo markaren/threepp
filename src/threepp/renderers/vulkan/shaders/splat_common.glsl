@@ -474,7 +474,7 @@ uint splatDepthBucket(float dist, float dMin, float dMax, float pLo, float pHi) 
 #include "height_fog.glsl"
 float splatHeightFogOd(vec3 a, vec3 b) {
     return heightFogLegOpticalDepth(a, b, clouds.hfDensity, clouds.hfFalloff,
-                                    clouds.hfBaseY, fog.waterSurfaceY);
+                                    clouds.hfBaseY, clouds.hfAir, fog.waterSurfaceY);
 }
 
 float splatMurkPathLength(vec3 a, vec3 b) {

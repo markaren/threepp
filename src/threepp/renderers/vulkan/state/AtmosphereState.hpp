@@ -30,14 +30,24 @@ namespace threepp::vulkan::impl {
         // supplies the medium density (FogExp2.density / linear-Fog span) + colour
         // and the froxel volumetrics run in heterogeneous mode with a near-uniform
         // default profile (baseY 0, huge falloff). setHeightFog is the advanced
-        // profile control: it sets baseY/falloff/noise; its density is used only
-        // when scene.fog is absent (back-compat for existing mist users). When
-        // both are set, scene.fog's density wins (heightFog.density ignored).
+        // profile control: it sets baseY/falloff/noise. An explicit height-fog
+        // density (> 0) is the profile's density; scene.fog's density then stays
+        // in the medium as uniform air under it (mediumAirThisFrame_ below).
         bool  mediumActiveThisFrame_ = false;// air medium present → run froxels hetero
         float mediumDensityThisFrame_ = 0.0f;
         float mediumBaseYThisFrame_   = 0.0f;
         float mediumFalloffThisFrame_ = 1.0e6f;
         float mediumNoiseThisFrame_   = 0.0f;
+        // The air under an explicit height fog: scene.fog's density (FogExp2
+        // density, or linear Fog's 1 / span) as a uniform σ_t added to the height
+        // fog's profile, so a ground mist and the thin air above it are one medium
+        // (σ(y) = mediumAir + mediumDensity · e^(−max(y − baseY, 0) / falloff)).
+        // The air dims every leg and scatters the sky's light (the surface haze,
+        // the sky band, the froxels' lamps); the sun's per-step march (and the
+        // path tracer's sun scatter) takes the layer only, since an environment
+        // sky already holds the air's sunlit glow. Zero unless both are set;
+        // scene.fog alone drives mediumDensity as before.
+        float mediumAirThisFrame_     = 0.0f;
         // Air-fog single-scattering tint (= scene.fog colour when present, else
         // white — mirrors the shade pass's medAlbedo). The overlay-fog snapshot
         // fades particles toward this (× no env, the accepted particle-domain

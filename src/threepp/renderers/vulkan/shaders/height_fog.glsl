@@ -11,6 +11,10 @@
 //   density        sigma_t at baseY (<= 0: no height fog)
 //   falloff        scale height H of the exponential profile
 //   baseY          the profile is constant (sigma0) below this height
+//   air            a uniform sigma_t under the profile (the hfAir field: scene
+//                  fog's thin air beneath an explicit ground mist; 0 = none).
+//                  The medium is sigma(y) = air + density * e^{-max(y-baseY,0)/H},
+//                  so the leg's optical depth gains air * (its above-water length).
 //   waterSurfaceY  world height of the water surface; >= 1e29 means none
 //
 // The air medium stops at the waterline. The profile clamps to constant
@@ -42,8 +46,10 @@
 
 // The integral over a leg that is already clipped to the air.
 float heightFogAirLegOpticalDepth(float yA, float yB, float len,
-                                  float density, float falloff, float baseY) {
+                                  float density, float falloff, float baseY, float air) {
     len = min(len, 1.0e7);
+    const float uniformOd = max(air, 0.0) * len;
+    if (density <= 0.0) return min(uniformOd, 80.0);
     const float H  = max(falloff, 1e-3);
     const float ya = max(yA - baseY, 0.0);
     const float yb = max(yB - baseY, 0.0);
@@ -52,14 +58,14 @@ float heightFogAirLegOpticalDepth(float yA, float yB, float len,
     const float x  = (yb - ya) / H;
     const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
                                      : ((ea - eb) / x);
-    return min(density * len * f, 80.0);
+    return min(density * len * f + uniformOd, 80.0);
 }
 
 // Point form: the leg [a, b]. Use it whenever the points are at hand.
 float heightFogLegOpticalDepth(vec3 a, vec3 b,
-                               float density, float falloff, float baseY,
+                               float density, float falloff, float baseY, float air,
                                float waterSurfaceY) {
-    if (density <= 0.0) return 0.0;
+    if (density <= 0.0 && air <= 0.0) return 0.0;
     if (waterSurfaceY < 1e29) {
         const float wa = a.y - waterSurfaceY;
         const float wb = b.y - waterSurfaceY;
@@ -68,14 +74,14 @@ float heightFogLegOpticalDepth(vec3 a, vec3 b,
         if (wa < 0.0)      a = mix(a, b, tc);
         else if (wb < 0.0) b = mix(a, b, tc);
     }
-    return heightFogAirLegOpticalDepth(a.y, b.y, distance(a, b), density, falloff, baseY);
+    return heightFogAirLegOpticalDepth(a.y, b.y, distance(a, b), density, falloff, baseY, air);
 }
 
 // Height form: the leg's two heights and its FINITE length.
 float heightFogLegOpticalDepth(float yA, float yB, float len,
-                               float density, float falloff, float baseY,
+                               float density, float falloff, float baseY, float air,
                                float waterSurfaceY) {
-    if (density <= 0.0) return 0.0;
+    if (density <= 0.0 && air <= 0.0) return 0.0;
     len = min(len, 1.0e7);
     if (waterSurfaceY < 1e29) {
         const float wa = yA - waterSurfaceY;
@@ -90,7 +96,7 @@ float heightFogLegOpticalDepth(float yA, float yB, float len,
             len *= tc;
         }
     }
-    return heightFogAirLegOpticalDepth(yA, yB, len, density, falloff, baseY);
+    return heightFogAirLegOpticalDepth(yA, yB, len, density, falloff, baseY, air);
 }
 
 // ── Noise-displaced fog top (HeightFogSettings::topNoise) ────────────────────

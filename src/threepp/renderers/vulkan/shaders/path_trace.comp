@@ -195,6 +195,12 @@ layout(set = 0, binding = 9, scalar) uniform FogUbo {
     vec3  murkColor;     // its single-scattering albedo
     vec3  murkSigma;     // sigma_t per channel
     float murkAmbientK;  // setUnderwaterAmbientFalloff (not modelled here)
+    float hfTopNoise;    // not modelled here — declared to align hfAir
+    float hfTopInvScale;
+    vec3  hfTopOffset;
+    vec3  waterUp;
+    vec3  waterX;
+    float hfAir;         // uniform air sigma_t under the height fog (0 = none)
 } fog;
 #include "height_fog.glsl"// heightFogLegOpticalDepth
 #include "hg_phase.glsl"// hgPhase
@@ -355,15 +361,17 @@ vec3 sampleBackground(vec3 dir) {
 
 // ── The air medium ──────────────────────────────────────────────────────────
 // The deferred shade's one air medium (scene.fog and setHeightFog both feed
-// it): sigma_t = hfDensity · e^(−max(y − hfBaseY, 0) / hfFalloff), stopping
-// at the waterline, with fog.color as its single-scattering albedo (white
-// for a height fog without a scene.fog) and fog.anisotropy as its HG g.
+// it): sigma_t = hfAir + hfDensity · e^(−max(y − hfBaseY, 0) / hfFalloff),
+// stopping at the waterline, with fog.color as its single-scattering albedo
+// (white for a height fog without a scene.fog) and fog.anisotropy as its HG g.
+// hfAir is the uniform air under an explicit height fog (scene.fog's density
+// when both are set), nonzero only while hfDensity is.
 bool airOn() { return fog.hfDensity > 0.0; }
 float airSigma(vec3 x) {
-    return fog.hfDensity * exp(-max(x.y - fog.hfBaseY, 0.0) / max(fog.hfFalloff, 1e-3));
+    return fog.hfAir + fog.hfDensity * exp(-max(x.y - fog.hfBaseY, 0.0) / max(fog.hfFalloff, 1e-3));
 }
 float airOpticalDepth(vec3 a, vec3 b) {
-    return heightFogLegOpticalDepth(a, b, fog.hfDensity, fog.hfFalloff, fog.hfBaseY, fog.waterSurfaceY);
+    return heightFogLegOpticalDepth(a, b, fog.hfDensity, fog.hfFalloff, fog.hfBaseY, fog.hfAir, fog.waterSurfaceY);
 }
 vec3 airAlbedo() { return fog.enabled > 0.5 ? fog.color : vec3(1.0); }
 // The light the deferred shade lights the medium's ambient part with
@@ -395,7 +403,11 @@ float airSkyTransmittance(vec3 o, vec3 dir) {
         const float hCam = o.y - fog.hfBaseY;
         const float m    = max(dir.y, 0.02);
         const float od   = hCam >= 0.0 ? sigma * H / m * exp(-hCam / H) : sigma / m * (H - hCam);
-        return exp(-min(od, 80.0));
+        float T = exp(-min(od, 80.0));
+        // the uniform air under the layer: the deferred shade's bounded band (applySkyFog)
+        if (fog.hfAir > 0.0)
+            T *= 1.0 - exp(-clamp(dot(dir, airUp()), 0.0, 1.0) * 2.5) * (1.0 - exp(-fog.hfAir * 45.0));
+        return T;
     }
     const float elev     = clamp(dot(dir, airUp()), 0.0, 1.0);
     const float band     = exp(-elev * 2.5);
@@ -1131,6 +1143,13 @@ vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, float dustAt, float 
     const float tx = 0.5 * (lo + hi);
     const vec3 x = o + d * tx;
     if (fog.waterSurfaceY < 1e29 && x.y < fog.waterSurfaceY) return vec3(0.0);
+    // The uniform air under the layer (hfAir) dims the leg but scatters no sun
+    // here, as in the deferred march: its sun glow is the environment sky's own.
+    // The point was drawn in proportion to the whole sigma·T, so the layer's
+    // share of sigma at it weights the estimate.
+    const float sTot = airSigma(x);
+    const float layerShare = sTot > 0.0 ? max(sTot - fog.hfAir, 0.0) / sTot : 0.0;
+    if (layerShare <= 0.0) return vec3(0.0);
     vec3 sum = vec3(0.0);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = sunConeDir(normalize(lights.dirLights[i].direction), seed);
@@ -1139,7 +1158,7 @@ vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, float dustAt, float 
         sum += lights.dirLights[i].color
              * (ph * shadowVis(x, L, 1e30) * cloudSunTransmittance(x, L) * pdSurfaceLightTransmittance(x, L));
     }
-    return sum * airAlbedo() * ((1.0 - Tend) * (tx > dustAt ? dustTr : 1.0));
+    return sum * airAlbedo() * ((1.0 - Tend) * layerShare * (tx > dustAt ? dustTr : 1.0));
 }
 
 // ── The lamps in the air ────────────────────────────────────────────────────

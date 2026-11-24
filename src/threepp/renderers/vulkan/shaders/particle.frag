@@ -66,6 +66,7 @@ layout(set = 1, binding = 0, std140) uniform OverlayFog {
     float murkDensity;   // underwater-murk σ_t (0 = off)
     float waterSurfaceY; // world Y of the water surface — the murk clip
     float camWorldY;     // camera world Y
+    float hfAir;         // uniform air σ_t under the height fog (0 = none)
     vec3  viewToWorldY;  // world-Y row of the inverse-view: worldY = dot(.,viewPos)+camWorldY
     vec3  fogInscatter;  // vestigial: LINEAR air-fog tint (unused — the LIT path
                          // gets its fog colour from particle_light.comp instead)
@@ -98,7 +99,7 @@ layout(location = 0) out vec4 outColor;
 #include "height_fog.glsl"
 float airOpticalDepth(float camY, float partY, float len) {
     return heightFogLegOpticalDepth(camY, partY, len, ofog.hfDensity, ofog.hfFalloff,
-                                    ofog.hfBaseY, ofog.waterSurfaceY);
+                                    ofog.hfBaseY, ofog.hfAir, ofog.waterSurfaceY);
 }
 
 // Homogeneous underwater-murk optical depth over the BELOW-waterSurfaceY portion

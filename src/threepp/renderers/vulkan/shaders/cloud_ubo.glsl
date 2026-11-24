@@ -30,6 +30,8 @@ layout(set = 0, binding = CLOUD_UBO_BINDING, scalar) uniform CloudUbo {
     float hfFalloff;    // height-fog exponential height scale (m)
     float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
     float shadowActive; // 1.0 = cloud shadow map valid this frame
+    float epoch;        // cloud_march's history generation (declared to reach hfAir)
+    float hfAir;        // uniform air σ_t under the height fog (0 = none; only with hfDensity > 0)
 } clouds;
 
 #endif// CLOUD_UBO_GLSL

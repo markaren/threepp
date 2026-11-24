@@ -1842,6 +1842,12 @@ namespace threepp {
         mediumDensityThisFrame_ = hfExplicitDensity ? heightFogDensity_
                                 : (fogPresent ? sigma : 0.0f);
         mediumActiveThisFrame_  = mediumDensityThisFrame_ > 0.0f;
+        // Under an explicit height fog, scene.fog's density stays in the medium as
+        // uniform air (σ_t added at every height) instead of being dropped: a scene
+        // with a ground mist and a thin haze above it gets both, so far terrain
+        // fades with distance however high it stands. Without scene.fog, or with
+        // scene.fog alone, nothing changes.
+        mediumAirThisFrame_     = (hfExplicitDensity && fogPresent) ? sigma : 0.0f;
         mediumBaseYThisFrame_   = heightFogEnabled_ ? heightFogBaseY_   : 0.0f;
         mediumFalloffThisFrame_ = heightFogEnabled_ ? heightFogFalloff_ : kUniformFogFalloff;
         mediumNoiseThisFrame_   = heightFogEnabled_ ? heightFogNoiseAmount_ : 0.0f;
@@ -1858,6 +1864,7 @@ namespace threepp {
         ubo.hfDensity = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.0f;
         ubo.hfBaseY   = mediumBaseYThisFrame_;
         ubo.hfFalloff = mediumFalloffThisFrame_;
+        ubo.hfAir     = mediumActiveThisFrame_ ? mediumAirThisFrame_ : 0.0f;
 
         // The noise-displaced fog top (HeightFogSettings::topNoise). The shaders
         // sample the field at p * hfTopInvScale shifted by hfTopOffset.xz (the
@@ -2049,6 +2056,7 @@ namespace threepp {
         ubo.hfBaseY       = mediumBaseYThisFrame_;
         ubo.hfFalloff     = mediumFalloffThisFrame_;
         ubo.hfNoiseAmount = mediumNoiseThisFrame_;
+        ubo.hfAir         = mediumActiveThisFrame_ ? mediumAirThisFrame_ : 0.0f;
         // Cloud shadow map is generated + sampled only when clouds are on (it's
         // the cloud's own transmittance projected to the ground).
         ubo.shadowActive  = cloudsEnabled_ ? 1.0f : 0.0f;

@@ -182,7 +182,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     // that has to change basis is transformed once on the CPU rather than
     // reconstructed per vertex.
     vec3  sunDir;       // VIEW space, TOWARD the sun
-    float _pad0;
+    float hfAir;        // uniform air sigma_t under the height fog (0 = none)
     vec3  sunRadiance;  // linear, colour x intensity; 0 = the scene has no sun
     float _pad1;
     vec3  ambient;      // the scene's summed AmbientLights
@@ -278,7 +278,7 @@ vec3 viewOf(vec4 p) {
 #include "height_fog.glsl"
 float bbAirOpticalDepth(BbView V, float partY, float len) {
     return heightFogLegOpticalDepth(V.camWorldY, partY, len, V.hfDensity, V.hfFalloff,
-                                    V.hfBaseY, V.waterSurfaceY);
+                                    V.hfBaseY, V.hfAir, V.waterSurfaceY);
 }
 
 // The BELOW-waterSurfaceY portion of the leg, in metres: what the murk acts over.

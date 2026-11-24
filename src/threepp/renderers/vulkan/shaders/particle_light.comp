@@ -172,7 +172,7 @@ float spriteSunVis(uint d, vec3 P, vec3 L, float size) {
 #include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
     return heightFogLegOpticalDepth(a, b, clouds.hfDensity, clouds.hfFalloff,
-                                    clouds.hfBaseY, fog.waterSurfaceY);
+                                    clouds.hfBaseY, clouds.hfAir, fog.waterSurfaceY);
 }
 
 // Leg length clipped to BELOW the water surface — mirrors fogPathLength.
@@ -408,6 +408,8 @@ void main() {
         for (int s = 0; s < STEPS; ++s) {
             const float t = (float(s) + 0.5) * dt;
             const vec3  x = camPos + rd * t;
+            // the layer only: the uniform air (hfAir) dims these shafts through
+            // trCam but is not marched (the deferred shade's volumetricDirScatter)
             const float sigmaX = clouds.hfDensity * exp(-max(x.y - clouds.hfBaseY, 0.0) / H);
             if (sigmaX <= 1e-7) continue;
             // A submerged step scatters no air, as in the shade pass's march.

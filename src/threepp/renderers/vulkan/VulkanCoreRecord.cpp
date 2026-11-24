@@ -2408,6 +2408,7 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
                 rec.hfDensity     = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.f;
                 rec.hfBaseY       = mediumBaseYThisFrame_;
                 rec.hfFalloff     = mediumFalloffThisFrame_;
+                rec.hfAir         = mediumActiveThisFrame_ ? mediumAirThisFrame_ : 0.f;
                 rec.murkDensity   = murkDensity_;
                 rec.murkSigma[0]  = murkSigma_[0];
                 rec.murkSigma[1]  = murkSigma_[1];
@@ -3439,6 +3440,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                 of.hfDensity     = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.f;
                                 of.hfBaseY       = mediumBaseYThisFrame_;
                                 of.hfFalloff     = mediumFalloffThisFrame_;
+                                of.hfAir         = mediumActiveThisFrame_ ? mediumAirThisFrame_ : 0.f;
                                 of.murkDensity   = murkDensity_;
                                 of.waterSurfaceY = fogWaterSurfaceY_;
                                 of.camWorldY     = static_cast<float>(iv[13]);
