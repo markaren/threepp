@@ -1854,14 +1854,17 @@ namespace threepp {
         // the destinations are fresh, so no barrier is needed before the
         // copies. Returns the staging buffer (empty when nothing was queued);
         // the caller frees it once cb has executed (destroyBufferMaybeBatched
-        // right after endAndSubmitOneShot). Clears `up`.
-        Buffer recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched);
+        // right after endAndSubmitOneShot). Clears `up`. `keepCapacity`: `up`
+        // is a scratch its caller fills again next frame, so its byte vector
+        // keeps its allocation; otherwise that is released with the upload.
+        Buffer recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched,
+                                   bool keepCapacity = false);
         // recordStagedUploads in two halves, the first for any thread:
         // makeStaging copies up's bytes into a new host-visible staging buffer
         // (clears up.data, keeps up.copies; the allocator and nothing of the
         // renderer's state), recordStagedCopies records the copies and their
         // barriers from it into cb (clears up.copies).
-        Buffer makeStaging(StagedUploads& up);
+        Buffer makeStaging(StagedUploads& up, bool keepCapacity = false);
         void recordStagedCopies(StagedUploads& up, const Buffer& staging, VkCommandBuffer cb, bool dstUntouched);
         // The one-shot form: begin, record, submit (or join the open batch),
         // release the staging buffer.
