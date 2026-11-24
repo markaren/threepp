@@ -126,6 +126,23 @@ float pressureAt(ivec3 c, float pCentre) {
     return texelFetch(uP, c, 0).x;
 }
 
+// No flow into a solid. A zero-gradient pressure alone does not stop it on this collocated grid: it halves the
+// gradient beside a wall and leaves the air's normal motion there, and advection then carries the smoke into the
+// wall and out of its far side. So the component of v toward a solid neighbour is held to that solid's own
+// velocity: free slip, the air may slide along a wall and leave it but never enter it. The solid floor is the
+// same rule (a cell below the grid is solid when the floor is).
+vec3 wallClamp(ivec3 c, vec3 v) {
+    if (head.y + head.w < 0.5 && pc.box.w < 0.5) return v;
+    vec3 sv;
+    if (solidCell(c + ivec3(1, 0, 0), sv)) v.x = min(v.x, sv.x);
+    if (solidCell(c - ivec3(1, 0, 0), sv)) v.x = max(v.x, sv.x);
+    if (solidCell(c + ivec3(0, 1, 0), sv)) v.y = min(v.y, sv.y);
+    if (solidCell(c - ivec3(0, 1, 0), sv)) v.y = max(v.y, sv.y);
+    if (solidCell(c + ivec3(0, 0, 1), sv)) v.z = min(v.z, sv.z);
+    if (solidCell(c - ivec3(0, 0, 1), sv)) v.z = max(v.z, sv.z);
+    return v;
+}
+
 float hash31(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
     p += dot(p, p.yxz + 33.33);

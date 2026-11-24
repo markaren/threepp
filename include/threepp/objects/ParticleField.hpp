@@ -587,8 +587,13 @@ namespace threepp {
         //
         // COLLIDERS stir the air: a capsule moving through the box carries the
         // smoke with it and leaves a wake, the same way a character does in a
-        // game-FX fluid. SOURCES emit. Both are in WORLD space; the first 16
-        // sources and the first 64 colliders are used (a labyrinth's walls are colliders).
+        // game-FX fluid. BOXES are walls (a labyrinth's walls are boxes). No air
+        // flows into either, and a wall at least two cells thick keeps the smoke
+        // on its two sides apart; a thinner one still stops the flow. SOURCES
+        // emit. All three are in WORLD space; the first 16 sources, 64 colliders
+        // and 128 boxes are used (more are said once in the log, then dropped).
+        // A collider's `velocity` is what it carries the air with: set it to the
+        // body's own motion, or it stands still for the smoke.
         struct GridSmoke {
             struct Source {
                 Vector3 position{0.f, 0.f, 0.f};
@@ -628,7 +633,9 @@ namespace threepp {
             // The share of the box, from each open face inward, over which smoke fades away instead of being cut
             // flat at the box (0 = off). The solid floor does not fade.
             float boundaryFade = 0.10f;
-            Vector3 wind{0.f, 0.f, 0.f};// m/s, carries the smoke without being pushed back
+            // m/s, carries the smoke without being pushed back. It is added at the advection, so the walls turn it
+            // only within a cell of their faces: keep wind * stepDt under a cell, or it reads into thick walls.
+            Vector3 wind{0.f, 0.f, 0.f};
             bool  solidFloor  = false; // the bottom face of the box is a wall
             std::vector<Source>   sources;
             std::vector<Collider> colliders;

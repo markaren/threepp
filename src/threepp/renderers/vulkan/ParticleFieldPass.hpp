@@ -922,6 +922,9 @@ namespace threepp::vulkan {
             // field. Its images are private to the density block (see
             // SmokeGrid.hpp), so the frame graph never names them.
             std::unique_ptr<SmokeGrid> smoke;
+            // The solver's images could not be made (out of device memory): said once, and not
+            // tried again every frame for the life of the field.
+            bool smokeFailed = false;
 
             // ── F5: the baked height map ────────────────────────────────────
             // RINGED over the frames in flight, unlike the density volume,

@@ -215,6 +215,10 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // The BOXES alone bound it — not tMax — so the step grid below is the same
     // for every ray of a pixel-neighbourhood whatever each one hit (rule 1).
     float t0 = 1e30, t1 = 0.0;
+    // Does the ray cross a SOLVED volume's box (ParticleField::GridSmoke, boxInvSize.w = 1)? Only then does the
+    // march below take the solved volume's finer floor and higher cap, so dust or fire beside a smoke grid keeps
+    // its own step on every ray that does not pass through the grid.
+    bool solvedVol = false;
     const vec3 inv = 1.0 / rd;// ±inf on axis-parallel components is fine below
     for (uint i = 0u; i < n; ++i) {
         const vec3  bmin  = pd.boxMin[i].xyz;
@@ -224,7 +228,11 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         const vec3  lo = min(ta, tb), hi = max(ta, tb);
         const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
         const float x = min(min(hi.x, hi.y), hi.z);
-        if (x > e) { t0 = min(t0, e); t1 = max(t1, x); }
+        if (x > e) {
+            t0 = min(t0, e);
+            t1 = max(t1, x);
+            solvedVol = solvedVol || pd.boxInvSize[i].w > 0.5;
+        }
     }
     if (t1 <= t0 || tMax <= t0) return col;// no overlap / all of it behind the hit
 
@@ -254,10 +262,8 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // Below Nyquist on the voxel grid, with the old 1 m rule as a FLOOR so a
     // coarse volume never gets cheaper than it was before.
     const float want  = min(0.75 * vmin, 1.0);
-    // A SOLVED volume (ParticleField::GridSmoke, boxInvSize.w = 1) keeps its detail at the voxel, so its march
-    // may step well below the dust floor and may use more stations; every other volume keeps the old floor and cap.
-    bool solvedVol = false;
-    for (uint i = 0u; i < n; ++i) solvedVol = solvedVol || pd.boxInvSize[i].w > 0.5;
+    // A SOLVED volume keeps its detail at the voxel, so a ray through one may step well below the dust floor and
+    // may use more stations; every other ray keeps the old floor and cap.
     const int   STEPS = clamp(int(ceil(span / max(want, solvedVol ? 0.012 : 0.05))),
                               emissive ? 32 : 24, solvedVol ? 320 : 192);
     const float dt    = span / float(STEPS);

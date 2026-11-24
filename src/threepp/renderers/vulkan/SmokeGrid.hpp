@@ -143,6 +143,7 @@ namespace threepp::vulkan {
         bool          clockStarted_ = false;
         double        lastTime_     = 0.0;
         std::uint64_t seenResets_   = 0;
+        bool          warnedCaps_   = false;
     };
 
 }// namespace threepp::vulkan

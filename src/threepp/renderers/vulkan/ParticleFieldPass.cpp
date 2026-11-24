@@ -1630,8 +1630,14 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 // multiply that turns σ per particle into fixed-point units.
                 dd.sigmaFixed = std::max(dr.sigmaPerParticle, 0.f) * kDensityFixedScale;
                 dd.attrAddr   = d.attrAddr;// the same buffer the billboards colour from
-                if (gridSmoke && !st.smoke && ensureSmokePipelines()) {
+                if (gridSmoke && !st.smoke && !st.smokeFailed && ensureSmokePipelines()) {
                     st.smoke = SmokeGrid::create(ctx_, *smokePipes_, createImage3DFn_, st.densityRes);
+                    if (!st.smoke) {
+                        st.smokeFailed = true;
+                        THREEPP_LOGF(kLogParticles, Warn, "GridSmoke: the solver's %u^3 grid could not be allocated "
+                                     "(about %u MB of device memory); this field draws no smoke",
+                                     st.densityRes, static_cast<unsigned>((std::uint64_t(st.densityRes) * st.densityRes * st.densityRes * 48u) >> 20));
+                    }
                 }
                 if (gridSmoke && st.smoke) {
                     dd.smoke     = st.smoke.get();

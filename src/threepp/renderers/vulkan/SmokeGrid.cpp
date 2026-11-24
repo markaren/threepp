@@ -3,6 +3,7 @@
 #include "VulkanContext.hpp"
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/VulkanLog.hpp"
 
 #include "threepp/renderers/vulkan/shaders/smoke_advect.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/smoke_advect_fix.comp.spv.h"
@@ -249,7 +250,9 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
 
     // ── the clock ───────────────────────────────────────────────────────────
     const float dt = std::max(gs.stepDt, 1e-4f);
-    if (!clockStarted_ || field.gridSmokeResets() != seenResets_) {
+    if (!std::isfinite(gs.time)) {
+        // A clock that is not a number runs no steps (the count below would be a NaN cast to an integer).
+    } else if (!clockStarted_ || field.gridSmokeResets() != seenResets_) {
         clockStarted_ = true;
         seenResets_   = field.gridSmokeResets();
         lastTime_     = gs.time;
@@ -304,6 +307,14 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
     P.head[1]          = static_cast<float>(nc);
     const size_t nb = std::min<size_t>(gs.boxes.size(), kSmokeMaxBoxes);
     P.head[3]       = static_cast<float>(nb);
+    if (!warnedCaps_ && (gs.sources.size() > kSmokeMaxSources || gs.colliders.size() > kSmokeMaxColliders ||
+                         gs.boxes.size() > kSmokeMaxBoxes)) {
+        warnedCaps_ = true;
+        THREEPP_LOGF(kLogParticles, Warn, "GridSmoke: %zu sources, %zu colliders and %zu boxes given; only the first %zu, %zu "
+                     "and %zu are used",
+                     gs.sources.size(), gs.colliders.size(), gs.boxes.size(), size_t(kSmokeMaxSources),
+                     size_t(kSmokeMaxColliders), size_t(kSmokeMaxBoxes));
+    }
     P.head[2]          = static_cast<float>(std::fmod(gs.time, 1000.0));
     for (size_t i = 0; i < ns; ++i) {
         const auto& s = gs.sources[i];

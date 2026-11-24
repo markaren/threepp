@@ -21,9 +21,14 @@ void main() {
         const float gl = length(g);
         if (gl > 1e-6) {
             const vec3  n = g / gl;
-            const float cell = 1.0 / pc.invCell.x;// the confinement length: one cell
+            // The confinement length: one cell, the cube root of its volume (cells need not be cubes).
+            const float cell = 1.0 / pow(pc.invCell.x * pc.invCell.y * pc.invCell.z, 1.0 / 3.0);
             v += pc.invCell.w * pc.phys1.y * cell * cross(n, om.xyz);
         }
     }
+    // This is the velocity advection moves the smoke with, so it must not point into a solid either: the sources,
+    // buoyancy and the confinement above can all push air at a wall after the last projection.
+    vec3 sv;
+    if (!solidCell(c, sv)) v = wallClamp(c, v);
     imageStore(oVel, c, vec4(v, 0.0));
 }

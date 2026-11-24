@@ -31,13 +31,26 @@ void main() {
         v = mix(v, src[i].vel.xyz, clamp(k * src[i].rates.z * dt, 0.0, 1.0));
     }
 
-    // A collider carries the air with it and holds no smoke.
+    // A collider carries the air with it.
     vec3 sv;
     if (solidCell(c, sv)) {
         v = sv;
-        // The solid takes the air's motion; it only thins the smoke it sits in (a body that deleted all it swept
-        // cut a thin dark tunnel along its path).
-        s.x *= exp(-10.0 * dt);
+        // What a solid cell holds is what the advection reads when a backtrace ends just inside it, so a wall's
+        // surface takes the mean of the open cells beside it: the smoke beside a wall reads its own side, and the
+        // wall neither drains it (an empty wall did) nor stores it to hand to the far side (a wall that kept what
+        // the advection put in it did). A cell with no open neighbour, deep in a wall or a moving body, only thins
+        // the smoke it sits in: a body that deleted all it swept cut a thin dark tunnel along its path.
+        vec2  sum = vec2(0.0);
+        float k   = 0.0;
+        for (int a = 0; a < 6; ++a) {
+            const ivec3 q = c + ivec3(a == 0 ? 1 : (a == 1 ? -1 : 0), a == 2 ? 1 : (a == 3 ? -1 : 0), a == 4 ? 1 : (a == 5 ? -1 : 0));
+            vec3        qv;
+            if (!inGrid(q) || solidCell(q, qv)) continue;
+            sum += texelFetch(uSca, q, 0).xy;
+            k += 1.0;
+        }
+        if (k > 0.0) s = sum / k;
+        else s.x *= exp(-10.0 * dt);
     }
 
     v *= 1.0 / (1.0 + pc.phys1.z * dt);

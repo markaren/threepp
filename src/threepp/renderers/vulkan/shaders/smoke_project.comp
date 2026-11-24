@@ -18,8 +18,7 @@ void main() {
     const vec3  g   = vec3((pressureAt(c + ivec3(1, 0, 0), pc0) - pressureAt(c - ivec3(1, 0, 0), pc0)) * h.x,
                            (pressureAt(c + ivec3(0, 1, 0), pc0) - pressureAt(c - ivec3(0, 1, 0), pc0)) * h.y,
                            (pressureAt(c + ivec3(0, 0, 1), pc0) - pressureAt(c - ivec3(0, 0, 1), pc0)) * h.z);
-    vec3 v = texelFetch(uVel, c, 0).xyz - g;
-    // A solid floor takes no downward flow.
-    if (pc.box.w > 0.5 && c.y == 0) v.y = max(v.y, 0.0);
+    // No flow into a wall, a collider or the solid floor.
+    const vec3 v = wallClamp(c, texelFetch(uVel, c, 0).xyz - g);
     imageStore(oVel, c, vec4(v, 0.0));
 }
