@@ -238,12 +238,7 @@ void main() {
     // (oceanWakeLane). A step shorter than half a half-float step of the
     // channel would round away, so the count is dithered to it: the lane runs
     // out at its own rate whatever the frame rate.
-    const bool laneLeft = tb.laneFade > 0.0;
-    if (laneLeft) {
-        s.a = max(s.a - dt / tb.laneLife, 0.0);
-    } else {
-        s.a *= exp(-dt / tb.laneLife);
-    }
+    s.a = max(s.a - dt / tb.laneLife, 0.0);
     // A shore window (WakePatch::shore) is fed by shore_source.comp after this
     // step and by nothing here: its flow is the foam's drift off the solid and
     // downwind, which is not a stream through still water, and the sea round a
@@ -256,10 +251,8 @@ void main() {
     // A stream through still water is turbulent at about a quarter of its
     // speed, and turbulent water has lost its short waves.
     s.b = max(s.b, 0.25 * length(v));
-    // Turbulent water has lost its short waves. (The lane that counts down
-    // holds only what a producer laid: its readers take the churn from the
-    // turbulence itself, oceanWakeLane.)
-    if (!laneLeft) s.a = max(s.a, smoothstep(0.01, 0.12, s.b));
+    // (The lane holds only what a producer laid: its readers take the churn
+    // from the turbulence itself, oceanWakeLane.)
 
     // Where the ripples' own waves break (WakeField::rippleBreaking): their
     // slope, read at this texel from last step's ripples (the same sea the
@@ -314,11 +307,11 @@ void main() {
         // the share of life left: full only on the centre line just astern,
         // soft at its sides, fading in a straight line over the life.
         const float kLaneRefRadius = 5.0;
-        const float share = laneLeft ? clamp(sc.radius / kLaneRefRadius, 0.04, 1.0) : 1.0;
+        const float share = clamp(sc.radius / kLaneRefRadius, 0.04, 1.0);
         s.a = max(s.a, sc.lane * wl * share);
         v = mix(v, sc.vel, min(w, 1.0));
     }
-    if (laneLeft && s.a > 0.0) {
+    if (s.a > 0.0) {
         // (the dither of the count above: half a step of the rgba16f channel at s.a either way)
         const float ulp = exp2(floor(log2(s.a)) - 10.0);
         s.a += (wkHash(ivec3(px, int(tb.timeSec * 977.0) + li * 131)) - 0.5) * ulp;

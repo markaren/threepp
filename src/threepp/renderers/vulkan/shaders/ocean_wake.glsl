@@ -84,7 +84,7 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
                             // 32-bit halves (packUint2x32); 0 = none
     vec2  shoreEye;         // the camera the shore's windows were placed round (oceanWakeSample)
     float laneFade;         // what the lane's strength is divided by, 1 + (U/8)^2 for a wind U
-                            // (oceanWakeLane); 0 = the lane is a strength that dies exponentially
+                            // (oceanWakeLane)
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
     WakeSource sources[];
 };
@@ -99,7 +99,7 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
 // the lane only thins the short waves and never leaves a mirror.
 float oceanWakeLane(uint64_t tableAddr, float a, float turb) {
     const float fade = WakeTable(tableAddr).laneFade;
-    return fade > 0.0 ? clamp(max(a, smoothstep(0.01, 0.12, turb)) / fade, 0.0, 1.0) : clamp(a, 0.0, 1.0);
+    return clamp(max(a, smoothstep(0.01, 0.12, turb)) / fade, 0.0, 1.0);
 }
 
 #ifdef OCEAN_WAKE_SAMPLER

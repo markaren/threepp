@@ -733,9 +733,7 @@ namespace threepp::vulkan {
             tb.shoreEyeX     = st.eyeX;
             tb.shoreEyeZ     = st.eyeZ;
         }
-        // The lane holds the time it has left (wake_field.comp). THREEPP_OCEAN_NIGHT_LANE=0
-        // is the old lane, for judging: 0 here.
-        // The lane is where the turbulence has taken the short waves away, and
+        // The lane holds the time it has left (wake_field.comp). It is where the turbulence has taken the short waves away, and
         // the wind grows them back at a rate that rises steeply with its
         // speed; in a rough sea the metre waves also run in from the sides
         // within seconds. So a turbulent wake is a long smooth strip in a
@@ -747,13 +745,10 @@ namespace threepp::vulkan {
         // 1 + (U/8)^2, so the most it takes away is 1 / laneFade of the short
         // waves (0.64 at 6 m/s, 0.39 at 10): no mirror on a rough sea. In a
         // calm the strength is the share of life left.
-        static const bool kLaneLeft = env::flag("THREEPP_OCEAN_NIGHT_LANE", true);
-        if (kLaneLeft) {
+        {
             const float U = std::max(dm.params.windSpeed, 0.0f);
             tb.laneLife   = std::max(wf.laneLife / (1.0f + (U / 5.0f) * (U / 5.0f)), 1e-3f);
             tb.laneFade   = 1.0f + (U / 8.0f) * (U / 8.0f);
-        } else {
-            tb.laneFade = 0.0f;
         }
 
         uint32_t liveMask = 0;
