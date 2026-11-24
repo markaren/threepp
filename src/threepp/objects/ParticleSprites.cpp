@@ -55,6 +55,7 @@ varying vec4 vColor;
 varying vec2 vUv;
 varying vec3 vViewDir;
 #include <common>
+#include <bsdfs>
 #include <lights_pars_begin>
 #include <fog_pars_fragment>
 
