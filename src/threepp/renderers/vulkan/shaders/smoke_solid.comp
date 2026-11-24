@@ -1,0 +1,14 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Once a frame, before the steps: the colliders rasterised into solidMask (xyz = the solid's velocity, w = covered).
+// The capsules are the only thing that walks the collider list; every other pass reads one texel.
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    vec3        vel;
+    const float d = colliderSdf(worldOfCell(c), vel);
+    imageStore(solidMask, c, vec4(vel, d < 0.0 ? 1.0 : 0.0));
+}

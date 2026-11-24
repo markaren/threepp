@@ -1,0 +1,18 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Pass 4a: semi-Lagrangian advection. Velocity goes straight to oVel; the
+// scalars go to aux.xy as the PREDICTOR of the MacCormack correction that
+// follows (smoke_advect_fix.comp), which is what keeps a plume's edge sharp.
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    const float dt = pc.invCell.w;
+    const vec3  w  = worldOfCell(c);
+    const vec3  v  = texelFetch(uVel, c, 0).xyz + pc.wind.xyz;
+    const vec3  uvw = uvwOfWorld(w - v * dt);
+    imageStore(oVel, c, vec4(textureLod(uVel, uvw, 0.0).xyz, 0.0));
+    imageStore(aux, c, vec4(textureLod(uSca, uvw, 0.0).xy, 0.0, 0.0));
+}

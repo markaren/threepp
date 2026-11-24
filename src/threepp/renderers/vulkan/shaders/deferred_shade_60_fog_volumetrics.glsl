@@ -254,8 +254,12 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // Below Nyquist on the voxel grid, with the old 1 m rule as a FLOOR so a
     // coarse volume never gets cheaper than it was before.
     const float want  = min(0.75 * vmin, 1.0);
-    const int   STEPS = clamp(int(ceil(span / max(want, 0.05))),
-                              emissive ? 32 : 24, 192);
+    // A SOLVED volume (ParticleField::GridSmoke, boxInvSize.w = 1) keeps its detail at the voxel, so its march
+    // may step well below the dust floor and may use more stations; every other volume keeps the old floor and cap.
+    bool solvedVol = false;
+    for (uint i = 0u; i < n; ++i) solvedVol = solvedVol || pd.boxInvSize[i].w > 0.5;
+    const int   STEPS = clamp(int(ceil(span / max(want, solvedVol ? 0.012 : 0.05))),
+                              emissive ? 32 : 24, solvedVol ? 320 : 192);
     const float dt    = span / float(STEPS);
     // Step phase: the per-pixel hash dither of rule 3, for every march.
     // pcgHash of the pixel coordinate only — NO pc.frame term, deliberately.

@@ -1,0 +1,20 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Pass 6, repeated: one Jacobi sweep of the pressure Poisson equation
+// laplacian(p) = div(v). The pressure of the last step is the first guess, so a
+// plume that has settled needs few sweeps. Open faces are p = 0 (the smoke
+// leaves), solid faces are zero-gradient.
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    const vec3  w2  = pc.invCell.xyz * pc.invCell.xyz;
+    const float pc0 = texelFetch(uP, c, 0).x;
+    const float sum = w2.x * (pressureAt(c + ivec3(1, 0, 0), pc0) + pressureAt(c - ivec3(1, 0, 0), pc0))
+                    + w2.y * (pressureAt(c + ivec3(0, 1, 0), pc0) + pressureAt(c - ivec3(0, 1, 0), pc0))
+                    + w2.z * (pressureAt(c + ivec3(0, 0, 1), pc0) + pressureAt(c - ivec3(0, 0, 1), pc0));
+    const float div = texelFetch(uAux, c, 0).x;
+    imageStore(oP, c, vec4((sum - div) / (2.0 * (w2.x + w2.y + w2.z)), 0.0, 0.0, 0.0));
+}

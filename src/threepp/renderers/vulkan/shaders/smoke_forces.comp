@@ -1,0 +1,49 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Pass 1 of a smoke step: buoyancy, the sources, the colliders, damping.
+// Pointwise, so it reads (A) and writes (B) and the host flips both parities.
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+
+    const float dt = pc.invCell.w;
+    const vec3  w  = worldOfCell(c);
+    vec3        v  = texelFetch(uVel, c, 0).xyz;
+    vec2        s  = texelFetch(uSca, c, 0).xy;// density, temperature
+
+    // Hot, light smoke rises; heavy (cooled, sooty) smoke sinks a little.
+    v.y += dt * (pc.phys0.x * s.y - pc.phys0.y * s.x);
+
+    // Sources: a soft ball that adds smoke and heat and pulls the air toward its own velocity.
+    const int ns = int(head.x);
+    for (int i = 0; i < ns; ++i) {
+        const float r = max(src[i].posRadius.w, 1e-4);
+        const float d = length(w - src[i].posRadius.xyz) / r;
+        if (d >= 1.0) continue;
+        const float k = 1.0 - smoothstep(0.0, 1.0, d);
+        // Ragged emission: the puffs are not a smooth ball.
+        const float n = mix(1.0, 0.35 + 1.3 * vnoise(w * (3.0 / r) + vec3(0.0, -head.z * 1.7, 0.0)), src[i].vel.w);
+        s.x += src[i].rates.x * k * n * dt;
+        s.y += src[i].rates.y * k * n * dt;
+        v = mix(v, src[i].vel.xyz, clamp(k * src[i].rates.z * dt, 0.0, 1.0));
+    }
+
+    // A collider carries the air with it and holds no smoke.
+    vec3 sv;
+    if (solidCell(c, sv)) {
+        v = sv;
+        // The solid takes the air's motion; it only thins the smoke it sits in (a body that deleted all it swept
+        // cut a thin dark tunnel along its path).
+        s.x *= exp(-10.0 * dt);
+    }
+
+    v *= 1.0 / (1.0 + pc.phys1.z * dt);
+    const float sp = length(v);
+    if (sp > pc.wind.w) v *= pc.wind.w / sp;
+
+    imageStore(oVel, c, vec4(v, 0.0));
+    imageStore(oSca, c, vec4(s, 0.0, 0.0));
+}

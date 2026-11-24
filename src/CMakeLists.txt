@@ -873,6 +873,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanGeometryState.hpp"
             "threepp/renderers/vulkan/VulkanSceneTypes.hpp"
             "threepp/renderers/vulkan/ParticleFieldPass.hpp"
+            "threepp/renderers/vulkan/SmokeGrid.hpp"
             "threepp/renderers/vulkan/VulkanViewContext.hpp"
             "threepp/renderers/vulkan/SceneBuildFrame.hpp"
             # The state groups VulkanRenderer::Impl inherits (state/*.hpp).
@@ -978,6 +979,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/DrawGen.cpp"
             "threepp/renderers/vulkan/TlasGen.cpp"
             "threepp/renderers/vulkan/ParticleFieldPass.cpp"
+            "threepp/renderers/vulkan/SmokeGrid.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/WakeFieldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
@@ -1552,6 +1554,50 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_density_convert.comp"
         kParticleDensityConvertCompSpv
         _particle_density_convert_spv_h)
+    # ParticleField GRID SMOKE (ParticleField::GridSmoke): an Eulerian solver on the
+    # device whose last pass writes the field's r32ui sigma_t volume, so the r16f
+    # convert after it and everything downstream are the particle-dust code.
+    # See SmokeGrid.{hpp,cpp} and shaders/smoke_common.glsl.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_forces.comp"
+        kSmokeForcesCompSpv
+        _smoke_forces_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_curl.comp"
+        kSmokeCurlCompSpv
+        _smoke_curl_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_confine.comp"
+        kSmokeConfineCompSpv
+        _smoke_confine_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_advect.comp"
+        kSmokeAdvectCompSpv
+        _smoke_advect_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_advect_fix.comp"
+        kSmokeAdvectFixCompSpv
+        _smoke_advect_fix_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_diverge.comp"
+        kSmokeDivergeCompSpv
+        _smoke_diverge_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_jacobi.comp"
+        kSmokeJacobiCompSpv
+        _smoke_jacobi_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_project.comp"
+        kSmokeProjectCompSpv
+        _smoke_project_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_write.comp"
+        kSmokeWriteCompSpv
+        _smoke_write_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_solid.comp"
+        kSmokeSolidCompSpv
+        _smoke_solid_spv_h)
     # ParticleField DEVICE EMITTER (Ownership::Renderer,
     # plans/particle-atmosphere.md F-C): one thread per slot evaluates a
     # stateless closed-form trajectory and writes this frame's positions AND

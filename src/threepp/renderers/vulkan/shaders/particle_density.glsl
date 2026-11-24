@@ -87,7 +87,7 @@ layout(set = 0, binding = 69) uniform sampler3D particleDensityLinTex[kMaxDensit
 // loops per volume. `emission` is per-field for the same reason.
 layout(set = 0, binding = 68) uniform ParticleDensityUbo {
     vec4  boxMin[kMaxDensityFields];     // xyz = world min corner, w = resolution
-    vec4  boxInvSize[kMaxDensityFields]; // xyz = 1 / (2 * halfExtent), w unused
+    vec4  boxInvSize[kMaxDensityFields]; // xyz = 1 / (2 * halfExtent), w = 1 for a SOLVED volume (GridSmoke)
     vec4  albedoAniso[kMaxDensityFields];// rgb = single-scatter albedo, a = HG g
     // x = emissive intensity (0 = pure dust, the exact no-op), y = blackbody T
     // at the box bottom (K), z = T at the box top (K), w = ramp exponent.
@@ -315,8 +315,16 @@ float pdSurfaceLightTransmittance(vec3 p, vec3 L) {
         const float e = max(max(lo.x, lo.y), max(lo.z, 0.0));
         const float x = min(min(hi.x, hi.y), hi.z);
         if (x <= e) continue;
-        const float dl = (x - e) / float(kTaps);
-        for (int s = 0; s < kTaps; ++s) {
+        // A SOLVED volume (boxInvSize.w = 1, ParticleField::GridSmoke) has detail at its voxel size, and a sun low
+        // over a wide box crosses metres of it: 16 taps would be half a metre apart and read a thin filament as a
+        // wall of shadow (or miss it altogether), so its taps follow the voxel, two to a voxel, to a cap.
+        int taps = kTaps;
+        if (pd.boxInvSize[i].w > 0.5) {
+            const float vox = min(min(bsize.x, bsize.y), bsize.z) / max(pd.boxMin[i].w, 1.0);
+            taps = clamp(int(ceil((x - e) / (2.0 * vox))), kTaps, 64);
+        }
+        const float dl = (x - e) / float(taps);
+        for (int s = 0; s < taps; ++s) {
             const vec3 q  = p + L * (e + (float(s) + 0.5) * dl);
             const vec3 tt = clamp((q - bmin) * pd.boxInvSize[i].xyz, vec3(0.0), vec3(1.0));
             // The primary march's edge feather, so the shadow is of the plume

@@ -85,6 +85,26 @@ std::shared_ptr<ParticleField> ParticleField::create(const Config& config) {
     return std::make_shared<ParticleField>(config);
 }
 
+std::shared_ptr<ParticleField> ParticleField::createGridSmoke(const Vector3& center, const Vector3& halfExtent,
+                                                              std::uint32_t resolution) {
+
+    if (halfExtent.x <= 0.f || halfExtent.y <= 0.f || halfExtent.z <= 0.f) {
+        throw std::invalid_argument(
+                "ParticleField::createGridSmoke: halfExtent must be positive on every axis "
+                "— it is the world box the solved smoke fills");
+    }
+    Config cfg;
+    cfg.capacity  = 1;// the field machinery wants one; the smoke has no particles
+    cfg.ownership = Ownership::HostRing;
+    auto f        = create(cfg);
+    // One dead slot (w < 0 is the one liveness rule), so nothing draws and nothing scatters.
+    const ParticlePos dead{0.f, 0.f, 0.f, -1.f};
+    f->submit(&dead, 1, 1.f / 60.f);
+    f->setDensityRepr(center, halfExtent, 1.f, resolution);
+    f->gridSmoke_.enabled = true;
+    return f;
+}
+
 void ParticleField::submit(const void* pxVec4Array, std::uint32_t n, float dtSec) {
 
     // The mode split, enforced rather than documented. A Renderer field's

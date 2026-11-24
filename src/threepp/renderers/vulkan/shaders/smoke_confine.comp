@@ -1,0 +1,29 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Pass 3: vorticity confinement (Fedkiw et al.). A semi-Lagrangian step smooths
+// the small whorls away; this pushes the air round the ridges of |curl| so they
+// spin back up. Strength is GridSmoke::vorticity in 1/s.
+
+float mag(ivec3 c) { return texelFetch(uAux, clamp(c, ivec3(0), pc.res.xyz - 1), 0).w; }
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    vec3 v = texelFetch(uVel, c, 0).xyz;
+    const vec4 om = texelFetch(uAux, c, 0);
+    if (pc.phys1.y > 0.0 && om.w > 1e-4) {
+        const vec3 h = 0.5 * pc.invCell.xyz;
+        vec3 g = vec3((mag(c + ivec3(1, 0, 0)) - mag(c - ivec3(1, 0, 0))) * h.x,
+                      (mag(c + ivec3(0, 1, 0)) - mag(c - ivec3(0, 1, 0))) * h.y,
+                      (mag(c + ivec3(0, 0, 1)) - mag(c - ivec3(0, 0, 1))) * h.z);
+        const float gl = length(g);
+        if (gl > 1e-6) {
+            const vec3  n = g / gl;
+            const float cell = 1.0 / pc.invCell.x;// the confinement length: one cell
+            v += pc.invCell.w * pc.phys1.y * cell * cross(n, om.xyz);
+        }
+    }
+    imageStore(oVel, c, vec4(v, 0.0));
+}
