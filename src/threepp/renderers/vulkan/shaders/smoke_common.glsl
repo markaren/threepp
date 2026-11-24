@@ -43,10 +43,16 @@ struct Collider {
 // each of its six neighbours.
 layout(set = 0, binding = 9, rgba16f) uniform image3D solidMask;
 
+struct Box {
+    vec4 lo;// xyz minimum corner (world)
+    vec4 hi;// xyz maximum corner
+    vec4 vel;
+};
 layout(set = 0, binding = 8, std430) readonly buffer Params {
-    vec4     head;// x sources, y colliders, z time (s), w unused
-    Source   src[8];
-    Collider col[8];
+    vec4     head;// x sources, y capsule colliders, z time (s), w boxes
+    Source   src[16];   // kSmokeMaxSources in SmokeGrid.hpp
+    Collider col[64];   // kSmokeMaxColliders
+    Box      box[128];  // kSmokeMaxBoxes
 };
 
 layout(push_constant) uniform Pc {
@@ -80,6 +86,17 @@ float colliderSdf(vec3 w, out vec3 vel) {
             vel  = col[i].vel.xyz;
         }
     }
+    const int nb = int(head.w);
+    for (int i = 0; i < nb; ++i) {
+        const vec3  c = 0.5 * (box[i].lo.xyz + box[i].hi.xyz);
+        const vec3  h = 0.5 * (box[i].hi.xyz - box[i].lo.xyz);
+        const vec3  q = abs(w - c) - h;
+        const float d = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+        if (d < best) {
+            best = d;
+            vel  = box[i].vel.xyz;
+        }
+    }
     return best;
 }
 
@@ -87,7 +104,7 @@ float colliderSdf(vec3 w, out vec3 vel) {
 bool solidCell(ivec3 c, out vec3 vel) {
     vel = vec3(0.0);
     if (c.y < 0 && pc.box.w > 0.5) return true;
-    if (!inGrid(c) || head.y < 0.5) return false;
+    if (!inGrid(c) || head.y + head.w < 0.5) return false;
     const vec4 m = imageLoad(solidMask, c);
     vel          = m.xyz;
     return m.w > 0.5;

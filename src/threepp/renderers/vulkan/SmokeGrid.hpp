@@ -46,6 +46,11 @@ namespace threepp::vulkan {
     };
     static_assert(sizeof(SmokePc) == 96, "SmokePc layout drift");
 
+    // How many sources and colliders a field may carry (the rest are ignored). A labyrinth's walls are colliders.
+    inline constexpr std::uint32_t kSmokeMaxSources   = 16;
+    inline constexpr std::uint32_t kSmokeMaxColliders = 64;
+    inline constexpr std::uint32_t kSmokeMaxBoxes     = 128;
+
     // Mirrors `Params` in shaders/smoke_common.glsl (std430).
     struct SmokeGpuSource {
         float posRadius[4];
@@ -57,12 +62,18 @@ namespace threepp::vulkan {
         float b[4];
         float vel[4];
     };
-    struct SmokeGpuParams {
-        float            head[4];// x sources, y colliders, z time
-        SmokeGpuSource   src[8];
-        SmokeGpuCollider col[8];
+    struct SmokeGpuBox {
+        float lo[4];
+        float hi[4];
+        float vel[4];
     };
-    static_assert(sizeof(SmokeGpuParams) == 16 + 8 * 48 + 8 * 48, "SmokeGpuParams layout drift");
+    struct SmokeGpuParams {
+        float            head[4];// x sources, y capsule colliders, z time, w boxes
+        SmokeGpuSource   src[kSmokeMaxSources];
+        SmokeGpuCollider col[kSmokeMaxColliders];
+        SmokeGpuBox      box[kSmokeMaxBoxes];
+    };
+    static_assert(sizeof(SmokeGpuParams) == 16 + kSmokeMaxSources * 48 + kSmokeMaxColliders * 48 + kSmokeMaxBoxes * 48, "SmokeGpuParams layout drift");
 
     // One frame of one field, resolved on the host so recording reads no field.
     struct SmokePlan {

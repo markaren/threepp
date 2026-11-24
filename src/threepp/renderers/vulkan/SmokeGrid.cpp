@@ -299,9 +299,11 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
 
     // ── the sources and colliders ───────────────────────────────────────────
     SmokeGpuParams& P  = out.params;
-    const size_t    ns = std::min<size_t>(gs.sources.size(), 8), nc = std::min<size_t>(gs.colliders.size(), 8);
+    const size_t    ns = std::min<size_t>(gs.sources.size(), kSmokeMaxSources), nc = std::min<size_t>(gs.colliders.size(), kSmokeMaxColliders);
     P.head[0]          = static_cast<float>(ns);
     P.head[1]          = static_cast<float>(nc);
+    const size_t nb = std::min<size_t>(gs.boxes.size(), kSmokeMaxBoxes);
+    P.head[3]       = static_cast<float>(nb);
     P.head[2]          = static_cast<float>(std::fmod(gs.time, 1000.0));
     for (size_t i = 0; i < ns; ++i) {
         const auto& s = gs.sources[i];
@@ -331,6 +333,19 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
         g.vel[0]      = c.velocity.x;
         g.vel[1]      = c.velocity.y;
         g.vel[2]      = c.velocity.z;
+    }
+    for (size_t i = 0; i < nb; ++i) {
+        const auto& b = gs.boxes[i];
+        auto&       g = P.box[i];
+        g.lo[0]       = b.min.x;
+        g.lo[1]       = b.min.y;
+        g.lo[2]       = b.min.z;
+        g.hi[0]       = b.max.x;
+        g.hi[1]       = b.max.y;
+        g.hi[2]       = b.max.z;
+        g.vel[0]      = b.velocity.x;
+        g.vel[1]      = b.velocity.y;
+        g.vel[2]      = b.velocity.z;
     }
     return out;
 }
@@ -413,7 +428,7 @@ void SmokeGrid::record(VkCommandBuffer cb, const SmokePipelines& pl, const Smoke
                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
     // The colliders, rasterised once for all of this frame's steps (they do not move between them).
-    if (plan.steps > 0 && plan.params.head[1] > 0.5f) {
+    if (plan.steps > 0 && plan.params.head[1] + plan.params.head[3] > 0.5f) {
         const std::uint32_t sx = (res_ + 7u) / 8u, sy = (res_ + 3u) / 4u, sz = (res_ + 3u) / 4u;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl.solid);
         const VkDescriptorSet set = sets_[v_ | (s_ << 1) | (p_in_ << 2)];

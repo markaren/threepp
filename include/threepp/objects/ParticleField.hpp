@@ -587,8 +587,8 @@ namespace threepp {
         //
         // COLLIDERS stir the air: a capsule moving through the box carries the
         // smoke with it and leaves a wake, the same way a character does in a
-        // game-FX fluid. SOURCES emit. Both are in WORLD space; the first eight of
-        // each are used.
+        // game-FX fluid. SOURCES emit. Both are in WORLD space; the first 16
+        // sources and the first 64 colliders are used (a labyrinth's walls are colliders).
         struct GridSmoke {
             struct Source {
                 Vector3 position{0.f, 0.f, 0.f};
@@ -603,6 +603,12 @@ namespace threepp {
                 Vector3 a{0.f, 0.f, 0.f};
                 Vector3 b{0.f, 0.f, 0.f};
                 float   radius = 0.3f;
+                Vector3 velocity{0.f, 0.f, 0.f};// m/s of its surface
+            };
+
+            struct Box {// an axis-aligned block: a wall, a floor slab, a crate
+                Vector3 min{0.f, 0.f, 0.f};
+                Vector3 max{0.f, 0.f, 0.f};
                 Vector3 velocity{0.f, 0.f, 0.f};// m/s of its surface
             };
 
@@ -626,6 +632,7 @@ namespace threepp {
             bool  solidFloor  = false; // the bottom face of the box is a wall
             std::vector<Source>   sources;
             std::vector<Collider> colliders;
+            std::vector<Box>      boxes;// up to 128; static walls are the usual use
         };
         struct TracedRepr {// procedural-AABB BLAS
             float radiusScale = 1.f;// AABB dilation vs the render radius
