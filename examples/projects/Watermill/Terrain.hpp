@@ -457,8 +457,9 @@ namespace mill {
             const float wet = smooth(0.12f, -0.02f, above);
             c = mix(c, c * srgb(150, 130, 100) * 0.62f, wet);
             c = mix(c, srgb(84, 80, 52), 0.45f * smooth(-0.05f, -0.25f, above));
-            const float mossy = smooth(0.4f, 0.9f, n.y) * smooth(0.25f, 0.7f, above) * smooth(-0.1f, 0.5f, fbm3(w.x * 1.5f, w.y * 1.5f, w.z * 1.5f, 3, k.seed + 4));
-            c = mix(c, srgb(98, 124, 52), 0.85f * mossy);
+            // moss only on the tops of the stones the floods leave alone, dark olive and patchy, never lime
+            const float mossy = smooth(0.55f, 0.95f, n.y) * smooth(0.45f, 1.1f, above) * smooth(0.1f, 0.6f, fbm3(w.x * 1.5f, w.y * 1.5f, w.z * 1.5f, 3, k.seed + 4));
+            c = mix(c, srgb(52, 62, 32) * (0.85f + 0.3f * clamp01(0.5f + fbm3(w.x * 6.f, w.y * 6.f, w.z * 6.f, 2, k.seed + 5))), 0.6f * mossy);
             // the dark line where it meets the ground
             const float g = site::groundHeight(w.x, w.z);
             c = c * (0.55f + 0.45f * smooth(0.f, 0.12f, w.y - g));

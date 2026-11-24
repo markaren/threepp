@@ -189,7 +189,8 @@ namespace mill {
             L.stoneMax = 1.05f;
             L.seed = 7;
             L.tint = V3(1.f, 0.98f, 0.95f);
-            L.moss = 0.75f;
+            L.moss = 1.f;
+            L.mossLine = 2.2f;// the creek and the wheel keep the basement walls damp to about here
             const float b = -L.base;
             // west: the axle's hole and two small windows; south: the basement door; east and north: a window each
             L.openings[0] = {{wheelZ - millNorth - 0.35f, wheelZ - millNorth + 0.35f, wheelY - 0.35f + b, wheelY + 0.55f + b},
@@ -253,6 +254,15 @@ namespace mill {
                     if (w.facade == k) holes.push_back({w.u - 0.5f * w.width - 0.02f, w.u + 0.5f * w.width + 0.02f, w.y0 - 0.02f, w.y1 + 0.02f});
                 for (const auto& d : millDoors())
                     if (d.facade == k) holes.push_back({d.u - 0.5f * d.width - 0.02f, d.u + 0.5f * d.width + 0.02f, d.y0 - 0.05f, d.y1 + 0.02f});
+                // each storey of each wall was reboarded at its own time: one lift is long silvered, another browner and
+                // newer, another dark with rot and damp
+                std::array<V3, 3> liftTint;
+                for (auto& t : liftTint) {
+                    const float pick = rng();
+                    t = pick < 0.45f ? V3(1.f, 1.f, 1.f) * rng.range(0.95f, 1.12f)
+                      : pick < 0.75f ? V3(0.9f, 0.8f, 0.68f) * rng.range(0.9f, 1.05f)
+                                     : V3(0.72f, 0.7f, 0.66f) * rng.range(0.85f, 1.f);
+                }
                 // walk along the wall, board by board
                 float u = 0.f;
                 std::vector<float> joints;
@@ -261,10 +271,11 @@ namespace mill {
                     if (f.length - (u + bw) < 0.14f) bw = f.length - u;
                     const float gap = rng.range(0.003f, 0.011f);
                     const float uc = u + 0.5f * bw;
-                    // the board's tint: most silvered alike, the odd one darker or a later, browner replacement
-                    V3 tint = V3(1, 1, 1) * rng.range(0.86f, 1.08f);
-                    if (rng() < 0.08f) tint = V3(0.82f, 0.72f, 0.6f);
-                    if (rng() < 0.05f) tint = tint * 0.75f;
+                    // the board's own tint: boards differ, a later replacement is browner, a rotten one dark
+                    float own = rng.range(0.78f, 1.14f);
+                    V3 special(1, 1, 1);
+                    if (rng() < 0.12f) special = V3(0.9f, 0.74f, 0.58f);
+                    else if (rng() < 0.07f) special = V3(0.62f, 0.6f, 0.56f);
                     // three lifts, split at the floor bands; the bottoms have rotted back unevenly
                     float y = sillTop + 0.02f + std::max(0.f, rng.range(-0.03f, 0.06f));
                     for (int lift = 0; lift < 3; ++lift) {
@@ -287,13 +298,18 @@ namespace mill {
                         }
                         for (auto [a, b] : spans) {
                             if (b - a < 0.04f) continue;
+                            // now and then a board is gone, and the frame shows behind
+                            if (lift < 2 && rng() < 0.018f) continue;
                             WoodLook look;
-                            look.tint = tint;
+                            look.tint = liftTint[lift] * special * own * rng.range(0.94f, 1.06f);
                             look.seed = rng.next();
-                            look.bow = rng.range(-0.004f, 0.006f);
-                            look.twist = rng.range(-0.02f, 0.02f);
+                            look.bow = rng.range(-0.006f, 0.012f);
+                            look.twist = rng.range(-0.04f, 0.04f);
                             look.weather = boardWeather;
-                            appendBeam(wood(m.siding), f.at(uc, a, 0.016f), f.at(uc, b, 0.016f), f.out, bw - gap, 0.022f, look);
+                            // some have pulled off their nails at the foot and stand out from the wall; some are split short
+                            const float kick = (lift == 0 && rng() < 0.14f) ? rng.range(0.012f, 0.04f) : 0.f;
+                            const float shortTop = rng() < 0.05f ? rng.range(0.05f, 0.25f) * (b - a) : 0.f;
+                            appendBeam(wood(m.siding), f.at(uc, a, 0.016f + kick), f.at(uc, b - shortTop, 0.016f), f.out, bw - gap, 0.022f + rng.range(-0.003f, 0.004f), look);
                         }
                         y = bands[lift] + 0.04f;
                     }

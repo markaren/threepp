@@ -169,7 +169,7 @@ namespace mill {
             L.stoneMax = 0.85f;
             L.seed = 1711;
             L.tint = V3(0.95f, 0.94f, 0.9f);
-            L.moss = 0.55f;
+            L.moss = 0.75f;
             L.weather = [](const Vector3& p, const Vector3& n, const V3& c) {
                 V3 col = c * (0.72f + 0.28f * smooth(groundHeight(p.x, p.z), groundHeight(p.x, p.z) + 1.5f, p.y));
                 col = mix(col, srgb(80, 98, 52), 0.5f * smooth(0.5f, 0.9f, n.y));

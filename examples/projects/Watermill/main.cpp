@@ -7,11 +7,13 @@
 //   Tab               walk instead: W A S D to move, Q / E down / up, Shift faster, left mouse drag to look
 //   1 .. 9, 0         the views: hero, overview, side, bridge, stream, wheel, stone floor, basement, bin floor; falls
 //   P                 pause the water
+//   [ / ]             less / more water in the creek
 //   The panel: the wheel's speed and the torque on it, and the flume's gate (how much water it lets through).
 //
 // Headless (dev):
 //   Watermill --shot out.png [--view hero|overview|...] [--eye x,y,z] [--look x,y,z] [--fov deg] [--size WxH]
 //             [--time T] [--no-ao] [--bench N]   (N frames timed after T, then the still)
+//   Watermill --flow Q ...                       the creek's flow in m3/s (default 2.8; 0.3 a trickle, 8 a spate)
 //   Watermill --vulkan ...                       the same on VulkanRenderer (ray-traced light)
 //   Watermill --pathtrace SPP --shot out.png ... a path-traced still (Vulkan), SPP samples a pixel
 
@@ -92,6 +94,7 @@ int main(int argc, char** argv) {
     Vector3 sunArg;
     float airScale = 1.f;
     bool vulkan = false;
+    float flowArg = -1.f;
     int ptSamples = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -105,6 +108,7 @@ int main(int argc, char** argv) {
         else if (a == "--fov" && i + 1 < argc) fov = std::stof(argv[++i]);
         else if (a == "--bench" && i + 1 < argc) benchFrames = std::max(1, std::atoi(argv[++i]));
         else if (a == "--vulkan") vulkan = true;
+        else if (a == "--flow" && i + 1 < argc) flowArg = std::stof(argv[++i]);
         else if (a == "--sun" && i + 1 < argc) std::sscanf(argv[++i], "%f,%f,%f", &sunArg.x, &sunArg.y, &sunArg.z);
         else if (a == "--air" && i + 1 < argc) airScale = std::stof(argv[++i]);
         else if (a == "--pathtrace" && i + 1 < argc) ptSamples = std::max(1, std::atoi(argv[++i])), vulkan = true;
@@ -164,11 +168,11 @@ int main(int argc, char** argv) {
         // casts the canopy's shadows through it as shafts
         // thinner by the water than GL's, but thinning far more slowly with height, so the ranges kilometres off
         // stand in blue haze behind the valley
-        scene->fog = FogExp2(Color(0.62f, 0.70f, 0.74f), 0.0045f * airScale);
+        scene->fog = FogExp2(Color(0.62f, 0.70f, 0.74f), 0.004f * airScale);
         VulkanRenderer::HeightFogSettings air;
         air.density = 0.f;
         air.baseY = 0.f;
-        air.falloff = 70.f;
+        air.falloff = 150.f;
         air.noiseAmount = 0.f;
         vk->setHeightFog(air);
         if (ptSamples > 0) vk->setAutoLod(false);
@@ -245,6 +249,7 @@ int main(int argc, char** argv) {
     jetMat->metalness = 0.f;
     jetMat->vertexColors = true;// RGBA: the sheets fade where they break up
     StreamWater stream(rockPoints, waterMat, tintMat, jetMat);
+    if (flowArg >= 0.f) stream.setInflow(flowArg);
     scene->add(stream.mesh);
     if (stream.tint) scene->add(stream.tint);
     scene->add(stream.curtain);
@@ -314,7 +319,7 @@ int main(int argc, char** argv) {
     // The engine's MountainBackdrop, as the glacier walker has it: ranges from a kilometre and a quarter out to the
     // horizon, derivative-damped and warped so they have sharp crests, smooth flanks and gullies, rock in strata and
     // snow lying where it would, hazed toward the sky. A massif stands where the hero view's gap in the canopy looks
-    // up the valley.
+    // up the valley, far enough off to be only just there in the haze.
     {
         const Vector3 heroEye = views.at("hero").eye, heroAt = views.at("hero").target;
         Vector3 toward(heroAt.x - heroEye.x, 0.f, heroAt.z - heroEye.z);
@@ -323,7 +328,17 @@ int main(int argc, char** argv) {
         const Vector3 dir(toward.x * std::cos(turn) + toward.z * std::sin(turn), 0.f, toward.z * std::cos(turn) - toward.x * std::sin(turn));
         terrain::MountainBackdropOptions r;
         r.ground = [](float x, float z) { return 8.f + 0.12f * std::min(std::hypot(x, z * 0.5f), 400.f); };
-        r.massifs.push_back({Vector2(heroEye.x + dir.x * 5600.f, heroEye.z + dir.z * 5600.f), 1600.f, 1100.f});
+        // summer: no snow. The "snow" rule is given the forest's colour and the steepest faces stay bare rock, so the
+        // range reads as wooded ridges with crags; a long massif (a ridge, not a lone cone) fills the gap
+        r.massifs.push_back({Vector2(heroEye.x + dir.x * 8000.f, heroEye.z + dir.z * 8000.f), 3200.f, 950.f});
+        r.snowSlope = 0.45f;
+        r.snowColor = Color(0.028f, 0.042f, 0.022f);
+        r.rockColor = Color(0.04f, 0.038f, 0.034f);
+        r.rockBandColor = Color(0.075f, 0.068f, 0.058f);
+        // the air between: a blue a little darker than the sky at the horizon, so the far ridge is a faint silhouette
+        r.hazeColor = Color(0.4f, 0.5f, 0.6f);
+        r.hazeSunColor = Color(0.55f, 0.6f, 0.65f);
+        r.hazeDistance = 5500;
         r.hazeColor = Color(0.6f, 0.72f, 0.82f);// the sky at the horizon
         r.hazeSunColor = Color(1.f, 0.9f, 0.74f);
         r.sunDirection = look.sun;
@@ -424,8 +439,10 @@ int main(int argc, char** argv) {
             ImGui::Text("wheel %.1f rpm, torque %.1f kN m", sim.omega * 60.f / 6.2831853f, sim.torque / 1000.f);
             ImGui::Text("water on the wheel %.0f kg, spilling %.3f m3/s", sim.waterMass, sim.spillRate);
             if (ImGui::SliderFloat("flume gate", &gate, 0.f, 1.5f, "%.2f")) sim.inflow = fullInflow * gate;
+            float creek = stream.inflow();
+            if (ImGui::SliderFloat("creek flow (m3/s)", &creek, 0.1f, 8.f, "%.1f", ImGuiSliderFlags_Logarithmic)) stream.setInflow(creek);
             ImGui::Text("stream %.1f ms a frame", streamMsShown);
-            ImGui::Text(walking ? "walking: WASD, Q/E, Shift, drag to look; Tab: orbit" : "orbit; Tab: walk; 1-9: views; P: pause");
+            ImGui::Text(walking ? "walking: WASD, Q/E, Shift, drag to look; Tab: orbit" : "orbit; Tab: walk; 0-9: views; P: pause; [ ]: creek");
             ImGui::End();
         });
         capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
@@ -445,6 +462,10 @@ int main(int argc, char** argv) {
             }
         } else if (e.key == Key::P) {
             paused = !paused;
+        } else if (e.key == Key::LEFT_BRACKET) {
+            stream.setInflow(std::max(0.1f, stream.inflow() / 1.4f));
+        } else if (e.key == Key::RIGHT_BRACKET) {
+            stream.setInflow(std::min(8.f, stream.inflow() * 1.4f));
         } else if (e.key >= Key::NUM_0 && e.key <= Key::NUM_9) {
             goTo(viewKeys[static_cast<int>(e.key) - static_cast<int>(Key::NUM_0)]);
         }

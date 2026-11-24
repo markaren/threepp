@@ -201,7 +201,7 @@ void main() {
     public:
         static constexpr float dx = 0.125f, x0 = -16.f, z0 = -42.f;
         static constexpr int nx = 204, nz = 784;// to x 9.5, z 56 (past the falls and their pool)
-        static constexpr float inflow = 2.8f;   // m3/s in at the top (early summer: good water, as the photos show it)
+        static constexpr float defaultInflow = 2.8f;// m3/s in at the top (early summer: good water, as the photos show it)
 
         ShallowWater swe{nx, nz, dx, x0, z0};
         std::shared_ptr<threepp::Mesh> mesh;
@@ -285,17 +285,13 @@ void main() {
             swe.setBed(bed, ground, cover);
             swe.setActive(active);
             // the inflow along the top rows, the outflow held at the bottom
-            int top = 0;
-            for (int pass = 0; pass < 2; ++pass) {
-                for (int j = 1; j < 5; ++j) {
-                    for (int i = 0; i < nx; ++i) {
-                        const int c = j * nx + i;
-                        if (!active[c] || bed[c] > site::nominalWater(swe.zOf(j))) continue;
-                        if (pass == 0) ++top;
-                        else swe.setSource(c, inflow / (static_cast<float>(top) * dx * dx));
-                    }
+            for (int j = 1; j < 5; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int c = j * nx + i;
+                    if (active[c] && bed[c] <= site::nominalWater(swe.zOf(j))) inlet_.push_back(c);
                 }
             }
+            setInflow(defaultInflow);
             for (int j = nz - 3; j < nz - 1; ++j)
                 for (int i = 0; i < nx; ++i)
                     if (active[j * nx + i]) swe.setSink(j * nx + i, site::nominalWater(swe.zOf(j)) - 0.05f);
@@ -360,6 +356,15 @@ void main() {
             float x, top, bottom, speed, q;
         };
         std::vector<Pour> pours;
+
+        // the creek's flow, m3/s, coming in at the top of the reach: a summer trickle at 0.3, a spring spate at 8
+        void setInflow(float q) {
+            inflow_ = std::max(q, 0.f);
+            if (inlet_.empty()) return;
+            const float rate = inflow_ / (static_cast<float>(inlet_.size()) * dx * dx);
+            for (int c : inlet_) swe.setSourceRate(c, rate);
+        }
+        [[nodiscard]] float inflow() const { return inflow_; }
 
         // what the wheel lets fall into its pit, m3/s
         void setTailInflow(float q) {
@@ -582,7 +587,8 @@ void main() {
             updateCurtain();
         }
 
-        std::vector<int> tail_;
+        std::vector<int> tail_, inlet_;
+        float inflow_ = defaultInflow;
         std::vector<float> positions_, normals_, velocity_, info_, uv_;
         std::shared_ptr<threepp::MeshStandardMaterial> material_;
 

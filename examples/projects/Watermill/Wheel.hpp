@@ -223,7 +223,8 @@ namespace mill {
         L.stoneMin = 0.3f;
         L.stoneMax = 0.6f;
         L.seed = 301;
-        L.moss = 0.95f;
+        L.moss = 1.15f;
+        L.mossLine = wheelY - 0.6f;// the wheel's spray
         L.weather = [](const threepp::Vector3& p, const threepp::Vector3& n, const V3& c) {
             V3 col = c * (0.65f + 0.35f * smooth(0.f, 2.f, p.y));
             col = mix(col, srgb(70, 88, 48), 0.6f * smooth(2.8f, 0.4f, p.y) * clamp01(0.6f + fbm3(p.x * 3.f, p.y * 3.f, p.z * 3.f, 2, 9u)));

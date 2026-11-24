@@ -38,11 +38,32 @@ namespace mill {
         float shear = 0.f;       // m the top edge stands to one side of the bottom
         float taper = 0.f;       // one end this much (share) taller than the other
         float wobble = 0.f;      // m the outline wanders: nothing was cut to a line
-        float moss = 0.f;        // 0..1 how much moss and grime gathers on its edges and top
+        float moss = 0.f;        // 0..1 how mossy it is
+        float mossLine = -1e9f;  // world y: below about here the wall stays damp and the moss is thick
+        float wear = 0.f;        // m the weather has eaten into its face, unevenly
+        float spall = 0.f;       // m a corner of its face has flaked off (0: none)
+        int spallCorner = 0;     // which corner (0..3)
         uint32_t seed = 1;
         // colour of a vertex at a world point with a world normal (wet feet, moss, streaks)
         std::function<V3(const threepp::Vector3&, const threepp::Vector3&, const V3&)> weather;
     };
+
+    // How much moss covers a point of old stonework: broad cushions over several stones where the wall stays damp (low
+    // down, facing north or the creek), and a fringe lodged along every stone's edges and on its top.
+    inline float mossCover(const threepp::Vector3& p, const threepp::Vector3& n, float edge, float amount, float line) {
+        const float broad = smooth(0.f, 0.42f, fbm3(p.x * 0.85f, p.y * 1.1f, p.z * 0.85f, 4, 4721u));
+        const float low = smooth(line + 1.8f, line - 0.4f, p.y);
+        const float damp = 0.5f + 0.35f * smooth(0.2f, -0.6f, n.z) + 0.3f * smooth(0.2f, -0.7f, n.x);
+        const float fine = smooth(-0.15f, 0.35f, fbm3(p.x * 2.6f, p.y * 2.6f, p.z * 2.6f, 3, 4711u));
+        const float lodged = (0.7f * smooth(0.8f, 1.f, edge) + smooth(0.25f, 0.8f, n.y)) * fine;
+        return clamp01(amount * (1.35f * broad * (0.3f + 0.7f * low) * damp + 0.8f * lodged));
+    }
+
+    inline V3 mossColour(const threepp::Vector3& p, float cover) {
+        const V3 c = mix(srgb(58, 84, 30), srgb(116, 134, 54), clamp01(0.5f + fbm3(p.x * 7.f, p.y * 7.f, p.z * 7.f, 2, 4712u)));
+        // a cushion is darker at its thin edge, where the stone shows through, and brighter where it is thick
+        return c * (0.75f + 0.35f * cover);
+    }
 
     // one stone: a rounded box of half extents (hx along u, hy along v, hz along w) centred on f.o
     inline void appendStone(MeshBuild& out, const Frame& f, float hx, float hy, float hz, const StoneLook& look) {
@@ -70,6 +91,17 @@ namespace mill {
                 p.y += (p.y > 0 ? 1.f : -1.f) * ey * wy;
                 p.y *= 1.f + look.taper * (p.x / hx);
                 p.x += 0.5f * look.shear * (p.y / hy);
+            }
+            // worn: the weather has eaten the face unevenly, and a corner may have flaked off
+            {
+                const float front = smooth(-0.2f * hz, hz, p.z);
+                const float eaten = smooth(-0.1f, 0.6f, fbm3(p.x * 6.f + ox, p.y * 6.f + oy, p.z * 2.f, 3, look.seed + 21));
+                p.z -= look.wear * eaten * front;
+                if (look.spall > 0.f) {
+                    const float sx = (look.spallCorner & 1) ? 1.f : -1.f, sy = (look.spallCorner & 2) ? 1.f : -1.f;
+                    const float d = sx * p.x / hx + sy * p.y / hy + 0.12f * fbm3(p.x * 9.f, p.y * 9.f, ox, 2, look.seed + 22);
+                    p.z -= look.spall * smooth(1.05f, 1.2f, d) * front;
+                }
             }
             // the face swells: most on the front, a little on the sides
             const float sx = 1.f - (p.x / hx) * (p.x / hx), sy = 1.f - (p.y / hy) * (p.y / hy);
@@ -134,19 +166,35 @@ namespace mill {
             }
         }
         out.smoothNormals(start);
+        // the moss: where it covers the stone it stands a few millimetres proud in lumpy cushions
+        std::vector<float> cover(out.vertexCount() - start, 0.f);
+        if (look.moss > 0.f) {
+            for (unsigned i = start; i < out.vertexCount(); ++i) {
+                const Vector3 p(out.pos[3 * i], out.pos[3 * i + 1], out.pos[3 * i + 2]);
+                const Vector3 n(out.nor[3 * i], out.nor[3 * i + 1], out.nor[3 * i + 2]);
+                cover[i - start] = mossCover(p, n, edgeOf[i - start], look.moss, look.mossLine);
+            }
+            for (unsigned i = start; i < out.vertexCount(); ++i) {
+                const float m = cover[i - start];
+                if (m < 0.05f) continue;
+                const Vector3 p(out.pos[3 * i], out.pos[3 * i + 1], out.pos[3 * i + 2]);
+                const float lump = 0.5f + 0.5f * fbm3(p.x * 16.f, p.y * 16.f, p.z * 16.f, 2, 4714u);
+                const float h = smooth(0.15f, 0.7f, m) * (0.003f + 0.011f * lump);
+                for (int k = 0; k < 3; ++k) out.pos[3 * i + k] += out.nor[3 * i + k] * h;
+            }
+            out.smoothNormals(start);
+        }
         for (unsigned i = start; i < out.vertexCount(); ++i) {
             const Vector3 p(out.pos[3 * i], out.pos[3 * i + 1], out.pos[3 * i + 2]);
             const Vector3 n(out.nor[3 * i], out.nor[3 * i + 1], out.nor[3 * i + 2]);
             V3 c = look.weather ? look.weather(p, n, look.tint) : look.tint;
             const float edge = edgeOf[i - start];
-            // grime in the arrises, moss in clumps along the edges and on the tops, where water stands
-            c = c * (1.f - 0.22f * smooth(0.82f, 1.f, edge));
+            // grime in the arrises and dark streaks down the faces
+            c = c * (1.f - 0.25f * smooth(0.82f, 1.f, edge));
+            c = c * (1.f - 0.3f * smooth(0.1f, 0.55f, fbm3(p.x * 5.f, p.y * 0.5f, p.z * 5.f, 3, 4715u)));
             if (look.moss > 0.f) {
-                const float clump = smooth(-0.15f, 0.35f, fbm3(p.x * 2.6f, p.y * 2.6f, p.z * 2.6f, 3, 4711u));
-                const float where = 0.75f * smooth(0.8f, 1.f, edge) + smooth(0.25f, 0.8f, n.y);
-                const float m = clamp01(look.moss * clump * where);
-                const V3 mossCol = mix(srgb(66, 92, 34), srgb(112, 130, 56), clamp01(0.5f + fbm3(p.x * 7.f, p.y * 7.f, p.z * 7.f, 2, 4712u)));
-                c = mix(c, mossCol, 0.85f * m);
+                const float m = cover[i - start];
+                c = mix(c, mossColour(p, m), smooth(0.f, 0.55f, m));
             }
             out.col[3 * i] = c.r;
             out.col[3 * i + 1] = c.g;
@@ -175,6 +223,7 @@ namespace mill {
         uint32_t seed = 1;
         V3 baseTint{1, 1, 1};
         float moss = 0.5f;    // how mossy its stones' edges and its joints are
+        float mossLine = 0.f; // world y below about which it stays damp
         std::function<V3(const threepp::Vector3&, const threepp::Vector3&, const V3&)> weather;
     };
 
@@ -239,7 +288,13 @@ namespace mill {
                         static const std::array<V3, 5> hues{V3(0.78f, 0.77f, 0.75f), V3(0.84f, 0.76f, 0.64f), V3(0.70f, 0.64f, 0.56f), V3(0.80f, 0.68f, 0.56f), V3(0.62f, 0.62f, 0.62f)};
                         look.tint = spec.baseTint * hues[rng.next() % hues.size()] * rng.range(0.72f, 1.02f);
                     }
-                    look.round = rng.range(0.025f, 0.055f);
+                    look.round = rng.range(0.035f, 0.075f);
+                    look.wear = rng.range(0.004f, 0.016f);
+                    if (rng() < 0.3f) {
+                        look.spall = rng.range(0.012f, 0.032f);
+                        look.spallCorner = static_cast<int>(rng.next() % 4u);
+                    }
+                    look.mossLine = spec.mossLine;
                     look.pillow = rng.range(0.015f, 0.045f);
                     look.chips = rng.range(0.01f, 0.028f);
                     look.shear = rng.range(-0.035f, 0.035f);
@@ -299,8 +354,8 @@ namespace mill {
                         const Vector3 p = F.at(uu, vv, -lean - recess);
                         V3 c = V3(0.95f, 0.92f, 0.86f) * (0.75f + 0.35f * clamp01(0.5f + fbm3(p.x * 4.f, p.y * 4.f, p.z * 4.f, 2, 77u))) * (1.f - 0.35f * erosion);
                         if (spec.weather) c = spec.weather(p, F.w, c);
-                        const float clump = smooth(-0.2f, 0.3f, fbm3(p.x * 2.2f, p.y * 2.2f, p.z * 2.2f, 3, 4713u));
-                        c = mix(c, srgb(70, 96, 38), clamp01(0.8f * spec.moss * clump * (0.4f + 0.6f * erosion)));
+                        const float m = mossCover(p, F.w, 1.f, 1.1f * spec.moss, spec.mossLine) * (0.6f + 0.6f * erosion);
+                        c = mix(c, mossColour(p, m), smooth(0.f, 0.5f, m));
                         mortar.vertex(p, F.w, uu / 1.2f, vv / 1.2f, c);
                     }
                 }
@@ -326,6 +381,7 @@ namespace mill {
         uint32_t seed = 1;
         V3 tint{1, 1, 1};
         float moss = 0.5f;
+        float mossLine = -1e9f;// world y below about which it stays damp; default: a metre over its foot
         std::function<V3(const threepp::Vector3&, const threepp::Vector3&, const V3&)> weather;
     };
 
@@ -359,6 +415,7 @@ namespace mill {
             w.seed = L.seed * 31u + static_cast<uint32_t>(k) * 7919u;
             w.baseTint = L.tint;
             w.moss = L.moss;
+            w.mossLine = L.mossLine > -1e8f ? L.mossLine : L.base + 1.f;
             w.weather = L.weather;
             buildWall(stones, mortar, w);
         }

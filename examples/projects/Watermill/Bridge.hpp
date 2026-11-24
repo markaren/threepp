@@ -52,7 +52,8 @@ namespace mill {
                 L.stoneMax = 0.95f;
                 L.seed = static_cast<uint32_t>(500 + static_cast<int>(px * 10));
                 L.tint = V3(0.96f, 0.95f, 0.93f);
-                L.moss = 0.85f;
+                L.moss = 1.05f;
+                L.mossLine = site::nominalWater(zc) + 1.2f;
                 L.weather = stoneWeather;
                 buildLoop(stones, mortar, L);
                 // a timber bolster on top that the stringers bear on
@@ -77,7 +78,7 @@ namespace mill {
                 L.stoneMax = 0.9f;
                 L.seed = static_cast<uint32_t>(700 + static_cast<int>(e[0] * 10));
                 L.tint = V3(0.94f, 0.93f, 0.9f);
-                L.moss = 0.8f;
+                L.moss = 0.9f;
                 L.weather = stoneWeather;
                 buildLoop(stones, mortar, L);
             }

@@ -613,6 +613,26 @@ namespace mill {
                 placed[v][lodOf(x, z)].push_back(in);
             }
         }
+        // further off, the understory goes on through the whole valley, a little bigger and as dense, so between the
+        // far trunks and the ground there is leaf, not bare slope and sky
+        for (float gz = -150.f; gz < 75.f; gz += 6.5f) {
+            for (float gx = -90.f; gx < 90.f; gx += 6.5f) {
+                const float x = gx + rng.range(0.f, 6.5f), z = gz + rng.range(0.f, 6.5f);
+                // past about 95 m the canopy and the ridges behind close the view anyway
+                if (coreDistance(x, z) <= 46.f || coreDistance(x, z) > 95.f || rng() < 0.3f) continue;
+                if (!trunkClear(x, z, 3.f, 3.f)) continue;
+                const int v = rng() < 0.4f ? DogwoodUnder : Sapling;
+                Instance in{};
+                in.x = x;
+                in.z = z;
+                in.scale = rng.range(1.1f, 1.6f);
+                in.y = footHeight(x, z, 0.1f) - 0.05f;
+                in.yaw = rng() * 6.2831853f;
+                in.tint = tint(1.f) * 0.96f;
+                in.woodTint = V3(1, 1, 1) * rng.range(0.85f, 1.1f);
+                placed[v][lodOf(x, z)].push_back(in);
+            }
+        }
 
         // ---- the undergrowth ---------------------------------------------------------------------------------------
         std::array<std::vector<Instance>, 3> shrubAt, fernAt;
