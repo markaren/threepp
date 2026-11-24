@@ -538,6 +538,31 @@ namespace mill {
         return m.finish(1.f, true, false);
     }
 
+    // ---- foam lace ----------------------------------------------------------------------------------------------------
+    // white water seen close: clusters of bubbles and the veins between them, holes of dark water through it. Alpha is
+    // the foam (for an alpha-tested skin). 1.2 m a tile.
+    inline std::shared_ptr<threepp::DataTexture> foamLaceTexture(uint32_t seed) {
+        const int N = 512;
+        std::vector<unsigned char> px(static_cast<size_t>(N) * N * 4);
+        forRows(N, [&](int y) {
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(N);
+            for (int x = 0; x < N; ++x) {
+                const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(N);
+                const Cell big = worley2(u * 9, v * 9, seed, 9, 9);
+                const Cell small = worley2(u * 34, v * 34, seed + 1, 34, 34);
+                const float veins = smooth(0.16f, 0.02f, big.f2 - big.f1);
+                const float bubbles = smooth(0.42f, 0.18f, small.f1) * smooth(-0.3f, 0.3f, fbm2(u * 5, v * 5, 3, seed + 2, 5, 5));
+                const float body = smooth(-0.15f, 0.45f, fbm2(u * 3, v * 3, 4, seed + 3, 3, 3));
+                const float a = clamp01(std::max({veins * 0.9f, bubbles, body}) + 0.1f * fbm2(u * 60, v * 60, 2, seed + 4, 60, 60));
+                const size_t i = (static_cast<size_t>(y) * N + x) * 4;
+                const unsigned char w = toSrgbByte(0.82f + 0.12f * a);
+                px[i] = px[i + 1] = px[i + 2] = w;
+                px[i + 3] = toByte(a);
+            }
+        });
+        return makeTexture(std::move(px), N, N, true);
+    }
+
 }// namespace mill
 
 #endif

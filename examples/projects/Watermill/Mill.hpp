@@ -21,14 +21,30 @@ namespace mill {
 
     using threepp::Vector3;
 
+    // A century has settled the timber frame on its stone base: it racks toward the creek and downstream, more the
+    // higher up (a point of the frame at height y is moved by this), and each wall bows between its corners.
+    inline Vector3 frameSettle(float y) {
+        const float h = std::clamp((y - site::sillTop) / (site::eaves - site::sillTop), 0.f, 1.6f);
+        return Vector3(-0.05f, 0.f, 0.022f) * h;
+    }
+
     // one face of the building: its outer plane, a direction along it and the outward normal
     struct Facade {
         Vector3 origin;// the face's start at y = 0
         Vector3 along; // unit, along the wall
         Vector3 out;   // unit, outward
         float length;
+        float bulge;   // m the wall bows out (in, if negative) at its middle
 
-        [[nodiscard]] Vector3 at(float u, float y, float w) const { return origin + along * u + Vector3(0, y, 0) + out * w; }
+        [[nodiscard]] Vector3 at(float u, float y, float w) const {
+            Vector3 p = origin + along * u + Vector3(0, y, 0) + out * w;
+            if (y > site::sillTop) {
+                const float h = std::clamp((y - site::sillTop) / (site::eaves - site::sillTop), 0.f, 1.f);
+                const float t = std::clamp(u / length, 0.f, 1.f);
+                p += frameSettle(y) + out * (bulge * std::sin(3.14159265f * t) * std::sin(3.14159265f * h));
+            }
+            return p;
+        }
     };
 
     struct WindowSpec {
@@ -46,10 +62,10 @@ namespace mill {
     inline const std::array<Facade, 4>& facades() {
         using namespace site;
         static const std::array<Facade, 4> f{{
-                {Vector3(millWest, 0, millNorth), Vector3(0, 0, 1), Vector3(-1, 0, 0), millSouth - millNorth},
-                {Vector3(millWest, 0, millSouth), Vector3(1, 0, 0), Vector3(0, 0, 1), millEast - millWest},
-                {Vector3(millEast, 0, millSouth), Vector3(0, 0, -1), Vector3(1, 0, 0), millSouth - millNorth},
-                {Vector3(millEast, 0, millNorth), Vector3(-1, 0, 0), Vector3(0, 0, -1), millEast - millWest},
+                {Vector3(millWest, 0, millNorth), Vector3(0, 0, 1), Vector3(-1, 0, 0), millSouth - millNorth, 0.045f},
+                {Vector3(millWest, 0, millSouth), Vector3(1, 0, 0), Vector3(0, 0, 1), millEast - millWest, 0.025f},
+                {Vector3(millEast, 0, millSouth), Vector3(0, 0, -1), Vector3(1, 0, 0), millSouth - millNorth, -0.02f},
+                {Vector3(millEast, 0, millNorth), Vector3(-1, 0, 0), Vector3(0, 0, -1), millEast - millWest, 0.02f},
         }};
         return f;
     }
@@ -117,6 +133,20 @@ namespace mill {
         static V3 boardWeather(const Vector3& p, const Vector3& n, const V3& c) {
             using namespace site;
             V3 col = c;
+            // a century of sun and rain did not weather it evenly: broad patches gone silver, others still brown
+            const float patch = fbm3(p.x * 0.45f, p.y * 0.3f, p.z * 0.45f, 3, 901u);
+            col = mix(col, col * V3(1.08f, 0.9f, 0.72f), 0.75f * smooth(-0.05f, 0.45f, patch));
+            col = col * (0.9f + 0.18f * smooth(-0.4f, 0.4f, fbm3(p.x * 1.3f, p.y * 0.25f, p.z * 1.3f, 2, 902u)));
+            // black streaks run down from the eaves and the floor bands, where the water drips off
+            const float streakField = fbm3(p.x * 6.f, p.y * 0.35f, p.z * 6.f, 3, 903u);
+            const float underDrip = std::max({smooth(eaves - 1.6f, eaves - 0.1f, p.y), smooth(binFloor - 1.2f, binFloor - 0.05f, p.y) * (p.y < binFloor ? 1.f : 0.f),
+                                              smooth(garnerFloor - 1.2f, garnerFloor - 0.05f, p.y) * (p.y < garnerFloor ? 1.f : 0.f)});
+            col = col * (1.f - 0.55f * underDrip * smooth(0.05f, 0.5f, streakField));
+            // green algae and moss low on the boards, over the damp foundation, thickest on the north and the creek side
+            const float shade = n.z < -0.5f || n.x < -0.5f ? 1.f : 0.55f;
+            const float low = smooth(sillTop + 1.3f, sillTop + 0.05f, p.y) * shade;
+            const float clump = smooth(-0.2f, 0.35f, fbm3(p.x * 2.f, p.y * 2.f, p.z * 2.f, 3, 904u));
+            col = mix(col, srgb(74, 94, 46), 0.7f * low * clump);
             // splash and damp near the foot of the wall
             col = col * (0.72f + 0.28f * smooth(sillTop, sillTop + 1.0f, p.y));
             // the wheel keeps the west wall round it wet: dark, green-black
@@ -159,6 +189,7 @@ namespace mill {
             L.stoneMax = 1.05f;
             L.seed = 7;
             L.tint = V3(1.f, 0.98f, 0.95f);
+            L.moss = 0.75f;
             const float b = -L.base;
             // west: the axle's hole and two small windows; south: the basement door; east and north: a window each
             L.openings[0] = {{wheelZ - millNorth - 0.35f, wheelZ - millNorth + 0.35f, wheelY - 0.35f + b, wheelY + 0.55f + b},
@@ -191,17 +222,7 @@ namespace mill {
                 for (const auto& o : L.openings[k]) lintel(k, o.u0, o.u1, o.v1 - b);
             }
             root->add(stones.mesh(m.masonry));
-            MeshBuild& mortarBuild = mortar;
-            // the mortar takes the stones' weathering too (darker and greener low down)
-            for (size_t i = 0; i < mortarBuild.col.size(); i += 3) {
-                const Vector3 p(mortarBuild.pos[i], mortarBuild.pos[i + 1], mortarBuild.pos[i + 2]);
-                const Vector3 n(mortarBuild.nor[i], mortarBuild.nor[i + 1], mortarBuild.nor[i + 2]);
-                const V3 c = L.weather(p, n, V3(0.9f, 0.88f, 0.84f));
-                mortarBuild.col[i] = c.r;
-                mortarBuild.col[i + 1] = c.g;
-                mortarBuild.col[i + 2] = c.b;
-            }
-            root->add(mortarBuild.mesh(m.mortar));
+            root->add(mortar.mesh(m.mortar));
             // the basement floor: packed earth and old flags, seen through the door and windows
             MeshBuild floor;
             appendQuad(floor, Vector3(millWest + 0.3f, basementFloor, millSouth - 0.3f), Vector3(millEast - 0.3f, basementFloor, millSouth - 0.3f),
@@ -244,8 +265,8 @@ namespace mill {
                     V3 tint = V3(1, 1, 1) * rng.range(0.86f, 1.08f);
                     if (rng() < 0.08f) tint = V3(0.82f, 0.72f, 0.6f);
                     if (rng() < 0.05f) tint = tint * 0.75f;
-                    // three lifts, split at the floor bands
-                    float y = sillTop + 0.02f;
+                    // three lifts, split at the floor bands; the bottoms have rotted back unevenly
+                    float y = sillTop + 0.02f + std::max(0.f, rng.range(-0.03f, 0.06f));
                     for (int lift = 0; lift < 3; ++lift) {
                         float top = bands[lift] - 0.04f;
                         if (lift == 2 && gable) top = gableTop(f, uc) - 0.05f;
@@ -306,7 +327,8 @@ namespace mill {
                                 look.tint = V3(1, 1, 1) * rng.range(0.85f, 1.02f);
                                 look.seed = rng.next();
                                 look.weather = boardWeather;
-                                appendBeam(wood(m.siding), f.at(uj, a, 0.037f), f.at(uj, b, 0.037f), f.out, 0.055f, 0.02f, look);
+                                // nailed up by eye: never quite plumb
+                                appendBeam(wood(m.siding), f.at(uj + rng.range(-0.012f, 0.012f), a, 0.037f), f.at(uj + rng.range(-0.012f, 0.012f), b, 0.037f), f.out, 0.055f, 0.02f, look);
                             }
                         }
                         y = bands[lift] + 0.12f;
@@ -404,18 +426,21 @@ namespace mill {
             for (const auto& w : millWindows()) {
                 const Facade& f = F[w.facade];
                 const float hw = 0.5f * w.width;
+                // the frame has racked with the wall: its head stands a little to one side of its sill
+                const float rack = rng.range(-0.022f, 0.022f) / std::max(w.y1 - w.y0, 0.1f);
+                const auto fa = [&](float u, float y, float wOut) { return f.at(u + rack * (y - w.y0), y, wOut); };
                 const WoodLook trim{V3(0.95f, 0.94f, 0.9f) * rng.range(0.85f, 1.f), rng.next()};
                 MeshBuild& t = wood(m.trim);
                 // casing: head with its drip cap, the sides, the sill sloping out
-                appendBeam(t, f.at(w.u - hw - 0.14f, w.y1 + 0.07f, 0.06f), f.at(w.u + hw + 0.14f, w.y1 + 0.07f, 0.06f), Vector3(0, 1, 0), 0.035f, 0.14f, trim);
-                appendBeam(t, f.at(w.u - hw - 0.17f, w.y1 + 0.15f, 0.085f), f.at(w.u + hw + 0.17f, w.y1 + 0.15f, 0.085f), Vector3(0, 1, 0), 0.07f, 0.025f, trim);
+                appendBeam(t, fa(w.u - hw - 0.14f, w.y1 + 0.07f, 0.06f), fa(w.u + hw + 0.14f, w.y1 + 0.07f, 0.06f), Vector3(0, 1, 0), 0.035f, 0.14f, trim);
+                appendBeam(t, fa(w.u - hw - 0.17f, w.y1 + 0.15f, 0.085f), fa(w.u + hw + 0.17f, w.y1 + 0.15f, 0.085f), Vector3(0, 1, 0), 0.07f, 0.025f, trim);
                 for (float s : {-1.f, 1.f})
-                    appendBeam(t, f.at(w.u + s * (hw + 0.065f), w.y0 - 0.02f, 0.06f), f.at(w.u + s * (hw + 0.065f), w.y1, 0.06f), f.out, 0.13f, 0.035f, trim);
-                appendBeam(t, f.at(w.u - hw - 0.16f, w.y0 - 0.03f, 0.04f), f.at(w.u + hw + 0.16f, w.y0 - 0.03f, 0.04f), Vector3(0, 1, 0), 0.16f, 0.04f, trim);
+                    appendBeam(t, fa(w.u + s * (hw + 0.065f), w.y0 - 0.02f, 0.06f), fa(w.u + s * (hw + 0.065f), w.y1, 0.06f), f.out, 0.13f, 0.035f, trim);
+                appendBeam(t, fa(w.u - hw - 0.16f, w.y0 - 0.03f, 0.04f), fa(w.u + hw + 0.16f, w.y0 - 0.03f, 0.04f), Vector3(0, 1, 0), 0.16f, 0.04f, trim);
                 // the jambs lining the opening through the wall
                 for (float s : {-1.f, 1.f})
-                    appendBeam(t, f.at(w.u + s * (hw - 0.012f), w.y0, -0.07f), f.at(w.u + s * (hw - 0.012f), w.y1, -0.07f), f.along, 0.024f, 0.2f, trim);
-                appendBeam(t, f.at(w.u - hw, w.y1 - 0.012f, -0.07f), f.at(w.u + hw, w.y1 - 0.012f, -0.07f), f.out, 0.2f, 0.024f, trim);
+                    appendBeam(t, fa(w.u + s * (hw - 0.012f), w.y0, -0.07f), fa(w.u + s * (hw - 0.012f), w.y1, -0.07f), f.along, 0.024f, 0.2f, trim);
+                appendBeam(t, fa(w.u - hw, w.y1 - 0.012f, -0.07f), fa(w.u + hw, w.y1 - 0.012f, -0.07f), f.out, 0.2f, 0.024f, trim);
                 // two sashes of six panes; the lower one sits in front of the upper
                 const float h = w.y1 - w.y0;
                 for (int sash = 0; sash < 2; ++sash) {
@@ -425,18 +450,18 @@ namespace mill {
                     const float bar = 0.045f;
                     // stiles and rails
                     for (float s : {-1.f, 1.f})
-                        appendBeam(t, f.at(w.u + s * (hw - 0.025f - bar * 0.5f), sy0, depth), f.at(w.u + s * (hw - 0.025f - bar * 0.5f), sy1, depth), f.out, bar, 0.035f, trim);
-                    appendBeam(t, f.at(w.u - hw + 0.025f, sy0 + 0.5f * bar, depth), f.at(w.u + hw - 0.025f, sy0 + 0.5f * bar, depth), Vector3(0, 1, 0), 0.035f, bar, trim);
-                    appendBeam(t, f.at(w.u - hw + 0.025f, sy1 - 0.5f * bar, depth), f.at(w.u + hw - 0.025f, sy1 - 0.5f * bar, depth), Vector3(0, 1, 0), 0.035f, bar, trim);
+                        appendBeam(t, fa(w.u + s * (hw - 0.025f - bar * 0.5f), sy0, depth), fa(w.u + s * (hw - 0.025f - bar * 0.5f), sy1, depth), f.out, bar, 0.035f, trim);
+                    appendBeam(t, fa(w.u - hw + 0.025f, sy0 + 0.5f * bar, depth), fa(w.u + hw - 0.025f, sy0 + 0.5f * bar, depth), Vector3(0, 1, 0), 0.035f, bar, trim);
+                    appendBeam(t, fa(w.u - hw + 0.025f, sy1 - 0.5f * bar, depth), fa(w.u + hw - 0.025f, sy1 - 0.5f * bar, depth), Vector3(0, 1, 0), 0.035f, bar, trim);
                     // muntins: three panes across, two up
                     const float ix0 = w.u - hw + 0.025f + bar, ix1 = w.u + hw - 0.025f - bar;
                     const float iy0 = sy0 + bar, iy1 = sy1 - bar;
                     for (int c = 1; c < 3; ++c) {
                         const float x = ix0 + (ix1 - ix0) * static_cast<float>(c) / 3.f;
-                        appendBeam(t, f.at(x, iy0, depth), f.at(x, iy1, depth), f.out, 0.018f, 0.025f, trim);
+                        appendBeam(t, fa(x, iy0, depth), fa(x, iy1, depth), f.out, 0.018f, 0.025f, trim);
                     }
                     const float my = 0.5f * (iy0 + iy1);
-                    appendBeam(t, f.at(ix0, my, depth), f.at(ix1, my, depth), Vector3(0, 1, 0), 0.025f, 0.018f, trim);
+                    appendBeam(t, fa(ix0, my, depth), fa(ix1, my, depth), Vector3(0, 1, 0), 0.025f, 0.018f, trim);
                     // the panes: most whole and grimy, a few out, a few broken
                     for (int c = 0; c < 3; ++c) {
                         for (int r = 0; r < 2; ++r) {
@@ -444,7 +469,7 @@ namespace mill {
                             const float py0 = r == 0 ? iy0 : my + 0.009f, py1 = r == 0 ? my - 0.009f : iy1;
                             const float fate = rng();
                             if (fate < 0.12f) continue;// gone
-                            const Vector3 a = f.at(px0, py0, depth), b = f.at(px1, py0, depth), cc = f.at(px1, py1, depth), d = f.at(px0, py1, depth);
+                            const Vector3 a = fa(px0, py0, depth), b = fa(px1, py0, depth), cc = fa(px1, py1, depth), d = fa(px0, py1, depth);
                             const V3 tint = V3(1, 1, 1) * rng.range(0.8f, 1.1f);
                             if (fate < 0.18f) {
                                 // broken: a shard left in the bottom corner
@@ -541,11 +566,17 @@ namespace mill {
             const float rafterTop = eaves + 0.16f;// the roof plane over the outer wall line
             // a point on a slope: s = -1 west, +1 east; d = metres in from the eave's edge along the slope
             const float slopeLen = (half + over) * std::sqrt(2.f);
+            // the roof has sagged between its gables, the ridge most, and its planes are no longer flat
+            const float zMid = 0.5f * (z0 + z1), zHalf = 0.5f * (z1 - z0);
+            const auto sagAt = [&](float d, float z) {
+                const float along = std::max(0.f, 1.f - ((z - zMid) / zHalf) * ((z - zMid) / zHalf));
+                return along * (0.035f + 0.065f * std::clamp(d / slopeLen, 0.f, 1.f)) + 0.012f * fbm2(z * 0.45f, d * 0.6f, 2, 91u) * along;
+            };
             const auto onSlope = [&](float s, float d, float z, float lift) {
                 const float x = (s < 0 ? millWest - over : millEast + over) - s * d / std::sqrt(2.f);
                 const float y = rafterTop - over + d / std::sqrt(2.f);
                 const Vector3 n(s / std::sqrt(2.f), 1.f / std::sqrt(2.f), 0);
-                return Vector3(x, y, z) + n * lift;
+                return Vector3(x, y - sagAt(d, z), z) + n * lift + frameSettle(y);
             };
             MeshBuild& frame = wood(m.interior);
             // rafters (their tails show under the eaves), collar ties, the ridge board
@@ -557,11 +588,16 @@ namespace mill {
                 if (std::fmod(z - z0, 1.2f) < 0.3f && z > millNorth + 0.2f && z < millSouth - 0.2f)
                     appendBeam(frame, Vector3(millWest + 1.6f, eaves + 1.5f, z + 0.07f), Vector3(millEast - 1.6f, eaves + 1.5f, z + 0.07f), Vector3(0, 1, 0), 0.05f, 0.16f, WoodLook{V3(0.72f, 0.66f, 0.6f), rng.next()});
             }
-            appendBeam(frame, Vector3(midX, ridge + 0.06f, z0), Vector3(midX, ridge + 0.06f, z1), Vector3(1, 0, 0), 0.2f, 0.04f, WoodLook{V3(0.7f, 0.64f, 0.58f), rng.next()});
+            // the ridge board, in lengths that follow the sag
+            for (float z = z0; z < z1 - 0.01f; z += 0.5f * (z1 - z0) / 4.f) {
+                const float zb = std::min(z + 0.5f * (z1 - z0) / 4.f, z1);
+                const Vector3 a = onSlope(-1.f, slopeLen, z, 0.f), b = onSlope(-1.f, slopeLen, zb, 0.f);
+                appendBeam(frame, Vector3(a.x + 0.5f * over * 0.f, a.y + 0.06f, z), Vector3(b.x, b.y + 0.06f, zb), Vector3(1, 0, 0), 0.2f, 0.04f, WoodLook{V3(0.7f, 0.64f, 0.58f), rng.next()});
+            }
             // skip sheathing across the rafters: boards with gaps (light shows between them from inside where shakes are thin)
             for (float s : {-1.f, 1.f}) {
                 for (float d = 0.08f; d < slopeLen - 0.05f; d += 0.24f) {
-                    appendBeam(frame, onSlope(s, d, z0, 0.0f), onSlope(s, d, z1, 0.0f), Vector3(s / std::sqrt(2.f), 1.f / std::sqrt(2.f), 0), 0.15f, 0.02f, WoodLook{V3(0.75f, 0.7f, 0.64f) * rng.range(0.85f, 1.05f), rng.next()});
+                    appendBeam(frame, onSlope(s, d, z0, 0.0f), onSlope(s, d, z1, 0.0f), Vector3(s / std::sqrt(2.f), 1.f / std::sqrt(2.f), 0), 0.15f, 0.02f, WoodLook{V3(0.75f, 0.7f, 0.64f) * rng.range(0.85f, 1.05f), rng.next(), sagAt(d, zMid)});
                 }
             }
             // the shakes: courses from the eaves up, each shake its own piece, butts proud of the course above
@@ -577,10 +613,12 @@ namespace mill {
                         const float zc = z + 0.5f * w;
                         z += w + rng.range(0.004f, 0.012f);
                         if (rng() < 0.012f && d > 0.5f) continue;// a lost shake
-                        const float dTop = std::min(d + length, slopeLen + 0.02f);
+                        // the butts do not keep a ruled line: each sits a little up or down the slope
+                        const float dButt = d + rng.range(-0.025f, 0.02f);
+                        const float dTop = std::min(dButt + length, slopeLen + 0.02f);
                         // each lies on the ones below: the butt lifted more than the tip
-                        const float liftButt = 0.022f + rng.range(0.f, 0.006f), liftTip = 0.008f;
-                        Vector3 a = onSlope(s, d, zc, liftButt), b = onSlope(s, dTop, zc, liftTip);
+                        const float liftButt = 0.022f + rng.range(0.f, 0.009f), liftTip = 0.008f;
+                        Vector3 a = onSlope(s, dButt, zc, liftButt), b = onSlope(s, dTop, zc, liftTip);
                         const float yaw = rng.range(-0.04f, 0.04f);
                         b.z += yaw * (dTop - d);
                         // moss: clumps, thickest low on the roof and where the shakes are old
@@ -601,12 +639,15 @@ namespace mill {
             // the ridge cap, the rake (barge) boards on the gables, the fascia on the eaves
             const WoodLook cap{V3(0.6f, 0.58f, 0.55f), rng.next()};
             for (float s : {-1.f, 1.f}) {
-                const Vector3 a = onSlope(s, slopeLen - 0.12f, z0 - 0.05f, 0.05f), b = onSlope(s, slopeLen - 0.12f, z1 + 0.05f, 0.05f);
-                appendBeam(shakes, a, b, Vector3(s / std::sqrt(2.f), 1.f / std::sqrt(2.f), 0), 0.24f, 0.025f, cap);
+                // the ridge cap in four lengths, following the sag
+                for (int k = 0; k < 4; ++k) {
+                    const float za = z0 - 0.05f + (z1 - z0 + 0.1f) * static_cast<float>(k) / 4.f, zb = za + (z1 - z0 + 0.1f) / 4.f + 0.03f;
+                    appendBeam(shakes, onSlope(s, slopeLen - 0.12f, za, 0.05f), onSlope(s, slopeLen - 0.12f, zb, 0.05f), Vector3(s / std::sqrt(2.f), 1.f / std::sqrt(2.f), 0), 0.24f, 0.025f, cap);
+                }
                 for (float z : {z0 - 0.02f, z1 + 0.02f}) {
                     appendBeam(wood(m.trim), onSlope(s, 0.f, z, -0.05f), onSlope(s, slopeLen + 0.03f, z, -0.05f), Vector3(0, 0, 1), 0.035f, 0.2f, WoodLook{V3(0.85f, 0.83f, 0.8f), rng.next()});
                 }
-                appendBeam(wood(m.trim), onSlope(s, 0.02f, z0 - 0.02f, -0.1f), onSlope(s, 0.02f, z1 + 0.02f, -0.1f), Vector3(s, 0.f, 0.f), 0.035f, 0.18f, WoodLook{V3(0.85f, 0.83f, 0.8f), rng.next(), 0.015f});
+                appendBeam(wood(m.trim), onSlope(s, 0.02f, z0 - 0.02f, -0.1f), onSlope(s, 0.02f, z1 + 0.02f, -0.1f), Vector3(s, 0.f, 0.f), 0.035f, 0.18f, WoodLook{V3(0.85f, 0.83f, 0.8f), rng.next(), sagAt(0.02f, zMid)});
             }
         }
     };

@@ -17,6 +17,8 @@
 
 #include "threepp/threepp.hpp"
 
+#include "threepp/extras/terrain/MountainBackdrop.hpp"
+
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/postprocessing/EffectComposer.hpp"
@@ -58,7 +60,7 @@ namespace {
     };
 
     const std::map<std::string, View> views{
-            {"hero", {{-3.6f, 1.45f, 27.5f}, {2.8f, 4.2f, -8.f}, 50.f}},
+            {"hero", {{-4.3f, 0.95f, 27.5f}, {2.4f, 3.9f, -8.f}, 52.f}},
             {"overview", {{3.f, 11.f, 36.f}, {2.f, 3.5f, -6.f}, 50.f}},
             {"side", {{-14.f, 4.f, 2.f}, {6.f, 4.f, 0.f}, 50.f}},
             {"bridge", {{-6.f, 2.5f, 2.f}, {-3.f, 3.5f, -13.f}, 55.f}},
@@ -67,7 +69,7 @@ namespace {
             {"stone", {{10.7f, 5.25f, 0.4f}, {7.9f, 6.f, 0.4f}, 62.f}},
             {"basement", {{10.9f, 2.3f, -1.0f}, {7.2f, 2.7f, 0.9f}, 62.f}},
             {"bin", {{11.6f, 8.5f, 3.6f}, {7.5f, 7.6f, -2.f}, 60.f}},
-            {"falls", {{-1.2f, -1.7f, 50.f}, {3.f, 2.2f, 8.f}, 48.f}},
+            {"falls", {{-1.2f, -2.2f, 50.f}, {3.f, 1.7f, 8.f}, 48.f}},
     };
     const std::array<const char*, 10> viewKeys{"falls", "hero", "overview", "side", "bridge", "stream", "wheel", "stone", "basement", "bin"};
 
@@ -160,11 +162,13 @@ int main(int argc, char** argv) {
     if (vk) {
         // Vulkan's air is one medium that thins with height (a uniform one would veil the whole sky); the path tracer
         // casts the canopy's shadows through it as shafts
-        scene->fog = FogExp2(Color(0.62f, 0.70f, 0.74f), airLook.density);
+        // thinner by the water than GL's, but thinning far more slowly with height, so the ranges kilometres off
+        // stand in blue haze behind the valley
+        scene->fog = FogExp2(Color(0.62f, 0.70f, 0.74f), 0.0045f * airScale);
         VulkanRenderer::HeightFogSettings air;
         air.density = 0.f;
         air.baseY = 0.f;
-        air.falloff = airLook.falloff;
+        air.falloff = 70.f;
         air.noiseAmount = 0.f;
         vk->setHeightFog(air);
         if (ptSamples > 0) vk->setAutoLod(false);
@@ -244,6 +248,10 @@ int main(int argc, char** argv) {
     scene->add(stream.mesh);
     if (stream.tint) scene->add(stream.tint);
     scene->add(stream.curtain);
+    if (vk) {
+        stream.addFoamSkin();
+        scene->add(stream.foamSkin);
+    }
     // the same water in the flume and in the buckets, each with its absorption pass on GL
     const auto withTint = [&](const std::shared_ptr<Mesh>& waterMesh, Object3D& parent) {
         waterMesh->renderOrder = 2;
@@ -291,7 +299,7 @@ int main(int argc, char** argv) {
     {
         Rng rng(55);
         for (int k = 0; k < 7; ++k) {
-            const float z = rng.range(site::flumeStartZ + 10.f, site::wheelZ - 3.5f);
+            const float z = rng.range(site::flumeStartZ + 1.5f, site::wheelZ - 3.5f);
             leaks.emplace_back(site::flumeX + rng.range(-0.42f, 0.42f), site::flumeFloor(z) - 0.06f, z);
         }
     }
@@ -301,6 +309,29 @@ int main(int argc, char** argv) {
     const auto tWoods = std::chrono::steady_clock::now();
     scene->add(plantWoods(materials));
     std::cout << "woods " << secondsSince(tWoods) << " s" << std::endl;
+
+    // ---- the mountains beyond the valley ---------------------------------------------------------------------------
+    // The engine's MountainBackdrop, as the glacier walker has it: ranges from a kilometre and a quarter out to the
+    // horizon, derivative-damped and warped so they have sharp crests, smooth flanks and gullies, rock in strata and
+    // snow lying where it would, hazed toward the sky. A massif stands where the hero view's gap in the canopy looks
+    // up the valley.
+    {
+        const Vector3 heroEye = views.at("hero").eye, heroAt = views.at("hero").target;
+        Vector3 toward(heroAt.x - heroEye.x, 0.f, heroAt.z - heroEye.z);
+        toward.normalize();
+        const float turn = 0.1f;// a little left of the view's middle, where the canopy opens
+        const Vector3 dir(toward.x * std::cos(turn) + toward.z * std::sin(turn), 0.f, toward.z * std::cos(turn) - toward.x * std::sin(turn));
+        terrain::MountainBackdropOptions r;
+        r.ground = [](float x, float z) { return 8.f + 0.12f * std::min(std::hypot(x, z * 0.5f), 400.f); };
+        r.massifs.push_back({Vector2(heroEye.x + dir.x * 5600.f, heroEye.z + dir.z * 5600.f), 1600.f, 1100.f});
+        r.hazeColor = Color(0.6f, 0.72f, 0.82f);// the sky at the horizon
+        r.hazeSunColor = Color(1.f, 0.9f, 0.74f);
+        r.sunDirection = look.sun;
+        if (vk) r.shading = terrain::MountainBackdropOptions::Shading::Textured;// Vulkan's air is the haze
+        auto mountains = terrain::MountainBackdrop::create(r);
+        mountains->mesh()->autoLod = false;// its rings are spaced for distance already
+        scene->add(mountains);
+    }
 
     // ---- the mill's inside --------------------------------------------------------------------------------------
     Interior interior(materials);
@@ -323,7 +354,7 @@ int main(int argc, char** argv) {
     if (freeEye) v.eye = eye;
     if (freeLook) v.target = lookAt;
     if (fov > 0) v.fov = fov;
-    auto camera = PerspectiveCamera::create(v.fov, canvas.aspect(), 0.05f, 2000.f);
+    auto camera = PerspectiveCamera::create(v.fov, canvas.aspect(), 0.08f, 16000.f);// the mountains stand out to 9 km
     camera->position.copy(v.eye);
     OrbitControls controls{*camera, canvas};
     controls.target.copy(v.target);
@@ -495,7 +526,7 @@ int main(int argc, char** argv) {
         // the falls: mist and spray where the sheet lands in the pool, in proportion to what goes over
         for (const auto& p : stream.pours) {
             if (p.q < 0.01f) continue;
-            const float zHit = site::fallsZ + p.speed * std::sqrt(2.f * std::max(p.top - p.bottom, 0.05f) / 9.81f);
+            const float zHit = site::fallsLipZ(p.x) + p.speed * std::sqrt(2.f * std::max(p.top - p.bottom, 0.05f) / 9.81f);
             if (fx() < 6.f * p.q) spray.emitMist(Vector3(p.x + fx.range(-0.1f, 0.1f), p.bottom + 0.15f, zHit + fx.range(-0.2f, 0.5f)), Vector3(0, 0.3f, 0.45f), 0.6f, 0.25f);
             if (fx() < 8.f * p.q) spray.emitDrops(Vector3(p.x, p.bottom + 0.05f, zHit), Vector3(0, 1.4f, 0.8f), 2, 0.7f, 0.08f);
         }

@@ -35,6 +35,10 @@ namespace mill {
         float pillow = 0.025f;   // how far the face's middle swells, m
         float chips = 0.012f;    // depth of the chipping near the edges, m
         float tile = 0.9f;       // the stone texture's tile, m
+        float shear = 0.f;       // m the top edge stands to one side of the bottom
+        float taper = 0.f;       // one end this much (share) taller than the other
+        float wobble = 0.f;      // m the outline wanders: nothing was cut to a line
+        float moss = 0.f;        // 0..1 how much moss and grime gathers on its edges and top
         uint32_t seed = 1;
         // colour of a vertex at a world point with a world normal (wet feet, moss, streaks)
         std::function<V3(const threepp::Vector3&, const threepp::Vector3&, const V3&)> weather;
@@ -50,12 +54,23 @@ namespace mill {
         const unsigned start = out.vertexCount();
         const float ox = unit(look.seed) * 5.f, oy = unit(hash32(look.seed)) * 5.f;
         const Vector3 ix(hx - r, hy - r, hz - r);
+        std::vector<float> edgeOf;// per emitted vertex: how near the stone's outline it is (0 middle, 1 edge)
         // a vertex of the box surface in the stone's own space (x along, y up, z out), rounded and dressed
         const auto shape = [&](Vector3 p) {
             const Vector3 c(std::clamp(p.x, -ix.x, ix.x), std::clamp(p.y, -ix.y, ix.y), std::clamp(p.z, -ix.z, ix.z));
             Vector3 d = p - c;
             const float len = d.length();
             if (len > 1e-6f) p = c + d * (r / len);
+            // not square: the outline wanders, one end stands taller, the top is off to one side of the bottom
+            {
+                const float ex = smooth(0.55f, 1.f, std::abs(p.x) / hx), ey = smooth(0.55f, 1.f, std::abs(p.y) / hy);
+                const float wx = look.wobble * fbm3(p.y * 5.f + ox, p.z * 3.f, oy, 2, look.seed + 11);
+                const float wy = look.wobble * fbm3(p.x * 5.f + oy, p.z * 3.f, ox, 2, look.seed + 12);
+                p.x += (p.x > 0 ? 1.f : -1.f) * ex * wx;
+                p.y += (p.y > 0 ? 1.f : -1.f) * ey * wy;
+                p.y *= 1.f + look.taper * (p.x / hx);
+                p.x += 0.5f * look.shear * (p.y / hy);
+            }
             // the face swells: most on the front, a little on the sides
             const float sx = 1.f - (p.x / hx) * (p.x / hx), sy = 1.f - (p.y / hy) * (p.y / hy);
             const float bulge = look.pillow * std::pow(std::max(sx, 0.f), 0.6f) * std::pow(std::max(sy, 0.f), 0.6f);
@@ -73,14 +88,19 @@ namespace mill {
             return p;
         };
         // six faces as grids, each emitted with its own vertices (the rounding makes their shared edges meet)
-        const auto face = [&](const std::vector<float>& la, const std::vector<float>& lb, const std::function<Vector3(float, float)>& place, bool flip) {
+        // each face takes the texture over its own two axes (mode 0: x and y, 1: x and z, 2: z and y), or the faces
+        // that turn the corners would wear one texel stretched across them
+        const auto face = [&](const std::vector<float>& la, const std::vector<float>& lb, const std::function<Vector3(float, float)>& place, bool flip, int mode) {
             const unsigned base = out.vertexCount();
             for (size_t j = 0; j < lb.size(); ++j) {
                 for (size_t i = 0; i < la.size(); ++i) {
-                    const Vector3 local = shape(place(la[i], lb[j]));
+                    const Vector3 placed = place(la[i], lb[j]);
+                    const Vector3 local = shape(placed);
                     const Vector3 world = f.at(local.x, local.y, local.z);
+                    edgeOf.push_back(std::max(std::abs(placed.x) / hx, std::abs(placed.y) / hy));
                     // texture over the wall's face, offset per stone
-                    const float u = (local.x + hx) / look.tile + ox, v = (local.y + hy) / look.tile + oy;
+                    const float u = (mode == 2 ? local.z + hz + 0.37f : local.x + hx) / look.tile + ox;
+                    const float v = (mode == 1 ? local.z + hz + 0.61f : local.y + hy) / look.tile + oy;
                     out.vertex(world, f.w, u, v, look.tint);
                 }
             }
@@ -93,12 +113,12 @@ namespace mill {
                 }
             }
         };
-        face(lx, ly, [&](float a, float b) { return Vector3(a, b, hz); }, false);  // front
-        face(lx, ly, [&](float a, float b) { return Vector3(a, b, -hz); }, true);  // back
-        face(lx, lz, [&](float a, float b) { return Vector3(a, hy, b); }, true);   // top
-        face(lx, lz, [&](float a, float b) { return Vector3(a, -hy, b); }, false); // bottom
-        face(lz, ly, [&](float a, float b) { return Vector3(hx, b, a); }, true);   // right
-        face(lz, ly, [&](float a, float b) { return Vector3(-hx, b, a); }, false); // left
+        face(lx, ly, [&](float a, float b) { return Vector3(a, b, hz); }, false, 0);  // front
+        face(lx, ly, [&](float a, float b) { return Vector3(a, b, -hz); }, true, 0);  // back
+        face(lx, lz, [&](float a, float b) { return Vector3(a, hy, b); }, true, 1);   // top
+        face(lx, lz, [&](float a, float b) { return Vector3(a, -hy, b); }, false, 1); // bottom
+        face(lz, ly, [&](float a, float b) { return Vector3(hx, b, a); }, true, 2);   // right
+        face(lz, ly, [&](float a, float b) { return Vector3(-hx, b, a); }, false, 2); // left
         // weld the faces' shared border vertices by position, so normals are smooth across the rounded arrises
         {
             std::unordered_map<long long, unsigned> seen;
@@ -114,15 +134,23 @@ namespace mill {
             }
         }
         out.smoothNormals(start);
-        if (look.weather) {
-            for (unsigned i = start; i < out.vertexCount(); ++i) {
-                const Vector3 p(out.pos[3 * i], out.pos[3 * i + 1], out.pos[3 * i + 2]);
-                const Vector3 n(out.nor[3 * i], out.nor[3 * i + 1], out.nor[3 * i + 2]);
-                const V3 c = look.weather(p, n, look.tint);
-                out.col[3 * i] = c.r;
-                out.col[3 * i + 1] = c.g;
-                out.col[3 * i + 2] = c.b;
+        for (unsigned i = start; i < out.vertexCount(); ++i) {
+            const Vector3 p(out.pos[3 * i], out.pos[3 * i + 1], out.pos[3 * i + 2]);
+            const Vector3 n(out.nor[3 * i], out.nor[3 * i + 1], out.nor[3 * i + 2]);
+            V3 c = look.weather ? look.weather(p, n, look.tint) : look.tint;
+            const float edge = edgeOf[i - start];
+            // grime in the arrises, moss in clumps along the edges and on the tops, where water stands
+            c = c * (1.f - 0.22f * smooth(0.82f, 1.f, edge));
+            if (look.moss > 0.f) {
+                const float clump = smooth(-0.15f, 0.35f, fbm3(p.x * 2.6f, p.y * 2.6f, p.z * 2.6f, 3, 4711u));
+                const float where = 0.75f * smooth(0.8f, 1.f, edge) + smooth(0.25f, 0.8f, n.y);
+                const float m = clamp01(look.moss * clump * where);
+                const V3 mossCol = mix(srgb(66, 92, 34), srgb(112, 130, 56), clamp01(0.5f + fbm3(p.x * 7.f, p.y * 7.f, p.z * 7.f, 2, 4712u)));
+                c = mix(c, mossCol, 0.85f * m);
             }
+            out.col[3 * i] = c.r;
+            out.col[3 * i + 1] = c.g;
+            out.col[3 * i + 2] = c.b;
         }
     }
 
@@ -146,6 +174,7 @@ namespace mill {
         std::vector<float> courses;// shared course heights (so walls of one loop line up); filled if empty
         uint32_t seed = 1;
         V3 baseTint{1, 1, 1};
+        float moss = 0.5f;    // how mossy its stones' edges and its joints are
         std::function<V3(const threepp::Vector3&, const threepp::Vector3&, const V3&)> weather;
     };
 
@@ -200,41 +229,87 @@ namespace mill {
                     if (b - (u + len) < spec.stoneMin * 0.7f) len = b - u;
                     first = false;
                     const float uc = u + 0.5f * len;
-                    // the stone's depth: most go half into the wall, quoins and through-stones further
-                    const float depth = std::min(spec.thickness, rng.range(0.25f, 0.45f));
+                    // the stone's depth: most go half into the wall; a stone that turns a corner goes the wall's whole
+                    // thickness, or the corner shows the core behind it
+                    const bool corner = (spec.bondStart && u < spec.thickness + 0.01f) || (spec.bondEnd && u + len > spec.length - spec.thickness - 0.01f);
+                    const float depth = corner ? spec.thickness : std::min(spec.thickness, rng.range(0.25f, 0.45f));
                     StoneLook look;
                     look.seed = rng.next();
                     {
                         static const std::array<V3, 5> hues{V3(0.78f, 0.77f, 0.75f), V3(0.84f, 0.76f, 0.64f), V3(0.70f, 0.64f, 0.56f), V3(0.80f, 0.68f, 0.56f), V3(0.62f, 0.62f, 0.62f)};
                         look.tint = spec.baseTint * hues[rng.next() % hues.size()] * rng.range(0.72f, 1.02f);
                     }
-                    look.round = rng.range(0.015f, 0.035f);
-                    look.pillow = rng.range(0.012f, 0.035f);
-                    look.chips = rng.range(0.006f, 0.018f);
+                    look.round = rng.range(0.025f, 0.055f);
+                    look.pillow = rng.range(0.015f, 0.045f);
+                    look.chips = rng.range(0.01f, 0.028f);
+                    look.shear = rng.range(-0.035f, 0.035f);
+                    look.taper = rng.range(-0.09f, 0.09f);
+                    look.wobble = rng.range(0.008f, 0.022f);
+                    look.moss = spec.moss * rng.range(0.6f, 1.3f);
                     look.weather = spec.weather;
+                    // each a little short of its place: the joints are not all one width
+                    const float slackX = rng.range(0.f, 0.014f), slackY = rng.range(0.f, 0.018f);
                     Frame sf = F;
                     const float proud = rng.range(-0.004f, 0.012f);// not every face is in one plane
+                    // laid by hand: each stone rolled a little and bedded a little high or low in its joint
+                    {
+                        const float roll = 0.012f * rng.normal() * std::min(1.f, 0.6f / std::max(len, 0.3f));
+                        const float c = std::cos(roll), sn = std::sin(roll);
+                        sf.u = F.u * c + F.v * sn;
+                        sf.v = F.v * c - F.u * sn;
+                    }
+                    const float bed = rng.range(-0.004f, 0.004f);
                     if (ch > 0.3f && len < 0.8f && rng() < 0.18f) {
                         // two thin stones stacked in this course's height
                         const float split = rng.range(0.4f, 0.6f) * ch;
-                        sf.o = F.at(uc, y + 0.5f * split, -lean - depth * 0.5f + proud);
-                        appendStone(stones, sf, 0.5f * len - 0.5f * spec.joint, 0.5f * split - 0.5f * spec.joint, 0.5f * depth, look);
+                        sf.o = F.at(uc, y + 0.5f * split + bed, -lean - depth * 0.5f + proud);
+                        appendStone(stones, sf, 0.5f * len - 0.5f * spec.joint - slackX, 0.5f * split - 0.5f * spec.joint - slackY, 0.5f * depth, look);
                         look.seed = rng.next();
                         look.tint = look.tint * rng.range(0.85f, 1.1f);
                         sf.o = F.at(uc, y + split + 0.5f * (ch - split), -lean - depth * 0.5f + rng.range(-0.004f, 0.012f));
-                        appendStone(stones, sf, 0.5f * len - 0.5f * spec.joint, 0.5f * (ch - split) - 0.5f * spec.joint, 0.5f * depth, look);
+                        appendStone(stones, sf, 0.5f * len - 0.5f * spec.joint - slackX, 0.5f * (ch - split) - 0.5f * spec.joint - slackY, 0.5f * depth, look);
                     } else {
-                        sf.o = F.at(uc, yc, -lean - depth * 0.5f + proud);
-                        appendStone(stones, sf, 0.5f * len - 0.5f * spec.joint, 0.5f * ch - 0.5f * spec.joint, 0.5f * depth, look);
+                        sf.o = F.at(uc, yc + bed, -lean - depth * 0.5f + proud);
+                        appendStone(stones, sf, 0.5f * len - 0.5f * spec.joint - slackX, 0.5f * ch - 0.5f * spec.joint - slackY, 0.5f * depth, look);
                     }
                     u += len;
                 }
             }
-            // the course's mortar core, set back from the faces
+            // the course's mortar core, set back from the faces: its own, and at the corners the face of the wall it
+            // meets (flush with that face, it showed wherever a stone sat a few millimetres back)
             for (auto [a, b] : runs) {
+                if (spec.bondStart && a <= 0.f) a += spec.recess;
+                if (spec.bondEnd && b >= spec.length) b -= spec.recess;
+                if (b - a < 0.01f) continue;
+                // the core, well back, closes the wall; the face of the mortar in front of it is old lime: washed out
+                // deeper in places, grimy, green with moss where it stays damp
+                const float back = spec.recess + 0.045f;
                 Frame mf = F;
-                mf.o = F.at(0.5f * (a + b), yc, -lean - spec.recess - 0.5f * (spec.thickness - spec.recess));
-                appendBox(mortar, mf, 0.5f * (b - a), 0.5f * ch, 0.5f * (spec.thickness - spec.recess), 0.9f);
+                mf.o = F.at(0.5f * (a + b), yc, -lean - back - 0.5f * (spec.thickness - back));
+                appendBox(mortar, mf, 0.5f * (b - a), 0.5f * ch, 0.5f * (spec.thickness - back), 0.9f, V3(0.5f, 0.48f, 0.44f));
+                const int cols = std::max(1, static_cast<int>((b - a) / 0.14f)), rowsN = 3;
+                const unsigned base = mortar.vertexCount();
+                for (int r = 0; r <= rowsN; ++r) {
+                    for (int k = 0; k <= cols; ++k) {
+                        const float uu = a + (b - a) * static_cast<float>(k) / static_cast<float>(cols);
+                        const float vv = y + ch * static_cast<float>(r) / static_cast<float>(rowsN);
+                        const Vector3 probe = F.at(uu, vv, 0.f);
+                        const float erosion = clamp01(0.5f + 0.9f * fbm3(probe.x * 1.7f, probe.y * 1.7f, probe.z * 1.7f, 3, spec.seed + 5));
+                        const float recess = spec.recess * (0.55f + 1.4f * erosion);
+                        const Vector3 p = F.at(uu, vv, -lean - recess);
+                        V3 c = V3(0.95f, 0.92f, 0.86f) * (0.75f + 0.35f * clamp01(0.5f + fbm3(p.x * 4.f, p.y * 4.f, p.z * 4.f, 2, 77u))) * (1.f - 0.35f * erosion);
+                        if (spec.weather) c = spec.weather(p, F.w, c);
+                        const float clump = smooth(-0.2f, 0.3f, fbm3(p.x * 2.2f, p.y * 2.2f, p.z * 2.2f, 3, 4713u));
+                        c = mix(c, srgb(70, 96, 38), clamp01(0.8f * spec.moss * clump * (0.4f + 0.6f * erosion)));
+                        mortar.vertex(p, F.w, uu / 1.2f, vv / 1.2f, c);
+                    }
+                }
+                const unsigned w = cols + 1;
+                for (int r = 0; r < rowsN; ++r)
+                    for (int k = 0; k < cols; ++k) {
+                        const unsigned i0 = base + r * w + k, i1 = i0 + 1, i2 = i0 + w, i3 = i2 + 1;
+                        mortar.index.insert(mortar.index.end(), {i0, i1, i2, i1, i3, i2});
+                    }
             }
             y += ch;
         }
@@ -250,6 +325,7 @@ namespace mill {
         std::array<std::vector<Opening>, 4> openings;// west (-x), south (+z), east (+x), north (-z), along each wall
         uint32_t seed = 1;
         V3 tint{1, 1, 1};
+        float moss = 0.5f;
         std::function<V3(const threepp::Vector3&, const threepp::Vector3&, const V3&)> weather;
     };
 
@@ -282,6 +358,7 @@ namespace mill {
             w.openings = L.openings[k];
             w.seed = L.seed * 31u + static_cast<uint32_t>(k) * 7919u;
             w.baseTint = L.tint;
+            w.moss = L.moss;
             w.weather = L.weather;
             buildWall(stones, mortar, w);
         }

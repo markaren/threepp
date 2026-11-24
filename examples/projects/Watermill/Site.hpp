@@ -52,8 +52,17 @@ namespace mill::site {
     constexpr float flumeEndZ = wheelZ + 0.45f;                // its mouth, a little past the wheel's top
     constexpr float flumeFloorAtEnd = wheelY + wheelRadius + 0.28f;
     constexpr float flumeSlope = 0.004f;                       // rising upstream
-    constexpr float flumeStartZ = -46.f;                       // it comes out of the woods here
-    inline float flumeFloor(float z) { return flumeFloorAtEnd + flumeSlope * (flumeEndZ - z); }
+    // As at Glade Creek, the flume is short and starts in a head box: a timber box on a tall stone base just below the
+    // footbridge's landing, which the water fills from a pipe buried in the bank (fed from the creek higher up), so
+    // it seems to come from nowhere. The trough leaves the box's downstream side.
+    constexpr float headZ0 = -11.75f, headZ1 = -9.95f, headHalfX = 0.85f;
+    constexpr float flumeStartZ = headZ0 + 0.2f;               // the trough starts inside the head box
+    // the trough has settled on its trestle: it undulates along its length (always still falling to the wheel), true
+    // only over its last few metres, where the wheel's bracket holds it
+    inline float flumeFloor(float z) {
+        const float wave = 0.035f * fbm2(z * 0.06f, 2.7f, 3, 61u) * smooth(0.f, 5.f, flumeEndZ - z);
+        return flumeFloorAtEnd + flumeSlope * (flumeEndZ - z) + wave;
+    }
 
     // ---- the bridge --------------------------------------------------------------------------------------------------
     constexpr float bridgeZ = -13.f;
@@ -68,20 +77,24 @@ namespace mill::site {
     struct Knot {
         float z, cx, hw;
     };
-    inline const std::array<Knot, 13>& streamKnots() {
-        static const std::array<Knot, 13> k{{{-110.f, -9.f, 4.5f},
-                                             {-70.f, -6.f, 5.f},
-                                             {-45.f, -4.5f, 5.5f},
-                                             {-30.f, -2.6f, 6.0f},
-                                             {-13.f, -2.4f, 6.6f},
-                                             {0.f, -2.0f, 6.0f},
-                                             {8.f, -1.2f, 6.6f},
-                                             {16.f, 0.6f, 8.2f},
-                                             {28.f, 0.8f, 8.4f},
-                                             {36.f, 0.6f, 8.0f},
-                                             {45.f, 0.4f, 9.0f},
-                                             {60.f, -1.5f, 8.0f},
-                                             {90.f, -4.0f, 7.0f}}};
+    // The creek winds: upstream it comes round a bend from the left (so from the mill nobody sees where it starts),
+    // swings right past the mill and the falls, and bends away left again below the pool.
+    inline const std::array<Knot, 15>& streamKnots() {
+        static const std::array<Knot, 15> k{{{-120.f, -22.f, 4.5f},
+                                             {-90.f, -17.f, 5.f},
+                                             {-66.f, -13.5f, 5.2f},
+                                             {-50.f, -10.f, 5.4f},
+                                             {-38.f, -3.8f, 5.9f},
+                                             {-26.f, -0.4f, 6.3f},
+                                             {-13.f, -4.4f, 6.6f},
+                                             {-3.f, -2.6f, 6.0f},
+                                             {8.f, -1.3f, 6.5f},
+                                             {17.f, 0.5f, 8.0f},
+                                             {27.f, 0.9f, 8.3f},
+                                             {37.f, 0.9f, 8.0f},
+                                             {47.f, -1.4f, 8.6f},
+                                             {62.f, -7.0f, 7.5f},
+                                             {95.f, -16.f, 7.0f}}};
         return k;
     }
 
@@ -118,9 +131,59 @@ namespace mill::site {
     // the falls below the mill: the creek goes over a sandstone ledge into a pool, as at Glade Creek
     constexpr float fallsZ = 34.5f, fallsDrop = 1.9f;
 
-    // the bed's middle along the stream
+    // The ledges are beds of sandstone the creek has broken back unevenly: their edges run crooked and askew across
+    // the channel. Where each one's edge is at a given x:
+    inline float upperLedgeZ(float x) { return ledgeUpper + 1.7f * fbm2(x * 0.2f, 7.7f, 3, 41u) + 0.14f * (x + 2.f); }
+    inline float lowerLedgeZ(float x) { return ledgeLower + 1.3f * fbm2(x * 0.24f, 9.1f, 3, 42u) - 0.11f * (x + 1.f); }
+    // the falls' lip, cut back into a bay where the main chute goes over, ragged elsewhere
+    inline float fallsLipZ(float x) { return fallsZ - 0.75f * std::exp(-((x - 1.4f) / 2.6f) * ((x - 1.4f) / 2.6f)) + 0.5f * fbm2(x * 0.32f, 11.3f, 3, 43u); }
+
+    // The creek comes down in steps: a run of small cascades over sandstone beds and jammed boulders, a pool or a
+    // riffle between each. Each step's edge runs crooked and askew across the channel. Steps above the mill raise the
+    // bed upstream of them, steps below it lower the bed downstream, so the water at the wheel stays where it is.
+    struct CreekStep {
+        float z, drop, skew;
+        uint32_t seed;
+    };
+    inline const std::array<CreekStep, 11>& creekSteps() {
+        static const std::array<CreekStep, 11> s{{{-4.8f, 0.22f, 0.10f, 71u},
+                                                  {-10.5f, 0.28f, -0.13f, 72u},
+                                                  {-16.f, 0.18f, 0.06f, 73u},
+                                                  {-26.5f, 0.32f, -0.09f, 74u},
+                                                  {-32.f, 0.24f, 0.15f, 75u},
+                                                  {-37.5f, 0.3f, -0.05f, 76u},
+                                                  {-44.f, 0.34f, 0.11f, 77u},
+                                                  {-52.f, 0.3f, -0.12f, 78u},
+                                                  {-61.f, 0.35f, 0.08f, 79u},
+                                                  {21.5f, 0.3f, -0.12f, 80u},
+                                                  {27.2f, 0.22f, 0.14f, 81u}}};
+        return s;
+    }
+    inline float stepEdgeZ(const CreekStep& s, float x) { return s.z + s.skew * (x + 1.f) + 1.1f * fbm2(x * 0.26f, 3.7f, 3, s.seed); }
+
+    // the bed's middle at a point (no cross-section: the slope, the steps, the ledges and the falls)
+    inline float bedAt(float x, float z) {
+        // steeper above the mill, where the creek comes down through boulders
+        float b = -0.65f - (z < 0.f ? 0.032f : 0.02f) * z;
+        for (const auto& s : creekSteps()) {
+            const float e = stepEdgeZ(s, x);
+            if (s.z < 0.f) b += s.drop * (1.f - smooth(e - 0.3f, e + 0.3f, z));
+            else b -= s.drop * smooth(e - 0.3f, e + 0.3f, z);
+        }
+        return b + ledge(z, upperLedgeZ(x), 0.35f) + ledge(z, lowerLedgeZ(x), 0.3f) - fallsDrop * smooth(fallsLipZ(x) - 0.1f, fallsLipZ(x) + 0.1f, z);
+    }
+
+    // the same along the creek's middle line
     inline float bedProfile(float z) {
-        return -0.65f - 0.02f * z + ledge(z, ledgeUpper, 0.35f) + ledge(z, ledgeLower, 0.3f) - fallsDrop * smooth(fallsZ - 0.1f, fallsZ + 0.1f, z);
+        float cx, hw;
+        streamAt(z, cx, hw);
+        return bedAt(cx, z);
+    }
+
+    // each bank wanders on its own: the half width on one side (side -1 left, +1 right) at z
+    inline float bankHalfWidth(float z, float hw, float side) {
+        const uint32_t s = side < 0 ? 51u : 52u;
+        return hw * (1.f + 0.14f * fbm2(z * 0.07f, side * 3.3f, 3, s)) + 0.7f * fbm2(z * 0.28f, side * 5.1f, 2, s + 10u);
     }
 
     // the pool below the lower ledge, near the hero view
@@ -150,14 +213,20 @@ namespace mill::site {
     inline float groundHeight(float x, float z) {
         float cx, hw;
         streamAt(z, cx, hw);
-        const float base = bedProfile(z);
+        const float base = bedAt(x, z);
         const float d = x - cx;
-        const float e = std::abs(d) - hw;// > 0 outside the channel
+        const float hs = bankHalfWidth(z, hw, d < 0 ? -1.f : 1.f);
+        const float e = std::abs(d) - hs;// > 0 outside the channel
         const float rough = 0.06f * fbm2(x * 0.7f, z * 0.7f, 3, 11u);
         float h;
         if (e <= 0) {
-            const float t = d / hw;
-            h = base + 0.22f * t * t + rough;
+            // the deepest line wanders from side to side; gravel bars build where it has left; the bed is ribbed
+            // across the flow by riffles and scoured into hollows
+            const float t = d / hs;
+            const float thalweg = 0.45f * fbm2(z * 0.035f, 3.1f, 2, 53u);
+            const float bar = 0.16f * smooth(0.2f, 0.8f, std::abs(t - thalweg)) * smooth(-0.1f, 0.4f, fbm2(z * 0.09f, t * 0.5f, 2, 54u));
+            const float riffle = 0.06f * fbm2(x * 0.35f, z * 0.9f, 3, 55u) + 0.07f * fbm2(x * 0.18f, z * 0.18f, 3, 56u);
+            h = base - 0.04f + 0.3f * (t - thalweg) * (t - thalweg) + bar + riffle + rough;
         } else if (d < 0) {
             // the left bank: up into the woods, then the valley side
             const float lumps = 0.5f * fbm2(x * 0.12f, z * 0.12f, 4, 12u) * smooth(1.f, 6.f, e);

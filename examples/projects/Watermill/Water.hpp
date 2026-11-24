@@ -94,7 +94,16 @@ vec4 waterTap = mix(wT0, wT1, wBlend);
 // a finer, slower layer: even the stillest water shimmers a little
 vec4 wT2 = texture2D(uRipples, vWaterWorld.xz / (uTile * 0.31) + vec2(uTime * 0.021, -uTime * 0.017));
 float wSpeed = length(vFlowVel);
-vec2 wTilt = (waterTap.xy * 2.0 - 1.0) * (0.18 + 0.82 * clamp(wSpeed / 1.2, 0.0, 1.0)) + (wT2.xy * 2.0 - 1.0) * 0.1;
+// the flow's own frame: streaks of white water and the chop's crests are drawn out along the current
+vec2 wDir = wSpeed > 1e-3 ? vFlowVel / wSpeed : vec2(0.0, 1.0);
+vec2 wAcross = vec2(-wDir.y, wDir.x);
+vec2 wStreakUv = vec2(dot(vWaterWorld.xz, wAcross) / (uTile * 1.1), dot(vWaterWorld.xz, wDir) / (uTile * 4.5));
+float wRun = wSpeed * uPeriod / (uTile * 4.5);
+float wStreak = mix(texture2D(uRipples, wStreakUv - vec2(0.0, wPh0 * wRun)).a, texture2D(uRipples, wStreakUv - vec2(0.0, wPh1 * wRun) + vec2(0.41, 0.17)).a, wBlend);
+// running water is choppy all over: a third, small and fast layer carried with it
+vec4 wT3 = texture2D(uRipples, wStreakUv * vec2(2.3, 6.0) - vec2(0.0, uTime * wSpeed / (uTile * 0.6)));
+float wChop = clamp(wSpeed / 0.8, 0.0, 1.0);
+vec2 wTilt = (waterTap.xy * 2.0 - 1.0) * (0.24 + 0.86 * wChop) + (wT2.xy * 2.0 - 1.0) * 0.12 + (wT3.xy * 2.0 - 1.0) * 0.32 * wChop;
 vec3 wN = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
 vec3 wT = normalize(vec3(1.0, 0.0, 0.0) - wN * wN.x);
 vec3 wB = normalize(vec3(0.0, 0.0, 1.0) - wN * wN.z);
@@ -113,8 +122,10 @@ float wAlpha = 0.0;// the bed's dimming is the tint pass's
 // white water where the simulation says so, broken up by the lace carried with the ripples
 float wFoam = vWaterInfo.x;
 float wTh = 0.95 - 0.55 * wFoam;
-float wWhite = smoothstep(wTh - 0.12, wTh + 0.12, waterTap.a) * smoothstep(0.03, 0.25, wFoam);
-outgoingLight = mix(outgoingLight, wIrr * 0.72, wWhite);
+// in fast water the white is in streaks along the current, in slow water in a lace
+float wLace = mix(waterTap.a, wStreak, smoothstep(0.35, 1.1, wSpeed));
+float wWhite = max(smoothstep(wTh - 0.1, wTh + 0.1, wLace), 0.55 * smoothstep(0.7, 1.0, wFoam)) * smoothstep(0.03, 0.25, wFoam);
+outgoingLight = mix(outgoingLight, wIrr * 0.58, wWhite);
 wAlpha = mix(wAlpha, 1.0, 0.9 * wWhite);
 outgoingLight *= wEdge;
 diffuseColor.a = wAlpha * wEdge;
@@ -176,11 +187,11 @@ void main() {
         m->attenuationColor = Color(0.66f, 0.46f, 0.25f);
         m->attenuationDistance = 0.45f;
         m->normalMap = ripples;
-        m->normalScale.set(0.7f, 0.7f);
+        m->normalScale.set(1.1f, 1.1f);
         m->flow = 1.f;
         m->flowTile = 0.6f;
         m->flowPeriod = 0.8f;
-        m->flowFoam = 0.45f;
+        m->flowFoam = 1.f;
         m->flowFoamAlbedo = 0.78f;
         return m;
     }
@@ -188,14 +199,49 @@ void main() {
     // ---- the stream -------------------------------------------------------------------------------------------------
     class StreamWater {
     public:
-        static constexpr float dx = 0.125f, x0 = -13.f, z0 = -42.f;
-        static constexpr int nx = 180, nz = 784;// to x 9.5, z 56 (past the falls and their pool)
+        static constexpr float dx = 0.125f, x0 = -16.f, z0 = -42.f;
+        static constexpr int nx = 204, nz = 784;// to x 9.5, z 56 (past the falls and their pool)
         static constexpr float inflow = 2.8f;   // m3/s in at the top (early summer: good water, as the photos show it)
 
         ShallowWater swe{nx, nz, dx, x0, z0};
         std::shared_ptr<threepp::Mesh> mesh;
         std::shared_ptr<threepp::Mesh> tint;   // GL's absorption pass over the same surface (null without a material)
         std::shared_ptr<threepp::Mesh> curtain;// the falls: the sheet that goes over the ledge
+        // White water for VulkanRenderer and its path tracer, whose surface does not draw the flow mode's foam: a thin
+        // skin over the water, white and rough, as opaque as the simulation's foam (null unless asked for)
+        std::shared_ptr<threepp::Mesh> foamSkin;
+
+        void addFoamSkin() {
+            using namespace threepp;
+            auto m = MeshStandardMaterial::create();
+            m->color.setRGB(0.78f, 0.78f, 0.76f);
+            m->map = foamLaceTexture(611);// its alpha cuts the lace
+            m->alphaTest = 0.5f;
+            m->roughness = 0.85f;
+            m->metalness = 0.f;
+            m->vertexColors = true;
+            const size_t n = static_cast<size_t>(nx) * nz;
+            skinPos_.assign(3 * n, 0.f);
+            skinCol_.assign(4 * n, 1.f);
+            auto g = BufferGeometry::create();
+            g->setAttribute("position", FloatBufferAttribute::create(skinPos_, 3));
+            g->setAttribute("normal", FloatBufferAttribute::create(normals_, 3));
+            g->setAttribute("color", FloatBufferAttribute::create(skinCol_, 4));
+            std::vector<float> uv(2 * n);
+            for (size_t c = 0; c < n; ++c) {
+                uv[2 * c] = swe.xOf(static_cast<int>(c % nx)) / 1.2f;
+                uv[2 * c + 1] = swe.zOf(static_cast<int>(c / nx)) / 1.2f;
+            }
+            g->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+            for (const auto& name : {"position", "normal", "color"}) g->getAttribute(name)->setUsage(DrawUsage::Dynamic);
+            surfaceIndex_ = mesh->geometry()->getIndex()->array();
+            g->setIndex(std::vector<unsigned int>{0, 0, 0});
+            foamSkin = Mesh::create(g, m);
+            foamSkin->frustumCulled = false;
+            foamSkin->castShadow = false;
+            foamSkin->receiveShadow = true;
+            foamSkin->renderOrder = 3;
+        }
 
         // rockPoints: every boulder's vertices (x, y, z), so the water flows round the boulders
         StreamWater(const std::vector<float>& rockPoints, const std::shared_ptr<threepp::Material>& material,
@@ -221,7 +267,9 @@ void main() {
                     const int c = j * nx + i;
                     float cx, hw;
                     site::streamAt(z, cx, hw);
-                    bool on = std::abs(x - cx) < hw + 3.5f && ground[c] < site::nominalWater(z) + 0.7f;
+                    // the channel and a margin for the water to rise into, never out to the grid's edges
+                    const float hs = site::bankHalfWidth(z, hw, x < cx ? -1.f : 1.f);
+                    bool on = std::abs(x - cx) < hs + 2.2f && ground[c] < site::nominalWater(z) + 0.7f;
                     if (blocked(x, z)) on = false;
                     if (site::inWheelPit(x, z) && !site::inMill(x, z)) on = ground[c] < site::nominalWater(z) + 0.7f;
                     active[c] = on;
@@ -283,10 +331,11 @@ void main() {
             for (const auto& name : {"position", "normal", "flowVel", "waterInfo", "uv", "uv2"}) g->getAttribute(name)->setUsage(threepp::DrawUsage::Dynamic);
             std::vector<unsigned int> index;
             for (int j = 0; j + 1 < nz; ++j) {
-                // over the falls' drop the curtain is the water, not a ramp of the surface
                 const float zq0 = swe.zOf(j), zq1 = swe.zOf(j + 1);
-                if (zq1 > site::fallsZ - 0.2f && zq0 < site::fallsZ + 0.45f) continue;
                 for (int i = 0; i + 1 < nx; ++i) {
+                    // over the falls' drop the curtain is the water, not a ramp of the surface
+                    const float la = site::fallsLipZ(swe.xOf(i)), lb = site::fallsLipZ(swe.xOf(i + 1));
+                    if (zq1 > std::min(la, lb) - 0.2f && zq0 < std::max(la, lb) + 0.45f) continue;
                     const unsigned a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
                     if (active[a] || active[b] || active[c] || active[d]) index.insert(index.end(), {a, c, b, b, c, d});
                 }
@@ -303,6 +352,7 @@ void main() {
             }
             material_ = std::dynamic_pointer_cast<threepp::MeshStandardMaterial>(material);
             buildCurtain(fallMaterial);
+            buildWaveFields();
         }
 
         // the falls this frame: per column of the lip, how much goes over (m2/s), where from and where it lands
@@ -322,19 +372,21 @@ void main() {
 
         void updateCurtain() {
             using namespace site;
-            const int jLip = static_cast<int>((fallsZ - 0.35f - z0) / dx);
-            const float zLip = fallsZ - 0.05f;
             pours.resize(nx);
+            zLip_.resize(nx);
             for (int i = 0; i < nx; ++i) {
-                const int c = jLip * nx + i;
                 const float x = swe.xOf(i);
+                const float lipZ = fallsLipZ(x);
+                const int jLip = std::clamp(static_cast<int>((lipZ - 0.35f - z0) / dx), 0, nz - 1);
+                zLip_[i] = lipZ - 0.05f;
+                const int c = jLip * nx + i;
                 float vx, vz;
                 swe.velocityAt(x, swe.zOf(jLip) + 0.5f * dx, vx, vz);
                 const float h = swe.activeAt(c) ? swe.depth(c) : 0.f;
                 const float q = h > 0.01f ? h * std::max(vz, 0.f) : 0.f;
                 const float top = swe.bedAt(c) + h;
-                float bottom = swe.surfaceAt(x, fallsZ + 1.2f);
-                if (bottom < -1e8f) bottom = groundHeight(x, fallsZ + 1.2f);
+                float bottom = swe.surfaceAt(x, lipZ + 1.2f);
+                if (bottom < -1e8f) bottom = groundHeight(x, lipZ + 1.2f);
                 pours[i] = {x, top, bottom, std::max(vz, 0.4f), q};
             }
             // the sheet: a column per lip cell, falling from the lip along its path to the pool
@@ -353,6 +405,7 @@ void main() {
                         for (int e = 0; e < 2; ++e) cCol_[4 * (static_cast<size_t>(k) * (2 * nx) + 2 * i + e) + 3] = 0.f;
                     continue;
                 }
+                const float zLip = zLip_[i];
                 float dist = 0, py = p.top, pz = zLip;
                 for (int k = 0; k <= along; ++k) {
                     const float t = T * static_cast<float>(k) / static_cast<float>(along);
@@ -365,7 +418,10 @@ void main() {
                     // each lip cell falls as its own strip (a little wider than the cell, so neighbours close up)
                     for (int e = 0; e < 2; ++e) {
                         const size_t v = static_cast<size_t>(k) * (2 * nx) + 2 * i + e;
-                        const float x = p.x + (e ? 0.56f : -0.56f) * dx * widthShare;
+                        // the strip pulls in as it falls, the more so where it is thin, and wavers
+                        const float fall = static_cast<float>(k) / static_cast<float>(along);
+                        const float narrow = 1.f - 0.35f * fall * (1.f - smooth(0.05f, 0.2f, p.q));
+                        const float x = p.x + (e ? 0.56f : -0.56f) * dx * widthShare * narrow + 0.03f * fall * std::sin(p.x * 7.f + static_cast<float>(k));
                         cPos_[3 * v] = x;
                         cPos_[3 * v + 1] = y;
                         cPos_[3 * v + 2] = z;
@@ -389,6 +445,7 @@ void main() {
         void updateMesh(float time) {
             updateCurtain();
             swe.surface(positions_.data(), normals_.data(), velocity_.data(), info_.data());
+            addStandingWaves(time);
             for (size_t c = 0; c < info_.size() / 2; ++c) uv_[2 * c] = info_[2 * c];
             auto& g = *mesh->geometry();
             g.getAttribute<float>("position")->array() = positions_;
@@ -398,6 +455,30 @@ void main() {
             g.getAttribute<float>("uv")->array() = uv_;
             g.getAttribute<float>("uv2")->array() = velocity_;
             for (const auto& name : {"position", "normal", "flowVel", "waterInfo", "uv", "uv2"}) g.getAttribute(name)->needsUpdate();
+            if (foamSkin) {
+                const size_t n = info_.size() / 2;
+                for (size_t c = 0; c < n; ++c) {
+                    skinPos_[3 * c] = positions_[3 * c];
+                    skinPos_[3 * c + 1] = positions_[3 * c + 1] + 0.012f;
+                    skinPos_[3 * c + 2] = positions_[3 * c + 2];
+                    // as the GL water's foam: only the whitest water, broken up (here by the standing-wave field)
+                    const float lace = info_[2 * c] + 0.3f * wave1_[c];
+                    skinCol_[4 * c + 3] = info_[2 * c + 1] > 0.f ? 0.85f * smooth(0.6f, 0.95f, lace) : 0.f;
+                }
+                // VulkanRenderer takes no alpha from vertex colours: the skin is there only where the foam is thick
+                skinIndex_.clear();
+                for (size_t t = 0; t + 2 < surfaceIndex_.size(); t += 3) {
+                    const unsigned a = surfaceIndex_[t], b = surfaceIndex_[t + 1], c = surfaceIndex_[t + 2];
+                    if (skinCol_[4 * a + 3] + skinCol_[4 * b + 3] + skinCol_[4 * c + 3] > 0.9f) skinIndex_.insert(skinIndex_.end(), {a, b, c});
+                }
+                if (skinIndex_.empty()) skinIndex_ = {0, 0, 0};
+                auto& sg = *foamSkin->geometry();
+                sg.setIndex(skinIndex_);
+                sg.getAttribute<float>("position")->array() = skinPos_;
+                sg.getAttribute<float>("normal")->array() = normals_;
+                sg.getAttribute<float>("color")->array() = skinCol_;
+                for (const auto& name : {"position", "normal", "color"}) sg.getAttribute(name)->needsUpdate();
+            }
             if (material_) {
                 material_->customUniforms["uTime"].setValue(time);
                 material_->flowTime = time;
@@ -408,7 +489,70 @@ void main() {
         [[nodiscard]] float levelAt(float x, float z) const { return swe.surfaceAt(x, z); }
 
     private:
+        // Standing waves and boils. Where water runs fast and shallow over a rough bed its surface stands up in waves
+        // that hold their place over the rocks while the water runs through them (their wavelength grows with the
+        // speed, about 2 pi v^2 / g), and boils that well up and sink. The simulation's 12.5 cm cells smooth these
+        // out, so they are put back on its surface: a fixed field of bumps (two of them, mixed by a slow clock so the
+        // waves breathe), scaled by the water's own velocity head v^2 / 2g and kept within its depth. Still water
+        // gets none.
+        std::vector<float> wave1_, wave2_, wg1x_, wg1z_, wg2x_, wg2z_;
+
+        void buildWaveFields() {
+            const int n = nx * nz;
+            for (auto* v : {&wave1_, &wave2_, &wg1x_, &wg1z_, &wg2x_, &wg2z_}) v->assign(n, 0.f);
+            forRows(nz, [&](int j) {
+                for (int i = 0; i < nx; ++i) {
+                    const float x = swe.xOf(i), z = swe.zOf(j);
+                    // stretched across the flow (the creek runs along z): crests lie across it
+                    wave1_[j * nx + i] = fbm2(x * 0.9f, z * 1.5f, 3, 501u);
+                    wave2_[j * nx + i] = fbm2(x * 1.3f + 7.f, z * 1.1f, 3, 502u);
+                }
+            });
+            forRows(nz, [&](int j) {
+                const int jb = std::max(j - 1, 0), jt = std::min(j + 1, nz - 1);
+                for (int i = 0; i < nx; ++i) {
+                    const int il = std::max(i - 1, 0), ir = std::min(i + 1, nx - 1);
+                    const int c = j * nx + i;
+                    const float sx = 1.f / (static_cast<float>(ir - il) * dx), sz = 1.f / (static_cast<float>(jt - jb) * dx);
+                    wg1x_[c] = (wave1_[j * nx + ir] - wave1_[j * nx + il]) * sx;
+                    wg1z_[c] = (wave1_[jt * nx + i] - wave1_[jb * nx + i]) * sz;
+                    wg2x_[c] = (wave2_[j * nx + ir] - wave2_[j * nx + il]) * sx;
+                    wg2z_[c] = (wave2_[jt * nx + i] - wave2_[jb * nx + i]) * sz;
+                }
+            });
+        }
+
+        void addStandingWaves(float time) {
+            const float c1 = std::cos(0.9f * time), s1 = std::sin(0.9f * time);
+            forRows(nz, [&](int j) {
+                for (int i = 0; i < nx; ++i) {
+                    const int c = j * nx + i;
+                    const float h = info_[2 * c + 1];
+                    if (h <= 0.f) continue;
+                    const float vx = velocity_[2 * c], vz = velocity_[2 * c + 1];
+                    const float head = (vx * vx + vz * vz) / (2.f * 9.81f);
+                    // a wave stands about as high as the velocity head, in shallow water no higher than half its depth
+                    const float a = std::min({0.75f * head, 0.5f * h, 0.13f}) * smooth(0.015f, 0.06f, h);
+                    if (a < 1e-4f) continue;
+                    const float mixA = 0.75f + 0.25f * c1, mixB = 0.45f * s1;
+                    positions_[3 * c + 1] += a * (mixA * wave1_[c] + mixB * wave2_[c]);
+                    const float fx = a * (mixA * wg1x_[c] + mixB * wg2x_[c]), fz = a * (mixA * wg1z_[c] + mixB * wg2z_[c]);
+                    float nxv = normals_[3 * c] - fx * normals_[3 * c + 1], nyv = normals_[3 * c + 1], nzv = normals_[3 * c + 2] - fz * normals_[3 * c + 1];
+                    const float len = std::sqrt(nxv * nxv + nyv * nyv + nzv * nzv);
+                    normals_[3 * c] = nxv / len;
+                    normals_[3 * c + 1] = nyv / len;
+                    normals_[3 * c + 2] = nzv / len;
+                    // the crests break white
+                    const float crest = smooth(0.35f, 0.7f, mixA * wave1_[c] + mixB * wave2_[c]) * smooth(0.04f, 0.1f, a);
+                    info_[2 * c] = std::max(info_[2 * c], 0.55f * crest);
+                }
+            });
+        }
+
         static constexpr int CurtainRows = 12;
+        std::vector<float> zLip_;
+        std::vector<float> skinPos_, skinCol_;
+        std::vector<unsigned int> surfaceIndex_, skinIndex_;
         std::vector<float> cPos_, cNor_, cUv_, cCol_;
 
         void buildCurtain(const std::shared_ptr<threepp::Material>& material) {

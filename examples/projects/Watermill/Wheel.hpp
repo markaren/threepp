@@ -23,6 +23,9 @@
 
 namespace mill {
 
+    // the bearings' feet stand this far below the axle, on stone
+    constexpr float bearingSeat = 0.3f;
+
     struct WheelShape {
         static constexpr int buckets = site::wheelBuckets;
         static constexpr float rRim = site::wheelRadius;
@@ -158,16 +161,44 @@ namespace mill {
             }
             // the axle turns with the wheel: from the pier's bearing through the wall
             appendCylinder(dark, Vector3(axleOuterX - 0.1f - wheelX, 0, 0), Vector3(millWest - wheelX + 0.2f, 0, 0), 0.11f, 0.11f, 20, WoodLook{V3(1, 1, 1), 17});
+            // a century on the creek: the paint dulled and gone dark with wet, green algae where the water runs and
+            // stands (the buckets, the rims' inner edges), the arms streaked
+            for (size_t i = 0; i < iron.col.size(); i += 3) {
+                const Vector3 p(iron.pos[i], iron.pos[i + 1], iron.pos[i + 2]);
+                const float r = std::hypot(p.y, p.z);
+                V3 c(iron.col[i], iron.col[i + 1], iron.col[i + 2]);
+                c = c * V3(0.62f, 0.58f, 0.56f) * (0.8f + 0.35f * clamp01(0.5f + fbm3(p.x * 3.f, p.y * 3.f, p.z * 3.f, 3, 5101u)));
+                const float wetZone = smooth(WheelShape::rSole - 0.3f, WheelShape::rKnee, r);
+                const float algae = wetZone * smooth(-0.25f, 0.35f, fbm3(p.x * 4.f, p.y * 4.f, p.z * 4.f, 3, 5102u));
+                c = mix(c, srgb(48, 62, 34), 0.6f * algae);
+                c = c * (1.f - 0.3f * smooth(0.f, 0.6f, fbm3(p.x * 9.f, r * 1.2f, std::atan2(p.z, p.y) * 4.f, 2, 5103u)) * smooth(1.f, 2.4f, r));
+                iron.col[i] = c.r;
+                iron.col[i + 1] = c.g;
+                iron.col[i + 2] = c.b;
+            }
             auto ironMesh = iron.mesh(m.iron);
             auto darkMesh = dark.mesh(m.blackIron, false);
             rotor->add(ironMesh);
             rotor->add(darkMesh);
 
-            // the bearings, which do not turn: a cast pedestal on the pier and a block in the wall
+            // The bearings, which do not turn: cast plummer blocks, each bolted down on stone, the pier's cap stone
+            // outside and a corbel in the mill's wall. Their feet stand on the stone at bearingSeat below the axle.
             MeshBuild fixed;
+            const float seat = -bearingSeat;
             for (float bx : {axleOuterX - wheelX, millWest - 0.05f - wheelX}) {
-                appendBeam(fixed, Vector3(bx, -0.16f, -0.28f), Vector3(bx, -0.16f, 0.28f), Vector3(0, 1, 0), 0.26f, 0.12f, WoodLook{V3(1, 1, 1), 19});
-                appendCylinder(fixed, Vector3(bx - 0.13f, 0, 0), Vector3(bx + 0.13f, 0, 0), 0.17f, 0.17f, 16, WoodLook{V3(1, 1, 1), 23});
+                const WoodLook cast{V3(1, 1, 1), 19};
+                // the sole: a plate as long as the block's feet, on the stone
+                appendBeam(fixed, Vector3(bx, seat + 0.025f, -0.31f), Vector3(bx, seat + 0.025f, 0.31f), Vector3(0, 1, 0), 0.3f, 0.05f, cast);
+                // the body from the sole up to the shaft, and the housing round the shaft
+                appendBeam(fixed, Vector3(bx, seat + 0.05f + 0.5f * (-0.05f - seat - 0.05f), -0.19f), Vector3(bx, seat + 0.05f + 0.5f * (-0.05f - seat - 0.05f), 0.19f),
+                           Vector3(0, 1, 0), 0.24f, -0.05f - seat - 0.05f, cast);
+                appendCylinder(fixed, Vector3(bx - 0.13f, 0, 0), Vector3(bx + 0.13f, 0, 0), 0.17f, 0.17f, 18, WoodLook{V3(1, 1, 1), 23});
+                // the cap's flanges and their bolts, and the hold-down bolts through the feet
+                appendBeam(fixed, Vector3(bx, 0.f, -0.27f), Vector3(bx, 0.f, 0.27f), Vector3(0, 1, 0), 0.2f, 0.05f, cast);
+                for (float bz : {-0.23f, 0.23f}) {
+                    appendCylinder(fixed, Vector3(bx, 0.02f, bz), Vector3(bx, 0.06f, bz), 0.024f, 0.022f, 6, cast);
+                    for (float bxo : {-0.09f, 0.09f}) appendCylinder(fixed, Vector3(bx + bxo, seat + 0.045f, bz + 0.04f * (bz > 0 ? 1.f : -1.f)), Vector3(bx + bxo, seat + 0.085f, bz + 0.04f * (bz > 0 ? 1.f : -1.f)), 0.022f, 0.02f, 6, cast);
+                }
             }
             root->add(fixed.mesh(m.blackIron, false));
         }
@@ -185,13 +216,14 @@ namespace mill {
         L.z0 = pierZ0;
         L.z1 = pierZ1;
         L.base = -0.7f;
-        L.top = wheelY - 0.28f;
-        L.thickness = 0.32f;
+        L.top = wheelY - bearingSeat - 0.16f;// the cap stone goes on top
+        L.thickness = 0.5f * (pierX1 - pierX0);// so the pier is solid: every course's stones meet in the middle
         L.courseMin = 0.22f;
         L.courseMax = 0.36f;
         L.stoneMin = 0.3f;
         L.stoneMax = 0.6f;
         L.seed = 301;
+        L.moss = 0.95f;
         L.weather = [](const threepp::Vector3& p, const threepp::Vector3& n, const V3& c) {
             V3 col = c * (0.65f + 0.35f * smooth(0.f, 2.f, p.y));
             col = mix(col, srgb(70, 88, 48), 0.6f * smooth(2.8f, 0.4f, p.y) * clamp01(0.6f + fbm3(p.x * 3.f, p.y * 3.f, p.z * 3.f, 2, 9u)));
@@ -199,6 +231,28 @@ namespace mill {
             return col;
         };
         buildLoop(stones, mortar, L);
+        // the cap: one long slab over the whole pier, a little proud of it all round; the bearing is bolted to it
+        {
+            StoneLook cap;
+            cap.seed = 3101;
+            cap.tint = V3(0.86f, 0.84f, 0.8f);
+            cap.round = 0.02f;
+            cap.pillow = 0.008f;
+            cap.chips = 0.012f;
+            cap.weather = L.weather;
+            Frame f{threepp::Vector3(0.5f * (pierX0 + pierX1), wheelY - bearingSeat - 0.08f, 0.5f * (pierZ0 + pierZ1)), threepp::Vector3(0, 0, 1), threepp::Vector3(0, 1, 0), threepp::Vector3(-1, 0, 0)};
+            appendStone(stones, f, 0.5f * (pierZ1 - pierZ0) + 0.07f, 0.08f, 0.5f * (pierX1 - pierX0) + 0.06f, cap);
+        }
+        // the corbel in the mill's wall that carries the inner bearing, filling the bottom of the axle's hole
+        {
+            StoneLook corbel;
+            corbel.seed = 3102;
+            corbel.tint = V3(0.8f, 0.78f, 0.74f);
+            corbel.round = 0.02f;
+            corbel.weather = L.weather;
+            Frame f{threepp::Vector3(millWest, wheelY - bearingSeat - 0.3f, wheelZ), threepp::Vector3(0, 0, 1), threepp::Vector3(0, 1, 0), threepp::Vector3(-1, 0, 0)};
+            appendStone(stones, f, 0.37f, 0.3f, 0.31f, corbel);
+        }
         mortarOut = mortar.mesh(m.mortar);
         return stones.mesh(m.masonry);
     }

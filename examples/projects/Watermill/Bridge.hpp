@@ -52,6 +52,7 @@ namespace mill {
                 L.stoneMax = 0.95f;
                 L.seed = static_cast<uint32_t>(500 + static_cast<int>(px * 10));
                 L.tint = V3(0.96f, 0.95f, 0.93f);
+                L.moss = 0.85f;
                 L.weather = stoneWeather;
                 buildLoop(stones, mortar, L);
                 // a timber bolster on top that the stringers bear on
@@ -76,15 +77,28 @@ namespace mill {
                 L.stoneMax = 0.9f;
                 L.seed = static_cast<uint32_t>(700 + static_cast<int>(e[0] * 10));
                 L.tint = V3(0.94f, 0.93f, 0.9f);
+                L.moss = 0.8f;
                 L.weather = stoneWeather;
                 buildLoop(stones, mortar, L);
             }
-            // stringers: three a span, a little sag in each
+            // stringers: three a span; old timber over a long span has settled, the middle of each span sits lower
             std::vector<float> bearings{bridgeX0, bridgePiers[0], bridgePiers[1], bridgeX1};
+            std::vector<float> spanSag;
+            for (size_t s = 0; s + 1 < bearings.size(); ++s) spanSag.push_back(0.012f * (bearings[s + 1] - bearings[s]) * rng.range(0.8f, 1.2f));
+            // how far the deck has dropped at x: within each span, most in its middle
+            const auto sagAt = [&](float x) {
+                for (size_t s = 0; s + 1 < bearings.size(); ++s) {
+                    if (x < bearings[s] || x > bearings[s + 1]) continue;
+                    const float t = (x - bearings[s]) / (bearings[s + 1] - bearings[s]);
+                    return spanSag[s] * 4.f * t * (1.f - t);
+                }
+                return 0.f;
+            };
             for (size_t s = 0; s + 1 < bearings.size(); ++s) {
                 const float x0 = bearings[s] - (s == 0 ? 0.6f : 0.f), x1 = bearings[s + 1] + (s + 2 == bearings.size() ? 0.6f : 0.f);
                 for (float dz : {-0.62f, 0.f, 0.62f}) {
-                    WoodLook look{V3(0.66f, 0.63f, 0.6f) * rng.range(0.9f, 1.05f), rng.next(), 0.02f};
+                    WoodLook look{V3(0.66f, 0.63f, 0.6f) * rng.range(0.9f, 1.05f), rng.next(), spanSag[s] * rng.range(0.9f, 1.1f)};
+                    look.bow = rng.range(-0.02f, 0.02f);
                     look.weather = [](const Vector3& p, const Vector3& n, const V3& c) {
                         (void) p;
                         return n.y < -0.5f ? c * 0.75f : c;
@@ -100,10 +114,13 @@ namespace mill {
                 V3 tint = V3(0.92f, 0.9f, 0.86f) * rng.range(0.8f, 1.06f);
                 if (rng() < 0.06f) tint = V3(0.9f, 0.78f, 0.62f);
                 if (rng() < 0.08f) tint = mix(tint, V3(0.55f, 0.66f, 0.38f), 0.5f);
-                WoodLook look{tint, rng.next(), -0.004f, rng.range(-0.02f, 0.02f)};
-                appendBeam(wood, Vector3(x + 0.5f * w, deckTop - 0.03f, zc - halfDeck - rng.range(0.f, 0.06f)), Vector3(x + 0.5f * w, deckTop - 0.03f, zc + halfDeck + rng.range(0.f, 0.06f)),
-                           Vector3(0, 1, 0), w, 0.06f, look);
-                x += w + rng.range(0.012f, 0.025f);
+                WoodLook look{tint, rng.next(), -0.006f, rng.range(-0.04f, 0.04f)};
+                // each plank lies on the sagging stringers, a little askew, its ends ragged
+                const float y = deckTop - 0.03f - sagAt(x + 0.5f * w) + rng.range(-0.006f, 0.006f);
+                const float skew = rng.range(-0.035f, 0.035f);
+                appendBeam(wood, Vector3(x + 0.5f * w - skew, y + rng.range(-0.008f, 0.008f), zc - halfDeck - rng.range(0.f, 0.08f)),
+                           Vector3(x + 0.5f * w + skew, y + rng.range(-0.008f, 0.008f), zc + halfDeck + rng.range(0.f, 0.08f)), Vector3(0, 1, 0), w, 0.06f, look);
+                x += w + rng.range(0.008f, 0.03f);
             }
             // the rails: posts on the outside of the outer stringers, rails, close pickets
             for (float side : {-1.f, 1.f}) {
@@ -113,20 +130,31 @@ namespace mill {
                 const float x0 = bridgeX0 - 0.45f, x1 = bridgeX1 + 0.45f;
                 const int n = static_cast<int>((x1 - x0) / 1.25f);
                 for (int k = 0; k <= n; ++k) posts.push_back(x0 + (x1 - x0) * static_cast<float>(k) / static_cast<float>(n));
+                // every post leans a little its own way, and stands a little higher or lower: the rails between them
+                // run up and down and in and out
+                std::vector<Vector3> tops;
                 for (float px : posts) {
-                    appendBeam(rails, Vector3(px, seat + 0.15f, zr + side * 0.06f), Vector3(px, postTop, zr + side * 0.06f), Vector3(0, 0, side), 0.12f, 0.12f,
+                    const float drop = sagAt(px);
+                    const Vector3 top(px + rng.range(-0.035f, 0.035f), postTop - drop + rng.range(-0.025f, 0.02f), zr + side * (0.06f + rng.range(-0.01f, 0.045f)));
+                    tops.push_back(top);
+                    appendBeam(rails, Vector3(px, seat + 0.15f - drop, zr + side * 0.06f), top, Vector3(0, 0, side), 0.12f, 0.12f,
                                WoodLook{V3(0.8f, 0.77f, 0.73f) * rng.range(0.9f, 1.05f), rng.next()});
                 }
                 for (size_t k = 0; k + 1 < posts.size(); ++k) {
+                    const Vector3 ta = tops[k] - Vector3(0, 0.04f, side * 0.06f), tb = tops[k + 1] - Vector3(0, 0.04f, side * 0.06f);
+                    WoodLook look{V3(0.85f, 0.82f, 0.78f) * rng.range(0.9f, 1.05f), rng.next(), 0.012f};
+                    look.bow = rng.range(-0.015f, 0.015f);
+                    appendBeam(rails, ta, tb, Vector3(0, 1, 0), 0.07f, 0.09f, look);
                     const float a = posts[k], b = posts[k + 1];
-                    WoodLook look{V3(0.85f, 0.82f, 0.78f) * rng.range(0.9f, 1.05f), rng.next(), 0.008f};
-                    appendBeam(rails, Vector3(a, postTop - 0.04f, zr), Vector3(b, postTop - 0.04f, zr), Vector3(0, 1, 0), 0.07f, 0.09f, look);
-                    appendBeam(rails, Vector3(a, deckTop + 0.12f, zr), Vector3(b, deckTop + 0.12f, zr), Vector3(0, 1, 0), 0.06f, 0.08f, look);
-                    // pickets
-                    for (float x = a + 0.11f; x < b - 0.07f; x += 0.105f) {
+                    const auto bottomAt = [&](float x) { return deckTop + 0.12f - sagAt(x); };
+                    appendBeam(rails, Vector3(a, bottomAt(a), zr), Vector3(b, bottomAt(b), zr), Vector3(0, 1, 0), 0.06f, 0.08f, look);
+                    // pickets, from the bottom rail to the top one, each a little off true
+                    for (float x = a + 0.11f; x < b - 0.07f; x += rng.range(0.095f, 0.115f)) {
                         if (rng() < 0.015f) continue;// one gone here and there
-                        appendBeam(rails, Vector3(x, deckTop + 0.06f, zr - side * 0.01f), Vector3(x, postTop - 0.1f, zr - side * 0.01f), Vector3(0, 0, side), 0.05f, 0.022f,
-                                   WoodLook{V3(0.88f, 0.86f, 0.82f) * rng.range(0.82f, 1.06f), rng.next(), 0.f, rng.range(-0.05f, 0.05f)});
+                        const float t = (x - a) / (b - a);
+                        const Vector3 top = ta + (tb - ta) * t - Vector3(0, 0.06f, 0);
+                        appendBeam(rails, Vector3(x, bottomAt(x) - 0.06f, zr - side * 0.01f), Vector3(top.x + rng.range(-0.015f, 0.015f), top.y + rng.range(-0.02f, 0.01f), zr - side * 0.01f),
+                                   Vector3(0, 0, side), 0.05f, 0.022f, WoodLook{V3(0.88f, 0.86f, 0.82f) * rng.range(0.82f, 1.06f), rng.next(), 0.f, rng.range(-0.05f, 0.05f)});
                     }
                 }
             }

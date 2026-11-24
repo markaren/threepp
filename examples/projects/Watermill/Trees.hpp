@@ -295,6 +295,19 @@ namespace mill {
             return std::abs(rx * uz - rz * ux);
         }
 
+        // the mill as the hero view sees it: no trunk in the wedge from the eye to the mill's front and stream side
+        // (a tree leaning across the mill would hide what the picture is of)
+        inline bool inMillView(float x, float z, float margin) {
+            const float ax = heroEyeX, az = heroEyeZ, bx = site::millWest - 2.f, bz = site::millNorth - 1.f, cx = site::millEast + 2.5f, cz = site::millSouth;
+            // signed distances to the three edges, positive inside whichever way round the triangle runs
+            const float turn = (bx - ax) * (cz - az) - (bz - az) * (cx - ax) > 0.f ? 1.f : -1.f;
+            const auto inside = [&](float px, float pz, float qx, float qz) {
+                const float ex = qx - px, ez = qz - pz;
+                return turn * ((x - px) * ez - (z - pz) * ex) / -std::hypot(ex, ez);
+            };
+            return inside(ax, az, bx, bz) > -margin && inside(bx, bz, cx, cz) > -margin && inside(cx, cz, ax, az) > -margin;
+        }
+
         inline bool nearFlume(float x, float z, float margin) {
             return std::abs(x - site::flumeX) < margin && z > site::flumeStartZ - 1.f && z < site::flumeEndZ + 1.f;
         }
@@ -303,12 +316,16 @@ namespace mill {
             return std::abs(z - site::bridgeZ) < margin && x > site::bridgeX0 - 3.f && x < site::bridgeX1 + 0.5f;
         }
 
-        // how far outside the stream's channel (negative: in it)
+        // how far outside the stream's channel (negative: in it), each bank where it really is; and anything lower
+        // than the water's edge counts as in it, wherever the channel's shape puts it
         inline float bankDistance(float x, float z, float* cxOut = nullptr) {
             float cx, hw;
             site::streamAt(z, cx, hw);
             if (cxOut) *cxOut = cx;
-            return std::abs(x - cx) - hw;
+            const float d = x - cx;
+            const float e = std::abs(d) - site::bankHalfWidth(z, hw, d < 0 ? -1.f : 1.f);
+            if (site::groundHeight(x, z) < site::bedAt(x, z) + 0.45f) return std::min(e, -0.1f);
+            return e;
         }
 
         // the boulders, for keeping trunks and plants out of them
@@ -490,6 +507,7 @@ namespace mill {
             if (nearFlume(x, z, 1.8f)) return false;
             if (nearBridge(x, z, 2.5f)) return false;
             if (corridorDistance(x, z) < corridor) return false;
+            if (inMillView(x, z, 3.f)) return false;
             // along the reach the views look down, the creek is a gap open to the sky, as it is at the mill
             const float openReach = (z > -28.f && z < 62.f) ? 2.6f : 0.6f;
             if (bankDistance(x, z) < openReach) return false;
@@ -497,7 +515,15 @@ namespace mill {
             return true;
         };
         // the framing tree's place
-        const float fx = -7.0f, fz = 19.0f;
+        // (on the left bank, clear of the water however the bank wanders there)
+        const float fz = 19.0f;
+        const float fx = [&] {
+            float cx, hw;
+            site::streamAt(fz, cx, hw);
+            float x = std::min(-7.f, cx - site::bankHalfWidth(fz, hw, -1.f) - 0.9f);
+            while (bankDistance(x, fz) < 0.6f) x -= 0.25f;
+            return x;
+        }();
         trunks.emplace_back(fx, fz);
         // the canopy: a jittered grid over the whole valley
         const float cell = 6.3f;
@@ -605,12 +631,13 @@ namespace mill {
         const auto inThicket = [](float x, float z) {
             if (x > 8.f && x < 19.f && z > 5.f && z < 31.f) return 1.f;
             if (x > 13.f && x < 21.f && z > -11.f && z < 11.f) return 1.f;
-            if (x > 9.f && x < 24.f && z > -42.f && z < -16.f) return 0.35f;
-            if (x < -9.f && x > -20.f && z > -40.f && z < 15.f) return 0.18f;
+            // the valley sides upstream, which the views up the creek look onto: thickets, broken by open patches
+            if (x > 8.f && x < 36.f && z > -75.f && z < -12.f) return 0.8f;
+            if (x < -9.f && x > -34.f && z > -75.f && z < 15.f) return 0.5f;
             return 0.f;
         };
-        for (float z = -45.f; z < 33.f; z += 1.45f) {
-            for (float x = -22.f; x < 26.f; x += 1.45f) {
+        for (float z = -75.f; z < 33.f; z += 1.45f) {
+            for (float x = -34.f; x < 36.f; x += 1.45f) {
                 const float px = x + rng.range(-0.6f, 0.6f), pz = z + rng.range(-0.6f, 0.6f);
                 const float w = inThicket(px, pz) * smooth(-0.7f, 0.05f, fbm2(px * 0.13f, pz * 0.13f, 2, 61u));
                 if (rng() > w) continue;
@@ -740,9 +767,9 @@ namespace mill {
         for (size_t k = 0; k < herbs.size(); ++k) plantSet(herbs[k], herbAt[k], true), nHerbs += herbAt[k].size();
         allTris += plantTris;
 
-        std::printf("woods: %zu/%zu/%zu trees near/mid/far + 1 framing, %zu rhododendrons, %zu ferns, %zu herbs, %zu grass tufts; "
+        std::printf("woods: framing tree at x %.2f; %zu/%zu/%zu trees near/mid/far + 1 framing, %zu rhododendrons, %zu ferns, %zu herbs, %zu grass tufts; "
                     "%.1f M triangles in all, about %.1f M in the hero view; %zu meshes; %.2f s (textures %.2f s)\n",
-                    lodCount[0], lodCount[1], lodCount[2], nShrubs, nFerns, nHerbs, nGrass, static_cast<double>(allTris) * 1e-6,
+                    static_cast<double>(fx), lodCount[0], lodCount[1], lodCount[2], nShrubs, nFerns, nHerbs, nGrass, static_cast<double>(allTris) * 1e-6,
                     static_cast<double>(heroTris) * 1e-6, planter.meshes, seconds(t0), tTex);
         return planter.root;
     }

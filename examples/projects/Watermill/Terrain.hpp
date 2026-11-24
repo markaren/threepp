@@ -56,12 +56,15 @@ namespace mill {
 
     // colour of the ground at a point, by what it is
     inline V3 groundColour(float x, float z, float h, float ny) {
-        const float water = site::nominalWater(z);
+        const float water = site::bedAt(x, z) + 0.3f;
         const float above = h - water;
         const float mottle = fbm2(x * 0.35f, z * 0.35f, 4, 21u);
         const float fine = fbm2(x * 2.1f, z * 2.1f, 2, 22u);
         // the litter is the texture's own colour: the vertex colour tints it
-        V3 litter = V3(1.f, 1.f, 1.f) * (0.85f + 0.25f * fine);
+        // the litter is darker back under the trees than by the open creek
+        float lcx, lhw;
+        site::streamAt(z, lcx, lhw);
+        V3 litter = V3(1.f, 1.f, 1.f) * (0.85f + 0.25f * fine) * (0.62f + 0.38f * smooth(9.f, 2.f, std::abs(x - lcx) - lhw));
         const V3 moss = srgb(150, 178, 92);
         const V3 grass = srgb(160, 196, 104);
         V3 c = litter;
@@ -76,6 +79,10 @@ namespace mill {
         c = mix(c, mix(srgb(120, 100, 84), srgb(120, 150, 70), smooth(-0.2f, 0.3f, mottle + 0.5f * fine)), 0.7f * steep);
         // the damp margin, then the wet bank
         c = mix(c, srgb(110, 96, 80), 0.6f * smooth(0.6f, 0.1f, above));
+        // a steep face in the channel is the sandstone the creek has cut down to: dark and wet
+        float ccx, chw;
+        site::streamAt(z, ccx, chw);
+        if (std::abs(x - ccx) < chw + 1.f && ny < 0.6f && above < 0.4f) return srgb(70, 62, 52) * (0.8f + 0.3f * fine);
         // under the water: sand and fine gravel, tea-stained
         if (above < 0.02f) {
             V3 bed = mix(srgb(190, 168, 132), srgb(150, 130, 100), clamp01(0.5f + mottle));
@@ -195,7 +202,7 @@ namespace mill {
             float cx, hw;
             site::streamAt(z, cx, hw);
             const float edge = cx + hw;
-            const float water = site::nominalWater(z);
+            const float water = site::bedAt(cx + hw, z) + 0.3f;
             const int layers = 3 + static_cast<int>(rng() * 2.f);
             for (int k = 0; k < layers; ++k) {
                 Rock s{};
@@ -213,11 +220,16 @@ namespace mill {
                 rocks.push_back(s);
             }
         }
-        for (float z0 : {site::ledgeUpper, site::ledgeLower}) {
+        const int edges = 2 + static_cast<int>(site::creekSteps().size());
+        for (int which = 0; which < edges; ++which) {
+            const float z0 = which == 0 ? site::ledgeUpper : which == 1 ? site::ledgeLower : site::creekSteps()[which - 2].z;
             float cx, hw;
             site::streamAt(z0, cx, hw);
-            for (int k = 0; k < 400 && rocks.size() < 2000; ++k) {
-                const float x = cx + rng.range(-hw - 0.5f, hw + 0.5f), z = z0 + rng.range(-1.2f, 1.0f), r = rng.range(0.35f, 1.0f);
+            // the boulders the step is jammed with, and its sandstone bed's broken edge
+            for (int k = 0; k < (which < 2 ? 400 : 160) && rocks.size() < 2000; ++k) {
+                const float x = cx + rng.range(-hw - 0.5f, hw + 0.5f), r = rng.range(0.35f, 1.0f);
+                const float edgeZ = which == 0 ? site::upperLedgeZ(x) : which == 1 ? site::lowerLedgeZ(x) : site::stepEdgeZ(site::creekSteps()[which - 2], x);
+                const float z = edgeZ + rng.range(-1.2f, 0.6f);
                 if (fits(x, z, r)) add(x, z, r, 0.3f, r > 0.7f ? 5 : 4);
             }
         }
@@ -226,6 +238,13 @@ namespace mill {
         {
             float cx, hw;
             site::streamAt(site::fallsZ, cx, hw);
+            // the chutes the creek has cut through the lip layer: the main one in the bay, two smaller ones
+            const std::array<std::array<float, 2>, 3> chutes{{{cx + 1.6f, 1.9f}, {cx - 3.6f, 1.1f}, {cx + 5.4f, 0.9f}}};
+            const auto inChute = [&](float a, float b) {
+                for (const auto& c : chutes)
+                    if (b > c[0] - 0.5f * c[1] && a < c[0] + 0.5f * c[1]) return true;
+                return false;
+            };
             float x = cx - hw - 2.2f;
             while (x < cx + hw + 2.2f) {
                 Rock s{};
@@ -236,13 +255,18 @@ namespace mill {
                 s.yaw = rng.range(-0.25f, 0.25f);
                 s.tilt = rng.range(-0.04f, 0.04f);
                 s.x = x + s.r * s.elong;
-                s.z = site::fallsZ - 0.62f * s.r + rng.range(-0.15f, 0.1f);
-                s.y = site::bedProfile(site::fallsZ - 1.f) + (bank ? 0.25f : 0.02f) - 0.1f * rng();
+                if (!bank && inChute(x, x + 2.f * s.r * s.elong)) {
+                    // leave the chute open: step past it
+                    x += 0.35f;
+                    continue;
+                }
+                s.z = site::fallsLipZ(s.x) - 0.62f * s.r + rng.range(-0.15f, 0.1f);
+                s.y = site::bedAt(s.x, site::fallsLipZ(s.x) - 1.f) + (bank ? 0.25f : 0.02f) - 0.1f * rng();
                 s.seed = rng.next();
                 s.tint = tints[rng.next() % tints.size()] * rng.range(0.85f, 1.0f);
                 s.detail = 6;
                 rocks.push_back(s);
-                x += 2.f * s.r * s.elong + (bank ? rng.range(-0.3f, 0.1f) : rng.range(0.45f, 1.3f));
+                x += 2.f * s.r * s.elong + (bank ? rng.range(-0.3f, 0.1f) : rng.range(-0.25f, 0.15f));
             }
             // the face of the drop: sandstone beds, each a little behind the one above, the sheet falling in front
             for (float fxp = cx - hw - 1.5f; fxp < cx + hw + 1.5f;) {
@@ -254,8 +278,8 @@ namespace mill {
                     s.yaw = rng.range(-0.12f, 0.12f);
                     s.tilt = rng.range(-0.03f, 0.03f);
                     s.x = fxp + s.r * s.elong + rng.range(-0.3f, 0.3f);
-                    s.z = site::fallsZ - 0.62f * s.r - 0.08f * static_cast<float>(layer);
-                    const float lipBed = site::bedProfile(site::fallsZ - 1.f);
+                    s.z = site::fallsLipZ(s.x) - 0.62f * s.r - 0.08f * static_cast<float>(layer);
+                    const float lipBed = site::bedAt(s.x, site::fallsLipZ(s.x) - 1.f);
                     s.y = lipBed - 0.62f - 0.6f * static_cast<float>(layer);
                     s.seed = rng.next();
                     s.tint = tints[rng.next() % tints.size()] * rng.range(0.7f, 0.85f);// wet and dark
@@ -406,7 +430,7 @@ namespace mill {
             normals[tri[t + 2]] += n;
         }
         const unsigned base = static_cast<unsigned>(out.pos.size() / 3);
-        const float water = site::nominalWater(k.z);
+        const float water = site::bedAt(k.x, k.z) + 0.3f;
         for (size_t i = 0; i < verts.size(); ++i) {
             Vector3 n = normals[i];
             n.normalize();
