@@ -1,0 +1,48 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Pass 4b: the MacCormack correction (Selle et al.). aux.xy holds the forward
+// semi-Lagrangian step phi_hat; step it back and the difference to the original
+// is the error to add, halved, then clamped to the range the departure point's
+// eight neighbours allow so it can never overshoot. Reads the OLD velocity and
+// scalars (the parities have not flipped yet), writes the new scalars with the
+// dissipation and the cooling applied.
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    const float dt = pc.invCell.w;
+    const vec3  w  = worldOfCell(c);
+    const vec3  v  = texelFetch(uVel, c, 0).xyz + pc.wind.xyz;
+
+    const vec2 orig = texelFetch(uSca, c, 0).xy;
+    const vec2 hat  = texelFetch(uAux, c, 0).xy;
+    const vec2 back = textureLod(uAux, uvwOfWorld(w + v * dt), 0.0).xy;
+    vec2       phi  = hat + 0.5 * (orig - back);
+
+    // The departure cell's 2x2x2 neighbourhood, in the ORIGINAL scalars.
+    const vec3  q  = (w - v * dt - pc.box.xyz) * pc.invCell.xyz - 0.5;
+    const ivec3 b  = ivec3(floor(q));
+    vec2 lo = vec2(1e9), hi = vec2(-1e9);
+    for (int k = 0; k < 8; ++k) {
+        const ivec3 o = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        const ivec3 p = b + o;
+        const vec2  s = inGrid(p) ? texelFetch(uSca, p, 0).xy : vec2(0.0);
+        lo = min(lo, s);
+        hi = max(hi, s);
+    }
+    phi = clamp(phi, lo, hi);
+
+    phi.x *= exp(-pc.phys0.w * dt);
+    // A soft boundary layer: smoke fades out over the last phys0.z of the box at every open face (the solid
+    // floor excepted) instead of being clipped flat where the volume ends.
+    if (pc.phys0.z > 0.0) {
+        const vec3  uvw = (vec3(c) + 0.5) / vec3(pc.res.xyz);
+        float       e   = min(min(uvw.x, 1.0 - uvw.x), min(min(uvw.z, 1.0 - uvw.z), 1.0 - uvw.y));
+        if (pc.box.w < 0.5) e = min(e, uvw.y);
+        phi.x *= exp(-5.0 * (1.0 - smoothstep(0.0, pc.phys0.z, e)) * dt);
+    }
+    phi.y *= exp(-pc.phys1.x * dt);
+    imageStore(oSca, c, vec4(max(phi, vec2(0.0)), 0.0, 0.0));
+}

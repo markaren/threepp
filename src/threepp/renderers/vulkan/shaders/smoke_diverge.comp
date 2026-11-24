@@ -1,0 +1,16 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Pass 5: the divergence of the velocity, into aux.x. Solid neighbours push
+// their own velocity into the difference, so a moving collider displaces air.
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    const vec3 h = 0.5 * pc.invCell.xyz;
+    const float div = (velAt(c + ivec3(1, 0, 0)).x - velAt(c - ivec3(1, 0, 0)).x) * h.x
+                    + (velAt(c + ivec3(0, 1, 0)).y - velAt(c - ivec3(0, 1, 0)).y) * h.y
+                    + (velAt(c + ivec3(0, 0, 1)).z - velAt(c - ivec3(0, 0, 1)).z) * h.z;
+    imageStore(aux, c, vec4(div, 0.0, 0.0, 0.0));
+}

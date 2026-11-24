@@ -275,6 +275,10 @@ ParticleFieldPass::~ParticleFieldPass() {
     // queue is being torn down alongside us.
     for (auto& [_, st] : states_) destroyState(*st);
     states_.clear();
+    // The solvers hold images and a pool of their own: freed here, with the device idle and the
+    // allocator alive, not by member destruction after the body.
+    smokeRetire_.clear();
+    smokePipes_.reset();
     // F6: exported allocations of fields swept too recently for the
     // frame-serial rule to have freed them yet.
     for (auto& r : extRetire_) vulkan::destroyExternalBuffer(ctx_.device(), r.buf);
@@ -463,7 +467,7 @@ void ParticleFieldPass::ensureDensityPipeline() {
     VkPushConstantRange cpcr{};
     cpcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     cpcr.offset     = 0;
-    cpcr.size       = sizeof(std::uint32_t);
+    cpcr.size       = 2 * sizeof(std::uint32_t);// volIndex, raw
     VkPipelineLayoutCreateInfo cplci{};
     cplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     cplci.setLayoutCount         = 1;
@@ -590,6 +594,14 @@ void ParticleFieldPass::ensureTransCapacity(std::uint32_t count) {
                          kTransmitUsage, VMA_MEMORY_USAGE_AUTO, 0);
     }
     transCapacity_ = newCap;
+}
+
+bool ParticleFieldPass::ensureSmokePipelines() {
+
+    if (smokePipes_) return true;
+    ensureDensityPipeline();// the solver's last pass writes through the density set's layout
+    smokePipes_ = std::make_unique<SmokePipelines>(ctx_, densityDsLayout_);
+    return smokePipes_->write != VK_NULL_HANDLE;
 }
 
 bool ParticleFieldPass::ensureDensityVolume(State& st, const ParticleField& field) {
@@ -1140,6 +1152,11 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         }
     }
 
+    // A swept grid-smoke field's solver goes once no in-flight frame can name it.
+    smokeRetire_.erase(std::remove_if(smokeRetire_.begin(), smokeRetire_.end(),
+                                      [&](const RetiredSmoke& r) { return r.serial + impl::kFramesInFlight <= serial; }),
+                       smokeRetire_.end());
+
     if (!densitySetRetire_.empty() && densityPool_ != VK_NULL_HANDLE) {
         auto it = densitySetRetire_.begin();
         while (it != densitySetRetire_.end()) {
@@ -1557,7 +1574,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         // froxel passes forced on, and keep heteroActive raised — three
         // wrong answers to "is there dust in this scene".
         const auto& dr = r.field->densityRepr();
-        if (dr.enabled && std::min(r.field->liveCount(), st.capacity) > 0u) {
+        const bool gridSmoke = r.field->gridSmoke().enabled;
+        if (dr.enabled && (gridSmoke || std::min(r.field->liveCount(), st.capacity) > 0u)) {
             if (densityVols_.size() < kMaxDensityFields && ensureDensityVolume(st, *r.field)) {
                 // Half-extent is a divisor; a degenerate axis would produce an
                 // infinity that poisons every sample in the volume.
@@ -1612,6 +1630,20 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 // multiply that turns σ per particle into fixed-point units.
                 dd.sigmaFixed = std::max(dr.sigmaPerParticle, 0.f) * kDensityFixedScale;
                 dd.attrAddr   = d.attrAddr;// the same buffer the billboards colour from
+                if (gridSmoke && !st.smoke && !st.smokeFailed && ensureSmokePipelines()) {
+                    st.smoke = SmokeGrid::create(ctx_, *smokePipes_, createImage3DFn_, st.densityRes);
+                    if (!st.smoke) {
+                        st.smokeFailed = true;
+                        THREEPP_LOGF(kLogParticles, Warn, "GridSmoke: the solver's %u^3 grid could not be allocated "
+                                     "(about %u MB of device memory); this field draws no smoke",
+                                     st.densityRes, static_cast<unsigned>((std::uint64_t(st.densityRes) * st.densityRes * st.densityRes * 48u) >> 20));
+                    }
+                }
+                if (gridSmoke && st.smoke) {
+                    dd.smoke     = st.smoke.get();
+                    dd.smokePlan = st.smoke->plan(*r.field);
+                    densityVols_.back().solved = 1.f;
+                }
                 densityDispatch_.push_back(dd);
             }
         }
@@ -2010,6 +2042,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 densitySetRetire_.push_back({st.marchSet, serial});
                 st.marchSet = VK_NULL_HANDLE;
             }
+            if (st.smoke) smokeRetire_.push_back({std::move(st.smoke), serial});
             retireOrDestroy(st.density);
             retireOrDestroy(st.densityLin);
             it = states_.erase(it);
@@ -2198,6 +2231,7 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     zero.uint32[0] = 0;
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     for (const DensityDispatch& dd : densityDispatch_) {
+        if (dd.smoke) continue;// the solver's last pass writes every voxel
         vkCmdClearColorImage(cb, dd.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
     }
     // The majorants go with them: an atomicMax accumulator that is not zeroed
@@ -2224,6 +2258,7 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     // 3. One dispatch per field, over the CPU-CONSTANT capacity domain.
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, densityPipe_);
     for (const DensityDispatch& dd : densityDispatch_) {
+        if (dd.smoke) continue;
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, densityPipeLayout_,
                                 0, 1, &dd.set, 0, nullptr);
         DensityScatterPc pc{};
@@ -2239,6 +2274,13 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
         vkCmdPushConstants(cb, densityPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), &pc);
         vkCmdDispatch(cb, dd.groups, 1, 1);
+    }
+
+    // 3b. GRID SMOKE: a solved field runs its owed steps and writes its volume in
+    //     place of a scatter. Its passes bind their own pipelines and order
+    //     themselves with their own barriers; the barrier below covers the last.
+    for (const DensityDispatch& dd : densityDispatch_) {
+        if (dd.smoke) dd.smoke->record(cb, *smokePipes_, dd.smokePlan, dd.set);
     }
 
     // 4. Scatter → convert. The atomics must have landed before the convert
@@ -2258,8 +2300,9 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     for (const DensityDispatch& dd : densityDispatch_) {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, convertPipeLayout_,
                                 0, 1, &dd.convertSet, 0, nullptr);
-        vkCmdPushConstants(cb, convertPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
-                           0, sizeof(dd.volIndex), &dd.volIndex);
+        // volIndex, and whether the volume is a solved one (no particle-scatter noise to filter out).
+        const std::uint32_t convertPc[2] = {dd.volIndex, dd.smoke ? 1u : 0u};
+        vkCmdPushConstants(cb, convertPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(convertPc), convertPc);
         const std::uint32_t g = (dd.res + kConvertLocalSize - 1u) / kConvertLocalSize;
         vkCmdDispatch(cb, g, g, g);
     }

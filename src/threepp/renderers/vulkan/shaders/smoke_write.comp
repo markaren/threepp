@@ -1,0 +1,17 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// The last pass of a frame: the density grid becomes the field's sigma_t volume,
+// in the Q20.12 fixed point the particle scatter writes, so everything after it
+// (the r16f mirror, the majorant, the froxel passes, the shade's march) is the
+// code a particle field already uses.
+
+layout(set = 1, binding = 0, r32ui) uniform writeonly uimage3D oDensity;
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    const float rho = texelFetch(uSca, c, 0).x;
+    imageStore(oDensity, c, uvec4(uint(clamp(rho * pc.phys1.w, 0.0, 4.0e9)), 0u, 0u, 0u));
+}

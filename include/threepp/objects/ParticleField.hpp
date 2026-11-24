@@ -562,6 +562,85 @@ namespace threepp {
             // it late, which is what a real diffusion flame does.
             float tempFalloff       = 1.6f;
         };
+        // ── GRID SMOKE ──────────────────────────────────────────────────────
+        // A field whose density volume is not splatted from particles but SOLVED:
+        // an Eulerian smoke simulation on the device (stable fluids with a
+        // MacCormack advection, vorticity confinement and a Jacobi pressure
+        // projection) over the DensityRepr's own world box, one cell per voxel.
+        // Everything downstream of the volume is unchanged and shared with a
+        // particle dust cloud — the froxel passes, the shade's march, the
+        // emission ramp, the LIDAR's majorant — so a solved plume is lit,
+        // shadowed, fogged and sensed exactly as a splatted one is.
+        //
+        // Make one with ParticleField::createGridSmoke. It carries a single dead
+        // placeholder particle (the field machinery wants a capacity) and no
+        // particle representation; `densityRepr()` still owns the box, the
+        // resolution (latched at the first frame), the albedo, the phase
+        // function and the emission ramp.
+        //
+        // THE CLOCK. The application sets `time` (seconds) every frame; the
+        // renderer runs the whole fixed steps owed since the last frame, at most
+        // `maxStepsPerFrame` of them (beyond that the plume runs slow rather than
+        // stalling the frame). The first frame and a field that was reset only
+        // start the clock. A headless capture warms the solve up by advancing
+        // `time` over a few frames, exactly as a live run does.
+        //
+        // COLLIDERS stir the air: a capsule moving through the box carries the
+        // smoke with it and leaves a wake, the same way a character does in a
+        // game-FX fluid. BOXES are walls (a labyrinth's walls are boxes). No air
+        // flows into either, and a wall at least two cells thick keeps the smoke
+        // on its two sides apart; a thinner one still stops the flow. SOURCES
+        // emit. All three are in WORLD space; the first 16 sources, 64 colliders
+        // and 128 boxes are used (more are said once in the log, then dropped).
+        // A collider's `velocity` is what it carries the air with: set it to the
+        // body's own motion, or it stands still for the smoke.
+        struct GridSmoke {
+            struct Source {
+                Vector3 position{0.f, 0.f, 0.f};
+                float   radius         = 0.3f;// m
+                float   density        = 4.f; // density added per second at the centre
+                float   temperature    = 3.f; // temperature added per second at the centre
+                Vector3 velocity{0.f, 1.5f, 0.f};// m/s the air is pulled toward
+                float   velocityBlend  = 4.f; // 1/s: how hard it is pulled
+                float   noise          = 0.6f;// 0..1 raggedness of the emission
+            };
+            struct Collider {// a capsule; a = b is a sphere
+                Vector3 a{0.f, 0.f, 0.f};
+                Vector3 b{0.f, 0.f, 0.f};
+                float   radius = 0.3f;
+                Vector3 velocity{0.f, 0.f, 0.f};// m/s of its surface
+            };
+
+            struct Box {// an axis-aligned block: a wall, a floor slab, a crate
+                Vector3 min{0.f, 0.f, 0.f};
+                Vector3 max{0.f, 0.f, 0.f};
+                Vector3 velocity{0.f, 0.f, 0.f};// m/s of its surface
+            };
+
+            bool          enabled = false;
+            double        time    = 0.0;      // the solver's clock, seconds
+            float         stepDt  = 1.f / 60.f;
+            std::uint32_t maxStepsPerFrame = 8;
+            std::uint32_t pressureIterations = 24;
+            float buoyancy    = 3.f;   // m/s^2 per unit temperature
+            float weight      = 0.f;   // m/s^2 per unit density (sinks)
+            float dissipation = 0.12f; // 1/s, density decay
+            float cooling     = 0.9f;  // 1/s, temperature decay
+            float vorticity   = 4.f;   // 1/s, confinement strength (0 = off)
+            float damping     = 0.05f; // 1/s, velocity drag
+            float maxSpeed    = 20.f;  // m/s cap
+            float sigma       = 8.f;   // extinction (1/m) of density 1
+            // The share of the box, from each open face inward, over which smoke fades away instead of being cut
+            // flat at the box (0 = off). The solid floor does not fade.
+            float boundaryFade = 0.10f;
+            // m/s, carries the smoke without being pushed back. It is added at the advection, so the walls turn it
+            // only within a cell of their faces: keep wind * stepDt under a cell, or it reads into thick walls.
+            Vector3 wind{0.f, 0.f, 0.f};
+            bool  solidFloor  = false; // the bottom face of the box is a wall
+            std::vector<Source>   sources;
+            std::vector<Collider> colliders;
+            std::vector<Box>      boxes;// up to 128; static walls are the usual use
+        };
         struct TracedRepr {// procedural-AABB BLAS
             float radiusScale = 1.f;// AABB dilation vs the render radius
             bool  enabled     = false;
@@ -855,6 +934,17 @@ namespace threepp {
         [[nodiscard]] const BillboardRepr& billboardRepr() const { return billboardRepr_; }
         [[nodiscard]] DensityRepr&   densityRepr() { return densityRepr_; }
         [[nodiscard]] const DensityRepr& densityRepr() const { return densityRepr_; }
+        // A field whose density is a solved smoke (see GridSmoke). `resolution`
+        // is the cells per axis of the world box and is latched at the first
+        // frame; 96 is a good plume, 128 a hero shot.
+        static std::shared_ptr<ParticleField> createGridSmoke(const Vector3& center, const Vector3& halfExtent,
+                                                              std::uint32_t resolution = 96);
+        [[nodiscard]] GridSmoke&       gridSmoke() { return gridSmoke_; }
+        [[nodiscard]] const GridSmoke& gridSmoke() const { return gridSmoke_; }
+        // Throw the solved state away (zero density, velocity and pressure) and restart the clock at gridSmoke().time.
+        void resetGridSmoke() { ++gridSmokeResets_; }
+        [[nodiscard]] std::uint64_t gridSmokeResets() const { return gridSmokeResets_; }
+
         [[nodiscard]] TracedRepr&    tracedRepr() { return tracedRepr_; }
         [[nodiscard]] const TracedRepr& tracedRepr() const { return tracedRepr_; }
 
@@ -1045,6 +1135,8 @@ namespace threepp {
         BillboardRepr billboardRepr_;
         DensityRepr   densityRepr_;
         TracedRepr    tracedRepr_;
+        GridSmoke     gridSmoke_;
+        std::uint64_t gridSmokeResets_ = 0;
 
         // Ownership::Renderer only. Deliberately NOT behind dataSerial_: the
         // emitter's whole state is O(1) bytes that ride in a push constant, so

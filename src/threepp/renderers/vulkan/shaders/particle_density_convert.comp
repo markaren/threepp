@@ -38,6 +38,7 @@ layout(set = 0, binding = 2, std430) buffer MajorantBuf {
 
 layout(push_constant) uniform Pc {
     uint volIndex;
+    uint raw;// 1: a SOLVED volume (ParticleField::GridSmoke) - copy it, do not blur it
 } pc;
 
 // ── A 3^3 BINOMIAL PREFILTER, AND WHY THE MARCH NEEDS ONE ────────────────────
@@ -73,6 +74,11 @@ void main() {
     if (all(lessThan(c, sz))) {
         v = imageLoad(srcFixed, c).x;
         float acc = 0.0;
+        if (pc.raw != 0u) {
+            // A grid solve's voxels are its detail: the prefilter exists to remove the Poisson noise of a
+            // scatter, and would only blur this. Uniform branch (one volume per dispatch).
+            acc = float(v);
+        } else {
         for (int dz = -1; dz <= 1; ++dz)
         for (int dy = -1; dy <= 1; ++dy)
         for (int dx = -1; dx <= 1; ++dx) {
@@ -83,6 +89,7 @@ void main() {
             if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, sz))) continue;
             acc += kW[dx + 1] * kW[dy + 1] * kW[dz + 1]
                  * float(imageLoad(srcFixed, q).x);
+        }
         }
         imageStore(dstLin, c, vec4(acc * kInvScale));
     }

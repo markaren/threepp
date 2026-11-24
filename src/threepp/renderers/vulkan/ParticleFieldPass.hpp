@@ -62,6 +62,7 @@
 #include "VulkanImplCommon.hpp"
 #include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "VulkanResources.hpp"
+#include "SmokeGrid.hpp"
 
 #include <vulkan/vulkan.h>
 
@@ -133,6 +134,9 @@ namespace threepp::vulkan {
         float       boxMin[3]{};    // world min corner
         float       resolution = 0.f;// voxels/axis, as the UBO's boxMin.w
         float       boxInvSize[3]{};// 1 / (2 * halfExtent)
+        // 1 for a SOLVED volume (ParticleField::GridSmoke): its voxels are real detail, not scatter noise, so the
+        // convert does not blur it and the march may step finer than the dust floor. The UBO's boxInvSize.w.
+        float       solved = 0.f;
         // ── PER-FIELD medium params (plans/particle-atmosphere.md F-A) ──────
         // These used to be one shared value taken from whichever field was
         // enumerated first. They are per volume now because a fire field and a
@@ -912,6 +916,16 @@ namespace threepp::vulkan {
             // half of R10's "not one allocated byte".
             VkDescriptorSet marchSet = VK_NULL_HANDLE;
 
+            // ── GridSmoke: the field's solver (ParticleField::GridSmoke) ────
+            // Created on the first frame a grid-smoke field has its density
+            // volume, at that volume's latched resolution; null on every other
+            // field. Its images are private to the density block (see
+            // SmokeGrid.hpp), so the frame graph never names them.
+            std::unique_ptr<SmokeGrid> smoke;
+            // The solver's images could not be made (out of device memory): said once, and not
+            // tried again every frame for the life of the field.
+            bool smokeFailed = false;
+
             // ── F5: the baked height map ────────────────────────────────────
             // RINGED over the frames in flight, unlike the density volume,
             // because a bake is a WRITE and the previous frames' emit dispatches
@@ -969,6 +983,11 @@ namespace threepp::vulkan {
             // therefore its slot in the majorant buffer. Pushed to the convert
             // dispatch, which reduces the volume's maximum into it.
             std::uint32_t   volIndex   = 0;
+            // GridSmoke: this field's solver and the frame's plan for it. When
+            // set, the scatter and the volume clear are skipped — the solver's
+            // last pass writes every voxel of `image`.
+            SmokeGrid*      smoke = nullptr;
+            SmokePlan       smokePlan{};
         };
 
         // R8: one field's transmittance dispatch, resolved in prepareFrame so
@@ -1135,6 +1154,16 @@ namespace threepp::vulkan {
         };
         std::vector<RetiredSet> densitySetRetire_;
 
+        // GridSmoke. The pipelines are shared by every solver and created with
+        // the first one; a swept field's solver is held until no in-flight
+        // frame can still name its images or sets (the rule above).
+        std::unique_ptr<SmokePipelines> smokePipes_;
+        struct RetiredSmoke {
+            std::unique_ptr<SmokeGrid> grid;
+            std::uint64_t              serial;
+        };
+        std::vector<RetiredSmoke> smokeRetire_;
+
         // F6: the same rule for a swept field's EXPORTED allocation, which the
         // renderer's retire queue cannot take (it holds Buffers, and this one is
         // outside VMA). Destroying it inline would free memory an in-flight
@@ -1175,6 +1204,7 @@ namespace threepp::vulkan {
         void   retireOrDestroy(Image2D& img);
         void   ensureEmitPipeline();
         void   ensureDensityPipeline();
+        bool   ensureSmokePipelines();
         // R8. False when the pipeline could not be created, which leaves the
         // field's kBbVolume bit clear and its sprites flat rather than wrong.
         bool   ensureTransmittancePipeline();

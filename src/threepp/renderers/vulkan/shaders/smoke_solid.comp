@@ -1,0 +1,20 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#include "smoke_common.glsl"
+
+// Once a frame, before the steps: the colliders rasterised into solidMask (xyz = the solid's velocity, w = covered).
+// The capsules are the only thing that walks the collider list; every other pass reads one texel.
+//
+// A cell is solid when a collider comes within half a cell of its centre, not only when it covers the centre:
+// a wall thinner than a cell that fell between two centres would otherwise not exist for the solver at all, and
+// one that is exactly between two takes both. A wall seals the smoke on its two sides from each other when it is
+// at least two cells thick (smoke_forces.comp fills a wall cell from the open cells beside it).
+
+void main() {
+    const ivec3 c = ivec3(gl_GlobalInvocationID);
+    if (!inGrid(c)) return;
+    vec3        vel;
+    const float d    = colliderSdf(worldOfCell(c), vel);
+    const vec3  cell = 1.0 / pc.invCell.xyz;
+    imageStore(solidMask, c, vec4(vel, d < 0.5 * max(cell.x, max(cell.y, cell.z)) ? 1.0 : 0.0));
+}

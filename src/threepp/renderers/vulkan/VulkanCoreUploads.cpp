@@ -2530,6 +2530,7 @@ void VulkanRenderer::Impl::updateParticleDensityUbo(uint32_t frame) {
                 ubo.boxInvSize[i][0] = vols[i].boxInvSize[0];
                 ubo.boxInvSize[i][1] = vols[i].boxInvSize[1];
                 ubo.boxInvSize[i][2] = vols[i].boxInvSize[2];
+                ubo.boxInvSize[i][3] = vols[i].solved;
                 // PER FIELD since plans/particle-atmosphere.md F-A — this used
                 // to be one shared vec4 filled from the first enabled field.
                 ubo.albedoAniso[i][0] = vols[i].albedo[0];
