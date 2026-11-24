@@ -2898,11 +2898,17 @@ int main(int argc, char** argv) {
     std::unique_ptr<Renderer> rendererOwner;
     GLRenderer* gl = nullptr;
     VulkanRenderer* vk = nullptr;
+#ifndef THREEPP_WITH_VULKAN
+    if (vulkan) std::cerr << "--vulkan: this build has no Vulkan backend, running on GL" << std::endl;
+    vulkan = false;
+#else
     if (vulkan) {
         auto r = std::make_unique<VulkanRenderer>(canvas);
         vk = r.get();
         rendererOwner = std::move(r);
-    } else {
+    } else
+#endif
+    {
         auto r = std::make_unique<GLRenderer>(canvas);
         r->shadowMap().enabled = true;
         r->shadowMap().type = ShadowMap::PFC;
@@ -2942,6 +2948,7 @@ int main(int argc, char** argv) {
         // leaves the fog, and the in-scatter along it veils the whole sky however thin the
         // fog is. The panorama already carries its own horizon haze, so the layer is low.
         scene->fog = FogExp2(horizon, 1.f / 7000.f);
+#ifdef THREEPP_WITH_VULKAN
         VulkanRenderer::HeightFogSettings air;
         air.density = 0.f;// the profile only: scene.fog gives the density
         air.baseY = 0.f;
@@ -2952,6 +2959,7 @@ int main(int argc, char** argv) {
         // Toksvig damping that keeps glossy normal maps from shimmering erases them past a
         // few metres, and rough snow has no highlight to shimmer.
         vk->setNormalMapToksvig(false);
+#endif
         // the snow's traced bounce light, and the haze over the sky, add what GL leaves out
         renderer.toneMappingExposure = 0.9f;
     } else {
@@ -3242,7 +3250,9 @@ int main(int argc, char** argv) {
             skyMat->uniforms["uTime"].setValue(t);
             sky->position.copy(camera->position);
         }
+#ifdef THREEPP_WITH_VULKAN
         if (vk) vk->setSimTime(t);// pins Vulkan's clock (TAA, denoisers) to the scene's
+#endif
         Vector3 origin = controls.target;
         origin.y = groundHeight(origin.x, origin.z);
         drift.update(t, origin);
@@ -3493,6 +3503,7 @@ int main(int argc, char** argv) {
             rc.start();
             renderer.render(*scene, *camera);
             if (frames >= warm && frames < benchFrames) renderWallMs += 1000.0 * rc.getElapsedTime();
+#ifdef THREEPP_WITH_VULKAN
             if (vk && frames >= warm && frames < benchFrames) {
                 const auto ft = vk->lastFrameTimings();
                 cpuMs += ft.cpuFrameMs;
@@ -3501,6 +3512,7 @@ int main(int argc, char** argv) {
                 gpuMs += ft.gpuTotalMs;
                 for (const auto& p : ft.passes) passMs[p.name] += p.gpuMs;
             }
+#endif
             if (++frames == benchFrames) {
                 renderer.writeFramebuffer(shotPath);
                 std::printf("bench: %d frames, %.2f ms/frame\n", benchFrames, 1000.f * benchClock.getElapsedTime() / static_cast<float>(benchFrames));
