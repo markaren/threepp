@@ -24,6 +24,18 @@ namespace threepp::vulkan {
     // Used pervasively as `check(vkXxx(...), "vkXxx")` to keep call sites short.
     void check(VkResult r, const char* what);
 
+    // A compute pipeline from one SPIR-V module: the module is created, the
+    // pipeline built on `layout` with entry point "main", and the module
+    // destroyed again whether or not the pipeline came to be. `cache` may be
+    // VK_NULL_HANDLE. `spec`: the stage's specialization constants, or null.
+    // `what` names the pipeline in the error a failure throws through check():
+    // "vkCreateShaderModule(what)" or "vkCreateComputePipelines(what)". The
+    // module goes through the backend's vkCreateShaderModule
+    // (VulkanContext.hpp), so the NoContraction option reaches it.
+    [[nodiscard]] VkPipeline createComputePipeline(VkDevice device, VkPipelineCache cache, VkPipelineLayout layout,
+                                                   const uint32_t* spv, size_t spvBytes, const char* what,
+                                                   const VkSpecializationInfo* spec = nullptr);
+
     // Round x up to the nearest multiple of `align` (align must be a power of two).
     [[nodiscard]] inline uint32_t alignUp(uint32_t x, uint32_t align) {
         return (x + align - 1) & ~(align - 1);

@@ -142,31 +142,6 @@ namespace threepp::vulkan {
                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
         }
 
-        VkPipeline computePipeline(VulkanContext& ctx, const uint32_t* spv, size_t bytes, VkPipelineLayout layout,
-                                   const char* what) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = bytes;
-            smci.pCode    = spv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx.device(), &smci, nullptr, &mod), what);
-
-            VkPipelineShaderStageCreateInfo stage{};
-            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            stage.module = mod;
-            stage.pName  = "main";
-
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage  = stage;
-            cpci.layout = layout;
-            VkPipeline pipeline = VK_NULL_HANDLE;
-            check(vkCreateComputePipelines(ctx.device(), ctx.pipelineCache(), 1, &cpci, nullptr, &pipeline), what);
-            vkDestroyShaderModule(ctx.device(), mod, nullptr);
-            return pipeline;
-        }
-
     }// namespace
 
     WakeFieldPipeline::WakeFieldPipeline(VulkanContext& ctx)
@@ -235,8 +210,8 @@ namespace threepp::vulkan {
             plci.pPushConstantRanges    = &pcr;
             check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
                   "vkCreatePipelineLayout(wakeField)");
-            pipeline_ = computePipeline(ctx_, kWakeFieldCompSpv, sizeof(kWakeFieldCompSpv), pipelineLayout_,
-                                        "vkCreateComputePipelines(wakeField)");
+            pipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), pipelineLayout_, kWakeFieldCompSpv,
+                                              sizeof(kWakeFieldCompSpv), "wakeField");
         }
 
         // wake_ripple.comp. Bindings: 0 = the spectra (array), 1 = the patch's
@@ -264,8 +239,8 @@ namespace threepp::vulkan {
             plci.pPushConstantRanges    = &pcr;
             check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &ripplePipelineLayout_),
                   "vkCreatePipelineLayout(wakeRipple)");
-            ripplePipeline_ = computePipeline(ctx_, kWakeRippleCompSpv, sizeof(kWakeRippleCompSpv),
-                                              ripplePipelineLayout_, "vkCreateComputePipelines(wakeRipple)");
+            ripplePipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), ripplePipelineLayout_,
+                                                    kWakeRippleCompSpv, sizeof(kWakeRippleCompSpv), "wakeRipple");
         }
 
         // An ocean: three sets for the field (one per dispatch of a step) and
@@ -364,13 +339,14 @@ namespace threepp::vulkan {
         captureDsLayout_   = setLayout({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, kStorage, kStorage},
                                        "vkCreateDescriptorSetLayout(shoreCapture)");
         capturePipeLayout_ = pipeLayout(&captureDsLayout_, 1, sizeof(ShoreCapturePush), "vkCreatePipelineLayout(shoreCapture)");
-        capturePipeline_   = computePipeline(ctx_, kShoreCaptureCompSpv, sizeof(kShoreCaptureCompSpv), capturePipeLayout_,
-                                             "vkCreateComputePipelines(shoreCapture)");
+        capturePipeline_   = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), capturePipeLayout_,
+                                                   kShoreCaptureCompSpv, sizeof(kShoreCaptureCompSpv),
+                                                   "shoreCapture");
         // shore_jfa.comp: seeds in, seeds out, the map.
         jfaDsLayout_   = setLayout({kStorage, kStorage, kStorage}, "vkCreateDescriptorSetLayout(shoreJfa)");
         jfaPipeLayout_ = pipeLayout(&jfaDsLayout_, 1, sizeof(ShoreJfaPush), "vkCreatePipelineLayout(shoreJfa)");
-        jfaPipeline_   = computePipeline(ctx_, kShoreJfaCompSpv, sizeof(kShoreJfaCompSpv), jfaPipeLayout_,
-                                         "vkCreateComputePipelines(shoreJfa)");
+        jfaPipeline_   = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), jfaPipeLayout_, kShoreJfaCompSpv,
+                                               sizeof(kShoreJfaCompSpv), "shoreJfa");
         // shore_source.comp's own set (its set 1; set 0 is the ocean's displace
         // set, whose layout it is made with on first use): the map (sampled),
         // the field's state and flow, the parcels' last surface.
@@ -378,8 +354,9 @@ namespace threepp::vulkan {
                                     "vkCreateDescriptorSetLayout(shoreSource)");
         // shore_refract.comp: the bend, everything through buffer addresses.
         refractPipeLayout_ = pipeLayout(nullptr, 0, sizeof(ShoreRefractPush), "vkCreatePipelineLayout(shoreRefract)");
-        refractPipeline_   = computePipeline(ctx_, kShoreRefractCompSpv, sizeof(kShoreRefractCompSpv), refractPipeLayout_,
-                                             "vkCreateComputePipelines(shoreRefract)");
+        refractPipeline_   = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), refractPipeLayout_,
+                                                   kShoreRefractCompSpv, sizeof(kShoreRefractCompSpv),
+                                                   "shoreRefract");
 
         // An ocean: a capture set a frame in flight, two flood sets, a source set.
         std::array<VkDescriptorPoolSize, 3> ps{};
@@ -1084,8 +1061,8 @@ namespace threepp::vulkan {
             plci.pPushConstantRanges    = &pcr;
             check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &sourcePipeLayout_),
                   "vkCreatePipelineLayout(shoreSource)");
-            sourcePipeline_ = computePipeline(ctx_, kShoreSourceCompSpv, sizeof(kShoreSourceCompSpv), sourcePipeLayout_,
-                                              "vkCreateComputePipelines(shoreSource)");
+            sourcePipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), sourcePipeLayout_,
+                                                    kShoreSourceCompSpv, sizeof(kShoreSourceCompSpv), "shoreSource");
             sourceDisplaceLayout_ = in.displaceLayout;
         }
 

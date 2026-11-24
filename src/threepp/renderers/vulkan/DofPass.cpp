@@ -13,33 +13,6 @@
 
 namespace threepp::vulkan {
 
-    namespace {
-
-        VkPipeline makeComputePipe(VkDevice d, VkPipelineCache cache, VkPipelineLayout layout,
-                                   const uint32_t* spv, size_t spvBytes, const char* label) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = spvBytes;
-            smci.pCode    = spv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(d, &smci, nullptr, &mod), label);
-            VkPipelineShaderStageCreateInfo stage{};
-            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            stage.module = mod;
-            stage.pName  = "main";
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage  = stage;
-            cpci.layout = layout;
-            VkPipeline pipe = VK_NULL_HANDLE;
-            check(vkCreateComputePipelines(d, cache, 1, &cpci, nullptr, &pipe), label);
-            vkDestroyShaderModule(d, mod, nullptr);
-            return pipe;
-        }
-
-    }// namespace
-
     DofPass::DofPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight)
         : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
         createPipelines();
@@ -208,14 +181,14 @@ namespace threepp::vulkan {
         makeLayout({S, S, I, I},    16, gatherLayout_, gatherPipeLayout_);  // half, tiles → far, near
         makeLayout({U, S, S, S, I}, 32, combineLayout_, combinePipeLayout_);// cam, depth, far, near → scene
 
-        cocPipe_     = makeComputePipe(d, ctx_.pipelineCache(), cocPipeLayout_, kDofCocCompSpv,
-                                       sizeof(kDofCocCompSpv), "vkCreateComputePipelines(dof_coc)");
-        tilePipe_    = makeComputePipe(d, ctx_.pipelineCache(), tilePipeLayout_, kDofTileCompSpv,
-                                       sizeof(kDofTileCompSpv), "vkCreateComputePipelines(dof_tile)");
-        gatherPipe_  = makeComputePipe(d, ctx_.pipelineCache(), gatherPipeLayout_, kDofGatherCompSpv,
-                                       sizeof(kDofGatherCompSpv), "vkCreateComputePipelines(dof_gather)");
-        combinePipe_ = makeComputePipe(d, ctx_.pipelineCache(), combinePipeLayout_, kDofCombineCompSpv,
-                                       sizeof(kDofCombineCompSpv), "vkCreateComputePipelines(dof_combine)");
+        cocPipe_     = createComputePipeline(d, ctx_.pipelineCache(), cocPipeLayout_, kDofCocCompSpv,
+                                             sizeof(kDofCocCompSpv), "dof_coc");
+        tilePipe_    = createComputePipeline(d, ctx_.pipelineCache(), tilePipeLayout_, kDofTileCompSpv,
+                                             sizeof(kDofTileCompSpv), "dof_tile");
+        gatherPipe_  = createComputePipeline(d, ctx_.pipelineCache(), gatherPipeLayout_, kDofGatherCompSpv,
+                                             sizeof(kDofGatherCompSpv), "dof_gather");
+        combinePipe_ = createComputePipeline(d, ctx_.pipelineCache(), combinePipeLayout_, kDofCombineCompSpv,
+                                             sizeof(kDofCombineCompSpv), "dof_combine");
     }
 
     void DofPass::createDescriptorPool() {

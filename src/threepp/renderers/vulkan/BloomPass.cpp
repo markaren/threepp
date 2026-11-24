@@ -154,32 +154,6 @@ namespace threepp::vulkan {
                         "vmaCreateImage(bloom.pyr)", transientSlot(f));
     }
 
-    static VkPipeline makeComputePipe(VkDevice d, VkPipelineCache cache, VkPipelineLayout layout,
-                                      const uint32_t* spv, size_t spvBytes,
-                                      const char* label) {
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = spvBytes;
-        smci.pCode    = spv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smci, nullptr, &mod), label);
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = layout;
-        VkPipeline pipe = VK_NULL_HANDLE;
-        check(vkCreateComputePipelines(d, cache, 1, &cpci, nullptr, &pipe), label);
-        vkDestroyShaderModule(d, mod, nullptr);
-        return pipe;
-    }
-
     void BloomPass::createPipelines() {
         VkDevice d = ctx_.device();
 
@@ -228,10 +202,10 @@ namespace threepp::vulkan {
                   "vkCreatePipelineLayout(bloom)");
         }
 
-        downPipe_ = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomDownCompSpv,
-                                    sizeof(kBloomDownCompSpv), "vkCreateComputePipelines(bloom_down)");
-        upPipe_   = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomUpCompSpv,
-                                    sizeof(kBloomUpCompSpv), "vkCreateComputePipelines(bloom_up)");
+        downPipe_ = createComputePipeline(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomDownCompSpv,
+                                          sizeof(kBloomDownCompSpv), "bloom_down");
+        upPipe_   = createComputePipeline(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomUpCompSpv,
+                                          sizeof(kBloomUpCompSpv), "bloom_up");
     }
 
     void BloomPass::createDescriptorPool() {
