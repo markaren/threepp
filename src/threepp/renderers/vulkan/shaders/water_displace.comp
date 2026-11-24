@@ -591,7 +591,10 @@ void main() {
     float aXX = 0.0, aXZ = 0.0, aZX = 0.0, aZZ = 0.0, hGX = 0.0, hGZ = 0.0;
     float bGX = 0.0, bGZ = 0.0;// the bound harmonic's own gradient (chop normals)
     float wmLambda = pc.choppiness;
-    if ((pc.waveModel & 63u) != 0u) {
+    // Only cwm (bit 0) and boundWaves (bit 1) read the stencil: wmC and the
+    // limiter under bit 0 or 1, bGX/bGZ from the .w that only bit 1 writes.
+    // Bits 4 and 5 are set on every ocean and read none of it.
+    if ((pc.waveModel & 3u) != 0u) {
         wmC = sampleSmoothRaw(rest.xz).xyz;
         const vec4 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
         const vec4 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));

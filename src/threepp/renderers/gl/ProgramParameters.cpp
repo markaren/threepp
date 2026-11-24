@@ -72,7 +72,7 @@ ProgramParameters::ProgramParameters(
     if (shaderIDs.contains(material->type())) {
 
         shaderID = shaderIDs.at(material->type());
-        const auto shader = shaders::ShaderLib::instance().get(*shaderID);
+        const auto& shader = shaders::ShaderLib::instance().get(*shaderID);
         vShader = shader.vertexShader;
         fShader = shader.fragmentShader;
 
@@ -90,8 +90,8 @@ ProgramParameters::ProgramParameters(
         customProgramCacheKey = "onBeforeCompile:" + (material->customProgramCacheKey.empty() ? material->uuid() : material->customProgramCacheKey);
     }
 
-    vertexShader = vShader;
-    fragmentShader = fShader;
+    vertexShader = std::move(vShader);
+    fragmentShader = std::move(fShader);
 
     if (definesMaterial) {
         defines = definesMaterial->defines;

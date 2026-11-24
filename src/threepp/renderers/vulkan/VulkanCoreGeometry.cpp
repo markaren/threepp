@@ -274,13 +274,14 @@ bool VulkanRenderer::Impl::stageChangedSideAttributes(StagedUploads& up, const B
             return indexChanged;
         }
 
-Buffer VulkanRenderer::Impl::recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched) {
-            Buffer staging = makeStaging(up);
+Buffer VulkanRenderer::Impl::recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched,
+                                                 bool keepCapacity) {
+            Buffer staging = makeStaging(up, keepCapacity);
             recordStagedCopies(up, staging, cb, dstUntouched);
             return staging;
         }
 
-Buffer VulkanRenderer::Impl::makeStaging(StagedUploads& up) {
+Buffer VulkanRenderer::Impl::makeStaging(StagedUploads& up, bool keepCapacity) {
             Buffer staging;
             if (up.copies.empty()) {
                 up.data.clear();
@@ -291,7 +292,10 @@ Buffer VulkanRenderer::Impl::makeStaging(StagedUploads& up) {
                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             uploadHostVisible(ctx->allocator(), staging, up.data.data(), up.data.size());
             up.data.clear();
-            up.data.shrink_to_fit();
+            // A scratch keeps what a frame's edits usually take; one huge edit
+            // does not stay allocated for the rest of the run.
+            constexpr size_t kKeptScratchBytes = size_t(64) << 20;
+            if (!keepCapacity || up.data.capacity() > kKeptScratchBytes) up.data.shrink_to_fit();
             return staging;
         }
 
@@ -3030,7 +3034,9 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 // copies above, so no barrier of its own before; its closing
                 // barrier publishes them to the build and every later read.
                 if (!copyUp.copies.empty()) {
-                    retire(recordStagedUploads(copyUp, cb, /*dstUntouched=*/true));
+                    // copyUp is this thread's scratch, filled again by the next
+                    // frame with an edit: it keeps its bytes' allocation.
+                    retire(recordStagedUploads(copyUp, cb, /*dstUntouched=*/true, /*keepCapacity=*/true));
                 }
             }
 

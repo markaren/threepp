@@ -25,7 +25,7 @@ Interpolant::Interpolant(Sample parameterPositions, Sample sampleValues, int sam
 }
 
 // C++
-Sample Interpolant::evaluate(float t) {
+const Sample& Interpolant::evaluate(float t) {
 
     const auto& pp = this->parameterPositions;
     size_t i1 = this->_cachedIndex;
@@ -140,7 +140,7 @@ Sample Interpolant::evaluate(float t) {
 }
 
 
-Sample Interpolant::copySampleValue_(size_t index) const {
+const Sample& Interpolant::copySampleValue_(size_t index) const {
 
     // copies a sample value to the result buffer
 

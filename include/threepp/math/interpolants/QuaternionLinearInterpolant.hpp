@@ -13,7 +13,7 @@ namespace threepp {
         template<typename... Args>
         explicit QuaternionLinearInterpolant(Args&&... args): Interpolant(std::forward<Args>(args)...) {}
 
-        Sample interpolate_(size_t i1, float t0, float t, float t1) override {
+        const Sample& interpolate_(size_t i1, float t0, float t, float t1) override {
             const auto result = this->resultBuffer;
             const auto& values = this->sampleValues;
             const auto stride = this->valueSize;

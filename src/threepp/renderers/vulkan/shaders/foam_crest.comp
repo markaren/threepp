@@ -253,9 +253,13 @@ void main() {
             // measure lifted by at most half the ramp.
             float an;
             const vec2 t = crestDir(jxx, jzz, jxz, an);// along the crest
-            if (an >= 0.3) {
-                const float own = measure;
-                const float lift = 0.5 / pc.invRamp;
+            const float own = measure;
+            const float lift = 0.5 / pc.invRamp;
+            // The search can raise the measure to own + lift at most, and what
+            // is stored is clamp(measure * invRamp, 0, 1) * hullFade: where
+            // own + lift <= 0, or inside a hull's footprint, that is 0 whatever
+            // lies along the crest, so the search is not run there.
+            if (an >= 0.3 && own + lift > 0.0 && hullFade > 0.0) {
                 const int kN = 4;
                 for (int i = 1; i <= kN; ++i) {
                     const vec2 s = t * (pc.crestHalf * float(i) / float(kN));
@@ -275,9 +279,10 @@ void main() {
         {
             float an;
             const vec2 t = crestDir(jxx, jzz, jxz, an);
-            if (an >= 0.3) {
-                const vec3  own  = lv;
-                const float lift = 0.5 / pc.invRamp;
+            const vec3  own  = lv;
+            const float lift = 0.5 / pc.invRamp;
+            // As above, per level: only .yz is stored, each clamped at 0.
+            if (an >= 0.3 && max(own.y, own.z) + lift > 0.0 && hullFade > 0.0) {
                 const int kN = 4;
                 for (int i = 1; i <= kN; ++i) {
                     const vec2 s = t * (pc.crestHalf * float(i) / float(kN));

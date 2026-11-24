@@ -111,6 +111,23 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
 // -1 = not traced yet. Only the first directional light is cached (the one-sun
 // policy); any further light traces as before.
 float gWaterSunVis0 = -1.0;
+// What else dims that sun at the surface point: the cloud shadow (.x) and the
+// density volumes' transmittance toward it (.y). Both are functions of P and L
+// alone, so the second loop's values are the first's and are sampled once.
+// They stay two factors, multiplied at each site in the order they always
+// were. Only the first directional light is cached, as its visibility is.
+vec2 gWaterSunDim0    = vec2(1.0);
+bool gWaterSunDim0Set = false;
+
+vec2 waterSunDim(uint i, vec3 P, vec3 L) {
+    if (i == 0u && gWaterSunDim0Set) return gWaterSunDim0;
+    const vec2 d = vec2(cloudShadowSample(P), pdSurfaceLightTransmittance(P, L));
+    if (i == 0u) {
+        gWaterSunDim0    = d;
+        gWaterSunDim0Set = true;
+    }
+    return d;
+}
 
 
 #ifdef THREEPP_NO_RAY_QUERY
@@ -388,6 +405,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
     gWaterSunVis0 = -1.0;// per surface point: a second call must not reuse the first's ray
+    gWaterSunDim0Set = false;
     // The surface the rays see may be the mesh's ray-tracing proxy
     // (DisplacedMesh::rtProxyCells, kGeomFlagRtProxy): a coarser grid
     // than the one the raster drew P from, above or below it by the proxy's
@@ -1129,7 +1147,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 sunRefr = normalize(sunRefr);
                 const float phase = min(hgPhase(dot(dRef, sunRefr), kWaterInScatterG) * 4.0 * PI,
                                         kWaterInScatterPhaseMax);// 1 == isotropic
-                Ein += lights.dirLights[i].color * (ndl * vis * cloudShadowSample(P) * pdSurfaceLightTransmittance(P, L) * phase);
+                const vec2 dim = waterSunDim(i, P, L);
+                Ein += lights.dirLights[i].color * (ndl * vis * dim.x * dim.y * phase);
             }
             Ein *= (1.0 - F);
 
@@ -1248,7 +1267,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             }
             if (vis <= 0.0) continue;
             const float spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
-            vec3 c = spec * ndl * lights.dirLights[i].color * (vis * cloudShadowSample(P) * pdSurfaceLightTransmittance(P, L));
+            const vec2 dim = waterSunDim(i, P, L);
+            vec3 c = spec * ndl * lights.dirLights[i].color * (vis * dim.x * dim.y);
             // Directional lights are deltas → GGX spikes; clamp so a glint blooms
             // bright but never fireflies. (×4 over the global clamp → bright suns.)
             const float cl = max(max(c.r, c.g), c.b);

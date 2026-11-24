@@ -834,7 +834,7 @@ GLUniforms* GLProgram::getUniforms() {
     return cachedUniforms.get();
 }
 
-std::unordered_map<std::string, int> GLProgram::getAttributes() {
+const std::unordered_map<std::string, int>& GLProgram::getAttributes() {
 
     if (cachedAttributes.empty()) {
 
