@@ -19,6 +19,7 @@
 #include "gl_test_helpers.hpp"
 
 #include "threepp/scenes/Fog.hpp"
+#include "threepp/scenes/FogExp2.hpp"
 
 namespace {
 
@@ -88,4 +89,56 @@ TEST_CASE("fog cleared after the first render stops being applied") {
     INFO("fog " << fogged << " -> fog cleared " << cleared);
     REQUIRE(fogged > 150.0);
     CHECK(cleared < 20.0);
+}
+
+// What a program holds of the fog is that it is there and its kind. Its colour
+// and range are uniforms: a fog that is animated keeps its program and has to
+// show its new values all the same.
+TEST_CASE("a fog whose range changes after the first render is drawn with the new range") {
+
+    auto f = makeFixture();
+    f.scene->fog = whiteFog();
+
+    GLRenderer renderer(glCanvas());
+    renderer.setClearColor(Color(0x000000));
+
+    renderer.render(*f.scene, *f.camera);
+    const double fogged = avgBrightness(renderer.readRGBPixels());
+
+    // The same kind of fog, starting well behind the plane.
+    f.scene->fog = Fog(Color(0xffffff), 500.f, 1000.f);
+    renderer.render(*f.scene, *f.camera);
+    const double pushedBack = avgBrightness(renderer.readRGBPixels());
+
+    INFO("fog over the plane " << fogged << " -> fog behind it " << pushedBack);
+    REQUIRE(fogged > 150.0);
+    CHECK(pushedBack < 20.0);
+}
+
+// FOG_EXP2 is a compile-time define as USE_FOG is, so one kind of fog swapped
+// for the other needs the other program. Each fog below is chosen so that the
+// program of the wrong kind, fed this fog's uniforms, draws the opposite.
+TEST_CASE("a fog swapped for the other kind is drawn as that kind") {
+
+    auto f = makeFixture();
+    f.scene->fog = Fog(Color(0xffffff), 500.f, 1000.f);// linear, behind the plane
+
+    GLRenderer renderer(glCanvas());
+    renderer.setClearColor(Color(0x000000));
+
+    renderer.render(*f.scene, *f.camera);
+    const double linearClear = avgBrightness(renderer.readRGBPixels());
+
+    f.scene->fog = FogExp2(Color(0xffffff), 0.2f);// opaque at the plane's 60 units
+    renderer.render(*f.scene, *f.camera);
+    const double expFogged = avgBrightness(renderer.readRGBPixels());
+
+    f.scene->fog = Fog(Color(0xffffff), 500.f, 1000.f);
+    renderer.render(*f.scene, *f.camera);
+    const double linearAgain = avgBrightness(renderer.readRGBPixels());
+
+    INFO("linear " << linearClear << " -> exponential " << expFogged << " -> linear " << linearAgain);
+    REQUIRE(linearClear < 20.0);
+    CHECK(expFogged > 150.0);
+    CHECK(linearAgain < 20.0);
 }

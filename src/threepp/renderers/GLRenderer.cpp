@@ -1188,7 +1188,7 @@ struct GLRenderer::Impl {
 
             } else if (material->fog &&
                        (fog.has_value() != materialProperties->fog.has_value() ||
-                        (fog && !(fog.value() == materialProperties->fog.value())))) {
+                        (fog && fog->index() != materialProperties->fog->index()))) {
 
                 // USE_FOG is a compile-time define, so the program has to be
                 // rebuilt when a scene's fog APPEARS or DISAPPEARS, not only when
@@ -1198,8 +1198,13 @@ struct GLRenderer::Impl {
                 // USE_FOG undefined and the fog never showed up, and clearing it
                 // left the old program in place so the fog never went away.
                 // r129 compares `materialProperties.fog !== fog`, either side
-                // nullable. Line 862 already stores the whole optional, so the
-                // presence test here is against a value that tracks it.
+                // nullable: the fog's identity, which a change of its colour or
+                // range leaves alone. What the program holds of the fog is that
+                // it is there (USE_FOG) and its kind (FOG_EXP2); its values are
+                // uniforms that refreshFogUniforms writes each frame, so only
+                // presence and kind are compared. Comparing the values resolved
+                // the program of every fogged material on each frame a fog was
+                // animated.
                 needsProgramChange = true;
 
             } else if (materialProperties->numClippingPlanes &&
