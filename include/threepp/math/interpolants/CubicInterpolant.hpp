@@ -107,9 +107,11 @@ namespace threepp {
             this->_offsetNext = static_cast<float>(iNext * stride);
         }
 
-        Sample interpolate_(size_t i1, float t0, float t, float t1) override {
+        const Sample& interpolate_(size_t i1, float t0, float t, float t1) override {
             const auto result = this->resultBuffer;
-            const auto values = this->sampleValues;
+            // A reference: a copy here duplicated every keyframe of the track
+            // on each evaluation.
+            const auto& values = this->sampleValues;
             const auto stride = this->valueSize;
 
             const auto o1 = i1 * stride, o0 = o1 - stride;

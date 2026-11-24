@@ -35,9 +35,12 @@ namespace threepp {
                 int sampleSize,
                 Sample* resultBuffer);
 
-        Sample evaluate(float t);
+        // The interpolated sample, written into the result buffer and returned
+        // as a reference to it: valid until the next evaluate() on an
+        // interpolant that shares the buffer. Copy it to keep it.
+        const Sample& evaluate(float t);
 
-        Sample copySampleValue_(size_t index) const;
+        const Sample& copySampleValue_(size_t index) const;
 
         virtual ~Interpolant() = default;
 
@@ -52,7 +55,7 @@ namespace threepp {
 
         [[nodiscard]] std::optional<InterpolantSettings> getSettings_() const;
 
-        virtual Sample interpolate_(size_t i1, float t0, float t, float t1) = 0;
+        virtual const Sample& interpolate_(size_t i1, float t0, float t, float t1) = 0;
 
         virtual void intervalChanged_([[maybe_unused]] size_t i1, [[maybe_unused]] float t0, [[maybe_unused]] float t1){};
 
