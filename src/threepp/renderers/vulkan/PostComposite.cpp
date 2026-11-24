@@ -497,24 +497,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(postComposite)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kPostCompositeCompSpv);
-        smci.pCode    = kPostCompositeCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smci, nullptr, &mod), "vkCreateShaderModule(post_composite)");
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipeLayout_;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &pipe_),
-              "vkCreateComputePipelines(post_composite)");
-        vkDestroyShaderModule(d, mod, nullptr);
+        pipe_ = createComputePipeline(d, ctx_.pipelineCache(), pipeLayout_, kPostCompositeCompSpv,
+                                      sizeof(kPostCompositeCompSpv), "post_composite");
     }
 
     void PostComposite::createDescriptorPool() {

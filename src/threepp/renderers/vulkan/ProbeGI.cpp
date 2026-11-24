@@ -237,27 +237,9 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(probeGI)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         refl_ = reflectSpirvBindings(kProbeUpdateCompSpv);
-        smci.codeSize = sizeof(kProbeUpdateCompSpv);
-        smci.pCode    = kProbeUpdateCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smci, nullptr, &mod), "vkCreateShaderModule(probe_update)");
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipeLayout_;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &pipe_),
-              "vkCreateComputePipelines(probe_update)");
-        vkDestroyShaderModule(d, mod, nullptr);
+        pipe_ = createComputePipeline(d, ctx_.pipelineCache(), pipeLayout_, kProbeUpdateCompSpv,
+                                      sizeof(kProbeUpdateCompSpv), "probe_update");
     }
 
     void ProbeGI::createDescriptorPool() {

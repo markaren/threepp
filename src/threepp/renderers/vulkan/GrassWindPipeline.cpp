@@ -41,28 +41,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
               "vkCreatePipelineLayout(grass_wind)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kGrassWindCompSpv);
-        smci.pCode = kGrassWindCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
-              "vkCreateShaderModule(grass_wind)");
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage = stage;
-        cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
-                                       1, &cpci, nullptr, &pipeline_),
-              "vkCreateComputePipelines(grass_wind)");
-        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+        pipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), pipelineLayout_, kGrassWindCompSpv,
+                                          sizeof(kGrassWindCompSpv), "grass_wind");
     }
 
     void GrassWindPipeline::recordDispatch(VkCommandBuffer cb, const PushConstants& pc) {

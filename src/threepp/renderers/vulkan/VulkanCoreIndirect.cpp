@@ -1588,27 +1588,9 @@ namespace threepp {
         check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &debugResolvePipelineLayout_),
               "vkCreatePipelineLayout(debug_resolve)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kDebugResolveCompSpv);
-        smci.pCode    = kDebugResolveCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
-              "vkCreateShaderModule(debug_resolve)");
-
-        VkPipelineShaderStageCreateInfo ssci{};
-        ssci.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ssci.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        ssci.module = mod;
-        ssci.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = ssci;
-        cpci.layout = debugResolvePipelineLayout_;
-        check(vkCreateComputePipelines(ctx->device(), ctx->pipelineCache(), 1, &cpci, nullptr, &debugResolvePipeline_),
-              "vkCreateComputePipelines(debug_resolve)");
-        vkDestroyShaderModule(ctx->device(), mod, nullptr);
+        debugResolvePipeline_ = vulkan::createComputePipeline(ctx->device(), ctx->pipelineCache(),
+                                                              debugResolvePipelineLayout_, kDebugResolveCompSpv,
+                                                              sizeof(kDebugResolveCompSpv), "debug_resolve");
 
         // One set per frame-in-flight (see the member comment — a single
         // shared set rewritten per frame is the in-flight-update violation).

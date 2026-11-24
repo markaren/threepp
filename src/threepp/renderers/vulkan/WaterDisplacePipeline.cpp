@@ -64,28 +64,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
               "vkCreatePipelineLayout(displace)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kWaterDisplaceCompSpv);
-        smci.pCode    = kWaterDisplaceCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
-              "vkCreateShaderModule(displace)");
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
-                                       1, &cpci, nullptr, &pipeline_),
-              "vkCreateComputePipelines(displace)");
-        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+        pipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), pipelineLayout_, kWaterDisplaceCompSpv,
+                                          sizeof(kWaterDisplaceCompSpv), "displace");
 
         // Pool sized for up to kMaxOceans DisplacedMesh instances at once.
         // No FREE_DESCRIPTOR_SET_BIT: sets are released when the pool is
@@ -158,26 +138,9 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &chopPipelineLayout_),
               "vkCreatePipelineLayout(displace chop)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kWaterDisplaceChopCompSpv);
-        smci.pCode    = kWaterDisplaceChopCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
-              "vkCreateShaderModule(displace chop)");
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = chopPipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
-                                       1, &cpci, nullptr, &chopPipeline_),
-              "vkCreateComputePipelines(displace chop)");
-        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+        chopPipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), chopPipelineLayout_,
+                                              kWaterDisplaceChopCompSpv, sizeof(kWaterDisplaceChopCompSpv),
+                                              "displace chop");
 
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;

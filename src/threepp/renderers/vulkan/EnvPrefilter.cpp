@@ -77,28 +77,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
               "vkCreatePipelineLayout(prefilter)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kPrefilterEnvCompSpv);
-        smci.pCode    = kPrefilterEnvCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
-              "vkCreateShaderModule(prefilter)");
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
-                                       1, &cpci, nullptr, &pipeline_),
-              "vkCreateComputePipelines(prefilter)");
-        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+        pipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), pipelineLayout_, kPrefilterEnvCompSpv,
+                                          sizeof(kPrefilterEnvCompSpv), "prefilter");
 
         // Descriptor pool: kMaxEnvMips sets, each with one sampled + one storage.
         std::array<VkDescriptorPoolSize, 2> ps{};
