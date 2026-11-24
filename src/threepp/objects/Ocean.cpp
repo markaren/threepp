@@ -171,7 +171,6 @@ namespace threepp {
         // (openSeaTile); bounded water keeps its size: it cannot hold a wave
         // longer than itself. A swell set before the first frame is counted
         // when the renderer first sees the ocean.
-        const bool modes = longWaveModes();
         const float tile0 = options.horizon ? openSeaTile(scaleRef, options.windSpeed, options.fetch, 0.f, 0.f)
                                             : scaleRef;
 
@@ -209,8 +208,7 @@ namespace threepp {
         if (tile1 > 0.f) {
             // Cascade 0 at most 512 a side: where that binds (a large tile),
             // the hand-off moves up to eight of its texels instead.
-            p.textureSize0 = modes ? bandRes(tile0, tile1 / 6.f, std::min<uint32_t>(options.fftSize, 512u))
-                                   : bandRes(scaleRef, tile1, options.fftSize);
+            p.textureSize0 = bandRes(tile0, tile1 / 6.f, std::min<uint32_t>(options.fftSize, 512u));
             if (tile2 > 0.f) {
                 p.textureSize1 = bandRes(tile1, tile2, half);
                 p.textureSize2 = half;

@@ -126,11 +126,13 @@ void gradD(vec2 q, out float jxx, out float jzz, out float jxz) {
         const float invTile = 1.0 / pc.tileSize1;
         const vec2  uv = oceanC1Domain(q) * invTile;
         // Read through its mip chain at c1Lod: only the waves longer than the
-        // fold-foam length count (see below).
-        const vec2  jd = textureLod(jac1, uv, pc.c1Lod).rg * invTile;
+        // fold-foam length count (see below). B-spline, as cascade 0: the
+        // level's texels are metres, and bilinear made the foam's edges
+        // straight lines between them.
+        const vec2  jd = sampleBicubicRGLod(jac1, uv, pc.c1Lod) * invTile;
         const float p  = jd.x;
         const float r  = jd.y;
-        const float o  = textureLod(height1, uv, pc.c1Lod).g * invTile;
+        const float o  = sampleBicubicRGLod(height1, uv, pc.c1Lod).g * invTile;
         const float cs = kOceanCascade1RotCos;
         const float sn = kOceanCascade1RotSin;
         jxx += cs * cs * p + 2.0 * cs * sn * o + sn * sn * r;
@@ -155,6 +157,22 @@ vec2 crestDir(float jxx, float jzz, float jxz, out float aniso) {
     return vec2(-e.y, e.x);
 }
 
+// The choppiness the drawn map has where grad D is A (trace trA, determinant
+// detA), as water_displace.comp draws it in the steep-crest mode: 1 + s where
+// the crest is steep, 1 where it is not. The displacement pass gates on each band's envelope steepness
+// k_m a; here the crest's own compression stands for it (the most
+// compressive eigenvalue of grad D is -k a cos(t), k a on the crest, where
+// the foam forms). So foam forms where the drawn crests are sharp: the steep
+// ones, which break.
+float crestLambdaMax(float trA, float detA) {
+    if (pc.sharpness <= 0.0) return 1.0;
+    const float mid   = 0.5 * trA;
+    const float kappa = max(sqrt(max(mid * mid - detA, 0.0)) - mid, 0.0);
+    // Cascade 0's range (DisplacedMesh::kCrestGateLow / High [0]): the
+    // crests that break are the long waves'.
+    return 1.0 + pc.sharpness * smoothstep(0.055, 0.11, kappa);
+}
+
 // The fold-foam measure at q (foldFoam): how far under pc.threshold the
 // drawn map's Jacobian falls there, counted for a texel whose crest runs
 // along t only where the crest at q runs the same way and is one-sided
@@ -167,7 +185,7 @@ float crestMeasure(vec2 q, vec2 t) {
     if (an < 0.3 || abs(dot(ts, t)) < 0.94) return -1e30;
     const float trA  = (jxx + jzz) * pc.steepScale;
     const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
-    const float l    = cwmLimit(trA, detA, 1.0 + pc.sharpness);
+    const float l    = cwmLimit(trA, detA, crestLambdaMax(trA, detA));
     return pc.threshold - (1.0 + l * trA + l * l * detA);
 }
 
@@ -181,7 +199,7 @@ vec3 foldLevels(float trA, float detA) {
     vec3 m;
     for (int k = 0; k < 3; ++k) {
         const float L = kLevels[k];
-        const float l = cwmLimit(L * trA, L * L * detA, 1.0 + pc.sharpness);
+        const float l = cwmLimit(L * trA, L * L * detA, crestLambdaMax(L * trA, L * L * detA));
         m[k] = pc.threshold - (1.0 + l * L * trA + l * l * L * L * detA);
     }
     return m;
@@ -235,7 +253,7 @@ void main() {
     {
         const float trA  = (jxx + jzz) * pc.steepScale;
         const float detA = (jxx * jzz - jxz * jxz) * pc.steepScale * pc.steepScale;
-        const float l    = cwmLimit(trA, detA, 1.0 + pc.sharpness);
+        const float l    = cwmLimit(trA, detA, crestLambdaMax(trA, detA));
         measure = pc.threshold - (1.0 + l * trA + l * l * detA);
         {
             // Along the crest. A

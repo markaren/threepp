@@ -377,19 +377,59 @@ vec3 sampleDisplacement(vec2 worldXZ) {
 // and eta2 = (k a^2 / 2) cos(2t): the Stokes crest a + k a^2 / 2 and trough
 // -a + k a^2 / 2; its mean is 0. Each cascade carries its own; the
 // cross-band terms are left out (the narrow-band form has none).
-float boundHeight(float h, vec2 r, float km) {
-    return 0.5 * km * (h * h - dot(r, r));
+//
+// The harmonic is held at kStokesCap of the band's local amplitude
+// a = sqrt(eta^2 + |R[eta]|^2): k a^2 / 2 never passes 0.22 a, the share
+// Stokes' limiting wave (ka = 0.44) has, so a steep wave sharpens toward
+// that crest and no further, and no trough grows a hump of its own.
+//
+// STEEP CRESTS (pc.crestSharpness > 0: DisplacedMesh's steep-crest mode). A
+// sum of linear waves keeps every crest as round as its neighbours, where a
+// real sea's crests steepen only where a group of waves piles up, sharpen
+// there, break, and go round again as the crest runs on out of the group
+// (it travels at twice the group's speed). So the sharpening follows each
+// band's envelope steepness k_m a, smoothstep over its own range
+// (kCrestGate0 / kCrestGate1). Measured on the drawn sea: cascade 0 carries
+// the spectral peak (21 m and longer), and its band is so broad that k_m
+// leans long and reads the crests about half as steep as cascade 1 reads its
+// own; 0.055-0.11 there (12 m/s on 30 km of fetch: p50 0.058, p90 0.101) and
+// 0.10-0.20 on cascade 1's 9-21 m chop (p50 0.10, p90 0.17) sharpen the same
+// share of crests: the steepest third or so at 12 m/s, a few per cent of a
+// fully developed 10 m/s sea's long waves. Where the gate opens the harmonic is
+// exaggerated up to kBoundGain (a sum of linear waves is rounder than the
+// nonlinear sea it stands for) and the drawn choppiness rises to 1 + s
+// (main). gCrestGate is the gate of the last sampleSmoothRaw call, the
+// largest of its bands'. DisplacedMesh::sampleHeight holds the same terms.
+const float kStokesCap   = 0.22;// DisplacedMesh::kStokesHarmonicCap
+const float kBoundGain   = 4.0; // DisplacedMesh::kSteepBoundGain
+const vec2  kCrestGate0  = vec2(0.055, 0.11);// DisplacedMesh::kCrestGateLow / High [0]
+const vec2  kCrestGate1  = vec2(0.10, 0.20); // [1]
+float gCrestGate = 0.0;
+
+float crestGate(float h, vec2 r, float km, vec2 range) {
+    if (pc.crestSharpness <= 0.0 || km <= 0.0) return 0.0;
+    return smoothstep(range.x, range.y, km * sqrt(h * h + dot(r, r)));
+}
+
+float boundHeight(float h, vec2 r, float km, float gate) {
+    const float ke  = km * (1.0 + (kBoundGain - 1.0) * gate);
+    const float a   = sqrt(h * h + dot(r, r));
+    const float cap = min(1.0, 2.0 * kStokesCap / max(ke * a, 1e-6));
+    return 0.5 * ke * cap * (h * h - dot(r, r));
 }
 
 vec4 sampleSmoothRaw(vec2 worldXZ) {
     vec4 d = vec4(0.0);
+    gCrestGate = 0.0;
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
         const vec2 uv = bendW0(worldXZ) * invTile;
         const vec2 dxz = bendV0(c0RG(displace0, uv)) * invTile;
         const float h  = c0R(height0, uv) * invTile * pc.waveScale;
+        const float m  = crestGate(h, dxz * pc.waveScale, pc.boundKm0, kCrestGate0);
+        gCrestGate = max(gCrestGate, m);
         d.y += h;
-        if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm0);
+        if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm0, m);
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -398,8 +438,10 @@ vec4 sampleSmoothRaw(vec2 worldXZ) {
         const vec2 uv = oceanC1Domain(bendW1(worldXZ)) * invTile;
         const vec2 dxz = bendV1(oceanC1World(c1RG(displace1, uv))) * invTile;
         const float h  = c1R(height1, uv) * invTile * pc.waveScale;
+        const float m  = crestGate(h, dxz * pc.waveScale, pc.boundKm1, kCrestGate1);
+        gCrestGate = max(gCrestGate, m);
         d.y += h;
-        if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm1);
+        if ((pc.waveModel & 2u) != 0u) d.w += boundHeight(h, dxz * pc.waveScale, pc.boundKm1, m);
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -595,11 +637,12 @@ void main() {
     // limiter under bit 0 or 1, bGX/bGZ from the .w that only bit 1 writes.
     // Bits 4 and 5 are set on every ocean and read none of it.
     if ((pc.waveModel & 3u) != 0u) {
-        wmC = sampleSmoothRaw(rest.xz).xyz;
         const vec4 tL = sampleSmoothRaw(rest.xz + vec2(-wmEpsX, 0.0));
         const vec4 tR = sampleSmoothRaw(rest.xz + vec2( wmEpsX, 0.0));
         const vec4 tD = sampleSmoothRaw(rest.xz + vec2(0.0, -wmEpsZ));
         const vec4 tU = sampleSmoothRaw(rest.xz + vec2(0.0,  wmEpsZ));
+        // The centre last: gCrestGate is then this vertex's own.
+        wmC = sampleSmoothRaw(rest.xz).xyz;
         const float ix = 0.5 / wmEpsX, iz = 0.5 / wmEpsZ;
         aXX = (tR.x - tL.x) * ix;// d Dx / dx
         aXZ = (tU.x - tD.x) * iz;// d Dx / dz
@@ -621,7 +664,7 @@ void main() {
         // min(l, 1). Everything below that describes the drawn surface (the
         // vertex normal, the UV channel's displacement) reads wmLambda.
         if ((pc.waveModel & 1u) != 0u)
-            wmLambda = cwmLimit(aXX + aZZ, aXX * aZZ - aXZ * aZX, 1.0 + pc.crestSharpness);
+            wmLambda = cwmLimit(aXX + aZZ, aXX * aZZ - aXZ * aZX, 1.0 + pc.crestSharpness * gCrestGate);
     }
 
     vec3 disp;

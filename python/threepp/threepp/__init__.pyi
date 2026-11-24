@@ -2264,7 +2264,7 @@ class DisplacedMesh(Mesh):
         @property
         def bound_waves(self) -> bool:
             """
-            Second-order bound harmonics (default False): sharper crests, flatter troughs (Longuet-Higgins 1963, Tayfun 1980). THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.
+            Second-order bound harmonics (default True): sharper crests, flatter troughs (Longuet-Higgins 1963, Tayfun 1980), exaggerated on steep crests and held at the Stokes limit. THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.
             """
         @bound_waves.setter
         def bound_waves(self, arg0: bool) -> None:
@@ -2272,7 +2272,7 @@ class DisplacedMesh(Mesh):
         @property
         def choppiness(self) -> float:
             """
-            Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.
+            Horizontal pull of the historical chop, read only with cwm off (the Choppy Wave Model draws choppiness 1); ~0.45 realistic, >=0.8 folds crests.
             """
         @choppiness.setter
         def choppiness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -2280,7 +2280,7 @@ class DisplacedMesh(Mesh):
         @property
         def cwm(self) -> bool:
             """
-            Choppy Wave Model (default False): choppiness 1, the first-order Lagrangian surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter. THREEPP_OCEAN_CWM=1/0 overrides it. Live-tunable.
+            Choppy Wave Model (default True): choppiness 1, the first-order Lagrangian surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter; where a crest is steep it is drawn sharper still (the crest sharpness). False is the historical chop (choppiness). THREEPP_OCEAN_CWM=1/0 overrides it. Live-tunable.
             """
         @cwm.setter
         def cwm(self, arg0: bool) -> None:

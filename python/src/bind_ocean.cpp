@@ -143,12 +143,14 @@ namespace threepp_py {
                                "energy at the 10-40 m scale and less swell; 20e3-40e3 reads as a coastal sea. "
                                "Live-tunable; saturates at ~1600 V^2.")
                 .def_readwrite("cwm", &DisplacedMesh::Params::cwm,
-                               "Choppy Wave Model (default False): choppiness 1, the first-order Lagrangian "
-                               "surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter. "
-                               "THREEPP_OCEAN_CWM=1/0 overrides it. Live-tunable.")
+                               "Choppy Wave Model (default True): choppiness 1, the first-order Lagrangian "
+                               "surface of Nouguier, Guerin and Chapron 2009, with a per-vertex fold limiter; "
+                               "where a crest is steep it is drawn sharper still (the crest sharpness). False is "
+                               "the historical chop (choppiness). THREEPP_OCEAN_CWM=1/0 overrides it. Live-tunable.")
                 .def_readwrite("bound_waves", &DisplacedMesh::Params::boundWaves,
-                               "Second-order bound harmonics (default False): sharper crests, flatter troughs "
-                               "(Longuet-Higgins 1963, Tayfun 1980). THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.")
+                               "Second-order bound harmonics (default True): sharper crests, flatter troughs "
+                               "(Longuet-Higgins 1963, Tayfun 1980), exaggerated on steep crests and held at the "
+                               "Stokes limit. THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.")
                 .def_readwrite("short_wave_spectrum", &DisplacedMesh::Params::shortWaveSpectrum,
                                "The measured short-wave spectrum (default False, the Phillips tail alone): adds "
                                "Elfouhaily et al.'s (1997) wind-dependent short waves, so the sea's slopes reach "
@@ -171,7 +173,8 @@ namespace threepp_py {
                                "Swell spreading s of cos^(2s)(theta/2): ~25 nearby storm, ~75 far away; below 1 is taken as 1.")
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
-                               "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
+                               "Horizontal pull of the historical chop, read only with cwm off (the Choppy Wave Model draws "
+                               "choppiness 1); ~0.45 realistic, >=0.8 folds crests.")
                 .def_readwrite("foam_amount", &DisplacedMesh::Params::foamAmount,
                                "Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; "
                                "the wake field's foam unaffected). Ocean auto-derives ~size/300.")

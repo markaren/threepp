@@ -35,6 +35,13 @@ namespace threepp {
         }
     }// namespace
 
+    namespace {
+        float smoothstepf(float e0, float e1, float x) {
+            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
+            return t * t * (3.f - 2.f * t);
+        }
+    }// namespace
+
     bool DisplacedMesh::cwmOn() const {
         static const int env = envSwitch("THREEPP_OCEAN_CWM");
         return env < 0 ? params.cwm : env == 1;
@@ -60,14 +67,8 @@ namespace threepp {
         return env < 0 ? params.hullContact : env == 1;
     }
 
-    bool DisplacedMesh::longWaveModes() {
-        static const int env = envSwitch("THREEPP_OCEAN_NIGHT_MODES");
-        return env != 0;
-    }
-
     float DisplacedMesh::longWaveHandoff(float tileSize0, uint32_t textureSize0, float tileSize1) {
         if (!(tileSize0 > 0.f && tileSize1 > 0.f)) return 0.f;
-        if (!longWaveModes()) return tileSize1;
         // The large tile's grid cannot hold a wave shorter than eight of its
         // texels as anything but a few points (the B-spline read loses most
         // of it), so a coarse cascade 0 hands off higher up.
@@ -89,7 +90,6 @@ namespace threepp {
 
     float DisplacedMesh::openSeaTile(float tileSize0, float windSpeed, float fetch,
                                      float swellHeight, float swellPeriod) {
-        if (!longWaveModes()) return tileSize0;
         float peak = peakWavelength(windSpeed, fetch);
         if (swellHeight > 0.f && swellPeriod > 0.f)
             peak = std::max(peak, static_cast<float>(9.81 * swellPeriod * swellPeriod / (2.0 * 3.14159265358979)));
@@ -223,8 +223,10 @@ namespace threepp {
         // limiter, which lowers it where the Jacobian would fall under
         // kCwmMinJacobian, is not mirrored here (the audit reports where it
         // binds). Crest sharpness draws cascades 0 and 1 with 1 + s of it.
+        // In the steep-crest mode the 1 + s is gated by the crests' own
+        // steepness at the rest point (crestGateAt, below).
         const float chop = effectiveChoppiness();
-        const float chop01 = chop * (1.f + effectiveCrestSharpness());
+        const float sharpness = effectiveCrestSharpness();
         // The wave climate's gains at a rest point (waveClimateGain), on every
         // field of its cascade, as water_displace.comp applies them, times
         // the gains over the shore's depth (shoreGain).
@@ -244,9 +246,30 @@ namespace threepp {
             }
             return g;
         };
+        // The steep-crest gate at rest point q: water_displace.comp's
+        // crestGate, the largest of cascades 0 and 1's
+        // smoothstep(kCrestGateLow, kCrestGateHigh, k_m a).
+        auto crestGateAt = [&](float qx, float qz) {
+            float m = 0.f;
+            const std::array<float, 3> g = climate ? gains(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
+            for (uint32_t i = 0; i < 2; ++i) {
+                if ((cascadeMask & (1u << i)) == 0u) continue;
+                const CascadeField& cf = heightFields[i];
+                if (!(cf.boundKm > 0.f) || !hasField(cf, cf.data) || !hasField(cf, cf.disp)) continue;
+                const float invTile = 1.f / cf.tileSize;
+                const Vec2f p = b.on ? cascadeDomain(i, qx + b.d[2 * i], qz + b.d[2 * i + 1]) : cascadeDomain(i, qx, qz);
+                const Vec2f h = sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile, cascadeBicubic(i));
+                const Vec2f v = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile, cascadeBicubic(i));
+                const float s = invTile * params.waveScale * g[i];
+                const float a = std::sqrt(h.x * h.x + v.x * v.x + v.y * v.y) * s;
+                m = std::max(m, smoothstepf(kCrestGateLow[i], kCrestGateHigh[i], cf.boundKm * a));
+            }
+            return m;
+        };
         auto displacement = [&](float qx, float qz) {
             Vec2f d;
             const std::array<float, 3> g = climate ? gains(qx, qz) : std::array<float, 3>{1.f, 1.f, 1.f};
+            const float s01 = sharpness > 0.f ? sharpness * crestGateAt(qx, qz) : 0.f;
             for (uint32_t i = 0; i < 3; ++i) {
                 if ((cascadeMask & (1u << i)) == 0u) continue;
                 const CascadeField& cf = heightFields[i];
@@ -267,7 +290,7 @@ namespace threepp {
                     v = {c * v.x - s * v.y, s * v.x + c * v.y};
                 }
                 // Sharpness 0 keeps the historical sum, bit for bit.
-                const float c = (chop01 == chop) ? 1.f : (i < 2 ? chop01 : chop) / chop;
+                const float c = (i < 2 && s01 > 0.f) ? 1.f + s01 : 1.f;
                 if (climate) v = {v.x * g[i], v.y * g[i]};
                 d.x += v.x * invTile * c;
                 d.y += v.y * invTile * c;
@@ -334,7 +357,16 @@ namespace threepp {
                 if (climate) d = {d.x * gq[i], d.y * gq[i]};
                 const float s = invTile * params.waveScale;
                 const float e = h.x * s, rx = d.x * s, rz = d.y * s;
-                bound += 0.5f * cf.boundKm * (e * e - rx * rx - rz * rz);
+                // Gated up to kSteepBoundGain in the steep-crest mode and
+                // held at the Stokes cap of the band's local amplitude, as
+                // water_displace.comp's boundHeight does.
+                const float a   = std::sqrt(e * e + rx * rx + rz * rz);
+                const float ke  = cf.boundKm * (sharpness > 0.f
+                                                    ? 1.f + (kSteepBoundGain - 1.f) *
+                                                                smoothstepf(kCrestGateLow[i], kCrestGateHigh[i], cf.boundKm * a)
+                                                    : 1.f);
+                const float cap = std::min(1.f, 2.f * kStokesHarmonicCap / std::max(ke * a, 1e-6f));
+                bound += 0.5f * ke * cap * (e * e - rx * rx - rz * rz);
             }
         }
         return total * params.waveScale + bound;

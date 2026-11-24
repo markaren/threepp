@@ -102,8 +102,11 @@ namespace threepp {
             // swell for the steeper 10–40 m chop of a coastal sea.
             float fetch = 0.0f;
 
-            // Horizontal "choppiness" (sharper crests). ~0.45 is realistic;
-            // ≥ 0.8 starts to fold wave crests into white spikes.
+            // Horizontal "choppiness" of the historical chop, read only with
+            // the Choppy Wave Model off (DisplacedMesh::Params::cwm, on by
+            // default, draws choppiness 1 and sharpens steep crests further).
+            // ~0.45 is realistic; ≥ 0.8 starts to fold wave crests into white
+            // spikes.
             float choppiness = 0.55f;
 
             // Global wave-height multiplier; 1.0 is physical.

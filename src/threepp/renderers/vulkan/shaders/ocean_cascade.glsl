@@ -49,6 +49,44 @@ vec2 sampleBicubicRG(sampler2D tex, vec2 uv) {
     return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
 }
 
+// The same B-spline at one mip level, at that level's resolution.
+vec2 sampleBicubicRGLevel(sampler2D tex, vec2 uv, int level) {
+    const vec2 res = vec2(textureSize(tex, level));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const float l  = float(level);
+    const vec2 t00 = textureLod(tex, vec2(c0.x, c0.y), l).rg;
+    const vec2 t10 = textureLod(tex, vec2(c1.x, c0.y), l).rg;
+    const vec2 t01 = textureLod(tex, vec2(c0.x, c1.y), l).rg;
+    const vec2 t11 = textureLod(tex, vec2(c1.x, c1.y), l).rg;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
+// The B-spline read through a mip chain at a fractional level: its two
+// integer levels, blended. A bilinear read there is piecewise linear, and a
+// threshold on what is made of it (foam_crest's fold measure) draws the
+// level's texels as polygon edges.
+vec2 sampleBicubicRGLod(sampler2D tex, vec2 uv, float lod) {
+    const int   top = textureQueryLevels(tex) - 1;
+    const float lc  = clamp(lod, 0.0, float(top));
+    const int   l0  = int(floor(lc));
+    const float fr  = lc - float(l0);
+    const vec2  a   = sampleBicubicRGLevel(tex, uv, l0);
+    if (fr < 1e-3 || l0 >= top) return a;
+    return mix(a, sampleBicubicRGLevel(tex, uv, l0 + 1), fr);
+}
+
 // Width (m) of the band outside a hull's footprint over which the sea blends from
 // the vessel's waterline plane back to the wave field. It scales with the hull,
 // 0.6 x half-beam clamped to [0.3, 2] m: a fixed 2 m, sized for the 28 m Gunnerus

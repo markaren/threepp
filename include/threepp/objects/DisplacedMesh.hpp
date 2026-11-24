@@ -97,8 +97,9 @@ namespace threepp {
             // shore and up and back on a beach (shore_source.comp; nothing in
             // a calm, nothing where the water is deep).
 
-            // Choppy Wave Model switch (default OFF, the historical chop).
-            // ON draws the surface as the first-order Lagrangian sea of
+            // Choppy Wave Model (default ON; off is the historical chop,
+            // `choppiness` of the horizontal displacement and no limiter).
+            // It draws the surface as the first-order Lagrangian sea of
             // Nouguier, Guerin and Chapron (2009), x = q + D(q) with the full
             // horizontal displacement D, i.e. choppiness 1 whatever the field
             // below says, so crests are as peaked and troughs as broad as
@@ -108,9 +109,9 @@ namespace threepp {
             // the mesh never loops; vertex normals are the displaced
             // surface's own. The environment variable THREEPP_OCEAN_CWM =
             // 1 / 0 forces it on / off for every ocean. Live-tunable.
-            bool cwm = false;
+            bool cwm = true;
 
-            // Second-order bound waves (default OFF). ON adds the narrow-band
+            // Second-order bound waves (default ON). They add the narrow-band
             // second-order harmonic of Longuet-Higgins (1963) and Tayfun
             // (1980), eta2 = (k_m / 2)(eta^2 - |R[eta]|^2), to cascades 0 and
             // 1, k_m the band's mean wavenumber and R the Riesz transform,
@@ -118,9 +119,11 @@ namespace threepp {
             // which is minus the unit-choppiness horizontal displacement the
             // cascade already carries: crests higher and sharper, troughs
             // flatter, height skewness 3 sigma k_m, for waves from any
-            // direction. Normals follow. THREEPP_OCEAN_BOUND_WAVES = 1 / 0
-            // forces it. Live-tunable.
-            bool boundWaves = false;
+            // direction. Normals follow. With crestSharpness on, a steep
+            // band's harmonic is exaggerated (see there). Held at
+            // kStokesHarmonicCap of the band's local amplitude.
+            // THREEPP_OCEAN_BOUND_WAVES = 1 / 0 forces it. Live-tunable.
+            bool boundWaves = true;
 
             // Wave reflections (default OFF, the historical mirror). The
             // water's mirror ray passes THROUGH any other part of the water
@@ -164,25 +167,27 @@ namespace threepp {
             // her. THREEPP_OCEAN_HULL_CONTACT = 1 / 0 forces it.
             bool hullContact = false;
 
-            // Crest sharpness (default 0, off). A LOOK CONTROL, not physics:
-            // a sum of linear waves, even drawn as the Lagrangian sea of the
-            // Choppy Wave Model, keeps rounded crests, and the sharp, short-
-            // crested chop of a real wind sea comes from nonlinear steepening
-            // this surface does not model. s > 0 draws the horizontal
-            // displacement of cascades 0 and 1 with a choppiness of 1 + s
-            // instead of 1, so the crests pinch into ridges and the troughs
-            // widen, under the CWM limiter (needs cwm; nothing happens
-            // without it): where the Jacobian of the drawn map would fall
-            // under kCwmMinJacobian the vertex takes the largest choppiness
-            // that keeps it there, so a crest becomes a ridge and never loops.
-            // Heights are untouched: the wave height, and what a sensor
-            // ranges to at a given rest point, stay as they are; only where a
-            // crest is drawn moves. The vertex normals, the crest foam's rest
-            // points and sampleHeight's inversion all use the drawn
-            // choppiness; the fine cascade keeps choppiness 1.
+            // Crest sharpness (default 2; 0 = the plain Choppy Wave Model). A
+            // LOOK CONTROL, not physics: a sum of linear waves, even drawn as
+            // the Lagrangian sea of the Choppy Wave Model, keeps every crest
+            // as round as its neighbours, where a real wind sea's crests
+            // steepen where a group of waves piles up, sharpen, break and go
+            // round again as the crest runs on out of the group. So where a
+            // band's envelope steepness k_m a passes kCrestGateLow (fully by
+            // kCrestGateHigh), the horizontal displacement of cascades 0 and
+            // 1 is drawn with a choppiness rising to 1 + s and the bound
+            // harmonic (boundWaves) to kSteepBoundGain of Tayfun's, under the
+            // CWM limiter (needs cwm): where the Jacobian of the drawn map
+            // would fall under kCwmMinJacobian the vertex takes the largest
+            // choppiness that keeps it there, so a crest becomes a ridge and
+            // never loops. The crest foam measures the drawn surface (its
+            // own threshold, kSteepFoldFoamJacobian), so the sharpened crests
+            // are the ones that break. The vertex normals, the crest foam's
+            // rest points and sampleHeight all follow the drawn surface; the
+            // fine cascade keeps choppiness 1.
             // THREEPP_OCEAN_CREST_SHARPNESS = <s> forces it for every ocean.
             // Live-tunable.
-            float crestSharpness = 0.f;
+            float crestSharpness = 2.f;
 
             // Optional swell: a second, narrow wave system from a distant
             // storm, added to the wind sea with its own height, period and
@@ -208,9 +213,11 @@ namespace threepp {
             // exaggerate wave height.
             float waveScale = 1.0f;
 
-            // Horizontal-displacement multiplier ("choppiness"). 0 is a pure
-            // height-field, 1 is full Tessendorf horizontal pull (sharp crests).
-            // Real ocean falls around 0.4 — anything ≥ 0.8 starts producing
+            // Horizontal-displacement multiplier ("choppiness") of the
+            // historical chop, read only with cwm off (the Choppy Wave Model
+            // draws choppiness 1 under its limiter). 0 is a pure height-field,
+            // 1 is full Tessendorf horizontal pull (sharp crests). Real ocean
+            // falls around 0.4 — anything ≥ 0.8 starts producing
             // wave-folding artefacts (white spike crests).
             float choppiness = 0.45f;
 
@@ -251,6 +258,30 @@ namespace threepp {
         // field, held to [0, 4]; 0 without the Choppy Wave Model (whose
         // limiter it needs).
         [[nodiscard]] float effectiveCrestSharpness() const;
+        // The largest second harmonic a band's wave is drawn with, as a share
+        // of its local amplitude: Stokes' limiting wave (ka = 0.44) has
+        // a2 / a = ka / 2 = 0.22. water_displace.comp's boundHeight holds it.
+        static constexpr float kStokesHarmonicCap = 0.22f;
+        // The steep-crest mode (effectiveCrestSharpness() > 0): where a band's
+        // envelope steepness k_m a passes kCrestGateLow the crest begins to
+        // sharpen, by kCrestGateHigh fully: the drawn choppiness rises to
+        // 1 + sharpness and the bound harmonic to kSteepBoundGain of Tayfun's
+        // (held at kStokesHarmonicCap). water_displace.comp's crestGate.
+        static constexpr float kSteepBoundGain = 4.f;
+        // Per cascade: cascade 0's band (the spectral peak and longer) is so
+        // broad that its k_m reads its crests about half as steep as cascade
+        // 1 reads its chop, so its range is about half (measured 2026-11-24).
+        static constexpr float kCrestGateLow[2]  = {0.055f, 0.10f};
+        static constexpr float kCrestGateHigh[2] = {0.11f, 0.20f};
+        // The steep-crest mode's crest-foam threshold. Its measure is the
+        // Jacobian of the drawn, sharpened surface (choppiness up to 1 + s
+        // on a steep crest), so the same 0.76 that starts foam on a crest of
+        // steepness 0.24 at choppiness 1 would start it at 0.14: the frame
+        // went white. At 0.45 foam starts at a steepness near 0.18 (12 m/s on
+        // 30 km of fetch: the steepest tenth or so of the crests break, about
+        // eight caps where the plain sea showed one). A look constant, chosen
+        // by eye on 2026-11-24; THREEPP_OCEAN_FOLD_FOAM_J still moves it.
+        static constexpr float kSteepFoldFoamJacobian = 0.45f;
         // The crest foam's look constants (THREEPP_OCEAN_FOLD_FOAM_J / _RAMP /
         // _LENGTH and THREEPP_OCEAN_CREST_LINE_FOAM_REACH move them). Foam
         // starts where the drawn map's Jacobian falls under kFoldFoamJacobian
@@ -289,10 +320,6 @@ namespace threepp {
         // sooner than six of them.
         static float openSeaTile(float tileSize0, float windSpeed, float fetch,
                                  float swellHeight, float swellPeriod);
-        // Judging switch for the hand-off above and Ocean::create's cascade-0
-        // resolution and tile (THREEPP_OCEAN_NIGHT_MODES = 0: the hand-off at
-        // the middle tile, as before). Read once.
-        static bool longWaveModes();
 
         // Hull exclusion zone: suppresses wave displacement inside a
         // world-space oriented rectangle so the ocean doesn't clip through

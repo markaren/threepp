@@ -3418,7 +3418,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 // An open sea sizes its large tile for the peak it was made
                 // with (Ocean::create); a peak grown past a sixth of it stays
                 // on that tile, as resizing would make the field jump.
-                if (st.lodSlots > 0u && dm.lod.halfX == 0.f && dm.lod.halfZ == 0.f && DisplacedMesh::longWaveModes()) {
+                if (st.lodSlots > 0u && dm.lod.halfX == 0.f && dm.lod.halfZ == 0.f) {
                     float peak = DisplacedMesh::peakWavelength(dm.params.windSpeed, dm.params.fetch);
                     if (dm.params.swellHeight > 0.f && dm.params.swellPeriod > 0.f)
                         peak = std::max(peak, 9.81f * dm.params.swellPeriod * dm.params.swellPeriod / 6.2831853f);
@@ -3440,6 +3440,8 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // the band's mean frequency), recomputed on the CPU from the
             // cascade's own spectrum whenever the sea state changes.
             if (boundOn && !st.boundKmValid) {
+                // The steep-crest mode's gate and gain take this k_m too
+                // (water_displace.comp, DisplacedMesh::sampleHeight).
                 for (uint32_t i = 0; i < 2; ++i)
                     st.boundKm[i] = (st.cascadeMask & (1u << i)) ? st.cascades[i].phillips->meanWavenumber() : 0.f;
                 st.boundKmValid = true;
@@ -4007,13 +4009,17 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                     // the same cover needs a lower J (its own constant).
                     static const auto kEnvJ = vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_J");
                     const float kFoldJ = static_cast<float>(kEnvJ.value_or(
-                            DisplacedMesh::kFoldFoamJacobian));
+                            dm.effectiveCrestSharpness() > 0.f ? DisplacedMesh::kSteepFoldFoamJacobian
+                                                               : DisplacedMesh::kFoldFoamJacobian));
                     static const float kFoldRamp = std::max(1e-4f, static_cast<float>(
                             vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_RAMP").value_or(DisplacedMesh::kFoldFoamRamp)));
                     static const float kFoldLength = std::max(0.f, static_cast<float>(
                             vulkan::env::number("THREEPP_OCEAN_FOLD_FOAM_LENGTH").value_or(DisplacedMesh::kFoldFoamLength)));
                     cp.threshold = kFoldJ;
                     cp.invRamp   = 1.f / kFoldRamp;
+                    // The drawn surface's Jacobian, its choppiness gated as
+                    // the displacement gates it (foam_crest.comp's
+                    // crestLambdaMax): the steep, sharpened crests break.
                     cp.sharpness = dm.effectiveCrestSharpness();
                     // Mip level L of cascade 1 averages over 2^L texels, so a
                     // wave of 2^(L+1) texels is its shortest left: that is the
