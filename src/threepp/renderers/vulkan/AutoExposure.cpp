@@ -94,25 +94,9 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(autoexp)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         refl_ = reflectSpirvBindings(kLumHistogramCompSpv);
-        smci.codeSize = sizeof(kLumHistogramCompSpv);
-        smci.pCode    = kLumHistogramCompSpv;
-        VkShaderModule sm = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smci, nullptr, &sm),
-              "vkCreateShaderModule(lum_histogram)");
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage.sType        = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        cpci.stage.stage        = VK_SHADER_STAGE_COMPUTE_BIT;
-        cpci.stage.module       = sm;
-        cpci.stage.pName        = "main";
-        cpci.layout             = pipeLayout_;
-        check(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipe_),
-              "vkCreateComputePipelines(autoexp)");
-        vkDestroyShaderModule(d, sm, nullptr);
+        pipe_ = createComputePipeline(d, VK_NULL_HANDLE, pipeLayout_, kLumHistogramCompSpv,
+                                      sizeof(kLumHistogramCompSpv), "autoexp");
     }
 
     void AutoExposure::rewriteDescriptors(const VkImageView* sceneHdrViews) {

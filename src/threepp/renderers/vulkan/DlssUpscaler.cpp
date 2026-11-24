@@ -716,20 +716,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &reactivePipeLayout_),
               "vkCreatePipelineLayout(dlss.mask)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kFsrReactiveCompSpv); smci.pCode = kFsrReactiveCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smci, nullptr, &mod), "vkCreateShaderModule(dlss.mask)");
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = mod; stage.pName = "main";
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage = stage; cpci.layout = reactivePipeLayout_;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &reactivePipe_),
-              "vkCreateComputePipelines(dlss.mask)");
-        vkDestroyShaderModule(d, mod, nullptr);
+        reactivePipe_ = createComputePipeline(d, ctx_.pipelineCache(), reactivePipeLayout_, kFsrReactiveCompSpv,
+                                              sizeof(kFsrReactiveCompSpv), "dlss.mask");
 
         VkDescriptorPoolSize ps[2]{};
         ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = framesInFlight_;

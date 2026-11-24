@@ -82,14 +82,6 @@ namespace threepp::vulkan {
     }
 
     void EventCameraDetector::createPipeline() {
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kEventDetectCompSpv);
-        smci.pCode    = kEventDetectCompSpv;
-        VkShaderModule shader = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &shader),
-              "vkCreateShaderModule(event_detect)");
-
         // Four bindings:
         //   0 = scene buffer (storage, read)
         //   1 = log-history image (rg32f storage, read/write)
@@ -134,20 +126,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
               "vkCreatePipelineLayout(event_detect)");
 
-        VkPipelineShaderStageCreateInfo ssci{};
-        ssci.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ssci.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        ssci.module = shader;
-        ssci.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = ssci;
-        cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &cpci, nullptr, &pipeline_),
-              "vkCreateComputePipelines(event_detect)");
-
-        vkDestroyShaderModule(ctx_.device(), shader, nullptr);
+        pipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), pipelineLayout_, kEventDetectCompSpv,
+                                          sizeof(kEventDetectCompSpv), "event_detect");
     }
 
     void EventCameraDetector::allocateDescriptorPool() {

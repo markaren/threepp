@@ -27,28 +27,6 @@ namespace threepp::vulkan {
         // edge, which is what a missing feature looks like here, not a crash.
         constexpr std::uint32_t kMaxViews = 16;
 
-        VkPipeline makePipe(VkDevice d, VkPipelineCache cache, VkPipelineLayout layout,
-                            const std::uint32_t* spv, std::size_t bytes, const char* label) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = bytes;
-            smci.pCode    = spv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(d, &smci, nullptr, &mod), label);
-
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            cpci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            cpci.stage.module = mod;
-            cpci.stage.pName  = "main";
-            cpci.layout       = layout;
-            VkPipeline pipe = VK_NULL_HANDLE;
-            check(vkCreateComputePipelines(d, cache, 1, &cpci, nullptr, &pipe), label);
-            vkDestroyShaderModule(d, mod, nullptr);
-            return pipe;
-        }
-
     }// namespace
 
     BillboardSoftDepth::BillboardSoftDepth(VulkanContext& ctx, std::uint32_t framesInFlight,
@@ -95,10 +73,10 @@ namespace threepp::vulkan {
         // Both variants up front: which one runs depends on whether the source
         // depth is multisampled, which differs between the primary (the Canvas
         // antialiasing) and a secondary view (always one sample).
-        pipe_   = makePipe(d, ctx_.pipelineCache(), pipeLayout_, kParticleFieldSoftDepthCompSpv,
-                           sizeof(kParticleFieldSoftDepthCompSpv), "vkCreateComputePipelines(bbsoft)");
-        pipeMs_ = makePipe(d, ctx_.pipelineCache(), pipeLayout_, kParticleFieldSoftDepthMsCompSpv,
-                           sizeof(kParticleFieldSoftDepthMsCompSpv), "vkCreateComputePipelines(bbsoft.ms)");
+        pipe_   = createComputePipeline(d, ctx_.pipelineCache(), pipeLayout_, kParticleFieldSoftDepthCompSpv,
+                                        sizeof(kParticleFieldSoftDepthCompSpv), "bbsoft");
+        pipeMs_ = createComputePipeline(d, ctx_.pipelineCache(), pipeLayout_, kParticleFieldSoftDepthMsCompSpv,
+                                        sizeof(kParticleFieldSoftDepthMsCompSpv), "bbsoft.ms");
 
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;

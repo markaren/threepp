@@ -207,31 +207,6 @@ namespace threepp::vulkan {
             return total;
         }
 
-        VkPipeline makeComputePipe(VkDevice d, VkPipelineCache cache, VkPipelineLayout layout,
-                                   const uint32_t* spv, size_t spvBytes, const char* label) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = spvBytes;
-            smci.pCode    = spv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(d, &smci, nullptr, &mod), label);
-
-            VkPipelineShaderStageCreateInfo stage{};
-            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            stage.module = mod;
-            stage.pName  = "main";
-
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage  = stage;
-            cpci.layout = layout;
-            VkPipeline pipe = VK_NULL_HANDLE;
-            check(vkCreateComputePipelines(d, cache, 1, &cpci, nullptr, &pipe), label);
-            vkDestroyShaderModule(d, mod, nullptr);
-            return pipe;
-        }
-
     }// namespace
 
 
@@ -418,26 +393,26 @@ namespace threepp::vulkan {
                 if (!found) refl_.push_back(x);
             }
         }
-        projectPipe_  = makeComputePipe(d, cache, pipeLayout_, kSplatProjectCompSpv,
-                                        sizeof(kSplatProjectCompSpv), "splat_project");
-        scanPipe_     = makeComputePipe(d, cache, pipeLayout_, kSplatScanCompSpv,
-                                        sizeof(kSplatScanCompSpv), "splat_scan");
-        scanAddPipe_  = makeComputePipe(d, cache, pipeLayout_, kSplatScanAddCompSpv,
-                                        sizeof(kSplatScanAddCompSpv), "splat_scan_add");
-        expandPipe_   = makeComputePipe(d, cache, pipeLayout_, kSplatExpandCompSpv,
-                                        sizeof(kSplatExpandCompSpv), "splat_expand");
-        indirectPipe_ = makeComputePipe(d, cache, pipeLayout_, kSplatIndirectCompSpv,
-                                        sizeof(kSplatIndirectCompSpv), "splat_indirect");
-        histPipe_     = makeComputePipe(d, cache, pipeLayout_, kSplatRadixHistCompSpv,
-                                        sizeof(kSplatRadixHistCompSpv), "splat_radix_hist");
-        scatterPipe_  = makeComputePipe(d, cache, pipeLayout_, kSplatRadixScatterCompSpv,
-                                        sizeof(kSplatRadixScatterCompSpv), "splat_radix_scatter");
-        rangePipe_    = makeComputePipe(d, cache, pipeLayout_, kSplatRangeCompSpv,
-                                        sizeof(kSplatRangeCompSpv), "splat_range");
-        rasterPipe_   = makeComputePipe(d, cache, pipeLayout_, kSplatRasterCompSpv,
-                                        sizeof(kSplatRasterCompSpv), "splat_raster");
-        checksumPipe_ = makeComputePipe(d, cache, pipeLayout_, kSplatChecksumCompSpv,
-                                        sizeof(kSplatChecksumCompSpv), "splat_checksum");
+        projectPipe_  = createComputePipeline(d, cache, pipeLayout_, kSplatProjectCompSpv,
+                                              sizeof(kSplatProjectCompSpv), "splat_project");
+        scanPipe_     = createComputePipeline(d, cache, pipeLayout_, kSplatScanCompSpv, sizeof(kSplatScanCompSpv),
+                                              "splat_scan");
+        scanAddPipe_  = createComputePipeline(d, cache, pipeLayout_, kSplatScanAddCompSpv,
+                                              sizeof(kSplatScanAddCompSpv), "splat_scan_add");
+        expandPipe_   = createComputePipeline(d, cache, pipeLayout_, kSplatExpandCompSpv, sizeof(kSplatExpandCompSpv),
+                                              "splat_expand");
+        indirectPipe_ = createComputePipeline(d, cache, pipeLayout_, kSplatIndirectCompSpv,
+                                              sizeof(kSplatIndirectCompSpv), "splat_indirect");
+        histPipe_     = createComputePipeline(d, cache, pipeLayout_, kSplatRadixHistCompSpv,
+                                              sizeof(kSplatRadixHistCompSpv), "splat_radix_hist");
+        scatterPipe_  = createComputePipeline(d, cache, pipeLayout_, kSplatRadixScatterCompSpv,
+                                              sizeof(kSplatRadixScatterCompSpv), "splat_radix_scatter");
+        rangePipe_    = createComputePipeline(d, cache, pipeLayout_, kSplatRangeCompSpv, sizeof(kSplatRangeCompSpv),
+                                              "splat_range");
+        rasterPipe_   = createComputePipeline(d, cache, pipeLayout_, kSplatRasterCompSpv, sizeof(kSplatRasterCompSpv),
+                                              "splat_raster");
+        checksumPipe_ = createComputePipeline(d, cache, pipeLayout_, kSplatChecksumCompSpv,
+                                              sizeof(kSplatChecksumCompSpv), "splat_checksum");
 
         // ── the volume bake's own layout ─────────────────────────────────────
         // Four bindings, none of them one the frame binds. Under
@@ -474,10 +449,10 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &bplci, nullptr, &bakePipeLayout_),
               "vkCreatePipelineLayout(splat bake)");
 
-        bakeScatterPipe_ = makeComputePipe(d, cache, bakePipeLayout_, kSplatBakeScatterCompSpv,
-                                           sizeof(kSplatBakeScatterCompSpv), "splat_bake_scatter");
-        bakeResolvePipe_ = makeComputePipe(d, cache, bakePipeLayout_, kSplatBakeResolveCompSpv,
-                                           sizeof(kSplatBakeResolveCompSpv), "splat_bake_resolve");
+        bakeScatterPipe_ = createComputePipeline(d, cache, bakePipeLayout_, kSplatBakeScatterCompSpv,
+                                                 sizeof(kSplatBakeScatterCompSpv), "splat_bake_scatter");
+        bakeResolvePipe_ = createComputePipeline(d, cache, bakePipeLayout_, kSplatBakeResolveCompSpv,
+                                                 sizeof(kSplatBakeResolveCompSpv), "splat_bake_resolve");
     }
 
     void SplatPass::createDescriptorPool() {

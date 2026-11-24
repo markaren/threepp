@@ -261,28 +261,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
               "vkCreatePipelineLayout(taa)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kTaaResolveCompSpv);
-        smci.pCode    = kTaaResolveCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
-              "vkCreateShaderModule(taa)");
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
-                                       1, &cpci, nullptr, &pipeline_),
-              "vkCreateComputePipelines(taa)");
-        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+        pipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), pipelineLayout_, kTaaResolveCompSpv,
+                                          sizeof(kTaaResolveCompSpv), "taa");
 
         // ── RCAS sharpen pipeline: sampled resolved @0, storage swapchain @1;
         //    16-byte PC (width, height, amount, pad). ──────────────────────
@@ -316,26 +296,8 @@ namespace threepp::vulkan {
             check(vkCreatePipelineLayout(ctx_.device(), &rplci, nullptr, &rcasPipeLayout_),
                   "vkCreatePipelineLayout(rcas)");
 
-            VkShaderModuleCreateInfo rsmci{};
-            rsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            rsmci.codeSize = sizeof(kRcasCompSpv);
-            rsmci.pCode    = kRcasCompSpv;
-            VkShaderModule rmod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx_.device(), &rsmci, nullptr, &rmod),
-                  "vkCreateShaderModule(rcas)");
-            VkPipelineShaderStageCreateInfo rstage{};
-            rstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            rstage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            rstage.module = rmod;
-            rstage.pName  = "main";
-            VkComputePipelineCreateInfo rcpci{};
-            rcpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            rcpci.stage  = rstage;
-            rcpci.layout = rcasPipeLayout_;
-            check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &rcpci,
-                                           nullptr, &rcasPipe_),
-                  "vkCreateComputePipelines(rcas)");
-            vkDestroyShaderModule(ctx_.device(), rmod, nullptr);
+            rcasPipe_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), rcasPipeLayout_, kRcasCompSpv,
+                                              sizeof(kRcasCompSpv), "rcas");
         }
 
         // ── Motion blur pipelines (McGuire 2012). TileMax shares the RCAS
@@ -356,26 +318,9 @@ namespace threepp::vulkan {
             check(vkCreatePipelineLayout(ctx_.device(), &tplci, nullptr, &tilemaxPipeLayout_),
                   "vkCreatePipelineLayout(mblur.tilemax)");
 
-            VkShaderModuleCreateInfo tsmci{};
-            tsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            tsmci.codeSize = sizeof(kMotionTilemaxCompSpv);
-            tsmci.pCode    = kMotionTilemaxCompSpv;
-            VkShaderModule tmod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx_.device(), &tsmci, nullptr, &tmod),
-                  "vkCreateShaderModule(mblur.tilemax)");
-            VkPipelineShaderStageCreateInfo tstage{};
-            tstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            tstage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            tstage.module = tmod;
-            tstage.pName  = "main";
-            VkComputePipelineCreateInfo tcpci{};
-            tcpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            tcpci.stage  = tstage;
-            tcpci.layout = tilemaxPipeLayout_;
-            check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &tcpci,
-                                           nullptr, &tilemaxPipe_),
-                  "vkCreateComputePipelines(mblur.tilemax)");
-            vkDestroyShaderModule(ctx_.device(), tmod, nullptr);
+            tilemaxPipe_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), tilemaxPipeLayout_,
+                                                 kMotionTilemaxCompSpv, sizeof(kMotionTilemaxCompSpv),
+                                                 "mblur.tilemax");
 
             VkDescriptorSetLayoutBinding mb[4]{};
             for (int i = 0; i < 3; ++i) {
@@ -408,26 +353,8 @@ namespace threepp::vulkan {
             check(vkCreatePipelineLayout(ctx_.device(), &mplci, nullptr, &mblurPipeLayout_),
                   "vkCreatePipelineLayout(mblur)");
 
-            VkShaderModuleCreateInfo msmci{};
-            msmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            msmci.codeSize = sizeof(kMotionBlurCompSpv);
-            msmci.pCode    = kMotionBlurCompSpv;
-            VkShaderModule mmod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx_.device(), &msmci, nullptr, &mmod),
-                  "vkCreateShaderModule(mblur)");
-            VkPipelineShaderStageCreateInfo mstage{};
-            mstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            mstage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            mstage.module = mmod;
-            mstage.pName  = "main";
-            VkComputePipelineCreateInfo mcpci{};
-            mcpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            mcpci.stage  = mstage;
-            mcpci.layout = mblurPipeLayout_;
-            check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &mcpci,
-                                           nullptr, &mblurPipe_),
-                  "vkCreateComputePipelines(mblur)");
-            vkDestroyShaderModule(ctx_.device(), mmod, nullptr);
+            mblurPipe_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), mblurPipeLayout_,
+                                               kMotionBlurCompSpv, sizeof(kMotionBlurCompSpv), "mblur");
         }
     }
 

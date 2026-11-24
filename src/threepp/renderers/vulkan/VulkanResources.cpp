@@ -2,6 +2,7 @@
 #include "threepp/renderers/vulkan/TransientPool.hpp"
 #include "threepp/renderers/vulkan/EnvKnob.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/VulkanContext.hpp"// routes vkCreateShaderModule (NoContraction)
 
 #include <cstdlib>
 #include <mutex>
@@ -28,6 +29,37 @@ namespace threepp::vulkan {
         if (r != VK_SUCCESS) {
             throw std::runtime_error(std::string("[VulkanRenderer] ") + what + " failed: " + std::to_string(r));
         }
+    }
+
+    VkPipeline createComputePipeline(VkDevice device, VkPipelineCache cache, VkPipelineLayout layout,
+                                     const uint32_t* spv, size_t spvBytes, const char* what,
+                                     const VkSpecializationInfo* spec) {
+        const auto checkNamed = [what](VkResult r, const char* call) {
+            if (r != VK_SUCCESS) check(r, (std::string(call) + "(" + what + ")").c_str());
+        };
+
+        VkShaderModuleCreateInfo smci{};
+        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = spvBytes;
+        smci.pCode    = spv;
+        VkShaderModule mod = VK_NULL_HANDLE;
+        checkNamed(vkCreateShaderModule(device, &smci, nullptr, &mod), "vkCreateShaderModule");
+
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType                     = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage.sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cpci.stage.stage               = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpci.stage.module              = mod;
+        cpci.stage.pName               = "main";
+        cpci.stage.pSpecializationInfo = spec;
+        cpci.layout                    = layout;
+        VkPipeline pipe = VK_NULL_HANDLE;
+        const VkResult r = vkCreateComputePipelines(device, cache, 1, &cpci, nullptr, &pipe);
+        // The module is not needed past this call, and is released before a
+        // failure throws.
+        vkDestroyShaderModule(device, mod, nullptr);
+        checkNamed(r, "vkCreateComputePipelines");
+        return pipe;
     }
 
     namespace {

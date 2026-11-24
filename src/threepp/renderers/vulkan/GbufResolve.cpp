@@ -78,24 +78,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(gbufResolve)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kGbufResolveCompSpv);
-        smci.pCode    = kGbufResolveCompSpv;
-        VkShaderModule sm = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smci, nullptr, &sm),
-              "vkCreateShaderModule(gbuf_resolve)");
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        cpci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        cpci.stage.module = sm;
-        cpci.stage.pName  = "main";
-        cpci.layout       = pipeLayout_;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &pipe_),
-              "vkCreateComputePipelines(gbufResolve)");
-        vkDestroyShaderModule(d, sm, nullptr);
+        pipe_ = vulkan::createComputePipeline(d, ctx_.pipelineCache(), pipeLayout_, kGbufResolveCompSpv,
+                                              sizeof(kGbufResolveCompSpv), "gbufResolve");
     }
 
     void GbufResolve::createDepthPipeline() {

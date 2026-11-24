@@ -75,25 +75,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(instance_expand)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kInstanceExpandCompSpv);
-        smci.pCode    = kInstanceExpandCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smci, nullptr, &mod),
-              "vkCreateShaderModule(instance_expand)");
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipeLayout_;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &pipe_),
-              "vkCreateComputePipelines(instance_expand)");
-        vkDestroyShaderModule(d, mod, nullptr);
+        pipe_ = createComputePipeline(d, ctx_.pipelineCache(), pipeLayout_, kInstanceExpandCompSpv,
+                                      sizeof(kInstanceExpandCompSpv), "instance_expand");
 
         VkDescriptorPoolSize size{};
         size.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;

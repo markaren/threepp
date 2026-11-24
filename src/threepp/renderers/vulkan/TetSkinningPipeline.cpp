@@ -55,28 +55,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
               "vkCreatePipelineLayout(tetSkinning)");
 
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = sizeof(kTetSkinningCompSpv);
-        smci.pCode    = kTetSkinningCompSpv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &mod),
-              "vkCreateShaderModule(tetSkinning)");
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
-                                       1, &cpci, nullptr, &pipeline_),
-              "vkCreateComputePipelines(tetSkinning)");
-        vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+        pipeline_ = createComputePipeline(ctx_.device(), ctx_.pipelineCache(), pipelineLayout_, kTetSkinningCompSpv,
+                                          sizeof(kTetSkinningCompSpv), "tetSkinning");
 
         // Descriptor pool sized for up to kMaxTetMeshes meshes, kPosSlots sets
         // each (one per tet-position ring slot). FREE_DESCRIPTOR_SET_BIT

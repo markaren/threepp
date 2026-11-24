@@ -366,27 +366,8 @@ void ParticleFieldPass::ensureEmitPipeline() {
     check(vkCreatePipelineLayout(d, &plci, nullptr, &emitPipeLayout_),
           "vkCreatePipelineLayout(particle emit)");
 
-    VkShaderModuleCreateInfo smci{};
-    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    smci.codeSize = sizeof(kParticleEmitCompSpv);
-    smci.pCode    = kParticleEmitCompSpv;
-    VkShaderModule mod = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
-          "vkCreateShaderModule(particle_emit)");
-
-    VkPipelineShaderStageCreateInfo stage{};
-    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage.module = mod;
-    stage.pName  = "main";
-    VkComputePipelineCreateInfo cpci{};
-    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    cpci.stage  = stage;
-    cpci.layout = emitPipeLayout_;
-    const VkResult r = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci,
-                                                nullptr, &emitPipe_);
-    vkDestroyShaderModule(d, mod, nullptr);
-    check(r, "vkCreateComputePipelines(particle_emit)");
+    emitPipe_ = createComputePipeline(d, ctx_.pipelineCache(), emitPipeLayout_, kParticleEmitCompSpv,
+                                      sizeof(kParticleEmitCompSpv), "particle_emit");
 }
 
 void ParticleFieldPass::ensureDensityPipeline() {
@@ -473,27 +454,8 @@ void ParticleFieldPass::ensureDensityPipeline() {
     check(vkCreatePipelineLayout(d, &plci, nullptr, &densityPipeLayout_),
           "vkCreatePipelineLayout(particle density)");
 
-    VkShaderModuleCreateInfo smci{};
-    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    smci.codeSize = sizeof(kParticleDensityScatterCompSpv);
-    smci.pCode    = kParticleDensityScatterCompSpv;
-    VkShaderModule mod = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
-          "vkCreateShaderModule(particle_density_scatter)");
-
-    VkPipelineShaderStageCreateInfo stage{};
-    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage.module = mod;
-    stage.pName  = "main";
-    VkComputePipelineCreateInfo cpci{};
-    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    cpci.stage  = stage;
-    cpci.layout = densityPipeLayout_;
-    const VkResult r = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci,
-                                                nullptr, &densityPipe_);
-    vkDestroyShaderModule(d, mod, nullptr);
-    check(r, "vkCreateComputePipelines(particle_density_scatter)");
+    densityPipe_ = createComputePipeline(d, ctx_.pipelineCache(), densityPipeLayout_, kParticleDensityScatterCompSpv,
+                                         sizeof(kParticleDensityScatterCompSpv), "particle_density_scatter");
 
     // The convert pipeline: two storage images, the majorant SSBO, 4³ groups,
     // and ONE push constant — the volume's slot, which is the only thing about
@@ -511,26 +473,8 @@ void ParticleFieldPass::ensureDensityPipeline() {
     check(vkCreatePipelineLayout(d, &cplci, nullptr, &convertPipeLayout_),
           "vkCreatePipelineLayout(particle density convert)");
 
-    VkShaderModuleCreateInfo csm{};
-    csm.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    csm.codeSize = sizeof(kParticleDensityConvertCompSpv);
-    csm.pCode    = kParticleDensityConvertCompSpv;
-    VkShaderModule cmod = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(d, &csm, nullptr, &cmod),
-          "vkCreateShaderModule(particle_density_convert)");
-    VkPipelineShaderStageCreateInfo cstage{};
-    cstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    cstage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    cstage.module = cmod;
-    cstage.pName  = "main";
-    VkComputePipelineCreateInfo ccp{};
-    ccp.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    ccp.stage  = cstage;
-    ccp.layout = convertPipeLayout_;
-    const VkResult cr = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &ccp,
-                                                 nullptr, &convertPipe_);
-    vkDestroyShaderModule(d, cmod, nullptr);
-    check(cr, "vkCreateComputePipelines(particle_density_convert)");
+    convertPipe_ = createComputePipeline(d, ctx_.pipelineCache(), convertPipeLayout_, kParticleDensityConvertCompSpv,
+                                         sizeof(kParticleDensityConvertCompSpv), "particle_density_convert");
 }
 
 // ── R8: the transmittance prepass's pipeline ────────────────────────────────
@@ -588,26 +532,8 @@ bool ParticleFieldPass::ensureTransmittancePipeline() {
     check(vkCreatePipelineLayout(d, &plci, nullptr, &transPipeLayout_),
           "vkCreatePipelineLayout(particlefield transmit)");
 
-    VkShaderModuleCreateInfo smci{};
-    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    smci.codeSize = sizeof(kParticleFieldTransmitCompSpv);
-    smci.pCode    = kParticleFieldTransmitCompSpv;
-    VkShaderModule mod = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
-          "vkCreateShaderModule(particlefield_transmit)");
-    VkPipelineShaderStageCreateInfo stage{};
-    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage.module = mod;
-    stage.pName  = "main";
-    VkComputePipelineCreateInfo cpci{};
-    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    cpci.stage  = stage;
-    cpci.layout = transPipeLayout_;
-    const VkResult r = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci,
-                                                nullptr, &transPipe_);
-    vkDestroyShaderModule(d, mod, nullptr);
-    check(r, "vkCreateComputePipelines(particlefield_transmit)");
+    transPipe_ = createComputePipeline(d, ctx_.pipelineCache(), transPipeLayout_, kParticleFieldTransmitCompSpv,
+                                       sizeof(kParticleFieldTransmitCompSpv), "particlefield_transmit");
     return transPipe_ != VK_NULL_HANDLE;
 }
 
@@ -639,26 +565,8 @@ bool ParticleFieldPass::ensureSunOccludePipeline() {
     check(vkCreatePipelineLayout(d, &plci, nullptr, &occludePipeLayout_),
           "vkCreatePipelineLayout(particlefield sun occlude)");
 
-    VkShaderModuleCreateInfo smci{};
-    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    smci.codeSize = sizeof(kParticleFieldSunOccludeCompSpv);
-    smci.pCode    = kParticleFieldSunOccludeCompSpv;
-    VkShaderModule mod = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
-          "vkCreateShaderModule(particlefield_sun_occlude)");
-    VkPipelineShaderStageCreateInfo stage{};
-    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage.module = mod;
-    stage.pName  = "main";
-    VkComputePipelineCreateInfo cpci{};
-    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    cpci.stage  = stage;
-    cpci.layout = occludePipeLayout_;
-    const VkResult r = vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci,
-                                                nullptr, &occludePipe_);
-    vkDestroyShaderModule(d, mod, nullptr);
-    check(r, "vkCreateComputePipelines(particlefield_sun_occlude)");
+    occludePipe_ = createComputePipeline(d, ctx_.pipelineCache(), occludePipeLayout_, kParticleFieldSunOccludeCompSpv,
+                                         sizeof(kParticleFieldSunOccludeCompSpv), "particlefield_sun_occlude");
     return occludePipe_ != VK_NULL_HANDLE;
 }
 
@@ -1075,25 +983,8 @@ void ParticleFieldPass::ensureBakePipeline() {
     check(vkCreatePipelineLayout(d, &plci, nullptr, &bakePipeLayout_),
           "vkCreatePipelineLayout(particle height bake)");
 
-    VkShaderModuleCreateInfo smci{};
-    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    smci.codeSize = sizeof(kParticleHeightBakeCompSpv);
-    smci.pCode    = kParticleHeightBakeCompSpv;
-    VkShaderModule mod = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(d, &smci, nullptr, &mod),
-          "vkCreateShaderModule(particle_height_bake)");
-
-    VkComputePipelineCreateInfo cpci{};
-    cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    cpci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    cpci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    cpci.stage.module = mod;
-    cpci.stage.pName  = "main";
-    cpci.layout       = bakePipeLayout_;
-    const VkResult pr =
-            vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &cpci, nullptr, &bakePipe_);
-    vkDestroyShaderModule(d, mod, nullptr);
-    check(pr, "vkCreateComputePipelines(particle_height_bake)");
+    bakePipe_ = createComputePipeline(d, VK_NULL_HANDLE, bakePipeLayout_, kParticleHeightBakeCompSpv,
+                                      sizeof(kParticleHeightBakeCompSpv), "particle_height_bake");
 }
 
 // The TLAS the bake traces. Called every frame from prepareParticleFields, and
