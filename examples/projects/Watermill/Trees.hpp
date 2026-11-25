@@ -383,6 +383,13 @@ namespace mill {
             return std::hypot(x - ax - t * vx, z - az - t * vz);
         }
 
+        // A tile is one InstancedMesh for every tree variant, detail level and material in it, and each is a draw call in every
+        // pass (the sun's shadow, the camera, the water's mirror): with 24 m and 16 m tiles that was 1273 meshes, about 700 of
+        // them drawn in the mirror alone, and on GL the frame was bound by submitting them, the GPU a quarter busy. The cheap
+        // detail levels take big tiles (a few trees off screen are drawn with them); the near trees, heavy to draw, keep fine ones.
+        inline constexpr float treeTile[3] = {24.f, 72.f, 144.f};// near, mid, far trees
+        inline constexpr float understoryTile = 48.f;
+
         struct Planter {
             std::shared_ptr<threepp::Group> root = threepp::Group::create();
             float tile = 24.f;
@@ -743,8 +750,8 @@ namespace mill {
                 if (list.empty()) continue;
                 const auto wood = trees[v].wood[lod].geometry();
                 const auto leaves = trees[v].leaves[lod].geometry();
-                planter.plant(wood, bark, list, false, true);
-                planter.plant(leaves, leafMat, list, true, true);
+                planter.plant(wood, bark, list, false, true, treeTile[lod]);
+                planter.plant(leaves, leafMat, list, true, true, treeTile[lod]);
                 const size_t tris = trees[v].wood[lod].triangles() + trees[v].leaves[lod].triangles();
                 lodTris[lod] += tris * list.size();
                 lodCount[lod] += list.size();
@@ -772,9 +779,9 @@ namespace mill {
         size_t plantTris = 0;
         const auto plantSet = [&](const PlantMeshes& pm, const std::vector<Instance>& list, bool shadows) {
             if (list.empty()) return;
-            if (!pm.wood.empty()) planter.plant(pm.wood.geometry(), barkMat[Furrowed], list, false, shadows, 16.f);
-            if (!pm.leaves.empty()) planter.plant(pm.leaves.geometry(), leafMat, list, true, shadows, 16.f);
-            if (!pm.green.empty()) planter.plant(pm.green.geometry(), greenMat, list, true, shadows, 16.f);
+            if (!pm.wood.empty()) planter.plant(pm.wood.geometry(), barkMat[Furrowed], list, false, shadows, understoryTile);
+            if (!pm.leaves.empty()) planter.plant(pm.leaves.geometry(), leafMat, list, true, shadows, understoryTile);
+            if (!pm.green.empty()) planter.plant(pm.green.geometry(), greenMat, list, true, shadows, understoryTile);
             const size_t tris = pm.wood.triangles() + pm.leaves.triangles() + pm.green.triangles();
             plantTris += tris * list.size();
             for (const auto& in : list)
