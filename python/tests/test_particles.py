@@ -128,6 +128,21 @@ def test_grid_smoke_fire_settings_default_to_an_open_flame_and_round_trip():
         (0.4, 3.0, 0.0, 450.0))
 
 
+def test_grid_smoke_fire_lights_its_surroundings_by_default():
+    """GridSmoke's light: a glowing field lights what is round it by itself, at the
+    physical strength of its glow (light_scale 1) and with shadows, until asked
+    otherwise; both settings are the field's own, live."""
+    field = tp.ParticleField.create_grid_smoke(tp.Vector3(0, 1, 0), tp.Vector3(1, 1, 1), 64)
+    gs = field.grid_smoke
+    assert gs.light_scale == pytest.approx(1.0)
+    assert gs.light_cast_shadow is True
+    gs.light_scale, gs.light_cast_shadow = 0.35, False
+    again = field.grid_smoke
+    assert again.light_scale == pytest.approx(0.35) and again.light_cast_shadow is False
+    gs.light_scale = 0.0  # a fire that lights nothing
+    assert field.grid_smoke.light_scale == 0.0
+
+
 @pytest.mark.skipif(not tp.HAS_VULKAN, reason="built without the Vulkan backend")
 def test_headless_render_with_rain_under_a_float_sky():
     canvas = tp.Canvas("particles-test", width=W, height=H, headless=True, vsync=False)

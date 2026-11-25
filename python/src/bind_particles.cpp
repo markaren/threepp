@@ -338,6 +338,17 @@ namespace threepp_py {
                 .def_readwrite("temperature_scale", &GS::temperatureScale,
                                "Kelvin per temperature unit above the ambient (GridSmoke.AMBIENT_KELVIN): the "
                                "temperature the soot's glow sees.")
+                .def_readwrite("light_scale", &GS::lightScale,
+                               "The fire's light on its surroundings, as a share of the physical one (default 1; 0: "
+                               "the fire lights nothing). A glowing field lights the walls, the floor and the smoke "
+                               "round it by itself: its glow is summed over each eighth of the box every frame, and "
+                               "each eighth that glows becomes a point light at the centre of its glow, as strong as "
+                               "the glow radiates, falling off as the inverse square. The lights are the renderer's, "
+                               "never in the scene, and follow the flames a couple of frames late.")
+                .def_readwrite("light_cast_shadow", &GS::lightCastShadow,
+                               "The fire's lights cast shadows (default True), as a PointLight's cast_shadow: where "
+                               "the device traces rays every lamp's shadow is traced; with shadow maps a lamp gets a "
+                               "map only when it casts shadows.")
                 .def_readwrite("solid_floor", &GS::solidFloor, "The bottom face of the box is a wall.")
                 .def_property(
                         "sources",
