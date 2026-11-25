@@ -61,12 +61,19 @@ target_compile_features(threepp_py PRIVATE cxx_std_20)
 # PATH. Stage them next to it, as the PhysX runtime is below. The interpreter's
 # own python3xx.dll is in that list too and is already loaded by the time the
 # module is, so it stays out.
+# The copy is a target of its own that runs on every build of the module, not a
+# POST_BUILD step of its link: a change inside threepp.dll alone (a shader, a
+# .cpp whose exports stay the same) leaves the import library as it was, so the
+# module does not relink, and Python went on loading the old copy.
 if (WIN32 AND BUILD_SHARED_LIBS)
-    add_custom_command(TARGET threepp_py POST_BUILD
+    add_custom_target(threepp_py_runtime_dlls
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "$<FILTER:$<TARGET_RUNTIME_DLLS:threepp_py>,EXCLUDE,/python[0-9]+(_d)?[.]dll>"
                 $<TARGET_FILE_DIR:threepp_py>
-            COMMAND_EXPAND_LISTS)
+            COMMAND_EXPAND_LISTS
+            COMMENT "Staging threepp.dll and its runtime DLLs next to the Python module")
+    add_dependencies(threepp_py_runtime_dlls threepp threepp_editor_core)
+    add_dependencies(threepp_py threepp_py_runtime_dlls)
 endif ()
 
 # threepp is a static lib; linking it into this shared module requires every
