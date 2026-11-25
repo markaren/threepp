@@ -8862,7 +8862,7 @@ class ParticleField(Mesh):
             ...
     class GridSmoke:
         """
-        An Eulerian smoke solved on the device over the field's DensityRepr box: the velocity on the cells' faces, MacCormack advection, vorticity confinement and a Jacobi pressure projection. Make one with ParticleField.create_grid_smoke and set `time` (the application's clock, seconds) every frame; the renderer runs the whole steps owed since the last frame. Sources, colliders and boxes are in WORLD space. Vulkan only.
+        An Eulerian smoke solved on the device over the field's DensityRepr box: the velocity on the cells' faces, MacCormack advection, vorticity confinement and a Jacobi pressure projection. Make one with ParticleField.create_grid_smoke and set `time` (the application's clock, seconds) every frame; the renderer runs the whole steps owed since the last frame. Sources, colliders and boxes are in WORLD space. FIRE: a source's `fuel` burns where the air is hot enough and has oxygen left, turning into heat, soot and gas (the burn parameters below); with density_repr.emissive_intensity > 0 the soot glows at the solver's own temperature. Vulkan only.
         """
         class Box:
             """
@@ -8916,6 +8916,14 @@ class ParticleField(Mesh):
             def density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
                 ...
             @property
+            def fuel(self) -> float:
+                """
+                Fuel added per second at the centre (0: a smoke source). Unburnt fuel is carried by the air and renders nothing; it burns where the air is hotter than GridSmoke.ignition_temperature, so a cold fuel source needs a spark (any hot source).
+                """
+            @fuel.setter
+            def fuel(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
             def noise(self) -> float:
                 """
                 0..1 raggedness of the emission.
@@ -8963,6 +8971,7 @@ class ParticleField(Mesh):
             @velocity_blend.setter
             def velocity_blend(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
                 ...
+        AMBIENT_KELVIN: typing.ClassVar[float] = 293.0
         enabled: bool
         @property
         def boundary_fade(self) -> float:
@@ -8989,6 +8998,14 @@ class ParticleField(Mesh):
         def buoyancy(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def burn_rate(self) -> float:
+            """
+            1/s: the share of the fuel that can burn (what the cell's oxygen allows) that burns each second.
+            """
+        @burn_rate.setter
+        def burn_rate(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def colliders(self) -> list:
             """
             Moving capsules that stir the air (the first 64 are used). COPIES: assign a whole list.
@@ -8999,7 +9016,7 @@ class ParticleField(Mesh):
         @property
         def cooling(self) -> float:
             """
-            1/s, temperature decay.
+            1/s, temperature decay. A fire wants about 2: that is where a flame's soot stops glowing and its smoke goes dark (0.9, a smoke plume's, keeps it glowing for metres).
             """
         @cooling.setter
         def cooling(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -9021,6 +9038,30 @@ class ParticleField(Mesh):
         def dissipation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def expansion(self) -> float:
+            """
+            Gas released per unit of fuel burned, as a share of the cell's volume: the pressure projection pushes it out of the flame. Needs an open face to go to; leave it 0 in a box closed on every side.
+            """
+        @expansion.setter
+        def expansion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def heat_release(self) -> float:
+            """
+            Temperature units per unit of fuel burned.
+            """
+        @heat_release.setter
+        def heat_release(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ignition_temperature(self) -> float:
+            """
+            Temperature units: fuel burns only where the air is hotter than this.
+            """
+        @ignition_temperature.setter
+        def ignition_temperature(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def max_speed(self) -> float:
             """
             m/s cap on each component of the air's velocity.
@@ -9035,6 +9076,14 @@ class ParticleField(Mesh):
             """
         @max_steps_per_frame.setter
         def max_steps_per_frame(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def oxygen_per_fuel(self) -> float:
+            """
+            Share of a cell's oxygen one unit of fuel uses: a cell of fresh air burns 1 / oxygen_per_fuel of fuel. Air coming in through an open face is fresh; a closed room's runs out and its fire goes out with fuel left over.
+            """
+        @oxygen_per_fuel.setter
+        def oxygen_per_fuel(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def pressure_iterations(self) -> int:
@@ -9059,6 +9108,14 @@ class ParticleField(Mesh):
         def solid_floor(self, arg0: bool) -> None:
             ...
         @property
+        def soot_yield(self) -> float:
+            """
+            Smoke density per unit of fuel burned.
+            """
+        @soot_yield.setter
+        def soot_yield(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def sources(self) -> list:
             """
             The emitters (the first 16 are used). The getter returns COPIES: assign a whole list (`gs.sources = [s]`) after changing one.
@@ -9073,6 +9130,14 @@ class ParticleField(Mesh):
             """
         @step_dt.setter
         def step_dt(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def temperature_scale(self) -> float:
+            """
+            Kelvin per temperature unit above the ambient (GridSmoke.AMBIENT_KELVIN): the temperature the soot's glow sees.
+            """
+        @temperature_scale.setter
+        def temperature_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def time(self) -> float:
@@ -9233,7 +9298,7 @@ class ParticleField(Mesh):
     @staticmethod
     def create_grid_smoke(center: Vector3, half_extent: Vector3, resolution: typing.SupportsInt | typing.SupportsIndex = 96) -> ParticleField:
         """
-        A field whose density is a smoke solved on the device (see GridSmoke) over the world box center +- half_extent, `resolution` cells per axis (latched at the first frame; 96 is a good plume, 128 a hero shot, 256 about 0.8 GB). The box, albedo, phase function and emission ramp stay in density_repr. Vulkan only.
+        A field whose density is a smoke solved on the device (see GridSmoke) over the world box center +- half_extent, `resolution` cells per axis (latched at the first frame; 96 is a good plume, 128 a hero shot, 256 about 1 GB). The box, albedo, phase function and the glow's intensity stay in density_repr. Vulkan only.
         """
     def __repr__(self) -> str:
         ...

@@ -258,7 +258,10 @@ namespace threepp_py {
                                      "Jacobi pressure projection. Make one with ParticleField.create_grid_smoke and set "
                                      "`time` (the application's clock, seconds) every frame; the renderer runs the whole "
                                      "steps owed since the last frame. Sources, colliders and boxes are in WORLD space. "
-                                     "Vulkan only.");
+                                     "FIRE: a source's `fuel` burns where the air is hot enough and has oxygen left, "
+                                     "turning into heat, soot and gas (the burn parameters below); with "
+                                     "density_repr.emissive_intensity > 0 the soot glows at the solver's own "
+                                     "temperature. Vulkan only.");
 
         py::class_<GS::Source>(gsmoke, "Source")
                 .def(py::init<>())
@@ -267,6 +270,10 @@ namespace threepp_py {
                 .def_readwrite("density", &GS::Source::density, "Density added per second at the centre.")
                 .def_readwrite("temperature", &GS::Source::temperature,
                                "Temperature added per second at the centre (buoyancy lifts it).")
+                .def_readwrite("fuel", &GS::Source::fuel,
+                               "Fuel added per second at the centre (0: a smoke source). Unburnt fuel is carried by "
+                               "the air and renders nothing; it burns where the air is hotter than "
+                               "GridSmoke.ignition_temperature, so a cold fuel source needs a spark (any hot source).")
                 .def_readwrite("velocity", &GS::Source::velocity, "m/s the air at the source is pulled toward.")
                 .def_readwrite("velocity_blend", &GS::Source::velocityBlend, "1/s: how hard it is pulled.")
                 .def_readwrite("noise", &GS::Source::noise, "0..1 raggedness of the emission.");
@@ -296,7 +303,9 @@ namespace threepp_py {
                 .def_readwrite("buoyancy", &GS::buoyancy, "m/s^2 per unit temperature.")
                 .def_readwrite("weight", &GS::weight, "m/s^2 per unit density (sinks).")
                 .def_readwrite("dissipation", &GS::dissipation, "1/s, density decay.")
-                .def_readwrite("cooling", &GS::cooling, "1/s, temperature decay.")
+                .def_readwrite("cooling", &GS::cooling,
+                               "1/s, temperature decay. A fire wants about 2: that is where a flame's soot stops "
+                               "glowing and its smoke goes dark (0.9, a smoke plume's, keeps it glowing for metres).")
                 .def_readwrite("vorticity", &GS::vorticity, "1/s, confinement strength (0 = off).")
                 .def_readwrite("damping", &GS::damping, "1/s, drag pulling the air toward the wind.")
                 .def_readwrite("max_speed", &GS::maxSpeed, "m/s cap on each component of the air's velocity.")
@@ -311,6 +320,24 @@ namespace threepp_py {
                                "m/s, rms per axis: the eddies the wind brings (near the ground about a tenth of the "
                                "wind). They ride the wind and tear a plume; 0 = smooth air.")
                 .def_readwrite("turbulence_scale", &GS::turbulenceScale, "m, the size of those eddies.")
+                .def_readwrite("ignition_temperature", &GS::ignitionTemperature,
+                               "Temperature units: fuel burns only where the air is hotter than this.")
+                .def_readwrite("burn_rate", &GS::burnRate,
+                               "1/s: the share of the fuel that can burn (what the cell's oxygen allows) that burns "
+                               "each second.")
+                .def_readwrite("heat_release", &GS::heatRelease, "Temperature units per unit of fuel burned.")
+                .def_readwrite("soot_yield", &GS::sootYield, "Smoke density per unit of fuel burned.")
+                .def_readwrite("oxygen_per_fuel", &GS::oxygenPerFuel,
+                               "Share of a cell's oxygen one unit of fuel uses: a cell of fresh air burns "
+                               "1 / oxygen_per_fuel of fuel. Air coming in through an open face is fresh; a closed "
+                               "room's runs out and its fire goes out with fuel left over.")
+                .def_readwrite("expansion", &GS::expansion,
+                               "Gas released per unit of fuel burned, as a share of the cell's volume: the pressure "
+                               "projection pushes it out of the flame. Needs an open face to go to; leave it 0 in a box "
+                               "closed on every side.")
+                .def_readwrite("temperature_scale", &GS::temperatureScale,
+                               "Kelvin per temperature unit above the ambient (GridSmoke.AMBIENT_KELVIN): the "
+                               "temperature the soot's glow sees.")
                 .def_readwrite("solid_floor", &GS::solidFloor, "The bottom face of the box is a wall.")
                 .def_property(
                         "sources",
@@ -352,6 +379,8 @@ namespace threepp_py {
                             g.boxes = std::move(v);
                         },
                         "Walls (the first 128 are used). COPIES: assign a whole list.");
+        // The air's own temperature (K), which temperature 0 stands for.
+        gsmoke.attr("AMBIENT_KELVIN") = GS::kAmbientKelvin;
 
         // ── EmitterParams (Ownership.Renderer's closed form) ────────────────
         auto emitter = py::class_<ParticleField::EmitterParams>(cls, "EmitterParams");
@@ -503,8 +532,8 @@ namespace threepp_py {
                             py::arg("half_extent"), py::arg("resolution") = 96u,
                             "A field whose density is a smoke solved on the device (see GridSmoke) over the world "
                             "box center +- half_extent, `resolution` cells per axis (latched at the first frame; "
-                            "96 is a good plume, 128 a hero shot, 256 about 0.8 GB). The box, albedo, phase "
-                            "function and emission ramp stay in density_repr. Vulkan only.")
+                            "96 is a good plume, 128 a hero shot, 256 about 1 GB). The box, albedo, phase "
+                            "function and the glow's intensity stay in density_repr. Vulkan only.")
                 .def_property_readonly("grid_smoke", [](ParticleField& f) { return &f.gridSmoke(); },
                                        py::return_value_policy::reference_internal,
                                        "The solver's settings, live (a reference, not a copy).")

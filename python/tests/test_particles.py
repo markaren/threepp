@@ -94,6 +94,40 @@ def test_grid_smoke_settings_live_on_the_field_and_lists_are_copies():
     field.reset_grid_smoke()
 
 
+def test_grid_smoke_fire_settings_default_to_an_open_flame_and_round_trip():
+    """GridSmoke's fire: a source carries no fuel until asked (so every smoke plume
+    stays smoke), the burn's settings default to an open hydrocarbon flame (a cell
+    of fresh air burns 0.4 of fuel, which heats it about 1800 K), and each one is
+    the field's own, live."""
+    field = tp.ParticleField.create_grid_smoke(tp.Vector3(0, 1, 0), tp.Vector3(1, 1, 1), 64)
+    gs = field.grid_smoke
+    assert tp.ParticleField.GridSmoke.Source().fuel == 0.0
+    assert gs.ignition_temperature == pytest.approx(0.5)
+    assert gs.burn_rate == pytest.approx(8.0)
+    assert gs.heat_release == pytest.approx(7.5)
+    assert gs.soot_yield == pytest.approx(1.0)
+    assert gs.oxygen_per_fuel == pytest.approx(2.5)
+    assert gs.expansion == pytest.approx(12.0)
+    assert gs.temperature_scale == pytest.approx(600.0)
+    assert tp.ParticleField.GridSmoke.AMBIENT_KELVIN == pytest.approx(293.0)
+    flame_k = gs.heat_release / gs.oxygen_per_fuel * gs.temperature_scale
+    assert 1500.0 < flame_k < 2100.0  # what fresh air burnt through gains: a real flame's rise
+
+    s = tp.ParticleField.GridSmoke.Source()
+    s.position, s.radius, s.fuel, s.temperature = tp.Vector3(0, 0.15, 0), 0.25, 4.0, 0.0
+    spark = tp.ParticleField.GridSmoke.Source()
+    spark.position, spark.radius, spark.temperature = tp.Vector3(0, 0.1, 0), 0.07, 40.0
+    gs.sources = [s, spark]
+    assert gs.sources[0].fuel == pytest.approx(4.0) and gs.sources[1].fuel == 0.0
+
+    gs.ignition_temperature, gs.burn_rate, gs.heat_release = 0.8, 12.0, 9.0
+    gs.soot_yield, gs.oxygen_per_fuel, gs.expansion, gs.temperature_scale = 0.4, 3.0, 0.0, 450.0
+    again = field.grid_smoke
+    assert (again.ignition_temperature, again.burn_rate, again.heat_release) == pytest.approx((0.8, 12.0, 9.0))
+    assert (again.soot_yield, again.oxygen_per_fuel, again.expansion, again.temperature_scale) == pytest.approx(
+        (0.4, 3.0, 0.0, 450.0))
+
+
 @pytest.mark.skipif(not tp.HAS_VULKAN, reason="built without the Vulkan backend")
 def test_headless_render_with_rain_under_a_float_sky():
     canvas = tp.Canvas("particles-test", width=W, height=H, headless=True, vsync=False)
