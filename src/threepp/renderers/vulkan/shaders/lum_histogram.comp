@@ -1,4 +1,5 @@
 #version 460
+#extension GL_KHR_shader_subgroup_ballot : require
 // Log2-luma histogram for automatic exposure adaptation.
 // 128 uint bins cover log2(L) in [-8, +8] (i.e. EV -8..+8 relative to linear 1.0).
 // The CPU reads this histogram the following frame (1-frame pipeline lag, safe via
@@ -13,26 +14,53 @@ layout(push_constant) uniform Pc { uint width, height; } pc;
 
 shared uint localBins[128];
 
+const uint kNoBin = 0xFFFFFFFFu;
+
+// The bin of one pixel, or kNoBin outside the image.
+// Skip non-finite pixels: a stray NaN/Inf (e.g. a bad fog/denoiser value)
+// must NOT be metered — a NaN buckets unpredictably and an Inf slams the top
+// bin, either of which can collapse the adapted exposure to the floor and
+// black the frame (defensive; the fog math is now overflow-safe at source).
+uint binOf(ivec2 coord) {
+    if (coord.x >= int(pc.width) || coord.y >= int(pc.height)) return kNoBin;
+    vec3 c = texelFetch(sceneHdr, coord, 0).rgb;
+    if (any(isnan(c)) || any(isinf(c))) return kNoBin;
+    float L = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+    // Map log2(L) in [-8, +8] -> [0, 1] -> bin [0, 127].
+    float t = clamp((log2(L) + 8.0) * (1.0 / 16.0), 0.0, 1.0);
+    return uint(t * 127.0);
+}
+
+// One shared atomic per distinct bin among the subgroup's lanes, not one per
+// lane: a flat sky or wall puts a whole tile in one bin, and 256 lanes adding
+// to one shared word serialise. Each round takes the first pending lane's bin
+// and counts every lane that has it. The counts are integers, so the bins are
+// the same as one atomic per pixel.
+void countBin(uint b) {
+    bool pending = b != kNoBin;
+    while (pending) {
+        const uint target = subgroupBroadcastFirst(b);
+        if (b == target) {
+            const uint n = subgroupBallotBitCount(subgroupBallot(true));
+            if (subgroupElect()) atomicAdd(localBins[target], n);
+            pending = false;
+        }
+    }
+}
+
 void main() {
     const uint li = gl_LocalInvocationIndex;
     if (li < 128u) localBins[li] = 0u;
     barrier();
     memoryBarrierShared();
 
-    const ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-    // Skip non-finite pixels: a stray NaN/Inf (e.g. a bad fog/denoiser value)
-    // must NOT be metered — a NaN buckets unpredictably and an Inf slams the top
-    // bin, either of which can collapse the adapted exposure to the floor and
-    // black the frame (defensive; the fog math is now overflow-safe at source).
-    if (coord.x < int(pc.width) && coord.y < int(pc.height)) {
-        vec3 c = texelFetch(sceneHdr, coord, 0).rgb;
-        if (!any(isnan(c)) && !any(isinf(c))) {
-        float L = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
-        // Map log2(L) in [-8, +8] -> [0, 1] -> bin [0, 127].
-        float t = clamp((log2(L) + 8.0) * (1.0 / 16.0), 0.0, 1.0);
-        atomicAdd(localBins[uint(t * 127.0)], 1u);
-        }
-    }
+    // Each invocation meters a 2x2 block, so a group covers 32x32 pixels and
+    // a quarter as many groups add their bins to the (host-visible) buffer.
+    const ivec2 base = ivec2(gl_GlobalInvocationID.xy) * 2;
+    countBin(binOf(base));
+    countBin(binOf(base + ivec2(1, 0)));
+    countBin(binOf(base + ivec2(0, 1)));
+    countBin(binOf(base + ivec2(1, 1)));
     barrier();
     memoryBarrierShared();
 

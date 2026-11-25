@@ -198,7 +198,8 @@ namespace threepp::vulkan {
         const uint32_t pc[2] = {width, height};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), pc);
-        vkCmdDispatch(cb, (width + 15u) / 16u, (height + 15u) / 16u, 1u);
+        // 16x16 invocations, each metering a 2x2 block (lum_histogram.comp).
+        vkCmdDispatch(cb, (width + 31u) / 32u, (height + 31u) / 32u, 1u);
     }
 
     void AutoExposure::tick(uint32_t currentFrame, float dt) {
