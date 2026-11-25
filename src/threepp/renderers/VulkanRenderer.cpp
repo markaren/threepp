@@ -1885,14 +1885,30 @@ namespace threepp {
             return halfBitsToFloat(h);
         };
 
-        const auto vel = copyGeneralImageToHost(*ctx, img.velocity, n, n, 0u, 8u, "readGridSmoke(velocity)", n);
+        const uint32_t nf  = n + 1u;// the velocity is on the faces
+        const auto     vel = copyGeneralImageToHost(*ctx, img.velocity, nf, nf, 0u, 8u, "readGridSmoke(velocity)", nf);
         const auto sca = copyGeneralImageToHost(*ctx, img.scalars, n, n, 0u, 4u, "readGridSmoke(scalars)", n);
         const auto prs = copyGeneralImageToHost(*ctx, img.pressure, n, n, 0u, 4u, "readGridSmoke(pressure)", n);
         const auto aux = copyGeneralImageToHost(*ctx, img.scratch, n, n, 0u, 8u, "readGridSmoke(scratch)", n);
         const auto sol = copyGeneralImageToHost(*ctx, img.solid, n, n, 0u, 8u, "readGridSmoke(solid)", n);
 
         out.resolution = n;
-        out.velocity.resize(cells * 3u);
+        // The solver stores the velocity relative to the wind (shaders/smoke_common.glsl); the readback is in m/s.
+        const Vector3& wind  = field.gridSmoke().wind;
+        const float    w3[3] = {wind.x, wind.y, wind.z};
+        const size_t   faces = static_cast<size_t>(nf) * nf * nf;
+        out.velocity.resize(faces * 3u);
+        for (uint32_t k = 0; k < nf; ++k)
+            for (uint32_t j = 0; j < nf; ++j)
+                for (uint32_t i = 0; i < nf; ++i) {
+                    const size_t   t      = i + size_t(nf) * (j + size_t(nf) * k);
+                    const uint32_t ijk[3] = {i, j, k};
+                    for (uint32_t a = 0; a < 3; ++a) {
+                        // A face exists up to n along its own axis and below n across it.
+                        const bool exists = ijk[(a + 1) % 3] < n && ijk[(a + 2) % 3] < n;
+                        out.velocity[t * 3u + a] = exists ? halfAt(vel, t * 4u + a) + w3[a] : 0.f;
+                    }
+                }
         out.density.resize(cells);
         out.temperature.resize(cells);
         out.pressure.resize(cells);
@@ -1900,10 +1916,7 @@ namespace threepp {
         out.solid.resize(cells);
         out.solidVelocity.resize(cells * 3u);
         for (size_t i = 0; i < cells; ++i) {
-            for (size_t a = 0; a < 3; ++a) {
-                out.velocity[i * 3u + a]      = halfAt(vel, i * 4u + a);
-                out.solidVelocity[i * 3u + a] = halfAt(sol, i * 4u + a);
-            }
+            for (size_t a = 0; a < 3; ++a) out.solidVelocity[i * 3u + a] = halfAt(sol, i * 4u + a);
             out.density[i]     = halfAt(sca, i * 2u);
             out.temperature[i] = halfAt(sca, i * 2u + 1u);
             std::memcpy(&out.pressure[i], prs.data() + i * 4u, sizeof(float));

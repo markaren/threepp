@@ -2,15 +2,19 @@
 #extension GL_GOOGLE_include_directive : enable
 #include "smoke_common.glsl"
 
-// Pass 5: the divergence of the velocity, into aux.x. Solid neighbours push
-// their own velocity into the difference, so a moving collider displaces air.
+// Pass 5: the divergence of each open cell, into aux.x: what its six faces carry
+// out of it, per unit volume (1/s). A solid's face moves with the solid.
 
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
     if (!inGrid(c)) return;
-    const vec3 h = 0.5 * pc.invCell.xyz;
-    const float div = (velAt(c + ivec3(1, 0, 0)).x - velAt(c - ivec3(1, 0, 0)).x) * h.x
-                    + (velAt(c + ivec3(0, 1, 0)).y - velAt(c - ivec3(0, 1, 0)).y) * h.y
-                    + (velAt(c + ivec3(0, 0, 1)).z - velAt(c - ivec3(0, 0, 1)).z) * h.z;
+    vec3 sv;
+    if (solidCell(c, sv)) {
+        imageStore(aux, c, vec4(0.0));
+        return;
+    }
+    const float div = (faceVel(0, c + ivec3(1, 0, 0)) - faceVel(0, c)) * pc.invCell.x +
+                      (faceVel(1, c + ivec3(0, 1, 0)) - faceVel(1, c)) * pc.invCell.y +
+                      (faceVel(2, c + ivec3(0, 0, 1)) - faceVel(2, c)) * pc.invCell.z;
     imageStore(aux, c, vec4(div, 0.0, 0.0, 0.0));
 }

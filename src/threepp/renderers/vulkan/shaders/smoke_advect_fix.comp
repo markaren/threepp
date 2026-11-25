@@ -2,7 +2,7 @@
 #extension GL_GOOGLE_include_directive : enable
 #include "smoke_common.glsl"
 
-// Pass 4b: the MacCormack correction (Selle et al.). aux.xy holds the forward
+// Pass 1b: the MacCormack correction (Selle et al.). aux.xy holds the forward
 // semi-Lagrangian step phi_hat; step it back and the difference to the original
 // is the error to add, halved, then clamped to the range the departure point's
 // eight neighbours allow so it can never overshoot. Reads the OLD velocity and
@@ -14,7 +14,7 @@ void main() {
     if (!inGrid(c)) return;
     const float dt = pc.invCell.w;
     const vec3  w  = worldOfCell(c);
-    const vec3  v  = texelFetch(uVel, c, 0).xyz + pc.wind.xyz;
+    const vec3  v  = cellVel(c) + pc.wind.xyz;
 
     const vec2 orig = texelFetch(uSca, c, 0).xy;
     const vec2 hat  = texelFetch(uAux, c, 0).xy;

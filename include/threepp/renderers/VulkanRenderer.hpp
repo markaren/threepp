@@ -224,10 +224,15 @@ namespace threepp {
 
         // ── GridSmoke solver state readback (TEST / AUDIT) ───────────────
         // Copy a grid-smoke field's solver state (ParticleField::GridSmoke) to
-        // the host as the last rendered frame's steps left it. Every array is
-        // resolution^3 cells in x-fastest order, cell (i, j, k) at
+        // the host as the last rendered frame's steps left it. Every cell array
+        // is resolution^3 cells in x-fastest order, cell (i, j, k) at
         // i + n * (j + n * k), its centre at the box minimum + (index + 0.5)
-        // cells on each axis (cells need not be cubes).
+        // cells on each axis (cells need not be cubes). The velocity is on the
+        // cells' FACES: (n + 1)^3 entries of 3 in the same x-fastest order over
+        // n + 1, entry (i, j, k) holding u on the x face at the min side of cell
+        // (i, j, k), v on its min y face and w on its min z face; the faces of
+        // the box's max sides are the entries at n, and a component whose face
+        // does not exist (u at j = n, say) is 0.
         //
         // Exists so the solver's claims (the projection leaves no divergence, a
         // sealed box keeps its smoke, a wall keeps its two sides apart, a
@@ -238,7 +243,7 @@ namespace threepp {
         // is not a grid smoke or its solver has not run yet.
         struct GridSmokeState {
             uint32_t           resolution = 0;
-            std::vector<float> velocity;     // m/s, 3 per cell
+            std::vector<float> velocity;     // m/s, 3 per face texel, (n + 1)^3 of them (above), wind included
             std::vector<float> density;      // 1 per cell
             std::vector<float> temperature;  // 1 per cell
             std::vector<float> pressure;     // 1 per cell: the last step's pressure solve

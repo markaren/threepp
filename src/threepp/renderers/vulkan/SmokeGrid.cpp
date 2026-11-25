@@ -110,9 +110,8 @@ SmokePipelines::SmokePipelines(VulkanContext& ctx, VkDescriptorSetLayout density
     sci.magFilter    = VK_FILTER_LINEAR;
     sci.minFilter    = VK_FILTER_LINEAR;
     sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    check(vkCreateSampler(d, &sci, nullptr, &samplerEdge), "vkCreateSampler(smoke edge)");
-    // Beyond the box there is no smoke: density and pressure read as zero.
+    // Beyond the box there is no smoke and the air is the wind: density, pressure and the velocity (stored relative
+    // to the wind) all read as zero.
     sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     check(vkCreateSampler(d, &sci, nullptr, &samplerBorder), "vkCreateSampler(smoke border)");
@@ -139,7 +138,6 @@ SmokePipelines::~SmokePipelines() {
     if (layout) vkDestroyPipelineLayout(d, layout, nullptr);
     if (writeLayout) vkDestroyPipelineLayout(d, writeLayout, nullptr);
     if (setLayout) vkDestroyDescriptorSetLayout(d, setLayout, nullptr);
-    if (samplerEdge) vkDestroySampler(d, samplerEdge, nullptr);
     if (samplerBorder) vkDestroySampler(d, samplerBorder, nullptr);
 }
 
@@ -151,18 +149,19 @@ std::unique_ptr<SmokeGrid> SmokeGrid::create(VulkanContext& ctx, const SmokePipe
     if (!createImage3D) return nullptr;
     std::unique_ptr<SmokeGrid> g(new SmokeGrid(ctx, res));
 
-    const auto mk = [&](Image2D& img, VkFormat fmt, const char* name) {
-        img = createImage3D(res, res, res, fmt, kGridUsage, name);
+    const auto mk = [&](Image2D& img, std::uint32_t n, VkFormat fmt, const char* name) {
+        img = createImage3D(n, n, n, fmt, kGridUsage, name);
         return img.image != VK_NULL_HANDLE;
     };
     bool ok = true;
     for (int i = 0; i < 2; ++i) {
-        ok = mk(g->vel_[i], VK_FORMAT_R16G16B16A16_SFLOAT, "smokeVelocity") && ok;
-        ok = mk(g->sca_[i], VK_FORMAT_R16G16_SFLOAT, "smokeScalars") && ok;
-        ok = mk(g->p_[i], VK_FORMAT_R32_SFLOAT, "smokePressure") && ok;
+        // The velocity lives on the faces: res + 1 of them along each axis (smoke_common.glsl).
+        ok = mk(g->vel_[i], res + 1, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeVelocity") && ok;
+        ok = mk(g->sca_[i], res, VK_FORMAT_R16G16_SFLOAT, "smokeScalars") && ok;
+        ok = mk(g->p_[i], res, VK_FORMAT_R32_SFLOAT, "smokePressure") && ok;
     }
-    ok = mk(g->aux_, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeScratch") && ok;
-    ok = mk(g->solid_, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeSolid") && ok;
+    ok = mk(g->aux_, res, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeScratch") && ok;
+    ok = mk(g->solid_, res, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeSolid") && ok;
     if (!ok) return nullptr;// ~SmokeGrid frees what was made
 
     g->params_ = createBuffer(ctx.allocator(), ctx.device(), sizeof(SmokeGpuParams),
@@ -197,7 +196,8 @@ std::unique_ptr<SmokeGrid> SmokeGrid::create(VulkanContext& ctx, const SmokePipe
             ii[i] = {smp, img.view, VK_IMAGE_LAYOUT_GENERAL};
         };
         const auto sto = [&](int i, const Image2D& img) { ii[i] = {VK_NULL_HANDLE, img.view, VK_IMAGE_LAYOUT_GENERAL}; };
-        cis(0, pl.samplerEdge, g->vel_[v]);
+        // Border: beyond the box the stored velocity (relative to the wind) is 0, the air there is the wind.
+        cis(0, pl.samplerBorder, g->vel_[v]);
         sto(1, g->vel_[1 - v]);
         cis(2, pl.samplerBorder, g->sca_[s]);
         sto(3, g->sca_[1 - s]);
@@ -364,7 +364,9 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
 
 void SmokeGrid::step(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan) {
 
-    const std::uint32_t gx = (res_ + 7u) / 8u, gy = (res_ + 3u) / 4u, gz = (res_ + 3u) / 4u;
+    // Every pass covers the velocity's res + 1 faces per axis; the cell passes skip the extra layer.
+    const std::uint32_t f  = res_ + 1u;
+    const std::uint32_t gx = (f + 7u) / 8u, gy = (f + 3u) / 4u, gz = (f + 3u) / 4u;
     const auto run = [&](VkPipeline pipe) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
         const VkDescriptorSet set = sets_[v_ | (s_ << 1) | (p_in_ << 2)];
@@ -374,16 +376,19 @@ void SmokeGrid::step(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePl
         computeBarrier(cb);
     };
 
+    // Advection first, with the velocity the last projection left: the smoke is only ever carried by air that
+    // neither gathers nor spreads, so a sealed box keeps what it holds. The forces come after it and the
+    // projection cleans up what they add.
+    run(pl.advect);// vel: A -> B (the new velocity), aux.xy = the scalars' predictor
+    run(pl.advectFix);// scalars: A -> B, reading the OLD velocity (v_ has not flipped past it)
+    v_ ^= 1;
+    s_ ^= 1;
     run(pl.forces);// vel, scalars: A -> B
     v_ ^= 1;
     s_ ^= 1;
     run(pl.curl);// aux = curl(vel)
     run(pl.confine);// vel: A -> B
     v_ ^= 1;
-    run(pl.advect);// vel: A -> B (the new velocity), aux.xy = the scalars' predictor
-    run(pl.advectFix);// scalars: A -> B, reading the OLD velocity (v_ has not flipped past it)
-    v_ ^= 1;
-    s_ ^= 1;
     run(pl.diverge);// aux.x = div(vel)
     for (std::uint32_t i = 0; i < plan.iterations; ++i) {
         run(pl.jacobi);// pressure: A -> B

@@ -564,9 +564,10 @@ namespace threepp {
         };
         // ── GRID SMOKE ──────────────────────────────────────────────────────
         // A field whose density volume is not splatted from particles but SOLVED:
-        // an Eulerian smoke simulation on the device (stable fluids with a
-        // MacCormack advection, vorticity confinement and a Jacobi pressure
-        // projection) over the DensityRepr's own world box, one cell per voxel.
+        // an Eulerian smoke simulation on the device (stable fluids on a
+        // staggered grid, the velocity on the cells' faces, with a MacCormack
+        // advection, vorticity confinement and a Jacobi pressure projection)
+        // over the DensityRepr's own world box, one cell per voxel.
         // Everything downstream of the volume is unchanged and shared with a
         // particle dust cloud — the froxel passes, the shade's march, the
         // emission ramp, the LIDAR's majorant — so a solved plume is lit,
@@ -627,14 +628,14 @@ namespace threepp {
             float dissipation = 0.12f; // 1/s, density decay
             float cooling     = 0.9f;  // 1/s, temperature decay
             float vorticity   = 4.f;   // 1/s, confinement strength (0 = off)
-            float damping     = 0.05f; // 1/s, velocity drag
-            float maxSpeed    = 20.f;  // m/s cap
+            float damping     = 0.05f; // 1/s, drag pulling the air toward the wind
+            float maxSpeed    = 20.f;  // m/s cap on each component of the air's velocity
             float sigma       = 8.f;   // extinction (1/m) of density 1
             // The share of the box, from each open face inward, over which smoke fades away instead of being cut
             // flat at the box (0 = off). The solid floor does not fade.
             float boundaryFade = 0.10f;
-            // m/s, carries the smoke without being pushed back. It is added at the advection, so the walls turn it
-            // only within a cell of their faces: keep wind * stepDt under a cell, or it reads into thick walls.
+            // m/s, the air outside the box. The box starts with it, air coming in through an open side brings it,
+            // the drag pulls toward it, and inside it is air like any other: walls and colliders turn it.
             Vector3 wind{0.f, 0.f, 0.f};
             bool  solidFloor  = false; // the bottom face of the box is a wall
             std::vector<Source>   sources;
