@@ -126,11 +126,17 @@ int main(int argc, char** argv) {
     std::unique_ptr<Renderer> rendererOwner;
     GLRenderer* gl = nullptr;
     VulkanRenderer* vk = nullptr;
+#ifndef THREEPP_WITH_VULKAN
+    if (vulkan) std::cerr << "--vulkan: this build has no Vulkan backend, running on GL" << std::endl;
+    vulkan = false;
+#else
     if (vulkan) {
         auto r = std::make_unique<VulkanRenderer>(canvas);
         vk = r.get();
         rendererOwner = std::move(r);
-    } else {
+    } else
+#endif
+    {
         auto r = std::make_unique<GLRenderer>(canvas);
         r->shadowMap().enabled = true;
         r->shadowMap().type = ShadowMap::PFC;
@@ -169,6 +175,7 @@ int main(int argc, char** argv) {
         // thinner by the water than GL's, but thinning far more slowly with height, so the ranges kilometres off
         // stand in blue haze behind the valley
         scene->fog = FogExp2(Color(0.62f, 0.70f, 0.74f), 0.004f * airScale);
+#ifdef THREEPP_WITH_VULKAN
         VulkanRenderer::HeightFogSettings air;
         air.density = 0.f;
         air.baseY = 0.f;
@@ -176,6 +183,7 @@ int main(int argc, char** argv) {
         air.noiseAmount = 0.f;
         vk->setHeightFog(air);
         if (ptSamples > 0) vk->setAutoLod(false);
+#endif
     }
 
     auto sun = DirectionalLight::create(Color(1.f, 0.94f, 0.82f), 3.4f);
@@ -607,6 +615,7 @@ int main(int argc, char** argv) {
             ++benchDone;
             return;
         }
+#ifdef THREEPP_WITH_VULKAN
         if (headless && simTime >= shotTime && vk && ptSamples > 0) {
             // the trace converges over a still scene: the clock stops here
             VulkanRenderer::PathTraceParams params;
@@ -618,6 +627,7 @@ int main(int argc, char** argv) {
             std::cout << "path traced " << ptSamples << " spp in " << secondsSince(tTrace) << " s; wrote " << shotPath << std::endl;
             std::exit(0);
         }
+#endif
         if (headless && simTime >= shotTime) {
             if (benchFrames > 0) {
                 const double ms = 1000.0 * secondsSince(benchStart) / benchFrames;

@@ -120,11 +120,17 @@ int main(int argc, char** argv) {
     std::unique_ptr<Renderer> rendererOwner;
     GLRenderer* gl = nullptr;
     VulkanRenderer* vk = nullptr;
+#ifndef THREEPP_WITH_VULKAN
+    if (vulkan) std::cerr << "--vulkan: this build has no Vulkan backend, running on GL" << std::endl;
+    vulkan = false;
+#else
     if (vulkan) {
         auto r = std::make_unique<VulkanRenderer>(canvas);
         vk = r.get();
         rendererOwner = std::move(r);
-    } else {
+    } else
+#endif
+    {
         auto r = std::make_unique<GLRenderer>(canvas);
         r->shadowMap().enabled = true;
         r->shadowMap().type = ShadowMap::PFC;
@@ -396,6 +402,7 @@ int main(int argc, char** argv) {
         }
         if (headless && simTime >= shotTime) {
             if (benchFrames > 0) std::cout << "bench " << benchFrames << " frames: " << 1000.0 * secondsSince(benchStart) / benchFrames << " ms a frame" << std::endl;
+#ifdef THREEPP_WITH_VULKAN
             if (vk && ptSamples > 0) {
                 VulkanRenderer::PathTraceParams params;
                 params.samplesPerFrame = 16;
@@ -406,6 +413,7 @@ int main(int argc, char** argv) {
                 std::cout << "path traced " << ptSamples << " spp in " << secondsSince(tTrace) << " s; wrote " << shotPath << std::endl;
                 std::exit(0);
             }
+#endif
             renderer.writeFramebuffer(shotPath);
             std::cout << "wrote " << shotPath << std::endl;
             std::exit(0);
