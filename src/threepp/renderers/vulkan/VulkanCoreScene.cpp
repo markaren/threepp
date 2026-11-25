@@ -3504,6 +3504,7 @@ void VulkanRenderer::Impl::enqueueVertexInterop(SceneBuildFrame& sb) {
                             r0.lastDrawStart = dr.start;
                             r0.lastDrawCount = dr.count;
                             ++drawInputsVersion_;
+                            ++drawFactsEpoch_;// the kept draw ranges (no version shows it)
                             if (!r0.interop && r0.as != VK_NULL_HANDLE) {
                                 geomDirtyAny = true;
                                 entryGeomDirty[i] = true;
@@ -5488,6 +5489,7 @@ void VulkanRenderer::Impl::resizeEntryBuffers(SceneBuildFrame& sb) {
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
             ++drawInputsVersion_;// structural rebuild — every draw record is new
+            ++drawFactsEpoch_;// and every record a mesh's kept facts name may be gone
             ++tlasStats_.structuralRebuilds;
 
             // Companion to the post-init dump: with the scene's BLASes +
@@ -6781,6 +6783,17 @@ void VulkanRenderer::Impl::readMaterialWatch(MaterialWatch& w, const Material& m
                 float* was = &w.xforms[i * 10];
                 if (!bytesDiffer(k, was, sizeof(k))) continue;
                 std::memcpy(was, k, sizeof(k));
+                changed = true;
+            }
+            // What the raster draw records read besides the record (the draw
+            // facts keep them per mesh while the version stands).
+            const uint32_t drawBits = (mat.textureAnimatedHint ? 1u : 0u) | (mat.vertexColors ? 2u : 0u) |
+                                      (mat.polygonOffset ? 4u : 0u);
+            if (drawBits != w.drawBits || bytesDiffer(&mat.polygonOffsetUnits, &w.polyUnits, sizeof(float)) ||
+                bytesDiffer(&mat.polygonOffsetFactor, &w.polyFactor, sizeof(float))) {
+                w.drawBits = drawBits;
+                w.polyUnits = mat.polygonOffsetUnits;
+                w.polyFactor = mat.polygonOffsetFactor;
                 changed = true;
             }
             // The displacement, which re-displaces the geometry: its scale and

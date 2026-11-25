@@ -96,6 +96,88 @@ namespace threepp {
         s = {};
     }
 
+    VulkanRenderer::Impl::DrawFacts VulkanRenderer::Impl::drawFactsOf(const MeshEntry& en, size_t i) {
+        DrawFacts f;
+        // The geometry once: the record's key, the bounds and the draw range
+        // below all read it (each fetch is a virtual call and a shared_ptr
+        // copy).
+        const auto geom = en.mesh->geometry();
+        f.rec = resolveBlasForEntry(en, geom.get());
+        // One virtual material() call per mesh (it is an out-of-line override
+        // returning shared_ptr by value, so the compiler cannot CSE repeated
+        // calls). Held by shared_ptr so the raw pointer cannot dangle on a
+        // temporary.
+        const auto matSp = en.mesh->material();
+        const Material* sm = matSp.get();
+        // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
+        // cutout foliage the jittered coverage flips a pixel's normal
+        // SIGN frame to frame. The GI temporal reproject + SVGF normal
+        // edge-stop must treat ±N as the SAME surface there (flag
+        // consumed in deferred_shade.comp / deferred_gi_filter.comp) or
+        // the GI history cold-starts every frame — measured as 8× the
+        // frame-to-frame flicker on a procedural tree canopy.
+        if (sm && sm->side == Side::Double) f.matFlags |= kInstFlagDoubleSided;
+        // TEXTURE-ANIMATED (scrolling UVs, video/live textures): the
+        // pattern moves with NO geometric motion vectors, so the TAA
+        // resolve must hold a short history (α floor) instead of
+        // smearing it. TAA-only — the GI history accumulates
+        // DEMODULATED irradiance, which a texture animation doesn't
+        // change, so bit 6 deliberately does NOT shorten the GI cap.
+        if (sm && sm->textureAnimatedHint) f.matFlags |= kInstFlagTexAnim;
+        f.vtxColor = sm && sm->vertexColors;
+        // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
+        // a +clip-z bias pushes the surface toward NEAR so it renders on
+        // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE
+        // polygonOffsetUnits for "on top", so flip the sign; units==0
+        // (bool only) → a small default that clears z-fight without
+        // floating. (The slope-scaled `factor` term isn't applied — flat
+        // decals don't need it; bias is uniform in NDC.)
+        if (sm && sm->polygonOffset) {
+            const float uf = sm->polygonOffsetUnits + sm->polygonOffsetFactor;
+            f.polyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
+        }
+        // The mesh's material decides both (one material table record for
+        // all its entries).
+        f.wantCull = (i < lastVisibleCullMode_.size()) ? lastVisibleCullMode_[i] : VK_CULL_MODE_BACK_BIT;
+        f.isDecal  = (i < geomDescsCached_.size()) && (entryMat(i).alphaCutoff == -2.0f);
+        if (geom) {
+            Box3 box;// the record's box: a displacementMap's moved positions
+            if (boundsOf(*geom, box)) {
+                const Vector3 c = box.getCenter();
+                const Vector3 h = box.getSize() * 0.5f;
+                f.center[0] = c.x; f.center[1] = c.y; f.center[2] = c.z;
+                f.half[0]   = h.x; f.half[1]   = h.y; f.half[2]   = h.z;
+                f.boundsValid = true;
+            }
+            const auto& dr = geom->drawRange;
+            f.drawStart = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
+            f.drawCount = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
+        }
+        return f;
+    }
+
+    void VulkanRenderer::Impl::checkDrawFacts(const DrawFacts& kept, const MeshEntry& en, size_t i) {
+        const DrawFacts f = drawFactsOf(en, i);
+        const char* field = nullptr;
+        if (f.rec != kept.rec) field = "record";
+        else if (f.matFlags != kept.matFlags) field = "material flags";
+        else if (std::memcmp(&f.polyOff, &kept.polyOff, sizeof(float)) != 0) field = "polygon offset";
+        else if (f.vtxColor != kept.vtxColor) field = "vertex colours";
+        else if (f.wantCull != kept.wantCull) field = "cull mode";
+        else if (f.isDecal != kept.isDecal) field = "decal";
+        else if (f.drawStart != kept.drawStart || f.drawCount != kept.drawCount) field = "draw range";
+        else if (f.boundsValid != kept.boundsValid ||
+                 (f.boundsValid && (std::memcmp(f.center, kept.center, sizeof(f.center)) != 0 ||
+                                    std::memcmp(f.half, kept.half, sizeof(f.half)) != 0)))
+            field = "bounds";
+        else if (kept.idsKnown && (classIdForObject(*en.mesh) != kept.classId ||
+                                   stableIdIfAssigned(*en.mesh) != kept.stableId))
+            field = "ids";
+        if (!field) return;
+        THREEPP_LOGF(vulkan::kLogScene, Error, "draw facts of mesh %u (entry %zu) stale: %s", en.mesh->id, i, field);
+        std::abort();
+    }
+
     void VulkanRenderer::Impl::buildIndirectDrawData(uint32_t frame) {
         // SPLIT, not nested: function-scope until now, so its number already
         // included the ~15 MB of memcpy at the bottom of this function and the
@@ -325,25 +407,33 @@ namespace threepp {
         uint32_t globalIdx = 0;
         // Last-entry memos. An InstancedMesh expands to one entry per instance,
         // all sharing a single en.mesh, so these collapse a whole instanced run
-        // to one lookup each; on a scene of distinct meshes they simply always
-        // miss and cost one pointer compare. Keying on en.mesh is exact: the
-        // BLAS resolve dispatches on en.mesh's type and looks up by en.mesh (or
-        // its geometry), and the two id helpers key purely on en.mesh->id. The
-        // caches they read are not mutated inside this loop. Deliberately LOCAL
-        // — a BlasRecord* cached on MeshEntry would dangle after a BLAS evict,
-        // since entries persist across frames via the snapshot fast path.
+        // to one derivation. Keying on en.mesh is exact: the BLAS resolve
+        // dispatches on en.mesh's type and looks up by en.mesh (or its
+        // geometry), and the two id helpers key purely on en.mesh->id. The
+        // caches they read are not mutated inside this loop. A scene of
+        // distinct meshes misses at every mesh, and there the mesh's facts
+        // come from its span (EntrySpan::drawFacts): kept from an earlier build
+        // while the entry's fingerprint and drawFactsEpoch_ say nothing they
+        // were derived from has changed, else derived (drawFactsOf) and, by the
+        // primary's build, kept. Not on MeshEntry: a record they name is only
+        // evicted with its geometry (a structural rebuild, a slot edit's prune
+        // of a dead one, which the fingerprint's geometry id shows) or swapped
+        // by vertex interop, which moves the epoch; the check reads no record.
         // The id pair is filled LAZILY, below the skip-continues: stableIdForObject
         // MUTATES (try_emplace hands out the next auto id), so hoisting it above
         // the BLAS check would assign ids to entries that never previously got
-        // one and shift every later object's stable id.
+        // one and shift every later object's stable id. Kept facts keep the
+        // pair the primary's build met.
         const Object3D*   memoMesh     = nullptr;
         const BlasRecord* memoRec      = nullptr;
         bool              memoIdsValid = false;
         uint16_t          memoClassId  = 0;
         uint32_t          memoStableId = 0;
-        // Material-derived per-mesh memos (one virtual material() call +
-        // flag/offset derivation per RUN of instances, not per instance).
-        std::shared_ptr<Material> memoMatSp;
+        DrawFacts*        memoKept     = nullptr;// the run's kept facts, current
+        size_t            factsSpan    = 0;      // the span cursor (spans tile the entries in order)
+        const bool        factsOn      = !versionsDisabled();
+        static const bool factsCheck   = vulkan::env::flag("THREEPP_VK_DRAW_FACTS_CHECK");
+        // Material-derived per-mesh memos.
         uint32_t          memoMatFlags = 0u;// double-sided / tex-anim bits
         bool              memoVtxColor = false;
         float             memoPolyOff  = 0.f;
@@ -737,69 +827,63 @@ namespace threepp {
             if (en.sensorOnly && !(sensorOnlySurfaces_ && vc.secondary && vc.sensorSurfaces)) continue;
             if (en.mesh != memoMesh) {
                 memoMesh     = en.mesh;
-                // The geometry once: the record's key, the bounds and the draw
-                // range below all read it (each fetch is a virtual call and a
-                // shared_ptr copy).
-                const auto memoGeom = en.mesh->geometry();
-                memoRec      = resolveBlasForEntry(en, memoGeom.get());
                 memoIdsValid = false;
-                // One virtual material() call per run (it is an out-of-line
-                // override returning shared_ptr by value, so the compiler
-                // cannot CSE repeated calls). Held by shared_ptr so the raw
-                // pointer cannot dangle on a temporary.
-                memoMatSp = en.mesh->material();
-                const Material* sm = memoMatSp.get();
-                memoMatFlags = 0u;
-                // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
-                // cutout foliage the jittered coverage flips a pixel's normal
-                // SIGN frame to frame. The GI temporal reproject + SVGF normal
-                // edge-stop must treat ±N as the SAME surface there (flag
-                // consumed in deferred_shade.comp / deferred_gi_filter.comp) or
-                // the GI history cold-starts every frame — measured as 8× the
-                // frame-to-frame flicker on a procedural tree canopy.
-                if (sm && sm->side == Side::Double) memoMatFlags |= kInstFlagDoubleSided;
-                // TEXTURE-ANIMATED (scrolling UVs, video/live textures): the
-                // pattern moves with NO geometric motion vectors, so the TAA
-                // resolve must hold a short history (α floor) instead of
-                // smearing it. TAA-only — the GI history accumulates
-                // DEMODULATED irradiance, which a texture animation doesn't
-                // change, so bit 6 deliberately does NOT shorten the GI cap.
-                if (sm && sm->textureAnimatedHint) memoMatFlags |= kInstFlagTexAnim;
-                memoVtxColor = sm && sm->vertexColors;
-                // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
-                // a +clip-z bias pushes the surface toward NEAR so it renders on
-                // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE
-                // polygonOffsetUnits for "on top", so flip the sign; units==0
-                // (bool only) → a small default that clears z-fight without
-                // floating. (The slope-scaled `factor` term isn't applied — flat
-                // decals don't need it; bias is uniform in NDC.)
-                memoPolyOff = 0.f;
-                if (sm && sm->polygonOffset) {
-                    const float uf = sm->polygonOffsetUnits + sm->polygonOffsetFactor;
-                    memoPolyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
-                }
-                memoLodStatic = memoRec && memoRec->lodLevels.empty();
-                if (memoRec) memoLodSel0 = selectLodGeom(*memoRec, 0);
-                memoBoundsValid = false;
-                memoDrawStart = 0u;
-                memoDrawCount = 0xFFFFFFFFu;
-                // The mesh's material decides both (one material table record
-                // for all its entries).
-                memoWantCull = (i < lastVisibleCullMode_.size()) ? lastVisibleCullMode_[i] : VK_CULL_MODE_BACK_BIT;
-                memoIsDecal  = (i < geomDescsCached_.size()) && (entryMat(i).alphaCutoff == -2.0f);
-                if (const auto& geom = memoGeom) {
-                    Box3 box;// the record's box: a displacementMap's moved positions
-                    if (boundsOf(*geom, box)) {
-                        const Vector3 c = box.getCenter();
-                        const Vector3 h = box.getSize() * 0.5f;
-                        memoCenter[0] = c.x; memoCenter[1] = c.y; memoCenter[2] = c.z;
-                        memoHalf[0]   = h.x; memoHalf[1]   = h.y; memoHalf[2]   = h.z;
-                        memoBoundsValid = true;
+                memoKept     = nullptr;
+                // Its span's kept facts, when this mesh can keep any: not what
+                // the build reads per frame by design (a deformer's record and
+                // a displacement-mapped box move under it, a field draws its
+                // proxy, interop records belong to their producer).
+                DrawFacts* slot = nullptr;
+                const MeshFingerprint* fp = nullptr;
+                if (factsOn && !en.isParticleField && !en.isSkinned && !en.isDisplaced && !en.isGrass &&
+                    !en.isTet && !en.isMorphed && !en.isVertexInterop && !en.isDisplacementMapped &&
+                    i < prevSceneFingerprint.size()) {
+                    while (factsSpan + 1u < entrySpans_.size() && entrySpans_[factsSpan + 1u].first <= i) ++factsSpan;
+                    if (factsSpan < entrySpans_.size()) {
+                        EntrySpan& sp = entrySpans_[factsSpan];
+                        if (sp.mesh == en.mesh && sp.first <= i && i < size_t(sp.first) + sp.count) {
+                            slot = &sp.drawFacts;
+                            fp   = &prevSceneFingerprint[i];
+                        }
                     }
-                    const auto& dr = geom->drawRange;
-                    memoDrawStart = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
-                    memoDrawCount = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
                 }
+                DrawFacts derived;
+                const DrawFacts* f = nullptr;
+                if (slot && slot->epoch == drawFactsEpoch_ && slot->meshId == fp->meshId &&
+                    slot->geomId == fp->geomId && slot->matId == fp->matId && slot->matVersion == fp->matVersion &&
+                    slot->geomVersion == fp->geomVersion) {
+                    if (factsCheck) checkDrawFacts(*slot, en, i);
+                    f = memoKept = slot;
+                } else {
+                    derived = drawFactsOf(en, i);
+                    f = &derived;
+                    // Kept by the primary's build alone (the views preparing
+                    // after it only read), and never without a record: one may
+                    // be built for the mesh later.
+                    if (slot && !vc.secondary && derived.rec) {
+                        derived.epoch       = drawFactsEpoch_;
+                        derived.meshId      = fp->meshId;
+                        derived.geomId      = fp->geomId;
+                        derived.matId       = fp->matId;
+                        derived.matVersion  = fp->matVersion;
+                        derived.geomVersion = fp->geomVersion;
+                        *slot = derived;
+                        memoKept = slot;
+                    }
+                }
+                memoRec         = f->rec;
+                memoMatFlags    = f->matFlags;
+                memoVtxColor    = f->vtxColor;
+                memoPolyOff     = f->polyOff;
+                memoBoundsValid = f->boundsValid;
+                std::copy(f->center, f->center + 3, memoCenter);
+                std::copy(f->half, f->half + 3, memoHalf);
+                memoDrawStart   = f->drawStart;
+                memoDrawCount   = f->drawCount;
+                memoWantCull    = f->wantCull;
+                memoIsDecal     = f->isDecal;
+                memoLodStatic   = memoRec && memoRec->lodLevels.empty();
+                if (memoRec) memoLodSel0 = selectLodGeom(*memoRec, 0);
             }
             const BlasRecord* rec = memoRec;
             if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
@@ -898,8 +982,20 @@ namespace threepp {
             // every flag bit-test (they mask the low byte) and carried
             // through the MSAA resolve. Read back via outIds.z >> 8.
             if (!memoIdsValid) {
-                memoClassId  = classIdForObject(*en.mesh);
-                memoStableId = stableIdForObject(*en.mesh);
+                if (memoKept && memoKept->idsKnown) {
+                    memoClassId  = memoKept->classId;
+                    memoStableId = memoKept->stableId;
+                } else {
+                    memoClassId  = classIdForObject(*en.mesh);
+                    memoStableId = stableIdForObject(*en.mesh);
+                    // As the primary's build met them (it hands the auto id
+                    // out); the views preparing after it only read.
+                    if (memoKept && !vc.secondary) {
+                        memoKept->classId  = memoClassId;
+                        memoKept->stableId = memoStableId;
+                        memoKept->idsKnown = true;
+                    }
+                }
                 memoIdsValid = true;
             }
             flags |= (static_cast<uint32_t>(memoClassId) & 0xFFu) << 8;

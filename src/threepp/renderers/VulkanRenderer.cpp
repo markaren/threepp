@@ -1931,11 +1931,13 @@ namespace threepp {
         // stableId feeds DrawInfoGpu — invalidate the indirect-build skip
         // caches or an otherwise-static scene keeps serving the old id.
         ++core()->drawInputsVersion_;
+        ++core()->drawFactsEpoch_;// and the ids the draw facts keep
     }
 
     void VulkanRenderer::setObjectClassId(const Object3D& obj, uint32_t classId) {
         core()->classIds_[obj.id] = static_cast<uint16_t>(classId > 255u ? 255u : classId);
         ++core()->drawInputsVersion_;// class id rides DrawInfoGpu::flags bits 8..15
+        ++core()->drawFactsEpoch_;
     }
 
     void VulkanRenderer::setEmissiveCastsLight(const Object3D& obj, bool castsLight) {

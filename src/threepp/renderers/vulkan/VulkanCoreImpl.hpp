@@ -3077,6 +3077,12 @@ namespace threepp {
         // sidesteps the gl_DrawIDARB-resets-per-call issue without
         // needing dynamic-offset descriptors or per-call push constants.
         void buildIndirectDrawData(uint32_t frame);
+        // The draw facts of entry i's mesh as the build derives them (no
+        // epoch or fingerprint stamps; EntrySpan::drawFacts keeps them).
+        vulkan::impl::DrawFacts drawFactsOf(const MeshEntry& en, size_t i);
+        // THREEPP_VK_DRAW_FACTS_CHECK: kept facts against freshly derived
+        // ones, at every use; a difference ends the process.
+        void checkDrawFacts(const vulkan::impl::DrawFacts& kept, const MeshEntry& en, size_t i);
 
         // Begin the raster G-buffer render pass and ship the prebuilt
         // indirect-draw groups via 1-4 vkCmdDrawIndirect calls (one per

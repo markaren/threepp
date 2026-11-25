@@ -278,6 +278,12 @@ namespace threepp::vulkan::impl {
             // scale, the bias and the map's pixel version (a re-displacement).
             float dispScale = 0.f, dispBias = 0.f;
             unsigned int dispMapVersion = 0;
+            // What the raster draw records take from the material and its
+            // record does not carry (EntrySpan::drawFacts keeps them per
+            // mesh): the texture-animated hint, vertex colours and polygon
+            // offset as bits, and the offset's units and factor.
+            uint32_t drawBits = 0u;
+            float polyUnits = 0.f, polyFactor = 0.f;
         };
         // The watched materials are the material table's live records: one
         // per material an entry draws (hidden ones included), a mesh shown

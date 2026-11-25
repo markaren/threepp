@@ -2156,6 +2156,7 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                 // an otherwise-static scene it would keep serving the raster
                 // vertex-pull the freed addresses verbatim.
                 ++drawInputsVersion_;
+                ++drawFactsEpoch_;// nor the draw facts that kept the old record
             }
             // Bound only now: the packed branch above may have replaced the record.
             auto& rec = *recPtr;
@@ -2356,6 +2357,7 @@ void VulkanRenderer::Impl::setStableCorrespondence(const Mesh& mesh, bool stable
                 markGeomDescsDirty(static_cast<uint32_t>(i));
             }
             ++drawInputsVersion_;
+            ++drawFactsEpoch_;
         }
 
 VkDeviceSize VulkanRenderer::Impl::updatableBlasSize(const BlasRecord& rec, const BufferGeometry& geom) const {

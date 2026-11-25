@@ -271,6 +271,38 @@ namespace threepp::vulkan::impl {
         int32_t parentIdx = -1;
     };
 
+    struct BlasRecord;
+
+    // What the draw build (buildIndirectDrawData) derives about a mesh before
+    // its first record: the BLAS record whose buffers it draws, the bits and
+    // the depth bias its material gives, its object-space box, its draw
+    // range, cull mode and blend-decal sense, and its two ids. A plain mesh
+    // is a run of its own, so on a frame where anything moves every mesh paid
+    // that derivation: two virtual calls with shared_ptr copies, the
+    // BLAS-cache and stable-id lookups and its material's fields, some 80 ns
+    // a mesh. Kept on the mesh's span from one build to the next, written by
+    // the primary view's build only (it runs before the other views prepare,
+    // which only read). Good while the entry's fingerprint shows the mesh,
+    // geometry and material it was derived from, at the versions it read,
+    // and drawFactsEpoch_ has not moved (a structural rebuild, a drawRange
+    // edit, a record swapped under a geometry, an id override). Never kept
+    // for what the build reads per frame by design: deformers, particle
+    // fields, vertex interop, displacement-mapped geometry.
+    struct DrawFacts {
+        uint64_t epoch = 0;// drawFactsEpoch_ when derived; 0: none
+        unsigned int meshId = 0, geomId = 0, matId = 0, matVersion = 0, geomVersion = 0;// the fingerprint's then
+        const BlasRecord* rec = nullptr;
+        uint32_t matFlags = 0u;// double-sided / texture-animated bits
+        float polyOff = 0.f;
+        uint32_t drawStart = 0u, drawCount = 0xFFFFFFFFu;
+        float center[3]{}, half[3]{};
+        VkCullModeFlags wantCull = VK_CULL_MODE_BACK_BIT;
+        uint32_t stableId = 0u;
+        uint16_t classId = 0u;
+        bool vtxColor = false, isDecal = false, boundsValid = false;
+        bool idsKnown = false;// stableId and classId as the primary's build met them
+    };
+
     // One contiguous run of entries sharing a single source Mesh: an
     // InstancedMesh expansion (count() entries) or a single-entry span for a
     // plain mesh. Rebuilt at every FULL expansion, in entry order; the
@@ -428,6 +460,9 @@ namespace threepp::vulkan::impl {
         static constexpr uint32_t kProbeChunk = 512;
         std::vector<std::array<float, 6>> probeChunks;
         uint32_t probeChunksValid = 0;
+        // The draw build's facts about the mesh (DrawFacts above). A span
+        // made new starts without; a slot edit moves them with the span.
+        DrawFacts drawFacts;
     };
 
     struct EntryKey {

@@ -174,6 +174,7 @@ namespace threepp::vulkan::impl {
         // every full expansion; on lean frames the per-frame loops consult the
         // spans first and touch individual entries only for spans that changed.
         using EntrySpan = vulkan::impl::EntrySpan;
+        using DrawFacts = vulkan::impl::DrawFacts;
         std::vector<EntrySpan> entrySpans_;
         // Bumped wherever entrySpans_ is laid out anew (the rebuild, a slot
         // edit): VulkanRenderer::admitted's mesh-id index is rebuilt from it
@@ -207,6 +208,11 @@ namespace threepp::vulkan::impl {
         // ViewContext::indirectBuiltSig to skip buildIndirectDrawData when a
         // FIF slot's device buffers already hold the exact same content.
         uint32_t drawInputsVersion_ = 1;
+        // The kept draw facts' epoch (EntrySpan::drawFacts): moved by what can
+        // change a mesh's facts without its fingerprint showing it, which is a
+        // structural rebuild, a drawRange edit, a record swapped under its
+        // geometry and an id override. Never 0 (0 marks no facts).
+        uint64_t drawFactsEpoch_ = 1;
         // Count of entries whose moved-sticky countdown is nonzero — lets the
         // per-frame stamp skip its O(entries) walk on fully settled scenes.
         uint32_t stickyActiveCount_ = 0;
