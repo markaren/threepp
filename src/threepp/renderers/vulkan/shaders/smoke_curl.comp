@@ -2,15 +2,16 @@
 #extension GL_GOOGLE_include_directive : enable
 #include "smoke_common.glsl"
 
-// Pass 2: the curl of the velocity, into aux (xyz = curl, w = |curl|).
+// Pass 3: the curl of the velocity at the cell centres, into aux (xyz = curl, w = |curl|), from the cells' mean
+// velocities (smoke_common.glsl: cellVel).
 
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
     if (!inGrid(c)) return;
-    const vec3 h = 0.5 * pc.invCell.xyz;
-    const vec3 xp = velAt(c + ivec3(1, 0, 0)), xm = velAt(c - ivec3(1, 0, 0));
-    const vec3 yp = velAt(c + ivec3(0, 1, 0)), ym = velAt(c - ivec3(0, 1, 0));
-    const vec3 zp = velAt(c + ivec3(0, 0, 1)), zm = velAt(c - ivec3(0, 0, 1));
+    const vec3 h  = 0.5 * pc.invCell.xyz;
+    const vec3 xp = cellVel(c + ivec3(1, 0, 0)), xm = cellVel(c - ivec3(1, 0, 0));
+    const vec3 yp = cellVel(c + ivec3(0, 1, 0)), ym = cellVel(c - ivec3(0, 1, 0));
+    const vec3 zp = cellVel(c + ivec3(0, 0, 1)), zm = cellVel(c - ivec3(0, 0, 1));
     const vec3 curl = vec3((yp.z - ym.z) * h.y - (zp.y - zm.y) * h.z,
                            (zp.x - zm.x) * h.z - (xp.z - xm.z) * h.x,
                            (xp.y - xm.y) * h.x - (yp.x - ym.x) * h.y);

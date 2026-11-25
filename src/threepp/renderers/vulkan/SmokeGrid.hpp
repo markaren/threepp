@@ -1,7 +1,8 @@
 // SmokeGrid — the device-side Eulerian smoke solver behind ParticleField::GridSmoke.
 //
-// One SmokeGrid is one field's solver state: velocity, density+temperature and
-// pressure on a res^3 grid (each a ping-pong pair), one scratch volume, the
+// One SmokeGrid is one field's solver state: density+temperature and pressure
+// on a res^3 grid, the velocity on the faces between those cells ((res+1)^3,
+// see shaders/smoke_common.glsl), each a ping-pong pair, one scratch volume, the
 // per-frame parameter block, and eight descriptor sets — one per parity of the
 // three pairs, written once at creation and never again, so the solver costs no
 // descriptor traffic. SmokePipelines is the part that does not depend on a
@@ -95,7 +96,6 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
         VkPipelineLayout      layout      = VK_NULL_HANDLE;// set 0
         VkPipelineLayout      writeLayout = VK_NULL_HANDLE;// set 0 + the field's density set (set 1)
-        VkSampler             samplerEdge   = VK_NULL_HANDLE;
         VkSampler             samplerBorder = VK_NULL_HANDLE;
         VkPipeline            forces = VK_NULL_HANDLE, curl = VK_NULL_HANDLE, confine = VK_NULL_HANDLE,
                    advect = VK_NULL_HANDLE, advectFix = VK_NULL_HANDLE, diverge = VK_NULL_HANDLE,
@@ -125,6 +125,21 @@ namespace threepp::vulkan {
 
         // Run the owed steps and write the density volume (set 1 of the write pass).
         void record(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan, VkDescriptorSet densitySet);
+
+        // TEST/AUDIT: the images holding the state the last recorded step left (the "in" half of each pair).
+        // Valid to copy once the device has drained. See VulkanRenderer::readGridSmoke.
+        struct Images {
+            VkImage velocity = VK_NULL_HANDLE;// rgba16f, (res+1)^3, xyz m/s on the min faces, relative to the wind
+            VkImage scalars  = VK_NULL_HANDLE;// rg16f, density, temperature
+            VkImage pressure = VK_NULL_HANDLE;// r32f
+            VkImage scratch  = VK_NULL_HANDLE;// rgba16f, .x = the last step's divergence before its projection
+            VkImage solid    = VK_NULL_HANDLE;// rgba16f, xyz the solid's velocity, w covered
+        };
+        [[nodiscard]] Images latest() const {
+            return {vel_[v_].image, sca_[s_].image, p_[p_in_].image, aux_.image, solid_.image};
+        }
+        // False until the first frame has cleared the images.
+        [[nodiscard]] bool ready() const { return ready_; }
 
     private:
         SmokeGrid(VulkanContext& ctx, std::uint32_t res) : ctx_(ctx), res_(res) {}

@@ -2,33 +2,50 @@
 #extension GL_GOOGLE_include_directive : enable
 #include "smoke_common.glsl"
 
-// Pass 3: vorticity confinement (Fedkiw et al.). A semi-Lagrangian step smooths
+// Pass 4: vorticity confinement (Fedkiw et al.). A semi-Lagrangian step smooths
 // the small whorls away; this pushes the air round the ridges of |curl| so they
-// spin back up. Strength is GridSmoke::vorticity in 1/s.
+// spin back up. Strength is GridSmoke::vorticity in 1/s. The force is found at
+// the cell centres, where the curl is, and a face takes the mean of its two cells.
 
 float mag(ivec3 c) { return texelFetch(uAux, clamp(c, ivec3(0), pc.res.xyz - 1), 0).w; }
 
+// The confinement acceleration at a cell centre (m/s^2); none outside the box or in a solid.
+vec3 confinement(ivec3 c) {
+    vec3 sv;
+    if (!inGrid(c) || solidCell(c, sv)) return vec3(0.0);
+    const vec4 om = texelFetch(uAux, c, 0);
+    if (om.w <= 1e-4) return vec3(0.0);
+    const vec3 h = 0.5 * pc.invCell.xyz;
+    const vec3 g = vec3((mag(c + ivec3(1, 0, 0)) - mag(c - ivec3(1, 0, 0))) * h.x,
+                        (mag(c + ivec3(0, 1, 0)) - mag(c - ivec3(0, 1, 0))) * h.y,
+                        (mag(c + ivec3(0, 0, 1)) - mag(c - ivec3(0, 0, 1))) * h.z);
+    const float gl = length(g);
+    if (gl <= 1e-6) return vec3(0.0);
+    // The confinement length: one cell, the cube root of its volume (cells need not be cubes).
+    const float cell = 1.0 / pow(pc.invCell.x * pc.invCell.y * pc.invCell.z, 1.0 / 3.0);
+    return pc.phys1.y * cell * cross(g / gl, om.xyz);
+}
+
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
-    if (!inGrid(c)) return;
-    vec3 v = texelFetch(uVel, c, 0).xyz;
-    const vec4 om = texelFetch(uAux, c, 0);
-    if (pc.phys1.y > 0.0 && om.w > 1e-4) {
-        const vec3 h = 0.5 * pc.invCell.xyz;
-        vec3 g = vec3((mag(c + ivec3(1, 0, 0)) - mag(c - ivec3(1, 0, 0))) * h.x,
-                      (mag(c + ivec3(0, 1, 0)) - mag(c - ivec3(0, 1, 0))) * h.y,
-                      (mag(c + ivec3(0, 0, 1)) - mag(c - ivec3(0, 0, 1))) * h.z);
-        const float gl = length(g);
-        if (gl > 1e-6) {
-            const vec3  n = g / gl;
-            // The confinement length: one cell, the cube root of its volume (cells need not be cubes).
-            const float cell = 1.0 / pow(pc.invCell.x * pc.invCell.y * pc.invCell.z, 1.0 / 3.0);
-            v += pc.invCell.w * pc.phys1.y * cell * cross(n, om.xyz);
+    if (!inFaces(c)) return;
+    const vec4 old = texelFetch(uVel, c, 0);
+    vec3       v   = vec3(0.0);
+    const bool on  = pc.phys1.y > 0.0;
+    const vec3 fc  = on ? confinement(c) : vec3(0.0);
+    for (int a = 0; a < 3; ++a) {
+        if (!faceExists(a, c)) continue;
+        float sv;
+        if (solidFace(a, c, sv)) {
+            v[a] = sv;
+            continue;
         }
+        v[a] = old[a];
+        if (!on) continue;
+        // The mean of the two cells the face separates (a face on the box's side has one).
+        const ivec3 b = c - unitAxis(a);
+        const float n = (inGrid(b) ? 1.0 : 0.0) + (inGrid(c) ? 1.0 : 0.0);
+        v[a] += pc.invCell.w * (confinement(b)[a] + fc[a]) / max(n, 1.0);
     }
-    // This is the velocity advection moves the smoke with, so it must not point into a solid either: the sources,
-    // buoyancy and the confinement above can all push air at a wall after the last projection.
-    vec3 sv;
-    if (!solidCell(c, sv)) v = wallClamp(c, v);
     imageStore(oVel, c, vec4(v, 0.0));
 }

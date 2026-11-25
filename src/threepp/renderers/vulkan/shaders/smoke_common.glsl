@@ -5,7 +5,7 @@
 // (velocity, scalar, pressure) ping-pong parity serves every pass and the host
 // never rewrites a set. A pass names only the bindings it reads.
 //
-//   uVel  / oVel    velocity, rgba16f, m/s                  (xyz)
+//   uVel  / oVel    velocity, rgba16f, m/s, ON THE FACES (below), (res+1)^3
 //   uSca  / oSca    scalars,  rg16f:  x = density, y = temperature
 //   uP    / oP      pressure, r32f
 //   aux / uAux      scratch,  rgba16f: vorticity (curl, |curl|), the
@@ -15,7 +15,22 @@
 //
 // The grid is `res` cells per axis over the world box [box, box + res / invCell];
 // cell i has its centre at box + (i + 0.5) / invCell. Cells are NOT assumed to
-// be cubes: every derivative takes the per-axis spacing from invCell.
+// be cubes: every derivative takes the per-axis spacing from invCell. "Cell
+// coordinates" put cell i's centre at i + 0.5.
+//
+// THE VELOCITY IS STAGGERED (a MAC grid): each component lives on the faces it
+// crosses. Texel (i, j, k) of the velocity image holds .x = u on the x face at
+// the min side of cell (i, j, k), at cell coordinates (i, j + 0.5, k + 0.5); .y =
+// v on its min y face; .z = w on its min z face. The texels at i, j or k = res
+// hold the faces of the box's max sides; a component whose face does not exist
+// (u at j = res, say) is held at 0. With the velocity there, the divergence a
+// cell sees and the pressure gradient a face feels are the same differences, so
+// the projection leaves no divergence the pressure solve did not; and a wall is
+// a face the air cannot cross, not a cell to clamp beside.
+//
+// The velocity is stored RELATIVE TO THE WIND. Outside the box the air moves
+// with the wind, which the border sampler reads as 0; inside, the wind is air
+// like any other, so walls and colliders turn it.
 
 layout(local_size_x = 8, local_size_y = 4, local_size_z = 4) in;
 
@@ -66,6 +81,22 @@ layout(push_constant) uniform Pc {
 
 bool inGrid(ivec3 c) { return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, pc.res.xyz)); }
 
+// A texel of the velocity image (the faces): 0..res on every axis.
+bool inFaces(ivec3 c) { return all(greaterThanEqual(c, ivec3(0))) && all(lessThanEqual(c, pc.res.xyz)); }
+
+// Does texel c hold a face on `axis` (0..res along it, 0..res-1 across it)?
+bool faceExists(int axis, ivec3 c) {
+    ivec3 lim = pc.res.xyz;
+    lim[axis] += 1;
+    return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, lim));
+}
+
+ivec3 unitAxis(int axis) {
+    ivec3 e = ivec3(0);
+    e[axis] = 1;
+    return e;
+}
+
 vec3 worldOfCell(ivec3 c) { return pc.box.xyz + (vec3(c) + 0.5) / pc.invCell.xyz; }
 
 // The cell-space position of a world point, in the units a sampler3D wants.
@@ -110,11 +141,51 @@ bool solidCell(ivec3 c, out vec3 vel) {
     return m.w > 0.5;
 }
 
-// Velocity of a cell, as a neighbour sees it: a solid's own velocity, the edge value beyond an open face.
-vec3 velAt(ivec3 c) {
+// Is face `axis` of texel c a solid's (a solid cell on either side of it, the solid floor included)? `vel` is then
+// that solid's velocity along the axis, relative to the wind: the air there moves with the solid, no faster and no
+// slower, so no air goes into it. A face between a solid and the open air beyond the box is the solid's too.
+bool solidFace(int axis, ivec3 c, out float vel) {
+    vec3       sa, sb;
+    const bool a = solidCell(c - unitAxis(axis), sa);
+    const bool b = solidCell(c, sb);
+    vel          = 0.0;
+    if (!a && !b) return false;
+    const vec3 s = (a && b) ? 0.5 * (sa + sb) : (a ? sa : sb);
+    vel          = s[axis] - pc.wind[axis];
+    return true;
+}
+
+// A face's velocity (relative to the wind), a solid's face moving with its solid. `c` must hold the face.
+float faceVel(int axis, ivec3 c) {
+    float sv;
+    if (solidFace(axis, c, sv)) return sv;
+    return texelFetch(uVel, c, 0)[axis];
+}
+
+// The face's centre, in world space.
+vec3 worldOfFace(int axis, ivec3 c) {
+    vec3 p = vec3(c) + 0.5;
+    p[axis] -= 0.5;
+    return pc.box.xyz + p / pc.invCell.xyz;
+}
+
+// The air's velocity (relative to the wind) at a cell centre: the mean of its two faces on each axis. A solid cell
+// moves with its solid; beyond an open face of the box, the edge cell's.
+vec3 cellVel(ivec3 c) {
     vec3 sv;
-    if (solidCell(c, sv)) return sv;
-    return texelFetch(uVel, clamp(c, ivec3(0), pc.res.xyz - 1), 0).xyz;
+    if (solidCell(c, sv)) return sv - pc.wind.xyz;
+    c            = clamp(c, ivec3(0), pc.res.xyz - 1);
+    const vec3 v = texelFetch(uVel, c, 0).xyz;
+    return 0.5 * vec3(v.x + texelFetch(uVel, c + ivec3(1, 0, 0), 0).x,
+                      v.y + texelFetch(uVel, c + ivec3(0, 1, 0), 0).y,
+                      v.z + texelFetch(uVel, c + ivec3(0, 0, 1), 0).z);
+}
+
+// One velocity component (relative to the wind) anywhere, `p` in cell coordinates: trilinear over that component's
+// own faces. Beyond the box the border reads 0: the air there is the wind.
+float sampleFace(int axis, vec3 p) {
+    p[axis] += 0.5;
+    return textureLod(uVel, p / vec3(pc.res.xyz + 1), 0.0)[axis];
 }
 
 // Pressure of a neighbour as the cell at `c0` sees it: a solid wall is a zero-gradient wall (its own
@@ -124,23 +195,6 @@ float pressureAt(ivec3 c, float pCentre) {
     if (solidCell(c, sv)) return pCentre;
     if (!inGrid(c)) return 0.0;
     return texelFetch(uP, c, 0).x;
-}
-
-// No flow into a solid. A zero-gradient pressure alone does not stop it on this collocated grid: it halves the
-// gradient beside a wall and leaves the air's normal motion there, and advection then carries the smoke into the
-// wall and out of its far side. So the component of v toward a solid neighbour is held to that solid's own
-// velocity: free slip, the air may slide along a wall and leave it but never enter it. The solid floor is the
-// same rule (a cell below the grid is solid when the floor is).
-vec3 wallClamp(ivec3 c, vec3 v) {
-    if (head.y + head.w < 0.5 && pc.box.w < 0.5) return v;
-    vec3 sv;
-    if (solidCell(c + ivec3(1, 0, 0), sv)) v.x = min(v.x, sv.x);
-    if (solidCell(c - ivec3(1, 0, 0), sv)) v.x = max(v.x, sv.x);
-    if (solidCell(c + ivec3(0, 1, 0), sv)) v.y = min(v.y, sv.y);
-    if (solidCell(c - ivec3(0, 1, 0), sv)) v.y = max(v.y, sv.y);
-    if (solidCell(c + ivec3(0, 0, 1), sv)) v.z = min(v.z, sv.z);
-    if (solidCell(c - ivec3(0, 0, 1), sv)) v.z = max(v.z, sv.z);
-    return v;
 }
 
 float hash31(vec3 p) {

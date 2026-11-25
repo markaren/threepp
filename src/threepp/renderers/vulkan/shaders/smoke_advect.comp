@@ -2,17 +2,38 @@
 #extension GL_GOOGLE_include_directive : enable
 #include "smoke_common.glsl"
 
-// Pass 4a: semi-Lagrangian advection. Velocity goes straight to oVel; the
-// scalars go to aux.xy as the PREDICTOR of the MacCormack correction that
-// follows (smoke_advect_fix.comp), which is what keeps a plume's edge sharp.
+// Pass 1a: semi-Lagrangian advection. Each velocity face is carried back along
+// the air's motion at that face into oVel; the scalars go to aux.xy as the
+// PREDICTOR of the MacCormack correction that follows (smoke_advect_fix.comp),
+// which is what keeps a plume's edge sharp. All in cell coordinates, the motion
+// being the stored velocity plus the wind.
 
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
-    if (!inGrid(c)) return;
-    const float dt = pc.invCell.w;
-    const vec3  w  = worldOfCell(c);
-    const vec3  v  = texelFetch(uVel, c, 0).xyz + pc.wind.xyz;
-    const vec3  uvw = uvwOfWorld(w - v * dt);
-    imageStore(oVel, c, vec4(textureLod(uVel, uvw, 0.0).xyz, 0.0));
-    imageStore(aux, c, vec4(textureLod(uSca, uvw, 0.0).xy, 0.0, 0.0));
+    if (!inFaces(c)) return;
+    const vec3 step = pc.invCell.w * pc.invCell.xyz;// m/s -> cells per step, per axis
+
+    const vec4 old = texelFetch(uVel, c, 0);
+    vec3       v   = vec3(0.0);
+    for (int a = 0; a < 3; ++a) {
+        if (!faceExists(a, c)) continue;
+        float sv;
+        if (solidFace(a, c, sv)) {
+            v[a] = sv;
+            continue;
+        }
+        vec3 p = vec3(c) + 0.5;
+        p[a] -= 0.5;// the face
+        // Its own component exactly; the other two from the four faces of theirs around it.
+        vec3 u = vec3(sampleFace(0, p), sampleFace(1, p), sampleFace(2, p));
+        u[a]   = old[a];
+        v[a]   = sampleFace(a, p - (u + pc.wind.xyz) * step);
+    }
+    imageStore(oVel, c, vec4(v, 0.0));
+
+    if (inGrid(c)) {
+        const vec3 p = vec3(c) + 0.5;
+        const vec3 d = p - (cellVel(c) + pc.wind.xyz) * step;
+        imageStore(aux, c, vec4(textureLod(uSca, d / vec3(pc.res.xyz), 0.0).xy, 0.0, 0.0));
+    }
 }
