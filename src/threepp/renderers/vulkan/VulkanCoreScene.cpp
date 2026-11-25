@@ -11,6 +11,7 @@
 #include <bit>
 #include <cfloat>
 #include <limits>
+#include <optional>
 #include <typeindex>
 #include <utility>
 #include <unordered_map>
@@ -1148,12 +1149,23 @@ bool VulkanRenderer::Impl::flatSnapshotCheck(Object3D& scene, Camera& camera) {
                 if (routingOf(snap[fm.first]) != fm.bits) return false;
                 const unsigned int v = fm.mat->version();
                 if (v == fm.version) continue;
+                // texSetOf reads nothing but the mesh's material, which is the
+                // same one for every mesh here: one texture-of walk (nine
+                // virtual material() calls and casts) per edited material,
+                // not one per mesh that draws with it.
+                const Material* tsMat = nullptr;
+                MaterialTexSet ts;
                 for (const uint32_t k : fm.nodes) {
                     const SnapNode& sn = snap[k];
                     if (static_cast<size_t>(sn.spanIndex) >= entrySpans_.size()) return false;
                     const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
                     const Mesh& m = *sn.mesh;
-                    if (v != fp0.matVersion && texSetOf(m) != fp0.tex) return false;
+                    if (v == fp0.matVersion) continue;
+                    if (const Material* live = m.material().get(); live != tsMat) {
+                        ts    = texSetOf(m);
+                        tsMat = live;
+                    }
+                    if (ts != fp0.tex) return false;
                 }
                 fm.version = v;
             }
@@ -2719,6 +2731,15 @@ void VulkanRenderer::Impl::diffLeanEntries(SceneBuildFrame& sb) {
                 // instance per frame). Matrix change comes straight from the
                 // span refresh above (fp.matrix was updated there in the same
                 // pass). Per-entry writes remain only for spans that changed.
+                // An edited material's texture set and pbr key, once per
+                // material: both read only the mesh's material, and a shared
+                // material edited is as many spans as meshes draw with it,
+                // seldom next to each other. Filled on edit frames only.
+                struct EditedMaterial {
+                    MaterialTexSet       tex;
+                    std::array<float, 15> pbr;
+                };
+                std::optional<std::unordered_map<const Material*, EditedMaterial>> edited;
                 for (auto& sp : entrySpans_) {
                     if (!leanOk) break;
                     MeshFingerprint& fp0 = prevSceneFingerprint[sp.first];
@@ -2727,12 +2748,15 @@ void VulkanRenderer::Impl::diffLeanEntries(SceneBuildFrame& sb) {
                     const unsigned int matVer = fp0.matTyped ? fp0.matTyped->version() : 0u;
                     if (matVer != fp0.matVersion) {
                         Mesh* m = sp.mesh;
-                        if (texSetOf(*m) != fp0.tex) {
+                        if (!edited) edited.emplace();
+                        auto [it, fresh] = edited->try_emplace(m->material().get());
+                        if (fresh) it->second = {texSetOf(*m), pbrKeyOf(materialFromMesh(*m))};
+                        if (it->second.tex != fp0.tex) {
                             leanOk = false;// texture swap = STRUCTURAL — full path decides
                             break;
                         }
                         matChanged = true;
-                        const std::array<float, 15> pbr = pbrKeyOf(materialFromMesh(*m));
+                        const std::array<float, 15>& pbr = it->second.pbr;
                         for (uint32_t j = 0; j < sp.count; ++j) {
                             auto& fp = prevSceneFingerprint[sp.first + j];
                             fp.matVersion = matVer;
@@ -4001,12 +4025,23 @@ void VulkanRenderer::Impl::patchMaterialDescs(SceneBuildFrame& sb) {
                 // valid for every entry of the same Material.
                 const Material* memoMat = nullptr;
                 MaterialDesc memoMd{};
+                // ...and every desc built this pass, by material: the meshes
+                // of an edited shared material are seldom next to each other
+                // in the entry list, and each miss of the one-entry memo
+                // rebuilt the same desc (~25 casts and the texture walk).
+                std::optional<std::unordered_map<const Material*, MaterialDesc>> builtDescs;
                 for (size_t i = 0; i < entries.size(); ++i) {
                     const MeshEntry& en = entries[i];
                     if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc
                     if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep its record
                     Mesh* m = en.mesh;
                     const Material* mat = m->material().get();
+                    if (patchMatDescs && mat != memoMat && builtDescs) {
+                        if (const auto it = builtDescs->find(mat); it != builtDescs->end()) {
+                            memoMat = mat;
+                            memoMd  = it->second;
+                        }
+                    }
                     if (!(patchMatDescs && memoMat && mat == memoMat)) {
                         MaterialDesc md = buildMaterialDesc(*m);
                         if (patchMatDescs) {
@@ -4019,6 +4054,10 @@ void VulkanRenderer::Impl::patchMaterialDescs(SceneBuildFrame& sb) {
                         }
                         memoMat = mat;
                         memoMd  = md;
+                        if (patchMatDescs) {
+                            if (!builtDescs) builtDescs.emplace();
+                            builtDescs->insert_or_assign(mat, md);
+                        }
                     }
                     // Compared against the record being replaced; on the
                     // full fallback that is record 0, so assume a change.
