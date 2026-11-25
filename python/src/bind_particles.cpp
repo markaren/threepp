@@ -250,6 +250,109 @@ namespace threepp_py {
                 .def_readwrite("temp_falloff", &ParticleField::DensityRepr::tempFalloff)
                 .def_readwrite("enabled", &ParticleField::DensityRepr::enabled);
 
+        // ── GridSmoke (a smoke solved on the device over the DensityRepr's box) ─
+        using GS = ParticleField::GridSmoke;
+        auto gsmoke = py::class_<GS>(cls, "GridSmoke",
+                                     "An Eulerian smoke solved on the device over the field's DensityRepr box: the "
+                                     "velocity on the cells' faces, MacCormack advection, vorticity confinement and a "
+                                     "Jacobi pressure projection. Make one with ParticleField.create_grid_smoke and set "
+                                     "`time` (the application's clock, seconds) every frame; the renderer runs the whole "
+                                     "steps owed since the last frame. Sources, colliders and boxes are in WORLD space. "
+                                     "Vulkan only.");
+
+        py::class_<GS::Source>(gsmoke, "Source")
+                .def(py::init<>())
+                .def_readwrite("position", &GS::Source::position, "World position (m).")
+                .def_readwrite("radius", &GS::Source::radius, "m")
+                .def_readwrite("density", &GS::Source::density, "Density added per second at the centre.")
+                .def_readwrite("temperature", &GS::Source::temperature,
+                               "Temperature added per second at the centre (buoyancy lifts it).")
+                .def_readwrite("velocity", &GS::Source::velocity, "m/s the air at the source is pulled toward.")
+                .def_readwrite("velocity_blend", &GS::Source::velocityBlend, "1/s: how hard it is pulled.")
+                .def_readwrite("noise", &GS::Source::noise, "0..1 raggedness of the emission.");
+
+        py::class_<GS::Collider>(gsmoke, "Collider",
+                                 "A capsule from a to b (a == b is a sphere). Set velocity to the body's own motion, "
+                                 "or it stands still for the smoke.")
+                .def(py::init<>())
+                .def_readwrite("a", &GS::Collider::a)
+                .def_readwrite("b", &GS::Collider::b)
+                .def_readwrite("radius", &GS::Collider::radius, "m")
+                .def_readwrite("velocity", &GS::Collider::velocity, "m/s of its surface.");
+
+        py::class_<GS::Box>(gsmoke, "Box", "An axis-aligned block: a wall, a floor slab, a crate.")
+                .def(py::init<>())
+                .def_readwrite("min", &GS::Box::min)
+                .def_readwrite("max", &GS::Box::max)
+                .def_readwrite("velocity", &GS::Box::velocity, "m/s of its surface.");
+
+        gsmoke
+                .def_readwrite("enabled", &GS::enabled)
+                .def_readwrite("time", &GS::time, "The solver's clock (s). Set it every frame.")
+                .def_readwrite("step_dt", &GS::stepDt, "Fixed solver step (s).")
+                .def_readwrite("max_steps_per_frame", &GS::maxStepsPerFrame,
+                               "Beyond this many steps owed in one frame the plume runs slow instead of stalling.")
+                .def_readwrite("pressure_iterations", &GS::pressureIterations)
+                .def_readwrite("buoyancy", &GS::buoyancy, "m/s^2 per unit temperature.")
+                .def_readwrite("weight", &GS::weight, "m/s^2 per unit density (sinks).")
+                .def_readwrite("dissipation", &GS::dissipation, "1/s, density decay.")
+                .def_readwrite("cooling", &GS::cooling, "1/s, temperature decay.")
+                .def_readwrite("vorticity", &GS::vorticity, "1/s, confinement strength (0 = off).")
+                .def_readwrite("damping", &GS::damping, "1/s, drag pulling the air toward the wind.")
+                .def_readwrite("max_speed", &GS::maxSpeed, "m/s cap on each component of the air's velocity.")
+                .def_readwrite("sigma", &GS::sigma, "Extinction (1/m) of density 1.")
+                .def_readwrite("boundary_fade", &GS::boundaryFade,
+                               "Share of the box, from each open face inward, over which smoke fades out instead "
+                               "of being cut flat (0 = off).")
+                .def_readwrite("wind", &GS::wind,
+                               "m/s, the air outside the box: the box starts with it, air coming in brings it, the "
+                               "drag pulls toward it, and walls and colliders turn it.")
+                .def_readwrite("turbulence", &GS::turbulence,
+                               "m/s, rms per axis: the eddies the wind brings (near the ground about a tenth of the "
+                               "wind). They ride the wind and tear a plume; 0 = smooth air.")
+                .def_readwrite("turbulence_scale", &GS::turbulenceScale, "m, the size of those eddies.")
+                .def_readwrite("solid_floor", &GS::solidFloor, "The bottom face of the box is a wall.")
+                .def_property(
+                        "sources",
+                        [](const GS& g) {
+                            py::list l;
+                            for (const auto& s : g.sources) l.append(s);
+                            return l;
+                        },
+                        [](GS& g, const py::iterable& items) {
+                            std::vector<GS::Source> v;
+                            for (const auto& h : items) v.push_back(h.cast<GS::Source>());
+                            g.sources = std::move(v);
+                        },
+                        "The emitters (the first 16 are used). The getter returns COPIES: assign a whole list "
+                        "(`gs.sources = [s]`) after changing one.")
+                .def_property(
+                        "colliders",
+                        [](const GS& g) {
+                            py::list l;
+                            for (const auto& c : g.colliders) l.append(c);
+                            return l;
+                        },
+                        [](GS& g, const py::iterable& items) {
+                            std::vector<GS::Collider> v;
+                            for (const auto& h : items) v.push_back(h.cast<GS::Collider>());
+                            g.colliders = std::move(v);
+                        },
+                        "Moving capsules that stir the air (the first 64 are used). COPIES: assign a whole list.")
+                .def_property(
+                        "boxes",
+                        [](const GS& g) {
+                            py::list l;
+                            for (const auto& b : g.boxes) l.append(b);
+                            return l;
+                        },
+                        [](GS& g, const py::iterable& items) {
+                            std::vector<GS::Box> v;
+                            for (const auto& h : items) v.push_back(h.cast<GS::Box>());
+                            g.boxes = std::move(v);
+                        },
+                        "Walls (the first 128 are used). COPIES: assign a whole list.");
+
         // ── EmitterParams (Ownership.Renderer's closed form) ────────────────
         auto emitter = py::class_<ParticleField::EmitterParams>(cls, "EmitterParams");
 
@@ -394,6 +497,20 @@ namespace threepp_py {
                      "`resolution` is LATCHED the frame the volume is allocated. Vulkan only.")
                 .def_property_readonly("density_repr", [](ParticleField& f) { return &f.densityRepr(); },
                                        py::return_value_policy::reference_internal)
+
+                // ── a solved smoke ──────────────────────────────────────────
+                .def_static("create_grid_smoke", &ParticleField::createGridSmoke, py::arg("center"),
+                            py::arg("half_extent"), py::arg("resolution") = 96u,
+                            "A field whose density is a smoke solved on the device (see GridSmoke) over the world "
+                            "box center +- half_extent, `resolution` cells per axis (latched at the first frame; "
+                            "96 is a good plume, 128 a hero shot, 256 about 0.8 GB). The box, albedo, phase "
+                            "function and emission ramp stay in density_repr. Vulkan only.")
+                .def_property_readonly("grid_smoke", [](ParticleField& f) { return &f.gridSmoke(); },
+                                       py::return_value_policy::reference_internal,
+                                       "The solver's settings, live (a reference, not a copy).")
+                .def("reset_grid_smoke", &ParticleField::resetGridSmoke,
+                     "Throw the solved state away (zero density, velocity and pressure) and restart the clock at "
+                     "grid_smoke.time.")
 
                 // ── Ownership.HostRing half ─────────────────────────────────
                 .def("submit",

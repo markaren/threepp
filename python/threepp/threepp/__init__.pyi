@@ -8860,6 +8860,268 @@ class ParticleField(Mesh):
         @wind.setter
         def wind(self, arg0: Vector3) -> None:
             ...
+    class GridSmoke:
+        """
+        An Eulerian smoke solved on the device over the field's DensityRepr box: the velocity on the cells' faces, MacCormack advection, vorticity confinement and a Jacobi pressure projection. Make one with ParticleField.create_grid_smoke and set `time` (the application's clock, seconds) every frame; the renderer runs the whole steps owed since the last frame. Sources, colliders and boxes are in WORLD space. Vulkan only.
+        """
+        class Box:
+            """
+            An axis-aligned block: a wall, a floor slab, a crate.
+            """
+            max: Vector3
+            min: Vector3
+            def __init__(self) -> None:
+                ...
+            @property
+            def velocity(self) -> Vector3:
+                """
+                m/s of its surface.
+                """
+            @velocity.setter
+            def velocity(self, arg0: Vector3) -> None:
+                ...
+        class Collider:
+            """
+            A capsule from a to b (a == b is a sphere). Set velocity to the body's own motion, or it stands still for the smoke.
+            """
+            a: Vector3
+            b: Vector3
+            def __init__(self) -> None:
+                ...
+            @property
+            def radius(self) -> float:
+                """
+                m
+                """
+            @radius.setter
+            def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def velocity(self) -> Vector3:
+                """
+                m/s of its surface.
+                """
+            @velocity.setter
+            def velocity(self, arg0: Vector3) -> None:
+                ...
+        class Source:
+            def __init__(self) -> None:
+                ...
+            @property
+            def density(self) -> float:
+                """
+                Density added per second at the centre.
+                """
+            @density.setter
+            def density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def noise(self) -> float:
+                """
+                0..1 raggedness of the emission.
+                """
+            @noise.setter
+            def noise(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def position(self) -> Vector3:
+                """
+                World position (m).
+                """
+            @position.setter
+            def position(self, arg0: Vector3) -> None:
+                ...
+            @property
+            def radius(self) -> float:
+                """
+                m
+                """
+            @radius.setter
+            def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def temperature(self) -> float:
+                """
+                Temperature added per second at the centre (buoyancy lifts it).
+                """
+            @temperature.setter
+            def temperature(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+            @property
+            def velocity(self) -> Vector3:
+                """
+                m/s the air at the source is pulled toward.
+                """
+            @velocity.setter
+            def velocity(self, arg0: Vector3) -> None:
+                ...
+            @property
+            def velocity_blend(self) -> float:
+                """
+                1/s: how hard it is pulled.
+                """
+            @velocity_blend.setter
+            def velocity_blend(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+                ...
+        enabled: bool
+        @property
+        def boundary_fade(self) -> float:
+            """
+            Share of the box, from each open face inward, over which smoke fades out instead of being cut flat (0 = off).
+            """
+        @boundary_fade.setter
+        def boundary_fade(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def boxes(self) -> list:
+            """
+            Walls (the first 128 are used). COPIES: assign a whole list.
+            """
+        @boxes.setter
+        def boxes(self, arg1: collections.abc.Iterable) -> None:
+            ...
+        @property
+        def buoyancy(self) -> float:
+            """
+            m/s^2 per unit temperature.
+            """
+        @buoyancy.setter
+        def buoyancy(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def colliders(self) -> list:
+            """
+            Moving capsules that stir the air (the first 64 are used). COPIES: assign a whole list.
+            """
+        @colliders.setter
+        def colliders(self, arg1: collections.abc.Iterable) -> None:
+            ...
+        @property
+        def cooling(self) -> float:
+            """
+            1/s, temperature decay.
+            """
+        @cooling.setter
+        def cooling(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def damping(self) -> float:
+            """
+            1/s, drag pulling the air toward the wind.
+            """
+        @damping.setter
+        def damping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def dissipation(self) -> float:
+            """
+            1/s, density decay.
+            """
+        @dissipation.setter
+        def dissipation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def max_speed(self) -> float:
+            """
+            m/s cap on each component of the air's velocity.
+            """
+        @max_speed.setter
+        def max_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def max_steps_per_frame(self) -> int:
+            """
+            Beyond this many steps owed in one frame the plume runs slow instead of stalling.
+            """
+        @max_steps_per_frame.setter
+        def max_steps_per_frame(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def pressure_iterations(self) -> int:
+            ...
+        @pressure_iterations.setter
+        def pressure_iterations(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def sigma(self) -> float:
+            """
+            Extinction (1/m) of density 1.
+            """
+        @sigma.setter
+        def sigma(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def solid_floor(self) -> bool:
+            """
+            The bottom face of the box is a wall.
+            """
+        @solid_floor.setter
+        def solid_floor(self, arg0: bool) -> None:
+            ...
+        @property
+        def sources(self) -> list:
+            """
+            The emitters (the first 16 are used). The getter returns COPIES: assign a whole list (`gs.sources = [s]`) after changing one.
+            """
+        @sources.setter
+        def sources(self, arg1: collections.abc.Iterable) -> None:
+            ...
+        @property
+        def step_dt(self) -> float:
+            """
+            Fixed solver step (s).
+            """
+        @step_dt.setter
+        def step_dt(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def time(self) -> float:
+            """
+            The solver's clock (s). Set it every frame.
+            """
+        @time.setter
+        def time(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def turbulence(self) -> float:
+            """
+            m/s, rms per axis: the eddies the wind brings (near the ground about a tenth of the wind). They ride the wind and tear a plume; 0 = smooth air.
+            """
+        @turbulence.setter
+        def turbulence(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def turbulence_scale(self) -> float:
+            """
+            m, the size of those eddies.
+            """
+        @turbulence_scale.setter
+        def turbulence_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def vorticity(self) -> float:
+            """
+            1/s, confinement strength (0 = off).
+            """
+        @vorticity.setter
+        def vorticity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def weight(self) -> float:
+            """
+            m/s^2 per unit density (sinks).
+            """
+        @weight.setter
+        def weight(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def wind(self) -> Vector3:
+            """
+            m/s, the air outside the box: the box starts with it, air coming in brings it, the drag pulls toward it, and walls and colliders turn it.
+            """
+        @wind.setter
+        def wind(self, arg0: Vector3) -> None:
+            ...
     class MeshRepr:
         enabled: bool
         @property
@@ -8968,8 +9230,17 @@ class ParticleField(Mesh):
         """
         Create a field at its FINAL capacity (never resized — see Config.capacity). Raises ValueError on capacity == 0.
         """
+    @staticmethod
+    def create_grid_smoke(center: Vector3, half_extent: Vector3, resolution: typing.SupportsInt | typing.SupportsIndex = 96) -> ParticleField:
+        """
+        A field whose density is a smoke solved on the device (see GridSmoke) over the world box center +- half_extent, `resolution` cells per axis (latched at the first frame; 96 is a good plume, 128 a hero shot, 256 about 0.8 GB). The box, albedo, phase function and emission ramp stay in density_repr. Vulkan only.
+        """
     def __repr__(self) -> str:
         ...
+    def reset_grid_smoke(self) -> None:
+        """
+        Throw the solved state away (zero density, velocity and pressure) and restart the clock at grid_smoke.time.
+        """
     def set_attributes(self, rgba: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
         """
         Per-particle appearance as (n, 4) float32 (r, g, b, a): rgb is LINEAR HDR radiance in the same domain BillboardRepr.color_hot is authored in, a is reserved for the phase-2 alpha-over opacity. Requires Config.attributes.
@@ -9041,6 +9312,11 @@ class ParticleField(Mesh):
     def follow_center(self) -> Vector3:
         """
         The SNAPPED centre — use this, not the raw camera position, to place anything that must agree with the wrap box (above all density_repr.center).
+        """
+    @property
+    def grid_smoke(self) -> ParticleField.GridSmoke:
+        """
+        The solver's settings, live (a reference, not a copy).
         """
     @property
     def host_fallback(self) -> bool:

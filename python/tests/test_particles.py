@@ -61,6 +61,39 @@ def test_float_texture_roundtrip():
     assert tex.color_space == tp.ColorSpace.Linear
 
 
+def test_grid_smoke_settings_live_on_the_field_and_lists_are_copies():
+    """GridSmoke from Python: grid_smoke is the field's own settings (a reference),
+    the wind's eddies are off until asked for, and sources, colliders and boxes come
+    back as copies, so a change sticks only when the whole list is assigned."""
+    with pytest.raises(ValueError):
+        tp.ParticleField.create_grid_smoke(tp.Vector3(0, 2, 0), tp.Vector3(3, 0, 3))
+    field = tp.ParticleField.create_grid_smoke(tp.Vector3(0, 2, 0), tp.Vector3(3, 2, 3), 64)
+    gs = field.grid_smoke
+    assert gs.enabled and gs.turbulence == 0.0
+    gs.wind = tp.Vector3(6, 0, 0)
+    gs.turbulence, gs.turbulence_scale = 0.6, 1.2
+    assert field.grid_smoke.turbulence == pytest.approx(0.6)
+    assert field.grid_smoke.turbulence_scale == pytest.approx(1.2)
+    assert field.grid_smoke.wind.x == pytest.approx(6.0)
+
+    s = tp.ParticleField.GridSmoke.Source()
+    s.position, s.radius = tp.Vector3(0, 0.5, 0), 0.25
+    s.velocity = tp.Vector3(6, 2, 0)  # the air it pulls toward: the wind plus its own jet
+    gs.sources = [s]
+    gs.sources[0].radius = 9.0  # changes a copy
+    assert len(gs.sources) == 1 and gs.sources[0].radius == pytest.approx(0.25)
+    assert gs.sources[0].velocity.x == pytest.approx(6.0)
+
+    floor = tp.ParticleField.GridSmoke.Box()
+    floor.min, floor.max = tp.Vector3(-3, 0, -3), tp.Vector3(3, 0.2, 3)
+    pole = tp.ParticleField.GridSmoke.Collider()
+    pole.a, pole.b, pole.radius = tp.Vector3(1, 0, 0), tp.Vector3(1, 3, 0), 0.3
+    gs.boxes, gs.colliders = [floor], [pole]
+    assert gs.boxes[0].max.y == pytest.approx(0.2)
+    assert gs.colliders[0].b.y == pytest.approx(3.0)
+    field.reset_grid_smoke()
+
+
 @pytest.mark.skipif(not tp.HAS_VULKAN, reason="built without the Vulkan backend")
 def test_headless_render_with_rain_under_a_float_sky():
     canvas = tp.Canvas("particles-test", width=W, height=H, headless=True, vsync=False)
