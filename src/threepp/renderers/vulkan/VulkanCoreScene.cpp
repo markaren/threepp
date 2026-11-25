@@ -5788,33 +5788,36 @@ bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
 uint64_t VulkanRenderer::Impl::spanTlasSig(const EntrySpan& sp, uint8_t mask, VkGeometryInstanceFlagsKHR flags,
                                            bool cutout, const BlasRecord* rec, VkDeviceAddress blas0,
                                            bool perEntryLod) const {
-    // FNV-1a over everything a span's TLAS rows are made from (see the fill).
-    uint64_t h = 1469598103934665603ull;
-    const auto mix = [&h](const void* p, size_t n) {
-        const auto* b = static_cast<const uint8_t*>(p);
-        for (size_t k = 0; k < n; ++k) h = (h ^ b[k]) * 1099511628211ull;
+    // Everything a span's TLAS rows are made from (see the fill), mixed a 64-bit
+    // word at a time. It was FNV-1a a byte at a time: some 130 dependent
+    // multiplies a span, the larger part of what a fill spends on each span on
+    // a frame where few of them have a row to write. A signature is only ever
+    // compared with the one this function made at the last fill, so its values
+    // need not match the old ones; what it covers is unchanged.
+    uint64_t h = 0x9E3779B97F4A7C15ull;
+    const auto mix = [&h](uint64_t v) {
+        h = (h ^ v) * 0xBF58476D1CE4E5B9ull;
+        h ^= h >> 31;
     };
-    const auto put = [&mix](const auto& v) { mix(&v, sizeof(v)); };
-    put(sp.first);
-    put(sp.count);
-    put(mask);
-    put(flags);
-    put(cutout);
-    put(sp.hidden);
-    put(rec);
-    put(blas0);
-    const uint64_t lodKey = perEntryLod ? lodLevelVersion_ : 0ull;
-    put(lodKey);
-    const size_t levels = rec ? rec->lodLevels.size() : 0u;
-    put(levels);
+    mix((uint64_t(sp.first) << 32) | sp.count);
+    mix(uint64_t(mask) | (uint64_t(flags) << 8) | (uint64_t(cutout ? 1u : 0u) << 40) |
+        (uint64_t(sp.hidden ? 1u : 0u) << 41) | (uint64_t(sp.meshFadeComplement ? 1u : 0u) << 42));
+    mix(reinterpret_cast<uintptr_t>(rec));
+    mix(blas0);
+    mix(perEntryLod ? lodLevelVersion_ : 0ull);
+    mix(rec ? rec->lodLevels.size() : 0u);
     // The rows' own changes (a moved instance, a fade that flips its side of
     // a crossfade, a reclassified ray shadow or cutout bit) are not in here:
     // they arrive as meshMovedBits_ / tlasRowDirty_ bits, and only those rows
     // are rewritten. A moved mesh moves them all.
-    mix(sp.meshWorld.data(), sizeof(float) * 16);
-    put(sp.fadeAttr);
-    put(sp.meshFade);
-    put(sp.meshFadeComplement);
+    uint64_t world[8];
+    static_assert(sizeof(world) == sizeof(sp.meshWorld));
+    std::memcpy(world, sp.meshWorld.data(), sizeof(world));
+    for (const uint64_t w : world) mix(w);
+    mix(reinterpret_cast<uintptr_t>(sp.fadeAttr));
+    uint32_t fade = 0u;
+    std::memcpy(&fade, &sp.meshFade, sizeof(fade));
+    mix(fade);
     return h | 1ull;// 0 means "rewrite"
 }
 

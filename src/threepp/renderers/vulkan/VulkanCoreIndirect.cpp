@@ -737,7 +737,11 @@ namespace threepp {
             if (en.sensorOnly && !(sensorOnlySurfaces_ && vc.secondary && vc.sensorSurfaces)) continue;
             if (en.mesh != memoMesh) {
                 memoMesh     = en.mesh;
-                memoRec      = resolveBlasForEntry(en);
+                // The geometry once: the record's key, the bounds and the draw
+                // range below all read it (each fetch is a virtual call and a
+                // shared_ptr copy).
+                const auto memoGeom = en.mesh->geometry();
+                memoRec      = resolveBlasForEntry(en, memoGeom.get());
                 memoIdsValid = false;
                 // One virtual material() call per run (it is an out-of-line
                 // override returning shared_ptr by value, so the compiler
@@ -783,7 +787,7 @@ namespace threepp {
                 // for all its entries).
                 memoWantCull = (i < lastVisibleCullMode_.size()) ? lastVisibleCullMode_[i] : VK_CULL_MODE_BACK_BIT;
                 memoIsDecal  = (i < geomDescsCached_.size()) && (entryMat(i).alphaCutoff == -2.0f);
-                if (auto geom = en.mesh->geometry()) {
+                if (const auto& geom = memoGeom) {
                     Box3 box;// the record's box: a displacementMap's moved positions
                     if (boundsOf(*geom, box)) {
                         const Vector3 c = box.getCenter();

@@ -404,13 +404,18 @@ namespace threepp {
         // displacementMap whose record is not built yet, its own grown by the
         // spec's reach. False when geom has no box at all.
         bool boundsOf(BufferGeometry& geom, Box3& out) const {
-            // No displacementMap anywhere (the usual scene): no lookups.
+            // No displacementMap anywhere (the usual scene): no lookups. The
+            // record is looked up only for a displaced geometry: the find used to
+            // sit in the if's initializer and ran for every geometry, a hash
+            // lookup per mesh per draw-record build for nothing.
             const uint64_t sig = geomDisplacement_.empty() ? 0u : displacementSignatureOf(&geom);
-            if (const auto it = blasCache.find(&geom);
-                sig != 0u && it != blasCache.end() && it->second->dispSig == sig) {
-                const auto& r = *it->second;
-                out.set(Vector3(r.dispMin[0], r.dispMin[1], r.dispMin[2]), Vector3(r.dispMax[0], r.dispMax[1], r.dispMax[2]));
-                return true;
+            if (sig != 0u) {
+                if (const auto it = blasCache.find(&geom); it != blasCache.end() && it->second->dispSig == sig) {
+                    const auto& r = *it->second;
+                    out.set(Vector3(r.dispMin[0], r.dispMin[1], r.dispMin[2]),
+                            Vector3(r.dispMax[0], r.dispMax[1], r.dispMax[2]));
+                    return true;
+                }
             }
             if (!geom.boundingBox) geom.computeBoundingBox();
             if (!geom.boundingBox) return false;
@@ -2900,8 +2905,9 @@ namespace threepp {
         // physical buffers feed BLAS and the raster prepass (VERTEX_BUFFER_BIT
         // was added at allocation), so this is a pure lookup, no upload.
         // Branches off the cached type flags so we don't dynamic_cast every
-        // entry on every raster draw call.
-        const BlasRecord* resolveBlasForEntry(const MeshEntry& en) const {
+        // entry on every raster draw call. `geom`: the entry's geometry when the
+        // caller holds it already (one virtual geometry() call, not two).
+        const BlasRecord* resolveBlasForEntry(const MeshEntry& en, const BufferGeometry* geom = nullptr) const {
             if (en.isParticleField) {
                 // A field's raster draw pulls the MeshRepr PROXY, not the
                 // zero-area placeholder the field carries as its Mesh geometry
@@ -2946,7 +2952,7 @@ namespace threepp {
                 if (it != morphedMeshStates.end() && it->second->blas)
                     return it->second->blas.get();
             }
-            auto* geom = en.mesh->geometry().get();
+            if (!geom) geom = en.mesh->geometry().get();
             auto it = blasCache.find(geom);
             if (it != blasCache.end()) return it->second.get();
             return nullptr;
