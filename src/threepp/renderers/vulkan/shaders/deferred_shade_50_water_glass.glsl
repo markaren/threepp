@@ -67,18 +67,31 @@ const float kWaterInScatterPhaseMax = 8.0;
 // murkLive() alone.
 const float kMurkIsWater = 0.01;
 
+// The density of a sea's facet normals at cosine ndh to the mean normal:
+// Gaussian slopes (Cox and Munk 1954) of variance alpha^2 both axes together,
+// as waterBeckmannG1 has them. Normalised as GGX is (its projection on the
+// mean plane integrates to one).
+float waterBeckmannD(float ndh, float alpha) {
+    const float c2 = max(ndh * ndh, 1e-6);
+    const float a2 = max(alpha * alpha, 1e-10);
+    return exp(-(1.0 - c2) / (c2 * a2)) / (PI * a2 * c2 * c2);
+}
+
 // The water surface's analytic response to ONE light direction: a GGX glint on
 // the wave facet plus the clearcoat layer's tighter lobe. shadeWater's
 // directional, spot and point loops all evaluate this one lobe, so the three
-// light types cannot drift apart on the same water.
+// light types cannot drift apart on the same water. gaussAlpha > 0: the facet
+// lobe is the sea's Gaussian slopes of that alpha (waterBeckmannD) instead,
+// the lobe the sun's glints are counted from (waterSunGlints).
 float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
-                 float specRough, float kG, float clearcoat, float ccRough) {
+                 float specRough, float kG, float clearcoat, float ccRough, float gaussAlpha) {
     const vec3  H   = normalize(V + L);
     const float ndh = max(dot(N, H), 0.0);
     const float vdh = max(dot(V, H), 0.0);
     const float Gs  = geomSmithG1(NdotV, kG) * geomSmithG1(ndl, kG);
     const float Fb  = r0 + (1.0 - r0) * pow(1.0 - vdh, 5.0);
-    float spec = distGGX(ndh, specRough) * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
+    const float D   = gaussAlpha > 0.0 ? waterBeckmannD(ndh, gaussAlpha) : distGGX(ndh, specRough);
+    float spec = D * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
     if (clearcoat > 0.0) {
         const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
         spec += clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
@@ -86,25 +99,34 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
     return spec;
 }
 
-// ── DISCRETE SUN GLINTS (kOceanGlints) ──────────────────────────────────────
-// waterGlint's lobe is the MEAN of what the water under a pixel reflects of a
-// directional light. The light actually comes off it at specular points, the
-// places where the rippled surface's slope sweeps through the light's mirror
-// slope: on curved centimetre waves there are many, each an image of the sun
-// shrunk by the curvature. Their number in the pixel's footprint is Poisson
-// with mean (Longuet-Higgins 1960: the slope density at the mirror slope times
-// the curvature's mean |det|)
+// ── DISCRETE SUN GLINTS ─────────────────────────────────────────────────────
+// A directional light's lobe on the water is the MEAN of what the water under
+// a pixel reflects of it. The light actually comes off it at specular points,
+// the places where the rippled surface's slope sweeps through the light's
+// mirror slope: on curved centimetre waves there are many, each an image of
+// the sun shrunk by the curvature. Their number in the pixel's footprint is
+// Poisson with mean (Longuet-Higgins 1960: the slope density at the mirror
+// slope times the curvature's mean |det|)
 //     lambda = footprint area * kGlintPoints * D(h) (n.h) / (4 v.h),
-// D the lobe's own GGX: the water's slopes ARE the spread the lobe stands for.
+// D the sea's own slopes, Gaussian (Cox and Munk 1954; waterBeckmannD), of
+// the lobe's variance: GGX's tail, ten times as heavy, put bright points all
+// over the near water far off the glitter path, where a sea has next to none.
 // The pixel shows the lobe times the k points' light over lambda (each
 // point's light heavy-tailed, glintPointsLight): the same mean everywhere,
 // but where lambda is small (the near water, the edge of the glitter path) it
 // is dark with bright points, as a sea glitters, and where it is large (far
-// off, the middle of the path) it is the sheen it was. kGlintPoints is set by
-// eye (2026-11-25, Norvasundet and an open sea from a deck, a USV and a drone,
-// 3 to 14 m/s): Longuet-Higgins' count for capillaries is some 10^3 to 10^4
-// per m^2 per unit of D, which no pixel resolves; 60 keeps a point or so in a
-// near pixel, where a camera does see them one by one. The counts are drawn per
+// off, the middle of the path) it is the sheen it was.
+// Each point is an image of the light's disc (pc.sunTanHalfAngle): of the
+// water's area a share  cover = D(h) (n.h) / (4 v.h) * pi tan^2(radius)
+// mirrors some of the disc. A small sun's images are specks; a veiled sun's
+// (a cloud deck's 5 degrees) are blots that overlap, and where they cover the
+// water the glitter is a sheen (the pixel's spread as a Boolean model of
+// blots has it, waterSunGlints).
+// kGlintPoints is set by eye (2026-11-25, Norvasundet and an open sea from a
+// deck, a USV and a drone, 3 to 14 m/s): Longuet-Higgins' count for
+// capillaries is some 10^3 to 10^4 per m^2 per unit of D, which no pixel
+// resolves; 240 keeps a few points in a near pixel, where a camera does see
+// them one by one, and the glitter path a band. The counts are drawn per
 // cell of a grid laid on the water (world-fixed, so a glint stays put from
 // frame to frame; its edge a power of two of kGlintCell picked from the
 // footprint, the two nearest sizes blended so nothing pops as the camera
@@ -112,7 +134,9 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
 // share of the strip. A cell draws a new count every kGlintLife seconds at a
 // phase of its own; two draws half a period apart cross-fade (sin^2 + cos^2 =
 // 1), so a glint swells and fades instead of blinking, and the mean holds.
-const float kGlintPoints = 60.0; // 1/m^2: specular points per unit of the lobe's slope density (curvature)
+// An ocean's water draws them (kOceanChop: they ride with its chop normals);
+// other water, and the point and spot lights, keep the smooth lobe.
+const float kGlintPoints = 240.0; // 1/m^2: specular points per unit of the lobe's slope density (curvature)
 const float kGlintCell   = 0.01; // m: the finest cell of the grid the counts are drawn on
 const float kGlintLife   = 0.25; // s: how long a specular point holds before the ripples move it on
 
@@ -167,18 +191,29 @@ float glintCellCount(ivec2 cell, uint level, float lambda, float t) {
 
 // What the light's lobe at P is drawn with: the light of the specular points
 // there now over its mean. 1 where so many fall in the pixel (lambda over 64)
-// that it is its mean, and where hardly any can (under 1e-7).
-float waterSunGlints(vec3 P, vec3 N, vec3 V, vec3 L, float specRough) {
+// or the light's images cover the water, that it is its mean, and where
+// hardly any can (under 1e-7). alpha: the lobe's (waterBeckmannD).
+float waterSunGlints(vec3 P, vec3 N, vec3 V, vec3 L, float alpha) {
     const vec3  camPos    = cam.viewInverse[3].xyz;
     const float pixAcross = (cam.camAux.x > 0.5 ? 1.0 : length(P - camPos))
                           * 2.0 * cam.projInverse[1][1] / max(float(pc.height), 1.0);
     const float pixAlong  = pixAcross / max(abs(dot(fog.waterUp, V)), 0.02);
     const vec3  H         = normalize(V + L);
     const float ndh       = max(dot(N, H), 0.0);
-    // specular points per square metre of water here
-    const float density   = kGlintPoints * distGGX(ndh, specRough) * ndh / (4.0 * max(dot(V, H), 1e-3));
-    const float lambdaPix = pixAcross * pixAlong * density;
-    if (!(lambdaPix > 1e-7) || lambdaPix > 64.0) return 1.0;
+    // the share of the water that mirrors the light, per steradian of it
+    const float mirror    = waterBeckmannD(ndh, alpha) * ndh / (4.0 * max(dot(V, H), 1e-3));
+    const float lambdaPix = pixAcross * pixAlong * kGlintPoints * mirror;
+    // The share the images of the light's disc cover, and the pixel's spread
+    // under blots of that cover: as a count's of mean (lambdaPix + cover) /
+    // (1 - cover). The count's own while the images are specks; the cover's,
+    // (1 - cover) / cover, once one blot outsizes the pixel; none as they
+    // cover it all.
+    const float cover     = mirror * PI * pc.sunTanHalfAngle * pc.sunTanHalfAngle;
+    if (!(lambdaPix > 1e-7) || cover > 0.98) return 1.0;
+    const float lambda    = (lambdaPix + cover) / (1.0 - cover);
+    if (lambda > 64.0) return 1.0;
+    // the points per square metre the cells below draw from
+    const float density   = lambda / (pixAcross * pixAlong);
     const vec3  wX    = fog.waterX;
     const vec3  wZ    = cross(fog.waterX, fog.waterUp);
     const vec2  q     = vec2(dot(P, wX), dot(P, wZ));
@@ -200,7 +235,10 @@ float waterSunGlints(vec3 P, vec3 N, vec3 V, vec3 L, float specRough) {
         }
         g += (j == 0 ? 1.0 - (lv - l0) : lv - l0) * k / max(taps * lambdaTap, 1e-20);
     }
-    return g;
+    // No pixel outshines the light's disc mirrored over all of it: the lobe's
+    // mean over the cover (a flat facet's image of a veiled sun is a blot of
+    // the sun's own radiance, not a spark).
+    return cover > 0.0 ? min(g, 1.0 / cover) : g;
 }
 
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
@@ -1398,18 +1436,25 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             }
             if (vis <= 0.0) continue;
             float spec;
-            if (kOceanGlints != 0u) {
+            if (kOceanChop != 0u) {
                 // The light's lobe takes back the short waves' spread the pixel
-                // does not draw (gWaterCapUndrawn), and is drawn as the facets
-                // that mirror the light, counted: the reflection keeps its
-                // crisp mirror of the drawn waves, the sun glitters over them.
+                // does not draw (gWaterCapUndrawn), widens by the light's disc
+                // as the water mirrors it (a disc of tan-radius r spreads the
+                // mirror slope by r^2/16 along the plane of incidence and
+                // r^2/(16 (v.h)^2) across it), has the sea's Gaussian slopes,
+                // and is drawn as the facets that mirror the light, counted:
+                // the reflection keeps its crisp mirror of the drawn waves, the
+                // sun glitters over them.
                 const float aE  = specRough * specRough;
-                const float rG  = sqrt(sqrt(aE * aE + gWaterCapUndrawn));
+                const float vh  = max(dot(V, normalize(V + L)), 0.1);
+                const float tr2 = pc.sunTanHalfAngle * pc.sunTanHalfAngle;
+                const float aG  = sqrt(aE * aE + gWaterCapUndrawn + tr2 * (1.0 + 1.0 / (vh * vh)) / 16.0);
+                const float rG  = sqrt(aG);
                 const float kGg = (rG + 1.0) * (rG + 1.0) / 8.0;
-                spec = waterGlint(N, V, L, NdotV, ndl, r0, rG, kGg, pm.clearcoat, ccRough)
-                     * waterSunGlints(P, N, V, L, rG);
+                spec = waterGlint(N, V, L, NdotV, ndl, r0, rG, kGg, pm.clearcoat, ccRough, aG)
+                     * waterSunGlints(P, N, V, L, aG);
             } else {
-                spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
+                spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough, 0.0);
             }
             const vec2 dim = waterSunDim(i, P, L);
             vec3 c = spec * ndl * lights.dirLights[i].color * (vis * dim.x * dim.y);
@@ -1470,7 +1515,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                                 clusterLights[li].position, vec2(gl_GlobalInvocationID.xy)) : -1.0;
             const float vis = smV >= 0.0 ? smV : doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
             if (vis <= 0.0) continue;
-            float spec = waterGlint(N, V, toL, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
+            float spec = waterGlint(N, V, toL, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough, 0.0);
             // Beam POOL — a broad faint sheen where the beam strikes the
             // surface. Real water returns part of a grazing beam diffusely
             // (micro-facets beyond the GGX tail, spray, top-layer scatter);

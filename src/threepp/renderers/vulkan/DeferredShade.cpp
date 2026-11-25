@@ -1261,8 +1261,8 @@ namespace threepp::vulkan {
     // budget features << 41 | Ray Reconstruction << 45 | the ocean's
     // switches, each specialised only for a pipeline that has it on: chop
     // normals << 46 (spec constant 7), crest foam << 47 (8), wave reflections
-    // << 56 (9), the discrete sun glints << 58 (11) and the wave climate's two
-    // bits << 59 (12); bits 48-55 and 57 are free. Built on first use (see createPipeline). With no knob set the key is the MSAA code and the
+    // << 56 (9) and the wave climate's two bits << 59 (12); bits 48-55, 57
+    // and 58 are free. Built on first use (see createPipeline). With no knob set the key is the MSAA code and the
     // shadow mode alone, so an app holds one pipeline per G-buffer sample count
     // and shadow mode its views use, and one more for each set of ray-budget
     // knobs it turns on.
@@ -1270,14 +1270,6 @@ namespace threepp::vulkan {
                                             bool rayRecon, bool oceanChop, bool oceanCrestFoam,
                                             bool oceanWaveReflect, uint32_t oceanClimate) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
-        // The discrete sun glints ride with an ocean (its chop normals are on
-        // with one). Branch water/glints only, for the A/B:
-        // THREEPP_OCEAN_GLINTS=0 is dev's water.
-        static const bool glintSwitch = [] {
-            const char* e = std::getenv("THREEPP_OCEAN_GLINTS");
-            return !(e && e[0] == '0');
-        }();
-        const bool oceanGlints = oceanChop && glintSwitch;
         const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
                              (shadowMaps ? (1ull << 40u) : 0ull) |
                              (static_cast<uint64_t>(rayBudget & kRayBudgetAll) << 41u) |
@@ -1285,7 +1277,6 @@ namespace threepp::vulkan {
                              (oceanChop ? (1ull << 46u) : 0ull) |
                              (oceanCrestFoam ? (1ull << 47u) : 0ull) |
                              (oceanWaveReflect ? (1ull << 56u) : 0ull) |
-                             (oceanGlints ? (1ull << 58u) : 0ull) |
                              (static_cast<uint64_t>(oceanClimate & 3u) << 59u);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
@@ -1305,16 +1296,16 @@ namespace threepp::vulkan {
                                             static_cast<uint32_t>((key >> 46u) & 1u),
                                             static_cast<uint32_t>((key >> 47u) & 1u),
                                             static_cast<uint32_t>((key >> 56u) & 1u),
-                                            0u,// spec constant 10 is retired
-                                            static_cast<uint32_t>((key >> 58u) & 1u),
+                                            0u,// spec constants 10 and 11 are retired
+                                            0u,
                                             static_cast<uint32_t>((key >> 59u) & 3u)};
         std::array<VkSpecializationMapEntry, 13> entries{};
         // kSpecFlags, kSpecMask, kProbeGi, kShadowMaps, kRayBudget and
         // kRayRecon (0..5) always; kOceanChop (7), kOceanCrestFoam (8),
-        // kOceanWaveReflect (9), kOceanGlints (11) and kOceanClimate (12, two
-        // bits) are specialised only for a pipeline that has them on, so every
-        // other one passes the six entries it always did (the constants keep
-        // their default 0; 6 and 10 are retired).
+        // kOceanWaveReflect (9) and kOceanClimate (12, two bits) are
+        // specialised only for a pipeline that has them on, so every other
+        // one passes the six entries it always did (the constants keep their
+        // default 0; 6, 10 and 11 are retired).
         uint32_t entryCount = 0;
         uint32_t dataWords  = 0;
         for (uint32_t i = 0; i < 13; ++i) {
