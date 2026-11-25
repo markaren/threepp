@@ -1598,6 +1598,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_solid.comp"
         kSmokeSolidCompSpv
         _smoke_solid_spv_h)
+    # A burning grid smoke's light: its glow summed per octant of the box, which
+    # the renderer reads back and turns into point lights.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_glow.comp"
+        kSmokeGlowCompSpv
+        _smoke_glow_spv_h)
     # ParticleField DEVICE EMITTER (Ownership::Renderer,
     # plans/particle-atmosphere.md F-C): one thread per slot evaluates a
     # stateless closed-form trajectory and writes this frame's positions AND

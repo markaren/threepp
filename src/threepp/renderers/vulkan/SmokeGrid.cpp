@@ -11,6 +11,7 @@
 #include "threepp/renderers/vulkan/shaders/smoke_curl.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/smoke_diverge.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/smoke_forces.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/smoke_glow.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/smoke_jacobi.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/smoke_project.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/smoke_solid.comp.spv.h"
@@ -106,6 +107,14 @@ SmokePipelines::SmokePipelines(VulkanContext& ctx, VkDescriptorSetLayout density
     plci.setLayoutCount                = 2;
     plci.pSetLayouts                   = two;
     check(vkCreatePipelineLayout(d, &plci, nullptr, &writeLayout), "vkCreatePipelineLayout(smoke write)");
+    // The glow's sums: the solver's set (its scalars and the temperature volume), and its own push block.
+    VkPushConstantRange gpcr{};
+    gpcr.stageFlags             = VK_SHADER_STAGE_COMPUTE_BIT;
+    gpcr.size                   = sizeof(SmokeGlowPc);
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &setLayout;
+    plci.pPushConstantRanges    = &gpcr;
+    check(vkCreatePipelineLayout(d, &plci, nullptr, &glowLayout), "vkCreatePipelineLayout(smoke glow)");
 
     VkSamplerCreateInfo sci{};
     sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -131,14 +140,16 @@ SmokePipelines::SmokePipelines(VulkanContext& ctx, VkDescriptorSetLayout density
     project   = make(layout, kSmokeProjectCompSpv, sizeof(kSmokeProjectCompSpv), "smoke_project");
     write     = make(writeLayout, kSmokeWriteCompSpv, sizeof(kSmokeWriteCompSpv), "smoke_write");
     solid     = make(layout, kSmokeSolidCompSpv, sizeof(kSmokeSolidCompSpv), "smoke_solid");
+    glow      = make(glowLayout, kSmokeGlowCompSpv, sizeof(kSmokeGlowCompSpv), "smoke_glow");
 }
 
 SmokePipelines::~SmokePipelines() {
     const VkDevice d = ctx_.device();
-    for (VkPipeline p : {forces, curl, confine, advect, advectFix, diverge, jacobi, project, write, solid})
+    for (VkPipeline p : {forces, curl, confine, advect, advectFix, diverge, jacobi, project, write, solid, glow})
         if (p) vkDestroyPipeline(d, p, nullptr);
     if (layout) vkDestroyPipelineLayout(d, layout, nullptr);
     if (writeLayout) vkDestroyPipelineLayout(d, writeLayout, nullptr);
+    if (glowLayout) vkDestroyPipelineLayout(d, glowLayout, nullptr);
     if (setLayout) vkDestroyDescriptorSetLayout(d, setLayout, nullptr);
     if (samplerBorder) vkDestroySampler(d, samplerBorder, nullptr);
 }
@@ -172,6 +183,20 @@ std::unique_ptr<SmokeGrid> SmokeGrid::create(VulkanContext& ctx, const SmokePipe
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                               VMA_MEMORY_USAGE_AUTO, 0);
     if (g->params_.handle == VK_NULL_HANDLE) return nullptr;
+
+    // The glow's sums (smoke_glow.comp), reached by address: two vec4 per (z layer, quarter of the x-y plane), and
+    // the eight octants' two vec4 per frame in flight, where the host reads them.
+    constexpr VkBufferUsageFlags kAddressed = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    g->glowPartials_ = createBuffer(ctx.allocator(), ctx.device(), VkDeviceSize(res) * 4u * 32u, kAddressed,
+                                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+    for (std::uint32_t f = 0; f < impl::kFramesInFlight; ++f) {
+        g->glowOut_[f] = createBuffer(ctx.allocator(), ctx.device(), sizeof(SmokeGlow), kAddressed, VMA_MEMORY_USAGE_AUTO,
+                                      VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        VmaAllocationInfo info{};
+        vmaGetAllocationInfo(ctx.allocator(), g->glowOut_[f].alloc, &info);
+        g->glowMapped_[f] = info.pMappedData;
+        if (!g->glowMapped_[f]) return nullptr;
+    }
 
     VkDescriptorPoolSize ps[3]{};
     ps[0] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * 8};
@@ -249,9 +274,11 @@ SmokeGrid::~SmokeGrid() {
     destroyImage2D(ctx_.allocator(), d, solid_);
     destroyImage2D(ctx_.allocator(), d, temperature_);
     destroyBuffer(ctx_.allocator(), params_);
+    destroyBuffer(ctx_.allocator(), glowPartials_);
+    for (auto& b : glowOut_) destroyBuffer(ctx_.allocator(), b);
 }
 
-SmokePlan SmokeGrid::plan(const ParticleField& field) {
+SmokePlan SmokeGrid::plan(const ParticleField& field, std::uint32_t frame, std::uint64_t serial) {
 
     const auto& gs = field.gridSmoke();
     const auto& dr = field.densityRepr();
@@ -381,7 +408,63 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
         g.vel[1]      = b.velocity.y;
         g.vel[2]      = b.velocity.z;
     }
+
+    // ── the fire's light ────────────────────────────────────────────────────
+    // Summed only while the field glows and its light is wanted; the sum is per unit of emissiveIntensity (the host
+    // applies both factors when it makes the lights), so neither is in the push block.
+    const auto positive = [](float v) { return std::isfinite(v) && v > 0.f; };
+    out.glow       = positive(dr.emissiveIntensity) && positive(gs.lightScale);
+    out.glowSlot   = frame % impl::kFramesInFlight;
+    out.glowSerial = serial;
+    SmokeGlowPc& gp = out.glowPc;
+    for (int a = 0; a < 3; ++a) {
+        gp.res[a]  = pc.res[a];
+        gp.cell[a] = 1.f / pc.invCell[a];
+        gp.box[a]  = pc.box[a];
+    }
+    gp.res[3]  = 0;
+    gp.cell[3] = pc.phys1[3];
+    gp.box[3]  = 0.f;
     return out;
+}
+
+void SmokeGrid::recordGlow(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan) {
+
+    if (!plan.glow || pl.glow == VK_NULL_HANDLE) return;
+    const std::uint32_t slot = plan.glowSlot;
+    SmokeGlowPc         pc   = plan.glowPc;
+    pc.partials              = glowPartials_.address;
+    pc.octants               = glowOut_[slot].address;
+
+    // The solver's set of this frame's last parity, the one the write pass read: its scalars are the state the
+    // volumes were written from. The temperature volume it reads was written before the barrier that follows the
+    // write pass (ParticleFieldPass::recordDensityScatter), so nothing has to wait here.
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl.glow);
+    const VkDescriptorSet set = sets_[v_ | (s_ << 1) | (p_in_ << 2)];
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl.glowLayout, 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cb, pl.glowLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cb, res_, 4u, 1u);// a z layer of a quarter of the x-y plane per workgroup
+    computeBarrier(cb);
+    pc.res[3] = 1;
+    vkCmdPushConstants(cb, pl.glowLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cb, 1u, 1u, 1u);// the eight octants
+    // The octants to the host, which reads them once this frame's fence has signalled (takeGlow).
+    memBarrier(cb, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+               VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+    glowSerial_[slot] = plan.glowSerial;
+}
+
+bool SmokeGrid::takeGlow(std::uint32_t frame, std::uint64_t serial, SmokeGlow& out) {
+
+    const std::uint32_t slot = frame % impl::kFramesInFlight;
+    const std::uint64_t at   = glowSerial_[slot];
+    glowSerial_[slot]        = 0;
+    // Only the slot's last frame's: a sum left in the slot by an earlier frame (the field stopped burning, or was
+    // not drawn, in between) is stale.
+    if (at == 0 || at + impl::kFramesInFlight != serial) return false;
+    invalidateHostReads(ctx_.allocator(), glowOut_[slot].alloc, 0, VK_WHOLE_SIZE);
+    std::memcpy(&out, glowMapped_[slot], sizeof(out));
+    return true;
 }
 
 void SmokeGrid::step(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan) {

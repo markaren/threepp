@@ -1937,6 +1937,27 @@ namespace threepp {
         return true;
     }
 
+    bool VulkanRenderer::readGridSmokeLight(const ParticleField& field, GridSmokeLight& out) const {
+        const auto& impl = *core();
+        if (!impl.particleFieldPass_) return false;
+        vulkan::SmokeGlow glow{};
+        uint8_t           lit = 0;
+        if (!impl.particleFieldPass_->fireLightFor(field, glow, lit)) return false;
+        // The sum is per unit of emissiveIntensity (the lights apply this frame's, and so does this).
+        const float emit = std::max(field.densityRepr().emissiveIntensity, 0.f);
+        out.lights       = 0;
+        for (uint32_t i = 0; i < 8u; ++i) {
+            const auto& g = glow.octant[i];
+            auto&       o = out.octants[i];
+            o.intensity.set(g.intensity[0] * emit, g.intensity[1] * emit, g.intensity[2] * emit);
+            o.centroid.set(g.centroid[0], g.centroid[1], g.centroid[2]);
+            o.spread = g.spread;
+            o.lit    = ((lit >> i) & 1u) != 0u;
+            out.lights += o.lit ? 1u : 0u;
+        }
+        return true;
+    }
+
     void VulkanRenderer::setObjectInstanceId(const Object3D& obj, uint32_t instanceId) {
         core()->instanceIdOverride_[obj.id] = std::min(instanceId, Impl::kMaxStableId);
         // stableId feeds DrawInfoGpu — invalidate the indirect-build skip

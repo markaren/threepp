@@ -20,6 +20,10 @@
 //      and oxygen   the air runs out the fire stops with fuel left over
 //   I  expansion    a fire's projected velocity keeps the divergence its burn
 //                   released, to the pressure solve's residual
+//   J  fire light   a burning field's glow, summed per octant of its box on the
+//                   device and read back for its lights, matches the same sum
+//                   on the host from the solver's state; the light sits over
+//                   the burner; and a fire with no glow or no light adds none
 //
 // Every case prints its numbers before its verdict, so a failure says by how much.
 // An argument runs only the cases it names: `VulkanGridSmoke_test BD`.
@@ -180,6 +184,13 @@ namespace {
         Sim& operator=(const Sim&) = delete;
 
         ParticleField::GridSmoke& gs() { return field_->gridSmoke(); }
+        ParticleField&            field() { return *field_; }
+
+        // Render `frames` frames with the clock held still: no step is owed, so the solver's state stays as it is
+        // and every frame writes the same volumes from it.
+        void hold(int frames) {
+            for (int i = 0; i < frames; ++i) render();
+        }
 
         // Run until `steps` solver steps have been taken (a multiple of kStepsPerFrame).
         void runTo(int steps) {
@@ -849,6 +860,174 @@ namespace {
         check(rms(errLit) <= 0.05 * rms(eLit), "I: the burning cells keep their expansion (div u within 5 % of E)");
     }
 
+    // ── J: the fire's light ──────────────────────────────────────────────────
+    // A burning field throws its glow on its surroundings as point lights: the glow summed per octant of its box on
+    // the device (smoke_glow.comp) and read back a couple of frames late (VulkanRenderer::readGridSmokeLight). The sum
+    // must be the one the host makes from the solver's own state (readGridSmoke) through the emission the march
+    // draws: sigma as the write pass stores it (Q20.12 of density x GridSmoke::sigma, truncated), the march's feather
+    // at the box's faces, the glow's fade from 700 to 1000 K and the blackbody (blackbody.glsl), times the cells'
+    // volume. The clock is held still for a few frames first, so the sum that comes back is of the state
+    // readGridSmoke reads.
+    //
+    // The tolerance. The device reads the temperature as the r16f the write pass stored, which the host reproduces
+    // by rounding its kelvin to the nearest half. A device that rounds toward zero instead stores up to one step less
+    // (1 K below 2048 K, 2 K above), which moves T^4 by at most 4 / 1024 = 0.4 % in a 1000 K cell and by less in a
+    // hotter one, all of it in one direction; float sums in another order add 1e-5. So 1 % for an octant's sum, and
+    // a tenth of a cell for its centroid.
+    constexpr double kLum[3] = {0.2126, 0.7152, 0.0722};
+
+    // blackbody.glsl's blackbodyRGB, in double.
+    void blackbody(double T, double out[3]) {
+        const double s = std::clamp(T, 500.0, 12000.0) * 0.001;
+        const double u = std::max(s - 2.09, 0.0);
+        const double h = s * 0.5, h4 = h * h * h * h;
+        out[0] = h4;
+        out[1] = std::clamp(0.22394 * s - 0.18818, 0.0, 1.0) * h4;
+        out[2] = std::clamp(u * (0.17759 + 0.01179 * u), 0.0, 1.0) * h4;
+    }
+
+    double smooth(double e0, double e1, double x) {
+        const double t = std::clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    }
+
+    // x rounded to the nearest binary16 (ties to even): what an r16f store keeps of a positive normal value.
+    float nearestHalf(float x) {
+        if (!(x > 0.f)) return 0.f;
+        int e = 0;
+        std::frexp(x, &e);// x = m 2^e, m in [0.5, 1): the half's step there is 2^(e - 11)
+        const double step = std::ldexp(1.0, e - 11);
+        return float(std::nearbyint(double(x) / step) * step);
+    }
+
+    struct OctantSum {
+        double rgb[3]{}, lum = 0.0, at[3]{};// at: luminance-weighted world position
+    };
+
+    void caseFireLight(Rig& rig) {
+        std::printf("\n== J  fire light: a fire burning off-centre in a 2 m box, 1 s, 64^3, its glow summed per octant ==\n");
+        const Vector3 centre(0.2f, 1.f, -0.1f);
+        Sim           sim(rig, centre, Vector3(1.f, 1.f, 1.f), 64);
+        auto&         gs = sim.gs();
+        gs.solidFloor    = true;
+        gs.expansion     = 2.f;
+        // A fuel source hot enough to light itself, in the box's upper-x, lower-y, lower-z octant.
+        const Vector3 burner(0.45f, 0.25f, -0.4f);
+        ParticleField::GridSmoke::Source s = plumeSource(burner, 0.2f);
+        s.density                          = 0.f;
+        s.temperature                      = 4.f;
+        s.fuel                             = 3.f;
+        s.velocity                         = Vector3(0.f, 1.f, 0.f);
+        s.velocityBlend                    = 2.f;
+        gs.sources.push_back(s);
+        auto& dr             = sim.field().densityRepr();
+        dr.emissiveIntensity = 10.f;
+        sim.runToSeconds(1.0);
+        sim.hold(4);
+
+        VulkanRenderer::GridSmokeLight light;
+        State                          st;
+        if (!rig.renderer.readGridSmokeLight(sim.field(), light) || !sim.read(st)) {
+            check(false, "J: the fire's light and the solver state read back");
+            return;
+        }
+
+        // The host's sum, octant by octant.
+        const View  v         = sim.view(st);
+        const float sigFixed  = std::max(gs.sigma, 0.f) * 4096.f;// SmokeGrid::plan's phys1.w
+        const int   h         = v.n / 2;
+        OctantSum   host[8];
+        for (int k = 0; k < v.n; ++k)
+            for (int j = 0; j < v.n; ++j)
+                for (int i = 0; i < v.n; ++i) {
+                    const size_t c = v.id(i, j, k);
+                    // smoke_write.comp's kelvin, as its r16f store keeps it.
+                    const float K = nearestHalf(std::clamp(gs.kAmbientKelvin + gs.temperatureScale * st.temperature[c],
+                                                           0.f, 60000.f));
+                    if (!(K > 700.f)) continue;
+                    const float  q   = std::clamp(st.density[c] * sigFixed, 0.f, 4.0e9f);
+                    const double sig = double(std::uint32_t(q)) / 4096.0;
+                    double       fw  = 1.0;
+                    for (const int a : {i, j, k}) {
+                        const double t = (a + 0.5) / v.n;
+                        fw *= smooth(0.0, 0.045, t) * smooth(0.0, 0.045, 1.0 - t);
+                    }
+                    double bb[3];
+                    blackbody(K, bb);
+                    const double w = sig * fw * smooth(700.0, 1000.0, K) * double(dr.emissiveIntensity) * v.cellVolume();
+                    const int    o = (i >= h ? 1 : 0) | (j >= h ? 2 : 0) | (k >= h ? 4 : 0);
+                    OctantSum&   e = host[o];
+                    double       l = 0.0;
+                    for (int a = 0; a < 3; ++a) {
+                        e.rgb[a] += w * bb[a];
+                        l += kLum[a] * w * bb[a];
+                    }
+                    e.lum += l;
+                    const Vector3 p = v.world(i, j, k);
+                    e.at[0] += l * p.x;
+                    e.at[1] += l * p.y;
+                    e.at[2] += l * p.z;
+                }
+
+        double totalHost = 0.0, totalDev = 0.0, worst = 0.0, worstAt = 0.0, glowAt[3] = {0.0, 0.0, 0.0};
+        for (const OctantSum& o : host) totalHost += o.rgb[0];
+        for (const auto& o : light.octants) totalDev += o.intensity.x;
+        std::printf("  %-6s  %-31s  %-31s  %-23s  %-6s  %s\n", "octant", "intensity, device (W/sr rgb)",
+                    "intensity, host", "centroid, device (m)", "spread", "light");
+        for (int i = 0; i < 8; ++i) {
+            const auto&      d = light.octants[i];
+            const OctantSum& e = host[i];
+            const double     dev[3] = {d.intensity.x, d.intensity.y, d.intensity.z};
+            std::printf("  %6d  %9.4f %9.4f %9.4f    %9.4f %9.4f %9.4f    %6.3f %6.3f %6.3f  %6.3f  %s\n", i, dev[0],
+                        dev[1], dev[2], e.rgb[0], e.rgb[1], e.rgb[2], d.centroid.x, d.centroid.y, d.centroid.z,
+                        d.spread, d.lit ? "yes" : "-");
+            // Each channel within 1 % of the host's, or within 1 % of the whole fire's for an octant too dim to say.
+            for (int a = 0; a < 3; ++a)
+                worst = std::max(worst, std::abs(dev[a] - e.rgb[a]) / std::max(e.rgb[a], 0.01 * totalHost));
+            if (e.lum > 0.01 * (totalHost * kLum[0])) {
+                const Vector3 c(float(e.at[0] / e.lum), float(e.at[1] / e.lum), float(e.at[2] / e.lum));
+                worstAt = std::max(worstAt, double(c.distanceTo(d.centroid) / v.cell.x));
+            }
+            const double l = kLum[0] * dev[0] + kLum[1] * dev[1] + kLum[2] * dev[2];
+            for (int a = 0; a < 3; ++a) glowAt[a] += l * double(d.centroid[a]);
+        }
+        double lumDev = 0.0;
+        for (const auto& o : light.octants) lumDev += kLum[0] * o.intensity.x + kLum[1] * o.intensity.y + kLum[2] * o.intensity.z;
+        const Vector3 glow(float(glowAt[0] / std::max(lumDev, 1e-30)), float(glowAt[1] / std::max(lumDev, 1e-30)),
+                           float(glowAt[2] / std::max(lumDev, 1e-30)));
+        const float across = std::hypot(glow.x - burner.x, glow.z - burner.z);
+        std::printf("  red: device %.4f, host %.4f W/sr (%+.3f %%); worst channel %.3f %% off, worst centroid %.3f "
+                    "cells off\n",
+                    totalDev, totalHost, 100.0 * (totalDev - totalHost) / std::max(totalHost, 1e-30), 100.0 * worst,
+                    worstAt);
+        std::printf("  the glow's centre (%.3f, %.3f, %.3f) m: %.3f m across from the burner, %.3f m above it; %u "
+                    "light(s)\n",
+                    glow.x, glow.y, glow.z, across, glow.y - burner.y, light.lights);
+        check(totalHost > 0.0 && light.lights > 0, "J: the fire glows, and its glow comes back as lights");
+        check(worst <= 0.01, "J: the device's octant sums are the host's from the solver's state, to 1 % per channel");
+        check(worstAt <= 0.1, "J: and their centroids are the host's, to a tenth of a cell");
+        check(across <= 0.25f && glow.y > burner.y,
+              "J: the light sits over the burner (the glow's centre within 0.25 m across, and above it)");
+
+        // No glow, no light: at once, from the frame the intensity drops.
+        dr.emissiveIntensity = 0.f;
+        sim.hold(1);
+        VulkanRenderer::GridSmokeLight off;
+        const bool                     dark = !rig.renderer.readGridSmokeLight(sim.field(), off) || off.lights == 0;
+        dr.emissiveIntensity                = 10.f;
+        sim.hold(4);
+        VulkanRenderer::GridSmokeLight back;
+        const bool                     lit = rig.renderer.readGridSmokeLight(sim.field(), back) && back.lights > 0;
+        gs.lightScale                      = 0.f;
+        sim.hold(1);
+        VulkanRenderer::GridSmokeLight unlit;
+        const bool                     none = !rig.renderer.readGridSmokeLight(sim.field(), unlit) || unlit.lights == 0;
+        std::printf("  emissiveIntensity 0: %u light(s); back to 10: %u; lightScale 0: %u\n", dark ? 0u : off.lights,
+                    back.lights, none ? 0u : unlit.lights);
+        check(dark && lit, "J: with emissiveIntensity 0 the fire adds no light (and with it back, it does again)");
+        check(none, "J: with lightScale 0 the fire adds no light");
+    }
+
 }// namespace
 
 int main(int argc, char** argv) {
@@ -891,6 +1070,7 @@ int main(int argc, char** argv) {
     if (want('G')) caseBurnBooks(rig);
     if (want('H')) caseBurnLimits(rig);
     if (want('I')) caseExpansion(rig);
+    if (want('J')) caseFireLight(rig);
 
     std::printf("\n");
     if (vulkan::validationActive()) {

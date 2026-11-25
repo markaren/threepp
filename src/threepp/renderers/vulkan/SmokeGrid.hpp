@@ -19,10 +19,17 @@
 // barriers. The two images it writes for the rest of the frame — the field's
 // r32ui density volume and the temperature volume — are declared by
 // ParticleFieldPass, the first exactly as it is for a scatter.
+//
+// A burning field also lights its surroundings: `recordGlow()` sums its glow
+// over each octant of the box into a small host-visible block per frame in
+// flight (shaders/smoke_glow.comp), and `takeGlow()` reads a block back once
+// its frame's fence has signalled, never waiting for the device. ParticleFieldPass
+// makes the octants point lights.
 
 #ifndef THREEPP_VULKAN_SMOKEGRID_HPP
 #define THREEPP_VULKAN_SMOKEGRID_HPP
 
+#include "VulkanImplCommon.hpp"
 #include "VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -84,6 +91,30 @@ namespace threepp::vulkan {
     };
     static_assert(sizeof(SmokeGpuParams) == 16 + 32 + kSmokeMaxSources * 48 + kSmokeMaxColliders * 48 + kSmokeMaxBoxes * 48, "SmokeGpuParams layout drift");
 
+    // Mirrors `Pc` in shaders/smoke_glow.comp.
+    struct SmokeGlowPc {
+        std::int32_t  res[4]; // xyz cells per axis, w the pass (0 the layers' partial sums, 1 the octants)
+        float         cell[4];// xyz cell size (m), w sigma_t in Q20.12 per unit density (the write pass's)
+        float         box[4]; // xyz world minimum of the grid
+        std::uint64_t partials;
+        std::uint64_t octants;
+    };
+    static_assert(sizeof(SmokeGlowPc) == 64, "SmokeGlowPc layout drift");
+
+    // One frame's light of a burning field, as shaders/smoke_glow.comp leaves it: per octant of the box (bit 0 the
+    // upper half along x, bit 1 along y, bit 2 along z), its glow summed over the cells. Per unit of
+    // DensityRepr::emissiveIntensity, which the host multiplies in.
+    struct SmokeGlowOctant {
+        float intensity[3];// the cells' emission times their volume (W/sr per unit emissiveIntensity)
+        float luminance;   // the same in luminance: the weight of the centroid
+        float centroid[3]; // world, the glow's luminance-weighted centre (the octant's centre when it is dark)
+        float spread;      // m, the glow's rms distance from the centroid
+    };
+    struct SmokeGlow {
+        SmokeGlowOctant octant[8];
+    };
+    static_assert(sizeof(SmokeGlow) == 256, "SmokeGlow layout drift");
+
     // One frame of one field, resolved on the host so recording reads no field.
     struct SmokePlan {
         std::uint32_t  steps      = 0;
@@ -91,6 +122,12 @@ namespace threepp::vulkan {
         bool           reset      = false;
         SmokePc        pc{};
         SmokeGpuParams params{};
+        // The fire's light this frame: whether to sum the glow (the field burns, and its light is wanted), into
+        // which frame-in-flight slot, and for which frame serial.
+        bool           glow     = false;
+        std::uint32_t  glowSlot = 0;
+        std::uint64_t  glowSerial = 0;
+        SmokeGlowPc    glowPc{};
     };
 
     class SmokePipelines {
@@ -104,10 +141,12 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
         VkPipelineLayout      layout      = VK_NULL_HANDLE;// set 0
         VkPipelineLayout      writeLayout = VK_NULL_HANDLE;// set 0 + the field's density set (set 1)
+        VkPipelineLayout      glowLayout  = VK_NULL_HANDLE;// set 0, SmokeGlowPc
         VkSampler             samplerBorder = VK_NULL_HANDLE;
         VkPipeline            forces = VK_NULL_HANDLE, curl = VK_NULL_HANDLE, confine = VK_NULL_HANDLE,
                    advect = VK_NULL_HANDLE, advectFix = VK_NULL_HANDLE, diverge = VK_NULL_HANDLE,
-                   jacobi = VK_NULL_HANDLE, project = VK_NULL_HANDLE, write = VK_NULL_HANDLE, solid = VK_NULL_HANDLE;
+                   jacobi = VK_NULL_HANDLE, project = VK_NULL_HANDLE, write = VK_NULL_HANDLE, solid = VK_NULL_HANDLE,
+                   glow = VK_NULL_HANDLE;
 
     private:
         VulkanContext& ctx_;
@@ -134,11 +173,22 @@ namespace threepp::vulkan {
         [[nodiscard]] VkImage     temperatureImage() const { return temperature_.image; }
         [[nodiscard]] VkImageView temperatureView() const { return temperature_.view; }
 
-        // Advance the field's clock and pack this frame's parameters.
-        SmokePlan plan(const ParticleField& field);
+        // Advance the field's clock and pack this frame's parameters. `frame` is the frame-in-flight slot and
+        // `serial` the frame serial being prepared: the glow, when the field burns, goes to that slot.
+        SmokePlan plan(const ParticleField& field, std::uint32_t frame, std::uint64_t serial);
 
         // Run the owed steps and write the density volume (set 1 of the write pass) and the temperature volume.
         void record(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan, VkDescriptorSet densitySet);
+
+        // The fire's light: sum the glow record() wrote into the plan's slot (shaders/smoke_glow.comp), and make it
+        // visible to the host. After record(), behind the barrier that follows the write pass. No-op unless the plan
+        // asks for it.
+        void recordGlow(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan);
+
+        // The glow `frame`'s slot holds, when the frame that used the slot last summed one and that frame is
+        // `serial` - kFramesInFlight: called in the frame's post-fence window, before this frame records into the
+        // same slot, so it reads a finished sum and never waits. Each sum is taken once.
+        bool takeGlow(std::uint32_t frame, std::uint64_t serial, SmokeGlow& out);
 
         // TEST/AUDIT: the images holding the state the last recorded step left (the "in" half of each pair).
         // Valid to copy once the device has drained. See VulkanRenderer::readGridSmoke.
@@ -165,6 +215,12 @@ namespace threepp::vulkan {
         std::uint32_t  res_;
         Image2D        vel_[2]{}, sca_[2]{}, p_[2]{}, aux_{}, solid_{}, temperature_{};
         Buffer         params_{};
+        // The glow's sums: the layers' partials (device-local, by address), and the octants, one host-visible
+        // block per frame in flight, with the frame serial that wrote each (0 = nothing to take).
+        Buffer         glowPartials_{};
+        Buffer         glowOut_[impl::kFramesInFlight]{};
+        void*          glowMapped_[impl::kFramesInFlight]{};
+        std::uint64_t  glowSerial_[impl::kFramesInFlight]{};
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
         VkDescriptorSet  sets_[8]{};
         // The ping-pong parities: which half of each pair is "in".

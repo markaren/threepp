@@ -1376,6 +1376,29 @@ namespace threepp {
         // Renderer::useLegacyLights GL multiplies the irradiance by pi, which is the value
         // as it is.
         const float ambientScale = useLegacyLights_ ? 1.f : 1.f / math::PI;
+        // A point light into the uncapped list; `unitScale` turns its intensity into the one the falloff math expects.
+        const auto gatherPoint = [&](PointLight& pl, float unitScale) {
+            // Point/spot lights are COLLECTED (uncapped) for the
+            // clustered path; the UBO's 8-per-type slots are filled
+            // from the power-sorted list after the traverse.
+            GpuClusterLight rec{};
+            Vector3 wp; pl.getWorldPosition(wp);
+            rec.position[0] = wp.x; rec.position[1] = wp.y; rec.position[2] = wp.z;
+            rec.range = pl.distance;
+            rec.color[0] = pl.color.r * pl.intensity * unitScale;
+            rec.color[1] = pl.color.g * pl.intensity * unitScale;
+            rec.color[2] = pl.color.b * pl.intensity * unitScale;
+            rec.decay = pl.decay;
+            rec.direction[2] = -1.f;
+            rec.cosAngleOuter = -1.1f;// cone sentinel: smoothstep(-1.1,-1.05,cos≥-1) = 1
+            rec.cosAngleInner = -1.05f;
+            rec.radius = pl.radius;
+            rec.cullRadius = clusterCullRadius(rec);
+            rec.type = 0.f;
+            rec.shadowSlot = -1.f;
+            clusterCollect.push_back(rec);
+            clusterSrc.push_back(&pl);
+        };
         const auto gatherLight = [&](Object3D& o) {
             if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
                 ubo.ambient[0] += a->color.r * a->intensity * ambientScale;
@@ -1427,26 +1450,7 @@ namespace threepp {
                 g.color[1] = dl->color.g * dl->intensity;
                 g.color[2] = dl->color.b * dl->intensity;
             } else if (auto* pl = dynamic_cast<PointLight*>(&o)) {
-                // Point/spot lights are COLLECTED (uncapped) for the
-                // clustered path; the UBO's 8-per-type slots are filled
-                // from the power-sorted list after the traverse.
-                GpuClusterLight rec{};
-                Vector3 wp; pl->getWorldPosition(wp);
-                rec.position[0] = wp.x; rec.position[1] = wp.y; rec.position[2] = wp.z;
-                rec.range = pl->distance;
-                rec.color[0] = pl->color.r * pl->intensity * pointUnitScale;
-                rec.color[1] = pl->color.g * pl->intensity * pointUnitScale;
-                rec.color[2] = pl->color.b * pl->intensity * pointUnitScale;
-                rec.decay = pl->decay;
-                rec.direction[2] = -1.f;
-                rec.cosAngleOuter = -1.1f;// cone sentinel: smoothstep(-1.1,-1.05,cos≥-1) = 1
-                rec.cosAngleInner = -1.05f;
-                rec.radius = pl->radius;
-                rec.cullRadius = clusterCullRadius(rec);
-                rec.type = 0.f;
-                rec.shadowSlot = -1.f;
-                clusterCollect.push_back(rec);
-                clusterSrc.push_back(pl);
+                gatherPoint(*pl, pointUnitScale);
             } else if (auto* sl = dynamic_cast<SpotLight*>(&o)) {
                 Vector3 lp, tp;
                 sl->getWorldPosition(lp);
@@ -1492,6 +1496,14 @@ namespace threepp {
             }
         };
         for (Light* light : sceneCensus(scene).lights) gatherLight(*light);
+        // The burning grid smokes' own light (ParticleField::GridSmoke::lightScale): the point lights the particle
+        // pass made this frame from each fire's summed glow, which from here on take the path a scene PointLight
+        // does (the power sort, the clusters, the UBO's eight, the shadow slots). Their intensity is the radiant
+        // intensity the shading consumes already, so no unit conversion. None while the path tracer accumulates:
+        // its paths pick the fire's emission up on every bounce (dustLeg), so the fire lights the scene there by
+        // itself, and its lights would count that light twice.
+        if (particleFieldPass_ && !(pathTracer_ && pathTracer_->active()))
+            for (PointLight* fire : particleFieldPass_->fireLights()) gatherPoint(*fire, 1.f);
 
         // Power-sort the point/spot list (strongest first) so BOTH the
         // UBO's 8-per-type slots (legacy paths: PT, reflection/GI hits,

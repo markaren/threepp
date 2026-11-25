@@ -1,0 +1,186 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#include "blackbody.glsl"
+
+// ── THE FIRE'S LIGHT ─────────────────────────────────────────────────────────
+// A burning grid smoke (ParticleField::GridSmoke) glows, and the glow is drawn
+// by the shade's march as emission: radiance per metre of path, sigma times
+// the soot's blackbody at the solver's temperature (particle_density.glsl,
+// pdEmissionAt). What lights the walls and the floor round it is the same
+// emission seen from outside: each cell radiates its emission times its volume
+// as intensity (power per steradian), the same in every direction, so a fire
+// seen from a distance is a point light of the summed intensity at the centre
+// of its glow. This pass makes that sum, once a frame per burning field, right
+// after the solver has written its volumes: over each eighth of the box (two
+// halves per axis, so a fire that fills one corner, or spills out of a door,
+// lights from where it is), the summed intensity, its luminance-weighted centre
+// and how far the glow spreads round that centre. The renderer reads the eight
+// back a couple of frames later and makes each one that glows a point light
+// (ParticleFieldPass), which then lights the surfaces, the smoke and the
+// shadows through the path every PointLight takes.
+//
+// Per unit of DensityRepr::emissiveIntensity: the host multiplies that in, so
+// a change to it (or to GridSmoke::lightScale) shows on the very next frame.
+//
+// The emission of a cell is pdEmissionAt's at the cell's centre, where its
+// trilinear taps are the cell itself: sigma as the write pass stores it (Q20.12
+// of density x GridSmoke::sigma, truncated) times the march's feather at the
+// box's faces, and the temperature as the write pass stored it, read back from
+// the r16f volume the march samples. A cell cooler than the glow's dark end
+// (blackbody.glsl) emits nothing and costs a single 2-byte read, which is
+// almost every cell of a smoke: the density is fetched only where it glows.
+//
+// Two passes, plain float sums in a fixed order, no atomics: the same state
+// gives the same bits.
+//   pass 0  one workgroup per (z layer, quarter of the x-y plane): its
+//           threads walk the layer's cells of that quarter, a shared-memory
+//           tree sums them, and the layer's partial goes to `partials`
+//   pass 1  one workgroup: 16 threads per octant sum its layers' partials,
+//           then the octant's totals go to `octants` (this frame's readback
+//           slot, host-visible)
+//
+// An octant is 0..7: bit 0 the upper half of the grid along x, bit 1 along y,
+// bit 2 along z, the upper half of an odd count the larger. Its entry is two
+// vec4: (intensity rgb, its luminance), each the cells' emission times their
+// volume summed (W/sr per unit emissiveIntensity); and (centroid xyz in world
+// space, rms distance of the glow from it in metres). An octant that does not
+// glow has zero intensity and its centre as its centroid.
+
+layout(local_size_x = 128) in;
+
+layout(set = 0, binding = 2) uniform sampler3D uSca;                 // x density, y temperature (smoke_common.glsl)
+layout(set = 0, binding = 10, r16f) uniform readonly image3D uKelvin;// what smoke_write.comp wrote this frame
+
+layout(buffer_reference, scalar, buffer_reference_align = 16) buffer Partials { vec4 v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer Octants { vec4 v[]; };
+
+// Mirrors SmokeGlowPc in SmokeGrid.hpp.
+layout(push_constant, scalar) uniform Pc {
+    ivec4    res;     // xyz cells per axis, w the pass (0 or 1)
+    vec4     cell;    // xyz cell size (m), w sigma_t in Q20.12 per unit density (the write pass's)
+    vec4     box;     // xyz world minimum of the grid
+    uint64_t partials;// 2 vec4 per (z layer, quarter)
+    uint64_t octants; // 2 vec4 per octant
+} pc;
+
+const vec3 kLum   = vec3(0.2126, 0.7152, 0.0722);
+const int  kBatch = 8;// cells a thread reads at once in pass 0
+
+shared vec4 sA[128];
+shared vec4 sB[128];
+
+// The cells of half `upper` of `n` along one axis, as [lo, hi).
+ivec2 halfRange(int n, bool upper) {
+    const int h = n / 2;
+    return upper ? ivec2(h, n) : ivec2(0, h);
+}
+
+void main() {
+    const uint lid = gl_LocalInvocationIndex;
+
+    if (pc.res.w == 0) {
+        // ── pass 0: one z layer of one quarter ──────────────────────────────
+        const int   z  = int(gl_WorkGroupID.x);
+        const uint  q  = gl_WorkGroupID.y;// bit 0 upper x, bit 1 upper y
+        const ivec2 xr = halfRange(pc.res.x, (q & 1u) != 0u);
+        const ivec2 yr = halfRange(pc.res.y, (q & 2u) != 0u);
+        const ivec2 zr = halfRange(pc.res.z, z >= pc.res.z / 2);
+        // The moments are taken about the octant's own centre (cell coordinates put cell i's centre at i + 0.5), so
+        // the float sums stay small.
+        const vec3 oc = 0.5 * vec3(xr.x + xr.y, yr.x + yr.y, zr.x + zr.y);
+        const int  w  = xr.y - xr.x;
+        const int  n  = w * (yr.y - yr.x);
+        vec4 a = vec4(0.0);// rgb emission x volume, its luminance (the volume applied in pass 1)
+        vec4 b = vec4(0.0);// luminance x offset from the octant's centre (m), luminance x its square
+        // kBatch cells a thread at a time, their reads issued together: a thread that read one cell and waited for
+        // it before the next spent the pass waiting (all of a 256^3 grid's workgroups are resident at once, so the
+        // time is one thread's chain of reads), and took six times what its bytes cost.
+        for (int base = int(lid); base < n; base += 128 * kBatch) {
+            float T[kBatch];
+            float D[kBatch];
+            for (int u = 0; u < kBatch; ++u) {
+                const int i = base + u * 128;
+                T[u] = i < n ? imageLoad(uKelvin, ivec3(xr.x + i % w, yr.x + i / w, z)).r : 0.0;
+            }
+            // The density only where the cell glows (a NaN glows nowhere).
+            for (int u = 0; u < kBatch; ++u) {
+                const int i = base + u * 128;
+                D[u] = T[u] > kPdGlowDarkK ? texelFetch(uSca, ivec3(xr.x + i % w, yr.x + i / w, z), 0).x : 0.0;
+            }
+            for (int u = 0; u < kBatch; ++u) {
+                if (!(T[u] > kPdGlowDarkK)) continue;
+                const int   i   = base + u * 128;
+                const ivec3 c   = ivec3(xr.x + i % w, yr.x + i / w, z);
+                const float sig = float(uint(clamp(D[u] * pc.cell.w, 0.0, 4.0e9))) * (1.0 / 4096.0);
+                const vec3  tt  = (vec3(c) + 0.5) / vec3(pc.res.xyz);
+                const vec3  fw  = smoothstep(vec3(0.0), vec3(0.045), tt) * smoothstep(vec3(0.0), vec3(0.045), 1.0 - tt);
+                const vec3  e   = (sig * (fw.x * fw.y * fw.z) * smoothstep(kPdGlowDarkK, kPdGlowFullK, T[u])) *
+                                  blackbodyRGB(T[u]);
+                const float l   = dot(e, kLum);
+                const vec3  o   = (vec3(c) + 0.5 - oc) * pc.cell.xyz;
+                a += vec4(e, l);
+                b += vec4(l * o, l * dot(o, o));
+            }
+        }
+        sA[lid] = a;
+        sB[lid] = b;
+        barrier();
+        for (uint s = 64u; s > 0u; s >>= 1u) {
+            if (lid < s) {
+                sA[lid] += sA[lid + s];
+                sB[lid] += sB[lid + s];
+            }
+            barrier();
+        }
+        if (lid == 0u) {
+            Partials p     = Partials(pc.partials);
+            const uint k   = (uint(z) * 4u + q) * 2u;
+            p.v[k]         = sA[0];
+            p.v[k + 1u]    = sB[0];
+        }
+        return;
+    }
+
+    // ── pass 1: the octants, 16 threads each ────────────────────────────────
+    const uint  o    = lid >> 4u;
+    const uint  lane = lid & 15u;
+    const uint  q    = o & 3u;
+    const ivec2 zr   = halfRange(pc.res.z, (o & 4u) != 0u);
+    Partials    p    = Partials(pc.partials);
+    vec4 a = vec4(0.0), b = vec4(0.0);
+    for (int z = zr.x + int(lane); z < zr.y; z += 16) {
+        const uint k = (uint(z) * 4u + q) * 2u;
+        a += p.v[k];
+        b += p.v[k + 1u];
+    }
+    sA[lid] = a;
+    sB[lid] = b;
+    barrier();
+    for (uint s = 8u; s > 0u; s >>= 1u) {
+        if (lane < s) {
+            sA[lid] += sA[lid + s];
+            sB[lid] += sB[lid + s];
+        }
+        barrier();
+    }
+    if (lane == 0u) {
+        const vec4  A   = sA[lid];
+        const vec4  B   = sB[lid];
+        const float vol = pc.cell.x * pc.cell.y * pc.cell.z;
+        const ivec2 xr  = halfRange(pc.res.x, (o & 1u) != 0u);
+        const ivec2 yr  = halfRange(pc.res.y, (o & 2u) != 0u);
+        const vec3  oc  = pc.box.xyz + 0.5 * vec3(xr.x + xr.y, yr.x + yr.y, zr.x + zr.y) * pc.cell.xyz;
+        vec3  mean   = vec3(0.0);
+        float spread = 0.0;
+        if (A.w > 0.0) {
+            mean   = B.xyz / A.w;
+            spread = sqrt(max(B.w / A.w - dot(mean, mean), 0.0));
+        }
+        Octants out_ = Octants(pc.octants);
+        out_.v[o * 2u]      = vec4(A.xyz * vol, A.w * vol);
+        out_.v[o * 2u + 1u] = vec4(oc + mean, spread);
+    }
+}

@@ -258,6 +258,36 @@ namespace threepp {
         };
         [[nodiscard]] bool readGridSmoke(const ParticleField& field, GridSmokeState& out);
 
+        // ── GridSmoke fire light (TEST / AUDIT) ──────────────────────────
+        // The light a burning grid smoke threw on its surroundings in the last
+        // rendered frame (ParticleField::GridSmoke::lightScale): its glow summed
+        // on the device over each eighth of its box, which the renderer read
+        // back to make the frame's lights, and which of the eighths became one.
+        // Octant i is the upper half of the box along x when bit 0 of i is set,
+        // along y with bit 1 and along z with bit 2 (the upper half of an odd
+        // cell count the larger). The sum is the glow of the frame that used
+        // the last frame's slot before it, kFramesInFlight (2) frames earlier,
+        // since the readback never waits for the device: to compare it with
+        // readGridSmoke, hold the field's clock still for a few frames first.
+        //
+        // Host only: no device work, no wait. Returns false when the field is
+        // not a grid smoke, or no sum came back for the last frame (the field
+        // does not glow, its light is off, or it has only just started).
+        struct GridSmokeLight {
+            struct Octant {
+                // W/sr: the octant's emission (the glow the march draws,
+                // DensityRepr::emissiveIntensity included) times its cells'
+                // volume, summed. Its light's intensity is this times lightScale.
+                Vector3 intensity;
+                Vector3 centroid;    // world: the glow's luminance-weighted centre, where its light is
+                float   spread = 0.f;// m: the glow's rms distance from the centroid
+                bool    lit    = false;// it is one of the frame's lights
+            };
+            std::array<Octant, 8> octants{};
+            uint32_t              lights = 0;// how many of the octants are lights
+        };
+        [[nodiscard]] bool readGridSmokeLight(const ParticleField& field, GridSmokeLight& out) const;
+
         // ── Gaussian-splat depth AOV ─────────────────────────────────────
         // A splat cloud is composited by a compute tile rasterizer and is in no
         // acceleration structure, so it writes no G-buffer depth and every

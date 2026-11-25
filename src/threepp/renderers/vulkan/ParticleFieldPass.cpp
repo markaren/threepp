@@ -3,6 +3,7 @@
 
 #include "VulkanContext.hpp"
 
+#include "threepp/lights/PointLight.hpp"
 #include "threepp/objects/ParticleField.hpp"
 
 #include "threepp/renderers/vulkan/shaders/particle_density_convert.comp.spv.h"
@@ -16,9 +17,11 @@
 #include "threepp/renderers/vulkan/SpirvReflect.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 using namespace threepp;
 using namespace threepp::vulkan;
@@ -1116,6 +1119,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     const std::vector<DensityVolumeDesc> prevVols = densityVols_;
     densityVols_.clear();
     densityDispatch_.clear();
+    fireLights_.clear();// a field that is not drawn this frame lights nothing
     emitDispatch_.clear();
     interopCopies_.clear();
     auxScratch_.clear();
@@ -1173,6 +1177,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         if (!r.field) continue;
         State& st = ensureState(*r.field);
         st.lastSeenSerial = serial;
+        st.glowValid      = false;// until this frame's sum is read back (the grid smoke block below)
+        st.glowLit        = 0;
 
         std::uint32_t live = std::min(r.field->liveCount(), st.capacity);
 
@@ -1641,9 +1647,14 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 }
                 if (gridSmoke && st.smoke) {
                     dd.smoke     = st.smoke.get();
-                    dd.smokePlan = st.smoke->plan(*r.field);
+                    dd.smokePlan = st.smoke->plan(*r.field, frame, serial);
                     densityVols_.back().solved   = 1.f;
                     densityVols_.back().tempView = st.smoke->temperatureView();
+                    // The fire's light: the glow this slot's last frame summed (kFramesInFlight frames ago; its fence
+                    // has signalled) becomes this frame's lights, before this frame sums into the same slot. A field
+                    // that has only just started burning has none for those frames.
+                    st.glowValid = st.smoke->takeGlow(frame, serial, st.glow);
+                    addFireLights(st, *r.field);
                 }
                 densityDispatch_.push_back(dd);
             }
@@ -2319,11 +2330,189 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
         vkCmdDispatch(cb, g, g, g);
     }
 
+    // 6. GRID SMOKE's light: every burning solved field's glow, summed per octant of its box for the lights a later
+    //    frame makes of it (ParticleField::GridSmoke::lightScale). The temperature volumes the sums read were written
+    //    in front of the barrier at 4; the sums read nothing the converts write, so the two run side by side.
+    for (const DensityDispatch& dd : densityDispatch_)
+        if (dd.smoke) dd.smoke->recordGlow(cb, *smokePipes_, dd.smokePlan);
+
     // Both volumes' readers — the froxel passes' manual trilinear on the uint
     // volume (every view, in its passes), the shade's and the transmittance
     // prepass's hardware trilinear on the r16f mirror — declare them through
     // their descriptor sets; the LIDAR's read of the majorants follows the
     // frame graph's exit barrier.
+}
+
+// ── The fire's light ─────────────────────────────────────────────────────────
+// A glow sum is the octants' radiant intensity per unit emissiveIntensity, so the lights take this frame's
+// emissiveIntensity and lightScale, not the ones of the frame that summed: turning either down shows at once.
+//
+// An octant becomes a light when it holds at least kFireLightMinShare of the field's brightest channel (dimmer ones
+// would add a light per pixel's loop for nothing the eye can find beside the rest), and radiates more than a light
+// whose reach would be under half a metre.
+//
+// THE REACH. The light falls off as the inverse square, and its range only bounds where the shading and the culling
+// look for it: the shading's window (1 - (d/R)^4)^2 takes at most 1.09 I/R^2 of irradiance off anywhere, at
+// d = 0.9 R. R = sqrt(I / kFireLightRangeIrradiance) holds that loss under the 0.005 the renderer already treats as
+// nothing where it sizes a light with no range of its own (its cluster cull radius), so the reach is never cut short
+// where the eye could see it; and like that radius it stops at 500 m.
+//
+// THE SOURCE. A fire is not a point: its radius is that of a ball glowing evenly with the octant's spread (an even
+// ball's rms radius is sqrt(3/5) of its radius), which the ray-traced shadows sample, so they are as soft as a
+// flame that size makes them. But the shadow rays aim at points of that ball, and a ball that reaches through a
+// wall lets a fire in a room light the ground outside it (a light under a shed's ceiling, its glow spread half a
+// room wide, reached half a metre above the roof). So it stops at the nearest solid the solver knows: its boxes,
+// its colliders and its solid floor, the walls the smoke itself is kept out of.
+//
+// THE PLACE. The centroid of an octant's glow lies between its glowing cells, and when the octant holds glow on
+// both sides of a wall (a fire in a room, spilling out of its door) it can lie inside the wall, where every shadow
+// ray finds it hidden and its light is lost. Such a light moves out to the nearest point of free air.
+namespace {
+    constexpr float kFireLightMinShare        = 0.01f;
+    constexpr float kFireLightRangeIrradiance = 0.004f;
+    constexpr float kFireLightMinIntensity    = kFireLightRangeIrradiance * 0.25f;// a 0.5 m reach
+    constexpr float kFireLightMaxRange        = 500.f;
+
+    // The solids a grid smoke's solver knows, as signed distances (negative inside), with the shapes
+    // smoke_common.glsl's colliderSdf gives them, and only the ones it uses (the first kSmokeMaxBoxes and
+    // kSmokeMaxColliders).
+    struct SmokeSolids {
+        const ParticleField::GridSmoke& gs;
+        float                           floorY;// the solid floor's height (when gs.solidFloor)
+
+        [[nodiscard]] std::size_t boxes() const { return std::min<std::size_t>(gs.boxes.size(), kSmokeMaxBoxes); }
+        [[nodiscard]] std::size_t capsules() const {
+            return std::min<std::size_t>(gs.colliders.size(), kSmokeMaxColliders);
+        }
+        [[nodiscard]] static float boxDistance(const ParticleField::GridSmoke::Box& b, const Vector3& p) {
+            float out = 0.f, in = -1e30f;
+            for (int a = 0; a < 3; ++a) {
+                const float q = std::max(b.min[a] - p[a], p[a] - b.max[a]);// > 0 outside this slab
+                out += std::max(q, 0.f) * std::max(q, 0.f);
+                in = std::max(in, q);
+            }
+            return std::sqrt(out) + std::min(in, 0.f);
+        }
+        [[nodiscard]] static Vector3 capsuleNearest(const ParticleField::GridSmoke::Collider& c, const Vector3& p) {
+            const Vector3 ab = c.b - c.a;
+            const float   h  = std::clamp((p - c.a).dot(ab) / std::max(ab.dot(ab), 1e-8f), 0.f, 1.f);
+            return c.a + ab * h;
+        }
+        [[nodiscard]] float distance(const Vector3& p) const {
+            float d = gs.solidFloor ? p.y - floorY : 1e30f;
+            for (std::size_t i = 0; i < boxes(); ++i) d = std::min(d, boxDistance(gs.boxes[i], p));
+            for (std::size_t i = 0; i < capsules(); ++i) {
+                const auto& c = gs.colliders[i];
+                d             = std::min(d, p.distanceTo(capsuleNearest(c, p)) - std::max(c.radius, 1e-3f));
+            }
+            return d;
+        }
+        // The nearest point of free air, `margin` clear of the solid p is in (p itself when it is in none): out
+        // through one of the six faces of a box that holds it, out along the radius of a collider, up off the floor.
+        // An exit that lands in another solid (a lintel under a ceiling) is passed over; p when none is free.
+        [[nodiscard]] Vector3 freeAir(const Vector3& p, float margin) const {
+            if (distance(p) >= 0.f) return p;
+            Vector3   best = p;
+            float     move = 1e30f;
+            const auto consider = [&](const Vector3& q) {
+                const float m = p.distanceTo(q);
+                if (m < move && distance(q) > 0.f) {
+                    move = m;
+                    best = q;
+                }
+            };
+            for (std::size_t i = 0; i < boxes(); ++i) {
+                const auto& b = gs.boxes[i];
+                if (boxDistance(b, p) >= 0.f) continue;
+                for (int a = 0; a < 3; ++a) {
+                    Vector3 lo = p, hi = p;
+                    lo[a]      = b.min[a] - margin;
+                    hi[a]      = b.max[a] + margin;
+                    consider(lo);
+                    consider(hi);
+                }
+            }
+            for (std::size_t i = 0; i < capsules(); ++i) {
+                const auto&   c = gs.colliders[i];
+                const Vector3 n = capsuleNearest(c, p);
+                Vector3       d = p - n;
+                if (d.length() >= std::max(c.radius, 1e-3f)) continue;
+                if (d.lengthSq() < 1e-12f) d.set(0.f, 1.f, 0.f);
+                consider(n + d.normalize() * (std::max(c.radius, 1e-3f) + margin));
+            }
+            if (gs.solidFloor && p.y < floorY) consider(Vector3(p.x, floorY + margin, p.z));
+            return best;
+        }
+    };
+}// namespace
+
+void ParticleFieldPass::addFireLights(State& st, const ParticleField& field) {
+
+    st.glowLit = 0;
+    if (!st.glowValid) return;
+    const auto& gs   = field.gridSmoke();
+    const float emit = field.densityRepr().emissiveIntensity;
+    if (!std::isfinite(emit) || !std::isfinite(gs.lightScale)) return;
+    const float k = std::max(emit, 0.f) * std::max(gs.lightScale, 0.f);
+    if (!(k > 0.f)) return;
+
+    float total[3] = {0.f, 0.f, 0.f};
+    for (const SmokeGlowOctant& o : st.glow.octant)
+        for (int c = 0; c < 3; ++c) total[c] += o.intensity[c];
+    const float floorI = std::max(kFireLightMinShare * k * std::max({total[0], total[1], total[2]}),
+                                  kFireLightMinIntensity);
+    const auto&       dr = field.densityRepr();
+    const SmokeSolids solids{gs, dr.center.y - std::max(dr.halfExtent.y, 1e-4f)};
+    // A cell, the margin a light moved out of a wall keeps from it.
+    const float cell = 2.f * std::max(std::min({dr.halfExtent.x, dr.halfExtent.y, dr.halfExtent.z}), 1e-4f) /
+                       float(std::max(st.densityRes, 1u));
+
+    for (std::uint32_t i = 0; i < 8u; ++i) {
+        const SmokeGlowOctant& o = st.glow.octant[i];
+        const float I[3] = {k * o.intensity[0], k * o.intensity[1], k * o.intensity[2]};
+        const float peak = std::max({I[0], I[1], I[2]});
+        // A NaN anywhere in the octant (a solver gone wrong) lights nothing rather than poisoning every pixel.
+        const bool finite = std::isfinite(peak) && std::isfinite(o.centroid[0]) && std::isfinite(o.centroid[1]) &&
+                            std::isfinite(o.centroid[2]) && std::isfinite(o.spread);
+        if (!finite || !(peak >= floorI) || std::min({I[0], I[1], I[2]}) < 0.f) continue;
+
+        auto& light = st.fireLights[i];
+        if (!light) light = PointLight::create(Color(1.f, 1.f, 1.f), 1.f, 0.f, 2.f);
+        const Vector3 at = solids.freeAir(Vector3(o.centroid[0], o.centroid[1], o.centroid[2]), std::max(cell, 0.02f));
+        light->color.setRGB(I[0] / peak, I[1] / peak, I[2] / peak);
+        light->intensity  = peak;
+        light->decay      = 2.f;// the inverse square
+        light->distance   = std::min(std::sqrt(peak / kFireLightRangeIrradiance), kFireLightMaxRange);
+        light->radius     = std::clamp(solids.distance(at), 0.f, std::sqrt(5.f / 3.f) * o.spread);
+        light->castShadow = gs.lightCastShadow;
+        light->position.copy(at);
+        fireLights_.push_back(light.get());
+        st.glowLit = static_cast<std::uint8_t>(st.glowLit | (1u << i));
+    }
+    // THREEPP_LOG=vulkan.particles:trace: a line per burning field per frame, its lights after it.
+    if (kLogParticles.enabled(log::Level::Trace)) {
+        std::string each;
+        for (std::uint32_t i = 0; i < 8u; ++i) {
+            if (((st.glowLit >> i) & 1u) == 0u) continue;
+            const PointLight& l = *st.fireLights[i];
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), " %u:%.2f@(%.2f,%.2f,%.2f)r%.2f", i, double(l.intensity),
+                          double(l.position.x), double(l.position.y), double(l.position.z), double(l.radius));
+            each += buf;
+        }
+        THREEPP_LOGF(kLogParticles, Trace, "GridSmoke fire light: %.2f %.2f %.2f W/sr (lightScale %.3g);%s",
+                     double(k * total[0]), double(k * total[1]), double(k * total[2]), double(gs.lightScale),
+                     each.c_str());
+    }
+}
+
+bool ParticleFieldPass::fireLightFor(const ParticleField& field, SmokeGlow& glow, std::uint8_t& litMask) const {
+
+    const auto it = states_.find(&field);
+    if (it == states_.end() || !it->second->smoke || !it->second->glowValid) return false;
+    glow    = it->second->glow;
+    litMask = it->second->glowLit;
+    return true;
 }
 
 void ParticleFieldPass::declareDensityScatter(rg::RenderGraph& g, rg::PassBuilder& pass,

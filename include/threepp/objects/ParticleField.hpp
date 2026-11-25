@@ -622,6 +622,33 @@ namespace threepp {
         // then on its flame keeps its own fuel alight. The heat is the same
         // temperature buoyancy lifts and `cooling` takes away, and with
         // DensityRepr::emissiveIntensity > 0 the soot glows at it.
+        //
+        // THE FIRE'S LIGHT. A glowing field lights its surroundings by itself:
+        // the walls, the floor and the smoke round the flames, with no light in
+        // the scene. Each frame the renderer sums the glow it draws (the soot's
+        // emission, emissiveIntensity included) over each eighth of the box (two
+        // halves per axis) on the device: each cell radiates its emission times
+        // its volume, the same in every direction, so seen from a distance an
+        // eighth that glows is a point light of that summed intensity at the
+        // centre of its glow, falling off as the inverse square, from a source
+        // as wide as the glow is spread (soft shadows) but never reaching into
+        // the walls the solver knows (its boxes, colliders and solid floor; a
+        // centre that falls inside one moves out to the nearest free air), so
+        // the shadow rays cannot find it through a wall. Each eighth that glows
+        // becomes such a light, so a fire that spills out of a door lights the
+        // wall from outside while the room behind it is lit from within, and the
+        // light flickers with the flames because it follows the solved emission
+        // frame by frame. The sum comes back a couple of frames late, which on a
+        // fire does not show. `lightScale` scales it: 1 is that physical
+        // stand-in, 0 a fire that lights nothing (which also skips the sum).
+        // The lights are the renderer's, never in the scene graph; they take the
+        // path a PointLight does (the surfaces, the smoke's in-scatter, the
+        // clustered culling, the shadows). `lightCastShadow` is their castShadow:
+        // as for any PointLight, where the device traces rays every lamp's
+        // shadow is traced, and where it uses shadow maps a lamp gets a map only
+        // when it casts shadows, so a fire in a shed does not light the ground
+        // outside through the walls. The path tracer adds none of them: its paths
+        // pick the fire's emission up themselves.
         struct GridSmoke {
             struct Source {
                 Vector3 position{0.f, 0.f, 0.f};
@@ -694,6 +721,9 @@ namespace threepp {
             // Kelvin per temperature unit, above the fixed ambient: what the glow sees (blackbody, DensityRepr).
             float temperatureScale    = 600.f;
             static constexpr float kAmbientKelvin = 293.f;
+            // ── the fire's light (see THE FIRE'S LIGHT above) ───────────────
+            float lightScale      = 1.f; // share of the glow's physical light the fire throws (0: none)
+            bool  lightCastShadow = true;// the fire's lights cast shadows (their castShadow)
             bool  solidFloor  = false; // the bottom face of the box is a wall
             std::vector<Source>   sources;
             std::vector<Collider> colliders;

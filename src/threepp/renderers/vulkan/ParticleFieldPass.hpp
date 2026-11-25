@@ -66,6 +66,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -76,6 +77,7 @@
 namespace threepp {
     class Object3D;
     class ParticleField;
+    class PointLight;
 }// namespace threepp
 
 namespace threepp::vulkan {
@@ -703,6 +705,29 @@ namespace threepp::vulkan {
         // and the scatter / convert sets (reflected).
         void declareDensityScatter(rg::RenderGraph& g, rg::PassBuilder& pass, rg::BufferHandle fields) const;
 
+        // ── The fire's light (ParticleField::GridSmoke::lightScale) ─────────
+        // Every burning grid smoke's glow is summed per octant of its box at
+        // the end of recordDensityScatter (SmokeGrid::recordGlow), into this
+        // frame's readback slot, and comes back kFramesInFlight frames later.
+        //
+        // This frame's fire lights: for every burning grid smoke, a point
+        // light per octant of its box that glowed in the sum prepareFrame read
+        // back (kFramesInFlight frames old), at the centre of the glow, as
+        // strong as it radiates (W/sr, already the shading's units: no
+        // physical-unit conversion applies) times the field's lightScale. The
+        // renderer adds them to the frame's lights after the scene's
+        // (updateLightsUbo). The objects are this pass's, the same ones every
+        // frame while their field lives, and in no scene graph. Rebuilt in
+        // every prepareFrame.
+        [[nodiscard]] const std::vector<PointLight*>& fireLights() const { return fireLights_; }
+
+        // TEST/AUDIT: the sum a field's lights were made from this frame, and
+        // which octants became lights (bit i, octant i). False when the field
+        // is not a grid smoke or no sum came back this frame. See
+        // VulkanRenderer::readGridSmokeLight.
+        [[nodiscard]] bool fireLightFor(const ParticleField& field, SmokeGlow& glow,
+                                        std::uint8_t& litMask) const;
+
         // This frame's bound volumes, in descriptor-array order. Never longer
         // than kMaxDensityFields.
         [[nodiscard]] const std::vector<DensityVolumeDesc>& densityVolumes() const {
@@ -933,6 +958,13 @@ namespace threepp::vulkan {
             // The solver's images could not be made (out of device memory): said once, and not
             // tried again every frame for the life of the field.
             bool smokeFailed = false;
+            // The fire's light: the glow sum this frame read back (valid when one came back), which octants
+            // became lights, and the lights themselves, made on first use and kept with the field, so a light
+            // keeps its id (a shadow-map slot is held by id) and nothing is allocated per frame.
+            SmokeGlow     glow{};
+            bool          glowValid = false;
+            std::uint8_t  glowLit   = 0;
+            std::array<std::shared_ptr<PointLight>, 8> fireLights{};
 
             // ── F5: the baked height map ────────────────────────────────────
             // RINGED over the frames in flight, unlike the density volume,
@@ -1196,6 +1228,10 @@ namespace threepp::vulkan {
         std::vector<DensityVolumeDesc> densityVols_;
         std::vector<DensityDispatch>   densityDispatch_;
         std::uint64_t densityGen_      = 0;
+        std::vector<PointLight*>       fireLights_;// fireLights()
+
+        // The fire's light: a field's lights for this frame from the sum its State holds (fireLights()).
+        void addFireLights(State& st, const ParticleField& field);
 
         State& ensureState(const ParticleField& field);
         void   ensureDescCapacity(std::uint32_t frame, std::uint32_t count);
