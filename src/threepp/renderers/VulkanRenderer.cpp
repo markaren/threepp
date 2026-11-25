@@ -1715,16 +1715,17 @@ namespace threepp {
     namespace {
 
         // Copies mip 0 of one layer of a colour image resting in GENERAL to
-        // the host, after draining the device. For the audit readbacks below,
-        // never per frame.
+        // the host, after draining the device. A 3D image passes its depth
+        // (and layer 0). For the audit readbacks below, never per frame.
         std::vector<uint8_t> copyGeneralImageToHost(vulkan::VulkanContext& ctx, VkImage image,
                                                     uint32_t width, uint32_t height, uint32_t layer,
-                                                    uint32_t bytesPerTexel, const char* label) {
+                                                    uint32_t bytesPerTexel, const char* label,
+                                                    uint32_t depth = 1) {
             // Drain first: the producers rewrite these images in every frame
             // in flight.
             vkDeviceWaitIdle(ctx.device());
 
-            const VkDeviceSize bytes = VkDeviceSize(width) * height * bytesPerTexel;
+            const VkDeviceSize bytes = VkDeviceSize(width) * height * depth * bytesPerTexel;
             vulkan::Buffer staging = vulkan::createBuffer(
                     ctx.allocator(), ctx.device(), bytes,
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1763,7 +1764,7 @@ namespace threepp {
             region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
             region.imageSubresource.baseArrayLayer = layer;
             region.imageSubresource.layerCount     = 1;
-            region.imageExtent                     = {width, height, 1};
+            region.imageExtent                     = {width, height, depth};
             vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, staging.handle, 1, &region);
             vulkan::check(vkEndCommandBuffer(cb), label);
 
@@ -1866,6 +1867,49 @@ namespace threepp {
         }
         resolution = n;
         period     = w.rippleSize[patch];
+        return true;
+    }
+
+    bool VulkanRenderer::readGridSmoke(const ParticleField& field, GridSmokeState& out) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx || !impl.particleFieldPass_) return false;
+        vulkan::SmokeGrid::Images img;
+        uint32_t                  n = 0;
+        if (!impl.particleFieldPass_->smokeGridFor(field, img, n) || n == 0) return false;
+
+        const size_t cells = static_cast<size_t>(n) * n * n;
+        const auto   halfAt = [](const std::vector<uint8_t>& b, size_t i) {
+            uint16_t h;
+            std::memcpy(&h, b.data() + i * 2u, sizeof(h));
+            return halfBitsToFloat(h);
+        };
+
+        const auto vel = copyGeneralImageToHost(*ctx, img.velocity, n, n, 0u, 8u, "readGridSmoke(velocity)", n);
+        const auto sca = copyGeneralImageToHost(*ctx, img.scalars, n, n, 0u, 4u, "readGridSmoke(scalars)", n);
+        const auto prs = copyGeneralImageToHost(*ctx, img.pressure, n, n, 0u, 4u, "readGridSmoke(pressure)", n);
+        const auto aux = copyGeneralImageToHost(*ctx, img.scratch, n, n, 0u, 8u, "readGridSmoke(scratch)", n);
+        const auto sol = copyGeneralImageToHost(*ctx, img.solid, n, n, 0u, 8u, "readGridSmoke(solid)", n);
+
+        out.resolution = n;
+        out.velocity.resize(cells * 3u);
+        out.density.resize(cells);
+        out.temperature.resize(cells);
+        out.pressure.resize(cells);
+        out.divergence.resize(cells);
+        out.solid.resize(cells);
+        out.solidVelocity.resize(cells * 3u);
+        for (size_t i = 0; i < cells; ++i) {
+            for (size_t a = 0; a < 3; ++a) {
+                out.velocity[i * 3u + a]      = halfAt(vel, i * 4u + a);
+                out.solidVelocity[i * 3u + a] = halfAt(sol, i * 4u + a);
+            }
+            out.density[i]     = halfAt(sca, i * 2u);
+            out.temperature[i] = halfAt(sca, i * 2u + 1u);
+            std::memcpy(&out.pressure[i], prs.data() + i * 4u, sizeof(float));
+            out.divergence[i] = halfAt(aux, i * 4u);
+            out.solid[i]      = halfAt(sol, i * 4u + 3u);
+        }
         return true;
     }
 

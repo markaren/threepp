@@ -352,6 +352,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanParticleField_test COMMAND VulkanParticleField_test)
     set_tests_properties(VulkanParticleField_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # ParticleField::GridSmoke, measured on the solver's own state (readGridSmoke):
+    # the projection leaves no divergence the solve did not, a sealed box keeps its
+    # smoke, walls keep their two sides apart, a symmetric plume stays symmetric,
+    # still solids move nothing, and the plume does not depend on the grid.
+    add_executable(VulkanGridSmoke_test VulkanGridSmoke_test.cpp)
+    target_link_libraries(VulkanGridSmoke_test PRIVATE threepp)
+    add_test(NAME VulkanGridSmoke_test COMMAND VulkanGridSmoke_test)
+    set_tests_properties(VulkanGridSmoke_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # BillboardRepr::softDistance: a sprite through the ground fades into it
     # instead of being cut along a line, off is unchanged, and a sprite with
     # only sky behind it is byte-identical. Twice: the multisampled overlay (the

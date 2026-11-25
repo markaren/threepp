@@ -2071,6 +2071,16 @@ bool ParticleFieldPass::densityVolumeFor(const ParticleField& field,
     return true;
 }
 
+bool ParticleFieldPass::smokeGridFor(const ParticleField& field,
+                                     SmokeGrid::Images& images, std::uint32_t& res) const {
+
+    const auto it = states_.find(&field);
+    if (it == states_.end() || !it->second->smoke || !it->second->smoke->ready()) return false;
+    images = it->second->smoke->latest();
+    res    = it->second->smoke->resolution();
+    return true;
+}
+
 // The whole per-frame cost of Ownership::Renderer, and the whole per-frame
 // TRAFFIC too: one vkCmdPushConstants + one vkCmdDispatch per field, over a
 // domain the CPU has known since the field was created. Nothing is uploaded,

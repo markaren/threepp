@@ -126,6 +126,21 @@ namespace threepp::vulkan {
         // Run the owed steps and write the density volume (set 1 of the write pass).
         void record(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan, VkDescriptorSet densitySet);
 
+        // TEST/AUDIT: the images holding the state the last recorded step left (the "in" half of each pair).
+        // Valid to copy once the device has drained. See VulkanRenderer::readGridSmoke.
+        struct Images {
+            VkImage velocity = VK_NULL_HANDLE;// rgba16f, xyz m/s
+            VkImage scalars  = VK_NULL_HANDLE;// rg16f, density, temperature
+            VkImage pressure = VK_NULL_HANDLE;// r32f
+            VkImage scratch  = VK_NULL_HANDLE;// rgba16f, .x = the last step's divergence before its projection
+            VkImage solid    = VK_NULL_HANDLE;// rgba16f, xyz the solid's velocity, w covered
+        };
+        [[nodiscard]] Images latest() const {
+            return {vel_[v_].image, sca_[s_].image, p_[p_in_].image, aux_.image, solid_.image};
+        }
+        // False until the first frame has cleared the images.
+        [[nodiscard]] bool ready() const { return ready_; }
+
     private:
         SmokeGrid(VulkanContext& ctx, std::uint32_t res) : ctx_(ctx), res_(res) {}
         void step(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan);

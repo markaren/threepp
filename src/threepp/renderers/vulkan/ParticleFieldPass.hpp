@@ -761,6 +761,11 @@ namespace threepp::vulkan {
         [[nodiscard]] bool densityVolumeFor(const ParticleField& field,
                                             VkImage& image, std::uint32_t& res) const;
 
+        // TEST/AUDIT: a grid-smoke field's solver images, for readback. False when
+        // the field has no solver or it has not run. See VulkanRenderer::readGridSmoke.
+        [[nodiscard]] bool smokeGridFor(const ParticleField& field,
+                                        SmokeGrid::Images& images, std::uint32_t& res) const;
+
         // Fields with resident device state. Read by the renderer's own
         // early-out: a scene that never had a field must not pay for one, and a
         // scene that just lost its last field still has a sweep to run.
