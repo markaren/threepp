@@ -213,6 +213,14 @@ float gWaterLobeAlong = 0.5;
 // (the reflection is their mirror), 1 where it averages them away. The glint
 // and the facet Fresnel take all of it.
 float gWaterLobeShare = 1.0;
+// The banked short waves' slope variance under a water pixel that neither its
+// normal nor its lobe draws (THE FOOTPRINT'S TWO AXES, deferred_shade_06): the
+// share of the texel's own spread a pixel close to the camera "resolves" (it
+// shows a definite facet of the centimetre waves, not their spread), which the
+// fine cascade does not hold either. shadeWater's discrete glints (kOceanGlints)
+// widen the light's lobe by it before counting its specular points. 0 without
+// the banked short waves (DisplacedMesh::Params::shortWaveSpectrum).
+float gWaterCapUndrawn = 0.0;
 // Crest foam (DisplacedMesh::Params::crestFoam; read only where kOceanCrestFoam
 // is set, stand-ins bound otherwise). oceanCrestFoam is the foam on the water's
 // REST coordinates (foam_crest.comp): R16F over one oceanFoamTileSize, REPEAT,
@@ -357,6 +365,11 @@ layout(constant_id = 8) const uint kOceanCrestFoam = 0u;
 // waveReflections): the water's own mirror ray shades water it meets instead
 // of passing through it. 0 keeps the pass-through.
 layout(constant_id = 9) const uint kOceanWaveReflect = 0u;
+// 1 = the water's sun glints are discrete (shadeWater's waterSunGlints): the
+// smooth sun lobe becomes the specular points under the pixel, counted. Rides
+// with an ocean (its chop normals); branch water/glints only, for the A/B:
+// THREEPP_OCEAN_GLINTS=0 is dev's water.
+layout(constant_id = 11) const uint kOceanGlints = 0u;
 // The wave climate this frame (DisplacedMesh::WaveClimate): bit 0 the fine
 // cascade's per-pixel slope is scaled by the map's .z (with the chop
 // normals), bit 1 the crest foam is read at the map's level (its texture

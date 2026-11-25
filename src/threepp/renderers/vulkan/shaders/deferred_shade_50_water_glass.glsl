@@ -86,6 +86,123 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
     return spec;
 }
 
+// ── DISCRETE SUN GLINTS (kOceanGlints) ──────────────────────────────────────
+// waterGlint's lobe is the MEAN of what the water under a pixel reflects of a
+// directional light. The light actually comes off it at specular points, the
+// places where the rippled surface's slope sweeps through the light's mirror
+// slope: on curved centimetre waves there are many, each an image of the sun
+// shrunk by the curvature. Their number in the pixel's footprint is Poisson
+// with mean (Longuet-Higgins 1960: the slope density at the mirror slope times
+// the curvature's mean |det|)
+//     lambda = footprint area * kGlintPoints * D(h) (n.h) / (4 v.h),
+// D the lobe's own GGX: the water's slopes ARE the spread the lobe stands for.
+// The pixel shows the lobe times the k points' light over lambda (each
+// point's light heavy-tailed, glintPointsLight): the same mean everywhere,
+// but where lambda is small (the near water, the edge of the glitter path) it
+// is dark with bright points, as a sea glitters, and where it is large (far
+// off, the middle of the path) it is the sheen it was. kGlintPoints is set by
+// eye (2026-11-25, Norvasundet and an open sea from a deck, a USV and a drone,
+// 3 to 14 m/s): Longuet-Higgins' count for capillaries is some 10^3 to 10^4
+// per m^2 per unit of D, which no pixel resolves; 60 keeps a point or so in a
+// near pixel, where a camera does see them one by one. The counts are drawn per
+// cell of a grid laid on the water (world-fixed, so a glint stays put from
+// frame to frame; its edge a power of two of kGlintCell picked from the
+// footprint, the two nearest sizes blended so nothing pops as the camera
+// nears), up to four cells along the footprint's strip, each standing for its
+// share of the strip. A cell draws a new count every kGlintLife seconds at a
+// phase of its own; two draws half a period apart cross-fade (sin^2 + cos^2 =
+// 1), so a glint swells and fades instead of blinking, and the mean holds.
+const float kGlintPoints = 60.0; // 1/m^2: specular points per unit of the lobe's slope density (curvature)
+const float kGlintCell   = 0.01; // m: the finest cell of the grid the counts are drawn on
+const float kGlintLife   = 0.25; // s: how long a specular point holds before the ripples move it on
+
+// A Poisson count of mean lambda from one hash: the inverse of its CDF, a
+// normal approximation past lambda 24 (where that loop would run long).
+float glintPoisson(float lambda, uint h) {
+    const float u = (float(h >> 8u) + 0.5) * (1.0 / 16777216.0);
+    if (lambda > 24.0) {
+        const float u2 = (float(pcgHash(h) >> 8u) + 0.5) * (1.0 / 16777216.0);
+        const float z  = sqrt(-2.0 * log(u)) * cos(TWO_PI * u2);
+        return max(floor(lambda + sqrt(lambda) * z + 0.5), 0.0);
+    }
+    float p = exp(-lambda), cdf = p, k = 0.0;
+    for (int i = 0; i < 64 && u > cdf; ++i) {
+        k += 1.0;
+        p *= lambda / k;
+        cdf += p;
+    }
+    return k;
+}
+
+// The light of k specular points, each an image of the sun shrunk by its
+// ripple's curvature, so heavy-tailed (Pareto, shape kGlintTail, mean 1): a
+// few flat ones outshine the many curved, and a far pixel that averages
+// dozens still sparkles where one of them is flat. The brightest of the k is
+// drawn; the rest are their mean below it, so the sum keeps its mean k.
+const float kGlintTail = 1.5;
+float glintPointsLight(float k, uint h) {
+    if (k <= 0.0) return 0.0;
+    const float xm    = (kGlintTail - 1.0) / kGlintTail;// the scale that makes the mean 1
+    const float v     = (float(h >> 8u) + 0.5) * (1.0 / 16777216.0);
+    const float top   = xm * pow(max(1.0 - pow(v, 1.0 / k), 1e-7), -1.0 / kGlintTail);
+    const float r     = xm / top;
+    const float below = (1.0 - pow(r, kGlintTail - 1.0)) / max(1.0 - pow(r, kGlintTail), 1e-7);
+    return top + (k - 1.0) * below;
+}
+
+// The light of one grid cell's points that mirror the light now (mean
+// lambda): two draws half a period apart, cross-faded.
+float glintCellCount(ivec2 cell, uint level, float lambda, float t) {
+    const uint  hc = pcgHash(uint(cell.x) * 73856093u ^ pcgHash(uint(cell.y) * 19349663u ^ level * 83492791u));
+    const float x  = t / kGlintLife + float(hc >> 8u) * (1.0 / 16777216.0);
+    const float sA = floor(x);
+    const float sB = floor(x + 0.5);
+    const float wA = sin(PI * (x - sA));
+    const float wB = sin(PI * (x + 0.5 - sB));
+    const uint  hA = pcgHash(hc ^ uint(int(sA)) * 2654435761u);
+    const uint  hB = pcgHash(hc ^ 0x9E3779B9u ^ uint(int(sB)) * 2246822519u);
+    return glintPointsLight(glintPoisson(lambda, hA), pcgHash(hA ^ 0x68E31DA4u)) * wA * wA
+         + glintPointsLight(glintPoisson(lambda, hB), pcgHash(hB ^ 0x68E31DA4u)) * wB * wB;
+}
+
+// What the light's lobe at P is drawn with: the light of the specular points
+// there now over its mean. 1 where so many fall in the pixel (lambda over 64)
+// that it is its mean, and where hardly any can (under 1e-7).
+float waterSunGlints(vec3 P, vec3 N, vec3 V, vec3 L, float specRough) {
+    const vec3  camPos    = cam.viewInverse[3].xyz;
+    const float pixAcross = (cam.camAux.x > 0.5 ? 1.0 : length(P - camPos))
+                          * 2.0 * cam.projInverse[1][1] / max(float(pc.height), 1.0);
+    const float pixAlong  = pixAcross / max(abs(dot(fog.waterUp, V)), 0.02);
+    const vec3  H         = normalize(V + L);
+    const float ndh       = max(dot(N, H), 0.0);
+    // specular points per square metre of water here
+    const float density   = kGlintPoints * distGGX(ndh, specRough) * ndh / (4.0 * max(dot(V, H), 1e-3));
+    const float lambdaPix = pixAcross * pixAlong * density;
+    if (!(lambdaPix > 1e-7) || lambdaPix > 64.0) return 1.0;
+    const vec3  wX    = fog.waterX;
+    const vec3  wZ    = cross(fog.waterX, fog.waterUp);
+    const vec2  q     = vec2(dot(P, wX), dot(P, wZ));
+    const vec2  v2    = vec2(dot(V, wX), dot(V, wZ));
+    const float vl    = length(v2);
+    const vec2  along = vl > 1e-4 ? v2 / vl : vec2(1.0, 0.0);
+    const float lv    = max(log2(max(pixAcross, kGlintCell) / kGlintCell), 0.0);
+    const float l0    = floor(lv);
+    float g = 0.0;
+    for (int j = 0; j < 2; ++j) {
+        const float level = l0 + float(j);
+        const float c     = kGlintCell * exp2(level);
+        const float taps  = clamp(floor(pixAlong / c + 0.5), 1.0, 4.0);
+        const float lambdaTap = c * max(pixAlong, c) / taps * density;
+        float k = 0.0;
+        for (int s = 0; s < int(taps); ++s) {
+            const vec2 qs = q + along * (pixAlong * ((float(s) + 0.5) / taps - 0.5));
+            k += glintCellCount(ivec2(floor(qs / c)), uint(level), lambdaTap, pc.timeSec);
+        }
+        g += (j == 0 ? 1.0 - (lv - l0) : lv - l0) * k / max(taps * lambdaTap, 1e-20);
+    }
+    return g;
+}
+
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
 // DETERMINISTIC thin-shell BSDF — noise-free because it's an analytic Fresnel
 // split, not a stochastic reflect/refract pick:
@@ -1280,7 +1397,20 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 if (i == 0u) gWaterSunVis0 = vis;
             }
             if (vis <= 0.0) continue;
-            const float spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
+            float spec;
+            if (kOceanGlints != 0u) {
+                // The light's lobe takes back the short waves' spread the pixel
+                // does not draw (gWaterCapUndrawn), and is drawn as the facets
+                // that mirror the light, counted: the reflection keeps its
+                // crisp mirror of the drawn waves, the sun glitters over them.
+                const float aE  = specRough * specRough;
+                const float rG  = sqrt(sqrt(aE * aE + gWaterCapUndrawn));
+                const float kGg = (rG + 1.0) * (rG + 1.0) / 8.0;
+                spec = waterGlint(N, V, L, NdotV, ndl, r0, rG, kGg, pm.clearcoat, ccRough)
+                     * waterSunGlints(P, N, V, L, rG);
+            } else {
+                spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
+            }
             const vec2 dim = waterSunDim(i, P, L);
             vec3 c = spec * ndl * lights.dirLights[i].color * (vis * dim.x * dim.y);
             // Directional lights are deltas → GGX spikes; clamp so a glint blooms

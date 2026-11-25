@@ -377,6 +377,7 @@
                 }
             }
             const float vSub = slopeVarSub * (sa + sc);// 1 when all of it is under the pixel, half each axis
+            gWaterCapUndrawn = (slopeVarSub - vSub) * wakeCalm * wakeCalm;
             slopeVar = vSub + vBand;
             const float vTotS  = slopeVar * wakeCalm * wakeCalm + wakeBoilVar;
             const float vAlong = (sa * slopeVarSub + shareBand * vBand) * wakeCalm * wakeCalm + 0.5 * wakeBoilVar;
