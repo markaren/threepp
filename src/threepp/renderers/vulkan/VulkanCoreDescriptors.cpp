@@ -416,18 +416,24 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             ensureParticleDensityResources();
             std::array<VkImageView, vulkan::kMaxDensityFields> pdViews{};
             std::array<VkImageView, vulkan::kMaxDensityFields> pdLinViews{};
+            // A solved volume's temperature (binding 99); every other slot, a
+            // particle field's included, takes the r16f dummy, which the
+            // shade never samples for it.
+            std::array<VkImageView, vulkan::kMaxDensityFields> pdTempViews{};
             {
                 uint32_t n = 0;
                 if (particleFieldPass_) {
                     for (const auto& v : particleFieldPass_->densityVolumes()) {
                         if (n >= vulkan::kMaxDensityFields) break;
-                        pdLinViews[n] = v.linView;
-                        pdViews[n++]  = v.view;
+                        pdLinViews[n]  = v.linView;
+                        pdTempViews[n] = v.tempView != VK_NULL_HANDLE ? v.tempView : particleDensityLinDummy_.view;
+                        pdViews[n++]   = v.view;
                     }
                 }
                 for (uint32_t i = n; i < vulkan::kMaxDensityFields; ++i) {
-                    pdViews[i]    = particleDensityDummy_.view;
-                    pdLinViews[i] = particleDensityLinDummy_.view;
+                    pdViews[i]     = particleDensityDummy_.view;
+                    pdLinViews[i]  = particleDensityLinDummy_.view;
+                    pdTempViews[i] = particleDensityLinDummy_.view;
                 }
             }
             std::array<VkBuffer, kFramesInFlight> pdUbos{};
@@ -435,6 +441,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 pdUbos[f] = particleDensityUbos_[f].handle;
             in.particleDensity      = pdViews.data();
             in.particleDensityLin   = pdLinViews.data();
+            in.particleDensityTemp  = pdTempViews.data();
             in.particleDensityCount = vulkan::kMaxDensityFields;
             in.particleDensityUbo   = pdUbos.data();
             // Splat reflection volumes (bindings 70/71) — the pdViews block
@@ -551,9 +558,10 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 tin.materialTexCount = kMaxMaterialTextures;
                 tin.emissiveTriBuf   = emBufs.data();
                 tin.fogUbo           = fogBufs.data();
-                tin.particleDensity    = pdViews.data();
-                tin.particleDensityLin = pdLinViews.data();
-                tin.particleDensityUbo = pdUbos.data();
+                tin.particleDensity     = pdViews.data();
+                tin.particleDensityLin  = pdLinViews.data();
+                tin.particleDensityTemp = pdTempViews.data();
+                tin.particleDensityUbo  = pdUbos.data();
                 tin.cloudUbo           = cloudBufs.data();
                 tin.cloudRange         = sizeof(GpuCloudUbo);
                 tin.oceanFineView      = oceanFineHeightView;

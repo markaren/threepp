@@ -4,6 +4,11 @@
 
 // Pass 5: the divergence of each open cell, into aux.x: what its six faces carry
 // out of it, per unit volume (1/s). A solid's face moves with the solid.
+//
+// Less the gas this step's burn released in the cell (the velocity's w, from
+// smoke_forces.comp): what the pressure solve then removes leaves div(u) equal to
+// that expansion instead of 0, so a flame pushes its own gas out of itself. With
+// no burn the expansion is 0 and the divergence is the velocity's own.
 
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
@@ -16,5 +21,5 @@ void main() {
     const float div = (faceVel(0, c + ivec3(1, 0, 0)) - faceVel(0, c)) * pc.invCell.x +
                       (faceVel(1, c + ivec3(0, 1, 0)) - faceVel(1, c)) * pc.invCell.y +
                       (faceVel(2, c + ivec3(0, 0, 1)) - faceVel(2, c)) * pc.invCell.z;
-    imageStore(aux, c, vec4(div, 0.0, 0.0, 0.0));
+    imageStore(aux, c, vec4(div - texelFetch(uVel, c, 0).w, 0.0, 0.0, 0.0));
 }

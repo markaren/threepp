@@ -1403,7 +1403,7 @@ DustLeg dustLeg(vec3 ro, vec3 rd, float tMax, inout uint seed) {
             sig += si;
             albStep += pd.albedoAniso[i].rgb * si;
             gStep   += pd.albedoAniso[i].a * si;
-            if (emissive && pd.emission[i].x > 0.0) emStep += pdEmissionAt(i, tt.y, si);
+            if (emissive && pd.emission[i].x > 0.0) emStep += pdEmissionAt(i, tt, si);
         }
         if (sig <= 0.0) continue;
         const float tr = exp(-tau);

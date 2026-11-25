@@ -2,10 +2,36 @@
 #extension GL_GOOGLE_include_directive : enable
 #include "smoke_common.glsl"
 
-// Pass 2 of a smoke step: buoyancy, the sources, the colliders, damping.
+// Pass 2 of a smoke step: the sources, the burn, buoyancy, the colliders, damping.
 // Pointwise, so it reads (A) and writes (B) and the host flips both parities.
 // One invocation per velocity texel: its cell's scalars (when it is a cell) and
 // the three faces at the cell's min sides.
+//
+// THE BURN, per open cell, after the sources: with o the oxygen left (1 - the
+// oxygen used), where the air is hotter than the ignition temperature and holds
+// fuel and oxygen,
+//
+//     burnable = min(fuel, o / oxygenPerFuel)        what this air can burn
+//     r        = burnable * (1 - exp(-burnRate dt))  what it burns this step
+//
+// and r leaves the fuel and turns into what a flame makes of it: oxygen used
+// (r * oxygenPerFuel), heat (r * heatRelease), soot (r * sootYield), and gas,
+// r * expansion of the cell's volume, which is a rate of r * expansion / dt.
+// That rate goes to the velocity texel's w and from there to the divergence
+// (smoke_diverge.comp), so the projection pushes it out of the cell. A cell of
+// fresh air burns at most 1 / oxygenPerFuel of fuel, so a fuel-rich core
+// starves until air comes in at its edges, and a closed room's fire goes out
+// with fuel left over.
+//
+// A burn whose oxygen the stored scalars cannot record is not made: under one
+// fp16 step of a deficit near 1 (2^-11; a device may round the store toward
+// zero, so half a step is not enough). A starved cell's deficit stops a step or
+// two short of 1, where each step's share of what is left rounds away; the fuel
+// that burn took could still round to a whole step of a small fuel value, and
+// the fuel a starved fire left would drain away a step at a time with no oxygen
+// used for it. So the books hold: fuel only goes where oxygen goes.
+
+const float kOxygenStep = 1.0 / 2048.0;
 
 // The scalars of the two cells a face separates, as the face sees them: their mean, or the one inside the box.
 vec2 faceScalars(int axis, ivec3 c) {
@@ -37,9 +63,10 @@ void main() {
     const int   ns = int(head.x);
 
     // ── the scalars, at the cell centre ─────────────────────────────────────
+    float expansion = 0.0;// 1/s: the gas this step's burn released in the cell
     if (inGrid(c)) {
         const vec3 w = worldOfCell(c);
-        vec2       s = texelFetch(uSca, c, 0).xy;// density, temperature
+        vec4       s = texelFetch(uSca, c, 0);// density, temperature, fuel, oxygen used
         for (int i = 0; i < ns; ++i) {
             const float k = sourceWeight(i, w);
             if (k <= 0.0) continue;
@@ -48,6 +75,7 @@ void main() {
             const float n = mix(1.0, 0.35 + 1.3 * vnoise(w * (3.0 / r) + vec3(0.0, -head.z * 1.7, 0.0)), src[i].vel.w);
             s.x += src[i].rates.x * k * n * dt;
             s.y += src[i].rates.y * k * n * dt;
+            s.z += src[i].rates.w * k * n * dt;
         }
         vec3 sv;
         if (solidCell(c, sv)) {
@@ -55,20 +83,33 @@ void main() {
             // surface takes the mean of the open cells beside it: the smoke beside a wall reads its own side, and the
             // wall neither drains it (an empty wall did) nor stores it to hand to the far side (a wall that kept what
             // the advection put in it did). A cell with no open neighbour, deep in a wall or a moving body, only thins
-            // the smoke it sits in: a body that deleted all it swept cut a thin dark tunnel along its path.
-            vec2  sum = vec2(0.0);
+            // the smoke it sits in: a body that deleted all it swept cut a thin dark tunnel along its path. Nothing
+            // burns in a wall.
+            vec4  sum = vec4(0.0);
             float k   = 0.0;
             for (int a = 0; a < 6; ++a) {
                 const ivec3 q = c + ivec3(a == 0 ? 1 : (a == 1 ? -1 : 0), a == 2 ? 1 : (a == 3 ? -1 : 0), a == 4 ? 1 : (a == 5 ? -1 : 0));
                 vec3        qv;
                 if (!inGrid(q) || solidCell(q, qv)) continue;
-                sum += texelFetch(uSca, q, 0).xy;
+                sum += texelFetch(uSca, q, 0);
                 k += 1.0;
             }
             if (k > 0.0) s = sum / k;
             else s.x *= exp(-10.0 * dt);
+        } else {
+            const float o = clamp(1.0 - s.w, 0.0, 1.0);// the oxygen left
+            if (s.y > burn0.x && s.z > 0.0 && o > 0.0) {
+                const float r = min(s.z, o / burn1.x) * (1.0 - exp(-burn0.y * dt));
+                if (r * burn1.x >= kOxygenStep) {
+                    s.z -= r;
+                    s.w += r * burn1.x;
+                    s.y += r * burn0.z;
+                    s.x += r * burn0.w;
+                    expansion = r * burn1.y / dt;
+                }
+            }
         }
-        imageStore(oSca, c, vec4(s, 0.0, 0.0));
+        imageStore(oSca, c, s);
     }
 
     // ── the velocity, on the faces ──────────────────────────────────────────
@@ -101,5 +142,5 @@ void main() {
         u *= 1.0 / (1.0 + pc.phys1.z * dt);
         v[a] = clamp(u + pc.wind[a], -pc.wind.w, pc.wind.w) - pc.wind[a];
     }
-    imageStore(oVel, c, vec4(v, 0.0));
+    imageStore(oVel, c, vec4(v, expansion));
 }

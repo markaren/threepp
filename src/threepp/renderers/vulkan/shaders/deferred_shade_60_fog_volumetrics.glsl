@@ -160,6 +160,9 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 //     T   = mix(bottomK, topK, pow(heightFraction, falloff))
 //     E  += intensity * blackbodyRGB(T) * sigma_i * e^(-tau) * dt
 //
+// (A SOLVED volume, ParticleField::GridSmoke, takes T from its own temperature
+// volume instead of the ramp: pdEmissionAt in particle_density.glsl.)
+//
 // Emission scales with THAT VOLUME's own sigma because that is the physics —
 // soot radiates in proportion to how much soot there is — and it is also what
 // makes the flame's silhouette be the particle distribution rather than a
@@ -321,10 +324,11 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
                 gStep   += pd.albedoAniso[i].a * si;
             }
             // Blackbody ramp over the height fraction inside THIS volume's
-            // box. The expression itself lives in particle_density.glsl so
-            // that the reflected-leg march (pdEmissiveLeg) cannot drift away
-            // from it — ONE emission model, called twice.
-            if (emissive && pd.emission[i].x > 0.0) emStep += pdEmissionAt(i, tt.y, si);
+            // box, or a solved volume's own temperature. The expression itself
+            // lives in particle_density.glsl so that the reflected-leg march
+            // (pdEmissiveLeg) cannot drift away from it — ONE emission model,
+            // called twice.
+            if (emissive && pd.emission[i].x > 0.0) emStep += pdEmissionAt(i, tt, si);
         }
         if (sig <= 0.0) continue;
         const float tr = exp(-tau);

@@ -3,10 +3,11 @@
 #include "smoke_common.glsl"
 
 // Pass 1a: semi-Lagrangian advection. Each velocity face is carried back along
-// the air's motion at that face into oVel; the scalars go to aux.xy as the
+// the air's motion at that face into oVel; the four scalars go to aux as the
 // PREDICTOR of the MacCormack correction that follows (smoke_advect_fix.comp),
 // which is what keeps a plume's edge sharp. All in cell coordinates, the motion
-// being the stored velocity plus the wind.
+// being the stored velocity plus the wind. The velocity's w (the last step's
+// expansion) is done with and starts the step at 0.
 
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
@@ -34,6 +35,6 @@ void main() {
     if (inGrid(c)) {
         const vec3 p = vec3(c) + 0.5;
         const vec3 d = p - (cellVel(c) + pc.wind.xyz) * step;
-        imageStore(aux, c, vec4(textureLod(uSca, d / vec3(pc.res.xyz), 0.0).xy, 0.0, 0.0));
+        imageStore(aux, c, textureLod(uSca, d / vec3(pc.res.xyz), 0.0));
     }
 }

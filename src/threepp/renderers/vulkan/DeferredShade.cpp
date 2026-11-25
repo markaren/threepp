@@ -41,7 +41,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 96;
+    constexpr uint32_t kDeferredBindingCount = 97;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -310,6 +310,12 @@ namespace threepp::vulkan {
         set(96, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // mirror gbuf depth
         set(97, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // mirror gbuf ids
         set(98, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // mirror gbuf albedo+metal
+        // A SOLVED density volume's temperature (ParticleField::GridSmoke),
+        // kelvin, r16f, LINEAR: its glow takes the voxel's own temperature
+        // where a particle field's takes the height ramp. The r16f dummy in
+        // every slot that is not a solved volume.
+        set(99, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // particle density temperatures...
+        b[nb - 1].descriptorCount = kMaxDensityVolumes;     // ...the density table's fixed-size array
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -1195,6 +1201,23 @@ namespace threepp::vulkan {
             setw(91, 94, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &mirrorUboInfo);
             for (uint32_t i = 0; i < 4; ++i)
                 setw(92 + static_cast<int>(i), 95u + i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &mirrorInfo[i], nullptr);
+            // The solved volumes' temperatures (99): the density table's shape,
+            // LINEAR like the r16f mirrors.
+            std::array<VkDescriptorImageInfo, kMaxDensityVolumes> pdTempInfos{};
+            for (uint32_t i = 0; i < kMaxDensityVolumes; ++i) {
+                pdTempInfos[i].sampler     = lutSampler_;
+                pdTempInfos[i].imageView   = (in.particleDensityTemp && i < in.particleDensityCount)
+                                                     ? in.particleDensityTemp[i]
+                                                     : VK_NULL_HANDLE;
+                pdTempInfos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            w[96].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[96].dstSet          = sets_[f];
+            w[96].dstBinding      = 99;
+            w[96].dstArrayElement = 0;
+            w[96].descriptorCount = kMaxDensityVolumes;
+            w[96].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[96].pImageInfo      = pdTempInfos.data();
             // Without ray query the layout has no binding 8: drop its write.
             uint32_t writeCount = static_cast<uint32_t>(w.size());
             if (!ctx_.rayQuerySupported()) {

@@ -71,9 +71,14 @@ layout(set = 0, binding = 67) uniform usampler3D particleDensityTex[kMaxDensityF
 // The r16f mirror of each volume (particle_density_convert.comp), declared
 // only where the per-pixel dust march runs (deferred_shade defines PD_LINEAR
 // before its includes). The froxel pipelines do not carry binding 69, so the
-// declaration must not exist there.
+// declaration must not exist there. Binding 99 is the same table's TEMPERATURE,
+// kelvin, for a solved volume (ParticleField::GridSmoke, boxInvSize.w = 1;
+// smoke_write.comp writes it): its glow takes the voxel's own temperature
+// where a particle field's takes the height ramp. Every other slot holds an
+// r16f dummy that is never sampled.
 #ifdef PD_LINEAR
 layout(set = 0, binding = 69) uniform sampler3D particleDensityLinTex[kMaxDensityFields];
+layout(set = 0, binding = 99) uniform sampler3D particleDensityTempTex[kMaxDensityFields];
 #endif
 
 // std140 (NOT scalar): this header is pulled into shaders that do not all
@@ -131,24 +136,6 @@ vec3 blackbodyRGB(float T) {
     const float h  = s * 0.5;// T / 2000 K
     const float h2 = h * h;
     return vec3(1.0, g, b) * (h2 * h2);
-}
-
-// The emitted radiance one volume contributes at a sample point — the single
-// expression the fire model has, factored out so every consumer shares the
-// same model. `ty` is the sample's
-// normalised height inside that volume's box (already in [0,1] — every caller
-// reaches this only after the in-box test, which is what keeps the pow's base
-// non-negative; a negative base is undefined in GLSL and has produced NaN in
-// this tree before). `sigma` is that volume's
-// own extinction there, because emission ∝ σ is the physics (soot radiates in
-// proportion to how much soot there is) and is what makes a flame's silhouette
-// be the particle distribution instead of a billboard card.
-//
-// Callers gate on pd.emission[i].x > 0.0 themselves: the multiply would be a
-// no-op but blackbodyRGB and the pow would not.
-vec3 pdEmissionAt(uint i, float ty, float sigma) {
-    const float T = mix(pd.emission[i].y, pd.emission[i].z, pow(ty, pd.emission[i].w));
-    return (pd.emission[i].x * sigma) * blackbodyRGB(T);
 }
 
 // One volume's contribution at a world point, trilinear. Returns 0 outside the
@@ -248,6 +235,52 @@ float particleMedium(vec3 p, out vec3 albedo, out float g) {
 }
 
 #ifdef PD_LINEAR
+// ── THE GLOW OF A SOLVED VOLUME'S SOOT, AND WHERE IT STOPS ──────────────────
+// blackbodyRGB's magnitude is Stefan-Boltzmann, T^4: the TOTAL radiance, almost
+// all of it infrared below ~1000 K. The authored ramp wants exactly that, since
+// it keeps a flame's tips (800-1250 K in every field in this tree) visible
+// beside its core. A solver's soot does not stop at the tips: it goes on
+// cooling, through 800 and 600 K to the ambient, and T^4 (which blackbodyRGB
+// holds at its 500 K floor) still lit it at a sixteenth of a 1000 K tip or
+// more all the way down, so a whole cooled smoke column glowed a dull red.
+// Real soot stops glowing VISIBLY near the Draper point (~800 K, where solids
+// first glow dull red in the dark): below it the visible radiance falls by
+// orders of magnitude for every hundred kelvin. So a solved volume's glow fades
+// out over the band around that point, and soot that has cooled below it is
+// dark; above it the glow is blackbodyRGB's, untouched.
+const float kPdGlowDarkK = 700.0;
+const float kPdGlowFullK = 1000.0;
+
+// The emitted radiance one volume contributes at a sample point — the single
+// expression the fire model has, factored out so every consumer shares the
+// same model: intensity * sigma * blackbodyRGB(T). `tt` is the sample's
+// normalised position inside that volume's box (already in [0,1]^3 — every
+// caller reaches this only after the in-box test, which is what keeps the
+// ramp's pow base non-negative; a negative base is undefined in GLSL and has
+// produced NaN in this tree before). `sigma` is that volume's own extinction
+// there, because emission ∝ σ is the physics (soot radiates in proportion to
+// how much soot there is) and is what makes a flame's silhouette be the
+// particle distribution instead of a billboard card.
+//
+// T is where the two kinds of volume differ. A particle field's is the
+// authored RAMP over the normalised height tt.y (DensityRepr::tempBottomK,
+// tempTopK, tempFalloff). A SOLVED volume (ParticleField::GridSmoke,
+// boxInvSize.w = 1) has a temperature of its own, the solver's, in kelvin at
+// binding 99, and takes that, faded below the Draper point (above): its soot
+// glows where the burn made it hot, wherever the flow carried it, and goes
+// dark as it cools. Uniform per volume, so the branch costs no divergence.
+//
+// Callers gate on pd.emission[i].x > 0.0 themselves: the multiply would be a
+// no-op but blackbodyRGB and the pow would not.
+vec3 pdEmissionAt(uint i, vec3 tt, float sigma) {
+    if (pd.boxInvSize[i].w > 0.5) {
+        const float T = texture(particleDensityTempTex[i], tt).r;
+        return (pd.emission[i].x * sigma * smoothstep(kPdGlowDarkK, kPdGlowFullK, T)) * blackbodyRGB(T);
+    }
+    const float T = mix(pd.emission[i].y, pd.emission[i].z, pow(tt.y, pd.emission[i].w));
+    return (pd.emission[i].x * sigma) * blackbodyRGB(T);
+}
+
 // σ_t at p from the r16f MIRRORS (one hardware-trilinear fetch per volume where
 // the integer path costs eight texelFetches), plus the σ-weighted albedo of the
 // mixture — the same quantity particleMedium() returns, over the cheap
@@ -406,7 +439,7 @@ float pdEmissiveLeg(vec3 ro, vec3 rd, float tMax, out vec3 emis) {
             if (any(lessThan(tt, vec3(0.0))) || any(greaterThan(tt, vec3(1.0)))) continue;
             const float si = texture(particleDensityLinTex[i], tt).r;
             sig += si;
-            if (pd.emission[i].x > 0.0) em += pdEmissionAt(i, tt.y, si);
+            if (pd.emission[i].x > 0.0) em += pdEmissionAt(i, tt, si);
         }
         if (sig <= 0.0) continue;
         // Same order as the primary march: this step's emission is attenuated

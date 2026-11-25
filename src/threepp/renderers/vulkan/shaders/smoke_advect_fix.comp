@@ -2,12 +2,14 @@
 #extension GL_GOOGLE_include_directive : enable
 #include "smoke_common.glsl"
 
-// Pass 1b: the MacCormack correction (Selle et al.). aux.xy holds the forward
+// Pass 1b: the MacCormack correction (Selle et al.). aux holds the forward
 // semi-Lagrangian step phi_hat; step it back and the difference to the original
 // is the error to add, halved, then clamped to the range the departure point's
 // eight neighbours allow so it can never overshoot. Reads the OLD velocity and
 // scalars (the parities have not flipped yet), writes the new scalars with the
-// dissipation and the cooling applied.
+// dissipation and the cooling applied. All four scalars are carried the same
+// way; the fuel and the oxygen used change only by burning (smoke_forces.comp)
+// and by mixing with the air around them, so neither fades.
 
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
@@ -16,19 +18,19 @@ void main() {
     const vec3  w  = worldOfCell(c);
     const vec3  v  = cellVel(c) + pc.wind.xyz;
 
-    const vec2 orig = texelFetch(uSca, c, 0).xy;
-    const vec2 hat  = texelFetch(uAux, c, 0).xy;
-    const vec2 back = textureLod(uAux, uvwOfWorld(w + v * dt), 0.0).xy;
-    vec2       phi  = hat + 0.5 * (orig - back);
+    const vec4 orig = texelFetch(uSca, c, 0);
+    const vec4 hat  = texelFetch(uAux, c, 0);
+    const vec4 back = textureLod(uAux, uvwOfWorld(w + v * dt), 0.0);
+    vec4       phi  = hat + 0.5 * (orig - back);
 
     // The departure cell's 2x2x2 neighbourhood, in the ORIGINAL scalars.
     const vec3  q  = (w - v * dt - pc.box.xyz) * pc.invCell.xyz - 0.5;
     const ivec3 b  = ivec3(floor(q));
-    vec2 lo = vec2(1e9), hi = vec2(-1e9);
+    vec4 lo = vec4(1e9), hi = vec4(-1e9);
     for (int k = 0; k < 8; ++k) {
         const ivec3 o = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
         const ivec3 p = b + o;
-        const vec2  s = inGrid(p) ? texelFetch(uSca, p, 0).xy : vec2(0.0);
+        const vec4  s = inGrid(p) ? texelFetch(uSca, p, 0) : vec4(0.0);
         lo = min(lo, s);
         hi = max(hi, s);
     }
@@ -44,5 +46,5 @@ void main() {
         phi.x *= exp(-5.0 * (1.0 - smoothstep(0.0, pc.phys0.z, e)) * dt);
     }
     phi.y *= exp(-pc.phys1.x * dt);
-    imageStore(oSca, c, vec4(max(phi, vec2(0.0)), 0.0, 0.0));
+    imageStore(oSca, c, max(phi, vec4(0.0)));
 }

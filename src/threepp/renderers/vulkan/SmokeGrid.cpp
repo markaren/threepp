@@ -70,15 +70,17 @@ SmokePipelines::SmokePipelines(VulkanContext& ctx, VkDescriptorSetLayout density
 
     const VkDevice d = ctx.device();
 
-    // Binding order mirrors shaders/smoke_common.glsl.
-    const VkDescriptorType types[10] = {
+    // Binding order mirrors shaders/smoke_common.glsl; 10 is the temperature volume, which only smoke_write.comp
+    // declares.
+    const VkDescriptorType types[11] = {
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
-    VkDescriptorSetLayoutBinding b[10]{};
-    for (std::uint32_t i = 0; i < 10; ++i) {
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+    VkDescriptorSetLayoutBinding b[11]{};
+    for (std::uint32_t i = 0; i < 11; ++i) {
         b[i].binding         = i;
         b[i].descriptorType  = types[i];
         b[i].descriptorCount = 1;
@@ -86,7 +88,7 @@ SmokePipelines::SmokePipelines(VulkanContext& ctx, VkDescriptorSetLayout density
     }
     VkDescriptorSetLayoutCreateInfo dlci{};
     dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dlci.bindingCount = 10;
+    dlci.bindingCount = 11;
     dlci.pBindings    = b;
     check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &setLayout), "vkCreateDescriptorSetLayout(smoke)");
 
@@ -111,7 +113,7 @@ SmokePipelines::SmokePipelines(VulkanContext& ctx, VkDescriptorSetLayout density
     sci.minFilter    = VK_FILTER_LINEAR;
     sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     // Beyond the box there is no smoke and the air is the wind: density, pressure and the velocity (stored relative
-    // to the wind) all read as zero.
+    // to the wind) all read as zero, and so do the fuel and the oxygen used: the air that comes in is fresh.
     sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     check(vkCreateSampler(d, &sci, nullptr, &samplerBorder), "vkCreateSampler(smoke border)");
@@ -157,11 +159,13 @@ std::unique_ptr<SmokeGrid> SmokeGrid::create(VulkanContext& ctx, const SmokePipe
     for (int i = 0; i < 2; ++i) {
         // The velocity lives on the faces: res + 1 of them along each axis (smoke_common.glsl).
         ok = mk(g->vel_[i], res + 1, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeVelocity") && ok;
-        ok = mk(g->sca_[i], res, VK_FORMAT_R16G16_SFLOAT, "smokeScalars") && ok;
+        ok = mk(g->sca_[i], res, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeScalars") && ok;
         ok = mk(g->p_[i], res, VK_FORMAT_R32_SFLOAT, "smokePressure") && ok;
     }
     ok = mk(g->aux_, res, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeScratch") && ok;
     ok = mk(g->solid_, res, VK_FORMAT_R16G16B16A16_SFLOAT, "smokeSolid") && ok;
+    // Kelvin to 1 K at a flame's 2000, and filterable: the shade samples it with hardware trilinear.
+    ok = mk(g->temperature_, res, VK_FORMAT_R16_SFLOAT, "smokeTemperature") && ok;
     if (!ok) return nullptr;// ~SmokeGrid frees what was made
 
     g->params_ = createBuffer(ctx.allocator(), ctx.device(), sizeof(SmokeGpuParams),
@@ -171,7 +175,7 @@ std::unique_ptr<SmokeGrid> SmokeGrid::create(VulkanContext& ctx, const SmokePipe
 
     VkDescriptorPoolSize ps[3]{};
     ps[0] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * 8};
-    ps[1] = {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5 * 8};
+    ps[1] = {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 6 * 8};
     ps[2] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8};
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -206,8 +210,8 @@ std::unique_ptr<SmokeGrid> SmokeGrid::create(VulkanContext& ctx, const SmokePipe
         sto(6, g->aux_);
         cis(7, pl.samplerBorder, g->aux_);
         VkDescriptorBufferInfo bi{g->params_.handle, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet w[10]{};
-        for (std::uint32_t i = 0; i < 10; ++i) {
+        VkWriteDescriptorSet w[11]{};
+        for (std::uint32_t i = 0; i < 11; ++i) {
             w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstSet          = g->sets_[idx];
             w[i].dstBinding      = i;
@@ -227,7 +231,10 @@ std::unique_ptr<SmokeGrid> SmokeGrid::create(VulkanContext& ctx, const SmokePipe
         VkDescriptorImageInfo si{VK_NULL_HANDLE, g->solid_.view, VK_IMAGE_LAYOUT_GENERAL};
         w[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         w[9].pImageInfo     = &si;
-        vulkan::updateDescriptorSets(ctx.device(), 10, w, 0, nullptr);
+        VkDescriptorImageInfo ti{VK_NULL_HANDLE, g->temperature_.view, VK_IMAGE_LAYOUT_GENERAL};
+        w[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[10].pImageInfo     = &ti;
+        vulkan::updateDescriptorSets(ctx.device(), 11, w, 0, nullptr);
     }
     return g;
 }
@@ -240,6 +247,7 @@ SmokeGrid::~SmokeGrid() {
     for (auto& i : p_) destroyImage2D(ctx_.allocator(), d, i);
     destroyImage2D(ctx_.allocator(), d, aux_);
     destroyImage2D(ctx_.allocator(), d, solid_);
+    destroyImage2D(ctx_.allocator(), d, temperature_);
     destroyBuffer(ctx_.allocator(), params_);
 }
 
@@ -320,6 +328,16 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
                      size_t(kSmokeMaxColliders), size_t(kSmokeMaxBoxes));
     }
     P.head[2]          = static_cast<float>(std::fmod(gs.time, 1000.0));
+    // The fire, clamped to what the burn's arithmetic can take (smoke_forces.comp): nothing it adds may be negative,
+    // and oxygenPerFuel divides.
+    P.burn[0] = gs.ignitionTemperature;
+    P.burn[1] = std::max(gs.burnRate, 0.f);
+    P.burn[2] = std::max(gs.heatRelease, 0.f);
+    P.burn[3] = std::max(gs.sootYield, 0.f);
+    P.burn[4] = std::max(gs.oxygenPerFuel, 1e-3f);
+    P.burn[5] = std::max(gs.expansion, 0.f);
+    P.burn[6] = std::max(gs.temperatureScale, 0.f);
+    P.burn[7] = ParticleField::GridSmoke::kAmbientKelvin;
     for (size_t i = 0; i < ns; ++i) {
         const auto& s = gs.sources[i];
         auto&       g = P.src[i];
@@ -330,6 +348,7 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
         g.rates[0]     = s.density;
         g.rates[1]     = s.temperature;
         g.rates[2]     = s.velocityBlend;
+        g.rates[3]     = std::max(s.fuel, 0.f);
         g.vel[0]       = s.velocity.x;
         g.vel[1]       = s.velocity.y;
         g.vel[2]       = s.velocity.z;
@@ -382,17 +401,17 @@ void SmokeGrid::step(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePl
     // Advection first, with the velocity the last projection left: the smoke is only ever carried by air that
     // neither gathers nor spreads, so a sealed box keeps what it holds. The forces come after it and the
     // projection cleans up what they add.
-    run(pl.advect);// vel: A -> B (the new velocity), aux.xy = the scalars' predictor
+    run(pl.advect);// vel: A -> B (the new velocity), aux = the scalars' predictor
     run(pl.advectFix);// scalars: A -> B, reading the OLD velocity (v_ has not flipped past it)
     v_ ^= 1;
     s_ ^= 1;
-    run(pl.forces);// vel, scalars: A -> B
+    run(pl.forces);// vel, scalars: A -> B; the burn, and its expansion into vel.w
     v_ ^= 1;
     s_ ^= 1;
     run(pl.curl);// aux = curl(vel)
     run(pl.confine);// vel: A -> B
     v_ ^= 1;
-    run(pl.diverge);// aux.x = div(vel)
+    run(pl.diverge);// aux.x = div(vel) - the expansion
     for (std::uint32_t i = 0; i < plan.iterations; ++i) {
         run(pl.jacobi);// pressure: A -> B
         p_in_ ^= 1;
@@ -460,7 +479,8 @@ void SmokeGrid::record(VkCommandBuffer cb, const SmokePipelines& pl, const Smoke
 
     for (std::uint32_t i = 0; i < plan.steps; ++i) step(cb, pl, plan);
 
-    // The density grid -> the field's sigma_t volume.
+    // The density grid -> the field's sigma_t volume, and the temperature -> kelvin for the glow. The temperature
+    // volume's layout and its readers are the render graph's (ParticleFieldPass::declareDensityScatter).
     const std::uint32_t gx = (res_ + 7u) / 8u, gy = (res_ + 3u) / 4u, gz = (res_ + 3u) / 4u;
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl.write);
     const VkDescriptorSet both[2] = {sets_[v_ | (s_ << 1) | (p_in_ << 2)], densitySet};

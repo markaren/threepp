@@ -187,6 +187,10 @@ namespace threepp::vulkan {
             // The r16f mirrors (binding 69), LINEAR-sampled by the shade's
             // per-pixel dust march. Same count and same dummy-fill contract.
             const VkImageView* particleDensityLin = nullptr;// [kMaxDensityFields]
+            // A solved volume's temperature in kelvin (binding 99, r16f,
+            // LINEAR), which its glow reads instead of the height ramp; the
+            // r16f dummy in every other slot. Same count and contract.
+            const VkImageView* particleDensityTemp = nullptr;// [kMaxDensityFields]
             uint32_t           particleDensityCount = 0;    // == kMaxDensityFields
             const VkBuffer*    particleDensityUbo = nullptr;// [framesInFlight]
             // Splat reflection volumes (bindings 70/71) —

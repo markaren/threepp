@@ -6,6 +6,7 @@
 // the small whorls away; this pushes the air round the ridges of |curl| so they
 // spin back up. Strength is GridSmoke::vorticity in 1/s. The force is found at
 // the cell centres, where the curl is, and a face takes the mean of its two cells.
+// The texel's w, the burn's expansion, goes through untouched to the divergence.
 
 float mag(ivec3 c) { return texelFetch(uAux, clamp(c, ivec3(0), pc.res.xyz - 1), 0).w; }
 
@@ -47,5 +48,5 @@ void main() {
         const float n = (inGrid(b) ? 1.0 : 0.0) + (inGrid(c) ? 1.0 : 0.0);
         v[a] += pc.invCell.w * (confinement(b)[a] + fc[a]) / max(n, 1.0);
     }
-    imageStore(oVel, c, vec4(v, 0.0));
+    imageStore(oVel, c, vec4(v, old.w));
 }

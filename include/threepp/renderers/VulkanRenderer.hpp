@@ -246,8 +246,13 @@ namespace threepp {
             std::vector<float> velocity;     // m/s, 3 per face texel, (n + 1)^3 of them (above), wind included
             std::vector<float> density;      // 1 per cell
             std::vector<float> temperature;  // 1 per cell
+            std::vector<float> fuel;         // 1 per cell: unburnt fuel
+            std::vector<float> oxygenDeficit;// 1 per cell: the share of its oxygen used (0 fresh air, 1 none left)
+            std::vector<float> expansion;    // 1/s, 1 per cell: the gas the last step's burn released in it
             std::vector<float> pressure;     // 1 per cell: the last step's pressure solve
-            std::vector<float> divergence;   // 1/s, 1 per cell: the last step's velocity BEFORE its projection
+            // 1/s, 1 per cell: what the last step's pressure solve removed: the velocity's divergence BEFORE its
+            // projection, less the expansion (the projection leaves div = expansion)
+            std::vector<float> divergence;
             std::vector<float> solid;        // 1 per cell: 1 where a collider or box covers it (not the solid floor)
             std::vector<float> solidVelocity;// m/s, 3 per cell: that solid's own motion
         };

@@ -1,21 +1,24 @@
 // SmokeGrid — the device-side Eulerian smoke solver behind ParticleField::GridSmoke.
 //
-// One SmokeGrid is one field's solver state: density+temperature and pressure
-// on a res^3 grid, the velocity on the faces between those cells ((res+1)^3,
-// see shaders/smoke_common.glsl), each a ping-pong pair, one scratch volume, the
-// per-frame parameter block, and eight descriptor sets — one per parity of the
-// three pairs, written once at creation and never again, so the solver costs no
-// descriptor traffic. SmokePipelines is the part that does not depend on a
-// field: the nine compute pipelines, their layouts and the two samplers.
+// One SmokeGrid is one field's solver state: the scalars (smoke, temperature,
+// fuel, oxygen used) and pressure on a res^3 grid, the velocity on the faces
+// between those cells ((res+1)^3, see shaders/smoke_common.glsl), each a
+// ping-pong pair, one scratch volume, the per-frame parameter block, and eight
+// descriptor sets — one per parity of the three pairs, written once at creation
+// and never again, so the solver costs no descriptor traffic. SmokePipelines is
+// the part that does not depend on a field: the compute pipelines, their
+// layouts and the sampler.
 //
 // A frame is `plan()` (host: how many fixed steps are owed, the parameter block
 // and the push constants, all by value) and later `record()` (device: those
 // steps, then the pass that writes the density volume in the Q20.12 fixed point
-// the particle scatter uses, so the r16f convert after it is shared code).
-// Nothing here touches the render graph: every image is private to this block and
-// lives in VK_IMAGE_LAYOUT_GENERAL, ordered by plain memory barriers, and the
-// one image the graph does know — the field's r32ui density volume — is
-// declared by ParticleFieldPass exactly as it is for a scatter.
+// the particle scatter uses, so the r16f convert after it is shared code, and
+// the temperature volume the glow reads).
+// The render graph does not see the solver itself: those images are private to
+// this block and live in VK_IMAGE_LAYOUT_GENERAL, ordered by plain memory
+// barriers. The two images it writes for the rest of the frame — the field's
+// r32ui density volume and the temperature volume — are declared by
+// ParticleFieldPass, the first exactly as it is for a scatter.
 
 #ifndef THREEPP_VULKAN_SMOKEGRID_HPP
 #define THREEPP_VULKAN_SMOKEGRID_HPP
@@ -56,7 +59,7 @@ namespace threepp::vulkan {
     // Mirrors `Params` in shaders/smoke_common.glsl (std430).
     struct SmokeGpuSource {
         float posRadius[4];
-        float rates[4];
+        float rates[4];// x density / s, y temperature / s, z velocity blend / s, w fuel / s
         float vel[4];
     };
     struct SmokeGpuCollider {
@@ -71,11 +74,15 @@ namespace threepp::vulkan {
     };
     struct SmokeGpuParams {
         float            head[4];// x sources, y capsule colliders, z time, w boxes
+        // The fire (ParticleField::GridSmoke): x ignition temperature, y burn rate, z heat release, w soot yield;
+        // then x oxygen per fuel, y expansion, z kelvin per temperature unit, w the ambient (K). Here and not in the
+        // push constants, which are 16 bytes short of the 128 every device guarantees.
+        float            burn[8];
         SmokeGpuSource   src[kSmokeMaxSources];
         SmokeGpuCollider col[kSmokeMaxColliders];
         SmokeGpuBox      box[kSmokeMaxBoxes];
     };
-    static_assert(sizeof(SmokeGpuParams) == 16 + kSmokeMaxSources * 48 + kSmokeMaxColliders * 48 + kSmokeMaxBoxes * 48, "SmokeGpuParams layout drift");
+    static_assert(sizeof(SmokeGpuParams) == 16 + 32 + kSmokeMaxSources * 48 + kSmokeMaxColliders * 48 + kSmokeMaxBoxes * 48, "SmokeGpuParams layout drift");
 
     // One frame of one field, resolved on the host so recording reads no field.
     struct SmokePlan {
@@ -121,19 +128,27 @@ namespace threepp::vulkan {
 
         [[nodiscard]] std::uint32_t resolution() const { return res_; }
 
+        // The temperature the glow sees, kelvin, r16f res^3: written by the last pass of every frame (all of it, so
+        // its contents are dead between frames) and sampled by the shade's march for the emission (binding 99,
+        // particle_density.glsl). Same lifetime as this grid.
+        [[nodiscard]] VkImage     temperatureImage() const { return temperature_.image; }
+        [[nodiscard]] VkImageView temperatureView() const { return temperature_.view; }
+
         // Advance the field's clock and pack this frame's parameters.
         SmokePlan plan(const ParticleField& field);
 
-        // Run the owed steps and write the density volume (set 1 of the write pass).
+        // Run the owed steps and write the density volume (set 1 of the write pass) and the temperature volume.
         void record(VkCommandBuffer cb, const SmokePipelines& pl, const SmokePlan& plan, VkDescriptorSet densitySet);
 
         // TEST/AUDIT: the images holding the state the last recorded step left (the "in" half of each pair).
         // Valid to copy once the device has drained. See VulkanRenderer::readGridSmoke.
         struct Images {
-            VkImage velocity = VK_NULL_HANDLE;// rgba16f, (res+1)^3, xyz m/s on the min faces, relative to the wind
-            VkImage scalars  = VK_NULL_HANDLE;// rg16f, density, temperature
+            VkImage velocity = VK_NULL_HANDLE;// rgba16f, (res+1)^3, xyz m/s on the min faces, relative to the wind;
+                                              // w = the expansion (1/s) the last step's burn released in that cell
+            VkImage scalars  = VK_NULL_HANDLE;// rgba16f, density, temperature, fuel, oxygen deficit
             VkImage pressure = VK_NULL_HANDLE;// r32f
-            VkImage scratch  = VK_NULL_HANDLE;// rgba16f, .x = the last step's divergence before its projection
+            VkImage scratch  = VK_NULL_HANDLE;// rgba16f, .x = what the last step's pressure solve removed: the
+                                              // divergence before its projection, less the expansion
             VkImage solid    = VK_NULL_HANDLE;// rgba16f, xyz the solid's velocity, w covered
         };
         [[nodiscard]] Images latest() const {
@@ -148,7 +163,7 @@ namespace threepp::vulkan {
 
         VulkanContext& ctx_;
         std::uint32_t  res_;
-        Image2D        vel_[2]{}, sca_[2]{}, p_[2]{}, aux_{}, solid_{};
+        Image2D        vel_[2]{}, sca_[2]{}, p_[2]{}, aux_{}, solid_{}, temperature_{};
         Buffer         params_{};
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
         VkDescriptorSet  sets_[8]{};

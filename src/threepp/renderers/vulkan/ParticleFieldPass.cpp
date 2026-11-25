@@ -1636,13 +1636,14 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                         st.smokeFailed = true;
                         THREEPP_LOGF(kLogParticles, Warn, "GridSmoke: the solver's %u^3 grid could not be allocated "
                                      "(about %u MB of device memory); this field draws no smoke",
-                                     st.densityRes, static_cast<unsigned>((std::uint64_t(st.densityRes) * st.densityRes * st.densityRes * 48u) >> 20));
+                                     st.densityRes, static_cast<unsigned>((std::uint64_t(st.densityRes) * st.densityRes * st.densityRes * 58u) >> 20));
                     }
                 }
                 if (gridSmoke && st.smoke) {
                     dd.smoke     = st.smoke.get();
                     dd.smokePlan = st.smoke->plan(*r.field);
-                    densityVols_.back().solved = 1.f;
+                    densityVols_.back().solved   = 1.f;
+                    densityVols_.back().tempView = st.smoke->temperatureView();
                 }
                 densityDispatch_.push_back(dd);
             }
@@ -2056,7 +2057,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     // an unchanged set and no write at all.
     bool volsChanged = prevVols.size() != densityVols_.size();
     for (std::size_t i = 0; !volsChanged && i < densityVols_.size(); ++i) {
-        volsChanged = prevVols[i].view != densityVols_[i].view;
+        // A grid smoke's solver (and with it the temperature volume) can come a frame after its density volume.
+        volsChanged = prevVols[i].view != densityVols_[i].view || prevVols[i].tempView != densityVols_[i].tempView;
     }
     if (volsChanged) ++densityGen_;
 }
@@ -2346,6 +2348,12 @@ void ParticleFieldPass::declareDensityScatter(rg::RenderGraph& g, rg::PassBuilde
         pass.use(g.importImage("particles.densityLin", dd.linImage, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                                VK_IMAGE_LAYOUT_UNDEFINED),
                  rg::storageWrite(kCs), 0, 1);
+        // A solved field's temperature volume: its write pass rewrites every voxel each frame, and the shade's march
+        // samples it for the glow (binding 99), so it is the graph's like the two volumes above.
+        if (dd.smoke)
+            pass.use(g.importImage("particles.smokeTemperature", dd.smoke->temperatureImage(), VK_IMAGE_ASPECT_COLOR_BIT,
+                                   1, VK_IMAGE_LAYOUT_UNDEFINED),
+                     rg::storageWrite(kCs), 0, 1);
     }
     static const auto scatterRefl = reflectSpirvBindings(
             kParticleDensityScatterCompSpv, sizeof(kParticleDensityScatterCompSpv) / sizeof(std::uint32_t));

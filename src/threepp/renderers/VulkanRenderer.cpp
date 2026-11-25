@@ -1887,7 +1887,7 @@ namespace threepp {
 
         const uint32_t nf  = n + 1u;// the velocity is on the faces
         const auto     vel = copyGeneralImageToHost(*ctx, img.velocity, nf, nf, 0u, 8u, "readGridSmoke(velocity)", nf);
-        const auto sca = copyGeneralImageToHost(*ctx, img.scalars, n, n, 0u, 4u, "readGridSmoke(scalars)", n);
+        const auto sca = copyGeneralImageToHost(*ctx, img.scalars, n, n, 0u, 8u, "readGridSmoke(scalars)", n);
         const auto prs = copyGeneralImageToHost(*ctx, img.pressure, n, n, 0u, 4u, "readGridSmoke(pressure)", n);
         const auto aux = copyGeneralImageToHost(*ctx, img.scratch, n, n, 0u, 8u, "readGridSmoke(scratch)", n);
         const auto sol = copyGeneralImageToHost(*ctx, img.solid, n, n, 0u, 8u, "readGridSmoke(solid)", n);
@@ -1911,18 +1911,29 @@ namespace threepp {
                 }
         out.density.resize(cells);
         out.temperature.resize(cells);
+        out.fuel.resize(cells);
+        out.oxygenDeficit.resize(cells);
+        out.expansion.resize(cells);
         out.pressure.resize(cells);
         out.divergence.resize(cells);
         out.solid.resize(cells);
         out.solidVelocity.resize(cells * 3u);
         for (size_t i = 0; i < cells; ++i) {
             for (size_t a = 0; a < 3; ++a) out.solidVelocity[i * 3u + a] = halfAt(sol, i * 4u + a);
-            out.density[i]     = halfAt(sca, i * 2u);
-            out.temperature[i] = halfAt(sca, i * 2u + 1u);
+            out.density[i]       = halfAt(sca, i * 4u);
+            out.temperature[i]   = halfAt(sca, i * 4u + 1u);
+            out.fuel[i]          = halfAt(sca, i * 4u + 2u);
+            out.oxygenDeficit[i] = halfAt(sca, i * 4u + 3u);
             std::memcpy(&out.pressure[i], prs.data() + i * 4u, sizeof(float));
             out.divergence[i] = halfAt(aux, i * 4u);
             out.solid[i]      = halfAt(sol, i * 4u + 3u);
         }
+        // The expansion rides in the w of the cell's own velocity texel (the faces at its min sides).
+        for (uint32_t k = 0; k < n; ++k)
+            for (uint32_t j = 0; j < n; ++j)
+                for (uint32_t i = 0; i < n; ++i)
+                    out.expansion[i + size_t(n) * (j + size_t(n) * k)] =
+                            halfAt(vel, (i + size_t(nf) * (j + size_t(nf) * k)) * 4u + 3u);
         return true;
     }
 

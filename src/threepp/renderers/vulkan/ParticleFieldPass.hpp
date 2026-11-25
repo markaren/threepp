@@ -137,6 +137,9 @@ namespace threepp::vulkan {
         // 1 for a SOLVED volume (ParticleField::GridSmoke): its voxels are real detail, not scatter noise, so the
         // convert does not blur it and the march may step finer than the dust floor. The UBO's boxInvSize.w.
         float       solved = 0.f;
+        // A solved volume's temperature, kelvin (SmokeGrid::temperatureView): binding 99, which its glow reads in
+        // place of the height ramp. VK_NULL_HANDLE for every other volume, whose slot binds the r16f dummy.
+        VkImageView tempView = VK_NULL_HANDLE;
         // ── PER-FIELD medium params (plans/particle-atmosphere.md F-A) ──────
         // These used to be one shared value taken from whichever field was
         // enumerated first. They are per volume now because a fire field and a

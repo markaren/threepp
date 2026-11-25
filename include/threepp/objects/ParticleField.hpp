@@ -552,6 +552,14 @@ namespace threepp {
             // emissiveIntensity == 0 is the exact no-op: the shader takes a
             // uniform branch around the whole emissive path, so a pure dust
             // field renders the same bits it did before emission existed.
+            //
+            // A SOLVED field (GridSmoke) has that v2 channel and takes no ramp:
+            // its temperature is the solver's own, voxel by voxel, turned into
+            // kelvin by GridSmoke::temperatureScale, so its soot glows where
+            // the fire made it hot and goes dark as it cools (from 1000 K down
+            // to 700 K, around the Draper point, its glow fades out:
+            // particle_density.glsl). tempBottomK, tempTopK and tempFalloff are
+            // not read for it.
             float emissiveIntensity = 0.f;  // HDR radiance scale of a 2000 K flame;
                                             // ACES/AgX wants tens, not ones.
             float tempBottomK       = 1900.f;// blackbody T at the box BOTTOM (core)
@@ -570,14 +578,16 @@ namespace threepp {
         // over the DensityRepr's own world box, one cell per voxel.
         // Everything downstream of the volume is unchanged and shared with a
         // particle dust cloud — the froxel passes, the shade's march, the
-        // emission ramp, the LIDAR's majorant — so a solved plume is lit,
-        // shadowed, fogged and sensed exactly as a splatted one is.
+        // LIDAR's majorant — so a solved plume is lit, shadowed, fogged and
+        // sensed exactly as a splatted one is. Its glow is the one difference:
+        // it takes the solver's own temperature, not the height ramp (FIRE,
+        // below).
         //
         // Make one with ParticleField::createGridSmoke. It carries a single dead
         // placeholder particle (the field machinery wants a capacity) and no
         // particle representation; `densityRepr()` still owns the box, the
         // resolution (latched at the first frame), the albedo, the phase
-        // function and the emission ramp.
+        // function and the glow's intensity (emissiveIntensity).
         //
         // THE CLOCK. The application sets `time` (seconds) every frame; the
         // renderer runs the whole fixed steps owed since the last frame, at most
@@ -595,12 +605,30 @@ namespace threepp {
         // and 128 boxes are used (more are said once in the log, then dropped).
         // A collider's `velocity` is what it carries the air with: set it to the
         // body's own motion, or it stands still for the smoke.
+        //
+        // FIRE. Besides smoke and heat the air carries FUEL (unburnt gas, which
+        // a source's `fuel` adds and nothing renders) and how much of its OXYGEN
+        // is used up. Every step, after the sources, each cell burns: where the
+        // air is hotter than `ignitionTemperature` and holds fuel and oxygen,
+        // the share `burnRate` per second of the fuel that can burn there does
+        // so, and each unit of fuel burned heats the cell by `heatRelease`,
+        // leaves `sootYield` of smoke, uses `oxygenPerFuel` of the cell's
+        // oxygen (a cell of fresh air burns 1 / oxygenPerFuel of fuel) and
+        // releases `expansion` of the cell's volume of gas, which the pressure
+        // projection pushes out of the cell. Air that comes in through an open
+        // face of the box is fresh; air in a closed room runs out, and the fire
+        // goes out with fuel left over. A fuel source hot enough of its own
+        // lights itself; a cold one waits for a spark, any hot source, and from
+        // then on its flame keeps its own fuel alight. The heat is the same
+        // temperature buoyancy lifts and `cooling` takes away, and with
+        // DensityRepr::emissiveIntensity > 0 the soot glows at it.
         struct GridSmoke {
             struct Source {
                 Vector3 position{0.f, 0.f, 0.f};
                 float   radius         = 0.3f;// m
                 float   density        = 4.f; // density added per second at the centre
                 float   temperature    = 3.f; // temperature added per second at the centre
+                float   fuel           = 0.f; // fuel added per second at the centre (0: a smoke source)
                 Vector3 velocity{0.f, 1.5f, 0.f};// m/s the air is pulled toward
                 float   velocityBlend  = 4.f; // 1/s: how hard it is pulled
                 float   noise          = 0.6f;// 0..1 raggedness of the emission
@@ -645,6 +673,27 @@ namespace threepp {
             // `turbulenceScale` their size (m). 0 = smooth air.
             float turbulence      = 0.f;
             float turbulenceScale = 1.5f;
+            // ── fire (see FIRE above) ───────────────────────────────────────
+            // The defaults are an open hydrocarbon flame. A cell of fresh air burns 0.4 of fuel and is heated 3 units
+            // by it: 1800 K at the default scale, near a real flame's adiabatic rise, and at the default buoyancy
+            // 9 m/s^2, about what gas that hot gets from the air around it (g dT/T). Its gas grows almost six-fold
+            // (an ideal gas heated to 2100 K, seven), and that push is also what spreads a flame: nothing else
+            // carries its heat sideways into the fuel beside it (more flattens the flame into a sheet, less leaves
+            // a thin jet over whatever lit it). A fuel-rich core starves and burns at its edges, where air comes in.
+            // A fire wants `cooling` near 2 (1/s): radiation and the air a flame draws in take its heat in a fraction
+            // of a second, which is where real flames end and their smoke goes dark; a smoke plume's 0.9 keeps the
+            // soot glowing for a couple of metres.
+            float ignitionTemperature = 0.5f; // temperature units: fuel burns only where the air is hotter (590 K)
+            float burnRate            = 8.f;  // 1/s: the share of the fuel that can burn that burns each second
+            float heatRelease         = 7.5f; // temperature units per unit of fuel burned
+            float sootYield           = 1.f;  // smoke density per unit of fuel burned
+            float oxygenPerFuel       = 2.5f; // share of a cell's oxygen one unit of fuel uses (0 < it)
+            // Gas released per unit of fuel burned, as a share of the cell's volume: the flame pushes the air out
+            // of itself. It needs somewhere to go: in a box closed on every side, leave it 0.
+            float expansion           = 12.f;
+            // Kelvin per temperature unit, above the fixed ambient: what the glow sees (blackbody, DensityRepr).
+            float temperatureScale    = 600.f;
+            static constexpr float kAmbientKelvin = 293.f;
             bool  solidFloor  = false; // the bottom face of the box is a wall
             std::vector<Source>   sources;
             std::vector<Collider> colliders;

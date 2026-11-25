@@ -5,13 +5,19 @@
 // The last pass of a frame: the density grid becomes the field's sigma_t volume,
 // in the Q20.12 fixed point the particle scatter writes, so everything after it
 // (the r16f mirror, the majorant, the froxel passes, the shade's march) is the
-// code a particle field already uses.
+// code a particle field already uses. And the temperature becomes kelvin, the
+// ambient plus GridSmoke::temperatureScale per unit, in the field's temperature
+// volume: the shade's march reads it for the soot's glow (particle_density.glsl,
+// pdEmissionAt) instead of the height ramp a particle field's fire takes.
 
 layout(set = 1, binding = 0, r32ui) uniform writeonly uimage3D oDensity;
+layout(set = 0, binding = 10, r16f) uniform writeonly image3D oKelvin;
 
 void main() {
     const ivec3 c = ivec3(gl_GlobalInvocationID);
     if (!inGrid(c)) return;
-    const float rho = texelFetch(uSca, c, 0).x;
-    imageStore(oDensity, c, uvec4(uint(clamp(rho * pc.phys1.w, 0.0, 4.0e9)), 0u, 0u, 0u));
+    const vec2 s = texelFetch(uSca, c, 0).xy;// density, temperature
+    imageStore(oDensity, c, uvec4(uint(clamp(s.x * pc.phys1.w, 0.0, 4.0e9)), 0u, 0u, 0u));
+    // Clamped below what r16f holds (65504): the glow's blackbody clamps far lower anyway.
+    imageStore(oKelvin, c, vec4(clamp(burn1.w + burn1.z * s.y, 0.0, 60000.0)));
 }

@@ -3,7 +3,8 @@
 #include "smoke_common.glsl"
 
 // Pass 6, repeated: one Jacobi sweep of the pressure Poisson equation
-// laplacian(p) = div(v). The pressure of the last step is the first guess, so a
+// laplacian(p) = div(v) - the burn's expansion (aux.x, smoke_diverge.comp). The
+// pressure of the last step is the first guess, so a
 // plume that has settled needs few sweeps. Open faces are p = 0 (the smoke
 // leaves), solid faces are zero-gradient.
 

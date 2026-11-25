@@ -61,7 +61,7 @@ namespace threepp::vulkan {
         };
         static_assert(sizeof(ResolvePush) == 112);
 
-        constexpr uint32_t kNumBindings = 19;// 0-9, then 67-69, 58, 13, 78, 79, 10 and 11
+        constexpr uint32_t kNumBindings = 20;// 0-9, then 67-69, 58, 13, 78, 79, 10, 11 and 99
 
         // The photon grid's header (path_trace.comp's PhotonGridBuf), ahead of
         // its buckets' count, start and end arrays. The shader's set-up pass
@@ -187,7 +187,8 @@ namespace threepp::vulkan {
         };
         // The rest sit at the deferred set's binding numbers, where the
         // includes the two share declare them: the ParticleField density
-        // volumes (67-69, particle_density.glsl), the cloud block (58,
+        // volumes (67-69 and the solved ones' temperatures at 99,
+        // particle_density.glsl), the cloud block (58,
         // cloud_ubo.glsl), the ocean's fine-cascade height (13) and its wake
         // field and ripples (78, 79, ocean_wake.glsl).
         auto setAt = [&](uint32_t slot, uint32_t binding, VkDescriptorType t, uint32_t count) {
@@ -216,6 +217,7 @@ namespace threepp::vulkan {
         setAt(16, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);                 // its ripples
         setAt(17, 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);                         // the photons
         setAt(18, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);                         // their grid
+        setAt(19, 99, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDensityFields);// solved volumes' kelvin
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -277,7 +279,7 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 5;// camera + lights + fog + density + clouds
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (4 + kMaxMaterialTextures + 2 * kMaxDensityFields);// env + ocean x3 + bindless + volumes
+        sizes[1].descriptorCount = framesInFlight_ * (4 + kMaxMaterialTextures + 3 * kMaxDensityFields);// env + ocean x3 + bindless + volumes
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sizes[2].descriptorCount = framesInFlight_ * 6 + 2;// materials + geometry + emissive + accumulation + photons x2; the resolve's two
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -343,7 +345,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures    = &tlasLocal;
 
-            VkWriteDescriptorSet w[16]{};
+            VkWriteDescriptorSet w[17]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -373,11 +375,13 @@ namespace threepp::vulkan {
             uint32_t nw = 9;
             std::array<VkDescriptorImageInfo, kMaxDensityFields> pdInfos{};
             std::array<VkDescriptorImageInfo, kMaxDensityFields> pdLinInfos{};
+            std::array<VkDescriptorImageInfo, kMaxDensityFields> pdTempInfos{};
             VkDescriptorBufferInfo pdUboInfo{};
-            if (in.particleDensity && in.particleDensityLin && in.particleDensityUbo) {
+            if (in.particleDensity && in.particleDensityLin && in.particleDensityTemp && in.particleDensityUbo) {
                 for (uint32_t i = 0; i < kMaxDensityFields; ++i) {
-                    pdInfos[i]    = {nearestSampler_, in.particleDensity[i], VK_IMAGE_LAYOUT_GENERAL};
-                    pdLinInfos[i] = {linearSampler_, in.particleDensityLin[i], VK_IMAGE_LAYOUT_GENERAL};
+                    pdInfos[i]     = {nearestSampler_, in.particleDensity[i], VK_IMAGE_LAYOUT_GENERAL};
+                    pdLinInfos[i]  = {linearSampler_, in.particleDensityLin[i], VK_IMAGE_LAYOUT_GENERAL};
+                    pdTempInfos[i] = {linearSampler_, in.particleDensityTemp[i], VK_IMAGE_LAYOUT_GENERAL};
                 }
                 pdUboInfo.buffer = in.particleDensityUbo[f];
                 pdUboInfo.range  = VK_WHOLE_SIZE;
@@ -394,7 +398,13 @@ namespace threepp::vulkan {
                 w[11].descriptorCount = kMaxDensityFields;
                 w[11].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w[11].pImageInfo      = pdLinInfos.data();
-                nw = 12;
+                w[12].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[12].dstSet          = sets_[f];
+                w[12].dstBinding      = 99;
+                w[12].descriptorCount = kMaxDensityFields;
+                w[12].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[12].pImageInfo      = pdTempInfos.data();
+                nw = 13;
             }
             VkDescriptorBufferInfo cloudInfo{};
             if (in.cloudUbo) {

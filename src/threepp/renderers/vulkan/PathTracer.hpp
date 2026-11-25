@@ -112,9 +112,10 @@ namespace threepp::vulkan {
             // set has them): kMaxDensityFields views each, every slot filled
             // (the caller's 1x1x1 dummies for the unused ones), and the
             // per-frame box/medium block.
-            const VkImageView* particleDensity    = nullptr;// integer volumes
-            const VkImageView* particleDensityLin = nullptr;// r16f mirrors
-            const VkBuffer*    particleDensityUbo = nullptr;// [framesInFlight]
+            const VkImageView* particleDensity     = nullptr;// integer volumes
+            const VkImageView* particleDensityLin  = nullptr;// r16f mirrors
+            const VkImageView* particleDensityTemp = nullptr;// solved volumes' kelvin (binding 99)
+            const VkBuffer*    particleDensityUbo  = nullptr;// [framesInFlight]
             // The cloud + height-fog block (binding 58, GpuCloudUbo).
             const VkBuffer*    cloudUbo           = nullptr;// [framesInFlight]
             VkDeviceSize       cloudRange         = VK_WHOLE_SIZE;

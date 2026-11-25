@@ -14,6 +14,12 @@
 //   E  still        a still collider and a still box in still air move nothing
 //   F  resolution   a plume rises the same at 64^3, 96^3 and 128^3, and in cells
 //                   that are not cubes
+//   G  burn books   in still air the fuel a cell burns matches the oxygen it used,
+//                   the heat it gained and the soot it made
+//   H  ignition     fuel below the ignition temperature does not burn, and where
+//      and oxygen   the air runs out the fire stops with fuel left over
+//   I  expansion    a fire's projected velocity keeps the divergence its burn
+//                   released, to the pressure solve's residual
 //
 // Every case prints its numbers before its verdict, so a failure says by how much.
 // An argument runs only the cases it names: `VulkanGridSmoke_test BD`.
@@ -313,15 +319,10 @@ namespace {
               "A: more iterations leave less divergence in the velocity (200 vs 8: under half)");
     }
 
-    // ── B: a sealed box keeps its smoke ──────────────────────────────────────
-    void caseSealedBox(Rig& rig) {
-        std::printf("\n== B  sealed box: walls on all six sides, dissipation off, 64^3 ==\n");
-        Sim  sim(rig, Vector3(0.f, 1.f, 0.f), Vector3(1.f, 1.f, 1.f), 64);
-        auto& gs        = sim.gs();
+    // 0.1 m walls (3.2 cells) inside the 2 m box centred at (0, 1, 0) on the four sides and the top; with the solid
+    // floor as the sixth, the air inside is sealed in.
+    void sealBox(ParticleField::GridSmoke& gs) {
         gs.solidFloor   = true;
-        gs.dissipation  = 0.f;
-        gs.boundaryFade = 0.f;
-        // 0.1 m walls (3.2 cells) inside the box on the four sides and the top; the solid floor is the sixth.
         const auto wall = [&](Vector3 mn, Vector3 mx) {
             ParticleField::GridSmoke::Box b;
             b.min = mn;
@@ -333,6 +334,16 @@ namespace {
         wall({-1.2f, -0.2f, -1.2f}, {1.2f, 2.2f, -0.9f});
         wall({-1.2f, -0.2f, 0.9f}, {1.2f, 2.2f, 1.2f});
         wall({-1.2f, 1.9f, -1.2f}, {1.2f, 2.2f, 1.2f});
+    }
+
+    // ── B: a sealed box keeps its smoke ──────────────────────────────────────
+    void caseSealedBox(Rig& rig) {
+        std::printf("\n== B  sealed box: walls on all six sides, dissipation off, 64^3 ==\n");
+        Sim  sim(rig, Vector3(0.f, 1.f, 0.f), Vector3(1.f, 1.f, 1.f), 64);
+        auto& gs        = sim.gs();
+        gs.dissipation  = 0.f;
+        gs.boundaryFade = 0.f;
+        sealBox(gs);
         gs.sources.push_back(plumeSource(Vector3(0.f, 0.3f, 0.f), 0.2f));
 
         sim.runToSeconds(0.5);
@@ -595,6 +606,249 @@ namespace {
               "F: cells 1.5x taller than wide give the same plume as cubic cells to 10 %");
     }
 
+    // ── G, H: the burn, in still air ─────────────────────────────────────────
+    // Nothing moves in these two: no buoyancy, no source pulls the air and nothing expands, so the velocity stays
+    // exactly zero (case E), the advection is the identity and every cell is a closed room of its own. A first phase
+    // lays fuel, heat and smoke into fresh air with the ignition out of reach; then the sources stop, the ignition
+    // comes down to kIgnite and the cells that are hot enough burn. Cooling, dissipation and the boundary fade are
+    // off, so whatever the fuel lost, the burn must account for, cell by cell.
+    constexpr float  kIgnite        = 0.3f;
+    constexpr double kLayDown       = 0.3;// s of sources
+    constexpr double kBurn          = 0.5;// s of burning after them
+    constexpr int    kBurnSteps     = int(kBurn / kDt + 0.5);
+    constexpr float  kOxygenPerFuel = 2.5f;// a cell of fresh air burns 0.4 of fuel
+
+    void stillAir(ParticleField::GridSmoke& gs) {
+        gs.buoyancy            = 0.f;
+        gs.weight              = 0.f;
+        gs.dissipation         = 0.f;
+        gs.cooling             = 0.f;
+        gs.boundaryFade        = 0.f;
+        gs.expansion           = 0.f;
+        gs.ignitionTemperature = 1e9f;// nothing burns while the sources lay it down
+        // Most of a cell's fuel goes in its first few steps, so the tail fp16 rounds is short.
+        gs.burnRate      = 30.f;
+        gs.heatRelease   = 2.f;
+        gs.sootYield     = 0.5f;
+        gs.oxygenPerFuel = kOxygenPerFuel;
+        sealBox(gs);
+    }
+
+    // A source that only adds: no pull on the air, no noise.
+    ParticleField::GridSmoke::Source stillSource(const Vector3& at, float radius, float density, float temperature,
+                                                 float fuel) {
+        ParticleField::GridSmoke::Source s;
+        s.position      = at;
+        s.radius        = radius;
+        s.density       = density;
+        s.temperature   = temperature;
+        s.fuel          = fuel;
+        s.velocityBlend = 0.f;
+        s.noise         = 0.f;
+        return s;
+    }
+
+    // One fp16 step (ulp) of x: what a stored value can be off by after one rounding is half of it.
+    double ulp16(double x) {
+        x = std::abs(x);
+        if (x < std::ldexp(1.0, -14)) return std::ldexp(1.0, -24);// subnormal
+        return std::ldexp(1.0, int(std::floor(std::log2(x))) - 10);
+    }
+
+    // ── G: the burn keeps its books ──────────────────────────────────────────
+    void caseBurnBooks(Rig& rig) {
+        std::printf("\n== G  the burn's books: a sealed box of still air, fuel laid into it hot, then lit, 64^3 ==\n");
+        Sim  sim(rig, Vector3(0.f, 1.f, 0.f), Vector3(1.f, 1.f, 1.f), 64);
+        auto& gs = sim.gs();
+        stillAir(gs);
+        // Lean: at most 0.36 of fuel where a cell's fresh air can burn 0.4, so a cell that is hot enough burns all of
+        // it; at most 1.2 of temperature, so the cells further than half the radius out stay below kIgnite.
+        gs.sources.push_back(stillSource(Vector3(0.f, 0.8f, 0.f), 0.35f, 0.5f, 4.f, 1.2f));
+        sim.runToSeconds(kLayDown);
+        State s0, s1;
+        if (!sim.read(s0)) {
+            check(false, "G: the solver state reads back");
+            return;
+        }
+        gs.sources.clear();
+        gs.ignitionTemperature = kIgnite;
+        sim.runToSeconds(kLayDown + kBurn);
+        if (!sim.read(s1)) return;
+
+        const View v = sim.view(s1);
+        double     burned = 0.0, oxygen = 0.0, heat = 0.0, soot = 0.0, worst = 0.0;
+        int        lit = 0, fuelled = 0;
+        for (int k = 0; k < v.n; ++k)
+            for (int j = 0; j < v.n; ++j)
+                for (int i = 0; i < v.n; ++i) {
+                    if (v.solid(i, j, k)) continue;
+                    const size_t c  = v.id(i, j, k);
+                    const double f0 = s0.fuel[c];
+                    const double b  = f0 - s1.fuel[c];
+                    const double dO = double(s1.oxygenDeficit[c]) - s0.oxygenDeficit[c];
+                    const double dT = double(s1.temperature[c]) - s0.temperature[c];
+                    const double dS = double(s1.density[c]) - s0.density[c];
+                    burned += b;
+                    oxygen += dO;
+                    heat += dT;
+                    soot += dS;
+                    fuelled += f0 > 0.0 ? 1 : 0;
+                    lit += b > 0.0 ? 1 : 0;
+                    // Every step of the burn rounds each channel it changes to fp16, the fuel included: a cell's books
+                    // may be off by half a step of the channel and of its fuel (times the yield) per step.
+                    const auto bound = [&](double a0, double a1, double yield) {
+                        return 0.5 * kBurnSteps * (ulp16(std::max(std::abs(a0), std::abs(a1))) + yield * ulp16(f0));
+                    };
+                    worst = std::max({worst,
+                                      std::abs(dO - b * gs.oxygenPerFuel) /
+                                              bound(s0.oxygenDeficit[c], s1.oxygenDeficit[c], gs.oxygenPerFuel),
+                                      std::abs(dT - b * gs.heatRelease) /
+                                              bound(s0.temperature[c], s1.temperature[c], gs.heatRelease),
+                                      std::abs(dS - b * gs.sootYield) / bound(s0.density[c], s1.density[c], gs.sootYield)});
+                }
+        const double vol  = v.cellVolume();
+        const double rO   = oxygen / gs.oxygenPerFuel, rT = heat / gs.heatRelease, rS = soot / gs.sootYield;
+        double       laid = 0.0;
+        for (float x : s0.fuel) laid += x;
+        std::printf("  %d cells hold fuel, %d of them burned; fuel burned %.6f (of %.6f laid down)\n", fuelled, lit,
+                    burned * vol, laid * vol);
+        std::printf("  oxygen used / oxygenPerFuel %.6f (%+.3f %%)  heat / heatRelease %.6f (%+.3f %%)  "
+                    "soot / sootYield %.6f (%+.3f %%)\n",
+                    rO * vol, 100.0 * (rO - burned) / burned, rT * vol, 100.0 * (rT - burned) / burned, rS * vol,
+                    100.0 * (rS - burned) / burned);
+        std::printf("  worst cell: off by %.2f of its fp16 bound\n", worst);
+        check(lit > 500 && burned > 0.0, "G: the hot cells burn");
+        check(worst <= 1.0, "G: in every cell, oxygen used, heat and soot made match the fuel burned (x oxygenPerFuel, "
+                            "heatRelease, sootYield) to the fp16 rounding of its steps");
+        // Over the box the roundings do not cancel: a store may round toward zero (the stored sums here come out
+        // 0.5 to 1.3 % short), and a cell's last steps add less than a step of fp16 and are dropped.
+        const auto near = [&](double x) { return std::abs(x - burned) <= 0.02 * burned; };
+        check(near(rO) && near(rT) && near(rS),
+              "G: and over the box, to 2 %");
+    }
+
+    // ── H: ignition, and the air running out ─────────────────────────────────
+    void caseBurnLimits(Rig& rig) {
+        std::printf("\n== H  ignition and oxygen: a sealed box of still air, a cold fuel cloud and a hot rich one, "
+                    "64^3 ==\n");
+        Sim  sim(rig, Vector3(0.f, 1.f, 0.f), Vector3(1.f, 1.f, 1.f), 64);
+        auto& gs = sim.gs();
+        stillAir(gs);
+        // Cold: fuel with no heat. Rich and hot: up to 0.9 of fuel where the air can burn 0.4.
+        gs.sources.push_back(stillSource(Vector3(0.45f, 0.8f, 0.f), 0.3f, 0.f, 0.f, 2.f));
+        gs.sources.push_back(stillSource(Vector3(-0.45f, 0.8f, 0.f), 0.3f, 0.f, 4.f, 3.f));
+        sim.runToSeconds(kLayDown);
+        State s0, s1, s2;
+        if (!sim.read(s0)) {
+            check(false, "H: the solver state reads back");
+            return;
+        }
+        gs.sources.clear();
+        gs.ignitionTemperature = kIgnite;
+        sim.runToSeconds(kLayDown + kBurn);
+        if (!sim.read(s1)) return;
+        sim.runToSeconds(kLayDown + 2.0 * kBurn);
+        if (!sim.read(s2)) return;
+
+        const View v           = sim.view(s1);
+        int        cold        = 0, coldMoved = 0, rich = 0, moved = 0;
+        double     minUsed     = 1.0, worstLeft = 0.0, left = 0.0;
+        const auto sameScalars = [](const State& a, const State& b, size_t c) {
+            return a.fuel[c] == b.fuel[c] && a.oxygenDeficit[c] == b.oxygenDeficit[c] &&
+                   a.temperature[c] == b.temperature[c] && a.density[c] == b.density[c];
+        };
+        for (int k = 0; k < v.n; ++k)
+            for (int j = 0; j < v.n; ++j)
+                for (int i = 0; i < v.n; ++i) {
+                    if (v.solid(i, j, k)) continue;
+                    const size_t c = v.id(i, j, k);
+                    moved += sameScalars(s1, s2, c) ? 0 : 1;
+                    const float f0 = s0.fuel[c];
+                    if (f0 <= 0.f) continue;
+                    if (s0.temperature[c] <= kIgnite) {
+                        ++cold;
+                        coldMoved += sameScalars(s0, s1, c) ? 0 : 1;
+                    } else if (f0 >= 1.f / kOxygenPerFuel + 0.05f) {
+                        ++rich;
+                        minUsed = std::min(minUsed, double(s1.oxygenDeficit[c]));
+                        // All the oxygen there was burned the share of the fuel it could; the rest is left.
+                        const double expect = f0 - (1.0 - s0.oxygenDeficit[c]) / kOxygenPerFuel;
+                        worstLeft           = std::max(worstLeft, std::abs(double(s1.fuel[c]) - expect));
+                        left += s1.fuel[c];
+                    }
+                }
+        std::printf("  below the ignition: %d cells with fuel, %d of them changed\n", cold, coldMoved);
+        std::printf("  rich and lit: %d cells, oxygen used >= %.5f, fuel left %.5f (worst cell %.5f from fuel - "
+                    "1/oxygenPerFuel)\n",
+                    rich, minUsed, left * v.cellVolume(), worstLeft);
+        std::printf("  the next %.1f s: %d cells changed\n", kBurn, moved);
+        check(cold > 200 && coldMoved == 0, "H: fuel below the ignition temperature does not burn (no such cell changes)");
+        check(rich > 100 && minUsed >= 0.995 && worstLeft <= 0.01,
+              "H: where the air runs out the fire stops with the fuel it could not burn left over (oxygen used "
+              ">= 99.5 %, fuel left within 0.01 of fuel - 1/oxygenPerFuel)");
+        check(moved == 0, "H: and once it has stopped nothing burns: another 0.5 s changes no cell");
+    }
+
+    // ── I: the flame's gas leaves it ─────────────────────────────────────────
+    // The burn releases gas (GridSmoke::expansion) and the projection must leave it there: div u = E in a burning
+    // cell where it leaves div u = 0 elsewhere. As in A, measured with the solver's own stencil: after the projection
+    // div u - E = -(L p - (div_before - E)), minus the solve's residual, so the velocity keeps the expansion to that
+    // residual (and fp16's rounding of the faces).
+    void caseExpansion(Rig& rig) {
+        std::printf("\n== I  expansion: an open fire, 1 s, 64^3, 2 m box, 200 pressure sweeps ==\n");
+        Sim  sim(rig, Vector3(0.f, 1.f, 0.f), Vector3(1.f, 1.f, 1.f), 64);
+        auto& gs              = sim.gs();
+        gs.solidFloor         = true;
+        gs.pressureIterations = 200;
+        gs.expansion          = 2.f;
+        // A fuel source hot enough to light itself.
+        ParticleField::GridSmoke::Source s = plumeSource(Vector3(0.f, 0.3f, 0.f), 0.2f);
+        s.density                          = 0.f;
+        s.temperature                      = 4.f;
+        s.fuel                             = 3.f;
+        s.velocity                         = Vector3(0.f, 1.f, 0.f);
+        s.velocityBlend                    = 2.f;
+        gs.sources.push_back(s);
+        sim.runToSeconds(1.0);
+        State st;
+        if (!sim.read(st)) {
+            check(false, "I: the solver state reads back");
+            return;
+        }
+        const View          v = sim.view(st);
+        std::vector<double> errAll, resAll, floorAll, errLit, resLit, floorLit, eLit;
+        double              eMax = 0.0;
+        for (int k = 0; k < v.n; ++k)
+            for (int j = 0; j < v.n; ++j)
+                for (int i = 0; i < v.n; ++i) {
+                    if (v.solid(i, j, k)) continue;
+                    const double E   = st.expansion[v.id(i, j, k)];
+                    const double err = v.divergence(i, j, k) - E;
+                    const double res = v.solveResidual(i, j, k);
+                    const double fl  = v.vel(i, j, k).length() * std::ldexp(1.0, -11) * std::sqrt(6.0) / v.cell.x;
+                    errAll.push_back(err);
+                    resAll.push_back(res);
+                    floorAll.push_back(fl);
+                    if (E > 0.0) {
+                        errLit.push_back(err);
+                        resLit.push_back(res);
+                        floorLit.push_back(fl);
+                        eLit.push_back(E);
+                        eMax = std::max(eMax, E);
+                    }
+                }
+        std::printf("  %zu burning cells: expansion RMS %.4f /s, max %.4f /s\n", eLit.size(), rms(eLit), eMax);
+        std::printf("  %-14s  %11s  %11s  %11s\n", "RMS (1/s)", "div u - E", "solve resid", "fp16 floor");
+        std::printf("  %-14s  %11.5f  %11.5f  %11.5f\n", "burning cells", rms(errLit), rms(resLit), rms(floorLit));
+        std::printf("  %-14s  %11.5f  %11.5f  %11.5f\n", "all open cells", rms(errAll), rms(resAll), rms(floorAll));
+        check(eLit.size() > 50 && rms(eLit) > 0.1, "I: the fire burns and releases gas");
+        check(rms(errLit) <= 1.25 * rms(resLit) + 2.0 * rms(floorLit) &&
+                      rms(errAll) <= 1.25 * rms(resAll) + 2.0 * rms(floorAll),
+              "I: the projected velocity's divergence is the expansion to the solve's residual (div u - E <= 1.25 x "
+              "solve residual + 2 x fp16 floor, burning cells and all cells)");
+        check(rms(errLit) <= 0.05 * rms(eLit), "I: the burning cells keep their expansion (div u within 5 % of E)");
+    }
+
 }// namespace
 
 int main(int argc, char** argv) {
@@ -634,6 +888,9 @@ int main(int argc, char** argv) {
     if (want('D')) caseSymmetry(rig);
     if (want('E')) caseStill(rig);
     if (want('F')) caseResolution(rig);
+    if (want('G')) caseBurnBooks(rig);
+    if (want('H')) caseBurnLimits(rig);
+    if (want('I')) caseExpansion(rig);
 
     std::printf("\n");
     if (vulkan::validationActive()) {

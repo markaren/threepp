@@ -6,7 +6,9 @@
 // divergence-free: the difference of the two cells a face separates is exactly
 // the gradient smoke_jacobi.comp's Laplacian is the divergence of. Beyond an open
 // side of the box the pressure is 0 (the smoke leaves); a solid's face keeps the
-// solid's velocity.
+// solid's velocity. A burning cell is left with the divergence of its expansion
+// (smoke_diverge.comp), which the texel's w still holds after this pass, so the
+// state a step leaves says what it was asked to.
 
 float cellPressure(ivec3 c) { return inGrid(c) ? texelFetch(uP, c, 0).x : 0.0; }
 
@@ -25,5 +27,5 @@ void main() {
         }
         v[a] = old[a] - (p0 - cellPressure(c - unitAxis(a))) * pc.invCell[a];
     }
-    imageStore(oVel, c, vec4(v, 0.0));
+    imageStore(oVel, c, vec4(v, old.w));
 }

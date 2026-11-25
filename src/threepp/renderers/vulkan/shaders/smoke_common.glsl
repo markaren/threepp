@@ -5,13 +5,21 @@
 // (velocity, scalar, pressure) ping-pong parity serves every pass and the host
 // never rewrites a set. A pass names only the bindings it reads.
 //
-//   uVel  / oVel    velocity, rgba16f, m/s, ON THE FACES (below), (res+1)^3
-//   uSca  / oSca    scalars,  rg16f:  x = density, y = temperature
+//   uVel  / oVel    velocity, rgba16f, m/s, ON THE FACES (below), (res+1)^3;
+//                   w = the gas the step's burn released in that cell (1/s),
+//                   from smoke_forces.comp to the projection
+//   uSca  / oSca    scalars,  rgba16f: x = density (the soot), y = temperature,
+//                   z = fuel (unburnt, invisible), w = the oxygen used
+//                   (0 = fresh air, 1 = none left)
 //   uP    / oP      pressure, r32f
 //   aux / uAux      scratch,  rgba16f: vorticity (curl, |curl|), the
 //                   MacCormack predictor, then the divergence
-//   Params          sources + colliders + clock (vkCmdUpdateBuffer each frame)
+//   Params          sources + colliders + the fire + clock (vkCmdUpdateBuffer each frame)
 //   oDensity        the field's r32ui sigma_t volume (the final pass only)
+//   oKelvin         the field's temperature volume for the glow (the final pass only)
+//
+// Outside the box all four scalars read 0: fresh air, with no fuel and no smoke
+// in it, is what comes in through an open face.
 //
 // The grid is `res` cells per axis over the world box [box, box + res / invCell];
 // cell i has its centre at box + (i + 0.5) / invCell. Cells are NOT assumed to
@@ -37,7 +45,7 @@ layout(local_size_x = 8, local_size_y = 4, local_size_z = 4) in;
 layout(set = 0, binding = 0) uniform sampler3D uVel;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image3D oVel;
 layout(set = 0, binding = 2) uniform sampler3D uSca;
-layout(set = 0, binding = 3, rg16f) uniform writeonly image3D oSca;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D oSca;
 layout(set = 0, binding = 4) uniform sampler3D uP;
 layout(set = 0, binding = 5, r32f) uniform writeonly image3D oP;
 layout(set = 0, binding = 6, rgba16f) uniform image3D aux;
@@ -45,7 +53,7 @@ layout(set = 0, binding = 7) uniform sampler3D uAux;
 
 struct Source {
     vec4 posRadius;// xyz world, w radius (m)
-    vec4 rates;    // x density / s, y temperature / s, z velocity blend / s
+    vec4 rates;    // x density / s, y temperature / s, z velocity blend / s, w fuel / s
     vec4 vel;      // xyz emission velocity (m/s), w noise amplitude (0..1)
 };
 struct Collider {
@@ -65,6 +73,12 @@ struct Box {
 };
 layout(set = 0, binding = 8, std430) readonly buffer Params {
     vec4     head;// x sources, y capsule colliders, z time (s), w boxes
+    // The fire (ParticleField::GridSmoke). burn0: x ignition temperature, y burn rate (1/s), z heat release
+    // (temperature per unit of fuel burned), w soot yield (density per unit of fuel burned). burn1: x oxygen per fuel
+    // (the share of a cell's oxygen one unit of fuel uses), y expansion (gas released per unit of fuel burned, as a
+    // share of the cell), z kelvin per temperature unit, w the ambient (K).
+    vec4     burn0;
+    vec4     burn1;
     Source   src[16];   // kSmokeMaxSources in SmokeGrid.hpp
     Collider col[64];   // kSmokeMaxColliders
     Box      box[128];  // kSmokeMaxBoxes
