@@ -2068,6 +2068,11 @@ namespace threepp {
             // The ocean's shore (first displaced mesh only): its maps where a
             // window moved or the scene changed, and the foam it lays this step.
             float oceanShoreMs    = 0.f;
+            // The ocean's wake field (first displaced mesh only): its step
+            // (advect, correct, settle over every live layer), and apart from
+            // it the ripples' spectral step and mips.
+            float oceanWakeMs     = 0.f;
+            float oceanRipplesMs  = 0.f;
             // Per-frame TLAS refit recorded on the frame command buffer
             // (0 on frames with no refit).
             float tlasRefitMs     = 0.f;

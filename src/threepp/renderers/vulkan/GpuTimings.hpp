@@ -138,9 +138,20 @@ namespace threepp::vulkan {
         // wake field's own step (advect, correct, settle) is not in it. First
         // displaced mesh of the frame only.
         TP_OceanShore     = 30,
-        TP_COUNT          = 31,
+        // The wake field's step (WakeFieldPipeline::record): the table, then
+        // advect, correct and settle over every live layer, the shore windows'
+        // included. It sat in the deform.water pass with no bracket of its own
+        // and was most of that pass on a frame with boats moving. First
+        // displaced mesh of the frame only, like the stages above.
+        TP_OceanWake      = 31,
+        // The wake field's ripples (WakeFieldPipeline::recordRipples), right
+        // after the step: each rippled patch's spectral step, its heights
+        // where a patch takes them, and the mips. Disjoint from TP_OceanWake.
+        TP_OceanRipples   = 32,
+        TP_COUNT          = 33,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
+    static_assert(TP_COUNT <= 64, "GpuTimings::maskRecorded_ holds a bit per TimingPass");
 
     class GpuTimings final: public rg::PassTimer {
     public:
@@ -215,7 +226,7 @@ namespace threepp::vulkan {
         uint32_t       framesInFlight_;
 
         std::vector<VkQueryPool> pools_;
-        std::vector<uint32_t>   maskRecorded_;
+        std::vector<uint64_t>   maskRecorded_;// a bit per TimingPass
         float timestampPeriodNs_ = 1.0f;
         bool  timingsSupported_  = false;
         bool  suppressed_        = false;

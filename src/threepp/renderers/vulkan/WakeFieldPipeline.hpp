@@ -395,12 +395,26 @@ namespace threepp::vulkan {
         // the source. Nothing when record() did not step this frame.
         void recordShore(VkCommandBuffer cb, State& st, const ShoreInputs& in, double nowSec);
 
+        // What a step leaves for recordRipples: the patches with ripples (none
+        // when record() did not step), those of them that take the height, and
+        // the field's push block.
+        struct RippleStep {
+            uint32_t      rippleMask = 0u;
+            uint32_t      heightMask = 0u;
+            PushConstants pc{};
+        };
+
         // One step of the field, into the frame's command stream: the table
         // and this frame's sources, then the three dispatches for every patch
-        // that is on, then the ripples of every patch that has any. A frame at
-        // the same time as the last (a still that renders the same instant
-        // again) records nothing.
-        void record(VkCommandBuffer cb, State& st, const DisplacedMesh& dm, double nowSec);
+        // that is on. A frame at the same time as the last (a still that
+        // renders the same instant again) records nothing. Returns the ripples
+        // the step leaves, for recordRipples right after it.
+        RippleStep record(VkCommandBuffer cb, State& st, const DisplacedMesh& dm, double nowSec);
+        // The ripples of every patch that has any, as the step just recorded
+        // left them (their slopes, their heights where a patch asks, then the
+        // mips); nothing for an empty step. A call of its own so the field and
+        // its ripples are timed apart (TP_OceanWake, TP_OceanRipples).
+        void recordRipples(VkCommandBuffer cb, State& st, const RippleStep& step);
 
     private:
         VulkanContext&        ctx_;
@@ -441,7 +455,6 @@ namespace threepp::vulkan {
 
         void createPipeline();
         void createShorePipelines();
-        void recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, uint32_t heightMask, PushConstants pc);
     };
 
 }// namespace threepp::vulkan

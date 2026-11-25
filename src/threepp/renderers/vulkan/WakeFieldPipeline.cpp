@@ -661,7 +661,8 @@ namespace threepp::vulkan {
         }
     }
 
-    void WakeFieldPipeline::record(VkCommandBuffer cb, State& st, const DisplacedMesh& dm, double nowSec) {
+    WakeFieldPipeline::RippleStep WakeFieldPipeline::record(VkCommandBuffer cb, State& st, const DisplacedMesh& dm,
+                                                            double nowSec) {
         // The first step, and one after the clock went back (a run started
         // over), take no time: they deposit and decay nothing away. Otherwise
         // dt is clamped so a stall cannot throw the field a quarter of a patch
@@ -671,7 +672,7 @@ namespace threepp::vulkan {
         const bool restart = st.prevTimeSec < 0.0 || since < 0.0;
         const float dt = restart ? 0.0f : std::min(static_cast<float>(since), 0.25f);
         st.stepped = false;
-        if (!restart && dt <= 0.0f) return;
+        if (!restart && dt <= 0.0f) return {};
         st.prevTimeSec = nowSec;
         st.stepped  = true;
         st.stepDt   = dt;
@@ -901,7 +902,7 @@ namespace threepp::vulkan {
         bmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0, 0, nullptr, 1, &bmb, 0, nullptr);
-        if (liveMask == 0u) return;
+        if (liveMask == 0u) return {};
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
         const uint32_t groups = (st.res + 7u) / 8u;
@@ -920,11 +921,14 @@ namespace threepp::vulkan {
             computeBarrier(cb);
         }
 
-        if (rippleMask != 0u) recordRipples(cb, st, rippleMask, heightMask, pc);
+        return {rippleMask, heightMask, pc};
     }
 
-    void WakeFieldPipeline::recordRipples(VkCommandBuffer cb, State& st, uint32_t rippleMask, uint32_t heightMask,
-                                          PushConstants pc) {
+    void WakeFieldPipeline::recordRipples(VkCommandBuffer cb, State& st, const RippleStep& step) {
+        const uint32_t rippleMask = step.rippleMask;
+        if (rippleMask == 0u) return;
+        uint32_t      heightMask = step.heightMask;
+        PushConstants pc         = step.pc;
         const uint32_t groups = (st.rippleRes + 7u) / 8u;
         auto dispatch = [&](uint32_t layer, uint32_t mode) {
             // (bound anew each time: the IFFT in between binds its own)

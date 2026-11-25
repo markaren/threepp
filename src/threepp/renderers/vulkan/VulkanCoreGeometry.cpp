@@ -3939,8 +3939,17 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             if (st.wake && st.wake->shoreOn) {
                 vulkan::WakeFieldPipeline::setShoreWindows(*st.wake, oceanLodEye_.x, oceanLodEye_.z);
             }
+            // The wake field's step, then its ripples, each timed apart.
+            const auto recordWake = [&] {
+                if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanWake, currentFrame);
+                const auto ripples = wakeField_->record(cb, *st.wake, dm, frameNowSec());
+                if (timed) gpuTimings_->end(cb, vulkan::TP_OceanWake, currentFrame);
+                if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanRipples, currentFrame);
+                wakeField_->recordRipples(cb, *st.wake, ripples);
+                if (timed) gpuTimings_->end(cb, vulkan::TP_OceanRipples, currentFrame);
+            };
             if (rippleHeights) {
-                wakeField_->record(cb, *st.wake, dm, frameNowSec());
+                recordWake();
                 VkMemoryBarrier mb{};
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
                 mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -4046,7 +4055,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
 
             // (4d) The wake field: carry, settle and feed every patch that is on
             // (already done above when the geometry takes its ripples' height).
-            if (st.wake && !rippleHeights) wakeField_->record(cb, *st.wake, dm, frameNowSec());
+            if (st.wake && !rippleHeights) recordWake();
 
             // (4e) The shore: its maps where a window moved or the scene
             // changed (ray queries against the TLAS as the last frame left it,

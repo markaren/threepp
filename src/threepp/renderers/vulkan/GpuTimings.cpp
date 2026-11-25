@@ -114,14 +114,14 @@ namespace threepp::vulkan {
         if (!timingsSupported_ || pools_[frame] == VK_NULL_HANDLE) return;
         vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                              pools_[frame], TP_Frame * 2u + 1u);
-        maskRecorded_[frame] |= (1u << TP_Frame);
+        maskRecorded_[frame] |= (1ull << TP_Frame);
     }
 
     void GpuTimings::begin(VkCommandBuffer cb, TimingPass pass, uint32_t frame) {
         if (!timingsSupported_ || suppressed_) return;
         vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                              pools_[frame], pass * 2u);
-        maskRecorded_[frame] |= (1u << pass);
+        maskRecorded_[frame] |= (1ull << pass);
     }
 
     void GpuTimings::end(VkCommandBuffer cb, TimingPass pass, uint32_t frame) {
@@ -165,6 +165,8 @@ namespace threepp::vulkan {
         lastTimings_.oceanDisplaceMs = 0.f;
         lastTimings_.oceanFoamMs     = 0.f;
         lastTimings_.oceanShoreMs    = 0.f;
+        lastTimings_.oceanWakeMs     = 0.f;
+        lastTimings_.oceanRipplesMs  = 0.f;
         lastTimings_.rtaoMs          = 0.f;
         lastTimings_.fogMarchMs      = 0.f;
         lastTimings_.billboardLayerMs = 0.f;
@@ -208,13 +210,13 @@ namespace threepp::vulkan {
             }
         }
 
-        const uint32_t mask = maskRecorded_[frame];
+        const uint64_t mask = maskRecorded_[frame];
         if (mask == 0u) return;// first use of this slot
         // We read pairs individually (not in one bulk fetch) because slots
         // for passes that didn't run this cycle are RESET but never WRITTEN,
         // and VK_QUERY_RESULT_WAIT_BIT on a reset query blocks indefinitely.
         auto pairMs = [&](TimingPass p) -> float {
-            if ((mask & (1u << p)) == 0u) return 0.f;
+            if ((mask & (1ull << p)) == 0u) return 0.f;
             std::array<uint64_t, 2> pair{};
             const VkResult r = vkGetQueryPoolResults(
                     ctx_.device(), pools_[frame],
@@ -247,6 +249,8 @@ namespace threepp::vulkan {
         lastTimings_.oceanDisplaceMs = pairMs(TP_OceanDisplace);
         lastTimings_.oceanFoamMs     = pairMs(TP_OceanFoam);
         lastTimings_.oceanShoreMs    = pairMs(TP_OceanShore);
+        lastTimings_.oceanWakeMs     = pairMs(TP_OceanWake);
+        lastTimings_.oceanRipplesMs  = pairMs(TP_OceanRipples);
         lastTimings_.rtaoMs          = pairMs(TP_Rtao);
         lastTimings_.fogMarchMs      = pairMs(TP_FogMarch);
         lastTimings_.billboardLayerMs = pairMs(TP_BillboardLayer);
@@ -273,6 +277,7 @@ namespace threepp::vulkan {
                 lastTimings_.particleEmitMs +
                 lastTimings_.oceanFftMs + lastTimings_.oceanDisplaceMs +
                 lastTimings_.oceanFoamMs + lastTimings_.oceanBlasMs + lastTimings_.oceanShoreMs +
+                lastTimings_.oceanWakeMs + lastTimings_.oceanRipplesMs +
                 lastTimings_.tlasRefitMs + lastTimings_.dynGeomRefitMs +
                 lastTimings_.rtaoMs + lastTimings_.probeGiMs + lastTimings_.fogMarchMs +
                 lastTimings_.billboardLayerMs +
