@@ -300,6 +300,9 @@ SmokePlan SmokeGrid::plan(const ParticleField& field) {
     pc.wind[1]                        = gs.wind.y;
     pc.wind[2]                        = gs.wind.z;
     pc.wind[3]                        = std::max(gs.maxSpeed, 0.1f);
+    pc.turb[0]                        = std::isfinite(gs.turbulence) ? std::max(gs.turbulence, 0.f) : 0.f;
+    pc.turb[1]                        = std::max(gs.turbulenceScale, 0.05f);
+    pc.turb[2] = pc.turb[3] = 0.f;
 
     // ── the sources and colliders ───────────────────────────────────────────
     SmokeGpuParams& P  = out.params;

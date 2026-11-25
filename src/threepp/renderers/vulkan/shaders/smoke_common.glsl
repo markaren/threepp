@@ -74,9 +74,10 @@ layout(push_constant) uniform Pc {
     ivec4 res;    // xyz cells per axis
     vec4  invCell;// xyz 1 / cell size (1/m), w dt (s)
     vec4  box;    // xyz world minimum, w solid floor (0 / 1)
-    vec4  phys0;  // x buoyancy, y weight, z -, w density dissipation (1/s)
+    vec4  phys0;  // x buoyancy, y weight, z boundary fade, w density dissipation (1/s)
     vec4  phys1;  // x cooling (1/s), y vorticity confinement, z velocity damping (1/s), w sigma_t in Q20.12 per unit density
     vec4  wind;   // xyz m/s, w speed cap (m/s)
+    vec4  turb;   // x the wind's eddies' speed (m/s, rms per axis; 0 = smooth air), y their size (m)
 } pc;
 
 bool inGrid(ivec3 c) { return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, pc.res.xyz)); }
@@ -213,4 +214,24 @@ float vnoise(vec3 p) {
                mix(mix(hash31(i + vec3(0, 0, 1)), hash31(i + vec3(1, 0, 1)), f.x),
                    mix(hash31(i + vec3(0, 1, 1)), hash31(i + vec3(1, 1, 1)), f.x), f.y),
                f.z);
+}
+
+// ── the wind's eddies ───────────────────────────────────────────────────────
+// One component of the curl of a vector potential made of three smooth noises (offset copies of vnoise), by central
+// differences: a velocity pattern with no divergence of its own. `p` is in units of the eddy size.
+float curlNoiseAxis(int axis, vec3 p) {
+    const float e   = 0.15;
+    const vec3  o1  = vec3(31.4, 47.2, 11.9), o2 = vec3(-17.8, 23.1, 59.3);
+    const vec3  ex  = vec3(e, 0.0, 0.0), ey = vec3(0.0, e, 0.0), ez = vec3(0.0, 0.0, e);
+    if (axis == 0) return (vnoise(p + ey + o2) - vnoise(p - ey + o2) - vnoise(p + ez + o1) + vnoise(p - ez + o1)) / (2.0 * e);
+    if (axis == 1) return (vnoise(p + ez) - vnoise(p - ez) - vnoise(p + ex + o2) + vnoise(p - ex + o2)) / (2.0 * e);
+    return (vnoise(p + ex + o1) - vnoise(p - ex + o1) - vnoise(p + ey) + vnoise(p - ey)) / (2.0 * e);
+}
+
+// The eddies' velocity along `axis` at world point w (m/s, relative to the wind): two octaves, the large eddies
+// carrying most of the energy, frozen into the air and carried by the wind. The constant makes each component's rms
+// pc.turb.x (measured over the noise in numpy: the two octaves' sum has an rms of 0.523 before it).
+float gustAxis(int axis, vec3 w) {
+    const vec3 q = (w - pc.wind.xyz * head.z) / pc.turb.y;
+    return pc.turb.x * (1.0 / 0.523) * (curlNoiseAxis(axis, q) + 0.25 * 2.3 * curlNoiseAxis(axis, q * 2.3 + 7.7));
 }

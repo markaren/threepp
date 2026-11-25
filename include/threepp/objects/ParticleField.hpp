@@ -637,6 +637,14 @@ namespace threepp {
             // m/s, the air outside the box. The box starts with it, air coming in through an open side brings it,
             // the drag pulls toward it, and inside it is air like any other: walls and colliders turn it.
             Vector3 wind{0.f, 0.f, 0.f};
+            // The air the wind brings is never smooth: over the sea or a field it arrives full of eddies. They ride
+            // the wind (frozen into the air, Taylor's hypothesis), have no divergence of their own (the curl of a
+            // smooth potential), and the air in the box is drawn toward them at their own turnover rate
+            // (turbulence / turbulenceScale), so a plume in a strong wind is torn instead of laid out as a smooth
+            // tube. `turbulence` is the eddies' speed (m/s, rms per axis; near the ground about a tenth of the wind),
+            // `turbulenceScale` their size (m). 0 = smooth air.
+            float turbulence      = 0.f;
+            float turbulenceScale = 1.5f;
             bool  solidFloor  = false; // the bottom face of the box is a wall
             std::vector<Source>   sources;
             std::vector<Collider> colliders;

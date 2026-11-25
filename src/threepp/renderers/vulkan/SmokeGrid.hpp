@@ -44,8 +44,9 @@ namespace threepp::vulkan {
         float        phys0[4];
         float        phys1[4];
         float        wind[4];
+        float        turb[4];// x eddy speed (m/s, rms), y eddy size (m)
     };
-    static_assert(sizeof(SmokePc) == 96, "SmokePc layout drift");
+    static_assert(sizeof(SmokePc) == 112, "SmokePc layout drift");
 
     // How many sources and colliders a field may carry (the rest are ignored). A labyrinth's walls are colliders.
     inline constexpr std::uint32_t kSmokeMaxSources   = 16;
