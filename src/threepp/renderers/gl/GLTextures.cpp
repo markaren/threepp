@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <optional>
 #include "threepp/renderers/gl/GLLog.hpp"
 
 using namespace threepp;
@@ -91,30 +92,44 @@ namespace {
         return internalFormat;
     }
 
-    // Sized internal format for a target's depth (or depth-stencil) attachment.
+    // Sized internal format for a depth (or depth-stencil) attachment, given
+    // whether it carries a stencil and the depth texture's type (none for a
+    // plain depth buffer).
     //
-    // Both sides of a multisampled target are allocated from here, and that is
-    // the point: resolving is a glBlitFramebuffer, and a depth blit is only
-    // legal when the read and draw attachments carry the *same* format. It is
-    // also why the stencil case names GL_DEPTH24_STENCIL8 rather than the
-    // unsized GL_DEPTH_STENCIL — unsized leaves the pick to the driver, and
-    // there is no guarantee it picks the same thing for a renderbuffer as for
-    // a multisampled one.
+    // A depth texture and the renderbuffers standing in for it (a multisampled
+    // target draws into those and resolves into the texture) are all allocated
+    // from here, and that is the point: resolving is a glBlitFramebuffer, and a
+    // depth blit is only legal when the read and draw attachments carry the
+    // *same* format. It is also why the stencil case names GL_DEPTH24_STENCIL8
+    // rather than the unsized GL_DEPTH_STENCIL — unsized leaves the pick to the
+    // driver, and there is no guarantee it picks the same thing for a
+    // renderbuffer as for a multisampled one.
+    //
+    // Depth is 24-bit unless a float depth texture asks for 32, as in three.js:
+    // 16 bits cannot tell surfaces a few centimetres apart a few tens of metres
+    // away. The one exception is the web, where WebGL 2 pairs
+    // DEPTH_COMPONENT24 only with UNSIGNED_INT data, so a depth texture of any
+    // other type stays 16-bit there.
+    GLint depthInternalFormat(bool stencil, std::optional<Type> textureType) {
+
+        if (textureType == Type::Float) return GL_DEPTH_COMPONENT32F;
+        if (stencil || textureType == Type::UnsignedInt248) return GL_DEPTH24_STENCIL8;
+#ifdef __EMSCRIPTEN__
+        if (textureType && *textureType != Type::UnsignedInt) return GL_DEPTH_COMPONENT16;
+#endif
+        return GL_DEPTH_COMPONENT24;
+    }
+
+    // The format of a target's depth renderbuffer: its depth texture's when it
+    // has one, so that the resolve blit into that texture is legal.
     GLint depthRenderbufferFormat(const GLRenderTarget* renderTarget) {
 
-        if (renderTarget->depthTexture) {
+        if (const auto& depthTexture = renderTarget->depthTexture) {
 
-            // Match whatever setupDepthTexture attached, so the resolve blit is legal.
-            if (renderTarget->depthTexture->format == Format::DepthStencil) return GL_DEPTH24_STENCIL8;
-
-            switch (renderTarget->depthTexture->type) {
-                case Type::Float: return GL_DEPTH_COMPONENT32F;
-                case Type::UnsignedInt: return GL_DEPTH_COMPONENT24;
-                default: return GL_DEPTH_COMPONENT16;
-            }
+            return depthInternalFormat(depthTexture->format == Format::DepthStencil, depthTexture->type);
         }
 
-        return renderTarget->stencilBuffer ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT16;
+        return depthInternalFormat(renderTarget->stencilBuffer, std::nullopt);
     }
 
 }// namespace
@@ -242,27 +257,8 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     if (dynamic_cast<DepthTexture*>(&texture)) {
 
-        if (texture.type == Type::Float) {
-
-            glInternalFormat = GL_DEPTH_COMPONENT32F;
-
-        } else if (texture.type == Type::UnsignedInt) {
-
-            glInternalFormat = GL_DEPTH_COMPONENT24;
-
-        } else if (texture.type == Type::UnsignedInt248) {
-
-            glInternalFormat = GL_DEPTH24_STENCIL8;
-
-        } else {
-
-#ifdef __EMSCRIPTEN__
-            glInternalFormat = GL_DEPTH_COMPONENT16;
-#else
-            glInternalFormat = GL_DEPTH_COMPONENT24;
-#endif
-
-        }
+        // the same format as the renderbuffers a multisampled target resolves from
+        glInternalFormat = depthInternalFormat(texture.format == Format::DepthStencil, texture.type);
 
         //
 
@@ -770,7 +766,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
             renderTargetProperties->glDepthbuffer = glDepthbuffer;
 
             glBindRenderbuffer(GL_RENDERBUFFER, glDepthbuffer);
-            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16,
+            glRenderbufferStorage(GL_RENDERBUFFER, depthInternalFormat(false, std::nullopt),
                                   renderTarget->width, renderTarget->height);
             glBindRenderbuffer(GL_RENDERBUFFER, 0);
 

@@ -1586,8 +1586,8 @@ int run(int argc, char** argv) {
     auto bounce = HemisphereLight::create(Color(0x101215), Color(0x7a604a), look.bounce);
     scene.add(bounce);
 
-    // the near plane as far out as the closest shots allow: the passes' render targets keep 16-bit depth, and the
-    // hall's far walls must not fight their pilasters
+    // the near plane as far out as the closest shots allow: the depth buffer's precision goes where it is needed, so
+    // the hall's far walls never fight their pilasters
     PerspectiveCamera camera(30, aspect, 0.04f, 80);
     camera.position.copy(camArg.value_or(hero.eye));
     OrbitControls controls(camera, canvas);

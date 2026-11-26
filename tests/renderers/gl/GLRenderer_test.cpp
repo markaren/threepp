@@ -3,6 +3,7 @@
 
 #include "gl_test_helpers.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
+#include "threepp/textures/DepthTexture.hpp"
 
 #include <array>
 #include <iostream>
@@ -128,6 +129,77 @@ TEST_CASE("GL: depth ordering is consistent") {
     int cx = RT_WIDTH / 2, cy = RT_HEIGHT / 2;
     int i = (cy * RT_WIDTH + cx) * 3;
     CHECK(glPixels[i] > glPixels[i + 1]); // red > green at center
+}
+
+// A render target's depth buffer, when no depth texture is asked for, has 24
+// bits as in three.js. A 16-bit one cannot tell two surfaces 5 cm apart at
+// 30 m behind a 1 cm near plane (both land on the same depth step), so the
+// far one, drawn second, wins the tie and shows through: a big room's far
+// walls flickering through their pilasters. Multisampled or not.
+TEST_CASE("GL: a render target's depth keeps surfaces 5 cm apart at 30 m in order") {
+    auto camera = PerspectiveCamera::create(30, 1.0f, 0.01f, 100);
+
+    auto scene = Scene::create();
+    const auto wall = [&](const Color& color, float z) {
+        auto mat = MeshBasicMaterial::create();
+        mat->color = color;
+        auto mesh = Mesh::create(PlaneGeometry::create(40, 40), mat);
+        mesh->position.z = z;
+        scene->add(mesh);
+    };
+    wall(Color(0xff0000), -30.f);  // in front, drawn first
+    wall(Color(0x00ff00), -30.05f);// 5 cm behind it
+
+    for (const unsigned int samples : {0u, 4u}) {
+        GLRenderer renderer(glCanvas());
+        renderer.outputColorSpace = ColorSpace::NoColorSpace;
+        renderer.setClearColor(Color(0x000000));
+
+        RenderTarget::Options options;// a depth buffer, no stencil, no depth texture
+        options.samples = samples;
+        auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, options);
+        renderer.setRenderTarget(target.get());
+        renderer.render(*scene, *camera);
+
+        const auto centre = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+        renderer.setRenderTarget(nullptr);
+
+        INFO("samples=" << samples << ": expected the red wall in front, got " << centre.r << "," << centre.g << "," << centre.b);
+        CHECK(centre.r > 200.0);
+        CHECK(centre.g < 50.0);
+    }
+}
+
+// A multisampled target with a depth texture resolves its depth into that
+// texture with a blit, and a depth blit is legal only between equal formats:
+// the renderbuffer drawn into must match the texture. When they differ, GL
+// rejects the whole resolve, colour included, and the target comes out black.
+TEST_CASE("GL: a multisampled render target with a default depth texture resolves") {
+    auto camera = PerspectiveCamera::create(30, 1.0f, 0.1f, 100);
+
+    auto scene = Scene::create();
+    auto mat = MeshBasicMaterial::create();
+    mat->color = Color(0xff0000);
+    auto mesh = Mesh::create(PlaneGeometry::create(40, 40), mat);
+    mesh->position.z = -30;
+    scene->add(mesh);
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;
+    renderer.setClearColor(Color(0x000000));
+
+    RenderTarget::Options options;
+    options.samples = 4;
+    options.depthTexture = DepthTexture::create();// of the default type
+    auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, options);
+    renderer.setRenderTarget(target.get());
+    renderer.render(*scene, *camera);
+
+    const auto centre = centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT);
+    renderer.setRenderTarget(nullptr);
+
+    INFO("expected the red wall, got " << centre.r << "," << centre.g << "," << centre.b);
+    CHECK(centre.r > 200.0);
 }
 
 TEST_CASE("GL: object position affects which pixels are lit") {
