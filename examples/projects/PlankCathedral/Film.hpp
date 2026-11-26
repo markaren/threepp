@@ -150,8 +150,7 @@ namespace planks::film {
     }
 
     // The drafts, word for word (Lars approves them before the render). Each
-    // is up for 2-4 s inside its shot, never over the impact: the slow
-    // motion's caption is up while the ball comes in and gone before it hits.
+    // is up for 2-4 s inside its shot, never over the impact.
     inline std::vector<Caption> captionTable(const std::vector<Shot>& shots, long long planks, double slowHit) {
         const auto shot = [&](int n) -> const Shot& {
             for (const auto& s : shots)
@@ -165,8 +164,14 @@ namespace planks::film {
         c.push_back({2, s2.t0 + 0.3, std::min(s2.t1 - 0.2, s2.t0 + 4.2), "No one placed them. A program designed it from a single number.", "Caption"});
         const auto& s3 = shot(3);
         c.push_back({3, s3.t0 + 1.0, s3.t0 + 4.8, "PhysX checks that every design stands before it is shown.", "Caption"});
+        // it announces the replay: up while the ball comes in when there are 2 s for it before the hit; otherwise
+        // over the settled rubble at the end of shot 5, running a moment across the cut and gone before the hit
+        const auto& s5 = shot(5);
         const auto& s6 = shot(6);
-        c.push_back({6, s6.t0 + 0.15, std::min(slowHit - 0.1, s6.t0 + 3.6), "The same collapse, four times slower.", "Caption"});
+        if (slowHit - 0.1 - (s6.t0 + 0.15) >= 2.0)
+            c.push_back({6, s6.t0 + 0.15, std::min(slowHit - 0.1, s6.t0 + 3.6), "The same collapse, four times slower.", "Caption"});
+        else
+            c.push_back({5, s5.t1 - 2.4, std::min(s6.t0 + 0.4, slowHit - 0.3), "The same collapse, four times slower.", "Caption"});
         const auto& s7 = shot(7);
         c.push_back({7, s7.t0 + 0.6, std::min(s7.t1 - 0.1, s7.t0 + 3.8), "Another number, another cathedral.", "Caption"});
         const auto& s8 = shot(8);
@@ -213,6 +218,9 @@ namespace planks::film {
             add(1, shot.t0, end, "Box", b);
         }
         for (const auto& c : captions) {
+            // a caption reads over pale wood on a soft dark band across the lower third, its top edge blurred away
+            if (c.style == "Caption")
+                add(1, c.in, c.out, "Box", "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\blur60\\1c&H000000&\\1a&H90&\\fad(300,300)}m -100 800 l 2020 800 2020 1180 -100 1180{\\p0}");
             if (c.style == "Caption") add(2, c.in, c.out, "Caption", "{\\blur5\\fad(300,300)}" + c.text);
             else add(2, c.in, c.out + 1.0, c.style, "{\\an5\\pos(960," + std::to_string(c.y) + ")\\blur3\\fad(400,0)}" + c.text);
         }

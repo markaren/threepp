@@ -84,6 +84,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -357,8 +358,55 @@ namespace {
         float hit = 1.2f;       // seconds from the release to the hit
         Vector3 ballStart, ballBottom, impact;
         std::vector<Vector3> rubble;// where the planks lie at the end of the real-time collapse
+        std::function<Vector3(float)> ballAt;// the recorded ball's centre, seconds from its release
         float aspect = 16.f / 9.f;
     };
+
+    // A view along `dir` in which the points span `fraction` of the frame's height, centred; its sides may
+    // spill over (`spill` says how far: the widest |x| in normalized device coordinates).
+    View fitHeight(const std::string& name, Vector3 target, Vector3 dir, float fov, float aspect, const std::vector<Vector3>& points, float fraction,
+                   float* spill = nullptr) {
+        dir.normalize();
+        PerspectiveCamera cam(fov, aspect, 0.01f, 200);
+        const auto place = [&](float distance) {
+            cam.position.copy(target).addScaledVector(dir, distance);
+            cam.lookAt(target);
+            cam.updateMatrixWorld();
+        };
+        const auto extent = [&](float& x0, float& x1, float& y0, float& y1) {
+            x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+            for (auto q : points) {
+                q.project(cam);
+                x0 = std::min(x0, q.x), x1 = std::max(x1, q.x), y0 = std::min(y0, q.y), y1 = std::max(y1, q.y);
+            }
+        };
+        float distance = 5;
+        for (int pass = 0; pass < 4; ++pass) {
+            float lo = 0.3f, hi = 60.f;
+            for (int i = 0; i < 36; ++i) {
+                const float mid = 0.5f * (lo + hi);
+                place(mid);
+                float x0, x1, y0, y1;
+                extent(x0, x1, y0, y1);
+                (y1 - y0 <= 2 * fraction ? hi : lo) = mid;
+            }
+            distance = hi;
+            place(distance);
+            float x0, x1, y0, y1;
+            extent(x0, x1, y0, y1);
+            const float halfHeight = std::tan(fov * math::DEG2RAD / 2) * distance;
+            Vector3 right, up, forward;
+            cam.matrixWorld->extractBasis(right, up, forward);
+            target.addScaledVector(right, 0.5f * (x0 + x1) * halfHeight * aspect).addScaledVector(up, 0.5f * (y0 + y1) * halfHeight);
+        }
+        place(distance);
+        if (spill) {
+            float x0, x1, y0, y1;
+            extent(x0, x1, y0, y1);
+            *spill = std::max(std::abs(x0), std::abs(x1));
+        }
+        return {name, cam.position, target, fov};
+    }
 
     struct FilmPlan {
         std::vector<film::Shot> shots;
@@ -366,6 +414,10 @@ namespace {
         double slowHit = 0;// film seconds: when the ball hits in the slow motion
         double end = 0;
         float buildA = 8.8f, buildB = 2.6f;// seconds each building takes to rise
+        float ballInSlow = 0;  // seconds of the recording the ball is in the slow motion's frame before it hits
+        float ballInWide = 0;  // seconds of film the ball is in the wide frame before it hits
+        float nextSpill = 0;   // how far the next seed's building reaches sideways in its frame (1: the frame's edge)
+        View wide;
     };
 
     // A camera moving from a to b (u from 0 to 1).
@@ -404,8 +456,35 @@ namespace {
         const auto& ptsA = A.points;
         const auto& ptsB = B.points;
 
-        const double hold = 0.5;                             // shot 4 opens on the ball before its release
-        const double slowBefore = 0.6, slowAfter = 2.2;     // the slow motion: seconds of the recording round the hit
+        // 6: low, beside the ball's path, near where it hits; it starts a moment (0.3 s of film) before the
+        // ball comes into its frame
+        const Vector3 inDir = horizontal(Vector3(in.ballStart).sub(in.ballBottom));
+        const Vector3 aim = Vector3(inDir).negate();
+        const Vector3 side(-aim.z, 0, aim.x);
+        Vector3 slowEye = Vector3(in.impact).addScaledVector(side, 1.4f).addScaledVector(aim, -0.2f);
+        slowEye.y = 0.10f;
+        Vector3 slowTarget = Vector3(in.impact).addScaledVector(aim, 0.25f);
+        slowTarget.y = 0.28f;
+        Move m6{slowEye, Vector3(slowEye).lerp(slowTarget, 0.05f), slowTarget, slowTarget, 42, 42};
+        float enters = in.hit;
+        {
+            PerspectiveCamera cam(42, aspect, 0.01f, 100);
+            cam.position.copy(slowEye);
+            cam.lookAt(slowTarget);
+            cam.updateMatrixWorld();
+            for (float t = std::max(0.f, in.hit - 1.5f); t <= in.hit; t += 1.f / 240) {
+                Vector3 b = in.ballAt(t);
+                b.project(cam);
+                if (std::abs(b.x) < 1.04f && std::abs(b.y) < 1.04f && b.z < 1) {
+                    enters = t;
+                    break;
+                }
+            }
+        }
+        p.ballInSlow = in.hit - enters;
+
+        const double hold = 0.25;                                        // shot 4 opens on the ball held back, then let go
+        const double slowBefore = p.ballInSlow + 0.3 / 4, slowAfter = 2.2;// the slow motion: seconds of the recording round the hit
         const double lengths[8] = {4.5, 4.5, 10.0, hold + in.hit, 6.0, (slowBefore + slowAfter) * 4, 5.0, 4.0};
         const char* names[8] = {"hook", "tower", "build", "swing", "collapse", "slow motion", "next seed", "end card"};
         double t = 0;
@@ -421,10 +500,15 @@ namespace {
         const View hook = frame("hook", Vector3(A.centre.x - 0.2f, A.box.max().y * 0.40f, A.centre.z), hookDir, 30, aspect, ptsA, 0.05f);
         Move m1{Vector3(hook.target).addScaledVector(Vector3(hook.eye).sub(hook.target), 1.13f), hook.eye, hook.target, hook.target, 30, 30};
 
-        // 2: up the south-west tower's west face, from its middle to its spire's top
-        const Vector3 faceDir = Vector3(-0.82f, 0, 0.57f).normalize();
-        const float reach = 4.f * A.towerHalf + 0.05f;// the face about three quarters of the frame's width
-        const float y0 = A.shaftTop * 0.72f, y1 = A.towerHeight - 0.22f;
+        // 2: the south-west tower from due south (the north-west one hides behind it, the crossing spire is out of
+        // frame): from its belfry tier the camera rises and tilts to the spire, which ends large against the dark
+        std::vector<Vector3> spirePts;
+        for (const auto& q : ptsA)
+            if (std::abs(q.x - A.tower.x) < A.towerHalf + 0.12f && std::abs(q.z - A.tower.z) < A.towerHalf + 0.12f && q.y > A.shaftTop - 0.05f) spirePts.push_back(q);
+        const View spire = frame("spire", Vector3(A.tower.x, 0.5f * (A.shaftTop + A.towerHeight), A.tower.z), Vector3(0, -0.10f, 1), 24, aspect, spirePts, 0.16f);
+        const float belfry = A.shaftTop - 0.16f;
+        Move m2{Vector3(spire.eye.x, belfry, spire.eye.z).sub(Vector3(spire.target.x, belfry, spire.target.z)).multiplyScalar(1.06f).add(Vector3(spire.target.x, belfry, spire.target.z)),
+                spire.eye, Vector3(spire.target.x - 0.12f, belfry + 0.02f, spire.target.z), spire.target, 24, 24};// it opens turned a little west, past the crossing tower's edge
 
         // 3: high three quarters, turning slowly round the building
         const auto orbitDir = [](float azimuthDeg, float elevationDeg) {
@@ -491,8 +575,9 @@ namespace {
             }
         }
 
-        // 4, 5: wide from the south-south-west, with room for the ball coming in from the left
-        // and with the rubble as it lies at the end of the shot, the few planks that flew furthest left out
+        // 4, 5: wide from the west-south-west, behind the ball's swing: the ball and its rope come in from the left
+        // foreground for the whole swing, the west front is lit, and the rubble as it lies at the end of the
+        // shot has room (the few planks that flew furthest left out)
         std::vector<Vector3> ptsW = ptsA;
         {
             std::vector<std::pair<float, Vector3>> far;
@@ -501,21 +586,51 @@ namespace {
             const size_t keep = far.size() - far.size() / 300;
             for (size_t i = 0; i < keep; ++i) ptsW.push_back(far[i].second);
         }
-        const Vector3 inDir = horizontal(Vector3(in.ballStart).sub(in.ballBottom));
-        ptsW.push_back(Vector3(in.ballBottom).addScaledVector(inDir, 1.1f).add(Vector3(0, 0.15f, 0)));
-        const View wide = frame("wide", Vector3(A.centre.x - 0.3f, A.box.max().y * 0.38f, A.centre.z + 0.15f), Vector3(-0.50f, 0.07f, 0.87f), 32, aspect, ptsW, 0.10f);
-
-        // 6: low, beside the ball's path, near where it hits
-        const Vector3 aim = Vector3(inDir).negate();
-        const Vector3 side(-aim.z, 0, aim.x);
-        Vector3 slowEye = Vector3(in.impact).addScaledVector(side, 1.4f).addScaledVector(aim, -0.2f);
-        slowEye.y = 0.10f;
-        Vector3 slowTarget = Vector3(in.impact).addScaledVector(aim, 0.25f);
-        slowTarget.y = 0.28f;
-        Move m6{slowEye, Vector3(slowEye).lerp(slowTarget, 0.05f), slowTarget, slowTarget, 42, 42};
+        for (float t = 0; t <= in.hit; t += 0.05f) {
+            const Vector3 b = in.ballAt(t);
+            ptsW.push_back(Vector3(b).add(Vector3(0, 0.12f, 0)));
+            ptsW.push_back(Vector3(b).add(Vector3(0, -0.12f, 0)));
+        }
+        View wide = frame("wide", Vector3(A.centre.x - 0.3f, A.box.max().y * 0.38f, A.centre.z + 0.15f), Vector3(-0.85f, 0.06f, 0.53f), 32, aspect, ptsW, 0.07f);
+        // the ball in frame from the moment it is let go: back off until it is
+        for (int i = 0; i < 60; ++i) {
+            PerspectiveCamera cam(wide.fov, aspect, 0.01f, 100);
+            cam.position.copy(wide.eye);
+            cam.lookAt(wide.target);
+            cam.updateMatrixWorld();
+            Vector3 b = in.ballAt(0);
+            b.project(cam);
+            if (std::abs(b.x) < 0.9f && std::abs(b.y) < 0.9f && b.z < 1) break;
+            wide.eye.sub(wide.target).multiplyScalar(1.02f).add(wide.target);
+        }
+        p.wide = wide;
+        {
+            PerspectiveCamera cam(wide.fov, aspect, 0.01f, 100);
+            cam.position.copy(wide.eye);
+            cam.lookAt(wide.target);
+            cam.updateMatrixWorld();
+            for (float t = 0; t <= in.hit; t += 1.f / 240) {
+                Vector3 b = in.ballAt(t);
+                b.project(cam);
+                if (std::abs(b.x) < 1.f && std::abs(b.y) < 1.f && b.z < 1) {
+                    p.ballInWide = in.hit - t + (t == 0 ? static_cast<float>(hold) : 0.f);
+                    break;
+                }
+            }
+        }
 
         // 7, 8: the next seed's building from the same side as the hook, a slow push, then still
-        const View next = frame("next", Vector3(B.centre.x - 0.2f, B.box.max().y * 0.40f, B.centre.z), hookDir, 30, aspect, ptsB, 0.06f);
+        // 7, 8: the next seed's building from the west-south-west and close: standing, it fills most of the
+        // frame's height; a slow push, then still
+        // (of the directions from the south-west round to the west, the one that shows most of its length and
+        // still keeps it inside the frame's sides)
+        View next;
+        for (float az = 110.f; az <= 166.f; az += 4.f) {
+            float spill = 0;
+            const Vector3 dir(std::cos(az * math::DEG2RAD), -0.02f, std::sin(az * math::DEG2RAD));
+            const View v = fitHeight("next", Vector3(B.centre.x - 0.2f, B.box.max().y * 0.45f, B.centre.z), dir, 30, aspect, ptsB, 0.80f, &spill);
+            if (spill <= 0.92f && spill > p.nextSpill) next = v, p.nextSpill = spill;
+        }
         Move m7{Vector3(next.target).addScaledVector(Vector3(next.eye).sub(next.target), 1.10f), next.eye, next.target, next.target, 30, 30};
 
         const int frames = static_cast<int>(std::lround(p.end * film::fps));
@@ -537,13 +652,10 @@ namespace {
                     s.scene = 0, s.mode = 0;
                     m1.at(u, s);
                     break;
-                case 2: {
+                case 2:
                     s.scene = 0, s.mode = 0;
-                    const float k = film::smooth(u) * 0.8f + u * 0.2f;
-                    const float y = y0 + (y1 - y0) * k;
-                    Move{Vector3(A.tower.x + faceDir.x * reach, y, A.tower.z + faceDir.z * reach), {}, Vector3(A.tower.x, y + 0.03f + 0.09f * k, A.tower.z), {}, 30, 30}.at(0, s);
+                    m2.at(film::smooth(u) * 0.75f + u * 0.25f, s);
                     break;
-                }
                 case 3: {
                     s.scene = 0, s.mode = 1;
                     s.t = lt;
@@ -682,9 +794,26 @@ namespace {
             for (std::size_t i = 0; i < header.planks; ++i) blend(a_.data() + 8 + 7 * i, b_.data() + 8 + 7 * i, planks.data() + 7 * i);
         }
 
+        // the ball's centre alone at time t: eight floats of the two nearest frames
+        Vector3 ballAt(float t) {
+            const float x = std::clamp(t * header.fps, 0.f, static_cast<float>(header.frames - 1));
+            const int i0 = static_cast<int>(std::floor(x));
+            const int i1 = std::min(i0 + 1, static_cast<int>(header.frames) - 1);
+            const float w = x - static_cast<float>(i0);
+            float a[8], b[8];
+            head(i0, a);
+            head(i1, b);
+            return {a[1] + (b[1] - a[1]) * w, a[2] + (b[2] - a[2]) * w, a[3] + (b[3] - a[3]) * w};
+        }
+
     private:
         std::FILE* f_ = nullptr;
         std::size_t floats_ = 0;
+
+        void head(int frame, float* out) {
+            seekTo(f_, sizeof(RecordHeader) + static_cast<std::uint64_t>(frame) * floats_ * sizeof(float));
+            if (std::fread(out, sizeof(float), 8, f_) != 8) std::fill(out, out + 8, 0.f);
+        }
         std::vector<float> a_, b_;
         int loadedA_ = -1, loadedB_ = -1;
 
@@ -1091,11 +1220,15 @@ int run(int argc, char** argv) {
             for (size_t i = 0; i + 6 < planksAtHit.size(); i += 7) in.rubble.emplace_back(planksAtHit[i], planksAtHit[i + 1], planksAtHit[i + 2]);
         }
         in.aspect = aspect;
+        in.ballAt = [&](float t) { return replay.ballAt(t); };
         const auto t0 = WallClock::now();
         filmPlan = planFilm(in);
         std::printf("the film: %zu frames, %.2f s, planned in %.2f s; the ball hits %.3f s after its release, %.2f s into the film\n", filmPlan.frames.size(),
                     filmPlan.end, since(t0), in.hit, filmPlan.shots[3].t1);
         for (const auto& s : filmPlan.shots) std::printf("  shot %d %-12s %s - %s\n", s.number, s.name.c_str(), film::mmss(s.t0).c_str(), film::mmss(s.t1).c_str());
+        std::printf("  the ball is in the wide frame %.2f s of film before it hits, in the slow motion's %.3f s of the recording (%.2f s of film); "
+                    "the next seed's building reaches %.2f of the way to its frame's sides\n",
+                    filmPlan.ballInWide, filmPlan.ballInSlow, filmPlan.ballInSlow * 4, filmPlan.nextSpill);
         std::printf("  the south-west tower: half %.3f m, shaft to %.2f m, top %.2f m; the building %.2f x %.2f x %.2f m; the ball hits at (%.2f, %.2f, %.2f)\n",
                     layout.towerHalf, layout.shaftTop, layout.towerHeight, layout.box.max().x - layout.box.min().x, layout.box.max().y,
                     layout.box.max().z - layout.box.min().z, in.impact.x, in.impact.y, in.impact.z);
