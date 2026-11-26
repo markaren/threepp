@@ -172,14 +172,26 @@ EmPlan emPlanBuild(vec3 P, int EM) {
 // Sample s of the plan. false = contributes nothing (degenerate / grazing / emitter
 // facing away from P). `twoSided`: accept emitter triangles facing away (the GI
 // irradiance convention); the diffuse/spec NEE use front-facing only.
-bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, out EmSample es) {
+//
+// `shift` turns the plan's stratified pattern (the stratum position and the R2
+// barycentrics), a Cranley-Patterson rotation in [0, 1)^3. kEmCoherent (0.5 in
+// every dimension) is the fixed pattern: the same lighting points for every pixel
+// and frame, smooth, which suits the 16 samples of a primary. With the 2 samples
+// a GI or probe ray's hit takes, a fixed pattern is a two-point quadrature, wrong
+// wherever the hit is near a large light: the research scenes' kitchen, lit by
+// window-sized panels, came out 22 % brighter than the path tracer on its first
+// bounce, and 1 % with 32 samples. Those callers pass a random shift per call,
+// which makes the two samples an unbiased estimate the denoiser and the probes'
+// averaging integrate.
+const vec3 kEmCoherent = vec3(0.5);
+bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, vec3 shift, out EmSample es) {
     uint lo, hi;
     float xi, pickDen;// CDF search range, stratum position, pick-pdf normaliser
     es.w = 1.0;
     es.light = kEmNoLight;
     if (!pl.cover) {
         lo = 0u; hi = pc.emissiveCount - 1u;
-        xi = (float(s) + 0.5) / float(pl.count) * pc.emissiveTotalPower;
+        xi = (float(s) + shift.x) / float(pl.count) * pc.emissiveTotalPower;
         pickDen = pc.emissiveTotalPower;
         es.w = 1.0 / float(pl.count);
     } else {
@@ -209,7 +221,7 @@ bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, out EmSample es) {
         const uint triBegin = uint(r.v2.x + 0.5), triCount = uint(r.v2.y + 0.5);
         if (triCount == 0u || r.v2.w <= 0.0) return false;
         lo = triBegin; hi = triBegin + triCount - 1u;
-        xi = r.v1.w + (float(s - base) + 0.5) / float(pl.n[l]) * r.v2.w;
+        xi = r.v1.w + (float(s - base) + shift.x) / float(pl.n[l]) * r.v2.w;
         pickDen = r.v2.w;
         es.w = 1.0 / float(pl.n[l]);
     }
@@ -221,9 +233,9 @@ bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, out EmSample es) {
         if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
     }
     const EmTri t = emissiveTris[lo];
-    // Coherent R2 barycentric → the SAME lighting point at every pixel (smooth irradiance).
-    const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
-    const float r2  =      fract(0.5 + float(s) * 0.5698402909);
+    // R2 barycentrics, turned by `shift` (kEmCoherent: the SAME lighting point at every pixel).
+    const float su1 = sqrt(fract(shift.y + float(s) * 0.7548776662));
+    const float r2  =      fract(shift.z + float(s) * 0.5698402909);
     es.lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
     const vec3  toL   = es.lp - P;
     const float dist2 = dot(toL, toL);

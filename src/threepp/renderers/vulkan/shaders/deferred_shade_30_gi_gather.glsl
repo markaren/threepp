@@ -82,11 +82,12 @@ vec3 gatherEnv(vec3 P, vec3 N, vec3 Ng, ivec2 px, uint frame, bool doShadows, bo
             bool missed;
             vec3 gi = giRadiance(orig, Ng, dir, doShadows, maxLod, seed, missed, envInt);// cheap 1-bounce; cosine pdf cancels
             if (missed) missN += 1.0;
-            // FIREFLY CLAMP (safety) — giRadiance has no specular sun-catch and its
-            // emitter NEE is internally clamped, so the diffuse GI is already
-            // bounded; this just caps any residual emitter spike.
-            const float gl = max(max(gi.r, gi.g), gi.b);
-            if (gl > 6.0) gi *= 6.0 / gl;
+            // No cap on the ray: giRadiance shades a hit's diffuse lobe only and its
+            // emitter samples carry their own clamp, so what comes back is bounded by
+            // the scene's own light. A fixed cap of 6 cut that light wherever it is
+            // bright rather than rare: a floor in the sun, a sky at 8x through a
+            // window. Without it the bounce light of the research scenes' window-lit
+            // rooms came up 10 to 15 % toward the path tracer's, at no cost in noise.
             acc += gi;
             if (gGiRayHitMoved) movN += 1.0;
         }

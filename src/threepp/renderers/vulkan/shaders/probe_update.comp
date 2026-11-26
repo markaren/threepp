@@ -41,7 +41,7 @@
 // The hit's direct light (analytic lights + emitter NEE) comes from
 // gi_bounce.glsl, which giRadiance includes as well. The geometry fetch, RNG,
 // shadow test and emissiveIrradiance below are copies of
-// deferred_shade.comp's; emissiveIrradiance differs on purpose (fixed 6.0
+// deferred_shade.comp's; emissiveIrradiance differs on purpose (no per-sample
 // firefly clamp), as does shadowVis (no moving-occluder flag).
 
 layout(local_size_x = 64) in;// kProbeRays — must match ProbeGI::kRaysPerProbe
@@ -162,9 +162,9 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
             gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
 }
 
-// ── Emitter diffuse NEE (deferred_shade's emissiveIrradiance; the firefly
-// clamp is the fixed 6.0 the GI channel uses — no pc.fireflyClamp here) ─────
-vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
+// ── Emitter diffuse NEE (deferred_shade's emissiveIrradiance, without its
+// per-sample clamp: a probe averages many rays over many frames) ─────
+vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows, inout uint seed) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     if (emGateBound(P) < 1.0) return vec3(0.0);// out of every emitter's range
     // The pick (global strata, or per-light COVERAGE with point proxies for small
@@ -172,10 +172,11 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     // opaque shadow ray. twoSided: a GI bounce accepts an emitter's back face.
     const vec3   shadowOrig = P + N * SHADOW_EPS;
     const EmPlan plan = emPlanBuild(P, EM_SAMPLES);
+    const vec3   shift = vec3(rnd(seed), rnd(seed), rnd(seed));// a random turn per call (emPlanSample)
     vec3 sum = vec3(0.0);
     for (int s = 0; s < plan.count; ++s) {
         EmSample es;
-        if (!emPlanSample(plan, s, P, /*twoSided=*/true, es)) continue;
+        if (!emPlanSample(plan, s, P, /*twoSided=*/true, shift, es)) continue;
         const float ndl = dot(N, es.L);
         if (ndl <= 0.01) continue;
         if (doShadows) {
@@ -191,10 +192,7 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
                     continue;
             }
         }
-        vec3 c = ndl * es.Le * es.gw;
-        const float lum = max(max(c.r, c.g), c.b);
-        if (lum > 6.0) c *= 6.0 / lum;
-        sum += c * es.w;
+        sum += (ndl * es.Le * es.gw) * es.w;
     }
     return sum;
 }
@@ -385,11 +383,11 @@ void main() {
     uint seed = pcgHash(pIdx * 9781u + pc.frame * 26699u + ri * 40009u + 0x9e3779b9u);
     float back, hitDist;
     float sealedDark;
-    vec3 L = probeRayRadiance(probePos, dir, (pc.flags & 1u) != 0u, seed, back, sealedDark, hitDist);
-    // Same 6.0 luminance cap the gather applies to giRadiance — bounds a
-    // sun-through-crack spike so one ray can't swing the whole probe.
-    const float ll = max(max(L.r, L.g), L.b);
-    if (ll > 6.0) L *= 6.0 / ll;
+    // Uncapped, as the gather's rays are: a fixed cap of 6 took much of the light
+    // from every ray that saw a sunlit floor or a bright sky, the probes' main
+    // source in a room lit through windows. The probe's average over its rays and
+    // frames carries a lone bright ray.
+    const vec3 L = probeRayRadiance(probePos, dir, (pc.flags & 1u) != 0u, seed, back, sealedDark, hitDist);
 
     s00[ri]   = L;
     sX[ri]    = L * dir.x;

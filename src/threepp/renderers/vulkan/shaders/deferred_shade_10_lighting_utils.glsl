@@ -884,7 +884,13 @@ vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
     const float D     = distGGX(NdotH, roughness);
     const float G     = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
     const vec3  spec  = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
-    const vec3  kd    = (vec3(1.0) - F) * (1.0 - metalness);
+    // The diffuse lobe is albedo (1 - metalness) / pi with no Fresnel weight, as the
+    // path tracer, the GL renderer (three.js's BRDF_Lambert), the rect lights and every
+    // GI term here have it. Weighting it by (1 - F) made this light alone darker than
+    // all of those: 4 % on a dielectric seen from above (a floor under a lamp: 0.464
+    // where the path tracer and the closed form give 0.489), more toward a back-lit
+    // grazing view, and the bounce light seeded by it inherited the loss.
+    const float kd    = 1.0 - metalness;
     const vec3  diff  = kd * albedo / PI;
     // KHR_materials_sheen Charlie lobe (matches shade_common's per-light sheen).
     vec3  sheen     = vec3(0.0);
@@ -947,7 +953,7 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
     vec3 sum = vec3(0.0);
     for (int s = 0; s < plan.count; ++s) {
         EmSample es;
-        if (!emPlanSample(plan, s, P, /*twoSided=*/false, es)) continue;
+        if (!emPlanSample(plan, s, P, /*twoSided=*/false, kEmCoherent, es)) continue;
         const vec3 L = es.L;
         if (dot(N, L) <= 0.01) continue;
         // DIFFUSE-ONLY emitter NEE. Light sampling (sampling the emitter) is the
@@ -960,9 +966,8 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
         // BRDF FIRST, shadow ray second (the same ordering emissiveSpecNEE uses): none
         // of this depends on the ray, so a sample that cannot move the pixel skips its
         // TLAS traversal entirely — the win is many-distant-weak-emitter scenes.
-        const vec3  H  = normalize(V + L);
-        const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);
-        const vec3  kd = (vec3(1.0) - Fr) * (1.0 - metalness);
+        // No Fresnel weight on the diffuse lobe: evalLight's note.
+        const float kd = 1.0 - metalness;
         vec3 c = (kd * albedo * (1.0 / PI)) * max(dot(N, L), 0.0) * es.Le * es.gw;
         const float lum = max(max(c.r, c.g), c.b);
         // Skip-the-ray cutoff, measured RELATIVE to what this pixel has already
@@ -1057,7 +1062,7 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
     vec3 sum = vec3(0.0);
     for (int s = 0; s < plan.count; ++s) {
         EmSample es;
-        if (!emPlanSample(plan, s, P, /*twoSided=*/false, es)) continue;
+        if (!emPlanSample(plan, s, P, /*twoSided=*/false, kEmCoherent, es)) continue;
         // What the reflection ray does not draw of this sample's light. A light
         // the ray draws whole costs no BRDF and no shadow ray here.
         const float keep = es.light != kEmNoLight ? 1.0 - emRayShareOf(rayShare, es.light) : 1.0;

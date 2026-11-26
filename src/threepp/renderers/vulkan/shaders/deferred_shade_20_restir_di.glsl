@@ -255,12 +255,12 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     // (nothing merged since), so its ray is not cast twice.
     if (doShadows && !kRR && restirOccluded(shadowOrig, li.dir, li.maxDist)) return vec3(0.0);
 
-    // DEMOD irradiance: (1-F)·NdotL·Le·W/π. The (1-F) diffuse Fresnel (specular takes F,
-    // the diffuse lobe gets the rest) restores the term emissiveNEE's kd=(1-Fr)(1-metal)
-    // carried — dropping it over-brightened, WORST at grazing (the floor sees the emitter
-    // at a shallow angle). Keyed on the surface NdotV (not per-light H) so it stays a
-    // per-surface demod quantity. albedo·(1-metal) is reapplied by the denoise recombine.
-    vec3 c = (NdotL * (1.0 / PI) * r.W) * li.Le * (vec3(1.0) - fresnelSchlick(NdotV, F0));
+    // DEMOD irradiance: NdotL·Le·W/π; albedo·(1-metal) is reapplied by the denoise
+    // recombine. No Fresnel weight, as evalLight's note says for every direct diffuse
+    // term. It used to take (1 - F(N·V)), the smooth-surface Fresnel at the view angle:
+    // 4 % off a floor seen from 41 degrees above, a third off one seen at grazing, on
+    // a rough surface whose real specular albedo stays a few percent at every angle.
+    vec3 c = (NdotL * (1.0 / PI) * r.W) * li.Le;
     const float clum = max(max(c.r, c.g), c.b);
     if (clum > pc.fireflyClamp) c *= pc.fireflyClamp / clum;
     return c;
@@ -271,7 +271,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
 // caller-chosen sample count. Used by the 1-bounce GI gather, which tolerates the
 // extra noise (it's temporally accumulated + à-trous denoised). Shares the
 // emitter sample plan of emissiveNEE (emissive_lights.glsl).
-vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
+vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows, inout uint seed) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     if (emGateBound(P) < 1.0) return vec3(0.0);// out of every emitter's range
     // The pick (global strata, or per-light COVERAGE with point proxies for small
@@ -279,10 +279,11 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     // opaque shadow ray. twoSided: a GI bounce accepts an emitter's back face.
     const vec3   shadowOrig = P + N * SHADOW_EPS;
     const EmPlan plan = emPlanBuild(P, EM_SAMPLES);
+    const vec3   shift = vec3(rnd(seed), rnd(seed), rnd(seed));// a random turn per call (emPlanSample)
     vec3 sum = vec3(0.0);
     for (int s = 0; s < plan.count; ++s) {
         EmSample es;
-        if (!emPlanSample(plan, s, P, /*twoSided=*/true, es)) continue;
+        if (!emPlanSample(plan, s, P, /*twoSided=*/true, shift, es)) continue;
         const float ndl = dot(N, es.L);
         if (ndl <= 0.01) continue;
         if (doShadows) {

@@ -8,7 +8,7 @@
 //   lights  — the LightsUbo block (at least the dir/point/spot prefix)
 //   float rnd(inout uint seed)
 //   float shadowVis(vec3 origin, vec3 dir, float tMax)
-//   vec3  emissiveIrradiance(vec3 P, vec3 N, int samples, bool doShadows)
+//   vec3  emissiveIrradiance(vec3 P, vec3 N, int samples, bool doShadows, inout uint seed)
 //   vec3  giSunLeg(vec3 P, inout vec3 L) — a directional light's leg to P:
 //         deferred_shade bends L into the water and returns the in-water
 //         transmittance per channel (murkSunLeg); probe_update has no murk and
@@ -182,6 +182,6 @@ vec3 giHitDirect(vec3 hitP, vec3 hitN, vec3 shadowOrig, vec3 diff, bool doShadow
     }
     // Emitter 1-bounce (e.g. enclosed scene lit only by an emissive sphere) —
     // cheap small-sample diffuse NEE so the colour bleed survives the denoiser.
-    lit += diff * emissiveIrradiance(hitP, hitN, 2, doShadows);
+    lit += diff * emissiveIrradiance(hitP, hitN, 2, doShadows, seed);
     return lit;
 }

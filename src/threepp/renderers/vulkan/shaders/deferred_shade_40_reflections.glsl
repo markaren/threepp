@@ -342,10 +342,7 @@ vec3 paneHitGather(vec3 hitP, vec3 hitN, bool doShadows, float maxLod, inout uin
                                     + hitN * sqrt(max(0.0, 1.0 - u1)));
         bool fMissed;
         // envInt 1.0: transmitted light, not the pane's IBL.
-        vec3 gi = giRadiance(fOrg, hitN, fd, doShadows, maxLod, seed, fMissed, 1.0);
-        const float gl = max(max(gi.r, gi.g), gi.b);
-        if (gl > 6.0) gi *= 6.0 / gl;// the gather's firefly cap
-        sum += gi;
+        sum += giRadiance(fOrg, hitN, fd, doShadows, maxLod, seed, fMissed, 1.0);// uncapped, as the gather
         if (fMissed) missN += 1.0;
     }
     open = missN / float(nRays);
@@ -945,10 +942,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                                     + hitN * sqrt(max(0.0, 1.0 - u1)));
                         bool fMissed;
                         // envInt 1.0: the replaced env fill is unscaled as well.
-                        vec3 gi = giRadiance(fOrg, hitN, fd, doShadows, maxLod, seed, fMissed, 1.0);
-                        const float gl = max(max(gi.r, gi.g), gi.b);
-                        if (gl > 6.0) gi *= 6.0 / gl;// the gather's firefly cap
-                        gSum += gi;
+                        gSum += giRadiance(fOrg, hitN, fd, doShadows, maxLod, seed, fMissed, 1.0);// uncapped, as the gather
                     }
                     hitDiffInd = mix(hitDiffInd, gSum * (1.0 / float(kStarvedRays)) + lights.ambient + hemiAmbient(hitN), starvedW);
                 }

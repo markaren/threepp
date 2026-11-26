@@ -950,7 +950,7 @@ vec3 emitterNee(const Surf s, vec3 V, inout uint seed) {
 // Lambert-only form giHitDirect would call; this shader's own NEE
 // (emitterNee) carries the full BSDF, so only the falloff helpers and the
 // analytic-light pick are used from the include.
-vec3 emissiveIrradiance(vec3 P, vec3 N, int samples, bool doShadows) { return vec3(0.0); }
+vec3 emissiveIrradiance(vec3 P, vec3 N, int samples, bool doShadows, inout uint seed) { return vec3(0.0); }
 vec3 giSunLeg(vec3 P, inout vec3 L) { return vec3(1.0); }
 #include "gi_bounce.glsl"// distFalloff, lightRangeWindow, pickAnalyticLight
 
