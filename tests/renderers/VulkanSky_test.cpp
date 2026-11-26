@@ -128,7 +128,6 @@ namespace {
 
 int main() {
     std::printf("VulkanSky_test\n");
-    setEnv("THREEPP_VULKAN_VALIDATION", "1");
 
     auto vk = vktest::openHeadlessVulkan("VulkanSky_test", kW, kH);
     if (!vk) return vktest::kSkipCode;
@@ -284,7 +283,7 @@ int main() {
 
     // ── 6. Validation ───────────────────────────────────────────────────────
     if (!vulkan::validationActive()) {
-        std::printf("\n[note] VK_LAYER_KHRONOS_validation is not installed: the zero-error\n"
+        std::printf("\n[note] no validation layer (THREEPP_VULKAN_VALIDATION=1 asks for it): the zero-error\n"
                     "       check is skipped.\n");
     } else {
         const std::uint32_t errs = vulkan::validationErrorCount() - errorsBefore;

@@ -11,7 +11,7 @@
 //
 //   rg_ab --scene room --probe 0 --out aaa_caps/rg/new/room
 //   rg_ab --compare aaa_caps/rg/base/room aaa_caps/rg/new/room
-//   rg_ab --selfcheck --scene fields_views     (ctest rg_ab_<scene>)
+//   rg_ab --selfcheck --scene fields_views
 //
 // Scenes
 //   room             closed box, six spheres (diffuse, gold, mirror, glass,
@@ -107,7 +107,7 @@
 // Exit codes: 0 ok; 1 --compare found a difference; 2 usage; 3 the render
 // graph reported a diagnostic (VulkanRenderer::renderGraphDiagnosticCount():
 // a pass declaring one image in two layouts, or aliased images in use at the
-// same time); 42 no Vulkan/RT device (ctest SKIP_RETURN_CODE).
+// same time); 42 no Vulkan/RT device.
 //
 // Baseline workflow
 //   1. Build rg_ab at the parent commit (git stash, or a worktree), copy

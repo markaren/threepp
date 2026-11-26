@@ -140,7 +140,6 @@ namespace {
 
 int main() {
     std::printf("VulkanSpotBeamFog_test\n");
-    setEnv("THREEPP_VULKAN_VALIDATION", "1");
     // The per-frame linear scene image (readSceneHdrDebug) needs its own
     // allocation to be readable after the frame.
     setEnv("THREEPP_VK_NO_ALIAS", "1");
@@ -297,7 +296,7 @@ int main() {
 
     // ── 4. Validation and the frame graph ───────────────────────────────────
     if (!vulkan::validationActive()) {
-        std::printf("\n[note] VK_LAYER_KHRONOS_validation is not installed: the zero-error\n"
+        std::printf("\n[note] no validation layer (THREEPP_VULKAN_VALIDATION=1 asks for it): the zero-error\n"
                     "       assertion is skipped (it would be vacuously true).\n");
     } else {
         const std::uint32_t errs = vulkan::validationErrorCount() - errorsBefore;

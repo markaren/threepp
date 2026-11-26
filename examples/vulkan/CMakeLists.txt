@@ -27,8 +27,8 @@ add_example(NAME "vulkan_furnace_test" SOURCES "audits/vulkan_furnace_test.cpp" 
 add_example(NAME "vulkan_aov_audit" SOURCES "audits/vulkan_aov_audit.cpp")
 add_example(NAME "vulkan_lidar_audit" SOURCES "audits/vulkan_lidar_audit.cpp")
 # Render-graph A/B capture harness (see the file comment and
-# plans/render-graph.md, "Verification method"). Also registered as the
-# per-scene ctests rg_ab_<scene> in tests/renderers.
+# plans/render-graph.md, "Verification method"). Run by hand; --selfcheck
+# fails on any render-graph diagnostic in a scene.
 add_example(NAME "rg_ab" SOURCES "audits/rg_ab.cpp")
 # Ocean sea-state audit: Hs, Tp, dispersion, slopes and crests of the FFT
 # ocean against published measurements (see the file comment).

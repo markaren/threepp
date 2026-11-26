@@ -18,10 +18,13 @@
 // so it cannot clip anything the range test would keep. Both bounds are
 // INCLUSIVE, matching traceRayEXT's [tMin, tMax].
 //
-// This lives in its own executable for the same reason CanvasApiOrder_test does:
-// it needs BOTH backends in one process, and the Vulkan canvas has to come first
-// (GLFW window hints are sticky). Plain exit-code program, not Catch2. Exits 42
-// (→ CTest "Skipped") when no Vulkan-capable GPU is available.
+// This lives in its own executable because it needs BOTH backends in one
+// process, and the Vulkan canvas has to come first. GLFW window hints are
+// process-global: a Vulkan canvas sets GLFW_CLIENT_API=GLFW_NO_API, and before
+// Canvas::initWindow reset the hints (f56e26821) a GL canvas made after it got a
+// window with no OpenGL context and the process exited with no traceback. This
+// program's order is also the test of that reset. Plain exit-code program, not
+// Catch2. Exits 42 (→ CTest "Skipped") when no Vulkan-capable GPU is available.
 //
 // RT is never bit-exact and the two backends sample different beam geometry (the
 // raster path quantises each beam to a cube-face pixel), so every cross-backend
@@ -323,7 +326,7 @@ int main() {
     // this object either way).
     auto cloud = makeCloud();
 
-    // ── Vulkan first: a Vulkan canvas must precede the GL one (CanvasApiOrder) ──
+    // ── Vulkan first: a Vulkan canvas must precede the GL one (see the top) ──
     Stats vkLidar, vkDepth;
     double vkSplatPct = 0.0;
     try {

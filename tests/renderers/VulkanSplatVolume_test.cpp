@@ -57,6 +57,7 @@
 //   VulkanSplatVolume_test                     assert the reflection is there
 //   THREEPP_VK_SPLATVOL_OFF=1 ...              assert it is NOT
 //   VulkanSplatVolume_test --shot <dir>        also dump the frames as PNG
+//   VulkanSplatVolume_test --cost              also time the march (section 2)
 //   VulkanSplatVolume_test --emit <file.ppm>   internal: the child half of the
 //                                              no-double-count A/B below
 // Exits 42 (CTest SKIP_RETURN_CODE) without a Vulkan/RT GPU.
@@ -253,9 +254,11 @@ namespace {
 int main(int argc, char** argv) {
 
     std::string emitPath, shotDir;
+    bool measureCost = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--emit") == 0 && i + 1 < argc) emitPath = argv[++i];
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotDir = argv[++i];
+        else if (std::strcmp(argv[i], "--cost") == 0) measureCost = true;
     }
     // The knobs, read here for reporting only — the renderer reads them itself
     // (SplatPass's constructor and updateSplatVolumeUbo's static), once per run.
@@ -481,8 +484,10 @@ int main(int argc, char** argv) {
     // INSIDE the deferred shade dispatch, which pathTraceMs already times end
     // to end. Same scene, same pose, cloud shown vs hidden — so the delta is
     // the svLeg marches on the water's reflected legs and nothing else (the
-    // splat rasterizer's own cost is splatMs, a different field).
-    {
+    // splat rasterizer's own cost is splatMs, a different field). Opt-in
+    // (--cost): 220 frames that no check reads, and section 3 below takes the
+    // pond, the bed and the cloud out of the scene either way.
+    if (measureCost) {
         const auto sample = [&](int n) {
             std::vector<double> v;
             v.reserve(size_t(n));

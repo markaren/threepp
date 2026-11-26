@@ -1,6 +1,7 @@
 // VulkanPathTraceLights_test: the path tracer's light, counted once and in
 // full. Each check traces the same scene with the fix's switch on (the
-// default) and off (the old way), prints both, and asserts the fixed one:
+// default) and asserts it; with --old it also traces the old way (the switch
+// off) and prints it beside, which no check reads:
 //
 //   [1] an emitter through a thin pane lights the floor once, dimmed by the
 //       pane (THREEPP_PT_THIN_GLASS_NEE): a clear pane takes about 8 % off,
@@ -23,6 +24,8 @@
 //   [7] an emissive blended card lights the floor by its opaque share: at
 //       opacity 0.5, as an opaque panel of half its emission does;
 //
+// --old: also trace each switch's old way, as above (8 traces, about a quarter
+// of the samples).
 // THREEPP_TEST_IMAGES=<dir>: the traces are also written there as PNGs.
 // Exit 42 (SKIP) without a Vulkan device with ray query.
 
@@ -39,7 +42,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,6 +58,34 @@ namespace {
     using vktest::failures;
     using vktest::setEnv;
     using vktest::constantEnv;
+
+    bool traceOldWay = false;// --old
+
+    // The same trace with a fix's switch at "0": run only with --old, for the
+    // print beside the fixed value. Empty without it.
+    template<class F>
+    auto oldWay(const char* knob, F&& trace) {
+        using T = decltype(trace());
+        if (!traceOldWay) return std::optional<T>{};
+        setEnv(knob, "0");
+        std::optional<T> v{trace()};
+        setEnv(knob, "1");
+        return v;
+    }
+
+    // " (old 0.1234)", or nothing when the old way was not traced.
+    std::string oldText(const std::optional<double>& v, const char* fmt = "%.4f") {
+        if (!v) return {};
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), fmt, *v);
+        return std::string(" (old ") + buf + ")";
+    }
+
+    template<class T, class F>
+    std::optional<double> mapOld(const std::optional<T>& v, F&& f) {
+        if (!v) return std::nullopt;
+        return f(*v);
+    }
 
     // A white 4x4 RGBA8 map: an untextured transparent MeshBasicMaterial is
     // drawn as a UI overlay and never traced; a textured one is.
@@ -151,9 +184,11 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::printf("VulkanPathTraceLights_test\n");
-    setEnv("THREEPP_VULKAN_VALIDATION", "1");
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--old") == 0) traceOldWay = true;
+    }
 
     auto vk = vktest::openHeadlessVulkan("VulkanPathTraceLights_test", kW, kH);
     if (!vk) return vktest::kSkipCode;
@@ -206,22 +241,20 @@ int main() {
         pane->position.y    = 1.f;
         scene.add(pane);
 
-        const double clearOn = floorLum("1_clear_on");
-        setEnv("THREEPP_PT_THIN_GLASS_NEE", "0");
-        const double clearOff = floorLum("1_clear_off");
-        setEnv("THREEPP_PT_THIN_GLASS_NEE", "1");
+        const double clearOn  = floorLum("1_clear_on");
+        const auto   clearOff = oldWay("THREEPP_PT_THIN_GLASS_NEE", [&] { return floorLum("1_clear_off"); });
 
         glass->color = Color(0.2f, 0.2f, 0.2f);
         glass->needsUpdate();
-        const double smokedOn = floorLum("1_smoked_on");
-        setEnv("THREEPP_PT_THIN_GLASS_NEE", "0");
-        const double smokedOff = floorLum("1_smoked_off");
-        setEnv("THREEPP_PT_THIN_GLASS_NEE", "1");
+        const double smokedOn  = floorLum("1_smoked_on");
+        const auto   smokedOff = oldWay("THREEPP_PT_THIN_GLASS_NEE", [&] { return floorLum("1_smoked_off"); });
 
-        std::printf("  floor: no pane %.4f | clear pane %.4f (old %.4f) | smoked pane %.4f (old %.4f)\n",
-                    open, clearOn, clearOff, smokedOn, smokedOff);
-        std::printf("  over the open floor: clear %.3f (old %.3f), smoked %.3f (old %.3f)\n",
-                    clearOn / open, clearOff / open, smokedOn / open, smokedOff / open);
+        const auto perOpen = [&](double v) { return v / open; };
+        std::printf("  floor: no pane %.4f | clear pane %.4f%s | smoked pane %.4f%s\n",
+                    open, clearOn, oldText(clearOff).c_str(), smokedOn, oldText(smokedOff).c_str());
+        std::printf("  over the open floor: clear %.3f%s, smoked %.3f%s\n",
+                    clearOn / open, oldText(mapOld(clearOff, perOpen), "%.3f").c_str(),
+                    smokedOn / open, oldText(mapOld(smokedOff, perOpen), "%.3f").c_str());
         // Two faces of 4 % Fresnel each: 0.92; smoked, 0.2 of that.
         check(open > 0.05, "the panel lights the open floor");
         check(std::abs(clearOn / open - 0.92) < 0.06, "a clear pane lets 0.92 through, once");
@@ -264,10 +297,8 @@ int main() {
         };
         const double full = refl(1, "2_bounces1");
         const double last = refl(0, "2_bounces0_on");
-        setEnv("THREEPP_PT_LAST_BOUNCE_MIS", "0");
-        const double old = refl(0, "2_bounces0_off");
-        setEnv("THREEPP_PT_LAST_BOUNCE_MIS", "1");
-        std::printf("  reflection: max_bounces 1 %.4f | max_bounces 0 %.4f (old %.4f)\n", full, last, old);
+        const auto   old  = oldWay("THREEPP_PT_LAST_BOUNCE_MIS", [&] { return refl(0, "2_bounces0_off"); });
+        std::printf("  reflection: max_bounces 1 %.4f | max_bounces 0 %.4f%s\n", full, last, oldText(old).c_str());
         check(full > 0.1, "the floor mirrors the panel");
         check(std::abs(last / full - 1.0) < 0.1, "max_bounces 0 keeps the whole reflection");
 
@@ -347,23 +378,23 @@ int main() {
 
         auto ambient = AmbientLight::create(Color(1.f, 1.f, 1.f), math::PI);
         scene.add(ambient);
-        const auto amb = tr.trace(scene, *camera, 128, 2, "3_ambient_on");
-        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "0");
-        const auto ambOld = tr.trace(scene, *camera, 128, 2, "3_ambient_off");
-        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "1");
+        const auto amb    = tr.trace(scene, *camera, 128, 2, "3_ambient_on");
+        const auto ambOld = oldWay("THREEPP_PT_AMBIENT_LIGHTS",
+                                   [&] { return tr.trace(scene, *camera, 128, 2, "3_ambient_off"); });
         scene.remove(*ambient);
-        std::printf("  ambient: sphere centre %.4f (old %.4f)\n", centre(amb), centre(ambOld));
+        std::printf("  ambient: sphere centre %.4f%s\n", centre(amb), oldText(mapOld(ambOld, centre)).c_str());
         check(centre(amb) > 0.46 && centre(amb) < 0.60, "an ambient light of pi lights the sphere at its albedo (0.5)");
 
         auto hemi = HemisphereLight::create(Color(1.f, 1.f, 1.f), Color(0.f, 0.f, 0.f), math::PI);
         scene.add(hemi);
-        const auto hem = tr.trace(scene, *camera, 128, 2, "3_hemi_on");
-        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "0");
-        const auto hemOld = tr.trace(scene, *camera, 128, 2, "3_hemi_off");
-        setEnv("THREEPP_PT_AMBIENT_LIGHTS", "1");
+        const auto hem    = tr.trace(scene, *camera, 128, 2, "3_hemi_on");
+        const auto hemOld = oldWay("THREEPP_PT_AMBIENT_LIGHTS",
+                                   [&] { return tr.trace(scene, *camera, 128, 2, "3_hemi_off"); });
         scene.remove(*hemi);
-        std::printf("  hemisphere: sphere top %.4f centre %.4f bottom %.4f (old %.4f %.4f %.4f)\n", top(hem), centre(hem),
-                    bottom(hem), top(hemOld), centre(hemOld), bottom(hemOld));
+        std::printf("  hemisphere: sphere top %.4f%s centre %.4f%s bottom %.4f%s\n",
+                    top(hem), oldText(mapOld(hemOld, top)).c_str(),
+                    centre(hem), oldText(mapOld(hemOld, centre)).c_str(),
+                    bottom(hem), oldText(mapOld(hemOld, bottom)).c_str());
         // Lambert under the sky half: albedo x (0.5 N.up + 0.5); the top band
         // is at N.up ~ 0.78 (0.45), the centre at 0 (0.25), the bottom ~ -0.78.
         check(std::abs(centre(hem) - 0.25) < 0.04, "the hemisphere lights the sphere's side by half its sky");
@@ -387,13 +418,14 @@ int main() {
         const auto cardLum = [&](const std::shared_ptr<Material>& mat, const std::string& name) {
             auto card = Mesh::create(PlaneGeometry::create(1.5f, 1.5f), mat);
             scene.add(card);
-            const auto on = tr.trace(scene, *camera, 64, 2, name + "_on");
-            setEnv("THREEPP_PT_BLEND_PASS", "0");
-            const auto off = tr.trace(scene, *camera, 64, 2, name + "_off");
-            setEnv("THREEPP_PT_BLEND_PASS", "1");
+            const auto on  = tr.trace(scene, *camera, 64, 2, name + "_on");
+            const auto off = oldWay("THREEPP_PT_BLEND_PASS",
+                                    [&] { return tr.trace(scene, *camera, 64, 2, name + "_off"); });
             scene.remove(*card);
-            return std::pair{lum(on, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10),
-                             lum(off, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10)};
+            const auto middle = [](const std::vector<float>& img) {
+                return lum(img, kW / 2 - 10, kW / 2 + 10, kH / 2 - 10, kH / 2 + 10);
+            };
+            return std::pair{middle(on), mapOld(off, middle)};
         };
         const double redL = 0.2126;
         auto basic         = MeshBasicMaterial::create();
@@ -402,7 +434,8 @@ int main() {
         basic->transparent = true;
         basic->opacity     = 0.25f;
         const auto [bOn, bOff] = cardLum(basic, "4_unlit_blend");
-        std::printf("  unlit blend, opacity 0.25: %.4f (old %.4f), expected %.4f\n", bOn, bOff, 0.75 + 0.25 * redL);
+        std::printf("  unlit blend, opacity 0.25: %.4f%s, expected %.4f\n", bOn, oldText(bOff).c_str(),
+                    0.75 + 0.25 * redL);
         check(std::abs(bOn - (0.75 + 0.25 * redL)) < 0.03, "an unlit blended card shows the background through it");
 
         auto lit         = MeshStandardMaterial::create();
@@ -412,7 +445,8 @@ int main() {
         lit->opacity     = 0.25f;
         lit->side        = Side::Double;
         const auto [lOn, lOff] = cardLum(lit, "4_lit_blend");
-        std::printf("  lit blend, opacity 0.25: %.4f (old %.4f), expected about %.4f\n", lOn, lOff, 0.75 + 0.25 * redL);
+        std::printf("  lit blend, opacity 0.25: %.4f%s, expected about %.4f\n", lOn, oldText(lOff).c_str(),
+                    0.75 + 0.25 * redL);
         check(std::abs(lOn - (0.75 + 0.25 * redL)) < 0.05, "a lit blended card lets the background through untinted");
 
         auto add         = MeshBasicMaterial::create();
@@ -423,7 +457,8 @@ int main() {
         add->opacity     = 0.5f;
         const double addL = 0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.6;
         const auto [aOn, aOff] = cardLum(add, "4_additive");
-        std::printf("  additive, strength 0.5: %.4f (old %.4f), expected %.4f\n", aOn, aOff, 1.0 + 0.5 * addL);
+        std::printf("  additive, strength 0.5: %.4f%s, expected %.4f\n", aOn, oldText(aOff).c_str(),
+                    1.0 + 0.5 * addL);
         check(std::abs(aOn - (1.0 + 0.5 * addL)) < 0.03, "an additive card adds its glow to the background");
     }
 

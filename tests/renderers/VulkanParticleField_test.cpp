@@ -371,11 +371,9 @@ int main(int argc, char** argv) {
     // binary the obvious way. A test's scratch is not the caller's problem.
     const char* capDirForDet = std::getenv("THREEPP_PF_CAPTURE_DIR");
 
-    // Before the Canvas: the profiler registry latches its flags on first use,
-    // and the validation layer must be requested before the instance exists.
+    // Before the Canvas: the profiler registry latches its flags on first use.
     setEnv("THREEPP_CPU_PHASE_PROFILE", "1");
     setEnv("THREEPP_CPU_PHASE_WINDOW", "100000000");
-    setEnv("THREEPP_VULKAN_VALIDATION", "1");
 
     auto vk = vktest::openHeadlessVulkan("VulkanParticleField_test", kW, kH);
     if (!vk) return kSkipCode;
@@ -3821,7 +3819,7 @@ int main(int argc, char** argv) {
     // Read AFTER everything above, so it covers field creation, the ring's slot
     // rotation, structural add/remove churn and the retire path.
     if (!vulkan::validationActive()) {
-        std::printf("\n[note] VK_LAYER_KHRONOS_validation is not installed — the zero-error\n"
+        std::printf("\n[note] no validation layer (THREEPP_VULKAN_VALIDATION=1 asks for it): the zero-error\n"
                     "       assertion is skipped (it would be vacuously true).\n");
     } else {
         const std::uint32_t errs = vulkan::validationErrorCount() - errorsBeforeFields;

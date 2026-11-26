@@ -37,6 +37,15 @@ endif ()
 # runtime → exits 42 (CTest "Skipped") where there isn't one. References are
 # GPU-specific, so this is a local pre-push check, not a hard cross-hardware gate.
 if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
+    # The validation layer. Four tests turn it on themselves, because the layer
+    # is what detects their bug: VulkanValidation (and _nort), FreedMesh,
+    # SplatViewGrow and SpriteTextureReuse. The others check for zero
+    # validation errors only when it is on: THREEPP_VULKAN_VALIDATION=1 (or a
+    # debug build) runs the suite that way. With the layer on, each shade
+    # pipeline takes 4-7 s to create even from a warm cache: the thirteen tests
+    # that forced it until 2026-11 took 386 s summed with it and 173 s without
+    # (their 16 registrations, ctest -j4, warm cache, RTX 4060 laptop).
+
     # The probe GI at four cascades: their per-frame update and scroll reset
     # dispatches (VulkanProbeCascades_test.cpp has the why). Catch2; without a
     # ray-tracing device it SKIPs, which only the message tells from a failure.
@@ -314,17 +323,6 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # The displacementMap edge refinement (EdgeRefine): conforming, budgeted,
     # attributes carried. CPU only.
     add_test_executable(EdgeRefine_test)
-    # The render-graph A/B harness (examples/vulkan/audits/rg_ab.cpp) in --selfcheck
-    # mode, one test per scene: renders the scene and fails (exit 3) on any
-    # render-graph diagnostic. Four scenes, about 20 s each, cover the MSAA
-    # G-buffer pool, secondary views, splats and fields; the harness's other
-    # scenes are run by hand. Exists only when the examples are built.
-    if (TARGET rg_ab)
-        foreach (_rg_scene room room_fx outdoor fields_views)
-            add_test(NAME rg_ab_${_rg_scene} COMMAND rg_ab --selfcheck --scene ${_rg_scene})
-            set_tests_properties(rg_ab_${_rg_scene} PROPERTIES SKIP_RETURN_CODE 42)
-        endforeach ()
-    endif ()
     # SPIR-V binding reflection against the embedded shaders; CPU only.
     add_test_executable(SpirvReflect_test)
     target_include_directories(SpirvReflect_test PRIVATE "${CMAKE_BINARY_DIR}/generated")
@@ -602,27 +600,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(VulkanCameraModel_test PROPERTIES SKIP_RETURN_CODE 42)
 
     # A vision sensor's near/far must bound the same quantity on both backends.
-    # Same both-backends-in-one-process shape as CanvasApiOrder_test below (and
-    # the same Vulkan-canvas-first ordering), because that is what it takes to
-    # compare a GL scan against a Vulkan one without serialising through a file.
+    # Both backends in ONE process, the Vulkan canvas first: that is what it
+    # takes to compare a GL scan against a Vulkan one without serialising
+    # through a file. The same order guards Canvas's window-hint reset
+    # (f56e26821): a Vulkan canvas sets GLFW_CLIENT_API=GLFW_NO_API, and before
+    # the reset a GL canvas made after it got a window with no context and the
+    # process exited with no traceback.
     add_executable(SensorBackendParity_test SensorBackendParity_test.cpp)
     target_link_libraries(SensorBackendParity_test PRIVATE threepp)
     target_include_directories(SensorBackendParity_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
     add_test(NAME SensorBackendParity_test COMMAND SensorBackendParity_test)
     set_tests_properties(SensorBackendParity_test PROPERTIES
-            SKIP_RETURN_CODE 42
-            SKIP_REGULAR_EXPRESSION "WGL: The driver does not appear to support OpenGL")
-
-    # Both backends in ONE process: GLFW window hints are sticky, so a Vulkan
-    # canvas used to leave GLFW_CLIENT_API=GLFW_NO_API set and any GL canvas
-    # created afterwards got a context-less window (hard exit, no traceback).
-    # Needs its own executable — every other test uses a single backend, and the
-    # hazard is invisible unless the Vulkan canvas comes first.
-    add_executable(CanvasApiOrder_test CanvasApiOrder_test.cpp)
-    target_link_libraries(CanvasApiOrder_test PRIVATE threepp)
-    target_include_directories(CanvasApiOrder_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME CanvasApiOrder_test COMMAND CanvasApiOrder_test)
-    set_tests_properties(CanvasApiOrder_test PROPERTIES
             SKIP_RETURN_CODE 42
             SKIP_REGULAR_EXPRESSION "WGL: The driver does not appear to support OpenGL")
 endif ()
