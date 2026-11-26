@@ -13,7 +13,10 @@
 // Off by default. On, it changes rendered values at the ulp level (a different
 // reference, not the old one made stable) and costs 0-2 % frame time on light
 // scenes and up to about 6 % GPU time on heavy ones. Modules built inside
-// third-party libraries (FSR, NGX) are not covered.
+// third-party libraries (FSR, NGX) are not covered. The ocean wake field's own
+// modules (its step, its ripples and its shore: WakeFieldPipeline) are
+// decorated whether or not it is on, because they carry their values from one
+// step to the next.
 //
 // Turned on by THREEPP_VK_NO_CONTRACTION=1 or by setNoContraction(true). The
 // value is fixed when the first shader module of the process is created
