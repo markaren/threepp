@@ -1,5 +1,5 @@
-// How the cathedral is shown on the GL renderer: pale pine planks in a dim
-// hall, one low warm light, and the room's own light to fill the shadows.
+// How the cathedral is shown on the GL renderer: pale pine planks in the
+// hall's low sun (Hall.hpp), and the room's own light to fill the shadows.
 //
 // The wood is made in the shader from each plank's own coordinates: every
 // board is cut from a log of its own, with its pith somewhere beside it, so its
@@ -15,6 +15,7 @@
 #include "threepp/threepp.hpp"
 
 #include "Cathedral.hpp"
+#include "Hall.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -23,7 +24,8 @@
 
 namespace planks {
 
-    inline std::shared_ptr<threepp::MeshStandardMaterial> woodMaterial() {
+    // `sun` is the hall's sun (sunGlsl): it reaches a plank only through the windows
+    inline std::shared_ptr<threepp::MeshStandardMaterial> woodMaterial(const std::string& sun) {
         using namespace threepp;
 
         auto m = MeshStandardMaterial::create();
@@ -31,7 +33,8 @@ namespace planks {
         m->roughness = 0.62f;
         m->metalness = 0.f;
         m->customProgramCacheKey = "plank-cathedral-wood";
-        m->onBeforeCompile = [](Shader& s) {
+        m->onBeforeCompile = [sun](Shader& s) {
+            addSun(s, sun);
             const auto replace = [](std::string& src, const std::string& what, const std::string& with) {
                 const auto at = src.find(what);
                 if (at != std::string::npos) src.replace(at, what.size(), with);
@@ -111,76 +114,6 @@ roughnessFactor = min(1.0, roughnessFactor + 0.18 * woodEnd());)");
         Color c;
         c.setRGB(r, g, b, ColorSpace::sRGB);
         return c;
-    }
-
-    // A dome around everything: the hall's dim, warm far walls at the floor's
-    // horizon, falling off upward into a warm dark, never to black.
-    inline std::shared_ptr<threepp::Mesh> backdrop(const threepp::Color& horizon, const threepp::Color& zenith) {
-        using namespace threepp;
-        auto material = ShaderMaterial::create();
-        material->uniforms["horizon"] = Uniform(horizon);
-        material->uniforms["zenith"] = Uniform(zenith);
-        material->vertexShader = R"(
-varying vec3 vDir;
-void main() {
-    vDir = normalize(position);
-    vec4 world = modelMatrix * vec4(position, 1.0);
-    gl_Position = projectionMatrix * viewMatrix * world;
-})";
-        material->fragmentShader = R"(
-uniform vec3 horizon;
-uniform vec3 zenith;
-varying vec3 vDir;
-void main() {
-    float up = clamp(vDir.y, 0.0, 1.0);
-    vec3 c = mix(horizon, zenith, pow(smoothstep(0.0, 0.7, up), 0.7));
-    gl_FragColor = vec4(c, 1.0);
-    #include <tonemapping_fragment>
-    #include <encodings_fragment>
-})";
-        material->side = Side::Back;
-        material->depthWrite = false;
-        material->fog = false;
-        auto mesh = Mesh::create(SphereGeometry::create(60, 48, 24), material);
-        mesh->frustumCulled = false;
-        mesh->renderOrder = -1;
-        return mesh;
-    }
-
-    // The hall's floor: dark polished concrete, its value drifting a little
-    // over metres and its polish a little more, so that it holds the warm light
-    // as a soft sheen without a pattern one could point at.
-    inline std::shared_ptr<threepp::MeshStandardMaterial> floorMaterial() {
-        using namespace threepp;
-        auto m = MeshStandardMaterial::create();
-        m->color = Color(0x3a332b);
-        m->roughness = 0.52f;
-        m->metalness = 0.f;
-        m->customProgramCacheKey = "plank-cathedral-floor";
-        m->onBeforeCompile = [](Shader& s) {
-            const auto replace = [](std::string& src, const std::string& what, const std::string& with) {
-                const auto at = src.find(what);
-                if (at != std::string::npos) src.replace(at, what.size(), with);
-            };
-            replace(s.vertexShader, "#include <common>", "#include <common>\nvarying vec3 vFloorPos;");
-            replace(s.vertexShader, "#include <worldpos_vertex>", "#include <worldpos_vertex>\nvFloorPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
-            replace(s.fragmentShader, "#include <common>", R"(#include <common>
-varying vec3 vFloorPos;
-float floorHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float floorNoise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(floorHash(i), floorHash(i + vec2(1, 0)), f.x), mix(floorHash(i + vec2(0, 1)), floorHash(i + vec2(1, 1)), f.x), f.y);
-}
-float floorMottle(vec2 p) {
-    return 0.5 * floorNoise(p * 0.7) + 0.3 * floorNoise(p * 2.3 + 7.1) + 0.2 * floorNoise(p * 9.0 + 3.7);
-})");
-            replace(s.fragmentShader, "#include <color_fragment>", R"(#include <color_fragment>
-diffuseColor.rgb *= 0.93 + 0.14 * floorMottle(vFloorPos.xz);)");
-            replace(s.fragmentShader, "#include <roughnessmap_fragment>", R"(#include <roughnessmap_fragment>
-roughnessFactor = clamp(roughnessFactor + 0.16 * (floorMottle(vFloorPos.xz * 1.7 + 11.0) - 0.5), 0.0, 1.0);)");
-        };
-        return m;
     }
 
     // Fits an orthographic shadow camera around a box, seen from the light.

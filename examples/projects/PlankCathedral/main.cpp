@@ -3,8 +3,8 @@
 //
 // Nothing is loaded from disk: the planks, their wood, the hall and its light
 // are all made here. Cathedral.hpp lays out every plank, Stability.hpp settles
-// the design in PhysX and rejects one that moves, Look.hpp makes the wood, the
-// floor and the hall.
+// the design in PhysX and rejects one that moves, Look.hpp makes the wood, and
+// Hall.hpp the exhibition hall it stands in and the sun through its windows.
 //
 //   mouse   orbit and zoom
 //   B       let the wrecking ball go
@@ -40,6 +40,14 @@
 //   --test stack|ring|wall|tower|roof N   one element of N courses instead of the cathedral
 //   --exposure E      tone mapping exposure
 //   --ssaa L          headless: supersample with 2^L samples (default 4; 0: MSAA and FXAA)
+//   --sun AZ EL       the sun's azimuth west of north and its elevation, degrees (default 48 24)
+//   --beam-x X        the window whose beam the building stands in is centred on the ray from this far east of
+//                     the west towers, at 1 m up (default 0.5)
+//   --key K, --room R, --fill F, --bounce B   the sun's intensity, the room's light (environment), the room's warm
+//                     bounce from the side away from the sun (in the environment), the floor's bounce from below
+//
+// The hall (Hall.hpp) is placed round the building: its north wall 7.5 m from the building's axis, the windows
+// high along it, the floor at y = 0.
 //
 // Headless:
 //   --shot file.png [--time T] [--cam X Y Z] [--target X Y Z] [--fov F] [--size WxH]
@@ -57,23 +65,24 @@
 //   --film-chunk K    draw only chunk K (again), and say what it cost
 //   --film-finish     no drawing: the master again from the chunks, the words burned in by ffmpeg: dir/film.mp4
 //   --film-sheet      the first, middle and last frame of every shot, the words on them: dir/shot_sheet.png
-//   --film-clip name T0 T1   the film from T0 to T1 s, the words on it: dir/clip_name.mp4
+//   --film-clip name T0 T1   the film from T0 to T1 s, clean (no words): dir/clip_name.mp4
 //   --film-clip-shots name N M   the same from shot N's start to shot M's end, at most 10 s
 //   --film-fresh      forget the chunks drawn so far (their stamps), so that every chunk is drawn again
+//   --film-stills d   no film: a few of its frames as PNGs in d (the hook's first and last, the tower's, the
+//                     build half done, the swing, the collapse 1 s and 6 s after the hit, the slow motion, the next seed)
 // Every invocation writes dir/captions.ass and dir/captions.md from the one table in Film.hpp. The ffmpeg
 // executable can also come from the FFMPEG environment variable.
 
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/environments/RoomEnvironment.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/geometries/RoundedBoxGeometry.hpp"
 #include "threepp/geometries/TubeGeometry.hpp"
 #include "threepp/postprocessing/postprocessing.hpp"
-#include "threepp/renderers/gl/PMREMGenerator.hpp"
 
 #include "Cathedral.hpp"
 #include "Film.hpp"
+#include "Hall.hpp"
 #include "Look.hpp"
 #include "Stability.hpp"
 
@@ -226,11 +235,11 @@ namespace {
         return out;
     }
 
-    // Low, from the south-west, about the height of the nave's eaves: the spires
-    // stand against the dark above the hall's far wall.
+    // Low, from the south-west, about the height of the nave's eaves, the west
+    // front on the lit side (the film's hook ends here).
     View heroView(const Layout& l, float aspect) {
-        const Vector3 target(l.centre.x - 0.25f, l.box.max().y * 0.40f, l.centre.z);
-        return frame("hero", target, Vector3(-0.50f, -0.03f, 0.87f), 30, aspect, l.points, 0.04f);
+        const Vector3 target(l.centre.x - 0.2f, l.box.max().y * 0.40f, l.centre.z);
+        return frame("hero", target, Vector3(-0.76f, -0.02f, 0.65f), 30, aspect, l.points, 0.05f);
     }
 
     std::vector<View> standardViews(const Layout& l, float aspect) {
@@ -328,28 +337,27 @@ namespace {
         float t = 0;           // rising: seconds into the build; the recording: seconds from the ball's release
         float eye[3]{}, target[3]{};
         float fov = 30;
-        float rim = 0;         // the rim light, 0 to 1: only in the wide hero shots (its sheen on the floor would show in the others)
         float ao = 1;          // how much of the ambient occlusion is laid on: less in the close-up, where it would smudge sunlit planks
         float shadowRadius = 2.5f;// the key's shadow filter, in texels: tighter close up, where its grain would show
 
         [[nodiscard]] bool same(const FrameState& o) const { return std::memcmp(this, &o, sizeof(FrameState)) == 0; }
     };
-    static_assert(sizeof(FrameState) == 56, "FrameState is hashed as raw bytes: no padding");
+    static_assert(sizeof(FrameState) == 52, "FrameState is hashed as raw bytes: no padding");
 
-    // The film's light: late sun from the west on the west front, a brighter
-    // key than the stills' in a darker hall, and a faint rim from behind, so
-    // that the spires stand off the dark. All of it is in the chunks' stamps.
+    // The light, for the film and the stills alike: the late sun low through
+    // the hall's north windows from the north-west, so that the west front is
+    // lit and the building stands in a beam; the room's warm light in the
+    // shadows. All of it is in the film's chunks' stamps.
     struct FilmLook {
-        float keyIntensity = 6.2f;
-        float keyLeftDeg = 45.f;      // the key's azimuth: this far to the hook camera's left of straight behind it
-        float keyElevationDeg = 24.f;
-        float rimIntensity = 0.7f;    // from behind the building, low
-        float rimElevationDeg = 14.f;
-        float fillIntensity = 0.2f;   // cool, from the hook camera's right
-        float environment = 0.12f;
-        std::uint32_t horizon = 0x1d1712;
-        std::uint32_t zenith = 0x080605;
-        std::uint32_t floorTint = 0x37302a;
+        float keyIntensity = 7.0f;    // the sun
+        float sunAzimuthDeg = 48.f;   // west of north: it comes through the north wall's windows
+        float sunElevationDeg = 24.f;
+        float beamX = 0.5f;           // the window's beam is centred on the ray from this far east of the west towers
+        float fillIntensity = 0.3f;   // the sunlit floor's warm bounce from the side away from the sun, in the environment
+        float bounce = 0.18f;         // the floor's warm bounce from below
+        float environment = 0.68f;    // the room's light (Hall.hpp's hallEnvironment): mostly the sky through the windows
+        std::uint32_t fog = 0x161617; // the far walls fade into dusk, near neutral
+        float fogNear = 7.f, fogFar = 34.f;
     };
 
     struct FilmInputs {
@@ -360,7 +368,28 @@ namespace {
         std::vector<Vector3> rubble;// where the planks lie at the end of the real-time collapse
         std::function<Vector3(float)> ballAt;// the recorded ball's centre, seconds from its release
         float aspect = 16.f / 9.f;
+        const Hall* hall = nullptr;// every camera stays inside it
     };
+
+    // How far from `from` along `dir` the eye can go and stay `margin` inside the hall's walls and ceiling.
+    float roomAlong(const Hall& h, const Vector3& from, Vector3 dir, float margin) {
+        dir.normalize();
+        float t = 1e9f;
+        const auto wall = [&](float p, float d, float lo, float hi) {
+            if (d > 1e-6f) t = std::min(t, (hi - margin - p) / d);
+            if (d < -1e-6f) t = std::min(t, (lo + margin - p) / d);
+        };
+        wall(from.x, dir.x, h.x0, h.x1);
+        wall(from.y, dir.y, 0.f, h.height);
+        wall(from.z, dir.z, h.zN, h.zS);
+        return std::max(0.f, t);
+    }
+
+    // The hall from its south-west corner, high: the window wall along the left, its patches of sun across the
+    // floor, the cathedral in the middle of the room.
+    View hallView(const Hall& h, const Layout& l) {
+        return {"hall", Vector3(h.x0 + 5.5f, 3.0f, h.zS - 1.4f), Vector3(l.centre.x + 0.8f, 2.2f, l.centre.z - 1.2f), 40};
+    }
 
     // A view along `dir` in which the points span `fraction` of the frame's height, centred; its sides may
     // spill over (`spill` says how far: the widest |x| in normalized device coordinates).
@@ -440,7 +469,7 @@ namespace {
 
     // The film, shot by shot (about 46 s at 60 frames a second):
     //  1 the finished cathedral, low, three quarters on its lit side, a slow dolly in
-    //  2 a slow move up the south-west tower's west face to its spire
+    //  2 a slow move up the south-west tower to its spire, the sun raking across it
     //  3 it rises from an empty floor, course by course; a high camera turns slowly
     //  4 the ball swings in on its rope from the left (wide)
     //  5 the collapse in real time, the same camera
@@ -495,20 +524,30 @@ namespace {
         p.end = t;
         p.slowHit = p.shots[5].t0 + slowBefore * 4;
 
-        // 1: low, three quarters from the south-west, the west front on the lit side
+        // 1: low, three quarters from the south-west, the west front on the lit side: it opens wide and a little
+        // higher on the cathedral in its room (the windows along the left, the sun's patches on the floor) and
+        // pushes in, slowing, to the building filling the frame
         const Vector3 hookDir = Vector3(-0.76f, -0.02f, 0.65f).normalize();
         const View hook = frame("hook", Vector3(A.centre.x - 0.2f, A.box.max().y * 0.40f, A.centre.z), hookDir, 30, aspect, ptsA, 0.05f);
-        Move m1{Vector3(hook.target).addScaledVector(Vector3(hook.eye).sub(hook.target), 1.13f), hook.eye, hook.target, hook.target, 30, 30};
+        Vector3 hookOut = Vector3(hook.eye).sub(hook.target);
+        const float hookNear = hookOut.length();
+        hookOut.add(Vector3(0, 0.12f * hookNear, 0)).normalize();
+        const float hookFar = std::min(1.6f * hookNear, in.hall ? roomAlong(*in.hall, hook.target, hookOut, 0.9f) : 1.6f * hookNear);
+        const Vector3 hookEye0 = Vector3(hook.target).addScaledVector(hookOut, hookFar);
+        // looking a little up and a little wider at first, so that the high windows' arches are in the frame
+        const Vector3 hookTarget0(hook.target.x, hookEye0.y + 0.05f * hookFar, hook.target.z);
+        Move m1{hookEye0, hook.eye, hookTarget0, hook.target, 38, 30};
 
-        // 2: the south-west tower from due south (the north-west one hides behind it, the crossing spire is out of
-        // frame): from its belfry tier the camera rises and tilts to the spire, which ends large against the dark
+        // 2: the south-west tower from the south-west, the sun raking across it (its west faces lit, its south face
+        // in shade): from its belfry tier the camera rises and tilts until its spire stands against the window wall
+        // in shade, the north-west spire to its left and the crossing spire to its right (the tower_top still)
         std::vector<Vector3> spirePts;
         for (const auto& q : ptsA)
-            if (std::abs(q.x - A.tower.x) < A.towerHalf + 0.12f && std::abs(q.z - A.tower.z) < A.towerHalf + 0.12f && q.y > A.shaftTop - 0.05f) spirePts.push_back(q);
-        const View spire = frame("spire", Vector3(A.tower.x, 0.5f * (A.shaftTop + A.towerHeight), A.tower.z), Vector3(0, -0.10f, 1), 24, aspect, spirePts, 0.16f);
+            if (std::abs(q.x - A.tower.x) < A.towerHalf + 0.02f && std::abs(q.z - A.tower.z) < A.towerHalf + 0.02f && q.y > A.shaftTop - 0.22f) spirePts.push_back(q);
+        const View spire = frame("spire", Vector3(A.tower.x, 0.5f * (A.shaftTop - 0.22f + A.towerHeight), A.tower.z), Vector3(-0.62f, -0.10f, 0.78f), 30, aspect, spirePts, 0.05f);
         const float belfry = A.shaftTop - 0.16f;
         Move m2{Vector3(spire.eye.x, belfry, spire.eye.z).sub(Vector3(spire.target.x, belfry, spire.target.z)).multiplyScalar(1.06f).add(Vector3(spire.target.x, belfry, spire.target.z)),
-                spire.eye, Vector3(spire.target.x - 0.12f, belfry + 0.02f, spire.target.z), spire.target, 24, 24};// it opens turned a little west, past the crossing tower's edge
+                spire.eye, Vector3(spire.target.x, belfry + 0.02f, spire.target.z), spire.target, 30, 30};
 
         // 3: high three quarters, turning slowly round the building
         const auto orbitDir = [](float azimuthDeg, float elevationDeg) {
@@ -619,13 +658,12 @@ namespace {
             }
         }
 
-        // 7, 8: the next seed's building from the same side as the hook, a slow push, then still
-        // 7, 8: the next seed's building from the west-south-west and close: standing, it fills most of the
-        // frame's height; a slow push, then still
-        // (of the directions from the south-west round to the west, the one that shows most of its length and
-        // still keeps it inside the frame's sides)
+        // 7, 8: the next seed's building from its sunlit north side and close, the hall's sunny floor and its plain
+        // south wall behind it: standing, it fills most of the frame's height; a slow push, then still
+        // (of the directions from the north-west round to the west-north-west, the one that shows most of its
+        // length and still keeps it inside the frame's sides)
         View next;
-        for (float az = 110.f; az <= 166.f; az += 4.f) {
+        for (float az = -166.f; az <= -130.f; az += 4.f) {
             float spill = 0;
             const Vector3 dir(std::cos(az * math::DEG2RAD), -0.02f, std::sin(az * math::DEG2RAD));
             const View v = fitHeight("next", Vector3(B.centre.x - 0.2f, B.box.max().y * 0.45f, B.centre.z), dir, 30, aspect, ptsB, 0.80f, &spill);
@@ -644,13 +682,12 @@ namespace {
             const float u = static_cast<float>((tf - sh.t0) / (sh.t1 - sh.t0));
             FrameState& s = p.frames[f];
             s.shot = sh.number;
-            s.rim = sh.number == 1 || sh.number >= 7 ? 1.f : 0.f;
             s.ao = sh.number == 2 ? 0.45f : 1.f;
             s.shadowRadius = sh.number == 2 || sh.number == 6 ? 1.f : 2.5f;
             switch (sh.number) {
                 case 1:
                     s.scene = 0, s.mode = 0;
-                    m1.at(u, s);
+                    m1.at(0.3f * u + 0.7f * u * (2 - u), s);// slowing as it arrives
                     break;
                 case 2:
                     s.scene = 0, s.mode = 0;
@@ -940,6 +977,8 @@ int run(int argc, char** argv) {
     float filmBudget = 240, clipFrom = 0, clipTo = 0;
     int clipShotFrom = 0, clipShotTo = 0;// --film-clip-shots: the clip's first and last shot
     bool filmFinish = false, filmSheet = false, filmFresh = false;
+    std::string filmStillsDir;
+    FilmLook look;
     if (const char* env = std::getenv("FFMPEG")) ffmpegPath = env;
     unsigned threads = std::max(2u, std::thread::hardware_concurrency() > 4 ? std::thread::hardware_concurrency() - 4 : 2u);
     for (int i = 1; i < argc; ++i) {
@@ -954,6 +993,17 @@ int run(int argc, char** argv) {
         else if (a == "--film-finish") filmFinish = true;
         else if (a == "--film-sheet") filmSheet = true;
         else if (a == "--film-fresh") filmFresh = true;
+        else if (a == "--film-stills" && more) filmStillsDir = argv[++i];
+        else if (a == "--sun" && i + 2 < argc) {
+            look.sunAzimuthDeg = std::stof(argv[i + 1]);
+            look.sunElevationDeg = std::stof(argv[i + 2]);
+            i += 2;
+        }
+        else if (a == "--beam-x" && more) look.beamX = std::stof(argv[++i]);
+        else if (a == "--key" && more) look.keyIntensity = std::stof(argv[++i]);
+        else if (a == "--room" && more) look.environment = std::stof(argv[++i]);
+        else if (a == "--fill" && more) look.fillIntensity = std::stof(argv[++i]);
+        else if (a == "--bounce" && more) look.bounce = std::stof(argv[++i]);
         else if (a == "--film-clip" && i + 3 < argc) {
             clipName = argv[i + 1];
             clipFrom = std::stof(argv[i + 2]);
@@ -1136,6 +1186,8 @@ int run(int argc, char** argv) {
     std::fflush(stdout);
 
     const Layout layout = layoutOf(design, plan);
+    // the hall round the building, which stands in a beam of the low sun
+    const Hall hall = makeHall(layout.centre, Vector3(layout.tower.x + look.beamX, 1.f, layout.centre.z), look.sunAzimuthDeg, look.sunElevationDeg);
     Swing swing = swingFor(layout, ballSpeed, ballRadius, ropeLength, ballAim, ballHeight, ballOffset);
     if (replaying) {
         swing.radius = replay.header.ballRadius;
@@ -1153,7 +1205,6 @@ int run(int argc, char** argv) {
     float restBall[7]{};
     std::string sceneStamp;
     const std::filesystem::path filmPath = filmDir;
-    const FilmLook look;
     // a chunk's stamp: everything its pixels depend on
     const auto chunkStamp = [&](int c) {
         film::Hash h;
@@ -1220,6 +1271,7 @@ int run(int argc, char** argv) {
             for (size_t i = 0; i + 6 < planksAtHit.size(); i += 7) in.rubble.emplace_back(planksAtHit[i], planksAtHit[i + 1], planksAtHit[i + 2]);
         }
         in.aspect = aspect;
+        in.hall = &hall;
         in.ballAt = [&](float t) { return replay.ballAt(t); };
         const auto t0 = WallClock::now();
         filmPlan = planFilm(in);
@@ -1232,6 +1284,25 @@ int run(int argc, char** argv) {
         std::printf("  the south-west tower: half %.3f m, shaft to %.2f m, top %.2f m; the building %.2f x %.2f x %.2f m; the ball hits at (%.2f, %.2f, %.2f)\n",
                     layout.towerHalf, layout.shaftTop, layout.towerHeight, layout.box.max().x - layout.box.min().x, layout.box.max().y,
                     layout.box.max().z - layout.box.min().z, in.impact.x, in.impact.y, in.impact.z);
+        {
+            // every camera inside the hall
+            int outside = 0;
+            for (const auto& f : filmPlan.frames)
+                if (f.eye[0] < hall.x0 + 0.3f || f.eye[0] > hall.x1 - 0.3f || f.eye[2] < hall.zN + 0.3f || f.eye[2] > hall.zS - 0.3f || f.eye[1] > hall.height - 0.3f) ++outside;
+            const auto& first = filmPlan.frames.front();
+            std::printf("  the hall: x %.2f to %.2f, z %.2f to %.2f, %.1f m high, windows from x = %.2f every %.1f m, %.2f wide, sill %.2f, spring %.2f; "
+                        "the hook opens at (%.2f, %.2f, %.2f); %d frames have the camera within 0.3 m of a wall or outside\n",
+                        hall.x0, hall.x1, hall.zN, hall.zS, hall.height, hall.firstX, hall.bay, hall.width, hall.sill, hall.spring, first.eye[0], first.eye[1],
+                        first.eye[2], outside);
+            for (const auto& sh : filmPlan.shots) {
+                const int f0 = static_cast<int>(std::ceil(sh.t0 * film::fps - 1e-6)), f1 = std::min(static_cast<int>(filmPlan.frames.size()), static_cast<int>(std::ceil(sh.t1 * film::fps - 1e-6))) - 1;
+                for (const int f : {f0, f1}) {
+                    const auto& s = filmPlan.frames[f];
+                    std::printf("  camera shot %d frame %d: eye %.3f %.3f %.3f target %.3f %.3f %.3f fov %.1f\n", sh.number, f, s.eye[0], s.eye[1], s.eye[2], s.target[0], s.target[1],
+                                s.target[2], s.fov);
+                }
+            }
+        }
 
         // every word, from the one table
         const auto captions = film::captionTable(filmPlan.shots, static_cast<long long>(design.planks.size()), filmPlan.slowHit);
@@ -1407,28 +1478,20 @@ int run(int argc, char** argv) {
     renderer.shadowMap().type = ShadowMap::PFC;
 
     Scene scene;
-    const Color horizon(filming ? look.horizon : 0x2a2119);
     scene.background = Color(0x0d0a08);
-    scene.fog = Fog(horizon, 5.5f, 22);
-    {
-        PMREMGenerator pmrem(renderer);
-        RoomEnvironment room;
-        scene.environment = pmrem.fromScene(room, 0.04f);
-        room.dispose();
-    }
-    scene.environmentIntensity = filming ? look.environment : 0.13f;
-    scene.add(backdrop(horizon, Color(filming ? look.zenith : 0x0e0b09)));
+    scene.fog = Fog(Color(look.fog), look.fogNear, look.fogFar);
+    scene.environment = hallEnvironment(renderer, hall, look.fillIntensity);
+    scene.environmentIntensity = look.environment;
 
-    auto floorLook = floorMaterial();
-    if (filming) floorLook->color = Color(look.floorTint);
-    auto floor = Mesh::create(PlaneGeometry::create(120, 120), floorLook);
-    floor->rotation.x = -math::PI / 2;
-    floor->receiveShadow = true;
-    scene.add(floor);
+    // the hall, and the sun that reaches anything in it only through the windows
+    const std::string sun = sunGlsl(hall);
+    buildHall(scene, hall, sun);
+    std::printf("the hall: x %.2f to %.2f, z %.2f to %.2f, %.1f m high; %d windows from x = %.2f every %.1f m; the sun (%.3f, %.3f, %.3f)\n", hall.x0, hall.x1,
+                hall.zN, hall.zS, hall.height, hall.windows, hall.firstX, hall.bay, hall.toSun.x, hall.toSun.y, hall.toSun.z);
 
     // the planks: one instanced mesh
     const auto plankGeometry = RoundedBoxGeometry::create(LEN, THICK, WIDE, 2, 0.0007f);
-    auto planksMesh = InstancedMesh::create(plankGeometry, woodMaterial(), design.planks.size());
+    auto planksMesh = InstancedMesh::create(plankGeometry, woodMaterial(sun), design.planks.size());
     planksMesh->castShadow = true;
     planksMesh->receiveShadow = true;
     planksMesh->frustumCulled = false;
@@ -1470,42 +1533,31 @@ int run(int argc, char** argv) {
     if (replaying) replay.at(0, replayPlanks, replayBall);
     syncPlanks();
 
-    // the wrecking ball, dark worn steel, and its rope
-    auto ballMaterial = MeshStandardMaterial::create();
-    ballMaterial->color = Color(0x3c3d3f);
+    // the wrecking ball, dark worn steel, and its rope, in the same sun
+    auto ballMaterial = hallMaterial(sun, "ball", Color(0x3c3d3f), 0.42f);
     ballMaterial->metalness = 0.85f;
-    ballMaterial->roughness = 0.42f;
     auto ballMesh = Mesh::create(SphereGeometry::create(swing.radius, 64, 32), ballMaterial);
     ballMesh->castShadow = true;
     ballMesh->receiveShadow = true;
     ballMesh->visible = false;
     scene.add(ballMesh);
-    auto ropeMaterial = MeshStandardMaterial::create();
-    ropeMaterial->color = Color(0x2a241d);
-    ropeMaterial->roughness = 0.9f;
+    auto ropeMaterial = hallMaterial(sun, "rope", Color(0x2a241d), 0.9f);
     auto ropeMesh = Mesh::create(BufferGeometry::create(), ropeMaterial);
     ropeMesh->castShadow = true;
     ropeMesh->visible = false;
     ropeMesh->frustumCulled = false;
     scene.add(ropeMesh);
 
-    // One low, warm key light, raking in from the side and a little behind
-    // the hero camera's right, like late sun through a high window: a lit side
-    // and a shadow side, long shadows across the floor. A faint cool fill on
-    // the shadow side; the warm bounce from the floor stays.
+    // The key is the low, warm late sun through the north windows (Hall.hpp lets it through only there): from
+    // the north-west, so that the west front is lit and the long shadows run south-east across the floor. Its
+    // shadow map is fitted tightly round the building (and round where the rubble and the ball go), so the
+    // planks keep crisp shadows; the windows' shapes need no shadow map. The room's light (the environment, with
+    // its warm bounce from the side away from the sun) and the floor's warm bounce lift the shadows.
     const View hero = heroView(layout, aspect);
-    auto key = DirectionalLight::create(Color(0xffd3a6), filming ? look.keyIntensity : 5.2f);
-    Object3D keyTarget, fillTarget, rimTarget;
+    auto key = DirectionalLight::create(Color(0xffd3a6), look.keyIntensity);
+    Object3D keyTarget;
     scene.addRef(keyTarget);
-    scene.addRef(fillTarget);
-    scene.addRef(rimTarget);
-    Vector3 toLight;
-    // the film's key, fill and rim are placed from the hook camera's side: behind it, the south-west
-    Vector3 lightBack = Vector3(hero.eye).sub(hero.target);
-    if (filming) lightBack.set(0.66f, 0, -0.75f).negate();
-    lightBack.y = 0;
-    lightBack.normalize();
-    const Vector3 lightRight(lightBack.z, 0, -lightBack.x);
+    const Vector3 toLight = hall.toSun;
     // the shadow map fitted round a box, the key 14 m out toward the light
     const auto fitKey = [&](Box3 box) {
         Vector3 centre;
@@ -1518,17 +1570,6 @@ int run(int argc, char** argv) {
         cam->updateProjectionMatrix();
     };
     {
-        const float elevation = (filming ? look.keyElevationDeg : 24.f) * math::DEG2RAD;
-        Vector3 flat;
-        if (filming) {
-            // late sun from the west: behind the hook camera and to its left, so the west front is lit
-            const float left = look.keyLeftDeg * math::DEG2RAD;
-            flat = Vector3(lightBack).multiplyScalar(std::cos(left)).addScaledVector(lightRight, -std::sin(left)).normalize();
-        } else {
-            const float side = 12 * math::DEG2RAD;
-            flat = Vector3(lightRight).multiplyScalar(std::cos(side)).addScaledVector(lightBack, std::sin(side)).normalize();
-        }
-        toLight.set(flat.x * std::cos(elevation), std::sin(elevation), flat.z * std::cos(elevation));
         key->setTarget(keyTarget);
         key->castShadow = true;
         key->shadow->mapSize.set(4096, 4096);
@@ -1541,32 +1582,13 @@ int run(int argc, char** argv) {
         fitKey(box);
     }
     scene.add(key);
-    {
-        auto fill = DirectionalLight::create(Color(0xa9bbd6), filming ? look.fillIntensity : 0.22f);
-        // on the shadow side: the hero's left; the film's right, the key being on its left
-        const Vector3 side = filming ? lightRight : Vector3(lightRight).negate();
-        fill->position.copy(layout.centre).addScaledVector(Vector3(side).multiplyScalar(0.8f).addScaledVector(lightBack, 0.3f).add(Vector3(0, 0.5f, 0)), 10.f);
-        fillTarget.position.copy(layout.centre);
-        fill->setTarget(fillTarget);
-        scene.add(fill);
-    }
-    std::shared_ptr<DirectionalLight> rimLight;
-    if (filming) {
-        // a faint rim from behind the building, on the shadow side, low: the spires' dark edges lift off the hall
-        auto rim = DirectionalLight::create(Color(0xffe2c6), look.rimIntensity);
-        rimLight = rim;
-        const float e = look.rimElevationDeg * math::DEG2RAD, a = 50 * math::DEG2RAD;
-        const Vector3 flat = Vector3(lightBack).multiplyScalar(-std::cos(a)).addScaledVector(lightRight, std::sin(a)).normalize();
-        rim->position.copy(layout.centre).addScaledVector(Vector3(flat.x * std::cos(e), std::sin(e), flat.z * std::cos(e)), 10.f);
-        rimTarget.position.copy(layout.centre);
-        rim->setTarget(rimTarget);
-        scene.add(rim);
-    }
     // what the floor throws back into the shadows: warm, from below
-    auto bounce = HemisphereLight::create(Color(0x14110e), Color(0x8a6646), 0.5f);
+    auto bounce = HemisphereLight::create(Color(0x101215), Color(0x7a604a), look.bounce);
     scene.add(bounce);
 
-    PerspectiveCamera camera(30, aspect, 0.01f, 120);
+    // the near plane as far out as the closest shots allow: the passes' render targets keep 16-bit depth, and the
+    // hall's far walls must not fight their pilasters
+    PerspectiveCamera camera(30, aspect, 0.04f, 80);
     camera.position.copy(camArg.value_or(hero.eye));
     OrbitControls controls(camera, canvas);
     controls.target.copy(targetArg.value_or(hero.target));
@@ -1643,7 +1665,7 @@ int run(int argc, char** argv) {
 
         // the next seed's building: its own planks, its own tints, standing as designed (proven earlier)
         const size_t nB = nextDesignPlanks.planks.size();
-        auto nextMesh = InstancedMesh::create(plankGeometry, woodMaterial(), nB);
+        auto nextMesh = InstancedMesh::create(plankGeometry, woodMaterial(sun), nB);
         nextMesh->castShadow = true;
         nextMesh->receiveShadow = true;
         nextMesh->frustumCulled = false;
@@ -1718,7 +1740,6 @@ int run(int argc, char** argv) {
             planksMesh->visible = s.scene == 0;
             nextMesh->visible = s.scene == 1;
             fitFor(s.scene, s.mode);
-            rimLight->intensity = look.rimIntensity * s.rim;
             gtaoPass->blendIntensity = s.ao;
             key->shadow->radius = s.shadowRadius;
             if (s.scene != poseScene || s.mode != poseMode || s.t != poseT) {
@@ -1779,7 +1800,31 @@ int run(int argc, char** argv) {
                 drawnFrames = 0;
             }
 
-            if (filmSheet) {
+            if (!filmStillsDir.empty()) {
+                // a few of the film's frames as stills, without words
+                std::filesystem::create_directories(filmStillsDir);
+                const auto frameAt = [&](double t) { return std::clamp(static_cast<int>(std::lround(t * film::fps)), 0, frameCount - 1); };
+                const auto& sh = filmPlan.shots;
+                const std::pair<const char*, int> stills[] = {
+                        {"film_1_hook_first", 0},
+                        {"film_1_hook_last", frameAt(sh[0].t1) - 1},
+                        {"film_2_tower_first", frameAt(sh[1].t0)},
+                        {"film_2_tower_last", frameAt(sh[1].t1) - 1},
+                        {"film_3_build_half", frameAt(0.5 * (sh[2].t0 + sh[2].t1))},
+                        {"film_4_swing", frameAt(0.5 * (sh[3].t0 + sh[3].t1))},
+                        {"film_5_collapse_+1s", frameAt(sh[4].t0 + 1.0)},
+                        {"film_5_collapse_+6s", frameAt(sh[4].t1) - 1},
+                        {"film_6_slow_motion", frameAt(filmPlan.slowHit + 4 * 0.45)},
+                        {"film_7_next_seed", frameAt(sh[6].t1) - 1},
+                };
+                for (const auto& [name, f] : stills) {
+                    draw(frames[f]);
+                    const auto path = std::filesystem::path(filmStillsDir) / (std::string(name) + ".png");
+                    renderer.writeFramebuffer(path);
+                    std::printf("wrote %s (frame %d, %s)\n", path.string().c_str(), f, film::mmss(static_cast<double>(f) / film::fps).c_str());
+                }
+                std::printf("%d frames drawn, %.1f ms a frame\n", drawnFrames, 1000 * drawSeconds / std::max(1, drawnFrames));
+            } else if (filmSheet) {
                 // the first, middle and last frame of every shot, the words laid on by ffmpeg, in one sheet
                 const auto dir = filmPath / "sheet";
                 std::filesystem::create_directories(dir);
@@ -1818,7 +1863,7 @@ int run(int argc, char** argv) {
                 if (film::runCommand(cmd) != 0) code = 1;
                 std::printf("wrote %s (%d frames drawn, %.1f ms a frame)\n", (filmPath / "shot_sheet.png").string().c_str(), drawnFrames, 1000 * drawSeconds / std::max(1, drawnFrames));
             } else if (!clipName.empty()) {
-                // a test clip: the film from T0 to T1, the words burned in
+                // a test clip: the film from T0 to T1, clean
                 if (clipShotFrom > 0) {
                     // from the first shot's start to the last shot's end, at most 10 s
                     for (const auto& sh : filmPlan.shots) {
@@ -1837,10 +1882,9 @@ int run(int argc, char** argv) {
                     std::printf("could not draw the clip\n");
                     code = 1;
                 } else {
-                    char shift[64];
-                    std::snprintf(shift, sizeof(shift), "%.6f", static_cast<double>(f0) / film::fps);
-                    const std::string cmd = film::inFolder(filmPath) + film::q(ff) + " -y -loglevel error -i " + film::q(master) + " -vf \"setpts=PTS-STARTPTS+" + shift +
-                                            "/TB,ass=captions.ass,setpts=PTS-STARTPTS,format=yuv420p\" -r 60 -c:v libx264 -preset slow -crf 17 -movflags +faststart clip_" + clipName + ".mp4";
+                    // clean, as the film goes out: the words are laid on later, in post
+                    const std::string cmd = film::inFolder(filmPath) + film::q(ff) + " -y -loglevel error -i " + film::q(master) +
+                                            " -vf format=yuv420p -r 60 -c:v libx264 -preset slow -crf 17 -movflags +faststart clip_" + clipName + ".mp4";
                     if (film::runCommand(cmd) != 0) code = 1;
                     std::printf("wrote %s: %.2f to %.2f s, %d frames in %.1f s (%.1f ms a frame drawn and read)\n", (filmPath / ("clip_" + clipName + ".mp4")).string().c_str(),
                                 static_cast<double>(f0) / film::fps, static_cast<double>(f1) / film::fps, f1 - f0, since(t0), 1000 * drawSeconds / std::max(1, drawnFrames));
@@ -1909,7 +1953,9 @@ int run(int argc, char** argv) {
         const std::string tag = "seed" + std::to_string(seed);
         if (!stillsDir.empty()) {
             std::filesystem::create_directories(stillsDir);
-            for (const auto& v : standardViews(layout, aspect)) captures.push_back({shotTime, false, v, (std::filesystem::path(stillsDir) / (tag + "_" + v.name + ".png")).string()});
+            auto views = standardViews(layout, aspect);
+            views.insert(views.begin(), hallView(hall, layout));
+            for (const auto& v : views) captures.push_back({shotTime, false, v, (std::filesystem::path(stillsDir) / (tag + "_" + v.name + ".png")).string()});
         }
         if (!heroPath.empty()) captures.push_back({shotTime, false, hero, heroPath});
         if (!shotPath.empty()) {
@@ -1978,7 +2024,9 @@ int run(int argc, char** argv) {
                     synced = physics->time;
                 }
             }
-            showBall();
+            // the ball and its rope only in the collapse; standing, the building is shown alone
+            if (c.afterHit) showBall();
+            else ballMesh->visible = ropeMesh->visible = false;
             aim(c.view);
 
             const auto t0 = WallClock::now();

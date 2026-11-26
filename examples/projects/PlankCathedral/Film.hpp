@@ -36,7 +36,7 @@ namespace planks::film {
     namespace fs = std::filesystem;
 
     // Bump when the look's code changes (Look.hpp's shaders, the passes): it is in the chunks' stamps.
-    constexpr int lookCode = 1;
+    constexpr int lookCode = 2;
 
     constexpr int fps = 60;
     constexpr int chunkFrames = 4 * fps;
@@ -149,8 +149,8 @@ namespace planks::film {
         return out;
     }
 
-    // The drafts, word for word (Lars approves them before the render). Each
-    // is up for 2-4 s inside its shot, never over the impact.
+    // The captions, word for word, for a captioned cut (the clean master has
+    // none). Each is up for 2-4 s inside its shot, never over the impact.
     inline std::vector<Caption> captionTable(const std::vector<Shot>& shots, long long planks, double slowHit) {
         const auto shot = [&](int n) -> const Shot& {
             for (const auto& s : shots)
@@ -229,7 +229,7 @@ namespace planks::film {
 
     inline std::string captionsMarkdown(const std::vector<Caption>& captions, const std::vector<Shot>& shots, double end) {
         std::string s = "# Plank Cathedral: every word on screen\n\n"
-                        "Drafts for Lars's approval. Burned in by ffmpeg from `captions.ass` (written with this file from one table in "
+                        "Drafts. Burned in by ffmpeg from `captions.ass` (written with this file from one table in "
                         "`Film.hpp`); the clean master has no words, so a change here never means rendering again.\n\n"
                         "| Shot | From | To | Text |\n|---|---|---|---|\n";
         for (const auto& c : captions) {
