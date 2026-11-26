@@ -43,8 +43,10 @@ add_test_executable(EchoSensors_test)
 if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test_executable(EchoSensorsVulkan_test)
     target_include_directories(EchoSensorsVulkan_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/renderers")
+    # vulkan_pipelines: tests/renderers' VulkanPipelineWarmup runs first.
     set_tests_properties(EchoSensorsVulkan_test PROPERTIES
-            SKIP_REGULAR_EXPRESSION "no Vulkan ray tracing device")
+            SKIP_REGULAR_EXPRESSION "no Vulkan ray tracing device"
+            FIXTURES_REQUIRED vulkan_pipelines)
 endif ()
 add_test_executable(TerrainGenerator_test)
 add_test_executable(TerrainTilesShutdown_test)

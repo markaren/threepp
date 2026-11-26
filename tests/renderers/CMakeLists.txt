@@ -37,6 +37,18 @@ endif ()
 # runtime → exits 42 (CTest "Skipped") where there isn't one. References are
 # GPU-specific, so this is a local pre-push check, not a hard cross-hardware gate.
 if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
+    # The setup step of the fixture vulkan_pipelines, which every Vulkan test
+    # here requires (the loop at the end of this block): it builds the
+    # pipelines they share once, before any of them starts, so that after a
+    # shader edit the cold compiles run there, in parallel, rather than in
+    # whichever tests reach them first (VulkanPipelineWarmup.cpp has the
+    # details). A few seconds when warm. CTest adds it to any run that selects
+    # a test requiring it; `ctest -FS vulkan_pipelines` leaves it out.
+    add_executable(VulkanPipelineWarmup VulkanPipelineWarmup.cpp)
+    target_link_libraries(VulkanPipelineWarmup PRIVATE threepp)
+    add_test(NAME VulkanPipelineWarmup COMMAND VulkanPipelineWarmup)
+    set_tests_properties(VulkanPipelineWarmup PROPERTIES FIXTURES_SETUP vulkan_pipelines)
+
     # The validation layer. Four tests turn it on themselves, because the layer
     # is what detects their bug: VulkanValidation (and _nort), FreedMesh,
     # SplatViewGrow and SpriteTextureReuse. The others check for zero
@@ -613,4 +625,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(SensorBackendParity_test PROPERTIES
             SKIP_RETURN_CODE 42
             SKIP_REGULAR_EXPRESSION "WGL: The driver does not appear to support OpenGL")
+
+    # Every test above that opens a Vulkan device waits for the warm-up. The
+    # CPU-only ones (RenderGraph, TransientPool, EdgeRefine, the SPIR-V and
+    # ocean CPU checks) do not need it and start at once.
+    get_property(_vk_tests DIRECTORY PROPERTY TESTS)
+    foreach (_vk_test IN LISTS _vk_tests)
+        if (_vk_test MATCHES "^(Vulkan|SensorBackendParity|SplatOverlayOcclusion|OceanFftShared)"
+                AND NOT _vk_test STREQUAL "VulkanPipelineWarmup")
+            set_tests_properties(${_vk_test} PROPERTIES FIXTURES_REQUIRED vulkan_pipelines)
+        endif ()
+    endforeach ()
+    unset(_vk_tests)
 endif ()

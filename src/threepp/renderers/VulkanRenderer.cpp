@@ -2271,6 +2271,16 @@ namespace threepp {
         return core()->ctx->rayQuerySupported();
     }
 
+    std::size_t VulkanRenderer::prewarmShadePermutations(unsigned maxThreads) {
+        auto& shade = core()->primaryView().deferredShade_;
+        if (!shade) return 0;
+        const std::size_t built = shade->prewarmPermutations(maxThreads);
+        // Whatever this renderer compiled so far, not only the permutations:
+        // a no-op when the cache has not grown since the last save.
+        core()->ctx->savePipelineCacheNow();
+        return built;
+    }
+
     void VulkanRenderer::setDlss(bool enabled) {
         core()->setDlss(enabled);
     }

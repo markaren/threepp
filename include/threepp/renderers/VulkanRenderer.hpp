@@ -738,6 +738,20 @@ namespace threepp {
         // throws.
         [[nodiscard]] bool rayTracingSupported() const;
 
+        // Builds, on worker threads, every deferred-shade permutation this
+        // machine has built before and this renderer has not, then saves the
+        // pipeline cache with all this renderer has compiled so far (nothing is
+        // written when that has not changed since the last save). The list of
+        // permutations is a text file beside the cache in the temp
+        // directory (threepp_pipeline_cache.<device>.shade_history.txt), kept
+        // across shader builds. After a shader edit each permutation is the
+        // full compile, minutes each on a laptop, and the first frame that
+        // needs one otherwise pays it on the render thread; this pays them
+        // all at once, in parallel. A permutation the
+        // cache holds takes about a millisecond. maxThreads 0 is half the
+        // hardware threads. Returns the number built.
+        std::size_t prewarmShadePermutations(unsigned maxThreads = 0);
+
         // ── Shadows ──────────────────────────────────────────────────────
         // How the sun (directional light 0) and the point and spot lamps
         // shadow the surfaces the camera sees, the water, the fog and the lit
