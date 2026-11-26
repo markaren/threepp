@@ -68,6 +68,7 @@ namespace threepp::vulkan {
         float posRadius[4];
         float rates[4];// x density / s, y temperature / s, z velocity blend / s, w fuel / s
         float vel[4];
+        float force[4];// xyz m/s^2 at the centre: the force over the mass of air the weight spreads it on; w unused
     };
     struct SmokeGpuCollider {
         float a[4];
@@ -89,7 +90,7 @@ namespace threepp::vulkan {
         SmokeGpuCollider col[kSmokeMaxColliders];
         SmokeGpuBox      box[kSmokeMaxBoxes];
     };
-    static_assert(sizeof(SmokeGpuParams) == 16 + 32 + kSmokeMaxSources * 48 + kSmokeMaxColliders * 48 + kSmokeMaxBoxes * 48, "SmokeGpuParams layout drift");
+    static_assert(sizeof(SmokeGpuParams) == 16 + 32 + kSmokeMaxSources * 64 + kSmokeMaxColliders * 48 + kSmokeMaxBoxes * 48, "SmokeGpuParams layout drift");
 
     // Mirrors `Pc` in shaders/smoke_glow.comp.
     struct SmokeGlowPc {

@@ -132,11 +132,13 @@ void main() {
         const vec3 w = worldOfFace(a, c);
         // The wind's eddies: the air is drawn toward them at their own turnover rate (speed / size).
         if (pc.turb.x > 0.0) u = mix(u, gustAxis(a, w), 1.0 - exp(-dt * pc.turb.x / pc.turb.y));
-        // Sources pull the air toward their own velocity.
+        // Sources pull the air toward their own velocity, and push it with their force (the host made it an
+        // acceleration whose weighted sum over the faces is the force: ParticleField.hpp, A SOURCE).
         for (int i = 0; i < ns; ++i) {
             const float k = sourceWeight(i, w);
             if (k <= 0.0) continue;
             u = mix(u + pc.wind[a], src[i].vel[a], clamp(k * src[i].rates.z * dt, 0.0, 1.0)) - pc.wind[a];
+            u += src[i].force[a] * k * dt;
         }
         // Drag pulls the air toward the wind; the speed cap holds each component.
         u *= 1.0 / (1.0 + pc.phys1.z * dt);

@@ -55,6 +55,7 @@ struct Source {
     vec4 posRadius;// xyz world, w radius (m)
     vec4 rates;    // x density / s, y temperature / s, z velocity blend / s, w fuel / s
     vec4 vel;      // xyz emission velocity (m/s), w noise amplitude (0..1)
+    vec4 force;    // xyz m/s^2 at the centre (the host's force over the air the weight spreads it on), w unused
 };
 struct Collider {
     vec4 a;  // xyz capsule end A (world), w radius

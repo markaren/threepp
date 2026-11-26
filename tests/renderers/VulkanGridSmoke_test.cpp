@@ -1030,6 +1030,125 @@ namespace {
         check(none, "J: with lightScale 0 the fire adds no light");
     }
 
+    // ── K: a source's force is the momentum the air gets ─────────────────────
+    // A push in still air with every face of the box open: the projection's pressure is zero outside, so its
+    // gradient sums to nothing over the box (each line of faces telescopes to the two outside values) and it only
+    // moves momentum around. With nothing else acting on the air (no buoyancy, confinement, eddies or drag) the
+    // air's momentum is then the force times the time it has pushed, while the jet is still inside the box. That
+    // is what makes `force` a fan: a pull (`velocity`) gives the air whatever the relaxation leaves it.
+    void caseRotorWake(Rig& rig);
+
+    void caseForce(Rig& rig) {
+        std::printf("\n== K  force: a 2 N push down in still, open air, 64^3 ==\n");
+        Sim   sim(rig, Vector3(0.f, 0.f, 0.f), Vector3(1.5f, 1.5f, 1.5f), 64);
+        auto& gs        = sim.gs();
+        gs.solidFloor   = false;
+        gs.buoyancy     = 0.f;
+        gs.weight       = 0.f;
+        gs.vorticity    = 0.f;
+        gs.turbulence   = 0.f;
+        gs.damping      = 0.f;
+        gs.dissipation  = 0.f;
+        gs.cooling      = 0.f;
+        gs.boundaryFade = 0.f;
+        gs.maxSpeed     = 100.f;
+        ParticleField::GridSmoke::Source s;
+        s.position      = Vector3(0.f, 0.7f, 0.f);
+        s.radius        = 0.25f;// 5.3 cells
+        s.density       = 0.f;
+        s.temperature   = 0.f;
+        s.velocityBlend = 0.f;
+        s.noise         = 0.f;
+        s.force         = Vector3(0.f, -2.f, 0.f);
+        gs.sources.push_back(s);
+        // The air's momentum on each axis: every face carries the air of one cell's volume.
+        const auto momentum = [&](const State& st, double p[3], double& vmax) {
+            const View v = sim.view(st);
+            p[0] = p[1] = p[2] = vmax = 0.0;
+            for (int a = 0; a < 3; ++a)
+                for (int k = 0; k < v.n + (a == 2); ++k)
+                    for (int j = 0; j < v.n + (a == 1); ++j)
+                        for (int i = 0; i < v.n + (a == 0); ++i) {
+                            const double u = v.stored(a, i, j, k);
+                            p[a] += u;
+                            vmax = std::max(vmax, std::abs(u));
+                        }
+            const double rhoV = double(ParticleField::GridSmoke::kAirDensity) * v.cellVolume();
+            for (int a = 0; a < 3; ++a) p[a] *= rhoV;
+        };
+        // Early, while the jet is slow, nothing but the push and the projection has touched the momentum. Later
+        // the advection, which does not keep momentum exactly (a semi-Lagrangian MacCormack step), drifts it a few
+        // per cent as the jet speeds past two cells a step.
+        double early = 0.0, sideways = 0.0, late = 0.0, vmax = 0.0;
+        for (int steps : {6, 18}) {
+            sim.runTo(steps);
+            State st;
+            if (!sim.read(st)) {
+                check(false, "K: the solver state reads back");
+                return;
+            }
+            double p[3];
+            momentum(st, p, vmax);
+            const double impulse = double(s.force.y) * steps * kDt;
+            const double err     = (p[1] - impulse) / std::abs(impulse);
+            std::printf("  after %2d steps (%.2f s): momentum (%.4f, %.4f, %.4f) kg m/s, force x time %.4f (%+.2f %%), "
+                        "fastest face %.2f m/s\n",
+                        steps, steps * kDt, p[0], p[1], p[2], impulse, 100.0 * err, vmax);
+            if (steps == 6) early = std::abs(err);
+            else late = std::abs(err);
+            sideways = std::max(sideways, std::max(std::abs(p[0]), std::abs(p[2])) / std::abs(impulse));
+        }
+        check(early <= 0.01, "K: the push gives the air the force times the time it pushed (to 1 % at 0.1 s)");
+        check(late <= 0.06, "K: and the advection leaves it within 6 % by 0.3 s, the jet at 7 m/s");
+        check(sideways <= 0.01, "K: none of it goes sideways (under 1 % of it on each other axis)");
+        caseRotorWake(rig);
+    }
+
+    // A rotor as a push: an M350 rotor's hover thrust (17.9 N, the 21 in prop, R 0.267 m) on a ball of 1.7 R. The
+    // weight is heaviest at the ball's centre, so a ball drives its air like a disc about 0.6 of its radius: at 1.7 R
+    // the wake leaves at momentum theory's far-wake speed, 2 v_i = 2 sqrt(T / (2 rho pi R^2)) (ParticleField.hpp,
+    // A SOURCE). Measured on the axis 2 R and 4 R below the centre, 0.5 s on, the jet's front well clear of the box.
+    void caseRotorWake(Rig& rig) {
+        const float R = 0.2667f, T = 17.9f;
+        const float vi = std::sqrt(T / (2.f * ParticleField::GridSmoke::kAirDensity * 3.14159265f * R * R));
+        std::printf("  a rotor: %.1f N on a ball of 1.7 R (R %.3f m) in a 6 m box, 128^3; momentum theory's far wake "
+                    "2 v_i = %.2f m/s\n", T, R, 2.f * vi);
+        Sim   sim(rig, Vector3(0.f, 0.f, 0.f), Vector3(3.f, 3.f, 3.f), 128);
+        auto& gs      = sim.gs();
+        gs.solidFloor = false;
+        gs.buoyancy = gs.weight = gs.vorticity = gs.turbulence = gs.damping = gs.dissipation = gs.cooling = 0.f;
+        gs.boundaryFade = 0.f;
+        gs.maxSpeed     = 100.f;
+        ParticleField::GridSmoke::Source s;
+        s.position      = Vector3(0.f, 1.5f, 0.f);
+        s.radius        = 1.7f * R;
+        s.density       = 0.f;
+        s.temperature   = 0.f;
+        s.velocityBlend = 0.f;
+        s.noise         = 0.f;
+        s.force         = Vector3(0.f, -T, 0.f);
+        gs.sources.push_back(s);
+        sim.runTo(30);
+        State st;
+        if (!sim.read(st)) {
+            check(false, "K: the rotor's solver state reads back");
+            return;
+        }
+        const View v = sim.view(st);
+        // The downward speed of the faces round the axis at a height, the mean of a 3 x 3 patch.
+        const auto wake = [&](float below) {
+            const int c = v.n / 2, j = int(std::lround((s.position.y - below - v.lo.y) / v.cell.y));
+            double    sum = 0.0;
+            for (int dk = -1; dk <= 1; ++dk)
+                for (int di = -1; di <= 1; ++di) sum -= v.stored(1, c + di, j, c + dk);
+            return sum / 9.0;
+        };
+        const double w2 = wake(2.f * R), w4 = wake(4.f * R);
+        std::printf("  after 30 steps (0.50 s): the wake on the axis %.2f m/s 2 R below, %.2f m/s 4 R below\n", w2, w4);
+        check(std::abs(w2 - 2.0 * vi) <= 0.1 * 2.0 * vi && std::abs(w4 - 2.0 * vi) <= 0.1 * 2.0 * vi,
+              "K: a rotor's thrust pushed on a ball of 1.7 R leaves at momentum theory's far-wake speed (to 10 %)");
+    }
+
 }// namespace
 
 int main(int argc, char** argv) {
@@ -1073,6 +1192,7 @@ int main(int argc, char** argv) {
     if (want('H')) caseBurnLimits(rig);
     if (want('I')) caseExpansion(rig);
     if (want('J')) caseFireLight(rig);
+    if (want('K')) caseForce(rig);
 
     std::printf("\n");
     if (vulkan::validationActive()) {

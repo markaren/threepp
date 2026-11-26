@@ -606,6 +606,26 @@ namespace threepp {
         // A collider's `velocity` is what it carries the air with: set it to the
         // body's own motion, or it stands still for the smoke.
         //
+        // A SOURCE adds smoke, heat and fuel at its rates and moves the air two
+        // ways. `velocity` is a PULL: the air in the ball is drawn toward it at
+        // `velocityBlend` per second (an emission's own speed, a chimney's
+        // draught, the slow breath through a bed of coals). Air that crosses the
+        // ball in less than about 1 / velocityBlend keeps most of its own speed,
+        // so a pull is not a fan: a jet fed by one leaves with a fraction of the
+        // momentum its velocity names, and the faster the jet the smaller the
+        // fraction. `force` is a PUSH: newtons on the air in the ball (of
+        // kAirDensity), spread by the same weight as the rates, so the air leaves
+        // with that momentum however fast it crosses. A fan, a rotor (thrust T
+        // pushes the air with -T along the rotor's axis: the wake, its speed and
+        // its contraction are then the solver's), a nozzle. The weight is
+        // heaviest at the centre, so a ball drives its air like a disc about 0.6
+        // of its radius: for a rotor of radius R give it about 1.7 R, and the
+        // wake leaves at momentum theory's far-wake speed, 2 sqrt(T / (2 rho pi
+        // R^2)) (smaller, the jet is narrower and faster for the same momentum).
+        // Give the ball a few cells of radius (at two cells it delivers the force
+        // to 2 %, at four to 0.2 %); what lands inside a collider or a wall is
+        // lost, since the solid holds its air at its own velocity.
+        //
         // FIRE. Besides smoke and heat the air carries FUEL (unburnt gas, which
         // a source's `fuel` adds and nothing renders) and how much of its OXYGEN
         // is used up. Every step, after the sources, each cell burns: where the
@@ -656,9 +676,10 @@ namespace threepp {
                 float   density        = 4.f; // density added per second at the centre
                 float   temperature    = 3.f; // temperature added per second at the centre
                 float   fuel           = 0.f; // fuel added per second at the centre (0: a smoke source)
-                Vector3 velocity{0.f, 1.5f, 0.f};// m/s the air is pulled toward
+                Vector3 velocity{0.f, 1.5f, 0.f};// m/s the air is pulled toward (a pull, not a fan: A SOURCE above)
                 float   velocityBlend  = 4.f; // 1/s: how hard it is pulled
                 float   noise          = 0.6f;// 0..1 raggedness of the emission
+                Vector3 force{0.f, 0.f, 0.f};   // N pushed into the air in the ball: a fan, a rotor (A SOURCE above)
             };
             struct Collider {// a capsule; a = b is a sphere
                 Vector3 a{0.f, 0.f, 0.f};
@@ -721,6 +742,7 @@ namespace threepp {
             // Kelvin per temperature unit, above the fixed ambient: what the glow sees (blackbody, DensityRepr).
             float temperatureScale    = 600.f;
             static constexpr float kAmbientKelvin = 293.f;
+            static constexpr float kAirDensity    = 1.2f;// kg/m^3: the air a source's force pushes
             // ── the fire's light (see THE FIRE'S LIGHT above) ───────────────
             float lightScale      = 1.f; // share of the glow's physical light the fire throws (0: none)
             bool  lightCastShadow = true;// the fire's lights cast shadows (their castShadow)

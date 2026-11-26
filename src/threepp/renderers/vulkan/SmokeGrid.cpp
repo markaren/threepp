@@ -380,6 +380,17 @@ SmokePlan SmokeGrid::plan(const ParticleField& field, std::uint32_t frame, std::
         g.vel[1]       = s.velocity.y;
         g.vel[2]       = s.velocity.z;
         g.vel[3]       = std::clamp(s.noise, 0.f, 1.f);
+        // The push, as the acceleration of the ball's centre: the force over the mass of air the weight spreads it
+        // on, kAirDensity times the weight's integral over the ball (1 - smoothstep(d / r): 4 pi r^3 / 15). The
+        // faces' sum is that integral to 2 % at two cells of radius, 0.2 % at four, so the momentum the air gets
+        // is the force's.
+        const float r      = g.posRadius[3];
+        const float perAir = 15.f / (ParticleField::GridSmoke::kAirDensity * 4.f * 3.14159265f * r * r * r);
+        const auto  push   = [&](float f) { return std::isfinite(f) ? f * perAir : 0.f; };
+        g.force[0]         = push(s.force.x);
+        g.force[1]         = push(s.force.y);
+        g.force[2]         = push(s.force.z);
+        g.force[3]         = 0.f;
     }
     for (size_t i = 0; i < nc; ++i) {
         const auto& c = gs.colliders[i];
