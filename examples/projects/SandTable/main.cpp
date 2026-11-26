@@ -775,7 +775,7 @@ int main(int argc, char** argv) {
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFC;
     // a frame draws the scene more than once; the shadows are the same in all of them
-    renderer.shadowMapAutoUpdate = false;
+    renderer.shadowMap().autoUpdate = false;
 
     const Color backdrop(0x14171b);
     Scene scene;

@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
     // for the image, and again for the depths and normals that the post chain
     // works from. The shadows are the same in all of them, and the floor's
     // mirror image is only wanted in the image, so both are made once a frame.
-    renderer.shadowMapAutoUpdate = false;
+    renderer.shadowMap().autoUpdate = false;
     bool mirrorDue = false;
     polish->onBeforeRender = RenderCallback([&mirrorDue, mirror = *polish->onBeforeRender](void* r, Object3D* scene, Camera* camera, BufferGeometry* geometry, Material* material, std::optional<GeometryGroup> group) {
         if (!mirrorDue) return;

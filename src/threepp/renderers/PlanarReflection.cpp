@@ -231,7 +231,7 @@ bool PlanarReflection::render(Renderer& renderer, Object3D& scene, Camera& camer
     // shadow maps (already rendered for this frame, and a light's map does
     // not depend on the camera), the hidden objects, the background.
     auto* currentTarget = renderer.getRenderTarget();
-    const bool shadowAutoUpdate = renderer.shadowMapAutoUpdate;
+    const bool shadowAutoUpdate = renderer.shadowMap().autoUpdate;
     Color clearColor;
     renderer.getClearColor(clearColor);
     const float clearAlpha = renderer.getClearAlpha();
@@ -255,7 +255,7 @@ bool PlanarReflection::render(Renderer& renderer, Object3D& scene, Camera& camer
         asScene->background = Background();
     }
 
-    renderer.shadowMapAutoUpdate = false;
+    renderer.shadowMap().autoUpdate = false;
     // Transparent black: the material's mix falls back to the environment
     // wherever nothing was drawn.
     renderer.setClearColor(Color(0, 0, 0), 0.f);
@@ -267,7 +267,7 @@ bool PlanarReflection::render(Renderer& renderer, Object3D& scene, Camera& camer
 
     renderer.setRenderTarget(currentTarget);
     renderer.setClearColor(clearColor, clearAlpha);
-    renderer.shadowMapAutoUpdate = shadowAutoUpdate;
+    renderer.shadowMap().autoUpdate = shadowAutoUpdate;
 
     if (asScene && !options.background) {
         asScene->background = background;

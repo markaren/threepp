@@ -394,9 +394,7 @@ struct GLRenderer::Impl {
 
         auto& shadowsArray = currentRenderState->getShadowsArray();
 
-        shadowMap.autoUpdate = scope.shadowMapAutoUpdate;
         shadowMap.render(scope, shadowsArray, scene, camera);
-        scope.shadowMapAutoUpdate = shadowMap.autoUpdate;
 
         currentRenderState->setupLights();
         currentRenderState->setupLightsView(camera);

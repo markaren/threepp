@@ -40,8 +40,6 @@ namespace threepp {
 
         bool sortObjects = true;
 
-        bool shadowMapAutoUpdate = true;
-
         std::vector<Plane> clippingPlanes;
         bool localClippingEnabled = false;
 

@@ -258,10 +258,10 @@ struct Water::Impl {
             eye.setFromMatrixPosition(*camera->matrixWorld);// Render
 
             const auto currentRenderTarget = _renderer->getRenderTarget();
-            const auto currentShadowAutoUpdate = _renderer->shadowMapAutoUpdate;
+            const auto currentShadowAutoUpdate = _renderer->shadowMap().autoUpdate;
             water_.visible = false;
 
-            _renderer->shadowMapAutoUpdate = false;// Avoid re-computing shadows
+            _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
 
             _renderer->setRenderTarget(renderTarget.get());
             _renderer->setDepthMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
@@ -269,7 +269,7 @@ struct Water::Impl {
             if (!_renderer->autoClear) _renderer->clear();
             _renderer->render(*scene, *mirrorCamera);
             water_.visible = true;
-            _renderer->shadowMapAutoUpdate = currentShadowAutoUpdate;
+            _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
         });
 

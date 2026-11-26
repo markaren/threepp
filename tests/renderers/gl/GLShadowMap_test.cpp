@@ -26,6 +26,7 @@ namespace {
     struct ShadowScene {
         std::shared_ptr<Scene> scene;
         std::shared_ptr<PerspectiveCamera> camera;
+        std::shared_ptr<Mesh> box;// the caster
     };
 
     enum class Sun { Directional,
@@ -73,7 +74,7 @@ namespace {
         camera->position.set(0, 7, 9);
         camera->lookAt(Vector3{0, 0, 0});
 
-        return {scene, camera};
+        return {scene, camera, box};
     }
 
     std::vector<unsigned char> renderOnce(GLRenderer& renderer, ShadowScene& s) {
@@ -191,6 +192,60 @@ TEST_CASE("Shadows come back when shadowMap.enabled is turned on again") {
 
     INFO("dark pixels: off first = " << darkOff << ", then on = " << darkOn);
     CHECK(darkOn > darkOff);
+
+    renderer.dispose();
+}
+
+// shadowMap().autoUpdate = false draws the shadow map only when needsUpdate asks
+// for it, as in three.js, so a frame that renders the scene several times (a
+// sensor's cube faces, a mirror, a post pass) draws its shadows once. The
+// renderer used to copy a field of its own, shadowMapAutoUpdate, over this flag
+// at every render, so setting it here was undone before it was read.
+TEST_CASE("With shadowMap().autoUpdate off, the shadow map is redrawn only when asked") {
+
+    auto s = makeShadowScene();
+
+    GLRenderer renderer(glCanvas());
+    renderer.shadowMap().enabled = true;
+    renderer.shadowMap().autoUpdate = false;
+    renderer.shadowMap().needsUpdate = true;
+
+    const int asked = countDarkPixels(renderOnce(renderer, s));
+    REQUIRE(asked > 0);// the requested update drew the box's shadow
+    CHECK_FALSE(renderer.shadowMap().autoUpdate);
+    CHECK_FALSE(renderer.shadowMap().needsUpdate);
+
+    // The box stops casting and nobody asks for an update: the map still holds
+    // the box, so its shadow stays on the floor.
+    s.box->castShadow = false;
+    const int notAsked = countDarkPixels(renderOnce(renderer, s));
+
+    // Asked again, the map is drawn without the box and the shadow goes.
+    renderer.shadowMap().needsUpdate = true;
+    const int askedAgain = countDarkPixels(renderOnce(renderer, s));
+
+    INFO("dark pixels: first update " << asked << ", not asked " << notAsked << ", asked again " << askedAgain);
+    CHECK(notAsked > asked * 9 / 10);
+    CHECK(askedAgain < asked / 2);
+
+    renderer.dispose();
+}
+
+TEST_CASE("With shadowMap().autoUpdate on, every render redraws the shadow map") {
+
+    auto s = makeShadowScene();
+
+    GLRenderer renderer(glCanvas());
+    renderer.shadowMap().enabled = true;
+
+    const int casting = countDarkPixels(renderOnce(renderer, s));
+    REQUIRE(casting > 0);
+
+    s.box->castShadow = false;
+    const int notCasting = countDarkPixels(renderOnce(renderer, s));
+
+    INFO("dark pixels: casting " << casting << ", then not casting " << notCasting);
+    CHECK(notCasting < casting / 2);
 
     renderer.dispose();
 }
