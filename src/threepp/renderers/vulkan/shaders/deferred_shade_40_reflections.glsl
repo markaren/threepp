@@ -1144,6 +1144,78 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     return radiance;
 }
 
+// The direct light leaving a GI hit toward the surface the ray came from (V):
+// giHitDirect's diffuse (the same loops, the same pick, the same emitter NEE),
+// and where `glossy` the specular lobe of the sun and the lamps, on the same
+// shadow ray (evalLight with no albedo; F0 = mix(0.04, albedo, metalness), so a
+// metal reflects instead of reading black). The roughness the caller passes is
+// floored at kGiSpecRoughFloor: a 1-spp gather ray that lands on a mirror just
+// inside a lamp's glint brings back the lamp, a spike no denoiser averages away,
+// so the bounce is roughened, as path tracers do on their later bounces; the
+// lobe keeps its energy, its peak spreads. The emitters' specular is left out:
+// emissiveSpecNEE at every GI hit cost 0.15-0.65 ms of the shade (540 rows) for
+// about a point of accuracy in emitter-lit rooms, where the sun and lamps' lobe
+// costs under 0.05 ms. giHitDirect stays as it is for the probe rays.
+const float kGiSpecRoughFloor = 0.3;
+vec3 giHitLit(vec3 hitP, vec3 hitN, vec3 shadowOrig, vec3 diff, bool glossy, vec3 V, vec3 F0, float rough,
+              bool doShadows, inout uint seed) {
+    vec3 lit = vec3(0.0);
+    const float NdotV = max(dot(hitN, V), 1e-4);
+    const float k     = (rough + 1.0) * (rough + 1.0) / 8.0;
+    const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
+    const bool pickOne = nLights > 8u;
+    float wL = 1.0;
+    const uint pick = pickOne ? pickAnalyticLight(hitP, seed, wL) : 0xFFFFFFFFu;
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        if (pickOne && i != pick) continue;
+        vec3        L   = normalize(lights.dirLights[i].direction);
+        const vec3  leg = giSunLeg(hitP, L);
+        const float ndl = dot(hitN, L);
+        if (ndl <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
+        const vec3  rad = lights.dirLights[i].color * (vis * wL * leg);
+        lit += diff * ndl * rad;
+        if (glossy) lit += evalLight(hitN, V, L, NdotV, F0, vec3(0.0), rough, 0.0, k, vec3(0.0), 0.0) * rad;
+    }
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        if (pickOne && (lights.dirCount + i) != pick) continue;
+        vec3        toL  = lights.pointLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        float atten = 1.0 / max(distFalloff(dist, lights.pointLights[i].decay), 0.01);
+        atten *= lightRangeWindow(dist, lights.pointLights[i].range);
+        if (atten <= 1e-6) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        const vec3  rad = lights.pointLights[i].color * (atten * vis * wL);
+        lit += diff * ndl * rad;
+        if (glossy) lit += evalLight(hitN, V, toL, NdotV, F0, vec3(0.0), rough, 0.0, k, vec3(0.0), 0.0) * rad;
+    }
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        if (pickOne && (lights.dirCount + lights.pointCount + i) != pick) continue;
+        vec3        toL  = lights.spotLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter, lights.spotLights[i].cosAngleInner,
+                                           dot(-toL, lights.spotLights[i].direction));
+        if (spotAtten <= 0.0) continue;
+        float atten = spotAtten / max(distFalloff(dist, lights.spotLights[i].decay), 0.01);
+        atten *= lightRangeWindow(dist, lights.spotLights[i].range);
+        if (atten <= 1e-6) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        const vec3  rad = lights.spotLights[i].color * (atten * vis * wL);
+        lit += diff * ndl * rad;
+        if (glossy) lit += evalLight(hitN, V, toL, NdotV, F0, vec3(0.0), rough, 0.0, k, vec3(0.0), 0.0) * rad;
+    }
+    lit += diff * emissiveIrradiance(hitP, hitN, 2, doShadows, seed);
+    return lit;
+}
+
 // CHEAP 1-bounce diffuse GI — replaces the recursive traceRadiance on the GI
 // path. One ray; on a hit, shade with ONLY direct sun/point/spot (one shadow ray
 // each) + the hit's own emissive + a small-sample emitter NEE. NO specular lobe
@@ -1205,9 +1277,25 @@ vec3 giRadiance(vec3 origin, vec3 orgN, vec3 dir, bool doShadows, float maxLod, 
     // that's legitimate INDIRECT. Same principle as gSuppressReflEmitter for reflections.
     // Was `lit = hEmissive`, which over-brightened every emitter-lit surface (worst where
     // GI rays point at the emitter — e.g. a floor under it = the floor>wall over-count).
-    // Analytic lights + emitter NEE at the hit (gi_bounce.glsl, shared with
-    // the probe rays).
-    vec3 lit = giHitDirect(hitP, hitN, shadowOrig, diff, doShadows, seed);
+    // Analytic lights + emitter NEE at the hit: giHitLit, giHitDirect's diffuse
+    // (which the probe rays share) and the glossy lobe below.
+    // GLOSSY BOUNCE: the hit's specular lobe toward the surface the ray left,
+    // metals included, on the shadow rays the diffuse traces. Lambert alone
+    // dropped every glint the sun and the lamps make off varnish, tile and metal,
+    // and the bounce saw a metal as black: the research scenes' classroom, its
+    // sun on varnished desks, read 29.5 % median error against the path tracer,
+    // 21.6 % with the lobe, for under 0.05 ms. Water is left to the reflection
+    // path: its glint would be a lone spike in a diffuse gather.
+    const bool glossy = geoms[hitId].foamAddress == 0ul;
+    float hRough = 1.0;
+    if (glossy) {
+        hRough = clamp(hm.roughness, 0.0, 1.0);
+        if (hm.roughnessTexIndex >= 0)
+            hRough *= textureLod(albedoMaps[nonuniformEXT(clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
+                                 (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
+    }
+    vec3 lit = giHitLit(hitP, hitN, shadowOrig, diff, glossy, -dir, mix(vec3(0.04), hAlbedo, hMetal),
+                        max(hRough, kGiSpecRoughFloor), doShadows, seed);
     // PROBE GRID (multi-bounce, on by default): the hit's INDIRECT irradiance from
     // the world-space SH-L1 cache — the bounce 2..∞ light plus the sky the
     // hit actually sees (probe rays that escape through real openings). The

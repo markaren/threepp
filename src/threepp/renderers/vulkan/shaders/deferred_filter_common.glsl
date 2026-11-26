@@ -69,7 +69,9 @@ layout(push_constant) uniform Pc {
     uint width; uint height; uint step;
     uint srcMode;// 0 = indirect (raw, pass 0), 1 = atrousA, 2 = atrousB
     uint dstMode;// 0 = atrousA, 1 = atrousB, 2 = recombine → sceneHdr
-    uint feedback;// 1 = also write src (the 1st-pass filtered) back as temporal history
+    uint reserved6;// RESERVED / UNUSED - was the history feedback, which no filter
+                   // does any more (deferred_gi_filter's note on it). Kept so the
+                   // block keeps its layout, as `channel` below.
     uint channel;// RESERVED / UNUSED - the GI-vs-reflection choice is now the
                  // pipeline (deferred_gi_filter vs deferred_refl_filter), not
                  // this slot. Kept so the 10-uint/40-byte block stays byte-for-
