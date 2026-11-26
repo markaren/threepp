@@ -2662,6 +2662,10 @@ class DisplacedMesh(Mesh):
         """
         Combined wave height (m) at a world XZ. cascade_mask selects cascades (bit i = cascade i). Returns 0 until a Vulkan render() has run.
         """
+    def sample_heights(self, world_x: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], world_z: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], cascade_mask: typing.SupportsInt | typing.SupportsIndex = 7) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        sample_height at many points in one call: world_x and world_z are 1-D arrays of one length, and the result is a float32 array of the heights (m), each exactly what sample_height returns at its point. The points are shared out over threepp's thread pool, so a hull's or a fleet's points cost one call instead of one each.
+        """
     def set_external_cascade(self, cascade: typing.SupportsInt | typing.SupportsIndex, height: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], disp: typing.Any = None) -> None:
         """
         Supply cascade 0, 1 or 2 yourself instead of its spectrum and inverse FFT: `height` is an N x N float32 array in metres (N = the cascade's texture size), row j along z, column i along x, the centre of texel (i, j) over the ocean's XZ at (i + 0.5, j + 0.5) * tile_size / N, periodic over the tile (cascade 1 in its rotated domain); `disp` is the horizontal displacement, N x N x 2 (x, z) in metres, or None for none. The drawn sea is the height times wave_scale and the displacement times the choppiness, as for the built-in waves; displacement, normals, crest foam, the traced surface and sample_height all follow the supplied field. The field is uploaded every frame as it stands, so call this again for each new instant.

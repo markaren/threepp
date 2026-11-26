@@ -877,8 +877,21 @@ namespace threepp {
         float sampleHeight(float worldX, float worldZ,
                            uint32_t cascadeMask = 0b111u) const;
 
+        // sampleHeight at `count` points at once: out[i] = sampleHeight(x[i],
+        // z[i], cascadeMask), bit for bit. The points are independent, so
+        // they are shared out over threepp::ThreadPool::shared(), and one call
+        // in place of `count` saves a binding's per-call cost (Python:
+        // sample_heights). Not concurrently with the renderer's update of the
+        // mirror, as sampleHeight.
+        void sampleHeights(const float* x, const float* z, float* out, size_t count,
+                           uint32_t cascadeMask = 0b111u) const;
+
     private:
         WaveClimate waveClimate_;
+
+        // sampleHeight's work at one point, without its opt-in write, so
+        // that sampleHeights can run it from several threads at once.
+        [[nodiscard]] float heightAt(float worldX, float worldZ, uint32_t cascadeMask) const;
     };
 
 }// namespace threepp

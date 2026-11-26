@@ -5,6 +5,7 @@
 // (pure constants + a POD struct); including it here keeps CPU/GPU parity
 // literal-exact.
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"
+#include "threepp/utils/ThreadPool.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -216,7 +217,19 @@ namespace threepp {
         // frame has recorded the copies and its fence has retired — the
         // mirror's fixed kFramesInFlight-frame latency (see the header).
         wantsHeightReadback = true;
+        return heightAt(worldX, worldZ, cascadeMask);
+    }
 
+    void DisplacedMesh::sampleHeights(const float* x, const float* z, float* out, size_t count,
+                                      uint32_t cascadeMask) const {
+        // the opt-in once, here: heightAt runs on several threads and writes nothing shared
+        wantsHeightReadback = true;
+        ThreadPool::shared().parallelFor(0, static_cast<int>(count), [&](int i) {
+            out[i] = heightAt(x[i], z[i], cascadeMask);
+        });
+    }
+
+    float DisplacedMesh::heightAt(float worldX, float worldZ, uint32_t cascadeMask) const {
         // World-space horizontal displacement D(q) of the selected cascades at
         // rest position q, choppiness applied. Under the Choppy Wave Model it
         // is the full displacement (choppiness 1); the shader's per-vertex

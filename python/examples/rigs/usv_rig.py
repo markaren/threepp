@@ -170,6 +170,16 @@ def slew(x, target, rate, dt):
     return x + max(-rate * dt, min(rate * dt, target - x))
 
 
+def sea_heights(ocean, xs, zs, mask):
+    """The sea's height (m) at world (xs[i], zs[i]), float64: one call where the ocean has
+    sample_heights (threepp's Ocean: exactly what sample_height gives at each point), else
+    sample_height point by point (a stand-in sea)."""
+    batched = getattr(ocean, "sample_heights", None)
+    if batched is not None:
+        return np.asarray(batched(xs, zs, mask), dtype=np.float64)
+    return np.array([ocean.sample_height(float(x), float(z), mask) for x, z in zip(xs, zs)], dtype=np.float64)
+
+
 # --------------------------------------------------------------------------- #
 #  The hull on her strips
 # --------------------------------------------------------------------------- #
@@ -278,7 +288,7 @@ class StripHull:
 
     def sample_water(self):
         self.pts = pts = self.probe_points()
-        self.water = np.array([self.ocean.sample_height(float(x), float(z), self.mask) for x, _, z in pts])
+        self.water = sea_heights(self.ocean, pts[:, 0], pts[:, 2], self.mask)
         return pts
 
     def seat(self, x, z, heading):
@@ -1190,13 +1200,9 @@ class Wash:
         xs = np.linspace(L["x_transom"] + 0.3, L["x_stem"] - 0.25, self.WL_STATIONS)
         bx = np.interp(xs, L["x"], L["b"])
         y = np.interp(xs, L["x"], L["wl"])
-        lvl = np.empty(2 * len(xs))
-        pts = []
-        for j, side in enumerate((1.0, -1.0)):
-            for k in range(len(xs)):
-                q = h.to_world([xs[k], y[k], side * bx[k]])
-                lvl[j * len(xs) + k] = float(self.ocean.sample_height(float(q[0]), float(q[2]), h.mask)) - float(q[1])
-                pts.append(q)
+        pts = [h.to_world([xs[k], y[k], side * bx[k]]) for side in (1.0, -1.0) for k in range(len(xs))]
+        qs = np.array(pts)
+        lvl = sea_heights(self.ocean, qs[:, 0], qs[:, 2], h.mask) - qs[:, 1]
         if self.wl_state is None or dt <= 0.0:
             self.wl_state = {"lvl": lvl, "mean": lvl.copy(), "rate": np.zeros_like(lvl)}
             return

@@ -1247,6 +1247,32 @@ def test_ocean_carries_several_vessels():
     assert ship.hull_exclusion.half_beam == pytest.approx(6.0)
 
 
+@pytest.mark.skipif(not hasattr(tp, "Ocean"), reason="Ocean needs the Vulkan build")
+def test_sample_heights_is_sample_height_at_each_point(vk_renderer):
+    """sample_heights answers many points in one call, each exactly what sample_height gives there."""
+    scene = tp.Scene()
+    ocean = tp.Ocean(size=200.0, resolution=64, wind_speed=10.0, fft_size=128)
+    scene.add(ocean)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 1000)
+    cam.position.set(0, 15, 40)
+    cam.look_at(0, 0, 0)
+    ocean.sample_height(0.0, 0.0)  # arms the GPU->CPU height readback (sticky opt-in)
+    for i in range(4):
+        vk_renderer.sim_time = i / 30.0
+        vk_renderer.render(scene, cam)
+    rng = np.random.default_rng(3)
+    x = rng.uniform(-80.0, 80.0, 500)
+    z = rng.uniform(-80.0, 80.0, 500)
+    for mask in (0b111, 0b011):
+        got = ocean.sample_heights(x, z, mask)
+        assert got.dtype == np.float32 and got.shape == (500,)
+        want = np.array([ocean.sample_height(float(a), float(b), mask) for a, b in zip(x, z)])
+        assert np.array_equal(got, want)
+        assert np.ptp(got) > 0.1  # a sea, not the zeros of an unread mirror
+    with pytest.raises(ValueError):
+        ocean.sample_heights(x, z[:10])
+
+
 def test_ocean_renders_and_displaces(vk_renderer):
     scene, cam, ocean = _ocean_scene()
     # The CPU height mirror is a lazy sticky opt-in: the renderer only records

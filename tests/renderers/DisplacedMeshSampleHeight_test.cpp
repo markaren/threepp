@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <vector>
 
 using namespace threepp;
 
@@ -73,6 +74,7 @@ namespace {
 
 TEST_CASE("sampleHeight without choppiness is the height field at the query") {
     auto mesh = makeMesh();
+    mesh->params.cwm = false;// the Choppy Wave Model always draws choppiness 1
     mesh->params.choppiness = 0.f;
     mesh->params.waveScale = 1.f;
     const double a = 3.0;
@@ -114,6 +116,7 @@ TEST_CASE("sampleHeight inverts the horizontal displacement") {
 TEST_CASE("sampleHeight inverts cascade 1 in its rotated domain") {
     auto mesh = makeMesh();
     const double choppiness = 0.8;
+    mesh->params.cwm = false;// the Choppy Wave Model always draws choppiness 1
     mesh->params.choppiness = float(choppiness);
     mesh->params.waveScale = 1.f;
     const double a = 2.5;
@@ -140,4 +143,32 @@ TEST_CASE("sampleHeight inverts cascade 1 in its rotated domain") {
     CHECK(maxErr < 5e-3);
     // Masking cascade 1 out leaves no field at all.
     CHECK(mesh->sampleHeight(3.f, 4.f, 0b101u) == 0.f);
+}
+
+TEST_CASE("sampleHeights is sampleHeight at every point, bit for bit") {
+    auto mesh = makeMesh();
+    mesh->params.choppiness = 0.9f;
+    mesh->params.waveScale = 1.3f;
+    fillGerstner(mesh->heightFields[0], 2.0);
+    fillGerstner(mesh->heightFields[1], 1.5);
+    fillGerstner(mesh->heightFields[2], 0.4);
+
+    // Enough points that the pool shares them out over its threads.
+    std::vector<float> x, z;
+    for (int i = 0; i < 4000; ++i) {
+        x.push_back(-70.f + 0.0371f * float(i));
+        z.push_back(40.f * std::sin(0.013f * float(i)));
+    }
+    for (const uint32_t mask : {0b111u, 0b011u, 0b100u}) {
+        std::vector<float> batched(x.size(), -1.f);
+        mesh->sampleHeights(x.data(), z.data(), batched.data(), x.size(), mask);
+        int differ = 0;
+        for (size_t i = 0; i < x.size(); ++i) {
+            if (batched[i] != mesh->sampleHeight(x[i], z[i], mask)) ++differ;
+        }
+        INFO("mask " << mask);
+        CHECK(differ == 0);
+    }
+    // No points: nothing written, nothing read.
+    mesh->sampleHeights(nullptr, nullptr, nullptr, 0);
 }

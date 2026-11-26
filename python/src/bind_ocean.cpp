@@ -453,6 +453,22 @@ namespace threepp_py {
                      "Combined wave height (m) at a world XZ. cascade_mask selects cascades "
                      "(bit i = cascade i). Returns 0 until a Vulkan render() has run.")
                 .def(
+                        "sample_heights",
+                        [](const DisplacedMesh& o, py::array_t<float, py::array::c_style | py::array::forcecast> x,
+                           py::array_t<float, py::array::c_style | py::array::forcecast> z, uint32_t cascadeMask) {
+                            if (x.ndim() != 1 || z.ndim() != 1 || x.shape(0) != z.shape(0))
+                                throw py::value_error("sample_heights: world_x and world_z must be 1-D arrays of one length");
+                            const auto n = static_cast<size_t>(x.shape(0));
+                            py::array_t<float> out(static_cast<py::ssize_t>(n));
+                            o.sampleHeights(x.data(), z.data(), out.mutable_data(), n, cascadeMask);
+                            return out;
+                        },
+                        py::arg("world_x"), py::arg("world_z"), py::arg("cascade_mask") = 0b111u,
+                        "sample_height at many points in one call: world_x and world_z are 1-D arrays of one length, "
+                        "and the result is a float32 array of the heights (m), each exactly what sample_height returns "
+                        "at its point. The points are shared out over threepp's thread pool, so a hull's or a fleet's "
+                        "points cost one call instead of one each.")
+                .def(
                         "set_wave_climate",
                         [](DisplacedMesh& o, py::array_t<float, py::array::c_style | py::array::forcecast> a,
                            float originX, float originZ, float sizeX, float sizeZ) {
