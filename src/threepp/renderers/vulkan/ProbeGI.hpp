@@ -61,8 +61,8 @@ namespace threepp::vulkan {
         // per frame — well inside the ~1 ms probe budget on an RTX 4070.
         static constexpr uint32_t kProbesPerFrame = 2048;
         // WARM-UP (env THREEPP_VK_PROBE_WARMUP, on by default; =0 restores the
-        // flat budget and the shader's flat history cap): for kWarmupFrames
-        // frames after a full clear (a grid fit, invalidateHistory) every frame
+        // flat budget and the shader's flat history cap, and no replace phase):
+        // for kWarmupFrames frames after a full clear (a grid fit, invalidateHistory) every frame
         // updates kWarmupBoost × kProbesPerFrame probes with their blend held at
         // 1/4 or more for the first half and 1/8 for the second (probeFlags bits
         // 6 and 5), so the grid fills and its bounce light
@@ -72,6 +72,30 @@ namespace threepp::vulkan {
         // come right after a load anyway.
         static constexpr uint32_t kWarmupFrames = 120;
         static constexpr uint32_t kWarmupBoost  = 8;
+        // REPLACE PHASE: the frame of a full clear runs kReplaceUpdates updates
+        // of the whole grid back to back, each REPLACING a probe's radiance with
+        // what its rays measured (update flags bit 4) instead of averaging it in.
+        // Each update is one step of the bounce iteration and adds the next
+        // bounce outright, so the grid holds its bounce light before the first
+        // frame is shaded; the warm-up above then averages the noise of that
+        // last update away. The depth moments and the validity measure geometry,
+        // which does not climb, and average over the sixteen.
+        //
+        // The grid used to climb over the warm-up instead, and every
+        // screen-space history averaged the frames it was dark in: Ray
+        // Reconstruction kept them for seconds (a camera cut at frame 64 lifted
+        // the research-scenes bathroom's bounce-lit areas from 0.941 to 0.990 of
+        // their settled level at once), so the kitchen read 0.716 of its settled
+        // level at frame 1 and 0.958 at frame 128. Now 0.986 at frame 1 and
+        // 0.996 from frame 5; the bathroom 0.674 -> 0.979 at frame 1. Spread
+        // over the first frames instead, the grid needed a history restart when
+        // it was done, and Ray Reconstruction drew that frame visibly smeared.
+        // The cost is that one frame: 16 updates of the whole grid, 10-14 ms of
+        // probe pass on an RTX 5080 in those rooms against 0.7 ms (a cascade
+        // layout pays it per window), on a load, a reset or a grid re-fit, which
+        // now swaps the old grid's light for the new one's where it went dark
+        // and climbed back for seconds.
+        static constexpr uint32_t kReplaceUpdates = 16;
         // Camera-centred cascades (layout Cascades): up to kCascadesMax
         // windows of kProbeCount probes each, finest first, back to back in
         // the SH and depth stores. Spacing kCascadeBaseSpacing·4^c, so 1, 4
