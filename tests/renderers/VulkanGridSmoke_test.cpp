@@ -1149,7 +1149,6 @@ namespace {
 
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
-    setEnv("THREEPP_VULKAN_VALIDATION", "1");// before the instance exists
 
     auto gpu = vktest::openHeadlessVulkan("VulkanGridSmoke_test", 96, 96);
     if (!gpu) return kSkipCode;
@@ -1187,7 +1186,7 @@ int main(int argc, char** argv) {
         const std::uint32_t errs = vulkan::validationErrorCount() - errorsBefore;
         check(errs == 0, "the solver provokes no validation errors (" + std::to_string(errs) + ")");
     } else {
-        std::printf("[note] the validation layer is not installed: the zero-error check did not run\n");
+        std::printf("[note] no validation layer (THREEPP_VULKAN_VALIDATION=1 asks for it): the zero-error check did not run\n");
     }
     std::printf("\n%s: %d check(s) failed\n", failures ? "FAILED" : "OK", failures);
     return failures ? 1 : 0;

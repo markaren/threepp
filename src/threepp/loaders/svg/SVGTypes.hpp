@@ -22,10 +22,12 @@ namespace threepp::svg {
         BEYOND
     };
 
-    inline struct ClassifyResult {
+    // Where classifyPoint puts a point relative to an edge. t, the position along
+    // the edge, is set for ORIGIN, DESTINATION and BETWEEN only.
+    struct ClassifyResult {
         IntersectionLocationType loc = IntersectionLocationType::ORIGIN;
         float t = 0;
-    } classifyResult;
+    };
 
     struct EdgeIntersection {
         float x;

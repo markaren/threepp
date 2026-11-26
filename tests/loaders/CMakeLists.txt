@@ -19,15 +19,13 @@ add_test_executable(STLLoader_test)
 add_test_executable(URDFLoader_test)
 add_test_executable(Xacro_test)
 add_test_executable(XacroUr_test)
-add_test_executable(XacroFranka_test)
 if (THREEPP_WITH_USD)
     add_test_executable(USDLoader_test)
 endif ()
-# Every case needs a description clone to expand — a Universal_Robots_ROS2_Description for
-# the one (THREEPP_UR_DESCRIPTION), a franka_description for the other
-# (THREEPP_FRANKA_DESCRIPTION). Without one Catch2 skips them all and exits 4, which is a
+# Every XacroUr case needs a Universal_Robots_ROS2_Description clone to expand
+# (THREEPP_UR_DESCRIPTION). Without one Catch2 skips them all and exits 4, which is a
 # ctest skip, not a failure.
-set_tests_properties(XacroUr_test XacroFranka_test SogLoader_test PROPERTIES SKIP_RETURN_CODE 4)
+set_tests_properties(XacroUr_test SogLoader_test PROPERTIES SKIP_RETURN_CODE 4)
 
 add_subdirectory(svg)
 

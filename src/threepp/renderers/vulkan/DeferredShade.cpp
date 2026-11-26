@@ -26,10 +26,15 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <exception>
+#include <mutex>
 #include <stdexcept>
+#include <system_error>
+#include <thread>
 
 namespace threepp::vulkan {
 
@@ -364,6 +369,7 @@ namespace threepp::vulkan {
         };
         const auto spv = [](const auto& blob) { return Spv{blob, std::size(blob)}; };
         const Spv shadeSpv    = rt ? spv(kDeferredShadeCompSpv) : spv(kDeferredShadeNoRtCompSpv);
+        shadeModuleRt_        = rt;
         const Spv froxelSpv   = rt ? spv(kFroxelInjectCompSpv) : spv(kFroxelInjectNoRtCompSpv);
         const Spv particleSpv = rt ? spv(kParticleLightCompSpv) : spv(kParticleLightNoRtCompSpv);
 
@@ -1283,6 +1289,165 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
+        const bool recorded = shadeKeyRecorded(key);
+        if (!recorded) {
+            THREEPP_LOGF(kLogShade, Info, "compiling the deferred shade variant 0x%llx: about two "
+                         "minutes on the first run, cached afterwards",
+                         static_cast<unsigned long long>(key));
+            std::fflush(stderr);
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        VkPipeline perm = buildShadePipeline(key);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        noteShadePipeline(key, perm, ms, recorded);
+        return perm;
+    }
+
+    std::string DeferredShade::shadeCacheSidecar(const char* suffix) const {
+        std::string path = ctx_.pipelineCacheFile();
+        if (path.empty()) return path;
+        const auto dot = path.rfind(".bin");
+        return (dot == std::string::npos ? path : path.substr(0, dot)) + suffix;
+    }
+
+    // The sidecar beside the cache blob: which shade permutations this
+    // machine already compiled into it. Only a WARM blob's record counts; a
+    // COLD or COMPACT start begins an empty cache, so the record is started
+    // over. The driver's own shader cache may still make an unrecorded create
+    // fast; the line then overstates, never hides.
+    bool DeferredShade::shadeKeyRecorded(uint64_t key) {
+        const bool cacheInUse = !ctx_.pipelineStatsEnabled() && ctx_.pipelineCache() != VK_NULL_HANDLE;
+        const std::string sidecar = cacheInUse ? shadeCacheSidecar(".shade_keys.txt") : std::string{};
+        if (!shadeKeysLoaded_ && !sidecar.empty()) {
+            shadeKeysLoaded_ = true;
+            if (ctx_.pipelineCacheWarm()) {
+                if (std::FILE* f = std::fopen(sidecar.c_str(), "r")) {
+                    unsigned long long h = 0, k = 0;
+                    while (std::fscanf(f, "%llx %llx", &h, &k) == 2) shadeKeysCached_.emplace_back(h, k);
+                    std::fclose(f);
+                }
+            } else if (std::FILE* f = std::fopen(sidecar.c_str(), "w")) {
+                std::fclose(f);
+            }
+        }
+        return std::find(shadeKeysCached_.begin(), shadeKeysCached_.end(), std::make_pair(shadeSpvHash_, key)) !=
+               shadeKeysCached_.end();
+    }
+
+    void DeferredShade::loadShadeHistory() {
+        if (shadeHistoryLoaded_) return;
+        shadeHistoryLoaded_ = true;
+        const std::string path = shadeCacheSidecar(".shade_history.txt");
+        if (path.empty()) return;
+        std::FILE* f = std::fopen(path.c_str(), "r");
+        if (!f) return;
+        // Line by line, skipping one that does not parse: processes append to
+        // this file concurrently, and a torn line must not hide the rest.
+        char line[128];
+        while (std::fgets(line, sizeof(line), f)) {
+            char module[8] = {};
+            unsigned mask = 0, probe = 0;
+            unsigned long long key = 0;
+            if (std::sscanf(line, "%7s %x %x %llx", module, &mask, &probe, &key) != 4) continue;
+            if (std::strcmp(module, "rt") != 0 && std::strcmp(module, "nort") != 0) continue;
+            const ShadeHistoryEntry e{std::strcmp(module, "rt") == 0, mask, probe, key};
+            // Two processes can append the same line at once; one copy is kept.
+            if (std::find(shadeHistory_.begin(), shadeHistory_.end(), e) == shadeHistory_.end()) shadeHistory_.push_back(e);
+        }
+        std::fclose(f);
+    }
+
+    void DeferredShade::recordShadeHistory(uint64_t key) {
+        loadShadeHistory();
+        const ShadeHistoryEntry e{shadeModuleRt_, specMask_, specProbe_ ? 1u : 0u, key};
+        if (std::find(shadeHistory_.begin(), shadeHistory_.end(), e) != shadeHistory_.end()) return;
+        shadeHistory_.push_back(e);
+        const std::string path = shadeCacheSidecar(".shade_history.txt");
+        if (path.empty()) return;
+        if (std::FILE* f = std::fopen(path.c_str(), "a")) {
+            std::fprintf(f, "%s %x %x %llx\n", e.rt ? "rt" : "nort", e.mask, e.probe,
+                         static_cast<unsigned long long>(e.key));
+            std::fclose(f);
+        }
+    }
+
+    std::size_t DeferredShade::prewarmPermutations(unsigned maxThreads) {
+        if (ctx_.pipelineStatsEnabled()) return 0;
+        loadShadeHistory();
+        const uint32_t probe = specProbe_ ? 1u : 0u;
+        std::vector<uint64_t> keys;
+        for (const auto& e : shadeHistory_) {
+            if (e.rt != shadeModuleRt_ || e.mask != specMask_ || e.probe != probe) continue;
+            const bool built = std::any_of(shadePerms_.begin(), shadePerms_.end(),
+                                           [&](const auto& p) { return p.first == e.key; });
+            if (!built && std::find(keys.begin(), keys.end(), e.key) == keys.end()) keys.push_back(e.key);
+        }
+        if (keys.empty()) return 0;
+
+        std::vector<char> recorded(keys.size(), 0);
+        std::size_t       unrecorded = 0;
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            recorded[i] = shadeKeyRecorded(keys[i]) ? 1 : 0;
+            if (!recorded[i]) ++unrecorded;
+        }
+        unsigned threads = maxThreads ? maxThreads : std::max(1u, std::thread::hardware_concurrency() / 2);
+        threads          = static_cast<unsigned>(std::min<std::size_t>(threads, keys.size()));
+        THREEPP_LOGF(kLogShade, Info, "prewarming %zu deferred shade permutation(s) on %u thread(s), %zu not "
+                     "recorded in the cache",
+                     keys.size(), threads, unrecorded);
+        std::fflush(stderr);
+
+        // Each worker takes the next key; the results land in their own slots,
+        // and everything else a create does happens on this thread afterwards.
+        std::vector<VkPipeline> perms(keys.size(), VK_NULL_HANDLE);
+        std::vector<double>     ms(keys.size(), 0.0);
+        std::atomic<std::size_t> next{0};
+        std::mutex               errorMutex;
+        std::exception_ptr       error;
+        const auto               t0 = std::chrono::steady_clock::now();
+        {
+            const auto worker = [&] {
+                for (std::size_t i = next.fetch_add(1); i < keys.size(); i = next.fetch_add(1)) {
+                    const auto s = std::chrono::steady_clock::now();
+                    try {
+                        perms[i] = buildShadePipeline(keys[i]);
+                    } catch (...) {
+                        std::lock_guard lock(errorMutex);
+                        if (!error) error = std::current_exception();
+                    }
+                    ms[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s).count();
+                }
+            };
+            std::vector<std::thread> pool;
+            pool.reserve(threads);
+            for (unsigned t = 0; t < threads; ++t) {
+                // A thread that cannot start leaves its share to the others,
+                // or to this thread when none started.
+                try {
+                    pool.emplace_back(worker);
+                } catch (const std::system_error&) {
+                    break;
+                }
+            }
+            if (pool.empty()) worker();
+            for (auto& th : pool) th.join();
+        }
+        if (error) {
+            for (VkPipeline p : perms) {
+                if (p != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), p, nullptr);
+            }
+            std::rethrow_exception(error);
+        }
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            noteShadePipeline(keys[i], perms[i], ms[i], recorded[i] != 0);
+            shadePerms_.emplace_back(keys[i], perms[i]);
+        }
+        THREEPP_LOGF(kLogShade, Info, "prewarmed %zu deferred shade permutation(s) in %.0f ms", keys.size(),
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        return keys.size();
+    }
+
+    VkPipeline DeferredShade::buildShadePipeline(uint64_t key) const {
         const std::array<uint32_t, 13> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
                                             static_cast<uint32_t>((key >> 32u) & 0xFFu),
                                             static_cast<uint32_t>((key >> 40u) & 1u),
@@ -1329,55 +1494,28 @@ namespace threepp::vulkan {
         const bool wantStats = ctx_.pipelineStatsEnabled();
         if (wantStats) cpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
 
-        // The sidecar beside the cache blob: which shade permutations this
-        // machine already compiled into it. Only a WARM blob's record counts;
-        // a COLD or COMPACT start begins an empty cache, so the record is
-        // started over. The driver's own shader cache may still make an
-        // unrecorded create fast; the line then overstates, never hides.
-        const bool cacheInUse = !wantStats && ctx_.pipelineCache() != VK_NULL_HANDLE;
-        std::string sidecar;
-        if (cacheInUse) {
-            sidecar = ctx_.pipelineCacheFile();
-            if (!sidecar.empty()) {
-                const auto dot = sidecar.rfind(".bin");
-                sidecar = (dot == std::string::npos ? sidecar : sidecar.substr(0, dot)) + ".shade_keys.txt";
-            }
-        }
-        if (!shadeKeysLoaded_ && !sidecar.empty()) {
-            shadeKeysLoaded_ = true;
-            if (ctx_.pipelineCacheWarm()) {
-                if (std::FILE* f = std::fopen(sidecar.c_str(), "r")) {
-                    unsigned long long h = 0, k = 0;
-                    while (std::fscanf(f, "%llx %llx", &h, &k) == 2) shadeKeysCached_.emplace_back(h, k);
-                    std::fclose(f);
-                }
-            } else if (std::FILE* f = std::fopen(sidecar.c_str(), "w")) {
-                std::fclose(f);
-            }
-        }
-        const bool recorded = std::find(shadeKeysCached_.begin(), shadeKeysCached_.end(),
-                                        std::make_pair(shadeSpvHash_, key)) != shadeKeysCached_.end();
-        if (!recorded) {
-            THREEPP_LOGF(kLogShade, Info, "compiling the deferred shade variant 0x%llx: about two "
-                         "minutes on the first run, cached afterwards",
-                         static_cast<unsigned long long>(key));
-            std::fflush(stderr);
-        }
-
-        const auto t0 = std::chrono::steady_clock::now();
         VkPipeline perm = VK_NULL_HANDLE;
         check(vkCreateComputePipelines(ctx_.device(), wantStats ? VK_NULL_HANDLE : ctx_.pipelineCache(),
                                        1, &cpci, nullptr, &perm),
               "vkCreateComputePipelines(deferred_shade permutation)");
-        if (!recorded && cacheInUse && !sidecar.empty()) {
-            shadeKeysCached_.emplace_back(shadeSpvHash_, key);
-            if (std::FILE* f = std::fopen(sidecar.c_str(), "a")) {
-                std::fprintf(f, "%016llx %llx\n", static_cast<unsigned long long>(shadeSpvHash_),
-                             static_cast<unsigned long long>(key));
-                std::fclose(f);
+        return perm;
+    }
+
+    void DeferredShade::noteShadePipeline(uint64_t key, VkPipeline perm, double ms, bool recorded) {
+        const bool cacheInUse = !ctx_.pipelineStatsEnabled() && ctx_.pipelineCache() != VK_NULL_HANDLE;
+        if (!recorded && cacheInUse) {
+            const std::string sidecar = shadeCacheSidecar(".shade_keys.txt");
+            if (!sidecar.empty()) {
+                shadeKeysCached_.emplace_back(shadeSpvHash_, key);
+                if (std::FILE* f = std::fopen(sidecar.c_str(), "a")) {
+                    std::fprintf(f, "%016llx %llx\n", static_cast<unsigned long long>(shadeSpvHash_),
+                                 static_cast<unsigned long long>(key));
+                    std::fclose(f);
+                }
             }
         }
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        recordShadeHistory(key);
+
         char label[96];
         std::snprintf(label, sizeof(label), "deferred_shade key=0x%llx", static_cast<unsigned long long>(key));
         // A pipeline-cache hit takes about 0.1 ms and is not worth a line; a
@@ -1392,10 +1530,10 @@ namespace threepp::vulkan {
                 std::snprintf(regs, sizeof(regs), ", %lld registers", static_cast<long long>(n));
             }
             THREEPP_LOGF(kLogShade, Info, "%s flags=0x%x mask=0x%x probe=%u: %.0f ms%s", label,
-                         values[0], values[1], values[2], ms, regs);
+                         static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+                         static_cast<uint32_t>((key >> 32u) & 0xFFu), ms, regs);
         }
         ctx_.dumpPipelineStats(perm, label);
-        return perm;
     }
 
     void DeferredShade::recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p) {

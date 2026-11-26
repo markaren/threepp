@@ -16,6 +16,7 @@
 //   VulkanMultiView_test           run every gate below
 //   VulkanMultiView_test --bench   opt-in: 0 vs 3 views, interleaved (not a gate)
 //   VulkanMultiView_test --sweep   opt-in: marginal cost of one view, per res
+//   VulkanMultiView_test --splat-cost   the gates, plus what a view's splats cost
 //
 // A NOTE ON MEASUREMENT, since it is what makes these gates trustworthy.
 // Adding a view, removing one, or even re-aiming one changes frame time, and
@@ -63,6 +64,7 @@ namespace {
     // --shot <dir>: the gates' compared frames as binary PPMs, so a failing
     // PSNR can be LOOKED at instead of guessed at.
     std::string shotDir;
+    bool measureSplatCost = false;// --splat-cost
     void shot(const char* name, const std::vector<unsigned char>& rgb, int w, int h) {
         if (shotDir.empty() || rgb.size() != size_t(w) * h * 3) return;
         vktest::writePpm(shotDir + "/" + name + ".ppm", rgb, w, h);
@@ -646,38 +648,43 @@ namespace {
         // ── measured, not asserted: what an opted-in view costs ─────────────
         // Interleaved A/B on the same binary, same frame, same everything but
         // the flag. Blocks rather than single frames so the TAA's dt-scaled
-        // constants are not the thing being measured.
-        const auto blockMs = [&](bool on, int n) {
-            (void) r.setViewSplats(hOn, on);
-            runFrames(canvas, r, scene, primaryCam, 8);
-            const auto t0 = std::chrono::steady_clock::now();
-            runFrames(canvas, r, scene, primaryCam, n);
-            const auto t1 = std::chrono::steady_clock::now();
-            return std::chrono::duration<double, std::milli>(t1 - t0).count() / n;
-        };
-        const auto measure = [&](const char* what) {
-            double onMs = 0, offMs = 0;
-            for (int rep = 0; rep < 2; ++rep) {
-                offMs += blockMs(false, 40);
-                onMs += blockMs(true, 40);
-            }
-            std::printf("  cost %-12s off %.3f ms/frame, on %.3f ms/frame, "
-                        "per-view splat cost %.3f ms\n",
-                        what, offMs / 2, onMs / 2, (onMs - offMs) / 2);
-        };
-        measure("60k splats");
+        // constants are not the thing being measured. Opt-in (--splat-cost):
+        // about 400 frames and a 500k-splat cloud that no check reads.
+        if (measureSplatCost) {
+            const auto blockMs = [&](bool on, int n) {
+                (void) r.setViewSplats(hOn, on);
+                runFrames(canvas, r, scene, primaryCam, 8);
+                const auto t0 = std::chrono::steady_clock::now();
+                runFrames(canvas, r, scene, primaryCam, n);
+                const auto t1 = std::chrono::steady_clock::now();
+                return std::chrono::duration<double, std::milli>(t1 - t0).count() / n;
+            };
+            const auto measure = [&](const char* what) {
+                double onMs = 0, offMs = 0;
+                for (int rep = 0; rep < 2; ++rep) {
+                    offMs += blockMs(false, 40);
+                    onMs += blockMs(true, 40);
+                }
+                std::printf("  cost %-12s off %.3f ms/frame, on %.3f ms/frame, "
+                            "per-view splat cost %.3f ms\n",
+                            what, offMs / 2, onMs / 2, (onMs - offMs) / 2);
+            };
+            measure("60k splats");
 
-        SplatGenerator::Options big = o;
-        big.count = 500000;
-        big.seed = 1337u;
-        auto bigCloud = SplatCloud::create(SplatGenerator::generate(big));
-        bigCloud->position.set(0.f, 20.f, 0.f);
-        scene.remove(*cloud);
-        scene.add(bigCloud);
-        runFrames(canvas, r, scene, primaryCam, 10);
-        measure("500k splats");
+            SplatGenerator::Options big = o;
+            big.count = 500000;
+            big.seed = 1337u;
+            auto bigCloud = SplatCloud::create(SplatGenerator::generate(big));
+            bigCloud->position.set(0.f, 20.f, 0.f);
+            scene.remove(*cloud);
+            scene.add(bigCloud);
+            runFrames(canvas, r, scene, primaryCam, 10);
+            measure("500k splats");
 
-        scene.remove(*bigCloud);
+            scene.remove(*bigCloud);
+        } else {
+            scene.remove(*cloud);
+        }
         (void) r.removeView(hOn);
         (void) r.removeView(hOff);
         r.setGbufferMsaa(savedMsaa);
@@ -976,6 +983,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--bench") == 0) bench = true;
         else if (std::strcmp(argv[i], "--sweep") == 0) sweep = true;
+        else if (std::strcmp(argv[i], "--splat-cost") == 0) measureSplatCost = true;
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotDir = argv[++i];
     }
 

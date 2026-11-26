@@ -90,6 +90,9 @@ namespace threepp::vulkan {
         // process. The first check runs after the first frame, which is where
         // the startup compiles have all just landed.
         void savePipelineCacheIfChanged();
+        // The same save, now and unthrottled (still a no-op when the size has
+        // not moved): for a caller that has just compiled a batch on purpose.
+        void savePipelineCacheNow() { savePipelineCache(); }
 
         VkSurfaceKHR surface() const { return surface_; }
         VkQueue graphicsQueue() const { return graphicsQueue_; }

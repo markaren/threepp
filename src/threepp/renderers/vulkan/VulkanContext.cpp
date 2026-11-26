@@ -601,13 +601,22 @@ namespace threepp::vulkan {
         // and it cost ~0.5 s to load and as much again to write back, every
         // launch. Above the cap the blob is dropped and this run starts
         // empty, so what it saves is only what it actually used. That is
-        // cheap: the driver keeps its own on-disk cache of compiled shaders
-        // (NVIDIA's GLCache), and a run with no blob at all compiled the same
-        // scene in ~1 s against it. The blob is the backstop for when the
-        // driver cache has lost an entry, and it is worth keeping only for
-        // the shaders this build still has.
-        constexpr size_t kPipelineCacheCapBytes = size_t{64} << 20;
-        const bool compact = usable && initial.size() > kPipelineCacheCapBytes;
+        // cheap when the driver's own on-disk cache of compiled shaders
+        // (NVIDIA's GLCache) still holds them: a run with no blob at all
+        // compiled the same scene in ~1 s against it. It is not cheap when the
+        // driver cache is full (1 GB on the laptop, 2026-11-26): then every
+        // dropped pipeline is compiled again by each process that needs it.
+        // The cap was 64 MB, which every deferred-shade edit crossed once the
+        // test suite's permutations were in the blob (about 2.5 MB each, ~30
+        // MB per edit); the process after the one that crossed it dropped
+        // them all, and every test then compiled them anew (about 6 minutes
+        // each under ctest -j4). 256 MB holds several builds' worth.
+        // THREEPP_VK_PIPELINE_CACHE_CAP_MB sets the cap; VulkanPipelineWarmup
+        // lowers it for its first renderer, so that a compaction happens there,
+        // before it builds every permutation again, and not inside a test.
+        const size_t capBytes =
+                static_cast<size_t>(std::max(1ll, env::integer("THREEPP_VK_PIPELINE_CACHE_CAP_MB").value_or(256))) << 20;
+        const bool compact = usable && initial.size() > capBytes;
         if (compact) usable = false;
 
         VkPipelineCacheCreateInfo ci{};
@@ -624,12 +633,17 @@ namespace threepp::vulkan {
         // file does not exist yet, and the first check should write it.
         savedPipelineCacheBytes_ = (usable && source == path) ? initial.size() : 0;
         pipelineCacheWarm_ = usable && pipelineCache_ != VK_NULL_HANDLE;
-        THREEPP_LOG(kLogPipelineCache, Debug)
-                << (usable ? "warm: loaded " : compact ? "compacting: dropped " : "cold: ignored ")
-                << initial.size() << " bytes from " << source.string()
-                << (usable    ? " (pipelines reused)"
-                    : compact ? " (over the 64 MB cap; this run writes back only what it uses)"
-                              : " (no matching cache; pipelines compile)");
+        // A compaction is worth a line by default: every pipeline after it is
+        // a compile unless the driver's own cache has it.
+        if (compact) {
+            THREEPP_LOG(kLogPipelineCache, Info)
+                    << "compacting: dropped " << initial.size() << " bytes from " << source.string() << " (over the "
+                    << (capBytes >> 20) << " MB cap; this run writes back only what it uses)";
+        } else {
+            THREEPP_LOG(kLogPipelineCache, Debug)
+                    << (usable ? "warm: loaded " : "cold: ignored ") << initial.size() << " bytes from "
+                    << source.string() << (usable ? " (pipelines reused)" : " (no matching cache; pipelines compile)");
+        }
     }
 
     void VulkanContext::savePipelineCache() {

@@ -313,7 +313,7 @@ namespace threepp::svg {
         path.currentPath->absellipse(cx, cy, rx, ry, theta, theta + delta, sweep_flag == 0, x_axis_rotation);
     }
 
-    inline void classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
+    inline ClassifyResult classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
 
         const auto ax = edgeEnd.x - edgeStart.x;
         const auto ay = edgeEnd.y - edgeStart.y;
@@ -323,40 +323,32 @@ namespace threepp::svg {
 
         if ((p.x == edgeStart.x) && (p.y == edgeStart.y)) {
 
-            classifyResult.loc = IntersectionLocationType::ORIGIN;
-            classifyResult.t = 0;
-            return;
+            return {IntersectionLocationType::ORIGIN, 0};
         }
 
         if ((p.x == edgeEnd.x) && (p.y == edgeEnd.y)) {
 
-            classifyResult.loc = IntersectionLocationType::DESTINATION;
-            classifyResult.t = 1;
-            return;
+            return {IntersectionLocationType::DESTINATION, 1};
         }
 
         if (sa < -std::numeric_limits<float>::epsilon()) {
 
-            classifyResult.loc = IntersectionLocationType::LEFT;
-            return;
+            return {IntersectionLocationType::LEFT};
         }
 
         if (sa > std::numeric_limits<float>::epsilon()) {
 
-            classifyResult.loc = IntersectionLocationType::RIGHT;
-            return;
+            return {IntersectionLocationType::RIGHT};
         }
 
         if (((ax * bx) < 0) || ((ay * by) < 0)) {
 
-            classifyResult.loc = IntersectionLocationType::BEHIND;
-            return;
+            return {IntersectionLocationType::BEHIND};
         }
 
         if ((std::sqrt(ax * ax + ay * ay)) < (std::sqrt(bx * bx + by * by))) {
 
-            classifyResult.loc = IntersectionLocationType::BEYOND;
-            return;
+            return {IntersectionLocationType::BEYOND};
         }
 
         float t;
@@ -370,8 +362,7 @@ namespace threepp::svg {
             t = by / ay;
         }
 
-        classifyResult.loc = IntersectionLocationType::BETWEEN;
-        classifyResult.t = t;
+        return {IntersectionLocationType::BETWEEN, t};
     }
 
     inline std::optional<EdgeIntersection> findEdgeIntersection(const Vector2& a0, const Vector2& a1, const Vector2& b0, const Vector2& b1) {
@@ -402,21 +393,21 @@ namespace threepp::svg {
             //check if endpoints of edge2 (b0-b1) lies on edge1 (a0-a1)
             for (unsigned i = 0; i < 2; i++) {
 
-                classifyPoint(i == 0 ? b0 : b1, a0, a1);
+                const auto classified = classifyPoint(i == 0 ? b0 : b1, a0, a1);
                 //find position of this endpoints relatively to edge1
-                if (classifyResult.loc == IntersectionLocationType::ORIGIN) {
+                if (classified.loc == IntersectionLocationType::ORIGIN) {
 
                     const auto& point = (i == 0 ? b0 : b1);
-                    return EdgeIntersection{point.x, point.y, classifyResult.t};
+                    return EdgeIntersection{point.x, point.y, classified.t};
 
-                } else if (classifyResult.loc == IntersectionLocationType::BETWEEN) {
+                } else if (classified.loc == IntersectionLocationType::BETWEEN) {
 
-                    const auto x = +((x1 + classifyResult.t * (x2 - x1)));
-                    const auto y = +((y1 + classifyResult.t * (y2 - y1)));
+                    const auto x = +((x1 + classified.t * (x2 - x1)));
+                    const auto y = +((y1 + classified.t * (y2 - y1)));
                     return EdgeIntersection{
                             x,
                             y,
-                            classifyResult.t,
+                            classified.t,
                     };
                 }
             }
@@ -429,12 +420,12 @@ namespace threepp::svg {
 
             for (unsigned i = 0; i < 2; i++) {
 
-                classifyPoint(i == 0 ? b0 : b1, a0, a1);
+                const auto classified = classifyPoint(i == 0 ? b0 : b1, a0, a1);
 
-                if (classifyResult.loc == IntersectionLocationType::ORIGIN) {
+                if (classified.loc == IntersectionLocationType::ORIGIN) {
 
                     const auto& point = (i == 0 ? b0 : b1);
-                    return EdgeIntersection{point.x, point.y, classifyResult.t};
+                    return EdgeIntersection{point.x, point.y, classified.t};
                 }
             }
 

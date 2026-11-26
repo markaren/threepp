@@ -406,6 +406,11 @@
       "filter": {
         "include": {
           "name": "^(VulkanValidation_nort|VulkanCameraModel)_test$"
+        },
+        "exclude": {
+          "fixtures": {
+            "setup": "vulkan_pipelines"
+          }
         }
       }
     },

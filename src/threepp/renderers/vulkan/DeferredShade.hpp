@@ -22,6 +22,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -491,6 +492,16 @@ namespace threepp::vulkan {
         void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, Stage stage, uint32_t frame,
                      VkDescriptorSet particleIoSet = VK_NULL_HANDLE) const;
 
+        // Builds every shade permutation in this machine's shade history (see
+        // shadeHistory_) that matches this instance's module and masks and is
+        // not built yet, on up to maxThreads worker threads (0: half the
+        // hardware threads). One the pipeline cache holds takes about a
+        // millisecond; one it does not is the full compile, which otherwise the
+        // first frame that needs it pays on the render thread. Returns how
+        // many it built. Does nothing under THREEPP_VULKAN_PIPELINE_STATS,
+        // which bypasses the cache.
+        std::size_t prewarmPermutations(unsigned maxThreads = 0);
+
     private:
         VulkanContext& ctx_;
         uint32_t       framesInFlight_;
@@ -511,6 +522,17 @@ namespace threepp::vulkan {
         VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps, uint32_t rayBudget, bool rayRecon,
                                  bool oceanChop, bool oceanCrestFoam, bool oceanWaveReflect, uint32_t oceanClimate);
         VkPipeline createShadePipeline(uint64_t key);
+        // The create itself. It reads only the module, the layout, the masks
+        // and the pipeline cache (internally synchronised), so several threads
+        // may call it at once (prewarmPermutations does).
+        VkPipeline buildShadePipeline(uint64_t key) const;
+        // A create's bookkeeping, on the calling thread: the sidecar and the
+        // history lines, the timing line and the pipeline statistics.
+        void noteShadePipeline(uint64_t key, VkPipeline perm, double ms, bool recorded);
+        // Whether the sidecar says the cache blob holds this build's `key`.
+        bool shadeKeyRecorded(uint64_t key);
+        // <blob stem><suffix> beside the pipeline cache; empty without one.
+        std::string shadeCacheSidecar(const char* suffix) const;
         // What the pipeline-cache blob holds of the shade, kept in a text file
         // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"
         // line per permutation this machine compiled into the cache. A create
@@ -519,6 +541,25 @@ namespace threepp::vulkan {
         uint64_t shadeSpvHash_ = 0;// FNV-1a of the shade's SPIR-V words
         bool     shadeKeysLoaded_ = false;
         std::vector<std::pair<uint64_t, uint64_t>> shadeKeysCached_;// (spv hash, key)
+        // Every permutation this machine has built, in <blob stem>.shade_history.txt:
+        // one "<module> <spec mask> <spec probe> <key>" line (module "rt" or
+        // "nort", the rest hex), whatever the shader build. Unlike the sidecar
+        // it outlives a shader edit and a cold or compacted cache, because it
+        // records keys, not what the blob holds: it is the list
+        // prewarmPermutations rebuilds after the build changes. Never pruned;
+        // deleting the file forgets the keys.
+        struct ShadeHistoryEntry {
+            bool     rt    = false;
+            uint32_t mask  = 0;
+            uint32_t probe = 0;
+            uint64_t key   = 0;
+            bool operator==(const ShadeHistoryEntry&) const = default;
+        };
+        bool shadeModuleRt_      = false;// shadeMod_ is the ray-query module
+        bool shadeHistoryLoaded_ = false;
+        std::vector<ShadeHistoryEntry> shadeHistory_;
+        void loadShadeHistory();
+        void recordShadeHistory(uint64_t key);
         VkPipeline            giFilterPipe_ = VK_NULL_HANDLE;// SVGF GI + shadow-ratio filter + recombine
         VkPipeline            reflFilterPipe_ = VK_NULL_HANDLE;// reflection gloss reconstruction + recombine
         VkPipeline            clusterPipe_  = VK_NULL_HANDLE;// clustered light culling (cluster_build.comp)
