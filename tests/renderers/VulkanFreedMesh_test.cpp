@@ -73,12 +73,8 @@ namespace {
 
     constexpr int kW = 320, kH = 240;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     // Blocks freed through PoisonAllocator so far.
     int poisonedBlocks = 0;

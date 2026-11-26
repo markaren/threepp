@@ -137,19 +137,7 @@ namespace {
     // geometry's BLAS builds are submitted without a host wait.
     constexpr bool kFrameAsserted[kKinds] = {true, true, true, true, true, true, true};
 
-    std::shared_ptr<Texture> constantEnv(float le) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, le);
-        for (size_t i = 3; i < data.size(); i += 4) data[i] = 1.f;
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::constantEnv;
 
     std::shared_ptr<Texture> checker() {
         constexpr int N = 32;
@@ -219,14 +207,6 @@ namespace {
         return v[i];
     }
 
-    void writePpm(const std::string& path, const std::vector<unsigned char>& rgb) {
-        if (FILE* f = std::fopen(path.c_str(), "wb")) {
-            std::fprintf(f, "P6\n%d %d\n255\n", kW, kH);
-            std::fwrite(rgb.data(), 1, static_cast<size_t>(kW) * kH * 3, f);
-            std::fclose(f);
-        }
-    }
-
     struct FrameRow {
         int kind = -1;// the event this frame carries, -1 for a quiet frame
         int sinceEvent = 0;
@@ -257,10 +237,7 @@ int main() {
     Canvas& canvas = *gpu.canvas;
     VulkanRenderer& renderer = *gpu.renderer;
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setAutoLod(false);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
@@ -474,7 +451,7 @@ int main() {
                           f);
             std::string fname = name;
             std::replace(fname.begin(), fname.end(), ' ', '_');
-            writePpm(std::string(dumpDir) + fname, im);
+            vktest::writePpm(std::string(dumpDir) + fname, im, kW, kH);
         };
 
         const auto stats0 = renderer.tlasStats();

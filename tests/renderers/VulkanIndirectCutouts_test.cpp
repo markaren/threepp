@@ -48,19 +48,7 @@ namespace {
     constexpr int kW = 640, kH = 360;
     constexpr int kFrames = 150;// the 1 spp GI accumulates over the renderer's temporal window
 
-    std::shared_ptr<Texture> constantEnv(float le) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, le);
-        for (size_t i = 3; i < data.size(); i += 4) data[i] = 1.f;
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::constantEnv;
 
     // A green checkerboard whose alpha is 1 on the even cells and 0 on the odd
     // ones: half the quad is a hole, in 8 x 8 cells.
@@ -85,9 +73,7 @@ namespace {
         return tex;
     }
 
-    double srgbToLinear(double c) {
-        return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-    }
+    using vktest::srgbToLinear;
 
     // The mean linear luma of a (2r+1)^2 patch about a projected world point.
     double patchAt(const std::vector<unsigned char>& px, const Camera& cam, Vector3 p, int r) {
@@ -124,10 +110,7 @@ int main() {
     renderer.setDenoise(true);  // the stochastic 1-bounce GI, accumulated
     renderer.setDeferredAO(true);
     renderer.setProbeGI(false); // the gather's own rays decide, not the grid
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

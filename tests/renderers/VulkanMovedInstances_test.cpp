@@ -28,6 +28,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <cstdio>
 #include <memory>
@@ -39,15 +40,11 @@ using namespace threepp;
 namespace {
 
     constexpr int kW = 160, kH = 120;
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
     constexpr int kSticky = 30;// kMovedStickyFrames (VulkanCoreFrame.cpp)
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     void expectMoving(VulkanRenderer& r, uint32_t want, const std::string& what) {
         const uint32_t got = r.tlasStats().movingEntries;
@@ -65,17 +62,9 @@ namespace {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanMovedInstances_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanMovedInstances_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     Scene scene;
     auto light = DirectionalLight::create(0xffffff, 2.f);

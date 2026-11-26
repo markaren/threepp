@@ -115,10 +115,7 @@ int main() {
     Canvas& canvas = *gpu.canvas;
     VulkanRenderer& renderer = *gpu.renderer;
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.setSharpenStrength(0.f);
     renderer.setEnvSunPolicy(Renderer::EnvSunPolicy::Off);// the red patch is not a sun

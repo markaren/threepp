@@ -38,6 +38,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -55,7 +56,7 @@ namespace fs = std::filesystem;
 namespace {
 
     constexpr int kW = 384, kH = 256;
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
     constexpr int kWarmFrames = 24;
 
     // A dense, opaque grey wall at z = 0 covering x in [-1.1, 1.1]. Opaque
@@ -76,12 +77,6 @@ namespace {
         auto d = SplatGenerator::generate(o);
         for (size_t i = 0; i < d.count(); ++i) d.setDcColor(i, Vector3{0.55f, 0.55f, 0.58f});
         return d;
-    }
-
-    void writePPM(const fs::path& p, const std::vector<unsigned char>& rgb) {
-        std::ofstream f(p, std::ios::binary);
-        f << "P6\n" << kW << " " << kH << "\n255\n";
-        f.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
     }
 
     // The overlay is the only saturated-magenta thing in the frame: the wall is
@@ -116,20 +111,9 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--dump") == 0) dump = true;
     }
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(Canvas::Parameters()
-                                                     .title("SplatOverlayOcclusion_probe")
-                                                     .size(kW, kH)
-                                                     .vsync(false)
-                                                     .headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("SplatOverlayOcclusion_probe", kW, kH);
+    if (!gpu) return kSkipCode;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.f;
@@ -222,8 +206,8 @@ int main(int argc, char** argv) {
     const auto withCloud = capture(kWarmFrames * 3);
 
     if (dump) {
-        writePPM(fs::path("splat_overlay_nocloud.ppm"), noCloud);
-        writePPM(fs::path("splat_overlay_withcloud.ppm"), withCloud);
+        vktest::writePpm("splat_overlay_nocloud.ppm", noCloud, kW, kH);
+        vktest::writePpm("splat_overlay_withcloud.ppm", withCloud, kW, kH);
     }
 
     // Column 192 is the screen centre. The wall's drawn silhouette ends near

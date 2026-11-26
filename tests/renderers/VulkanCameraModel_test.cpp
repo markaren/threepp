@@ -36,12 +36,8 @@ namespace {
     constexpr int kW = 384, kH = 256;// 1.5 aspect — deliberately NOT 1:1, so a
                                      // width/height mix-up cannot pass
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     void checkClose(float got, float want, float tol, const std::string& what) {
         const bool ok = std::abs(got - want) <= tol;

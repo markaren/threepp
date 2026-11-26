@@ -35,6 +35,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -47,14 +48,10 @@ using namespace threepp;
 namespace {
 
     constexpr int kW = 320, kH = 240;
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     // Deterministic per-instance transforms with rotation, non-uniform scale and
     // translation, so every element of the product depends on every column of
@@ -109,17 +106,9 @@ namespace {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanInstanceExpand_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanInstanceExpand_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     // OFF by default: the pass is a measured regression whose output no
     // consumer reads yet, so every app in the tree would pay for nothing.

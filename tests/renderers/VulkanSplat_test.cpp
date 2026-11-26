@@ -43,6 +43,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -61,7 +62,7 @@ namespace fs = std::filesystem;
 namespace {
 
     constexpr int kW = 384, kH = 256;
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
     // Enough frames for TAA to settle on a static camera; the golden is
     // compared after convergence, like VulkanGolden_test's.
     constexpr int kWarmFrames = 120;
@@ -74,25 +75,9 @@ namespace {
         if (!ok) ++failures;
     }
 
-    void writePPM(const fs::path& p, const std::vector<unsigned char>& rgb, int w, int h) {
-        fs::create_directories(p.parent_path());
-        std::ofstream f(p, std::ios::binary);
-        f << "P6\n" << w << " " << h << "\n255\n";
-        f.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
-    }
-    std::vector<unsigned char> readPPM(const fs::path& p, int& w, int& h) {
-        std::ifstream f(p, std::ios::binary);
-        if (!f) return {};
-        std::string magic;
-        f >> magic;
-        if (magic != "P6") return {};
-        int maxv = 0;
-        f >> w >> h >> maxv;
-        f.get();
-        std::vector<unsigned char> d(static_cast<size_t>(w) * h * 3);
-        f.read(reinterpret_cast<char*>(d.data()), static_cast<std::streamsize>(d.size()));
-        return f ? d : std::vector<unsigned char>{};
-    }
+    using vktest::writePpm;
+
+    using vktest::readPpm;
 
     // A deterministic cloud with enough overlap that ordering matters and
     // enough opacity that the occlusion check has something to occlude.
@@ -145,18 +130,10 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--update") == 0) update = true;
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanSplat_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanSplat_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.f;
@@ -208,11 +185,11 @@ int main(int argc, char** argv) {
     const auto pixels = renderer.readRGBPixels();
     const fs::path goldenPath = fs::path(PROJECT_FOLDER) / "tests" / "renderers" / "golden" / "splat.ppm";
     if (update) {
-        writePPM(goldenPath, pixels, kW, kH);
+        writePpm(goldenPath, pixels, kW, kH);
         std::printf("[upd ] wrote %s\n", goldenPath.string().c_str());
     } else {
         int gw = 0, gh = 0;
-        const auto ref = readPPM(goldenPath, gw, gh);
+        const auto ref = readPpm(goldenPath, gw, gh);
         if (ref.empty() || gw != kW || gh != kH) {
             report(false, "golden reference splat.ppm missing or wrong size (run --update)");
         } else {

@@ -54,38 +54,10 @@ namespace {
 
     constexpr int kW = 320, kH = 240;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
-
-    std::shared_ptr<Texture> constantEnv(float r, float g, float b) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, 1.f);
-        for (size_t i = 0; i < data.size(); i += 4) {
-            data[i] = r;
-            data[i + 1] = g;
-            data[i + 2] = b;
-        }
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
+    using vktest::constantEnv;
 
     // The visible entry id (ids .x) of every pixel.
     std::vector<std::uint32_t> readIds(VulkanRenderer& r) {
@@ -104,10 +76,7 @@ namespace {
         double lum() const { return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
     };
 
-    double srgbToLinear(double c) {
-        c /= 255.0;
-        return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-    }
+    using vktest::srgbByteToLinear;
 
     // Mean linear colour of a rectangle of the frame (x0..x1, y0..y1).
     Rgb meanRgb(const std::vector<unsigned char>& px, int x0, int x1, int y0, int y1) {
@@ -116,9 +85,9 @@ namespace {
         for (int y = y0; y < y1; ++y) {
             for (int x = x0; x < x1; ++x) {
                 const unsigned char* p = &px[(std::size_t(y) * kW + x) * 3];
-                m.r += srgbToLinear(p[0]);
-                m.g += srgbToLinear(p[1]);
-                m.b += srgbToLinear(p[2]);
+                m.r += srgbByteToLinear(p[0]);
+                m.g += srgbByteToLinear(p[1]);
+                m.b += srgbByteToLinear(p[2]);
                 ++n;
             }
         }
@@ -166,10 +135,7 @@ int main() {
     VulkanRenderer& renderer = *vk.renderer;
     const std::uint32_t errorsBefore = vulkan::validationErrorCount();
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

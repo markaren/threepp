@@ -52,9 +52,7 @@ namespace {
     constexpr int kW = 256, kH = 128;
     constexpr int kFrames = 60;
 
-    double srgbToLinear(double c) {
-        return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-    }
+    using vktest::srgbToLinear;
 
     // Mean linear luminance over a (2r+1)^2 patch around the pixel of world point P.
     double patchAt(const std::vector<unsigned char>& px, const PerspectiveCamera& cam, Vector3 P, int r) {
@@ -92,10 +90,7 @@ int main(int argc, char** argv) {
         return kSkipCode;
     }
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.setClearColor(Color(0.f, 0.f, 0.f));
     renderer.toneMapping = ToneMapping::None;

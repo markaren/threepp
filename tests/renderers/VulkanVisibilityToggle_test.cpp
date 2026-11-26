@@ -70,19 +70,7 @@ namespace {
     constexpr int kW = 384, kH = 192;
     constexpr int kSettleFrames = 45;
 
-    std::shared_ptr<Texture> constantEnv(float le) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, le);
-        for (size_t i = 3; i < data.size(); i += 4) data[i] = 1.f;
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::constantEnv;
 
     std::array<double, 3> patchMean(const std::vector<unsigned char>& a, int cx, int cy, int r) {
         std::array<double, 3> sum{0, 0, 0};
@@ -134,10 +122,7 @@ int main() {
     VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setDenoise(true);
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

@@ -30,12 +30,8 @@ using namespace threepp;
 
 namespace {
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     // Pixels materially brighter than the dark background and orange-ish: the cloud.
     long coverage(const std::vector<unsigned char>& img) {

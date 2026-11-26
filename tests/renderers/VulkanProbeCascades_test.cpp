@@ -58,10 +58,7 @@ TEST_CASE("Probe GI: four cascades fill, scroll and light the picture") {
     VulkanRenderer& renderer = *gpu.renderer;
     renderer.setProbeGI(true);
     renderer.setProbeCascades(4);
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     REQUIRE(renderer.probeCascades() == 4u);
 
