@@ -377,6 +377,14 @@ namespace threepp::vulkan::impl {
         uint32_t rowsLo = 0, rowsHi = 0;
         uint32_t rowsCount = ~0u;
         bool rowsRanged = false;          // this frame's refresh took [rowsLo, rowsHi) alone (consumed by the motion pass)
+        // The instance rows as the last refresh read them (count x 16 floats),
+        // kept from the first edit the mesh did not record (setMatrixAt and a
+        // bare needsUpdate(), or rows written into the array): the next such
+        // edit is compared with it row by row, so only the rows that changed
+        // are refreshed. rawVersion: instMatVersion when the copy was taken; a
+        // copy not taken at the last refresh is not compared with.
+        std::vector<float> rawRows;
+        unsigned int rawVersion = ~0u;
         // The cull bounds still current but for the rows [cullLo, cullHi)
         // (cullPartial; refreshSpanCullBounds re-boxes their blocks only).
         // Anything else that clears aabbValid clears cullPartial with it.

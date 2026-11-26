@@ -5660,15 +5660,47 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     const unsigned int v = sp.inst->instanceMatrix()->version;
                     const bool meshMoved = std::memcmp(sp.meshWorld.data(), mw, 64) != 0;
                     if (v == sp.instMatVersion && !meshMoved) continue;
+                    const auto& arr = sp.inst->instanceMatrix()->array();
+                    const size_t nf = size_t(sp.count) * 16u;
                     // The rows the edits since the last refresh wrote, when the
                     // mesh recorded them all (InstancedMesh::matrixRowsSince)
                     // and nothing else moved: those rows alone are refreshed.
-                    // Otherwise every row, as before.
                     InstancedMesh::RowEdits ed;
-                    const bool ranged = !meshMoved && sp.rowsCount == sp.count && sp.instMatVersion != ~0u &&
-                                        sp.inst->matrixRowsSince(sp.instMatVersion, ed);
-                    const uint32_t j0 = ranged ? std::min(ed.lo, sp.count) : 0u;
-                    const uint32_t j1 = ranged ? std::min(ed.hi, sp.count) : sp.count;
+                    const bool edited = !meshMoved && sp.instMatVersion != ~0u && v != sp.instMatVersion;
+                    const bool known = edited && sp.inst->matrixRowsSince(sp.instMatVersion, ed);
+                    const bool recorded = known && sp.rowsCount == sp.count;
+                    // An edit it did not record (setMatrixAt and a bare
+                    // needsUpdate(), as three.js code makes it, or rows written
+                    // into the array): the rows that changed, found against the
+                    // copy of the rows the last refresh read (rawRows). The
+                    // first row and the last that differ bound them, and the
+                    // refresh below skips a row between them that did not
+                    // change. Otherwise every row, as before.
+                    uint32_t lo = 0u, hi = sp.count;
+                    bool diffed = false;
+                    if (recorded) {
+                        lo = std::min(ed.lo, sp.count);
+                        hi = std::min(ed.hi, sp.count);
+                    } else if (edited && !known && sp.rowsCount == sp.count && sp.rawVersion == sp.instMatVersion &&
+                               sp.rawRows.size() == nf && arr.size() >= nf) {
+                        const float* now = arr.data();
+                        const float* was = sp.rawRows.data();
+                        while (lo < hi && std::memcmp(now + size_t(lo) * 16u, was + size_t(lo) * 16u, 64) == 0) ++lo;
+                        while (hi > lo && std::memcmp(now + size_t(hi - 1u) * 16u, was + size_t(hi - 1u) * 16u, 64) == 0) --hi;
+                        diffed = true;
+                        if (lo == hi) {// written, but no row changed: nothing to refresh
+                            sp.instMatVersion = v;
+                            sp.rawVersion = v;
+                            continue;
+                        }
+                    }
+                    const bool ranged = recorded || diffed;
+                    const uint32_t j0 = ranged ? lo : 0u;
+                    const uint32_t j1 = ranged ? hi : sp.count;
+                    // the copy matched the rows as of the refresh before this one,
+                    // and they changed since (not when only the mesh moved)
+                    const bool copyCurrent = sp.rawVersion == sp.instMatVersion && sp.rawRows.size() == nf;
+                    const bool rowsChanged = v != sp.instMatVersion;
                     sp.instMatVersion = v;
                     sp.rowsCount = sp.count;
                     sp.rowsLo = j0;
@@ -5713,7 +5745,6 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     // the full expansion below AND to instance_expand.comp,
                     // the `precise` GPU replica that instanceExpandCheck
                     // compares against bit for bit.
-                    const auto& arr = sp.inst->instanceMatrix()->array();
                     // mw is this matrix's element array; binding the
                     // Matrix4 itself keeps the mesh world out of the
                     // per-instance copy entirely.
@@ -5721,13 +5752,21 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                     Matrix4 instMat;
                     Matrix4 world;
                     for (uint32_t j = j0; j < j1; ++j) {
+                        // Found by the diff: a row equal to its copy kept its
+                        // world matrix (the mesh did not move), so it is
+                        // skipped, and a changed one goes into the copy here.
+                        if (diffed) {
+                            float* was = sp.rawRows.data() + size_t(j) * 16u;
+                            if (std::memcmp(arr.data() + size_t(j) * 16u, was, 64) == 0) continue;
+                            std::memcpy(was, arr.data() + size_t(j) * 16u, 64);
+                        }
                         std::memcpy(instMat.elements.data(), arr.data() + size_t(j) * 16u, 64);
                         world.multiplyMatrices(meshWorld, instMat);
                         float* wm = lastVisibleEntries_[sp.first + j].worldMatrix.data();
                         if (sp.instancesMoved && std::memcmp(wm, world.elements.data(), 64) != 0) {
                             const uint32_t i = sp.first + j;
                             meshMovedBits_[i >> 5] |= (1u << (i & 31u));
-                            if (ranged && ed.placedOnly(j)) entryPlacedBits_[i >> 5] |= (1u << (i & 31u));
+                            if (recorded && ed.placedOnly(j)) entryPlacedBits_[i >> 5] |= (1u << (i & 31u));
                         }
                         std::memcpy(wm, world.elements.data(), 64);
                         // Keep the fingerprint's matrix mirror fresh so a
@@ -5735,6 +5774,20 @@ void VulkanRenderer::Impl::refreshSpanMatrices() {
                         // frame's state, not a stale lean-era matrix.
                         prevSceneFingerprint[sp.first + j].matrix =
                                 lastVisibleEntries_[sp.first + j].worldMatrix;
+                    }
+                    // The copy the next unrecorded edit is compared with, from
+                    // the first such edit on (a mesh whose edits are all
+                    // recorded never needs one): the rows as this refresh read them.
+                    if (diffed) {
+                        sp.rawVersion = v;// the loop brought it up to date
+                    } else if ((!sp.rawRows.empty() || (edited && !known)) && arr.size() >= nf) {
+                        if (!copyCurrent) {
+                            sp.rawRows.assign(arr.begin(), arr.begin() + static_cast<std::ptrdiff_t>(nf));
+                        } else if (rowsChanged && j1 > j0) {
+                            std::memcpy(sp.rawRows.data() + size_t(j0) * 16u, arr.data() + size_t(j0) * 16u,
+                                        size_t(j1 - j0) * 64u);
+                        }
+                        sp.rawVersion = v;
                     }
                 } else {
                     if (std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
