@@ -42,8 +42,8 @@ namespace threepp {
         std::filesystem::path sourceFile;
 
         // The already-encoded image this texture was decoded from, for pixels
-        // that arrived INSIDE another file (a .glb bufferView, an assimp
-        // aiTexture blob) and so have no `sourceFile` to point at. Kept whole so
+        // that arrived INSIDE another file (a .glb bufferView, a texture packed
+        // in a .usdz) and so have no `sourceFile` to point at. Kept whole so
         // an archive export can store those original PNG/JPEG bytes instead of
         // re-encoding the decoded pixels — which is what made an archive save of
         // a texture-heavy .glb cost as much as the JSON it replaced.
