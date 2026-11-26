@@ -565,7 +565,8 @@ def test_sim_time_pins_ocean_against_frame_pacing(vk_renderer):
 def test_external_cascade_is_the_drawn_sea(vk_renderer):
     """A cascade supplied by the caller replaces its spectrum and inverse FFT: with one
     sine swell along x and a lower one along z on cascade 0, and the other cascades supplied
-    flat, sample_height returns that field times wave_scale; given back, the cascade is the spectrum's sea again."""
+    flat, sample_height returns that field times wave_scale, with no bound harmonic added (bound_waves is on by
+    default); given back, the cascade is the spectrum's sea again."""
     scene = tp.Scene()
     scene.background = 0x202830
     ocean = tp.Ocean(size=200.0, resolution=64, wind_speed=10.0, fft_size=128, wave_scale=1.5)

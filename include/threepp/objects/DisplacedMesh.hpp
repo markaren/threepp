@@ -121,7 +121,9 @@ namespace threepp {
             // flatter, height skewness 3 sigma k_m, for waves from any
             // direction. Normals follow. With crestSharpness on, a steep
             // band's harmonic is exaggerated (see there). Held at
-            // kStokesHarmonicCap of the band's local amplitude.
+            // kStokesHarmonicCap of the band's local amplitude. A cascade
+            // the host supplies (externalCascades) gets none: k_m is its
+            // spectrum's, and the supplied field replaced that sea.
             // THREEPP_OCEAN_BOUND_WAVES = 1 / 0 forces it. Live-tunable.
             bool boundWaves = true;
 
@@ -841,6 +843,9 @@ namespace threepp {
         //  - the values are metres times the cascade's tile size: the shaders
         //    divide by the tile size, then scale the height by waveScale and
         //    the displacement by the choppiness.
+        // The height is drawn as given: a supplied cascade gets no bound
+        // harmonic (Params::boundWaves) and its steepness opens no crest
+        // sharpening, since both read k_m from the spectrum it replaces.
         // Everything that reads the cascade then sees the supplied field: the
         // displacement, the normals, the crest foam, the traced surface and
         // sampleHeight. With the chop normals on the renderer makes the

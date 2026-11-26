@@ -3731,6 +3731,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 }
                 if (rb && rb->handle != VK_NULL_HANDLE) {
                     st.heightReadbackWritten[currentFrame] = true;
+                    st.heightReadbackExternal[currentFrame] = externalMask;
                     // Height image at offset 0, horizontal displacement
                     // after it: sampleHeight() inverts x = q + D(q) to find
                     // the rest point whose displaced image lies over the query.
@@ -3924,8 +3925,11 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                                 // The wave climate: its map at kClimateBinding scales the cascades.
                                 (st.climateImage.view != VK_NULL_HANDLE ? 256u : 0u);
             pc.uvOut          = foamOut ? st.blas->uv.address : 0ull;
-            pc.boundKm0       = boundOn ? st.boundKm[0] : 0.f;
-            pc.boundKm1       = boundOn ? st.boundKm[1] : 0.f;
+            // A cascade the host supplies (externalMask) is drawn as given: the
+            // bound harmonic and the steep-crest gate read k_m from the
+            // cascade's own spectrum, the sea the supplied field replaced.
+            pc.boundKm0       = (boundOn && !(externalMask & 1u)) ? st.boundKm[0] : 0.f;
+            pc.boundKm1       = (boundOn && !(externalMask & 2u)) ? st.boundKm[1] : 0.f;
             pc.crestSharpness = cwmOn ? dm.effectiveCrestSharpness() : 0.f;
             // The shore's depth: the cascades' gains over shallow water (the
             // last depth the shore laid, with its own placement; 0 = none).
@@ -4494,7 +4498,11 @@ void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, Displa
                     vmaUnmapMemory(ctx->allocator(), buf.alloc);
                     cf.dim      = dim;
                     cf.tileSize = tileSizes[ci];
-                    cf.boundKm  = (ci < 2 && dm.boundWavesOn() && st.boundKmValid) ? st.boundKm[ci] : 0.f;
+                    // No harmonic on a field the host supplied, as the displace
+                    // pass drew it: the slot's own record, since its copy is
+                    // kFramesInFlight frames old.
+                    const bool external = ((st.heightReadbackExternal[slot] >> ci) & 1u) != 0u;
+                    cf.boundKm  = (ci < 2 && !external && dm.boundWavesOn() && st.boundKmValid) ? st.boundKm[ci] : 0.f;
                     cf.bankedMss = (st.chopOn && uint32_t(ci) == st.chopFineIdx) ? st.shortWaveBankedMss : 0.f;
                 }
             }

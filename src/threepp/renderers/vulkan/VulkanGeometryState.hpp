@@ -690,6 +690,11 @@ namespace threepp::vulkan::impl {
         // would hand garbage heights to buoyancy for a frame; the mirror
         // skips it and keeps the last good field instead.
         bool      heightReadbackWritten[kFramesInFlight] = {};
+        // Per-slot: the cascades (bit i = cascade i) whose fields the host
+        // supplied (DisplacedMesh::externalCascades) when slot s's copy was
+        // recorded. The mirror gives those no bound harmonic, as the displace
+        // pass drew none on them.
+        uint32_t  heightReadbackExternal[kFramesInFlight] = {};
         // The shore's depth for sampleHeight (DisplacedMesh::shoreDepth),
         // under the same opt-in and ring: a slot a frame in flight holding a
         // copy of the shore's depth buffer, whole when the depth it holds is

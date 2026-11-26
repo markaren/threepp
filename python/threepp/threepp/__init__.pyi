@@ -2264,7 +2264,7 @@ class DisplacedMesh(Mesh):
         @property
         def bound_waves(self) -> bool:
             """
-            Second-order bound harmonics (default True): sharper crests, flatter troughs (Longuet-Higgins 1963, Tayfun 1980), exaggerated on steep crests and held at the Stokes limit. THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.
+            Second-order bound harmonics (default True): sharper crests, flatter troughs (Longuet-Higgins 1963, Tayfun 1980), exaggerated on steep crests and held at the Stokes limit; none on a cascade given with set_external_cascade. THREEPP_OCEAN_BOUND_WAVES=1/0 overrides it.
             """
         @bound_waves.setter
         def bound_waves(self, arg0: bool) -> None:
@@ -2670,7 +2670,7 @@ class DisplacedMesh(Mesh):
         """
     def set_external_cascade(self, cascade: typing.SupportsInt | typing.SupportsIndex, height: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], disp: typing.Any = None) -> None:
         """
-        Supply cascade 0, 1 or 2 yourself instead of its spectrum and inverse FFT: `height` is an N x N float32 array in metres (N = the cascade's texture size), row j along z, column i along x, the centre of texel (i, j) over the ocean's XZ at (i + 0.5, j + 0.5) * tile_size / N, periodic over the tile (cascade 1 in its rotated domain); `disp` is the horizontal displacement, N x N x 2 (x, z) in metres, or None for none. The drawn sea is the height times wave_scale and the displacement times the choppiness, as for the built-in waves; displacement, normals, crest foam, the traced surface and sample_height all follow the supplied field. The field is uploaded every frame as it stands, so call this again for each new instant.
+        Supply cascade 0, 1 or 2 yourself instead of its spectrum and inverse FFT: `height` is an N x N float32 array in metres (N = the cascade's texture size), row j along z, column i along x, the centre of texel (i, j) over the ocean's XZ at (i + 0.5, j + 0.5) * tile_size / N, periodic over the tile (cascade 1 in its rotated domain); `disp` is the horizontal displacement, N x N x 2 (x, z) in metres, or None for none. The drawn sea is the height times wave_scale and the displacement times the choppiness, as for the built-in waves, but with no bound harmonic (bound_waves) and no crest sharpening of its own, since both read the wavenumber of the spectrum it replaces; displacement, normals, crest foam, the traced surface and sample_height all follow the supplied field. The field is uploaded every frame as it stands, so call this again for each new instant.
         """
     def set_wave_climate(self, map: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], origin_x: typing.SupportsFloat | typing.SupportsIndex, origin_z: typing.SupportsFloat | typing.SupportsIndex, size_x: typing.SupportsFloat | typing.SupportsIndex, size_z: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
