@@ -971,6 +971,15 @@ def hull_waves_on(boat, setting=None):
     return "all" in names or boat in names
 
 
+def hull_thickness_on(boat, setting=None):
+    """Whether a boat's waves come from her SHAPE rather than her weight (Wash.thickness_segments: thin-ship
+    sources, a displacement ship's model, which raise the water at her bow): from the environment variable
+    HULL_THICKNESS (or `setting`), a comma-separated list of boat names, or "all". Off by default: every
+    Wash's waves as before."""
+    names = [n.strip() for n in (os.environ.get("HULL_THICKNESS", "") if setting is None else setting).split(",")]
+    return bool(boat) and ("all" in names or boat in names)
+
+
 def jet_wake_on(boat, setting=None):
     """Whether a boat's waterjet race is drawn as a jet's churned water (Wash.JET_*) rather than as
     a propeller race's: from the environment variable JET_WAKE (or `setting`), a comma-separated
@@ -1007,6 +1016,14 @@ class Wash:
                        waves a weight of that shape makes at her speed. No wave is drawn: at
                        rest she makes none, at speed the fan has the angle and the wavelengths
                        of that speed, and it bends where she turned.
+                       Or, where HULL_THICKNESS names her (hull_thickness_on()), her waves come from her
+                       SHAPE instead (thin-ship theory, a displacement ship's model): her sectional area
+                       curve at her design waterline, cut into SEGMENTS stretches of equal area change,
+                       each a source of -U dA m3/s at her surge U (thickness_segments()), and what her
+                       transom leaves open closed by a sink spread over U^2 / g behind it. That pushes the
+                       water aside, so it stands up at her bow, sinks along her shoulders and rises at
+                       her stern, with no dent to take out; VesselWash's Waves::Thickness, constant for
+                       constant.
       her hull's own   three sources more, each OFF unless HULL_FOAM names her (hull_foam_parts();
       foam             the switches bow, waterline and transom on a Wash):
                        bow        her bow wave where it breaks: at the shoulders, thrown out to
@@ -1043,6 +1060,7 @@ class Wash:
     EDDY = 2.4            # her patch's large eddies, in radii of her widest race at the surface
     WANDER = 0.45         # how far a race's surfacing point strays to either side, in its radii there
     STRIPS = 8            # stretches a side her weight is laid out in along her hulls
+    SEGMENTS = 16         # stretches her sectional area curve is cut into (HULL_THICKNESS; VesselWash::kSegments)
     G = 9.81
 
     # ---- her hull's own foam (off unless HULL_FOAM names her)
@@ -1057,6 +1075,10 @@ class Wash:
                                # its full level at 0.40; less is lace through which the water shows)
     BOW_AIR = 0.15             # LOOK: the bubbles it takes down, fully broken
     BOW_TURB = 0.25            # rms turbulent speed of the broken water, as a share of her speed (assumed)
+    # HULL_THICKNESS (_bow_regimes, VesselWash's kBowFoam / kBowAir): where a ship's overturning sheet lands the water
+    # is white, not lace (by eye on Trollfjord at 15 knots, 2026-11-26; 0.6 read as a thin line from 100 m)
+    BOW_SHEET_FOAM = 0.9       # LOOK
+    BOW_SHEET_AIR = 0.45       # LOOK
     # The breaking crest moves out from her with her first divergent crest: over the ground at
     # U tan(19.47 deg), the Kelvin wedge's half angle, so the foam leaves her side as a V.
     KELVIN_TAN = 0.3536
@@ -1124,6 +1146,9 @@ class Wash:
         self.wl_state = None                   # the waterline stations' water levels, mean level and closing speed
         self.jet_wake = jet_wake_on(hull.boat) # JET_WAKE: her jet's race as a jet's churned water (JET_*)
         self.waves_draft = hull_waves_on(hull.boat)  # HULL_WAVES: her weight carried down to her draft
+        self.thickness = hull_thickness_on(hull.boat)  # HULL_THICKNESS: her waves from her shape, not her weight
+        self.segments = None                   # thickness_segments(), once: her stretches and her transom
+        self.bowl = None                       # bow_lines(), once (HULL_THICKNESS: her bow wave breaking)
         # a catamaran (her spec's hull names demihull_z): her lanes and bow foam per demihull. A spec
         # with no hull section at all (the Otters': their floats are `pontoons`) names none.
         hull_spec = hull.spec.get("hull", {})
@@ -1157,13 +1182,16 @@ class Wash:
                 "tan_entry": float(b[fwd]) / max(x_stem - x_sh, 1e-3)}
 
     def _bow(self, u, texel):
-        """Her bow wave where it breaks (BOW_*)."""
+        """Her bow wave where it breaks (BOW_*; with HULL_THICKNESS, _bow_regimes())."""
+        if self.thickness:
+            self._bow_regimes(max(u, 0.0), texel)
+            return
         h, L = self.hull, self.lines
         U = max(u, 0.0)
         fd = U / math.sqrt(self.G * L["draft_bow"])
-        brk = smoothstep(self.BOW_FD[0], self.BOW_FD[1], fd)
         # a catamaran: the tables' breadth is a whole demihull's, so its half-breadth is half of it
         half = 0.5 if self.demihulls else 1.0
+        brk = smoothstep(self.BOW_FD[0], self.BOW_FD[1], fd)
         self.report["bow"] = {"F_D": fd, "breaking": brk,
                               "Z": 2.2 * U * U / self.G * half * L["tan_entry"] / (1.0 + fd)}
         if brk <= 1e-3:
@@ -1193,6 +1221,56 @@ class Wash:
                 v = out[[0, 2]] / max(float(np.linalg.norm(out[[0, 2]])), 1e-9) * (self.KELVIN_TAN * U)
                 self._put(f"bow_{s}{k}", q[[0, 2]], v, r, self.BOW_FOAM * brk * share, self.BOW_AIR * brk * share,
                           self.BOW_TURB * U * brk, 0.5 * brk)
+
+    def _bow_regimes(self, U, texel):
+        """Her bow wave where it breaks, for a hull whose waves come from her shape (HULL_THICKNESS): VesselWash's
+        bow (Waves::Thickness, bowFoam), constant for constant, on her bow's lines as it reads them (bow_lines()).
+        Its height (Noblesse, Delhommeau, Guilbaud, Hendrix and Yang, J. Fluid Mech. 600, 2008): Z_b g / U^2 =
+        2.2 tan a / ((1 + F) cos a), F = U / sqrt(g D), at most the 1/2 a steady bow wave can hold: past that
+        (4.4 tan a / cos a > 1 + F) it is unsteady at U^2 / 2g, under it an overturning sheet; it breaks either
+        way. Its broken water lands at sqrt(2 g Z_b) and takes air down as a plunging jet does (JET_VE,
+        JET_V_FULL), over a crest half its height wide, laid thinner where the field's texel is wider than that.
+        Along her entry from near her stem to her shoulder (a fifth of the way, half way, and at it), from her side
+        outward (her sections' breadth, as VesselWash has it; not her flare's), moving out at U tan(19.47 deg)."""
+        h = self.hull
+        if self.bowl is None:
+            self.bowl = self.bow_lines() or {}
+        B = self.bowl
+        if not B or not U > 0.0:
+            self.report["bow"] = {}
+            for n in [n for n in self.last if n.startswith("bow_")]:
+                del self.last[n]
+            return
+        ta = B["tan_entry"]
+        fd = U / math.sqrt(self.G * B["draft"])
+        zn = 2.2 * ta * math.sqrt(1.0 + ta * ta) / (1.0 + fd)       # Z_b g / U^2 (1 / cos a = sqrt(1 + tan^2 a))
+        zb = min(zn, 0.5) * U * U / self.G
+        land = math.sqrt(2.0 * self.G * zb)
+        air = smoothstep(self.JET_VE[0], self.JET_VE[1], land) * min(land / self.JET_V_FULL, 1.0)
+        r = max(0.5 * zb, 1.25 * texel)
+        brk = air * 0.5 * zb / r
+        self.report["bow"] = {"F_D": fd, "Z": zb, "unsteady": zn > 0.5, "landing": land, "breaking": brk}
+        if brk <= 1e-3:
+            for n in [n for n in self.last if n.startswith("bow_")]:
+                del self.last[n]
+            return
+        zc = self.demihull_z if self.demihulls else 0.0
+        wl = h.design["waterline_y_at_x0"]
+        entry = B["x_stem"] - B["x_shoulder"]
+        # along her entry from near her stem to her shoulder, rising to her crest and past it
+        for k, (x, share) in enumerate(((B["x_stem"] - 0.2 * entry, 0.6), (B["x_stem"] - 0.5 * entry, 0.9),
+                                        (B["x_shoulder"], 1.0))):
+            bx = float(np.interp(x, B["x"], B["b"]))
+            # each side of her bow about her centreline, or (a catamaran) both sides of each demihull's bow; the
+            # broken water from her side outward
+            for j, z0 in enumerate((-zc, zc) if zc > 0.0 else (0.0,)):
+                for side in (1.0, -1.0):
+                    q = h.to_world([x, wl, z0 + side * (bx + r)])
+                    out = h.R @ np.array([0.0, 0.0, side])
+                    v = out[[0, 2]] / max(float(np.linalg.norm(out[[0, 2]])), 1e-9) * (self.KELVIN_TAN * U)
+                    self._put(f"bow_{k}_{j}{'s' if side > 0.0 else 'p'}", q[[0, 2]], v, r,
+                              self.BOW_SHEET_FOAM * brk * share, self.BOW_SHEET_AIR * brk * share, self.BOW_TURB * U * brk,
+                              0.5 * brk)
 
     def _waterline(self, u, dt, texel):
         """The water thrown up her side where it closes on her hard (OCHI, WL_*)."""
@@ -1280,15 +1358,116 @@ class Wash:
         L = self.lines if self.lines is not None else self.hull_lines()
         return [max(float(np.interp(x, L["x"], L["wl"] - L["keel"])), 0.0) for (x, z, share, r, half) in self.strips]
 
-    def _put(self, name, p, vel, radius, foam, aeration, turbulence, lane, push=0.0, axis=(0.0, 0.0), draft=0.0):
+    def area_curve(self):
+        """Her sectional area curve at her design waterline, stern to bow, as VesselWash takes its sections: (x, the
+        immersed area of her whole section, her draft there, one hull's half-breadth at the water), from her aftmost
+        wet station (a table's empty stations behind her are not her), with one more station half a spacing ahead
+        of her foremost where her section is nothing, if the table has none there."""
+        h = self.hull
+        L = self.lines if self.lines is not None else self.hull_lines()
+        t = min(max((h.design["waterline_y_at_x0"] - h.h0) / h.dh, 0.0), h.nh - 1.001)
+        i, f = int(t), t - int(t)
+        ns = len(h.sx) // 2
+        area = 2.0 * (h.tab_a[:ns, i] + (h.tab_a[:ns, i + 1] - h.tab_a[:ns, i]) * f)
+        half = 0.5 if self.demihulls else 1.0  # a catamaran's tables hold a whole demihull's breadth
+        sec = sorted(zip(map(float, L["x"]), map(float, area), map(float, np.maximum(L["wl"] - L["keel"], 0.0)),
+                         map(float, half * L["b"])))
+        while sec and not sec[0][1] > 0.0:
+            sec.pop(0)
+        if len(sec) >= 2 and sec[-1][1] > 0.0:
+            sec.append((sec[-1][0] + 0.5 * (sec[-1][0] - sec[-2][0]), 0.0, sec[-1][2], sec[-1][3]))
+        return sec
+
+    def bow_lines(self):
+        """Her bow's lines from her area curve, as VesselWash reads them (Waves::Thickness): her stem half a station
+        ahead of her foremost wet section, her shoulder the foremost wet section half her widest, the tangent of
+        her entry's half angle from the one to the other, her bow's mean draft from her shoulder to her stem, and
+        the curve's x and half-breadths for placing the broken water. None where they make no bow."""
+        sec = self.area_curve()
+        if len(sec) < 2:
+            return None
+        a_max = max(s[1] for s in sec)
+        wet = [k for k, s in enumerate(sec) if s[1] > 1e-3 * a_max]
+        if not wet:
+            return None
+        b_max = max(sec[k][3] for k in wet)
+        stem = shoulder = None
+        for k in reversed(wet):
+            if stem is None:
+                stem = k
+            if sec[k][3] >= 0.5 * b_max:
+                shoulder = k
+                break
+        if not b_max > 0.0 or stem is None or shoulder is None:
+            return None
+        n = len(sec)
+        dx = sec[stem + 1][0] - sec[stem][0] if stem + 1 < n else (sec[stem][0] - sec[stem - 1][0] if stem > 0 else 0.0)
+        x_stem, x_sh = sec[stem][0] + 0.5 * dx, sec[shoulder][0]
+        draft = sum(max(sec[k][2], 0.0) for k in range(shoulder, stem + 1)) / max(stem - shoulder + 1, 1)
+        if not (x_stem > x_sh and draft > 0.0):
+            return None
+        return {"x_stem": x_stem, "x_shoulder": x_sh, "draft": draft,
+                "tan_entry": sec[shoulder][3] / max(x_stem - x_sh, 1e-3),
+                "x": np.array([s[0] for s in sec]), "b": np.array([s[3] for s in sec])}
+
+    def thickness_segments(self):
+        """Her sectional area curve at her design waterline, from the Bonjean tables (both halves), as SEGMENTS
+        sources of equal |dA|, stern to bow (VesselWash::thicknessSegments, constant for constant): a list of
+        (x, dA, half length, radius, draft) in the vessel frame, dA the area her section gains along the
+        stretch toward her bow (negative at her entry), and her aftmost wet section (x, area, draft,
+        half-breadth), which they leave open (update() closes it). A stretch takes stations until it holds its
+        share of |dA| and stops early where her section turns from narrowing to widening; it lies at the
+        |dA|-weighted centroid of its intervals, as long as their spread, as wide as half her half-breadth
+        there and as deep as her draft there."""
+        sec = self.area_curve()
+        if len(sec) < 2:
+            return [], None
+        total = sum(abs(b[1] - a[1]) for a, b in zip(sec[:-1], sec[1:]))
+        if not total > 0.0:
+            return [], None
+        share = total / self.SEGMENTS
+        out = []
+        acc = dict(sum=0.0, w=0.0, wx=0.0, wxx=0.0, wb=0.0, wd=0.0, sign=0)
+
+        def flush():
+            if acc["w"] > 0.0:
+                xc = acc["wx"] / acc["w"]
+                var = max(acc["wxx"] / acc["w"] - xc * xc, 0.0)
+                out.append((xc, acc["sum"], math.sqrt(3.0 * var), 0.5 * acc["wb"] / acc["w"], acc["wd"] / acc["w"]))
+            acc.update(sum=0.0, w=0.0, wx=0.0, wxx=0.0, wb=0.0, wd=0.0, sign=0)
+
+        for a, b in zip(sec[:-1], sec[1:]):
+            dA = b[1] - a[1]
+            w = abs(dA)
+            if not w > 0.0:
+                continue
+            sg = -1 if dA < 0.0 else 1
+            big = w > 0.02 * share             # a sliver of the other sign does not end a stretch
+            if acc["w"] >= share * (1.0 - 1e-4) or (big and acc["sign"] != 0 and sg != acc["sign"]):
+                flush()
+            if acc["sign"] == 0 and big:
+                acc["sign"] = sg
+            m, l = 0.5 * (a[0] + b[0]), b[0] - a[0]
+            acc["sum"] += dA
+            acc["w"] += w
+            acc["wx"] += w * m
+            acc["wxx"] += w * (m * m + l * l / 12.0)
+            acc["wb"] += w * 0.5 * (a[3] + b[3])
+            acc["wd"] += w * 0.5 * (a[2] + b[2])
+        flush()
+        return out, sec[0]
+
+    def _put(self, name, p, vel, radius, foam, aeration, turbulence, lane, push=0.0, axis=(0.0, 0.0), draft=0.0,
+             flux=0.0):
         x0, z0 = self.last.get(name, (p[0], p[1]))
         if math.hypot(p[0] - x0, p[1] - z0) > 0.5 * self.size:
             x0, z0 = p[0], p[1]                # she was moved, not sailed
-        if push and self.ripples:
+        if (push or flux) and self.ripples:
             self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
                                        float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0),
                                        push=float(push), ax=float(axis[0]), az=float(axis[1]), patch=self.index,
-                                       **({"draft": float(draft)} if draft > 0.0 else {}))
+                                       **({"draft": float(draft)} if draft > 0.0 else {}),
+                                       **({"flux": float(flux)} if flux else {}))
         else:
             self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
                                        float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0))
@@ -1412,16 +1591,37 @@ class Wash:
             for k in range(2):
                 self.last.pop(f"hull_{k}", None)
 
-        # her hull's own foam (HULL_FOAM): the bow wave where it breaks, the water thrown up her side
-        if self.bow:
+        # her hull's own foam (HULL_FOAM): the bow wave where it breaks, the water thrown up her side; a hull
+        # whose waves come from her shape (HULL_THICKNESS) breaks her bow wave always, as VesselWash does
+        if self.bow or self.thickness:
             self._bow(u, texel)
         if self.waterline:
             self._waterline(u, dt, texel)
         if os.environ.get("HULL_FOAM_DEBUG") and (self.bow or self.waterline or self.transom) and int(self.t / 2.0) != int((self.t - dt) / 2.0):
             print(f"[hullfoam] t {self.t:.1f} u {u:.2f}", {k: self.report.get(k) for k in ("bow", "waterline", "transom")}, flush=True)
 
+        # HULL_THICKNESS: her shape pushing the water aside, what makes her waves (in place of her weight)
+        if self.ripples and self.thickness:
+            if self.segments is None:
+                self.segments = self.thickness_segments()
+            segs, tr = self.segments
+            # a catamaran's area is both demihulls': half of each stretch to each, about its own centreline
+            zs = (-self.demihull_z, self.demihull_z) if self.demihulls else (0.0,)
+            wl = h.design["waterline_y_at_x0"]
+            for k, (x, dA, half, r, d) in enumerate(segs):
+                for j, z in enumerate(zs):
+                    q = h.to_world([x, wl, z])
+                    self._put(f"thick_{k}_{j}", q[[0, 2]], (0.0, 0.0), r, 0.0, 0.0, 0.0, 0.0,
+                              axis=fwd * half, draft=d, flux=-u * dA / len(zs))
+            if tr is not None:                 # what her transom leaves open, closed over U^2 / g behind it (ASSUMED)
+                l = max(u * u / self.G, tr[3])
+                for j, z in enumerate(zs):
+                    q = h.to_world([tr[0] - 0.5 * l, wl, z])
+                    self._put(f"thick_close_{j}", q[[0, 2]], (0.0, 0.0), 0.5 * tr[3], 0.0, 0.0, 0.0, 0.0,
+                              axis=fwd * (0.5 * l), draft=tr[2], flux=-u * tr[1] / len(zs))
+
         # her weight on the water, laid out along her hulls: what makes her waves
-        if self.ripples:
+        elif self.ripples:
             if self.strips is None:
                 self.strips = self.weight_strips()
                 # WAVES_DRAFT (HULL_WAVES): a hull carries her weight down to her draft, and a load at depth

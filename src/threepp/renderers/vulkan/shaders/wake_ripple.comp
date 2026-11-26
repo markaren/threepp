@@ -37,7 +37,11 @@
 //             with c = W shape(k) / (rho g L^2), pm the midpoint and
 //             theta = omega dt - k . (p1 - p0). Any dt does.
 //             The same loop leaves the weight's STILL dent, c e^(-i k . p1),
-//             summed over the sources, in the texel's other half.
+//             summed over the sources, in the texel's other half. A source's
+//             FLUX (a hull's thickness, Q m3/s) forces it with the pressure
+//             of its double-body flow, i rho Q (k . V) / k at its velocity V,
+//             so it turns a by ct e^(i ph), ct = Q (k . V) shape / (g k L^2),
+//             and leaves no dent: the water it raises is shown.
 //   1 PACK    eta^(k) = (a(k) + conj a(-k)) / 2, plus the dent (which takes
 //             the dent out: at rest a = -dent), times (i kx - kz): the
 //             spectrum of slope_x + i slope_z, so ONE complex inverse FFT
@@ -156,7 +160,7 @@ void main() {
         const uint      count = sl.count[OCEAN_WAKE_LIST_RIPPLE + pc.layer];
         for (uint j = 0u; j < count; ++j) {
             const WakeSource sc = tb.sources[sl.index[first + j]];
-            if (sc.push == 0.0 || sc.owner != li) continue;
+            if ((sc.push == 0.0 && sc.flux == 0.0) || sc.owner != li) continue;
             // nothing narrower than a texel and a half: the spectrum has to be gone at Nyquist
             const float r  = max(sc.radius, 1.5 * texel);
             float shape = exp(-0.25 * kl * kl * r * r);
@@ -172,7 +176,16 @@ void main() {
             const float kd = kl * sc.draft;
             if (kd > 1e-4) shape *= (1.0 - exp(-kd)) / kd;
             const float c = sc.push * shape / (RHO * G * L * L);
-            if (abs(c) < 1e-12) continue;
+            // A thickness (WakeSource::flux): a source of Q m3/s under the
+            // surface, with its image over it (the double body), has the
+            // potential phi^ = -Q e^(-k z) / k on the surface, and moving at V
+            // it presses on the sea with -rho V . grad(phi), whose transform is
+            // i rho Q (k . V) / k: a quarter turn ahead of a push's, so it
+            // turns a by ct e^(i ph) where a push turns it by -i c e^(i ph). It
+            // has no dent. V is its move over the step.
+            float ct = 0.0;
+            if (sc.flux != 0.0 && dt > 0.0) ct = sc.flux * dot(k, (sc.p1 - sc.p0) / dt) * shape / (G * kl * L * L);
+            if (abs(c) < 1e-12 && abs(ct) < 1e-12) continue;
             const float ps = -dot(k, sc.p1);
             dent += c * vec2(cos(ps), sin(ps));
             if (dt > 0.0 && p.ripple > 1.5) {
@@ -181,6 +194,7 @@ void main() {
                 const float ph = -(0.5 * w * dt + dot(k, 0.5 * (sc.p0 + sc.p1)));
                 // -i e^(i ph) = (sin ph, -cos ph)
                 a += (c * w * dt * sn) * vec2(sin(ph), -cos(ph));
+                if (ct != 0.0) a += (ct * w * dt * sn) * vec2(cos(ph), sin(ph));
             }
         }
         // What dies is the WAVES, a less the weights' still dents: a weight at

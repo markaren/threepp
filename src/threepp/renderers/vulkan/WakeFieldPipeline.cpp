@@ -40,7 +40,7 @@ namespace threepp::vulkan {
         constexpr VkDeviceSize kTableBytes =
                 sizeof(WakeTableGpu) + DisplacedMesh::kMaxWakeSources * sizeof(DisplacedMesh::WakeSource);
         // The source lists follow (ocean_wake_lists.glsl's OCEAN_WAKE_LISTS_OFFSET is this offset).
-        static_assert(kTableBytes == 88 + 76 * kWakeTablePatches + 68 * 256 && DisplacedMesh::kMaxWakeSources == 256,
+        static_assert(kTableBytes == 88 + 76 * kWakeTablePatches + 72 * 256 && DisplacedMesh::kMaxWakeSources == 256,
                       "ocean_wake_lists.glsl's OCEAN_WAKE_LISTS_OFFSET and OCEAN_WAKE_MAX_SOURCES");
         constexpr VkDeviceSize kListBytes = sizeof(WakeSourceListsGpu) + kWakeListIndices * sizeof(uint32_t);
 
@@ -48,15 +48,16 @@ namespace threepp::vulkan {
         // from source `s` at a texel of patch `g`: false only where its loop
         // passes over the source at every texel, so leaving it out of the
         // patch's list changes nothing. That loop passes over one that only
-        // pushes (the same test in the same order: a NaN fails a comparison
-        // there as here), and one whose squared distance from every texel
-        // centre exceeds 24 r^2. The patch's square holds its texel centres,
-        // so a segment whose box, grown by the reach and a margin above any
-        // rounding of the shader's float arithmetic, misses the square is out
-        // of reach at every texel. Anything not finite, the source's or the
-        // patch's, is kept.
+        // forces the ripples, with a push or a flux (the same test in the same
+        // order: a NaN fails a comparison there as here), and one whose
+        // squared distance from every texel centre exceeds 24 r^2. The patch's
+        // square holds its texel centres, so a segment whose box, grown by the
+        // reach and a margin above any rounding of the shader's float
+        // arithmetic, misses the square is out of reach at every texel.
+        // Anything not finite, the source's or the patch's, is kept.
         bool fieldSourceReaches(const DisplacedMesh::WakeSource& s, const WakePatchGpu& g) {
-            if (s.push != 0.0f && s.foam <= 0.0f && s.aeration <= 0.0f && s.turbulence <= 0.0f && s.lane <= 0.0f) {
+            if ((s.push != 0.0f || s.flux != 0.0f) && s.foam <= 0.0f && s.aeration <= 0.0f && s.turbulence <= 0.0f &&
+                s.lane <= 0.0f) {
                 return false;
             }
             const float reach = std::sqrt(24.0f) * std::abs(s.radius);
@@ -839,17 +840,19 @@ namespace threepp::vulkan {
             std::memcpy(up.sources, dm.wakeSources.data(), sourceCount * sizeof(DisplacedMesh::WakeSource));
         }
 
-        // The ripples: whose patch each pushing source forces (one patch each,
-        // because the shade adds the patches' waves), how fast every patch's
-        // waves have to die, and which patches hold any waves at all.
+        // The ripples: whose patch each source that forces them forces, with a
+        // push or a flux (one patch each, because the shade adds the patches'
+        // waves), how fast every patch's waves have to die, and which patches
+        // hold any waves at all.
         uint32_t rippleMask = 0;
         uint32_t heightMask = 0;// of those, the patches whose waves are taken to real space and back
         if (st.rippleRes > 0u) {
             std::array<float, DisplacedMesh::kMaxWakePatches> fastest{};
             std::array<bool, DisplacedMesh::kMaxWakePatches>  pushed{};
+            std::array<bool, DisplacedMesh::kMaxWakePatches>  fluxed{};
             for (uint32_t s = 0; s < sourceCount; ++s) {
                 DisplacedMesh::WakeSource& sc = up.sources[s];
-                if (sc.push == 0.0f) continue;
+                if (sc.push == 0.0f && sc.flux == 0.0f) continue;
                 auto holds = [&](uint32_t i) {
                     if (i >= st.appLayers || !(liveMask & (1u << i))) return false;
                     const WakePatchGpu& g = tb.patches[i];
@@ -867,10 +870,12 @@ namespace threepp::vulkan {
                 }
                 if (owner < 0) {// in no patch: its waves would come up a period away
                     sc.push = 0.0f;
+                    sc.flux = 0.0f;
                     continue;
                 }
                 sc.patch      = owner;
                 pushed[owner] = true;
+                if (sc.flux != 0.0f) fluxed[owner] = true;
                 if (dt > 0.0f) {
                     fastest[owner] = std::max(fastest[owner], std::hypot(sc.x1 - sc.x0, sc.z1 - sc.z0) / dt);
                 }
@@ -881,8 +886,10 @@ namespace threepp::vulkan {
                     st.rippleHeld[i]  = false;
                     st.rippleQuiet[i] = 0.0f;
                     st.rippleSpeed[i] = 0.0f;
+                    st.rippleTouch[i] = false;
                     continue;
                 }
+                if (fluxed[i]) st.rippleTouch[i] = true;
                 WakePatchGpu& g = tb.patches[i];
                 // another period is another sea: the spectrum it holds means nothing in it
                 if (st.rippleSize[i] != g.rippleSize) st.rippleHeld[i] = false;
@@ -911,12 +918,15 @@ namespace threepp::vulkan {
                     // would come round (wake_ripple.comp, SPONGE): the waves
                     // keep their own life, and the transverse ones survive.
                     g.rippleDecay  = slowest;
-                    g.rippleHeight = 1.0f;
+                    // A flux's waves hold the water a ship's thickness raises
+                    // round her: it meets her hull (water_displace).
+                    g.rippleHeight = st.rippleTouch[i] ? 2.0f : 1.0f;
                 }
                 st.rippleQuiet[i] = pushed[i] ? 0.0f : st.rippleQuiet[i] + dt;
                 const bool on = pushed[i] || (st.rippleHeld[i] && st.rippleQuiet[i] * g.rippleDecay < 7.0f);
                 if (!on) {
-                    st.rippleHeld[i] = false;
+                    st.rippleHeld[i]  = false;
+                    st.rippleTouch[i] = false;
                     continue;
                 }
                 g.ripple         = st.rippleHeld[i] && g.live > 1.5f ? 2.0f : 1.0f;
@@ -929,8 +939,8 @@ namespace threepp::vulkan {
         // Each patch's sources, by their index in the table and in its order
         // (ocean_wake_lists.glsl): for the field's step the ones that can lay
         // something in the patch or move its water (fieldSourceReaches), for
-        // its ripples the ones whose push forces them, owners as resolved
-        // above. A step's sources lie round a few vessels, so a patch's lists
+        // its ripples the ones whose push or flux forces them, owners as
+        // resolved above. A step's sources lie round a few vessels, so a patch's lists
         // hold a few of them or none.
         struct ListUpload {
             WakeSourceListsGpu head;
@@ -952,7 +962,7 @@ namespace threepp::vulkan {
             lists.head.first[r] = listed;
             for (uint32_t k = 0; (rippleMask & (1u << i)) && k < sourceCount; ++k) {
                 const DisplacedMesh::WakeSource& s = up.sources[k];
-                if (s.push != 0.0f && s.patch == static_cast<int32_t>(i)) lists.index[listed++] = k;
+                if ((s.push != 0.0f || s.flux != 0.0f) && s.patch == static_cast<int32_t>(i)) lists.index[listed++] = k;
             }
             lists.head.count[r] = listed - lists.head.first[r];
         }
