@@ -399,7 +399,7 @@ namespace {
 struct OBJLoader::Impl {
 
     OBJLoader& scope;
-    std::shared_ptr<MaterialCreator> materials;
+    std::shared_ptr<MaterialCreator> materials;// from setMaterials; a file's own .mtl takes precedence for that load
     std::unordered_map<std::string, std::weak_ptr<Group>> cache_;
 
     explicit Impl(OBJLoader& scope): scope(scope) {}
@@ -423,11 +423,16 @@ struct OBJLoader::Impl {
 
         std::ifstream in(path);
 
+        // This file's own .mtl, else the creator setMaterials gave. Local to the
+        // load: assigning the member let one file's materials outlive it, and the
+        // next .obj without an .mtl looked its names up in them (ModelLoader keeps
+        // one thread_local OBJLoader for every .obj it loads).
+        std::shared_ptr<MaterialCreator> creator = materials;
         if (tryLoadMtl) {
             std::filesystem::path mtlFile{path.parent_path() / (path.stem().string() + ".mtl")};
             if (std::filesystem::exists(mtlFile)) {
-                materials = MTLLoader().load(absolute(mtlFile));
-                materials->preload();
+                creator = MTLLoader().load(absolute(mtlFile));
+                creator->preload();
             }
         }
 
@@ -654,8 +659,8 @@ struct OBJLoader::Impl {
 
                 std::shared_ptr<Material> material;
 
-                if (this->materials && tryLoadMtl) {
-                    material = this->materials->create(sourceMaterial->name);
+                if (creator && tryLoadMtl) {
+                    material = creator->create(sourceMaterial->name);
 
                     if (isLine && material && !material->is<LineBasicMaterial>()) {
 

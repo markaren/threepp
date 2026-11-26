@@ -5,6 +5,9 @@
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/textures/Texture.hpp"
+
+#include "tiny_png.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -403,4 +406,108 @@ TEST_CASE("MTLLoader leaves a map empty when its file is missing") {
     CHECK(material->bumpMap == nullptr);
     CHECK(material->color.r == 1.0f);
     CHECK(material->color.g == 0.0f);
+}
+
+TEST_CASE("OBJLoader does not carry one file's .mtl into the next load") {
+
+    // ModelLoader keeps one OBJLoader per thread. The first file's .mtl used to
+    // stay on the loader, so a second file without an .mtl took its materials.
+    const auto temp = std::filesystem::temp_directory_path();
+    const auto firstObj = writeTempFile("threepp_mtl_reuse_first.obj",
+                                        "mtllib threepp_mtl_reuse_first.mtl\n"
+                                        "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                                        "usemtl red\n"
+                                        "f 1 2 3\n");
+    const auto firstMtl = writeTempFile("threepp_mtl_reuse_first.mtl", "newmtl red\nKd 1 0 0\n");
+    const auto secondObj = writeTempFile("threepp_mtl_reuse_second.obj",
+                                         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                                         "usemtl red\n"
+                                         "f 1 2 3\n");
+    std::filesystem::remove(temp / "threepp_mtl_reuse_second.mtl");
+
+    OBJLoader loader;
+    loader.useCache = false;
+
+    auto first = loader.load(firstObj);
+    REQUIRE(first);
+    REQUIRE(first->children.size() == 1);
+    auto red = std::dynamic_pointer_cast<MeshPhongMaterial>(first->children.front()->as<Mesh>()->material());
+    REQUIRE(red);
+    CHECK(red->name == "red");
+    CHECK(red->color.g == 0.0f);
+
+    auto second = loader.load(secondObj);
+    REQUIRE(second);
+    REQUIRE(second->children.size() == 1);
+    auto material = std::dynamic_pointer_cast<MeshPhongMaterial>(second->children.front()->as<Mesh>()->material());
+    REQUIRE(material);
+    CHECK(material != red);
+    CHECK(material->name == "red");
+    CHECK(material->color.g == 1.0f);// the default white, not the first file's red
+
+    std::filesystem::remove(firstObj);
+    std::filesystem::remove(firstMtl);
+    std::filesystem::remove(secondObj);
+}
+
+TEST_CASE("MTLLoader gives a material name its file does not define a default material") {
+
+    // MaterialCreator looked the name up with .at() and threw; three.js makes a
+    // default material. An .obj names "" for faces before any usemtl.
+    const auto mtl = writeTempFile("threepp_mtl_undefined.mtl", "newmtl red\nKd 1 0 0\n");
+
+    SECTION("through MaterialCreator") {
+        auto creator = MTLLoader().load(mtl);
+        REQUIRE(creator);
+
+        std::shared_ptr<Material> material;
+        REQUIRE_NOTHROW(material = creator->create("not_in_the_file"));
+        REQUIRE(material);
+        CHECK(material->name == "not_in_the_file");
+        CHECK_NOTHROW(creator->create(""));
+    }
+
+    SECTION("through OBJLoader, for faces before any usemtl") {
+        const auto obj = writeTempFile("threepp_mtl_undefined.obj",
+                                       "mtllib threepp_mtl_undefined.mtl\n"
+                                       "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                                       "f 1 2 3\n");
+        OBJLoader loader;
+        loader.useCache = false;
+        std::shared_ptr<Group> group;
+        REQUIRE_NOTHROW(group = loader.load(obj));
+        CHECK(positionCount(group) == 3);
+        std::filesystem::remove(obj);
+    }
+
+    std::filesystem::remove(mtl);
+}
+
+TEST_CASE("MTLLoader tags colour maps sRGB and data maps linear") {
+
+    // TextureLoader::load(path) tags NoColorSpace and the renderers decode only
+    // sRGB-tagged textures, so an untagged diffuse map rendered too light.
+    const auto png = loadertest::writeTinyPng("threepp_mtl_colour_space.png");
+    const auto mtl = writeTempFile("threepp_mtl_colour_space.mtl",
+                                   "newmtl textured\n"
+                                   "map_Kd threepp_mtl_colour_space.png\n"
+                                   "map_Ke threepp_mtl_colour_space.png\n"
+                                   "map_Bump threepp_mtl_colour_space.png\n"
+                                   "map_Ks threepp_mtl_colour_space.png\n");
+
+    auto creator = MTLLoader().load(mtl);
+    REQUIRE(creator);
+    auto material = std::dynamic_pointer_cast<MeshPhongMaterial>(creator->create("textured"));
+    REQUIRE(material);
+    REQUIRE(material->map);
+    REQUIRE(material->emissiveMap);
+    REQUIRE(material->bumpMap);
+    REQUIRE(material->specularMap);
+    CHECK(material->map->colorSpace == ColorSpace::sRGB);
+    CHECK(material->emissiveMap->colorSpace == ColorSpace::sRGB);
+    CHECK(material->bumpMap->colorSpace == ColorSpace::Linear);
+    CHECK(material->specularMap->colorSpace == ColorSpace::Linear);
+
+    std::filesystem::remove(mtl);
+    std::filesystem::remove(png);
 }
