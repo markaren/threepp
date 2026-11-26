@@ -8,7 +8,7 @@
 // ── THE FIRE'S LIGHT ─────────────────────────────────────────────────────────
 // A burning grid smoke (ParticleField::GridSmoke) glows, and the glow is drawn
 // by the shade's march as emission: radiance per metre of path, sigma times
-// the soot's blackbody at the solver's temperature (particle_density.glsl,
+// the soot's visible blackbody (flameRGB) at the solver's temperature (particle_density.glsl,
 // pdEmissionAt). What lights the walls and the floor round it is the same
 // emission seen from outside: each cell radiates its emission times its volume
 // as intensity (power per steradian), the same in every direction, so a fire
@@ -118,7 +118,7 @@ void main() {
                 const vec3  tt  = (vec3(c) + 0.5) / vec3(pc.res.xyz);
                 const vec3  fw  = smoothstep(vec3(0.0), vec3(0.045), tt) * smoothstep(vec3(0.0), vec3(0.045), 1.0 - tt);
                 const vec3  e   = (sig * (fw.x * fw.y * fw.z) * smoothstep(kPdGlowDarkK, kPdGlowFullK, T[u])) *
-                                  blackbodyRGB(T[u]);
+                                  flameRGB(T[u]);
                 const float l   = dot(e, kLum);
                 const vec3  o   = (vec3(c) + 0.5 - oc) * pc.cell.xyz;
                 a += vec4(e, l);

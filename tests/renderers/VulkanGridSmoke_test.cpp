@@ -865,25 +865,27 @@ namespace {
     // the device (smoke_glow.comp) and read back a couple of frames late (VulkanRenderer::readGridSmokeLight). The sum
     // must be the one the host makes from the solver's own state (readGridSmoke) through the emission the march
     // draws: sigma as the write pass stores it (Q20.12 of density x GridSmoke::sigma, truncated), the march's feather
-    // at the box's faces, the glow's fade from 700 to 1000 K and the blackbody (blackbody.glsl), times the cells'
-    // volume. The clock is held still for a few frames first, so the sum that comes back is of the state
-    // readGridSmoke reads.
+    // at the box's faces, the glow's fade from 700 to 1000 K and the visible blackbody (blackbody.glsl's flameRGB),
+    // times the cells' volume. The clock is held still for a few frames first, so the sum that comes back is of the
+    // state readGridSmoke reads.
     //
     // The tolerance. The device reads the temperature as the r16f the write pass stored, which the host reproduces
     // by rounding its kelvin to the nearest half. A device that rounds toward zero instead stores up to one step less
-    // (1 K below 2048 K, 2 K above), which moves T^4 by at most 4 / 1024 = 0.4 % in a 1000 K cell and by less in a
-    // hotter one, all of it in one direction; float sums in another order add 1e-5. So 1 % for an octant's sum, and
-    // a tenth of a cell for its centroid.
+    // (1 K below 2048 K, 2 K above), all of it in one direction, and flameRGB moves by 23587 / T^2 per kelvin: 1 %
+    // in a 1500 K cell, 0.6 % in a 2000 K one, and the sum is the hot cells'; float sums in another order add 1e-5.
+    // So 1 % for an octant's sum, and a tenth of a cell for its centroid.
     constexpr double kLum[3] = {0.2126, 0.7152, 0.0722};
 
-    // blackbody.glsl's blackbodyRGB, in double.
-    void blackbody(double T, double out[3]) {
-        const double s = std::clamp(T, 500.0, 12000.0) * 0.001;
-        const double u = std::max(s - 2.09, 0.0);
-        const double h = s * 0.5, h4 = h * h * h * h;
-        out[0] = h4;
-        out[1] = std::clamp(0.22394 * s - 0.18818, 0.0, 1.0) * h4;
-        out[2] = std::clamp(u * (0.17759 + 0.01179 * u), 0.0, 1.0) * h4;
+    // blackbody.glsl's flameRGB, in double: the colour fit times Planck's red radiance, normalised to 2000 K and
+    // stopping at kFlameMaxK (3000 K).
+    void flame(double T, double out[3]) {
+        const double Tc = std::clamp(T, 500.0, 3000.0);
+        const double s  = Tc * 0.001;
+        const double u  = std::max(s - 2.09, 0.0);
+        const double m  = std::exp(23587.0 * (0.0005 - 1.0 / Tc));
+        out[0] = m;
+        out[1] = std::clamp(0.22394 * s - 0.18818, 0.0, 1.0) * m;
+        out[2] = std::clamp(u * (0.17759 + 0.01179 * u), 0.0, 1.0) * m;
     }
 
     double smooth(double e0, double e1, double x) {
@@ -953,7 +955,7 @@ namespace {
                         fw *= smooth(0.0, 0.045, t) * smooth(0.0, 0.045, 1.0 - t);
                     }
                     double bb[3];
-                    blackbody(K, bb);
+                    flame(K, bb);
                     const double w = sig * fw * smooth(700.0, 1000.0, K) * double(dr.emissiveIntensity) * v.cellVolume();
                     const int    o = (i >= h ? 1 : 0) | (j >= h ? 2 : 0) | (k >= h ? 4 : 0);
                     OctantSum&   e = host[o];

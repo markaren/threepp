@@ -103,10 +103,11 @@ layout(set = 0, binding = 68) uniform ParticleDensityUbo {
     uvec4 counts;
 } pd;
 
-// The flame's colour, blackbodyRGB(T), and the band over which a solved
-// volume's soot stops glowing (kPdGlowDarkK, kPdGlowFullK) live in their own
-// header: smoke_glow.comp sums the same emission into a burning grid smoke's
-// light, and the two must not drift apart.
+// The flame's colour (blackbodyRGB(T) for an authored ramp, flameRGB(T) for a
+// solver's simulated heat) and the band over which a solved volume's soot stops
+// glowing (kPdGlowDarkK, kPdGlowFullK) live in their own header:
+// smoke_glow.comp sums the same emission into a burning grid smoke's light, and
+// the two must not drift apart.
 #include "blackbody.glsl"
 
 // One volume's contribution at a world point, trilinear. Returns 0 outside the
@@ -223,14 +224,16 @@ float particleMedium(vec3 p, out vec3 albedo, out float g) {
 // boxInvSize.w = 1) has a temperature of its own, the solver's, in kelvin at
 // binding 99, and takes that, faded below the Draper point (blackbody.glsl): its soot
 // glows where the burn made it hot, wherever the flow carried it, and goes
-// dark as it cools. Uniform per volume, so the branch costs no divergence.
+// dark as it cools. Its glow is flameRGB's visible radiance, not blackbodyRGB's
+// T^4, so the hottest gas carries what is seen, as in a real fire. Uniform per
+// volume, so the branch costs no divergence.
 //
 // Callers gate on pd.emission[i].x > 0.0 themselves: the multiply would be a
-// no-op but blackbodyRGB and the pow would not.
+// no-op but the blackbody and the pow would not.
 vec3 pdEmissionAt(uint i, vec3 tt, float sigma) {
     if (pd.boxInvSize[i].w > 0.5) {
         const float T = texture(particleDensityTempTex[i], tt).r;
-        return (pd.emission[i].x * sigma * smoothstep(kPdGlowDarkK, kPdGlowFullK, T)) * blackbodyRGB(T);
+        return (pd.emission[i].x * sigma * smoothstep(kPdGlowDarkK, kPdGlowFullK, T)) * flameRGB(T);
     }
     const float T = mix(pd.emission[i].y, pd.emission[i].z, pow(tt.y, pd.emission[i].w));
     return (pd.emission[i].x * sigma) * blackbodyRGB(T);

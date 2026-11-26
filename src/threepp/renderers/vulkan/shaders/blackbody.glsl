@@ -33,14 +33,49 @@
 // DensityRepr::emissiveIntensity the plain meaning "radiance of a 2000 K
 // flame". T is clamped before the power so a nonsense authored temperature can
 // neither produce a negative colour nor overflow to Inf.
-vec3 blackbodyRGB(float T) {
+vec3 blackbodyChroma(float T) {// the fit above: (1, g, b), red-normalised
     const float s = clamp(T, 500.0, 12000.0) * 0.001;// kilokelvin
     const float g = clamp(0.22394 * s - 0.18818, 0.0, 1.0);
     const float u = max(s - 2.09, 0.0);
     const float b = clamp(u * (0.17759 + 0.01179 * u), 0.0, 1.0);
-    const float h  = s * 0.5;// T / 2000 K
+    return vec3(1.0, g, b);
+}
+
+vec3 blackbodyRGB(float T) {
+    const float h  = clamp(T, 500.0, 12000.0) * 0.0005;// T / 2000 K
     const float h2 = h * h;
-    return vec3(1.0, g, b) * (h2 * h2);
+    return blackbodyChroma(T) * (h2 * h2);
+}
+
+// ── THE VISIBLE GLOW OF SIMULATED HEAT: PLANCK AT THE RED PRIMARY ───────────
+// T^4 is a hot body's TOTAL radiance, at a flame's temperatures almost all of it
+// infrared. What an eye or a camera sees is the visible part, and that rises far
+// more steeply: below ~3000 K Planck's law at a wavelength lambda goes as
+// exp(-c2 / (lambda T)) (Wien; c2 = 14388 um K), at the red primary (610 nm)
+// exp(-23587 K / T), locally about T^16 at 1500 K. So in a real fire the hottest
+// gas carries both what is seen and the light thrown: a 1300 K tip is about a
+// hundredth of a 1700 K core in the red, not the third T^4 gives, and firelight
+// is the core's orange, not the red of the many cooler cells around it.
+// A solved volume's temperatures are simulated, so it glows by this curve: the
+// colour of the fit above, the magnitude Planck's red radiance normalised to
+// 2000 K, which keeps DensityRepr::emissiveIntensity "the radiance of a 2000 K
+// flame". Above 2000 K it is brighter than T^4 says (x51 at 3000 K, where T^4
+// gives x5): that is the physics too. Particle fields keep blackbodyRGB: their
+// authored ramp was tuned against T^4 and reaches down to 800 K tips that this
+// curve would put out.
+//
+// The curve stops at kFlameMaxK. A solver's temperature is a model: a source
+// that heats faster than its gas cools settles where heating and cooling
+// balance, which can be thousands of kelvin, and this curve would make such a
+// cell thousands of times brighter than a flame, and white: a few overheated
+// cells by a burner then swamp the whole fire's glow and the light it throws.
+// Real flames stay below ~2500 K, so the glow never goes past 3000 K's (x51 of
+// a 2000 K flame).
+const float kFlameRedK = 23587.0;// c2 / 610 nm
+const float kFlameMaxK = 3000.0;
+vec3 flameRGB(float T) {
+    const float Tc = clamp(T, 500.0, kFlameMaxK);
+    return blackbodyChroma(Tc) * exp(kFlameRedK * (0.0005 - 1.0 / Tc));
 }
 
 // ── THE GLOW OF A SOLVED VOLUME'S SOOT, AND WHERE IT STOPS ──────────────────
@@ -55,7 +90,9 @@ vec3 blackbodyRGB(float T) {
 // first glow dull red in the dark): below it the visible radiance falls by
 // orders of magnitude for every hundred kelvin. So a solved volume's glow fades
 // out over the band around that point, and soot that has cooled below it is
-// dark; above it the glow is blackbodyRGB's, untouched.
+// dark. Now that the glow is flameRGB's, whose red at 1000 K is already 1e-5 of
+// a 2000 K flame's, the fade changes nothing visible; it stays because it is
+// the line below which smoke_glow.comp skips a cell after one 2-byte read.
 const float kPdGlowDarkK = 700.0;
 const float kPdGlowFullK = 1000.0;
 
