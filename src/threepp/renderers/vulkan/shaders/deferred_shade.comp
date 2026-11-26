@@ -1831,9 +1831,10 @@ void main() {
                 // the top-up (no sun share — point/spot casters) the floor stays 2:
                 // a cap-1 mean of 1-2 BINARY rays is salt-and-pepper dusting.
                 // Statistics-free on purpose: the trend needs frames to charge and
-                // the σ-step's variance estimate is degraded over a swept band (the
-                // feedback rewrites the mean but not E[R²]) — both limped exactly
-                // where this direct signal cuts instantly.
+                // the σ-step's variance estimate was degraded over a swept band
+                // (while the GI filter fed the ratio back, it rewrote the mean but
+                // not E[R²]) — both limped exactly where this direct signal cuts
+                // instantly.
                 const float sCapTrend = mix(sCapMot, 4.0, trendCut);
                 const float sCapStep  = mix(sCapMot, kShadowStepFloor, stepCut);
                 float sCap            = min(sCapTrend, sCapStep);

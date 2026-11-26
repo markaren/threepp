@@ -46,7 +46,7 @@ layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
 // rg16f scratches. The recombine adds directUImage × R̃: the exact unshadowed
 // analytic direct times the filtered [0,1] ratio — grain-free penumbras with
 // the color/BRDF untouched (Heitz et al. 2018 split).
-layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;      // feedback rewrites .x
+layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;      // read only here (not fed back)
 layout(set = 0, binding = 45, rgba16f) uniform readonly image2D directUImage;
 // The shade's per-pixel demodulation colour (.rgb): what the filtered diffuse
 // irradiance is multiplied by at the recombine. vec3(0) off the demod path.
@@ -325,15 +325,24 @@ void main() {
         // still-shadowed/darkened neighbours, and under a chase cam (ground
         // flowing past) that hauls the dark across the road as a trailing smear —
         // the same conveyor class as the reflection matte leak. Dwell/release
-        // pixels are marked by their SHORT pinned history (shadow .z ≤ 2, GI
-        // .a ≤ 3); for those, DON'T re-inject — keep the raw temporal value (a
-        // cap-2/3 EMA of the fresh estimate, already smooth) so next frame
-        // reprojects that, not a spatially-dragged blur. Static scenes keep the
-        // long history and the fast-convergence feedback unchanged.
+        // pixels are marked by their SHORT pinned history (GI .a ≤ 3); for
+        // those, DON'T re-inject — keep the raw temporal value (a cap-3 EMA of
+        // the fresh estimate, already smooth) so next frame reprojects that, not
+        // a spatially-dragged blur. Static scenes keep the long history and the
+        // fast-convergence feedback unchanged.
         const float hl = imageLoad(indirectImage, px).a;
         if (hl > 3.5) imageStore(indirectImage, px, vec4(cC.rgb, hl));
-        const vec4 sv = imageLoad(shadowVisImage, px);
-        if (sv.z > 2.5) imageStore(shadowVisImage, px, vec4(cS.x, sv.yzw));
+        // The shadow ratio is not fed back. Its range stop is sized by each
+        // pixel's own variance, so at a shadow's edge the filter is one-sided:
+        // a lit pixel the jitter moves in and out of the shadow has a loose stop
+        // and averages in the dark core beside it, while the core, which never
+        // flickers, keeps a tight one and takes in none of the light. Fed back as
+        // the history, that pull compounded frame after frame, and the variance
+        // grew with it (the write kept the samples' E[R²] under a lower mean): a
+        // floor striped by a slatted grating kept 0.86 of the sun the path tracer
+        // gives it, the research scenes' classroom 0.75 on its sunlit desks. Not
+        // fed back, the ratio's own history (1-2 rays and the soft sun's top-up a
+        // frame) gives 1.02 and 0.93, and is as fast to settle after a cut.
     }
 
     // Variance rides the rgba16f ping-pong's .a — cap it at fp16 max so a
