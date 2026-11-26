@@ -99,11 +99,12 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 // house closed form (ambient + env mean, unphased — applyHeteroSurfaceFog's
 // convention) PLUS the directional sun with the medium's HG phase — the term
 // volumetricDirScatter cannot supply, because its march is the height-fog
-// σ profile and it early-outs entirely when scene fog is off. The sun is
-// shadowed ONCE, at the σ-weighted centroid of the traversed dust (a full
-// per-step shadow ray is shaft-resolution the plume scale does not need),
-// dimmed by the cloud-shadow map at the same point — and SELF-shadowed by the
-// medium itself (pdSurfaceLightTransmittance at the same centroid): the scene shadow
+// σ profile and it early-outs entirely when scene fog is off. The sun's
+// geometry and cloud shadow is read along the march every few dusty steps
+// (not every step: a ray per step is a cost the plume scale does not need), so
+// a canopy's dappling becomes shafts through the plume rather than a pattern
+// printed on it — and the sun is SELF-shadowed by the medium itself
+// (pdSurfaceLightTransmittance at each of a few stretches' centroids): the scene shadow
 // map holds geometry only, density volumes never render into it, so without
 // the medium's own light-leg transmittance a deep soot column was fully
 // sunlit through its entire depth and read as white ash at any albedo.
@@ -287,10 +288,29 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
     // more, and the choice flips from pixel to pixel: seen from the side, four
     // plumes one behind another were ribbons of full sun on full shade. A
     // stretch with no dust in it costs nothing.
+    // THE SUN'S GEOMETRY SHADOW (and the cloud layer's) is read along the
+    // march itself: every kSunVisStride-th step that has dust, held over the
+    // steps between, each step weighting it by its own in-scatter weight, so a
+    // stretch carries the mean of that shadow over its dust (segV / segW). Read
+    // once at a centroid, a sharp shadow was printed on the plume as on a
+    // surface: under a pine canopy the needles' dappling covered the smoke as a
+    // crumpled foil. Read through the dust's depth it is that shadow's integral
+    // along the ray, the shafts a sunlit smoke shows. Fixed steps, the same for
+    // every pixel but rule 3's phase: no noise is added, and no frame term.
+    // About kSunVisReads reads on a ray dusty all the way, fewer on a thin
+    // wisp, none where there is no dust. The first directional light only (the
+    // sun); any other keeps one read at each stretch's centroid.
     const int kSunDepths = 8;
+    const int kSunVisReads = 24;
+    const int kSunVisStride = max(STEPS / kSunVisReads, 1);
     float segW[kSunDepths];
     vec3  segC[kSunDepths];
-    for (int g = 0; g < kSunDepths; ++g) { segW[g] = 0.0; segC[g] = vec3(0.0); }
+    float segV[kSunDepths];
+    for (int g = 0; g < kSunDepths; ++g) { segW[g] = 0.0; segC[g] = vec3(0.0); segV[g] = 0.0; }
+    const bool sunVisMarched = lights.dirCount > 0u;
+    const vec3 L0 = sunVisMarched ? normalize(lights.dirLights[0].direction) : vec3(0.0, 1.0, 0.0);
+    float vis0 = 1.0;               // the sun's visibility at the last read
+    int   vis0Age = kSunVisStride;  // dusty steps since it
     for (int s = 0; s < STEPS; ++s) {
         const float slab0 = t0 + float(s) * dt;
         // Rule 1's surface clip: the slab straddling tMax contributes its
@@ -339,6 +359,14 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         const int g = min(s * kSunDepths / STEPS, kSunDepths - 1);
         segW[g] += w;
         segC[g] += w * x;
+        if (sunVisMarched) {
+            if (vis0Age >= kSunVisStride) {
+                vis0    = primarySunVis(0u, x, vec3(0.0), x, L0, false) * cloudShadowSample(x);
+                vis0Age = 0;
+            }
+            ++vis0Age;
+            segV[g] += w * vis0;
+        }
         if (multi) {
             albW += albStep * (tr * ds);
             gW   += gStep * (tr * ds);
@@ -429,14 +457,16 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         float lit = 0.0;// the weighted mean over the stretches of what reaches each from the sun
         for (int g = 0; g < kSunDepths; ++g) {
             if (segW[g] <= 0.0) continue;
-            const float Tsun = pdSurfaceLightTransmittance(segC[g] / segW[g], L);
-            lit += segW[g] * max(ph * Tsun, ms * pow(Tsun, 0.25));
+            // The medium's own shadow is smooth and stays at the stretch's
+            // centroid; the sun's geometry and cloud shadow is the stretch's
+            // marched mean (above), another light's one read at the centroid.
+            const vec3  c    = segC[g] / segW[g];
+            const float Tsun = pdSurfaceLightTransmittance(c, L);
+            const float vis  = i == 0u ? segV[g] / segW[g]
+                                       : primarySunVis(i, c, vec3(0.0), c, L, false) * cloudShadowSample(c);
+            lit += segW[g] * vis * max(ph * Tsun, ms * pow(Tsun, 0.25));
         }
-        // The geometry's shadow and the cloud layer's stay at the one centroid:
-        // a traced ray a stretch is not what a plume's shading needs.
-        sun += lights.dirLights[i].color
-             * (primarySunVis(i, cen, vec3(0.0), cen, L, false) * cloudShadowSample(cen)
-                * (lit / wsum));
+        sun += lights.dirLights[i].color * (lit / wsum);
     }
     const vec3 amb = lights.ambient
                    + sampleEnvAirLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
