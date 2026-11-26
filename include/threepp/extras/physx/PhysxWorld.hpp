@@ -548,6 +548,13 @@ namespace threepp {
     public:
         struct Settings {
             Vector3 gravity{0, -9.81f, 0};
+            // PxTolerancesScale: the typical size of an object (metres) and its
+            // typical speed (m/s). PhysX derives its default contact offset,
+            // sleep and bounce thresholds and the PCM manifold tolerances from
+            // these, so a world of small bodies (centimetres or less) wants them
+            // scaled down with the bodies, or its stacks creep.
+            float toleranceLength = 1.f;
+            float toleranceSpeed = 10.f;
             float fixedTimestep = 1.f / 60.f;
             int maxSubSteps = 4;
             // Low-pass the dt handed to step() before it drives the fixed-timestep
@@ -670,7 +677,10 @@ namespace threepp {
             }
 
             // trackOutstandingAllocations=true matches the GPU samples; harmless when off.
-            physics_ = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation_, PxTolerancesScale(),
+            PxTolerancesScale tolerances;
+            tolerances.length = settings_.toleranceLength;
+            tolerances.speed = settings_.toleranceSpeed;
+            physics_ = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation_, tolerances,
                                        settings_.enableGpuDynamics);
             if (!physics_) throw std::runtime_error("PxCreatePhysics failed");
 
