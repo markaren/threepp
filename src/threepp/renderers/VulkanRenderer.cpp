@@ -2513,19 +2513,14 @@ namespace threepp {
         // All of these are compute storage images that live in GENERAL for
         // their whole lives; every format here is 8 bytes/px (rgba16f or
         // rg32f). The second row is the state the shade carries but the six
-        // classic outputs do not show: the RT AO pair, the GI filter's scratch
-        // ping-pong, and the ReSTIR reservoir weights in both parity slots.
-        // A divergence that surfaces in shadowVis at frame k but began in a
-        // reservoir at frame k-1 is only visible with these in the split.
-        auto& pv = impl.primaryView();
+        // classic outputs do not show: the RT AO pair and the GI filter's
+        // scratch ping-pong.
         const std::pair<const char*, const vulkan::Image2D*> imgs[] = {
                 {"indirect", &g.indirect},   {"momentsSq", &g.momentsSq},
                 {"reflect", &g.reflect},     {"reflAux", &g.reflAux},
                 {"shadowVis", &g.shadowVis}, {"directU", &g.directU},
                 {"rtao", &g.rtao},           {"rtaoAux", &g.rtaoAux},
                 {"atrousA", &g.atrousA},     {"atrousB", &g.atrousB},
-                {"reservoirW0", &pv.reservoirWImagesPP[0]},
-                {"reservoirW1", &pv.reservoirWImagesPP[1]},
         };
         constexpr VkDeviceSize kBpp = 8;
 
@@ -2789,7 +2784,7 @@ namespace threepp {
         auto& impl = *core();
         // Every live view, the primary included: the camera-swap path only
         // ever reached the secondaries. The flags are the same set a camera
-        // change clears; the reservoir clear is deferred to the frame path,
+        // change clears; the history clear is deferred to the frame path,
         // which drains the device before touching them.
         impl.forEachLiveView([&] {
             auto& v = impl.view();
@@ -3561,7 +3556,7 @@ namespace threepp {
         // the converged mean — on a settled frame the running-mean accumulator
         // would hide the switch entirely. Reset accumulation so the change is
         // actually visible. Gated on sceneBuilt_: before the first render there
-        // is nothing accumulated and the gbuf/reservoir images aren't allocated
+        // is nothing accumulated and the gbuf images aren't allocated
         // yet (clearGbufImages would touch null handles).
         if (core()->sceneBuilt_) core()->resetAccumulation();
     }

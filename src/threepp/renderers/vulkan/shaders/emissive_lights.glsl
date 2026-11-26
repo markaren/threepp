@@ -8,8 +8,8 @@
 // (the lighthouse lamp's 5 % glow wobble) — the reflected sail flipped red ↔ green a
 // few times a second ("a pulsating light that isn't") and, with other power splits,
 // simply lost both lights. The primary surface never showed it: ReSTIR DI samples
-// emitters per pixel and keeps reservoirs; reflected / GI / probe hits have no
-// reservoir and rely on this pick.
+// emitters per pixel (RIS over fresh candidates every frame); reflected / GI / probe
+// hits have no such pick and rely on this one.
 //
 // FIX — COVERAGE mode. With ≤ kEmissiveCoverMaxLights emissive instances every light
 // gets ≥ 1 sample and the remaining strata go ∝ power among the lights that still need

@@ -61,14 +61,6 @@ namespace threepp::vulkan::impl {
         std::array<Buffer, kFramesInFlight> clusterGridBuffers{};  // device-local (cluster_build writes)
         uint32_t clusterLightCountThisFrame_ = 0;
 
-        // ReSTIR DI reservoir ping-pong storage, consumed by the deferred
-        // shade's next-event estimation (DeferredShade reservoirPos/W). Two
-        // physical images per logical buffer: reservoirPosImagesPP carries
-        // lightPos.xyz + lightType.w (rgba32f), reservoirWImagesPP carries
-        // W_sum + M + W + p_hat (rgba16f). At frame N the shade writes slot
-        // (N & 1) and reads slot ((N+1) & 1).
-        // (reservoirPosImagesPP / reservoirWImagesPP moved to ViewContext —
-        //  the reservoirs are SCREEN-space, so they belong to a view.)
         // Frame counter driving Halton jitter + blue-noise offset for the
         // deferred shade's stochastic GI / soft-shadow sampling. Genuinely
         // shared: it is the sequence CLOCK, not per-view history. Every view

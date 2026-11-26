@@ -475,9 +475,9 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
 
     // Emissive area lights via the coherent emissiveNEE. The CALLER controls when to
     // add it (addEmissive): the PRIMARY surface skips it when ReSTIR DI is on (main()
-    // folds the reservoir result into the denoised diffuse-indirect channel instead),
-    // but REFLECTED hits (traceRadiance) ALWAYS add it — reservoirs are per-screen-pixel
-    // and don't exist for reflected surfaces, so without this metals reflecting an
+    // folds its per-pixel RIS pick into the denoised diffuse-indirect channel instead),
+    // but REFLECTED hits (traceRadiance) ALWAYS add it — that pick is per screen pixel
+    // and does not exist for reflected surfaces, so without this metals reflecting an
     // emissive-lit room lose their reflected lighting (= "metals lost their color").
     // RR (kRR): the reflection hits' small plan at every hit.
     if (addEmissive)

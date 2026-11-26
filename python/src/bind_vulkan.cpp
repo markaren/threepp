@@ -2347,12 +2347,13 @@ namespace threepp_py {
                 // scene with a handful of analytic lights and no emitters is paying
                 // for convergence it does not need, and the legacy per-light NEE
                 // loops are cheaper there — so this is a perf lever for simple
-                // scenes as much as it is an A/B for triaging reservoir artifacts.
+                // scenes as much as it is an A/B for triaging emitter-sampling artifacts.
                 .def_property("restir_di",
                               [](PyVulkanRenderer& r) { return r.native().restirDIEnabled(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setRestirDIEnabled(v); },
-                              "ReSTIR DI (streaming RIS + temporal/spatial reuse at primary\n"
-                              "surfaces) for the deferred shade's next-event estimation.\n"
+                              "ReSTIR DI (resampled importance sampling of the emitters at\n"
+                              "primary surfaces, no reuse across frames or pixels) for the\n"
+                              "deferred shade's next-event estimation.\n"
                               "Default on. Off falls back to the legacy per-light NEE loops:\n"
                               "cheaper with a handful of lights, markedly noisier with many.")
                 .def_property("probe_gi",

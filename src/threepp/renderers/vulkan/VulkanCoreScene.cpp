@@ -5344,10 +5344,9 @@ void VulkanRenderer::Impl::uploadRebuildDescs(SceneBuildFrame& sb) {
             // frames keys on the entry order any more: the reproject guards
             // compare the STABLE per-object id (ids .y) and read the prev
             // texel's own moved bit (ids .z, kInstFlagMoving) instead of
-            // dereferencing geoms[prev ids .x], the ReSTIR reservoirs store
-            // world-space light samples (position + type, never an index),
-            // and the prev-world motion references are identity-remapped
-            // below alongside meshMovedSticky_. The
+            // dereferencing geoms[prev ids .x], and the prev-world motion
+            // references are identity-remapped below alongside
+            // meshMovedSticky_. The
             // per-pixel depth/normal gates then cold-start exactly the pixels
             // whose surface really changed. So neither an APPEND (spawned
             // PhysX body, grown ParticleSystem) nor a mid-list REMOVAL /

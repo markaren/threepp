@@ -99,10 +99,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
             createTextureSampler();
             createDefaultMaterialTexture();
             vulkan::startupMark("sampler, default texture");
-            // Allocates the ReSTIR DI reservoir ping-pong images the deferred
-            // shade's NEE consumes.
-            createReservoirImages();
-            vulkan::startupMark("reservoir images");
+            resetViewSampling();
             skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
             vulkan::startupMark("skinning");
             tetSkinning_ = std::make_unique<vulkan::TetSkinningPipeline>(*ctx);
@@ -117,7 +114,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
             // at 1080p for six attachments × kFramesInFlight.
             ensureHybridResources();
             vulkan::startupMark("hybrid resources");
-            // Zero the reservoirs and every history, now that the slots exist.
+            // Zero every history, now that the slots exist.
             clearGbufImages();
             vulkan::startupMark("clear gbuf images");
             // TAA pipeline + images. The deferred shade's descriptor binding 1
@@ -437,8 +434,6 @@ VulkanRenderer::Impl::~Impl() {
                 for (auto& b : vp->rasterCameraUbos)   destroyBuffer(ctx->allocator(), b);
                 for (auto& b : vp->drawInfoBuffers)    destroyBuffer(ctx->allocator(), b);
                 for (auto& b : vp->indirectCmdBuffers) destroyBuffer(ctx->allocator(), b);
-                for (auto& img : vp->reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
-                for (auto& img : vp->reservoirWImagesPP)   destroyImage2D(ctx->allocator(), d, img);
             }
             for (auto& b : waterMirrorUbos_) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), waterMirrorUboOff_);

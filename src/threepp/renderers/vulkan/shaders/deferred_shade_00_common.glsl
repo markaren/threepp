@@ -268,14 +268,8 @@ layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth 
 layout(set = 0, binding = 55) uniform usampler2D gbufIdsPrevTex;  // PREV ids (.x = instanceId+1) — moving-mesh trailing-edge GI disocclusion
 layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
 layout(set = 0, binding = 26) uniform sampler2D reflectPrevTex;   // PREV reflect (other fif) — temporal AA history
-// ReSTIR DI reservoir ping-pong (STORAGE images, GENERAL layout).
-// 27/28 = lightPos.xyz + lightType.w (rgba32f) write/read; 29/30
-// = W_sum/M/W/p_hat (rgba16f) write/read. READ = last frame's reservoir (temporal
-// reuse); WRITE = this frame's, persisted for next frame's read.
-layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D reservoirPosWrite;
-layout(set = 0, binding = 28, rgba32f) uniform readonly  image2D reservoirPosRead;
-layout(set = 0, binding = 29, rgba16f) uniform writeonly image2D reservoirWWrite;
-layout(set = 0, binding = 30, rgba16f) uniform readonly  image2D reservoirWRead;
+// (Bindings 27-30 held the ReSTIR DI reservoir ping-pong; the emitters take plain
+// RIS now, with nothing carried between frames: restirEmissiveDI.)
 // Reflection denoiser AUX (ReBLUR-style), ping-pong (mirrors reflect 25/26). 31 = CUR
 // write, 32 = PREV read. .x = history length (accumulated frames, →fast convergence +
 // noise proxy), .y = E[L²] of the reflection luma (→ temporal variance), .z = reflection

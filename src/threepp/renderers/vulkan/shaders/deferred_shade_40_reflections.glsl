@@ -1027,7 +1027,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hm.sheenColor, hm.sheenRoughness,
                                               dielectricF0(hm.ior, hm.specularIntensity, hm.specularColor),
                                               hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
-                                              /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
+                                              /*addEmissive=*/true,// reflected hit: no per-pixel RIS pick → coherent emissiveNEE
                                               /*cheapHit=*/cheapHits);// caller decides (see header comment)
         gHitClusterCell  = kNoClusterCell;
         gSunFixedPattern = false;

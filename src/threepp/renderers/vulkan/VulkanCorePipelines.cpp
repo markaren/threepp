@@ -31,11 +31,9 @@ void VulkanRenderer::Impl::clearGbufImages() {
             ++tlasStats_.historyResets;
             VkCommandBuffer cb = beginOneShot();
 
-            // Clears the ReSTIR DI reservoir ping-pong (pos + W) so M=0 on
-            // frame 0's read side and the deferred shade's temporal-reuse path
-            // correctly sees "no prior history" instead of garbage — and, since
-            // 2026-09-05, every other temporal accumulator the shade owns: the
-            // per-slot indirect / momentsSq / reflect / reflAux / shadowVis
+            // Clears every temporal accumulator the shade owns (since
+            // 2026-09-05; before, only the ReSTIR DI reservoirs, retired since):
+            // the per-slot indirect / momentsSq / reflect / reflAux / shadowVis
             // histories and the froxel fog accumulator (.a = history length, so
             // zero reads as "no history"). Before, this "reset" left them all in
             // place, and whatever they held decayed only exponentially: the
@@ -44,10 +42,7 @@ void VulkanRenderer::Impl::clearGbufImages() {
             // Zero history costs a few frames of re-convergence; a capture that
             // wants replayable frames restarts here once its scene is stable
             // (VulkanRenderer::resetTemporalHistory).
-            std::vector<VkImage> images = {
-                    view().reservoirPosImagesPP[0].image, view().reservoirPosImagesPP[1].image,
-                    view().reservoirWImagesPP[0].image, view().reservoirWImagesPP[1].image,
-            };
+            std::vector<VkImage> images;
             for (auto& g : view().rasterGbufs) {
                 for (const VkImage img : {g.indirect.image, g.momentsSq.image, g.reflect.image,
                                           g.reflAux.image, g.shadowVis.image, g.froxelScatter.image,

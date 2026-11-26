@@ -448,8 +448,8 @@ void main() {
     vec3 diffInd;
     if (pc.shadeMode == 1u) {
         // Dispatch B: cheap deterministic fill only — no RT gather, no
-        // ReSTIR (both own dispatch-A-exclusive temporal state: the GI
-        // accumulator and the reservoir ping-pong). A minority sample's
+        // emitter RIS (the GI accumulator is dispatch-A-exclusive temporal
+        // state, and the emitters ride it). A minority sample's
         // indirect term is a small correction at an edge pixel; the same
         // cost/accuracy call as the inline reflection fold-in above. This is
         // the GI-recombine-albedo approximation documented at the SVGF gate
@@ -472,13 +472,6 @@ void main() {
         }
     } else if (giSkip) {
         diffInd = vec3(0.0);// unused — the accumulation below carries history
-        // ReSTIR reservoirs PING-PONG (read prev fif, write curr): a skipped
-        // pixel must still pass its reservoir through, or next frame's read
-        // sees stale data in a checkerboard pattern.
-        if (flagOn(8u)) {
-            imageStore(reservoirPosWrite, px, imageLoad(reservoirPosRead, px));
-            imageStore(reservoirWWrite,  px, imageLoad(reservoirWRead,  px));
-        }
     } else if (aoOn && probesOn) {
         // ── Phase B: probe + bent-normal env diffuse indirect ────────────────
         // (Under the FINAL GATHER, the default since 2026-11-08, a denoised
@@ -636,11 +629,10 @@ void main() {
     const vec3  demodColor  = demodIndirect
         ? diffIndW * (albedo * (1.0 - metalness) * sheenBase + pm.sheenColor * sheenAlbedo)
         : vec3(0.0);
-    // ReSTIR DI emissive area lighting → DEMOD irradiance folded into the diffuse-
-    // indirect channel so it rides the SVGF temporal + à-trous denoise (the reservoir
-    // converges light selection; this denoises the 1-sample radiance). Added before
-    // the demod split so it flows through BOTH the denoise accum path AND the inline
-    // (denoise-off) path. restirEmissiveDI also persists this pixel's reservoir.
+    // Emissive area lighting (RIS, restirEmissiveDI) → DEMOD irradiance folded into
+    // the diffuse-indirect channel so it rides the denoiser with the rest (the
+    // 1-sample radiance is integrated there). Added before the demod split so it
+    // flows through BOTH the denoise accum path AND the inline (denoise-off) path.
     if (pc.shadeMode != 1u && !giSkip && flagOn(8u)) {
         const float rNdotV = max(dot(N, V), 1e-4);
         diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated

@@ -382,14 +382,6 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // directions so the 1-spp residual denoises cleanly instead of
             // showing as AO speckle.
             in.blueNoise         = blueNoiseImage.view;
-            // ReSTIR DI reservoir ping-pong — the same 2 physical images the
-            // deferred shade's NEE uses (created unconditionally in
-            // createReservoirImages). rewriteDescriptors picks write/read
-            // slots per frame. Locals must outlive the call below.
-            const VkImageView resPosViews[2] = {view().reservoirPosImagesPP[0].view, view().reservoirPosImagesPP[1].view};
-            const VkImageView resWViews[2]   = {view().reservoirWImagesPP[0].view,   view().reservoirWImagesPP[1].view};
-            in.reservoirPos     = resPosViews;
-            in.reservoirW       = resWViews;
             // Probe GI (bindings 36/37/54) — the SH store + per-frame grid UBO
             // + Chebyshev depth store ProbeGI owns. Real buffers even when the
             // feature is off (the grid UBO's enable flag gates sampling).

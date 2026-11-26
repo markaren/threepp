@@ -499,7 +499,7 @@ int main(int argc, char** argv) {
             // clustered light list, ReSTIR DI choosing among several lamps and
             // the lamps' specular on a glossy sphere. Floor: bit-exact with and
             // without RT. The gate is emissive's all the same: a one-frame
-            // perturbation upstream of the reservoirs (the previous scene's
+            // perturbation upstream of the (then) ReSTIR reservoirs (the previous scene's
             // environment sun on the first frame, before the lights were packed
             // after the env refresh) moved the picture to 43 dB / maxD 35.
             {"lamps", [](Scene& s, PerspectiveCamera& cam, const std::shared_ptr<Texture>&) {

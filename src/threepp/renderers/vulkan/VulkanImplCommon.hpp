@@ -17,7 +17,7 @@ namespace threepp::vulkan::impl {
     // GPU schedule (queue is still serial — async compute would do that,
     // and is a much larger change).
     //
-    // The 2-slot ping-pong (the ReSTIR DI reservoir images) stays at 2
+    // The 2-slot ping-pong (the TAA history images) stays at 2
     // entries — Vulkan queue execution is
     // strictly in-order within a queue, so when frame N+2 writes slot
     // (N+2)&1 the prior owner of that slot (frame N) has fully completed

@@ -196,8 +196,8 @@ namespace threepp::vulkan {
                                  std::source_location where = std::source_location::current());
 
     // Minimal sampled-image record. Used both for textures (env, materials,
-    // blue-noise tile) and for storage images (accumulator, gbuf, ReSTIR DI
-    // reservoirs, à-trous ping-pong). Empty `sampler` slot for storage-only
+    // blue-noise tile) and for storage images (accumulator, gbuf, à-trous
+    // ping-pong). Empty `sampler` slot for storage-only
     // images; .mipLevels > 1 for prefiltered cube/equirect (PMREM).
     struct Image2D {
         VkImage       image     = VK_NULL_HANDLE;

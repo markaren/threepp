@@ -13,7 +13,7 @@ namespace threepp::vulkan::impl {
 
     struct GIState {
         // (deferredShade_ moved to ViewContext — its per-frame-in-flight
-        //  descriptor sets bind this view's G-buffer, reservoirs and sceneHdr,
+        //  descriptor sets bind this view's G-buffer and sceneHdr,
         //  so the sets themselves are per-view. The pipeline could be shared;
         //  it is not, because a set can never be rewritten while it may be in
         //  flight (VUID-03047), and a per-view pass object rules that out

@@ -9,13 +9,12 @@
 // above is noise-free but BIASED (a fixed sample set lights some emitter faces
 // more than others); per-pixel dithering it just trades the bias for noise that
 // EXPLODES with light count (Bistro = 1000s of emissive tris → un-denoisable).
-// ReSTIR resolves both: importance-RESAMPLE M emissive candidates into ONE
-// reservoir (weighted by unshadowed contribution), cast ONE shadow ray, and
-// (Stage B) reuse the reservoir across frames so it converges to smooth.
-// Stage A here = init RIS + visibility, NO temporal/spatial reuse
-// yet → 1 shadow ray (vs emissiveNEE's 16 = faster) but still single-sample
-// noisy until Stage B adds the reservoir ping-pong. lightType ≥ 1000 ⇒ emissive
-// triangle (analytic dir/point/spot keep their own noise-free analytic loops).
+// RIS resolves both: importance-RESAMPLE M emissive candidates into ONE
+// reservoir (weighted by unshadowed contribution) and cast ONE shadow ray
+// (vs emissiveNEE's 16 = faster); the single-sample noise is the denoiser's to
+// integrate. ReSTIR's temporal and spatial reuse of the reservoir are gone (see
+// restirEmissiveDI). lightType ≥ 1000 ⇒ emissive triangle (analytic
+// dir/point/spot keep their own noise-free analytic loops).
 float lum3(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
 struct Reservoir { vec3 lightPos; float lightType; float W_sum; float M; float W; float p_hat; };
@@ -59,20 +58,29 @@ bool restirOccluded(vec3 shadowOrig, vec3 dir, float maxDist) {
 
 // Returns DEMOD diffuse irradiance (NdotL·Le·W/π, no albedo/metalness — the
 // recombine applies albedo·(1-metalness)). The caller folds this into diffInd so it
-// rides the SVGF temporal + à-trous denoise: the reservoir converges light SELECTION,
-// the denoiser smooths the 1-sample RADIANCE (ReSTIR DI is always denoiser-paired).
+// rides the denoiser (SVGF's temporal + à-trous, or Ray Reconstruction): RIS picks one
+// of this frame's candidates at each pixel, and the denoiser integrates the picks.
+//
+// NO REUSE. ReSTIR's temporal and spatial reuse ran here on the SVGF path; Ray
+// Reconstruction dropped it 2026-11-03 (a reservoir carried across frames or shared
+// with its neighbours is noise RR keeps as a static grain). On SVGF it measured as no
+// gain and one fault (2026-11-26; gltf-research-scenes kitchen, bathroom2 and
+// living-room, and a room lit by 48 small coloured strips): the converged level
+// against the path tracer, the noise of a still frame and of a fast pan and the
+// share of spikes came out the same within a few tenths of a per cent, and the shade
+// 0.02-0.12 ms cheaper without it. The fault: a camera cut (so every load) restarted
+// the reservoirs, the reuse carried the first frames' estimate on in them for up to 20
+// frames each, and the indirect accumulation stretched that into an overshoot of
+// the kitchen's bounce-lit areas (+5 %) that took ~4 s to settle. Without it the cut
+// settles in ~30 frames.
 vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
-    if (emGateBound(P) < 1.0) {// out of every emitter's range: an empty reservoir, no candidates, no rays
-        imageStore(reservoirPosWrite, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, -2.0));
-        imageStore(reservoirWWrite,   ivec2(gl_GlobalInvocationID.xy), vec4(0.0));
-        return vec3(0.0);
-    }
+    if (emGateBound(P) < 1.0) return vec3(0.0);// out of every emitter's range: no candidates, no rays
     const vec3 shadowOrig = P + N * SHADOW_EPS;
     const int  emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
-    // Per-(pixel,frame) seed → candidates vary each frame so Stage B's temporal
-    // reuse accumulates them. Stable spatial key (pixel index) + clean per-frame
-    // increment so the temporal sequence converges (a jittered-worldPos key did not).
+    // Per-(pixel,frame) seed → the candidates vary each frame, and the denoiser's
+    // accumulation integrates them. Stable spatial key (pixel index) + a clean
+    // per-frame increment (a jittered-worldPos key did not converge).
     uint seed = pcgHash(gl_GlobalInvocationID.x
               + pcgHash(gl_GlobalInvocationID.y + pcgHash(pc.frame * 9781u + 1u)));
 
@@ -111,149 +119,14 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     }
     finalizeReservoir(r);
 
-    // ── Visibility reuse (Bitterli 2020 §5) ── the RIS target p_hat is UNSHADOWED, so
-    // the chosen candidate may be occluded (the emitter's own far face, a wall, the
-    // sphere's shadow). Shadow-test it NOW — before temporal reuse — and DISCARD the
-    // reservoir if occluded (W←0, W_sum←0; keep M for the merge normalisation). Without
-    // this, occluded samples persist into temporal history with positive weight and
-    // inflate W on a later VISIBLE pick → the penumbra / self-occlusion OVER-COUNT that
-    // read as too bright (floor brighter than wall). +1 shadow ray (still ≪ the 16 the
-    // old emissiveNEE cast); introduces the standard small conservative bias.
-    if (r.W > 0.0 && r.lightType >= 999.5) {
-        const LightInfoD liV = evalLightInfoEm(int(r.lightType), r.lightPos, P);
-        if (max(dot(N, liV.dir), 0.0) <= 0.0
-                || (doShadows && restirOccluded(shadowOrig, liV.dir, liV.maxDist))) {
-            r.W = 0.0; r.W_sum = 0.0;// occluded — let temporal reuse recover a visible sample
-        }
-    }
-
-    // ── Stage B: temporal reuse ── reproject via the motion vector, validate the
-    // surface (prev-normal match), read LAST frame's reservoir, re-evaluate ITS
-    // target p_hat at THIS pixel (the point of ReSTIR reuse), and merge. The single
-    // per-frame sample thus accumulates into an effective many-sample estimate that
-    // converges to SMOOTH via this temporal accumulation.
-    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-    // Under DLSS Ray Reconstruction (kRR) neither reuse stage runs: the
-    // reservoir is plain RIS over this frame's fresh candidates. RR assumes an
-    // independent sample per pixel per frame, and both stages break that: a
-    // reservoir carried for up to 20 frames (temporal) or shared with its
-    // neighbours (spatial) is noise RR keeps as a static grain (lights45's
-    // neon floor: high-pass 3.7 with temporal reuse, 0.8 without, SR 1.0).
-    // Fresh candidates are also the cheapest arm measured (2026-11-03).
-    if (!kRR) {
-        const vec2 uv   = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
-        const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
-        const vec2 cNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
-        const vec2 pNDC = cNDC + mv;
-        const vec2 pUv  = vec2(pNDC.x * 0.5 + 0.5, 0.5 - pNDC.y * 0.5);
-        bool tvalid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
-        if (tvalid) {
-            const vec3 pn = texture(gbufNormalPrevTex, paneToPhys(gbufNormalPrevTex, pUv)).xyz * 2.0 - 1.0;
-            tvalid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.7;// surface match (rejects sky/disocclusion)
-        }
-        if (tvalid) {
-            const ivec2 ppx = ivec2(pUv * vec2(float(pc.width), float(pc.height)));
-            const vec4 pPos = imageLoad(reservoirPosRead, ppx);
-            const vec4 pWd  = imageLoad(reservoirWRead,   ppx);
-            // M-clamp: short history in motion (flush stale fast), long when static.
-            const float mClamp = mix(20.0, 5.0, smoothstep(0.002, 0.03, length(mv)));
-            const float pM = min(pWd.y, mClamp);
-            if (pWd.z > 0.0 && pM > 0.0 && pPos.w >= 999.5) {// valid emissive reservoir
-                const LightInfoD pli = evalLightInfoEm(int(pPos.w), pPos.xyz, P);
-                const float pPhat = max(dot(N, pli.dir), 0.0) * lum3(pli.Le);// target re-eval at THIS pixel
-                if (pPhat > 0.0) {
-                    const float wPrev = pPhat * pM * pWd.z;
-                    r.W_sum += wPrev;
-                    r.M     += pM;
-                    if (rnd(seed) < wPrev / max(r.W_sum, 1e-20)) {
-                        r.lightPos = pPos.xyz; r.lightType = pPos.w; r.p_hat = pPhat;
-                    }
-                    finalizeReservoir(r);
-                }
-            }
-        }
-    }
-    // ── Snapshot the PRE-SPATIAL reservoir ── this (NOT the post-spatial r) is what
-    // gets persisted for next frame's temporal merge. Persisting the post-spatial
-    // reservoir would feed spatial
-    // contributions — which don't generalise across reprojection — back into the
-    // temporal M, biasing the weights and producing visible temporal instability.
-    Reservoir rPreSpatial = r;
-    // Cap the persisted W (firefly bound) so a one-off high-W sample can't perpetuate
-    // via the multiplicative w_prev temporal feedback (= static bright specks that
-    // never average out). Shading below uses the unclamped post-spatial r.
-    float persistW = rPreSpatial.W;
-    if (pc.fireflyClamp < 1e20) persistW = min(persistW, 5.0);
-
-    // ── Stage 1c: spatial reuse ──
-    // Tap a few random neighbours from the PREV-frame reservoir buffer (bindings
-    // 28/30), validate each against THIS pixel's surface (prev-normal cone + world
-    // distance — the same prev gbuffer the temporal stage validates against), and
-    // RIS-merge it after re-evaluating its target p_hat at OUR shading point. The
-    // M>=mTarget early-out means converged static pixels (high temporal M) skip it;
-    // the cost is spent where temporal reuse is weakest — freshly DISOCCLUDED pixels
-    // with little/no history (the frame-after-disocclusion noise the temporal-only
-    // path couldn't fix). M-cap 4/neighbour; spMax 5 static / 2 in motion (fewer
-    // stale taps under motion). Reads prev-frame neighbours so there's no second
-    // dispatch / barrier.
-    if (!kRR) {
-        const vec2  size   = vec2(float(pc.width), float(pc.height));
-        const float distC  = length(P - gPrimaryOrigin);// view leg of THIS pixel's ray
-        const float mvLen  = length(texture(gbufMotionTex, paneToPhys(gbufMotionTex, (vec2(px) + 0.5) / size)).rg);
-        const uint  spMax   = (mvLen > 0.01) ? 2u : 5u;
-        const float mTarget = 20.0;
-        const ivec2 maxPx   = ivec2(int(pc.width) - 1, int(pc.height) - 1);
-        for (uint sp = 0u; sp < spMax; ++sp) {
-            if (r.M >= mTarget) break;
-            const float ang = rnd(seed) * TWO_PI;
-            const float rad = sqrt(rnd(seed)) * 20.0;// 20px tap radius
-            const ivec2 off = ivec2(int(rad * cos(ang)), int(rad * sin(ang)));
-            if (off.x == 0 && off.y == 0) continue;
-            const ivec2 spPx = clamp(px + off, ivec2(0), maxPx);
-            // Validate the neighbour's PREV surface vs ours: normal cone (rejects
-            // sky / differently-facing) + world distance (rejects depth jumps that
-            // share a normal, e.g. parallel floors). Reconstructs the neighbour's
-            // prev world pos with the current cam — a near-exact gate for the static
-            // camera where spatial reuse matters most; loosens harmlessly otherwise
-            // (a bad tap's p_hat re-eval keeps the merge unbiased).
-            const vec3 pn = texelFetch(gbufNormalPrevTex, spPx, 0).xyz * 2.0 - 1.0;
-            if (dot(pn, pn) < 1e-6 || dot(N, normalize(pn)) <= 0.7) continue;
-            const vec2  uvN  = (vec2(spPx) + 0.5) / size;
-            const vec2  ndcN = vec2(uvN.x * 2.0 - 1.0, -(uvN.y * 2.0 - 1.0));
-            const float dN   = texelFetch(gbufDepthPrevTex, spPx, 0).x;
-            const vec4  vhN  = cam.projInverse * vec4(ndcN, dN, 1.0);
-            const vec3  wpN  = (cam.viewInverse * vec4(vhN.xyz / vhN.w, 1.0)).xyz;
-            if (length(wpN - P) > 0.1 * distC) continue;
-            // Merge the neighbour's prev-frame reservoir (target p_hat re-eval'd here).
-            const vec4 spPos = imageLoad(reservoirPosRead, spPx);
-            const vec4 spWd  = imageLoad(reservoirWRead,   spPx);
-            if (spWd.z <= 0.0 || spWd.y <= 0.0 || spPos.w < 999.5) continue;// valid emissive only
-            const float spM    = min(spWd.y, 4.0);// per-neighbour M-cap
-            const LightInfoD spli = evalLightInfoEm(int(spPos.w), spPos.xyz, P);
-            const float spPhat = max(dot(N, spli.dir), 0.0) * lum3(spli.Le);
-            if (spPhat <= 0.0) continue;
-            const float wSp = spPhat * spM * spWd.z;
-            r.W_sum += wSp;
-            r.M     += spM;
-            if (rnd(seed) < wSp / max(r.W_sum, 1e-20)) {
-                r.lightPos = spPos.xyz; r.lightType = spPos.w; r.p_hat = spPhat;
-            }
-        }
-        finalizeReservoir(r);
-    }
-
-    // Persist the PRE-SPATIAL reservoir for next frame's temporal read.
-    imageStore(reservoirPosWrite, px, vec4(rPreSpatial.lightPos, rPreSpatial.lightType));
-    imageStore(reservoirWWrite,   px, vec4(rPreSpatial.W_sum, rPreSpatial.M, persistW, rPreSpatial.p_hat));
-
-    // Shading uses the POST-SPATIAL reservoir r (the improved current-frame estimate).
+    // The pick's own visibility: one shadow ray. The RIS target is UNSHADOWED, so
+    // the pick may be occluded (the emitter's far face, a wall, the sphere's own
+    // shadow); occluded, it contributes nothing this frame.
     if (r.W <= 0.0 || r.p_hat <= 0.0 || r.lightType < 999.5) return vec3(0.0);
     const LightInfoD li = evalLightInfoEm(int(r.lightType), r.lightPos, P);
     const float NdotL = max(dot(N, li.dir), 0.0);
     if (NdotL <= 0.0) return vec3(0.0);
-    // Under RR the sample is the one the visibility test above already traced
-    // (nothing merged since), so its ray is not cast twice.
-    if (doShadows && !kRR && restirOccluded(shadowOrig, li.dir, li.maxDist)) return vec3(0.0);
+    if (doShadows && restirOccluded(shadowOrig, li.dir, li.maxDist)) return vec3(0.0);
 
     // DEMOD irradiance: NdotL·Le·W/π; albedo·(1-metal) is reapplied by the denoise
     // recombine. No Fresnel weight, as evalLight's note says for every direct diffuse

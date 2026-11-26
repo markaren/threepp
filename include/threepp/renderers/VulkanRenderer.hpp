@@ -520,8 +520,8 @@ namespace threepp {
 
         // Hard restart of every temporal accumulator, on every live view: the
         // TAA history, the reprojection validity of the deferred shade's
-        // per-frame histories (GI, shadow, reflections, volumetric fog) and the
-        // ReSTIR reservoirs. The next render() starts them from nothing, as the
+        // per-frame histories (GI, shadow, reflections, volumetric fog). The
+        // next render() starts them from nothing, as the
         // first frame does. Meant for the start of a capture once a scene has
         // finished STREAMING: terrain tiles that land at run-dependent frames
         // put run-varying content into every history, and an exponential
@@ -854,14 +854,17 @@ namespace threepp {
         void setSunAngularRadius(float degrees);
         [[nodiscard]] float sunAngularRadius() const;
 
-        // ReSTIR DI master toggle (streaming RIS + temporal + spatial reuse at
-        // primary surfaces) for the deferred shade's next-event estimation.
-        // ON by default — it is what makes many-light and emissive-geometry
-        // scenes converge at 1 spp, so it is the path the renderer is tuned and
-        // golden-tested against. setRestirDIEnabled(false) bypasses the primary
-        // RIS branch and falls back to the legacy per-light NEE loops: cheaper
-        // with a handful of lights, markedly noisier with many, and a useful
-        // A/B when triaging a reservoir-feedback artifact.
+        // ReSTIR DI master toggle: resampled importance sampling of the
+        // emitters at primary surfaces (RIS over this frame's candidates, one
+        // shadow ray; ReSTIR's temporal and spatial reuse are gone, as no gain
+        // and an overshoot after every camera cut) for the deferred shade's
+        // next-event estimation. ON by default — it is what makes many-light
+        // and emissive-geometry scenes converge at 1 spp, so it is the path the
+        // renderer is tuned and golden-tested against.
+        // setRestirDIEnabled(false) bypasses the primary RIS branch and falls
+        // back to the legacy per-light NEE loops: cheaper with a handful of
+        // lights, markedly noisier with many, and a useful A/B when triaging an
+        // emitter-sampling artifact.
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 
@@ -1102,8 +1105,8 @@ namespace threepp {
             // slot path does not take (see slotEdits). Hiding or re-showing a
             // mesh is not one.
             uint64_t structuralRebuilds = 0;
-            // Temporal history wipes, per view: the ReSTIR reservoirs, the
-            // denoiser and reflection histories, the fog and cloud
+            // Temporal history wipes, per view: the denoiser and reflection
+            // histories, the fog and cloud
             // accumulators start over (a new environment, a resize,
             // resetTemporalHistory, the first scene build). An entry added or
             // removed is not one: surviving entries keep their history.

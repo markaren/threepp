@@ -439,30 +439,11 @@ void VulkanRenderer::Impl::compactAsync(const AsyncCompaction& c) {
             blasRereferenced_ = true;
         }
 
-void VulkanRenderer::Impl::createReservoirImages() {
-            // Render extent, not swapchain extent — the per-pixel ReSTIR DI
-            // reservoir images are sized to the resolution the deferred shade
-            // launches at. Equal to the swapchain extent unless renderScale_ < 1.
-            const VkExtent2D ext = renderExtent();
-            for (size_t i = 0; i < view().reservoirPosImagesPP.size(); ++i) {
-                view().reservoirPosImagesPP[i] = createStorageImage2D(
-                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                        0, i == 0 ? "reservoirPosImagePP[0]" : "reservoirPosImagePP[1]");
-            }
-            for (size_t i = 0; i < view().reservoirWImagesPP.size(); ++i) {
-                view().reservoirWImagesPP[i] = createStorageImage2D(
-                        ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT,
-                        0, i == 0 ? "reservoirWImagePP[0]" : "reservoirWImagePP[1]");
-            }
-            // Storage memory contents are undefined after vmaCreateImage. NO
-            // clear here: clearGbufImages skips the G-buffer slots that do not
-            // exist yet, and every caller creates them next (ensureHybridResources).
-            // Clearing here zeroed only the reservoirs and left a new view's
-            // froxel fog history, indirect/reflect/shadow histories and raster
-            // attachments as recycled memory, which the froxel EMA accepted as
-            // history (a secondary view's fog blobs, 2026-10-21,
-            // plans/vulkan-secondary-view-froxel-history.md). Each caller runs
-            // clearGbufImages once, after ensureHybridResources.
+void VulkanRenderer::Impl::resetViewSampling() {
+            // A view's render extent was (re)made: its sample sequence, the
+            // reprojection's previous camera and the motion history start over.
+            // (The tail of the ReSTIR DI reservoir allocation it used to be part
+            // of; its callers rely on the reset.)
             sampleIndex = 0;
             view().prevCameraValid = false;
             seedMotionState(lastVisibleEntries_);// forget motion history (identity next frame)
@@ -728,16 +709,14 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // contract is to disable rather than silently reallocate under a
             // live foreign import.
             invalidateFrameInterop(view().id, "a render-target reallocation");
-            for (auto& img : view().reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : view().reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            createReservoirImages();// reallocates the reservoir images
+            resetViewSampling();// a new extent: the sampling starts over
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
             // bindings point at rasterGbufs[f].*.view, so stale views from the
             // old extent need to be replaced before the new descriptor sets
             // capture them.
             ensureHybridResources();
-            // Now that every slot exists: zero the reservoirs and every
-            // per-view history (device idle, see above).
+            // Now that every slot exists: zero every per-view history (device
+            // idle, see above).
             clearGbufImages();
             // TAA + upscale intermediates live at the render extent too;
             // rebuild before any descriptor write captures their views.
@@ -1305,8 +1284,8 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             if (refreshEnvTextureFromScene(scene)) {
                 THREEPP_CPUPROF("frame.2c_descRefresh");
                 // Env is a primary radiance source — can't reproject, so this
-                // path already wipes the ReSTIR DI reservoir history (a
-                // vkDeviceWaitIdle + clearGbufImages) to cold-start next frame.
+                // path already wipes the temporal histories (a vkDeviceWaitIdle
+                // + clearGbufImages) to cold-start next frame.
                 // Drain FIRST so the all-slots descriptor rewrite lands while the
                 // device is idle (both FIF sets safe to touch), and flush the
                 // retire queue (refreshEnvTextureFromScene retired the old env
@@ -2186,12 +2165,9 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
 
             // The water's mirror view: camera UBOs and a G-buffer, nothing
             // else (the primary's shade reads it; it shades nothing itself).
-            // The reservoir pair too, small at its extent: clearGbufImages,
-            // which every accumulation reset runs on every live view, barriers
-            // them without asking.
             if (v.waterMirror) {
                 createCameraUbos();
-                createReservoirImages();
+                resetViewSampling();
                 ensureHybridResources();
                 clearGbufImages();
                 v.allocatedBytes = vmaAllocatedBytes() - before;
@@ -2228,16 +2204,15 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
-            // Camera UBO ring + the ReSTIR reservoir pair, both at this view's
-            // render extent.
+            // Camera UBO ring at this view's render extent; its sampling starts.
             createCameraUbos();
-            createReservoirImages();
+            resetViewSampling();
 
             // G-buffer, raster camera UBOs, raster descriptor pool + sets — all
             // sized from renderExtent(), which now answers with v.renderExt.
             ensureHybridResources();
-            // Zero the reservoirs and every history of the new view, now that
-            // its G-buffer slots exist. Without it the froxel fog history held
+            // Zero every history of the new view, now that its G-buffer slots
+            // exist. Without it the froxel fog history held
             // recycled memory that passed as history (the drone feed's blobs).
             clearGbufImages();
 
@@ -2295,8 +2270,6 @@ void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
             for (auto& b : v.rasterCameraUbos)   destroyBuffer(ctx->allocator(), b);
             for (auto& b : v.drawInfoBuffers)    destroyBuffer(ctx->allocator(), b);
             for (auto& b : v.indirectCmdBuffers) destroyBuffer(ctx->allocator(), b);
-            for (auto& i : v.reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, i);
-            for (auto& i : v.reservoirWImagesPP)   destroyImage2D(ctx->allocator(), d, i);
             destroyImage2D(ctx->allocator(), d, v.colorTarget);
             destroyBuffer(ctx->allocator(), v.readbackBuf);
             // One pool destroy frees every set allocated from it.

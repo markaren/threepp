@@ -554,11 +554,6 @@ namespace threepp::vulkan::impl {
         // indirectGroupRanges_ during recordRasterGbufPass.
         std::array<Buffer, kFramesInFlight> indirectCmdBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> indirectCmdBufferCapacity{};
-        // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not
-        // per-frame-in-flight). Screen-space, so per-view. At frame N the
-        // shade writes slot (N & 1) and reads slot ((N+1) & 1).
-        std::array<Image2D, 2> reservoirPosImagesPP{};
-        std::array<Image2D, 2> reservoirWImagesPP{};
 
         // Group 3 — host-side temporal bookkeeping.
         //
@@ -660,7 +655,7 @@ namespace threepp::vulkan::impl {
         //           shade's output target) plus the pyramid above it.
         //   post_   owns hdrOut at the display extent.
         //   deferredShade_  owns per-frame-in-flight sets binding this
-        //           view's G-buffer, reservoirs and sceneHdr.
+        //           view's G-buffer and sceneHdr.
         //
         // Deliberately NOT here, and primary-only by scope: occlusion
         // culling + its Hi-Z, the MSAA G-buffer resolve, and the thin-lens

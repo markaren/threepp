@@ -77,11 +77,6 @@ namespace threepp::vulkan {
             // (GpuFogUbo: sigmaT/enabled/color/anisotropy/waterSurfaceY).
             const VkBuffer*    fogBuf     = nullptr;// [framesInFlight]
             VkDeviceSize       fogRange   = 0;
-            // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not per-frame).
-            // rewriteDescriptors picks write=slot(f&1), read=other per frame.
-            // STORAGE images.
-            const VkImageView* reservoirPos = nullptr;// [2] lightPos.xyz + lightType.w (rgba32f)
-            const VkImageView* reservoirW   = nullptr;// [2] W_sum/M/W/p_hat (rgba16f)
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
             const VkBuffer*    materialBuf = nullptr;// [framesInFlight] MaterialDesc[] (emissive)
             const VkBuffer*    geomDescBuf = nullptr;// [framesInFlight] GeometryDesc[] (reflection-hit normals/UVs; ringed for auto-LOD level switches)

@@ -2664,13 +2664,9 @@ namespace threepp {
         // matches motionMatBuffers.
         bool ensureEmissiveTriCapacity(uint32_t frame, uint32_t needed);
 
-        // Clears both ReSTIR DI reservoir ping-pong image pairs
-        // (reservoirPosImagesPP + reservoirWImagesPP) to (0,0,0,0), so the
-        // deferred shade's temporal-reuse read sees M=0 (no prior history)
-        // on the next frame instead of garbage. A stale tap that *does* slip
-        // past the reservoir's own validity guard (e.g. by undefined memory
-        // aliasing a real mesh-ID after image creation) then returns a
-        // harmless 0 mean / 0 M reservoir instead of garbage. Caller must
+        // Clears the deferred shade's temporal accumulators (the per-slot
+        // histories, see the definition) to zero, so the next frame reads "no
+        // prior history" instead of recycled memory. Caller must
         // hold the GPU idle (we don't issue our own barrier-into-TRANSFER_DST
         // since the only legal layout transition path for an image being
         // cleared is GENERAL → TRANSFER_DST → GENERAL).
@@ -3275,21 +3271,20 @@ namespace threepp {
         // re-widen per update — particle geometry must stay float.
         ParticleGeomRec* ensureParticleGeom(const std::shared_ptr<BufferGeometry>& geomSp);
 
-        // Storage-image (GENERAL layout) factory used for the ReSTIR DI
-        // reservoir ping-pong images (createReservoirImages). No staging
-        // upload — contents are initialised the first frame after
-        // sampleIndex resets to 0. The deferred shade reads/writes these
-        // every frame, so we transition once at creation and keep them in
-        // GENERAL forever after.
+        // Storage-image (GENERAL layout) factory (a view's colour target). No
+        // staging upload: the image is written before it is read. Transitioned
+        // once at creation and kept in GENERAL forever after.
         Image2D createStorageImage2D(uint32_t w, uint32_t h, VkFormat format,
                                      VkImageUsageFlags extraUsage = 0,
                                      const char* debugName = nullptr);
 
-        void createReservoirImages();
+        // A view's sampling restarts: sampleIndex, the previous camera and
+        // the motion history (VulkanCoreFrame.cpp).
+        void resetViewSampling();
 
 
         // Manual accumulation reset. Mirrors the post-create reset block above:
-        // wipes gbuf + accum + ReSTIR DI reservoirs, rewinds sampleIndex, and
+        // wipes gbuf + accum, rewinds sampleIndex, and
         // invalidates reproject state so the next frame cold-starts from
         // sample 1. Issues a vkDeviceWaitIdle since clearGbufImages requires
         // the GPU idle before its TRANSFER_DST layout transition. When
@@ -3849,11 +3844,11 @@ namespace threepp {
         void setTextureAnisotropy(float aniso);// 0 = auto; VulkanCoreTextures.cpp
 
         // Rebuild every resource sized to the deferred shade's render extent
-        // — the gbuf / reservoir / GI ping-pongs, the denoiser + TAA images,
-        // the raster G-buffer, the upscale intermediates — plus the
-        // descriptor sets that bind them. Shared by swapchain recreation and
-        // runtime renderScale changes. createReservoirImages resets
-        // accumulation; the caller must have the GPU idle before this runs.
+        // — the gbuf / GI ping-pongs, the denoiser + TAA images, the raster
+        // G-buffer, the upscale intermediates — plus the descriptor sets that
+        // bind them. Shared by swapchain recreation and runtime renderScale
+        // changes. resetViewSampling restarts the sampling; the caller must
+        // have the GPU idle before this runs.
         void reallocateRenderExtentResources();
 
         void recreateSwapchainAndDescriptors();

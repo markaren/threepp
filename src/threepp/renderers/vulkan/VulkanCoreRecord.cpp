@@ -3992,8 +3992,7 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             }
 
             // The acquired swapchain image (UNDEFINED in, GENERAL out) and the
-            // optional split-screen clear. The ReSTIR reservoirs' previous-frame
-            // writes are ordered by the entry barrier; the shade declares them.
+            // optional split-screen clear.
             addSwapchainPasses(g, imageIndex);
 
             // Per-frame set index. Was `currentFrame * imageCount_ + imageIndex`,
