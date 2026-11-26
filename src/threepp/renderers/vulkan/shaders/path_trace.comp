@@ -45,11 +45,15 @@
 // feed it: an exponential height profile, height_fog.glsl, with fog.color
 // as its single-scattering albedo and fog.anisotropy as its HG g), applied
 // to every leg of the path as the deferred shade applies it to the camera
-// leg: L = T·L_beyond + albedo·ambient·(1 − T) + the sun's single scatter
+// leg: L = T·L_beyond + albedo·ambient·(1 − T)·V + the sun's single scatter
 // along the leg. The deferred shade marches that last term in a few steps a
 // pixel; here each sample draws one point on the leg in proportion to the
 // medium's density and transmittance and traces its own shadow ray toward
 // the sun, so the shafts converge to the shadows of the geometry exactly.
+// V is the share of the sky the air on the leg sees (airSkyVisibility: one
+// such point and one ray toward the upper sky): 1 in the open, so the haze of
+// a landscape is the deferred shade's; under a roof only the sky through the
+// door and the cracks lights it, so a shed does not fill with sky-lit haze.
 // The point and spot lights scatter in the same air, and in the beam density
 // setDeferredVolumetrics gives clear air, as the frame's beam march and froxel glow
 // scatter them (airLampScatter). A leg that escapes takes the sky's transmittance (applySkyFog) and the
@@ -1161,6 +1165,30 @@ vec3 airSunScatter(vec3 o, vec3 d, float tEnd, float odEnd, float dustAt, float 
     return sum * airAlbedo() * ((1.0 - Tend) * layerShare * (tx > dustAt ? dustTr : 1.0));
 }
 
+// How much of the sky lights the air on [o, o + d·tEnd] (odEnd its optical
+// depth). The sky's in-scatter (airSkyLight) is the light of the whole upper
+// sky: right in the open, wrong under a roof, where the deferred shade's model
+// fills a shed or a mill with sky-lit haze. One point drawn in proportion to
+// sigma·T, as airSunScatter draws it, and one shadow ray from it toward a
+// cosine-weighted direction about up: averaged over the samples, the share of
+// the sky's light that point sees (its sky view factor: 1 in the open, a
+// little less between fjord walls, the doorway's share inside a boathouse).
+// Cosine weight, not uniform: an overcast sky is brightest overhead, so a
+// ridge low on the horizon takes little of its light. Glass on the way lets
+// its share through.
+float airSkyVisibility(vec3 o, vec3 d, float tEnd, float odEnd, inout uint seed) {
+    if (odEnd <= 1e-6 || tEnd <= 0.0) return 1.0;
+    const float Tend   = exp(-odEnd);
+    const float target = -log(max(1.0 - rnd(seed) * (1.0 - Tend), 1e-30));
+    float lo = 0.0, hi = tEnd;
+    for (int i = 0; i < 20; ++i) {
+        const float mid = 0.5 * (lo + hi);
+        if (airOpticalDepth(o, o + d * mid) < target) lo = mid; else hi = mid;
+    }
+    const vec3 x = o + d * (0.5 * (lo + hi));
+    return shadowVis(x, sampleCosine(airUp(), seed), 1e30);
+}
+
 // ── The lamps in the air ────────────────────────────────────────────────────
 // The point and spot lights' single scatter along a leg: the frame's beam
 // march (volumetricSpotScatter) and its froxels' point-light glow, with their
@@ -1803,14 +1831,17 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
             if (!inside && airOn()) {
                 const vec3 up = airUp();
                 if (miss) {
-                    const float Tsky = airSkyTransmittance(o, d);
-                    const float tEnd = airSkyLegLength(o);
-                    L += throughput * (airAlbedo() * airSkyLight(d) * (1.0 - Tsky) +
-                                       airSunScatter(o, d, tEnd, airOpticalDepth(o, o + d * tEnd), dustAt, dl.T, seed));
+                    const float Tsky  = airSkyTransmittance(o, d);
+                    const float tEnd  = airSkyLegLength(o);
+                    const float odEnd = airOpticalDepth(o, o + d * tEnd);
+                    L += throughput * (airAlbedo() * airSkyLight(d) * ((1.0 - Tsky) *
+                                       airSkyVisibility(o, d, tEnd, odEnd, seed)) +
+                                       airSunScatter(o, d, tEnd, odEnd, dustAt, dl.T, seed));
                     legT = Tsky;
                 } else {
                     const float od = airOpticalDepth(o, o + d * tHit);
-                    L += throughput * (airAlbedo() * airSkyLight(d) * (1.0 - exp(-od)) +
+                    L += throughput * (airAlbedo() * airSkyLight(d) * ((1.0 - exp(-od)) *
+                                       airSkyVisibility(o, d, tHit, od, seed)) +
                                        airSunScatter(o, d, tHit, od, dustAt, dl.T, seed));
                     legT = exp(-od);
                 }

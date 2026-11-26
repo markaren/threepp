@@ -560,6 +560,7 @@ namespace threepp::vulkan {
         // dispatch of all (prev is uninitialised), and any frame the clear
         // below zeroes the canonical stores under prev's feet.
         bool fullCopy = !haveWindow_;
+        bool replace  = false;// this frame runs the replace phase (kReplaceUpdates)
         if (needsClear_) {
             // Fresh fit: zero SH + validity + history so probes bootstrap with
             // α = 1 instead of blending into a stale grid. The depth store is
@@ -582,7 +583,10 @@ namespace threepp::vulkan {
             needsClear_    = false;
             scrollPending_ = false;// the full clear supersedes a scroll reset
             fullCopy       = true;
-            if (warmup_) warmupLeft_ = kWarmupFrames;// the fresh grid fills at the boosted rate
+            if (warmup_) {
+                warmupLeft_ = kWarmupFrames;// the fresh grid fills at the boosted rate
+                replace     = true;
+            }
         } else if (scrollPending_) {
             // A cascade window moved: reset the slots whose world cell changed
             // (probe_update.comp scroll mode, flags bit 2), before the snapshot
@@ -603,125 +607,132 @@ namespace threepp::vulkan {
                 std::memcpy(cPrevBase_[c], cBase_[c], sizeof(cBase_[c]));
         }
 
-        // Snapshot the canonical stores for this update's reads — but only the
-        // part that can have changed. The update reads prev ANYWHERE (the
-        // feedback tap samples at ray-hit points, which land wherever the
-        // geometry does), so prev must equal canonical over the whole grid.
-        // After dispatch k, though, the only probes where they differ are
-        // dispatch k's own window: nothing else wrote the canonical stores.
-        // So copying just that window before dispatch k+1 restores equality by
-        // induction, and the snapshot is byte-for-byte what a full copy would
-        // have produced. 10 MB of copy per frame becomes ~1.3 MB.
-        //
-        // Barrier 1:
-        // whatever wrote them last (the previous update's compute, or the
-        // needsClear_ fill above) must be visible to the transfer; barrier 2:
-        // the copies must land before the dispatch reads the snapshots, and
-        // the canonical stores' transfer-READ must retire before the dispatch
-        // WRITES them (WAR — execution ordering, covered by the same barrier).
-        {
-            VkMemoryBarrier2 toCopy{};
-            toCopy.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            toCopy.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            toCopy.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                   VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            toCopy.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            toCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT |
-                                   VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            VkDependencyInfo dep{};
-            dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.memoryBarrierCount = 1;
-            dep.pMemoryBarriers    = &toCopy;
-            vkCmdPipelineBarrier2(cb, &dep);
+        // One update a frame; on the frame of a full clear, the replace phase's
+        // kReplaceUpdates back to back, each reading what the one before it
+        // wrote (the snapshot below runs before every one of them).
+        const uint32_t sweeps = replace ? kReplaceUpdates : 1u;
+        for (uint32_t sweep = 0; sweep < sweeps; ++sweep, fullCopy = false) {
+            // Snapshot the canonical stores for this update's reads — but only the
+            // part that can have changed. The update reads prev ANYWHERE (the
+            // feedback tap samples at ray-hit points, which land wherever the
+            // geometry does), so prev must equal canonical over the whole grid.
+            // After dispatch k, though, the only probes where they differ are
+            // dispatch k's own window: nothing else wrote the canonical stores.
+            // So copying just that window before dispatch k+1 restores equality by
+            // induction, and the snapshot is byte-for-byte what a full copy would
+            // have produced. 10 MB of copy per frame becomes ~1.3 MB.
+            //
+            // Barrier 1:
+            // whatever wrote them last (the previous update's compute, or the
+            // needsClear_ fill above) must be visible to the transfer; barrier 2:
+            // the copies must land before the dispatch reads the snapshots, and
+            // the canonical stores' transfer-READ must retire before the dispatch
+            // WRITES them (WAR — execution ordering, covered by the same barrier).
+            {
+                VkMemoryBarrier2 toCopy{};
+                toCopy.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                toCopy.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                toCopy.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                       VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                toCopy.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                toCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT |
+                                       VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &toCopy;
+                vkCmdPipelineBarrier2(cb, &dep);
 
-            // Per cascade, [first, first + n) in that cascade's probe indices,
-            // wrapped at probeCount_ into at most two regions. The window
-            // never wraps as long as kProbesPerFrame divides the probe count
-            // (always for 32×16×32, not for a shaped scene fit), and a silent
-            // half-copy would be a needle-in-a-haystack bug. A full copy is
-            // one region over every live cascade.
-            uint32_t spans[2 * kCascadesMax][2]{};
-            uint32_t regionCount = 0;
-            if (fullCopy) {
-                spans[0][0] = 0u;
-                spans[0][1] = kProbeCount * cascadeCount_;
-                regionCount = 1;
-            } else {
-                for (uint32_t c = 0; c < cascadeCount_; ++c) {
-                    const uint32_t first = lastOffset_;
-                    const uint32_t n     = lastCount_;
-                    const uint32_t n0    = std::min(n, probeCount_ - first);
-                    spans[regionCount][0] = c * kProbeCount + first;
-                    spans[regionCount][1] = n0;
-                    ++regionCount;
-                    if (n - n0 > 0) {
-                        spans[regionCount][0] = c * kProbeCount;
-                        spans[regionCount][1] = n - n0;
+                // Per cascade, [first, first + n) in that cascade's probe indices,
+                // wrapped at probeCount_ into at most two regions. The window
+                // never wraps as long as kProbesPerFrame divides the probe count
+                // (always for 32×16×32, not for a shaped scene fit), and a silent
+                // half-copy would be a needle-in-a-haystack bug. A full copy is
+                // one region over every live cascade.
+                uint32_t spans[2 * kCascadesMax][2]{};
+                uint32_t regionCount = 0;
+                if (fullCopy) {
+                    spans[0][0] = 0u;
+                    spans[0][1] = kProbeCount * cascadeCount_;
+                    regionCount = 1;
+                } else {
+                    for (uint32_t c = 0; c < cascadeCount_; ++c) {
+                        const uint32_t first = lastOffset_;
+                        const uint32_t n     = lastCount_;
+                        const uint32_t n0    = std::min(n, probeCount_ - first);
+                        spans[regionCount][0] = c * kProbeCount + first;
+                        spans[regionCount][1] = n0;
                         ++regionCount;
+                        if (n - n0 > 0) {
+                            spans[regionCount][0] = c * kProbeCount;
+                            spans[regionCount][1] = n - n0;
+                            ++regionCount;
+                        }
                     }
                 }
+
+                const VkDeviceSize kDepthStride = static_cast<VkDeviceSize>(kDepthTexels) * 4;
+                // The relocation offsets follow the same windows, in their region
+                // after every SH record of the store.
+                const VkDeviceSize offsetRegion = static_cast<VkDeviceSize>(storeCascades_) * kProbeCount * kShStride;
+
+                VkBufferCopy shCopy[4 * kCascadesMax]{}, depthCopy[2 * kCascadesMax]{};
+                for (uint32_t i = 0; i < regionCount; ++i) {
+                    shCopy[i].srcOffset = shCopy[i].dstOffset = spans[i][0] * kShStride;
+                    shCopy[i].size                            = spans[i][1] * kShStride;
+                    VkBufferCopy& oc = shCopy[regionCount + i];
+                    oc.srcOffset = oc.dstOffset = offsetRegion + spans[i][0] * kOffsetStride;
+                    oc.size                     = spans[i][1] * kOffsetStride;
+                    depthCopy[i].srcOffset = depthCopy[i].dstOffset = spans[i][0] * kDepthStride;
+                    depthCopy[i].size                               = spans[i][1] * kDepthStride;
+                }
+                vkCmdCopyBuffer(cb, shBuf_.handle, prevShBuf_.handle, 2 * regionCount, shCopy);
+                vkCmdCopyBuffer(cb, depthBuf_.handle, prevDepthBuf_.handle, regionCount, depthCopy);
+
+                VkMemoryBarrier2 toCompute{};
+                toCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                toCompute.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                toCompute.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                          VK_ACCESS_2_TRANSFER_READ_BIT;
+                toCompute.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                toCompute.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                          VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                dep.pMemoryBarriers = &toCompute;
+                vkCmdPipelineBarrier2(cb, &dep);
             }
 
-            const VkDeviceSize kDepthStride = static_cast<VkDeviceSize>(kDepthTexels) * 4;
-            // The relocation offsets follow the same windows, in their region
-            // after every SH record of the store.
-            const VkDeviceSize offsetRegion = static_cast<VkDeviceSize>(storeCascades_) * kProbeCount * kShStride;
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+            // Per cascade: the round-robin budget, or during the warm-up after a
+            // full clear kWarmupBoost times it (all 16384 of a window at the default
+            // sizes: every probe updates every frame).
+            const uint32_t budget = warmupLeft_ > 0 ? kProbesPerFrame * kWarmupBoost : kProbesPerFrame;
+            const uint32_t count  = std::min(budget, probeCount_);
+            uint32_t emPowerBits;
+            std::memcpy(&emPowerBits, &emissiveTotalPower, sizeof(emPowerBits));
+            const uint32_t pc[8] = {probeOffset_, count, updateCounter_,
+                                    (shadows ? 1u : 0u) | (fastBlend ? 2u : 0u) | (cutoutTest ? 8u : 0u) |
+                                        (replace ? 16u : 0u),// bit 4: the update replaces the radiance
+                                    emissiveCount, emPowerBits, envMipCount, 0u};
+            vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+            // One window of `count` probes per cascade, a row per cascade (the
+            // shader takes the cascade from its workgroup's y): the warm-up's
+            // 16384 a window would be 65536 in X at four cascades, past the
+            // 65535 a device has to accept along one dimension.
+            vkCmdDispatch(cb, count, cascadeCount_, 1);
 
-            VkBufferCopy shCopy[4 * kCascadesMax]{}, depthCopy[2 * kCascadesMax]{};
-            for (uint32_t i = 0; i < regionCount; ++i) {
-                shCopy[i].srcOffset = shCopy[i].dstOffset = spans[i][0] * kShStride;
-                shCopy[i].size                            = spans[i][1] * kShStride;
-                VkBufferCopy& oc = shCopy[regionCount + i];
-                oc.srcOffset = oc.dstOffset = offsetRegion + spans[i][0] * kOffsetStride;
-                oc.size                     = spans[i][1] * kOffsetStride;
-                depthCopy[i].srcOffset = depthCopy[i].dstOffset = spans[i][0] * kDepthStride;
-                depthCopy[i].size                               = spans[i][1] * kDepthStride;
-            }
-            vkCmdCopyBuffer(cb, shBuf_.handle, prevShBuf_.handle, 2 * regionCount, shCopy);
-            vkCmdCopyBuffer(cb, depthBuf_.handle, prevDepthBuf_.handle, regionCount, depthCopy);
+            // The window this dispatch is about to write, so the NEXT dispatch's
+            // snapshot knows what to restore. Tracked per dispatch, not per frame.
+            lastOffset_ = probeOffset_;
+            lastCount_  = count;
+            haveWindow_ = true;
 
-            VkMemoryBarrier2 toCompute{};
-            toCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            toCompute.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            toCompute.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT |
-                                      VK_ACCESS_2_TRANSFER_READ_BIT;
-            toCompute.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            toCompute.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                      VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            dep.pMemoryBarriers = &toCompute;
-            vkCmdPipelineBarrier2(cb, &dep);
+            probeOffset_ = (probeOffset_ + count) % probeCount_;
+            ++updateCounter_;
         }
-
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        // Per cascade: the round-robin budget, or during the warm-up after a
-        // full clear kWarmupBoost times it (all 16384 of a window at the default
-        // sizes: every probe updates every frame).
-        const uint32_t budget = warmupLeft_ > 0 ? kProbesPerFrame * kWarmupBoost : kProbesPerFrame;
         if (warmupLeft_ > 0) --warmupLeft_;
-        const uint32_t count = std::min(budget, probeCount_);
-        uint32_t emPowerBits;
-        std::memcpy(&emPowerBits, &emissiveTotalPower, sizeof(emPowerBits));
-        const uint32_t pc[8] = {probeOffset_, count, updateCounter_,
-                                (shadows ? 1u : 0u) | (fastBlend ? 2u : 0u) | (cutoutTest ? 8u : 0u),
-                                emissiveCount, emPowerBits, envMipCount, 0u};
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
-        // One window of `count` probes per cascade, a row per cascade (the
-        // shader takes the cascade from its workgroup's y): the warm-up's
-        // 16384 a window would be 65536 in X at four cascades, past the
-        // 65535 a device has to accept along one dimension.
-        vkCmdDispatch(cb, count, cascadeCount_, 1);
-
-        // The window this dispatch is about to write, so the NEXT dispatch's
-        // snapshot knows what to restore. Tracked per dispatch, not per frame.
-        lastOffset_ = probeOffset_;
-        lastCount_  = count;
-        haveWindow_ = true;
-
-        probeOffset_ = (probeOffset_ + count) % probeCount_;
-        ++updateCounter_;
     }
 
 }// namespace threepp::vulkan

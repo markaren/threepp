@@ -15,8 +15,9 @@
 //       and a card lit from behind glows through only when translucent;
 //   [6] the frame's camera and lamps: a picture of its own extent (larger
 //       than the frame, traced in bands), the physical camera's exposure,
-//       a thin lens, the lens distortion, and a spot light's beam in clear
-//       air;
+//       a thin lens, the lens distortion, a spot light's beam in clear
+//       air, a dome port, and haze that glows in the open but not in a shut
+//       room;
 //   [7] no validation errors.
 //
 // Exit 42 (SKIP) without a Vulkan device; a device without ray query checks
@@ -625,6 +626,48 @@ int main() {
             std::printf("  inside a closed box: no dome %.3f, a 1 m dome %.3f\n", shut.lum(), dome.lum());
             check(shut.lum() < 0.02, "shut in the box, the camera sees its dark inside");
             check(dome.lum() > 0.9, "a dome port larger than the box starts every ray outside it");
+        }
+
+        // Haze takes the sky's light only where it sees the sky: a thick,
+        // nearly uniform height fog under a white environment glows in the
+        // open, and inside a shut room with black walls it stays dark (the air
+        // in a shed is not lit by the sky through its roof).
+        {
+            auto white      = constantEnv(1.f, 1.f, 1.f);
+            auto roomMat       = MeshStandardMaterial::create();
+            roomMat->color     = Color(0.f, 0.f, 0.f);
+            roomMat->roughness = 1.f;
+            roomMat->side      = Side::Double;
+            Scene shutScene, openScene;
+            for (Scene* s : {&shutScene, &openScene}) {
+                s->environment = white;
+                s->background  = white;
+            }
+            shutScene.add(Mesh::create(BoxGeometry::create(6.f, 6.f, 6.f), roomMat));
+            auto cam7 = PerspectiveCamera::create(50, float(kW) / float(kH), 0.01f, 100.f);
+            cam7->position.set(0, 0, 2.5f);
+            cam7->lookAt(0, 0, 0);
+            cam7->updateMatrixWorld();
+            VulkanRenderer::HeightFogSettings haze;
+            haze.density     = 0.3f;
+            haze.baseY       = -3.f;
+            haze.falloff     = 1000.f;
+            haze.noiseAmount = 0.f;
+            renderer.setHeightFog(haze);
+            const auto centre = [&](Scene& s) {
+                std::vector<float> img;
+                int iw = 0, ih = 0;
+                for (int i = 0; i < 2; ++i) renderer.render(s, *cam7);
+                return renderer.pathTrace(s, *cam7, 32, img, iw, ih, p) && iw == kW
+                               ? meanLinear(img, kW, kW / 2 - 20, kW / 2 + 20, kH / 2 - 20, kH / 2 + 20)
+                               : Rgb{};
+            };
+            const Rgb shut = centre(shutScene);
+            const Rgb open = centre(openScene);
+            renderer.setHeightFog(std::nullopt);
+            std::printf("  haze: in a shut room %.4f, in the open %.4f\n", shut.lum(), open.lum());
+            check(open.lum() > 0.2, "the haze glows with the sky in the open");
+            check(shut.lum() < 0.02, "and stays dark in a shut room");
         }
     }
 
