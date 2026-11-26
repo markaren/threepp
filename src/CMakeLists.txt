@@ -1251,590 +1251,276 @@ if (THREEPP_WITH_VULKAN)
     endif ()
 
     include(${PROJECT_SOURCE_DIR}/cmake/CompileVulkanShaders.cmake)
+    set(_vk_shaders "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders")
     # Path-traced LIDAR scanner — private ray-tracing pipeline that emits
     # one beam per launched thread, evaluates the LIDAR equation in the
     # closest-hit shader, and writes per-beam returns back to the host
     # via a small SSBO. See vulkan/LidarScanner.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lidar.rgen"
-        kLidarRgenSpv
-        _lidar_rgen_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lidar.rchit"
-        kLidarRchitSpv
-        _lidar_rchit_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lidar.rmiss"
-        kLidarRmissSpv
-        _lidar_rmiss_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/lidar.rgen" kLidarRgenSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/lidar.rchit" kLidarRchitSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/lidar.rmiss" kLidarRmissSpv)
     # GPU event camera (DVS) detector — reads sceneCaptureBuf written by
     # the renderer's per-frame scene-capture path, updates per-pixel
     # log-luminance history, paints an RGBA8 accumulator image, copies
     # it into the host-visible readback ring.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/event_detect.comp"
-        kEventDetectCompSpv
-        _event_detect_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/event_detect.comp" kEventDetectCompSpv)
     # Fast deterministic shading for the event-camera pipeline. Reads the
     # raster G-buffer + material/light buffers, outputs a packed BGRA8
     # luma buffer matching the swapchain layout — feeds event_detect
     # without the path tracer's stochastic noise.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/event_shade.comp"
-        kEventShadeCompSpv
-        _event_shade_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/event_shade.comp" kEventShadeCompSpv)
     # Debug-view resolve: samples one G-buffer channel and writes a readable
     # visualization to the swapchain (setHybridDebugView). Replaces a raw blit
     # that couldn't show the signed motion or integer ids attachments.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/debug_resolve.comp"
-        kDebugResolveCompSpv
-        _debug_resolve_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
-        kPrefilterEnvCompSpv
-        _prefilter_env_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/debug_resolve.comp" kDebugResolveCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/prefilter_env.comp" kPrefilterEnvCompSpv)
     # threepp::Sky on the deferred renderer: the Preetham model baked into mip 0
     # of the env image, in place, each frame its uniforms change
     # (vulkan/SkyBake.{hpp,cpp}); prefilter_env mips it.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sky_preetham.comp"
-        kSkyPreethamCompSpv
-        _sky_preetham_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/sky_preetham.comp" kSkyPreethamCompSpv)
     # Post stack: progressive bloom pyramid (Jimenez 2014 — Karis 13-tap down
     # chain + 3x3 tent additive upsample, vulkan/BloomPass.{hpp,cpp}) + the
     # exposure/white-balance/tone-map/grade/sRGB composite that closes the
     # HDR path (vulkan/PostComposite.{hpp,cpp}).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_down.comp"
-        kBloomDownCompSpv
-        _bloom_down_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_up.comp"
-        kBloomUpCompSpv
-        _bloom_up_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/post_composite.comp"
-        kPostCompositeCompSpv
-        _post_composite_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/bloom_down.comp" kBloomDownCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/bloom_up.comp" kBloomUpCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/post_composite.comp" kPostCompositeCompSpv)
     # Camera image formation: lens distortion + sensor noise on the FINISHED
     # frame, after the overlay pass so it covers everything the camera sees.
     # See vulkan/SensorPass.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sensor_image.comp"
-        kSensorImageCompSpv
-        _sensor_image_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/sensor_image.comp" kSensorImageCompSpv)
     # Thin-lens depth of field (CoC prefilter → tile max/dilate → near/far
     # scatter-as-gather → full-res combine). See vulkan/DofPass.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_coc.comp"
-        kDofCocCompSpv
-        _dof_coc_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_tile.comp"
-        kDofTileCompSpv
-        _dof_tile_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_gather.comp"
-        kDofGatherCompSpv
-        _dof_gather_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_combine.comp"
-        kDofCombineCompSpv
-        _dof_combine_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/dof_coc.comp" kDofCocCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/dof_tile.comp" kDofTileCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/dof_gather.comp" kDofGatherCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/dof_combine.comp" kDofCombineCompSpv)
     # Gaussian-splat compute tile rasterizer (project -> prefix sum ->
     # deterministic expansion -> radix sort -> per-tile accumulation into
     # sceneHdr). See vulkan/SplatPass.{hpp,cpp} and shaders/splat_common.glsl.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_project.comp"
-        kSplatProjectCompSpv
-        _splat_project_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_scan.comp"
-        kSplatScanCompSpv
-        _splat_scan_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_scan_add.comp"
-        kSplatScanAddCompSpv
-        _splat_scan_add_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_expand.comp"
-        kSplatExpandCompSpv
-        _splat_expand_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_indirect.comp"
-        kSplatIndirectCompSpv
-        _splat_indirect_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_radix_hist.comp"
-        kSplatRadixHistCompSpv
-        _splat_radix_hist_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_radix_scatter.comp"
-        kSplatRadixScatterCompSpv
-        _splat_radix_scatter_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_range.comp"
-        kSplatRangeCompSpv
-        _splat_range_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_raster.comp"
-        kSplatRasterCompSpv
-        _splat_raster_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_checksum.comp"
-        kSplatChecksumCompSpv
-        _splat_checksum_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_project.comp" kSplatProjectCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_scan.comp" kSplatScanCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_scan_add.comp" kSplatScanAddCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_expand.comp" kSplatExpandCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_indirect.comp" kSplatIndirectCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_radix_hist.comp" kSplatRadixHistCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_radix_scatter.comp" kSplatRadixScatterCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_range.comp" kSplatRangeCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_raster.comp" kSplatRasterCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_checksum.comp" kSplatChecksumCompSpv)
     # Splat VOLUME BAKE — off the frame path entirely: one scatter + one resolve
     # recorded inside SplatPass::uploadCloud's staging one-shot, voxelizing a
     # rigid cloud once into the rgba16f medium that reflection legs march.
     # Own descriptor set layout (shaders/splat_bake_common.glsl), nothing shared
     # with the raster above. See plans/splat-volume-reflections.md.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_bake_scatter.comp"
-        kSplatBakeScatterCompSpv
-        _splat_bake_scatter_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_bake_resolve.comp"
-        kSplatBakeResolveCompSpv
-        _splat_bake_resolve_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_bake_scatter.comp" kSplatBakeScatterCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_bake_resolve.comp" kSplatBakeResolveCompSpv)
     # Auto-exposure: log2-luma histogram over sceneHdr. See AutoExposure.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lum_histogram.comp"
-        kLumHistogramCompSpv
-        _lum_histogram_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
-        kDeferredShadeCompSpv
-        _deferred_shade_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/lum_histogram.comp" kLumHistogramCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/deferred_shade.comp" kDeferredShadeCompSpv)
     # No-ray-query variants (THREEPP_NO_RAY_QUERY, ray_query_stub.glsl): every
     # ray misses, for a device without VK_KHR_ray_query. DeferredShade picks
     # the set from VulkanContext::rayQuerySupported().
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
-        kDeferredShadeNoRtCompSpv
-        _deferred_shade_nort_spv_h
-        VARIANT_SUFFIX nort
-        DEFINES THREEPP_NO_RAY_QUERY)
+    compile_vulkan_shader(threepp "${_vk_shaders}/deferred_shade.comp" kDeferredShadeNoRtCompSpv
+        VARIANT_SUFFIX nort DEFINES THREEPP_NO_RAY_QUERY)
     # Demodulated-lighting filter + composite stages (formerly the two channels
     # of deferred_denoise.comp; shared pieces in deferred_filter_common.glsl,
     # picked up automatically by compile_vulkan_shader's *.glsl DEPENDS glob):
     #   deferred_gi_filter   — SVGF GI + soft-shadow ratio filter, recombine.
     #   deferred_refl_filter — reflection gloss reconstruction, recombine.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_gi_filter.comp"
-        kDeferredGiFilterCompSpv
-        _deferred_gi_filter_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_refl_filter.comp"
-        kDeferredReflFilterCompSpv
-        _deferred_refl_filter_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/deferred_gi_filter.comp" kDeferredGiFilterCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/deferred_refl_filter.comp" kDeferredReflFilterCompSpv)
     # Clustered light culling (deferred): per-cell light index lists consumed
     # by deferred_shade's analytic direct split. See DeferredShade::recordClusterBuild.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cluster_build.comp"
-        kClusterBuildCompSpv
-        _cluster_build_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/cluster_build.comp" kClusterBuildCompSpv)
     # Froxel volumetric lighting (deferred): inject (per-froxel in-scatter,
     # RT sun shafts + clustered lights) + integrate (front-to-back LUT).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_inject.comp"
-        kFroxelInjectCompSpv
-        _froxel_inject_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_inject.comp"
-        kFroxelInjectNoRtCompSpv
-        _froxel_inject_nort_spv_h
-        VARIANT_SUFFIX nort
-        DEFINES THREEPP_NO_RAY_QUERY)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_integrate.comp"
-        kFroxelIntegrateCompSpv
-        _froxel_integrate_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/froxel_inject.comp" kFroxelInjectCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/froxel_inject.comp" kFroxelInjectNoRtCompSpv
+        VARIANT_SUFFIX nort DEFINES THREEPP_NO_RAY_QUERY)
+    compile_vulkan_shader(threepp "${_vk_shaders}/froxel_integrate.comp" kFroxelIntegrateCompSpv)
     # Particle billboard lighting (deferred): per-particle light field (sun ×
     # RT shadow, clustered lights, probe/env ambient) + camera→particle fog leg
     # for the overlay billboards. See DeferredShade::recordParticleLight.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_light.comp"
-        kParticleLightCompSpv
-        _particle_light_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_light.comp"
-        kParticleLightNoRtCompSpv
-        _particle_light_nort_spv_h
-        VARIANT_SUFFIX nort
-        DEFINES THREEPP_NO_RAY_QUERY)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle_light.comp" kParticleLightCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle_light.comp" kParticleLightNoRtCompSpv
+        VARIANT_SUFFIX nort DEFINES THREEPP_NO_RAY_QUERY)
     # Half-res volumetric cloud march (deferred): far-field raymarched cloud
     # deck + temporal reprojection. See DeferredShade::recordCloudMarch.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cloud_march.comp"
-        kCloudMarchCompSpv
-        _cloud_march_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/cloud_march.comp" kCloudMarchCompSpv)
     # Cloud shadow map (deferred): top-down cloud transmittance projected to the
     # ground. See DeferredShade::recordCloudShadow.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cloud_shadow.comp"
-        kCloudShadowCompSpv
-        _cloud_shadow_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/cloud_shadow.comp" kCloudShadowCompSpv)
     # Half-res ray-traced ambient occlusion + bent normals (deferred): short
     # cosine occlusion rays through the TLAS, temporally reprojected at half res.
     # See DeferredShade::recordRtao.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/rtao.comp"
-        kRtaoCompSpv
-        _rtao_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/rtao.comp" kRtaoCompSpv)
     # The sun's fog march at half resolution, temporally accumulated (deferred):
     # the shade's own march over the shade's set. See DeferredShade::recordFogMarch.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/fog_march.comp"
-        kFogMarchCompSpv
-        _fog_march_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
-        kProbeUpdateCompSpv
-        _probe_update_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/fog_march.comp" kFogMarchCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/probe_update.comp" kProbeUpdateCompSpv)
     # Progressive path trace of the current view (VulkanRenderer::pathTraceBegin) —
     # see PathTracer.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace.comp"
-        kPathTraceCompSpv
-        _path_trace_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/path_trace.comp" kPathTraceCompSpv)
     # The same with its photons (the emitters' caustics), for a scene with
     # emitters and glass: compiled apart, so the camera paths of every other
     # scene carry none of its code.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace.comp"
-        kPathTracePhotonsCompSpv
-        _path_trace_photons_spv_h
-        VARIANT_SUFFIX photons
-        DEFINES PT_PHOTONS=1)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/path_trace_resolve.comp"
-        kPathTraceResolveCompSpv
-        _path_trace_resolve_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/path_trace.comp" kPathTracePhotonsCompSpv
+        VARIANT_SUFFIX photons DEFINES PT_PHOTONS=1)
+    compile_vulkan_shader(threepp "${_vk_shaders}/path_trace_resolve.comp" kPathTraceResolveCompSpv)
     # HiZ depth pyramid (occlusion-culling farthest-reduce) — see
     # HiZPyramid.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/hiz_build.comp"
-        kHizBuildCompSpv
-        _hiz_build_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/hiz_build.comp" kHizBuildCompSpv)
     # Two-phase GPU occlusion culling (phase-1 filter + AABB-vs-HiZ test) —
     # see OcclusionCull.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/occl_cull.comp"
-        kOcclCullCompSpv
-        _occl_cull_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/occl_cull.comp" kOcclCullCompSpv)
     # GPU per-instance world-matrix expansion (world = spanWorld ·
     # instanceMatrix[i]) — see InstanceExpand.{hpp,cpp} and
     # plans/gpu-driven-instances.md.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/instance_expand.comp"
-        kInstanceExpandCompSpv
-        _instance_expand_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/instance_expand.comp" kInstanceExpandCompSpv)
     # The G-buffer draw records of eligible instanced spans, written from the
     # expansion's world matrices (stage 2; DrawGen.{hpp,cpp}).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/draw_gen.comp"
-        kDrawGenCompSpv
-        _draw_gen_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/draw_gen.comp" kDrawGenCompSpv)
     # The TLAS instance descriptors of eligible instanced spans (stage 5;
     # TlasGen.{hpp,cpp}).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/tlas_gen.comp"
-        kTlasGenCompSpv
-        _tlas_gen_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/tlas_gen.comp" kTlasGenCompSpv)
     # ParticleField density representation (plans/particle-field.md §3.3): one
     # thread per particle slot splats fixed-point sigma_t into a world-anchored
     # r32ui volume that every view's froxel pass then samples. See
     # ParticleFieldPass.{hpp,cpp} and shaders/particle_density.glsl.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_density_scatter.comp"
-        kParticleDensityScatterCompSpv
-        _particle_density_scatter_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle_density_scatter.comp" kParticleDensityScatterCompSpv)
     # r32ui -> r16f mirror: hardware trilinear for the deferred shade's
     # per-pixel dust march (view-independent, unlike the froxel LUT read).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_density_convert.comp"
-        kParticleDensityConvertCompSpv
-        _particle_density_convert_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle_density_convert.comp" kParticleDensityConvertCompSpv)
     # ParticleField GRID SMOKE (ParticleField::GridSmoke): an Eulerian solver on the
     # device whose last pass writes the field's r32ui sigma_t volume, so the r16f
     # convert after it and everything downstream are the particle-dust code.
     # See SmokeGrid.{hpp,cpp} and shaders/smoke_common.glsl.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_forces.comp"
-        kSmokeForcesCompSpv
-        _smoke_forces_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_curl.comp"
-        kSmokeCurlCompSpv
-        _smoke_curl_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_confine.comp"
-        kSmokeConfineCompSpv
-        _smoke_confine_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_advect.comp"
-        kSmokeAdvectCompSpv
-        _smoke_advect_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_advect_fix.comp"
-        kSmokeAdvectFixCompSpv
-        _smoke_advect_fix_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_diverge.comp"
-        kSmokeDivergeCompSpv
-        _smoke_diverge_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_jacobi.comp"
-        kSmokeJacobiCompSpv
-        _smoke_jacobi_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_project.comp"
-        kSmokeProjectCompSpv
-        _smoke_project_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_write.comp"
-        kSmokeWriteCompSpv
-        _smoke_write_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_solid.comp"
-        kSmokeSolidCompSpv
-        _smoke_solid_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_forces.comp" kSmokeForcesCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_curl.comp" kSmokeCurlCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_confine.comp" kSmokeConfineCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_advect.comp" kSmokeAdvectCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_advect_fix.comp" kSmokeAdvectFixCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_diverge.comp" kSmokeDivergeCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_jacobi.comp" kSmokeJacobiCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_project.comp" kSmokeProjectCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_write.comp" kSmokeWriteCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_solid.comp" kSmokeSolidCompSpv)
     # A burning grid smoke's light: its glow summed per octant of the box, which
     # the renderer reads back and turns into point lights.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/smoke_glow.comp"
-        kSmokeGlowCompSpv
-        _smoke_glow_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/smoke_glow.comp" kSmokeGlowCompSpv)
     # ParticleField DEVICE EMITTER (Ownership::Renderer,
     # plans/particle-atmosphere.md F-C): one thread per slot evaluates a
     # stateless closed-form trajectory and writes this frame's positions AND
     # the prevPositions the motion vectors reproject through, in one dispatch.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_emit.comp"
-        kParticleEmitCompSpv
-        _particle_emit_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle_emit.comp" kParticleEmitCompSpv)
     # F5 surface interaction: a top-down height map of the static scene over one
     # field's footprint, one ray query per texel. The emitter solves its landing
     # against this map inside the closed form, so snow rests and rain splashes
     # with no collision pass and no per-particle state.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_height_bake.comp"
-        kParticleHeightBakeCompSpv
-        _particle_height_bake_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
-        kSkinningCompSpv
-        _skinning_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/tet_skinning.comp"
-        kTetSkinningCompSpv
-        _tet_skinning_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle_height_bake.comp" kParticleHeightBakeCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/skinning.comp" kSkinningCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/tet_skinning.comp" kTetSkinningCompSpv)
     # FFT-based ocean (DisplacedMesh): Phillips spectrum, time-evolution,
     # IFFT (twiddle table + horizontal/vertical butterflies + permute) and
     # a vertex-displacement compute that writes into the BLAS vertex buffer.
     # Each shader is independent of the path tracer and only consumed by the
     # OceanFFT host classes (src/threepp/renderers/vulkan/water/).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/phillips_spectrum.comp"
-        kPhillipsSpectrumCompSpv
-        _phillips_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dynamic_spectrum.comp"
-        kDynamicSpectrumCompSpv
-        _dynamic_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/phillips_spectrum.comp" kPhillipsSpectrumCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/dynamic_spectrum.comp" kDynamicSpectrumCompSpv)
     # The chop normals' variant (DisplacedMesh::Params::chopNormals): the same
     # source with its slope and displacement-gradient stores compiled in. The
     # plain compile above stays the shader the feature-off path has always run.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dynamic_spectrum.comp"
-        kDynamicSpectrumChopCompSpv
-        _dynamic_chop_spv_h
-        VARIANT_SUFFIX chop
-        DEFINES OCEAN_CHOP=1)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ocean_chop_moments.comp"
-        kOceanChopMomentsCompSpv
-        _ocean_chop_moments_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_twiddle.comp"
-        kIfftTwiddleCompSpv
-        _ifft_twiddle_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_horizontal.comp"
-        kIfftHorizontalCompSpv
-        _ifft_horizontal_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_vertical.comp"
-        kIfftVerticalCompSpv
-        _ifft_vertical_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_permute.comp"
-        kIfftPermuteCompSpv
-        _ifft_permute_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_shared.comp"
-        kIfftSharedCompSpv
-        _ifft_shared_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
-        kWaterDisplaceCompSpv
-        _water_displace_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
-        kWaterDisplaceChopCompSpv
-        _water_displace_chop_spv_h
-        VARIANT_SUFFIX chop
-        DEFINES OCEAN_CHOP=1)
+    compile_vulkan_shader(threepp "${_vk_shaders}/dynamic_spectrum.comp" kDynamicSpectrumChopCompSpv
+        VARIANT_SUFFIX chop DEFINES OCEAN_CHOP=1)
+    compile_vulkan_shader(threepp "${_vk_shaders}/ocean_chop_moments.comp" kOceanChopMomentsCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/ifft_twiddle.comp" kIfftTwiddleCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/ifft_horizontal.comp" kIfftHorizontalCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/ifft_vertical.comp" kIfftVerticalCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/ifft_permute.comp" kIfftPermuteCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/ifft_shared.comp" kIfftSharedCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/water_displace.comp" kWaterDisplaceCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/water_displace.comp" kWaterDisplaceChopCompSpv
+        VARIANT_SUFFIX chop DEFINES OCEAN_CHOP=1)
     # Crest foam (DisplacedMesh::Params::crestFoam): the deposit-and-decay pass
     # over the foam texture in the water's rest coordinates (water::CrestFoam).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_crest.comp"
-        kFoamCrestCompSpv
-        _foam_crest_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/foam_crest.comp" kFoamCrestCompSpv)
     # The wave climate's variant (DisplacedMesh::WaveClimate): the foam at three
     # sea states, for an ocean that has a climate map when its crest foam is made.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_crest.comp"
-        kFoamCrestClimateCompSpv
-        _foam_crest_climate_spv_h
-        VARIANT_SUFFIX climate
-        DEFINES OCEAN_CLIMATE_LEVELS=1)
+    compile_vulkan_shader(threepp "${_vk_shaders}/foam_crest.comp" kFoamCrestClimateCompSpv
+        VARIANT_SUFFIX climate DEFINES OCEAN_CLIMATE_LEVELS=1)
     # The ocean's wake field (DisplacedMesh::WakeField): what propellers, jets
     # and paddles leave on the water, in world-anchored patches. See
     # WakeFieldPipeline.{hpp,cpp} and shaders/ocean_wake.glsl.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/wake_field.comp"
-        kWakeFieldCompSpv
-        _wake_field_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/wake_field.comp" kWakeFieldCompSpv)
     # Its ripples: a spectrum a patch, turned and forced (wake_ripple.comp),
     # through the ocean's own inverse FFT.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/wake_ripple.comp"
-        kWakeRippleCompSpv
-        _wake_ripple_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/wake_ripple.comp" kWakeRippleCompSpv)
     # Its shore windows: the slice of the still scene at the waterline (ray
     # queries), the distance to it (jump flooding), and the foam the sea lays
     # where it drives into it.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_capture.comp"
-        kShoreCaptureCompSpv
-        _shore_capture_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_jfa.comp"
-        kShoreJfaCompSpv
-        _shore_jfa_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_source.comp"
-        kShoreSourceCompSpv
-        _shore_source_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/shore_capture.comp" kShoreCaptureCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/shore_jfa.comp" kShoreJfaCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/shore_source.comp" kShoreSourceCompSpv)
     # ... and the long waves' turn over the bed (the ray method, swept).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shore_refract.comp"
-        kShoreRefractCompSpv
-        _shore_refract_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/grass_wind.comp"
-        kGrassWindCompSpv
-        _grass_wind_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/shore_refract.comp" kShoreRefractCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/grass_wind.comp" kGrassWindCompSpv)
     # Zero-copy vertex interop: finiteness repair over the EXPORTED position
     # buffer, the GPU stand-in for the CPU scan that guards every other BLAS
     # build (the host array is stale under interop). See VertexSanitizePipeline.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/vertex_sanitize.comp"
-        kVertexSanitizeCompSpv
-        _vertex_sanitize_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/vertex_sanitize.comp" kVertexSanitizeCompSpv)
     # Hybrid raster G-buffer prepass — produces depth/normal/motion/IDs
     # for the path tracer to skip its primary BVH trace. See raygen.rgen
     # for the consumer side.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer.vert"
-        kGbufferVertSpv
-        _gbuffer_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer.frag"
-        kGbufferFragSpv
-        _gbuffer_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/gbuffer.vert" kGbufferVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/gbuffer.frag" kGbufferFragSpv)
     # Indirect-drawing variant of the G-buffer vertex shader. Reads per-mesh
     # data (model matrix, attribute buffer device addresses, flags) from an
     # SSBO indexed by gl_DrawIDEXT, fetches vertices via buffer references —
     # lets the whole gbuf pass ship as 1-3 vkCmdDrawIndirect calls instead
     # of N vkCmdDrawIndexed calls. Path B of the perf work; see
     # recordRasterGbufPass for the dispatch side.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer_indirect.vert"
-        kGbufferIndirectVertSpv
-        _gbuffer_indirect_vert_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/gbuffer_indirect.vert" kGbufferIndirectVertSpv)
     # ParticleField mesh representation: a SIBLING of gbuffer_indirect.vert
     # over the same render pass and the same fragment stage. It is separate
     # precisely because it breaks that file's one-instance-per-draw contract —
     # a field is one indirect draw whose instanceCount is the device-side live
     # count, so gl_InstanceIndex is the particle index there.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_gbuf.vert"
-        kParticleFieldGbufVertSpv
-        _particlefield_gbuf_vert_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_gbuf.vert" kParticleFieldGbufVertSpv)
     # ParticleField BILLBOARD representation (plans/particle-atmosphere.md F-D):
     # a vertex-less camera-facing quad — one indirect draw of 4 vertices x the
     # device-side live count per field, corner from gl_VertexIndex and particle
     # from gl_InstanceIndex, everything else pulled by buffer_reference. Drawn
     # in the post-upscaler overlay slot, additive and unlit, so it needs neither
     # particle_light.comp nor a sort.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.vert"
-        kParticleFieldBillboardVertSpv
-        _particlefield_billboard_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.frag"
-        kParticleFieldBillboardFragSpv
-        _particlefield_billboard_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_billboard.vert" kParticleFieldBillboardVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_billboard.frag" kParticleFieldBillboardFragSpv)
     # The billboard HDR layer (BillboardHdrLayer): the field billboard
     # fragment stage writing LINEAR radiance into two rgba16f targets (the
     # alpha-over sprites and the additive ones), and the display-space
     # composite that tone-maps each target once (built-in TAA path, secondary
     # views; the DLSS/FSR path blends the layer in post_composite.comp).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_billboard.frag"
-        kParticleFieldBillboardLayerFragSpv
-        _particlefield_billboard_layer_frag_spv_h
-        VARIANT_SUFFIX layer
-        DEFINES BB_HDR_LAYER)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_hdr_layer.frag"
-        kParticleFieldHdrLayerFragSpv
-        _particlefield_hdr_layer_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_billboard.frag" kParticleFieldBillboardLayerFragSpv
+        VARIANT_SUFFIX layer DEFINES BB_HDR_LAYER)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_hdr_layer.frag" kParticleFieldHdrLayerFragSpv)
     # The layer's own one-sample depth, copied (and, from a multisampled
     # overlay, reduced) from the overlay pass's depth.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_layer_depth.frag"
-        kBillboardLayerDepthFragSpv
-        _billboard_layer_depth_frag_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_layer_depth.frag"
-        kBillboardLayerDepthMsFragSpv
-        _billboard_layer_depth_ms_frag_spv_h
-        VARIANT_SUFFIX ms
-        DEFINES DEPTH_MS)
+    compile_vulkan_shader(threepp "${_vk_shaders}/billboard_layer_depth.frag" kBillboardLayerDepthFragSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/billboard_layer_depth.frag" kBillboardLayerDepthMsFragSpv
+        VARIANT_SUFFIX ms DEFINES DEPTH_MS)
     # R8 of plans/particle-volumetric-sprites: the transmittance PREPASS. One
     # thread per slot marches the field's density volume toward the eye and
     # toward the sun and writes the pair packed into one uint, which the
     # billboard vertex stage then fetches. It used to march in that stage, four
     # times per particle (a quad has four vertices and the march origin is the
     # particle centre) — measured at +9.4 ms for 4M sprites.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_transmit.comp"
-        kParticleFieldTransmitCompSpv
-        _particlefield_transmit_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_transmit.comp" kParticleFieldTransmitCompSpv)
     # The geometry half of T_sun: one ray query per particle toward the sun
     # against the scene TLAS, folded into the word the prepass above just
     # wrote. A separate module and not four lines in that one because a ray
     # query is a CAPABILITY — every volumetric field on every device compiles
     # the prepass, including devices with no ray query at all.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_sun_occlude.comp"
-        kParticleFieldSunOccludeCompSpv
-        _particlefield_sun_occlude_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_sun_occlude.comp" kParticleFieldSunOccludeCompSpv)
     # F4 (1): the billboard-only bloom composite. The glow-enabled fields are
     # drawn a SECOND time into a small offscreen linear-HDR target, the shared
     # bloom_down/bloom_up pyramid runs on that target alone, and this fullscreen
@@ -1842,10 +1528,7 @@ if (THREEPP_WITH_VULKAN)
     # render-pass instance the billboards always composited in — so they get a
     # bloom without the composite point moving out of the post-upscaler slot
     # that keeps them clear of TAA/DLSS/FSR entirely.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_glow.frag"
-        kParticleFieldGlowFragSpv
-        _particlefield_glow_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_glow.frag" kParticleFieldGlowFragSpv)
     # F4 (1), depth: the glow SOURCE target is half extent and the overlay's
     # depth is full extent, so the second draw of the glow-enabled fields has
     # nothing to depth-test against without a reduction. This fullscreen pass
@@ -1853,31 +1536,17 @@ if (THREEPP_WITH_VULKAN)
     # Two variants because the overlay's depth is multisampled exactly when the
     # Canvas asked for antialiasing, and a sampler2D and a sampler2DMS are
     # different types in GLSL.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_glow_depth.frag"
-        kBillboardGlowDepthFragSpv
-        _billboard_glow_depth_frag_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_glow_depth.frag"
-        kBillboardGlowDepthMsFragSpv
-        _billboard_glow_depth_ms_frag_spv_h
-        VARIANT_SUFFIX ms
-        DEFINES DEPTH_MS)
+    compile_vulkan_shader(threepp "${_vk_shaders}/billboard_glow_depth.frag" kBillboardGlowDepthFragSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/billboard_glow_depth.frag" kBillboardGlowDepthMsFragSpv
+        VARIANT_SUFFIX ms DEFINES DEPTH_MS)
     # BillboardRepr::softDistance: the scene's linear view depth, one float per
     # pixel in a buffer the billboard fragment stage reads by address, so a quad
     # through the ground fades into it instead of being cut along a line. Built
     # from the depth the sprites are tested against, which is multisampled
     # exactly when the overlay is, hence the same two variants as above.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_soft_depth.comp"
-        kParticleFieldSoftDepthCompSpv
-        _particlefield_soft_depth_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_soft_depth.comp"
-        kParticleFieldSoftDepthMsCompSpv
-        _particlefield_soft_depth_ms_spv_h
-        VARIANT_SUFFIX ms
-        DEFINES DEPTH_MS)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_soft_depth.comp" kParticleFieldSoftDepthCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particlefield_soft_depth.comp" kParticleFieldSoftDepthMsCompSpv
+        VARIANT_SUFFIX ms DEFINES DEPTH_MS)
     # MSAA G-buffer dominant-sample resolve (VulkanRenderer::setGbufferMsaa,
     # opt-in, default off). gbuf_resolve.comp picks the majority-covering
     # instance per pixel from the K raster samples and writes it into the
@@ -1885,187 +1554,91 @@ if (THREEPP_WITH_VULKAN)
     # gbuf_resolve_depth.{vert,frag} is a companion fullscreen pass that
     # resolves depth (compute can't target a depth-aspect image). See
     # GbufResolve.{hpp,cpp}.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuf_resolve.comp"
-        kGbufResolveCompSpv
-        _gbuf_resolve_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuf_resolve_depth.vert"
-        kGbufResolveDepthVertSpv
-        _gbuf_resolve_depth_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuf_resolve_depth.frag"
-        kGbufResolveDepthFragSpv
-        _gbuf_resolve_depth_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve.comp" kGbufResolveCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve_depth.vert" kGbufResolveDepthVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve_depth.frag" kGbufResolveDepthFragSpv)
     # Hybrid raster TAA: post-denoise temporal resolve. Reads taaInput +
     # history + gbufMotion → writes swapchain + new history.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/taa_resolve.comp"
-        kTaaResolveCompSpv
-        _taa_resolve_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/taa_resolve.comp" kTaaResolveCompSpv)
     # Post-TAA RCAS sharpen (FidelityFX-style) — restores detail the temporal
     # resolve softens. See vulkan/TaaResolve.cpp (folded into that pass).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/rcas.comp"
-        kRcasCompSpv
-        _rcas_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/rcas.comp" kRcasCompSpv)
     # Post-TAA motion blur (McGuire 2012 tile-max + reconstruction), also
     # folded into vulkan/TaaResolve.cpp. Opt-in via setMotionBlur.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/motion_tilemax.comp"
-        kMotionTilemaxCompSpv
-        _motion_tilemax_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/motion_blur.comp"
-        kMotionBlurCompSpv
-        _motion_blur_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/motion_tilemax.comp" kMotionTilemaxCompSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/motion_blur.comp" kMotionBlurCompSpv)
     # FSR reactive-mask generator (G-buffer IDs flags -> R8). Shared by the
     # DLSS path as its bias-current-color mask (same deformer-flag input), so
     # compile it when either upscaler is enabled.
     if (THREEPP_WITH_FSR OR THREEPP_WITH_DLSS)
-        compile_vulkan_shader(threepp
-            "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/fsr_reactive.comp"
-            kFsrReactiveCompSpv
-            _fsr_reactive_spv_h)
+        compile_vulkan_shader(threepp "${_vk_shaders}/fsr_reactive.comp" kFsrReactiveCompSpv)
     endif ()
     # Hybrid raster overlay: wireframe + Line/LineSegments draw on top of
     # the post-TAA swapchain image. Depth-tested against the G-buffer's
     # depth attachment so overlays are correctly occluded by path-traced
     # geometry. Only runs when the scene has overlay objects.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay.vert"
-        kOverlayVertSpv
-        _overlay_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay.frag"
-        kOverlayFragSpv
-        _overlay_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay.vert" kOverlayVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay.frag" kOverlayFragSpv)
     # Scene-inject for the hardware-MSAA overlay pass: a fullscreen triangle
     # that seeds the multisampled overlay target with the already-composited
     # scene (copied to a 1-sample scratch) before any overlay geometry draws.
     # Only used when Canvas antialiasing > 1.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_fullscreen.vert"
-        kOverlayFullscreenVertSpv
-        _overlay_fullscreen_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_inject.frag"
-        kOverlayInjectFragSpv
-        _overlay_inject_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_fullscreen.vert" kOverlayFullscreenVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_inject.frag" kOverlayInjectFragSpv)
     # Overlay depth prepass — writes unjittered depth so the wireframe
     # overlay's depth test compares like-with-like (the main G-buffer
     # depth is jittered for TAA).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth.vert"
-        kOverlayDepthVertSpv
-        _overlay_depth_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth.frag"
-        kOverlayDepthFragSpv
-        _overlay_depth_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_depth.vert" kOverlayDepthVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_depth.frag" kOverlayDepthFragSpv)
     # Overlay depth import — the G-buffer's depth resampled into the overlay
     # depth attachment when the only overlay content is ParticleField
     # billboards (no second rasterization of the scene for a few sprites).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth_import.vert"
-        kOverlayDepthImportVertSpv
-        _overlay_depth_import_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth_import.frag"
-        kOverlayDepthImportFragSpv
-        _overlay_depth_import_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_depth_import.vert" kOverlayDepthImportVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_depth_import.frag" kOverlayDepthImportFragSpv)
     # Shadow maps (ShadowMapPass): the casters' depth, with the cutout test.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_depth.vert"
-        kShadowDepthVertSpv
-        _shadow_depth_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_depth.frag"
-        kShadowDepthFragSpv
-        _shadow_depth_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/shadow_depth.vert" kShadowDepthVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/shadow_depth.frag" kShadowDepthFragSpv)
     # Splat depth stamp — the same depth buffer, written a second time from
     # the Gaussian-splat depth AOV, so the overlay is occluded by a cloud in
     # front of it (the compositor is compute and has no depth attachment).
     # Pairs with overlay_fullscreen.vert.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/splat_overlay_depth.frag"
-        kSplatOverlayDepthFragSpv
-        _splat_overlay_depth_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/splat_overlay_depth.frag" kSplatOverlayDepthFragSpv)
     # Overlay variant with per-vertex color input — used by Line /
     # LineSegments when geometry has a "color" attribute AND material
     # has vertexColors=true (e.g. AxesHelper).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_color.vert"
-        kOverlayColorVertSpv
-        _overlay_color_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_color.frag"
-        kOverlayColorFragSpv
-        _overlay_color_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_color.vert" kOverlayColorVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_color.frag" kOverlayColorFragSpv)
     # Overlay variant for Points objects — POINT_LIST topology, writes
     # gl_PointSize from the push constant, discards fragments outside
     # a unit-radius disk for round LIDAR-style dots.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_point.vert"
-        kOverlayPointVertSpv
-        _overlay_point_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_point.frag"
-        kOverlayPointFragSpv
-        _overlay_point_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_point.vert" kOverlayPointVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_point.frag" kOverlayPointFragSpv)
     # Lit split-screen pane meshes — a secondary scissored render() draws its
     # meshes depth-tested and sun+ambient lit over a cleared background,
     # instead of the flat HUD fills (the editor's camera preview).
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_mesh_lit.vert"
-        kOverlayMeshLitVertSpv
-        _overlay_mesh_lit_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_mesh_lit.frag"
-        kOverlayMeshLitFragSpv
-        _overlay_mesh_lit_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_mesh_lit.vert" kOverlayMeshLitVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_mesh_lit.frag" kOverlayMeshLitFragSpv)
     # Lit pane sky — fullscreen equirect background for the lit pane, sampling
     # the same envImage the deferred primary miss shows.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_pane_sky.vert"
-        kOverlayPaneSkyVertSpv
-        _overlay_pane_sky_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_pane_sky.frag"
-        kOverlayPaneSkyFragSpv
-        _overlay_pane_sky_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_pane_sky.vert" kOverlayPaneSkyVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_pane_sky.frag" kOverlayPaneSkyFragSpv)
     # HUD sprite (TextSprite + Sprite) — alpha-blended quad with per-sprite
     # combined-image-sampler binding. Walked from the user's HUD scene during
     # the ortho overlay pass, post-PT/TAA, depth disabled.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_sprite.vert"
-        kOverlaySpriteVertSpv
-        _overlay_sprite_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_sprite.frag"
-        kOverlaySpriteFragSpv
-        _overlay_sprite_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_sprite.vert" kOverlaySpriteVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_sprite.frag" kOverlaySpriteFragSpv)
     # World-space particle billboards (ParticleSystem). The Vulkan backend has no
     # generic ShaderMaterial path, so the particle Mesh is drawn by a dedicated
     # billboard pass in the post-TAA overlay block — depth-tested against the
     # G-buffer depth, composited onto the swapchain. Two blend variants (alpha /
     # additive) selected per material at draw time.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle.vert"
-        kParticleVertSpv
-        _particle_vert_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle.frag"
-        kParticleFragSpv
-        _particle_frag_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle.vert" kParticleVertSpv)
+    compile_vulkan_shader(threepp "${_vk_shaders}/particle.frag" kParticleFragSpv)
     # World-space Sprite billboards (screenSpace == false) — perspective,
     # depth-tested counterpart to the ortho overlay_sprite HUD path. Shares
     # overlay_sprite.frag; only the vertex shader differs (perspective reverse-Z,
     # no GL z-remap). Drawn in the post-TAA overlay block.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sprite3d.vert"
-        kSprite3dVertSpv
-        _sprite3d_vert_spv_h)
+    compile_vulkan_shader(threepp "${_vk_shaders}/sprite3d.vert" kSprite3dVertSpv)
 endif ()
 
 
