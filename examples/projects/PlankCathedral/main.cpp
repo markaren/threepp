@@ -11,7 +11,7 @@
 //
 // Flags:
 //   --seed N          which cathedral (default 1)
-//   --design N        take the seed's Nth design without proving the ones before it
+//   --design N        start from the seed's Nth design (the same kind of building, its sizes drawn again)
 //   --scale S         smaller buildings for quick probes (default 1)
 //   --ball            let the wrecking ball go at the start
 //   --ball-speed V    its speed at the bottom of its swing, m/s (default 4.5)
@@ -23,9 +23,16 @@
 //   --physics         design and settle on the CPU, report, and exit (no window, no GPU)
 //   --collapse T      with --physics: also run T seconds after the ball hits, and report
 //   --dump-final f    with --collapse: every plank's final pose, one line each
-//   --settle T        seconds of awake settling (default 2; 0 skips the proof)
+//   --settle T        seconds of awake settling (default 3; 0 skips the proof). A design passes when no
+//                     plank moved more than 0.1 mm in the last 0.5 s and none more than 3 mm in all;
+//                     otherwise the next design of the seed is tried, up to three
+//   --record file     CPU only: prove the design, let the ball go, and write every plank's pose and the
+//                     ball's from the release on (a small header, then raw floats per frame)
+//   --record-fps F    frames a second in the recording (default 60)
+//   --record-time T   seconds recorded from the release (default 7.5)
+//   --replay file     render from a recording: no physics at all (with --probe, --shot, --sequence)
 //   --threads N       PhysX worker threads
-//   --hz N, --iters N the step rate (default 960) and solver position iterations (default 48) of the proof
+//   --hz N, --iters N the step rate (default 960) and solver position iterations (default 64) of the proof
 //   --scene-hz N, --scene-iters N  the same once it is proven, for the ball and the collapse (default 960, 24:
 //                     at 480 Hz and 12 iterations a woken wall sags on its own, which would not be honest)
 //   --explain         say which planks the generator left out, and why
@@ -40,11 +47,14 @@
 //   --stills dir      the standard set of views for this seed
 //   --hero file.png   the hero view alone
 //   --probe dir       the collapse: one wide view before, and 0.25, 0.5, 1, 2, 4 and 6 s after the ball hits
+//                     (from a recording with --replay, so that the GPU is held for seconds)
 
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/environments/RoomEnvironment.hpp"
+#include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/geometries/RoundedBoxGeometry.hpp"
+#include "threepp/geometries/TubeGeometry.hpp"
 #include "threepp/postprocessing/postprocessing.hpp"
 #include "threepp/renderers/gl/PMREMGenerator.hpp"
 
@@ -64,6 +74,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 using namespace threepp;
@@ -88,9 +99,9 @@ namespace {
         Box3 box;
         Vector3 centre;
         std::vector<Vector3> points;// plank centres, for framing
-        float naveX0 = 0, naveX1 = 0, crossingX = 0, apseX = 0, eaves = 0, ridge = 0, zWall = 0;
-        Vector3 tower;// the south-west tower's axis, on the floor
-        float towerHeight = 0, towerReach = 0, tier2 = 0;
+        float naveX0 = 0, naveX1 = 0, crossingX = 0, eastX = 0, eaves = 0, ridge = 0, zWall = 0;
+        Vector3 tower;// the south-west (or the one) west tower's axis, on the floor
+        float towerHeight = 0, towerReach = 0, towerHalf = 0, shaftTop = 0;
     };
 
     Layout layoutOf(const Design& d, const Plan& p) {
@@ -104,18 +115,18 @@ namespace {
         l.naveX0 = p.naveStart;
         l.naveX1 = p.naveEnd;
         l.crossingX = p.crossingX;
-        l.apseX = p.apseX;
+        l.eastX = p.eastX;
         l.eaves = static_cast<float>(p.naveCourses) * THICK;
         l.ridge = static_cast<float>(p.ridgeCourse) * THICK;
         l.zWall = p.zWall;
-        l.tower.set(0, 0, p.towerZ);
-        l.towerReach = p.towerReach;
-        int tower = -1;
-        for (size_t i = 0; i < d.elements.size(); ++i)
-            if (d.elements[i] == "south-west tower") tower = static_cast<int>(i);
-        for (const auto& pl : d.planks)
-            if (pl.element == tower) l.towerHeight = std::max(l.towerHeight, courseY(pl.course) + THICK / 2);
-        l.tier2 = static_cast<float>(p.naveCourses + 8) * THICK;
+        l.tower.set(p.towerX, 0, p.towerZ);
+        l.towerHalf = p.towerHalf;
+        l.towerReach = p.towerHalf * 1.15f;// the buttresses stand a little proud of the faces
+        l.shaftTop = static_cast<float>(p.towerTop) * THICK;
+        for (const auto& pl : d.planks) {
+            const float dx = pl.x - p.towerX, dz = pl.z - p.towerZ;
+            if (std::abs(dx) < p.towerHalf && std::abs(dz) < p.towerHalf) l.towerHeight = std::max(l.towerHeight, courseY(pl.course) + THICK / 2);
+        }
         return l;
     }
 
@@ -210,27 +221,22 @@ namespace {
         views.push_back(heroView(l, aspect));
         // the west front, square on, from a little below the eaves
         {
-            Box3 front;
-            front.expandByPoint(Vector3(-0.3f, 0, -(l.tower.z + l.towerReach)));
-            front.expandByPoint(Vector3(0.3f, l.towerHeight, l.tower.z + l.towerReach));
             const Vector3 target(0, l.towerHeight * 0.46f, 0);
             std::vector<Vector3> points;
             for (const auto& p : l.points)
-                if (p.x < 0.35f) points.push_back(p);
+                if (p.x < l.towerHalf + 0.1f) points.push_back(p);
             views.push_back(frame("west_front", target, Vector3(-1, -0.04f, 0.05f), 30, aspect, points, 0.04f));
         }
-        // down the nave from just above the floor, by the west front
-        views.push_back({"nave_low", {l.naveX0 + 0.10f, 0.045f, 0.f}, {l.crossingX, l.eaves * 0.62f, 0.f}, 64});
-        // the south-west tower's upper tiers, close enough to count the planks
+        // the south-west tower's top: its belfry, parapet and spire, close up
         {
-            const Vector3 axis = l.tower;
-            const float y = l.tier2 + 0.12f;
-            const Vector3 out = Vector3(-0.62f, 0.f, 0.78f).normalize();
-            views.push_back({"tower_close", Vector3(axis).addScaledVector(out, 0.95f).add(Vector3(0, y - 0.1f, 0)), Vector3(axis.x, y + 0.02f, axis.z), 34});
+            std::vector<Vector3> points;
+            for (const auto& p : l.points)
+                if (std::abs(p.x - l.tower.x) < l.towerHalf + 0.02f && std::abs(p.z - l.tower.z) < l.towerHalf + 0.02f && p.y > l.shaftTop - 0.22f) points.push_back(p);
+            const Vector3 target(l.tower.x, 0.5f * (l.shaftTop - 0.22f + l.towerHeight), l.tower.z);
+            views.push_back(frame("tower_top", target, Vector3(-0.62f, -0.10f, 0.78f), 30, aspect, points, 0.05f));
         }
-        // along the nave's ridge from beside the crossing tower, to the west gable between the spires
-        views.push_back({"roof_ridge", {l.crossingX - 0.37f, l.ridge + 0.28f, 0.03f}, {0.f, l.ridge - 0.09f, 0.f}, 40});
-        // from high up, three quarters from the south-east
+        // inside the nave, low, looking east along it to the crossing
+        views.push_back({"nave_inside", {l.naveX0 + 0.32f, 0.032f, 0.008f}, {l.crossingX, l.eaves * 0.52f, 0.f}, 52});
         // from high up, three quarters from the south-east, looking down at about 38 degrees
         views.push_back(frame("aerial", l.centre, Vector3(0.55f * 0.79f, 0.62f, 0.83f * 0.79f), 30, aspect, l.points, 0.05f));
         return views;
@@ -322,6 +328,130 @@ namespace {
         }
     };
 
+    // A recorded collapse: a small header, then one frame after another, each
+    // its time from the release of the ball, the ball's pose and every plank's,
+    // as raw little-endian floats: x y z, then the rotation qx qy qz qw.
+    struct RecordHeader {
+        char magic[8] = {'P', 'L', 'A', 'N', 'K', 'R', 'E', 'C'};
+        std::uint32_t version = 1;
+        std::uint32_t planks = 0;
+        std::uint64_t seed = 1;
+        std::int32_t design = 0;
+        float scale = 1;
+        float fps = 60;
+        std::uint32_t frames = 0;
+        float hitTime = -1;// seconds from the release, -1 if the ball hit nothing
+        float ballRadius = 0.1f;
+        float pivot[3] = {0, 0, 0};
+        float rope = 6;// from the pivot to the ball's centre
+    };
+
+    bool seekTo(std::FILE* f, std::uint64_t offset) {
+#ifdef _WIN32
+        return _fseeki64(f, static_cast<long long>(offset), SEEK_SET) == 0;
+#else
+        return fseeko(f, static_cast<off_t>(offset), SEEK_SET) == 0;
+#endif
+    }
+
+    class Replay {
+    public:
+        RecordHeader header;
+
+        ~Replay() {
+            if (f_) std::fclose(f_);
+        }
+
+        bool open(const std::string& path) {
+            f_ = std::fopen(path.c_str(), "rb");
+            if (!f_) return false;
+            if (std::fread(&header, sizeof(header), 1, f_) != 1) return false;
+            if (std::string(header.magic, 8) != "PLANKREC" || header.frames == 0) return false;
+            floats_ = 8 + 7 * static_cast<std::size_t>(header.planks);
+            return true;
+        }
+
+        [[nodiscard]] float duration() const { return static_cast<float>(header.frames - 1) / header.fps; }
+
+        // the poses at time t (from the release), between the two nearest frames
+        void at(float t, std::vector<float>& planks, float ball[7]) {
+            const float x = std::clamp(t * header.fps, 0.f, static_cast<float>(header.frames - 1));
+            const int i0 = static_cast<int>(std::floor(x));
+            const int i1 = std::min(i0 + 1, static_cast<int>(header.frames) - 1);
+            const float w = x - static_cast<float>(i0);
+            load(i0, a_, loadedA_);
+            load(i1, b_, loadedB_);
+            planks.resize(7 * static_cast<std::size_t>(header.planks));
+            const auto blend = [&](const float* p, const float* q, float* out) {
+                for (int k = 0; k < 3; ++k) out[k] = p[k] + (q[k] - p[k]) * w;
+                const float sign = (p[3] * q[3] + p[4] * q[4] + p[5] * q[5] + p[6] * q[6]) < 0 ? -1.f : 1.f;
+                float n = 0;
+                for (int k = 3; k < 7; ++k) out[k] = p[k] + (sign * q[k] - p[k]) * w, n += out[k] * out[k];
+                n = n > 0 ? 1.f / std::sqrt(n) : 1.f;
+                for (int k = 3; k < 7; ++k) out[k] *= n;
+            };
+            blend(a_.data() + 1, b_.data() + 1, ball);
+            for (std::size_t i = 0; i < header.planks; ++i) blend(a_.data() + 8 + 7 * i, b_.data() + 8 + 7 * i, planks.data() + 7 * i);
+        }
+
+    private:
+        std::FILE* f_ = nullptr;
+        std::size_t floats_ = 0;
+        std::vector<float> a_, b_;
+        int loadedA_ = -1, loadedB_ = -1;
+
+        void load(int frame, std::vector<float>& out, int& loaded) {
+            if (loaded == frame) return;
+            // the other buffer may hold it already
+            if (&out == &a_ && loadedB_ == frame) {
+                a_ = b_;
+                loaded = frame;
+                return;
+            }
+            out.resize(floats_);
+            seekTo(f_, sizeof(RecordHeader) + static_cast<std::uint64_t>(frame) * floats_ * sizeof(float));
+            if (std::fread(out.data(), sizeof(float), floats_, f_) != floats_) std::fill(out.begin(), out.end(), 0.f);
+            loaded = frame;
+        }
+    };
+
+    // A rope from the pivot to the ball: straight while it is taut, hanging in
+    // a curve as long as the rope when the ball is closer than that, never
+    // through the floor.
+    std::shared_ptr<BufferGeometry> ropeGeometry(const Vector3& pivot, const Vector3& end, float length) {
+        const float span = pivot.distanceTo(end);
+        std::vector<Vector3> points;
+        const int n = 48;
+        const auto curve = [&](float sag, std::vector<Vector3>& out) {
+            out.clear();
+            for (int i = 0; i <= n; ++i) {
+                const float t = static_cast<float>(i) / n;
+                Vector3 p = Vector3(pivot).lerp(end, t);
+                p.y -= 4 * sag * t * (1 - t);
+                p.y = std::max(p.y, 0.006f);
+                out.push_back(p);
+            }
+        };
+        const auto arc = [&](const std::vector<Vector3>& pts) {
+            float l = 0;
+            for (size_t i = 1; i < pts.size(); ++i) l += pts[i].distanceTo(pts[i - 1]);
+            return l;
+        };
+        if (span >= length - 0.002f) {
+            curve(0, points);
+        } else {
+            float lo = 0, hi = length;
+            for (int i = 0; i < 40; ++i) {
+                const float mid = 0.5f * (lo + hi);
+                curve(mid, points);
+                (arc(points) < length ? lo : hi) = mid;
+            }
+            curve(lo, points);
+        }
+        auto path = std::make_shared<CatmullRomCurve3>(points);
+        return TubeGeometry::create(path, 96, 0.006f, 8, false);
+    }
+
 }// namespace
 
 int run(int argc, char** argv);
@@ -341,7 +471,7 @@ int run(int argc, char** argv) {
     std::uint64_t seed = 1;
     int firstDesign = 0;
     float scale = 1;
-    std::string shotPath, sequenceDir, stillsDir, probeDir, heroPath;
+    std::string shotPath, sequenceDir, stillsDir, probeDir, heroPath, recordPath, replayPath;
     float shotTime = 0;
     int width = 1920, height = 1080, fps = 30;
     std::optional<Vector3> camArg, targetArg;
@@ -349,7 +479,8 @@ int run(int argc, char** argv) {
     bool ballOn = false, physicsOnly = false;
     float ballSpeed = 4.5f, ballRadius = 0.1f, ropeLength = 6.f, ballHeight = 0.16f, ballOffset = 0.f;
     Vector3 ballAim(0.80f, 0, -0.60f);
-    float settleSeconds = 2.f, collapseSeconds = 0;
+    float settleSeconds = 3.f, collapseSeconds = 0;
+    float recordFps = 60, recordTime = 7.5f;
     float exposure = 1.18f;
     int ssaa = 4;
     std::string test;
@@ -369,6 +500,10 @@ int run(int argc, char** argv) {
         else if (a == "--sequence" && more) sequenceDir = argv[++i];
         else if (a == "--stills" && more) stillsDir = argv[++i];
         else if (a == "--probe" && more) probeDir = argv[++i];
+        else if (a == "--record" && more) recordPath = argv[++i];
+        else if (a == "--record-fps" && more) recordFps = std::max(1.f, std::stof(argv[++i]));
+        else if (a == "--record-time" && more) recordTime = std::stof(argv[++i]);
+        else if (a == "--replay" && more) replayPath = argv[++i];
         else if (a == "--time" && more) shotTime = std::stof(argv[++i]);
         else if (a == "--fps" && more) fps = std::max(1, std::atoi(argv[++i]));
         else if (a == "--size" && more) std::sscanf(argv[++i], "%dx%d", &width, &height);
@@ -412,7 +547,23 @@ int run(int argc, char** argv) {
             i += 3;
         }
     }
-    if (!probeDir.empty()) ballOn = true;
+    const bool recording = !recordPath.empty();
+    const bool replaying = !replayPath.empty();
+    Replay replay;
+    if (replaying) {
+        if (!replay.open(replayPath)) {
+            std::printf("cannot read the recording %s\n", replayPath.c_str());
+            return 1;
+        }
+        seed = replay.header.seed;
+        firstDesign = replay.header.design;
+        scale = replay.header.scale;
+        settleSeconds = 0;
+        ballOn = true;
+        std::printf("replaying %s: seed %llu design %d, %u planks, %u frames at %.0f fps, the ball hit at %.3f s\n", replayPath.c_str(),
+                    static_cast<unsigned long long>(seed), firstDesign, replay.header.planks, replay.header.frames, replay.header.fps, replay.header.hitTime);
+    }
+    if (!probeDir.empty() || recording) ballOn = true;
     if (physicsOnly && collapseSeconds > 0) ballOn = true;
     const bool headless = !shotPath.empty() || !sequenceDir.empty() || !stillsDir.empty() || !probeDir.empty() || !heroPath.empty();
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
@@ -422,11 +573,12 @@ int run(int argc, char** argv) {
     const float dt = 1.f / static_cast<float>(hz);
     Design design;
     Plan plan{};
+    int designIndex = firstDesign;
     std::unique_ptr<Physics> physics;
     for (int attempt = firstDesign; attempt < firstDesign + 3; ++attempt) {
-        const std::uint64_t variant = seed + static_cast<std::uint64_t>(attempt) * 1000003ull;
+        designIndex = attempt;
         const auto t0 = WallClock::now();
-        design = test.empty() ? buildCathedral(variant, scale, &plan, explain) : buildTest(test, testCourses);
+        design = test.empty() ? buildCathedral(seed, attempt, scale, &plan, explain) : buildTest(test, testCourses, explain);
         const double generation = since(t0);
         if (!dumpPath.empty()) {
             std::FILE* f = std::fopen(dumpPath.c_str(), "w");
@@ -438,10 +590,13 @@ int run(int argc, char** argv) {
         for (const auto& p : design.planks) ++perElement[p.element];
         std::printf("seed %llu (design %d): %zu planks, generated in %.1f ms (left out: %d overlapping, %d unsupported)\n",
                     static_cast<unsigned long long>(seed), attempt, design.planks.size(), generation * 1000, design.rejectedOverlap, design.rejectedSupport);
+        static const char* crowns[3] = {"spire", "dome", "lantern"};
         if (test.empty())
-            std::printf("  nave %.2f m wide, %d bays of %.2f m, eaves at %d courses, ridge at %d, roofs at %.0f deg; %s; west towers %d tiers from %d planks%s%s; crossing of %d planks, %s\n",
-                        plan.naveInner, plan.bays, plan.bayLength, plan.naveCourses, plan.ridgeCourse, plan.pitch, plan.aisles ? "aisles" : "no aisles",
-                        plan.tiers, plan.towerPlanks, plan.galleries ? ", galleries" : "", plan.lantern ? ", lanterns" : ", spires", plan.crossingPlanks, plan.dome ? "dome" : "spire");
+            std::printf("  %s; nave %.2f m wide, %d bays of %.2f m, eaves at %d courses, ridge at %d, roofs at %.0f deg; %s; towers of %d tiers; crossing %s; %s; %s\n",
+                        plan.westTowers == 2 ? "two west towers" : "one west tower", plan.naveInner, plan.bays, plan.bayLength, plan.naveCourses, plan.ridgeCourse, plan.pitch,
+                        plan.aisles ? "aisles" : "no aisles", plan.tiers, crowns[plan.crown],
+                        plan.armStretchers == 0 ? "no transept" : plan.armStretchers <= 2 ? "a short transept" : "a long transept",
+                        plan.roundApse ? "a round apse" : "a flat east end");
         {
             // per element name (the two walls of a pair add up)
             std::map<std::string, std::pair<int, int>> byName;
@@ -450,8 +605,9 @@ int run(int argc, char** argv) {
                 entry.first += n;
                 entry.second += e < static_cast<int>(design.leftOut.size()) ? design.leftOut[e] : 0;
             }
-            for (const auto& [name, v] : byName) std::printf("    %-22s %6d  (left out %d)\n", name.c_str(), v.first, v.second);
+            for (const auto& [name, v] : byName) std::printf("    %-24s %6d  (left out %d)\n", name.c_str(), v.first, v.second);
         }
+        if (replaying) break;// no physics at all
 
         const auto t1 = WallClock::now();
         physics.reset();// PhysX allows one foundation at a time
@@ -460,38 +616,54 @@ int run(int argc, char** argv) {
         if (settleSeconds <= 0) break;
 
         const auto r = physics->settle(settleSeconds);
-        std::printf("  settled %.1f s awake in %.1f s (%.2f ms/step): largest displacement %.3f mm (%s), %d planks moved over 1 mm\n",
-                    settleSeconds, r.seconds, r.msPerStep, r.maxDisplacement * 1000,
-                    r.worst >= 0 ? design.elements[design.planks[r.worst].element].c_str() : "-", r.movedOverMm);
+        const auto nameOf = [&](int i) { return i >= 0 ? design.elements[design.planks[i].element].c_str() : "-"; };
+        std::printf("  settled %.1f s awake in %.1f s (%.2f ms/step): in the last 0.5 s at most %.4f mm (%s); in all at most %.3f mm (%s); %d planks moved over 1 mm\n",
+                    settleSeconds, r.seconds, r.msPerStep, r.maxLate * 1000, nameOf(r.worstLate), r.maxDisplacement * 1000, nameOf(r.worst), r.movedOverMm);
         if (r.worst >= 0) {
             const auto& w = design.planks[r.worst];
             const auto q = physics->pose(r.worst).p;
             std::printf("  worst plank: course %d at (%.3f, %.3f), moved (%.3f, %.3f, %.3f) mm\n", w.course, w.x, w.z, (q.x - w.x) * 1000, (q.y - courseY(w.course)) * 1000, (q.z - w.z) * 1000);
         }
-        // where it moved, element by element
+        // where it moved, element by element: in all, and in the last half second
         const auto moved = physics->displacements();
-        std::map<std::string, std::pair<float, int>> worstOf;
+        const auto late = physics->lateDisplacements();
+        std::map<std::string, std::tuple<float, int, float>> worstOf;
         for (size_t i = 0; i < moved.size(); ++i) {
-            auto& w = worstOf[design.elements[design.planks[i].element]];
-            if (moved[i] >= w.first) w = {moved[i], design.planks[i].course};
+            auto& [m, course, l] = worstOf[design.elements[design.planks[i].element]];
+            if (moved[i] >= m) m = moved[i], course = design.planks[i].course;
+            l = std::max(l, late[i]);
         }
-        for (const auto& [name, m] : worstOf) std::printf("    %-22s %8.3f mm (course %d)\n", name.c_str(), m.first * 1000, m.second);
-        if (r.maxDisplacement <= 0.001f) break;
-        std::printf("  design %d rejected: it moved more than a millimetre\n", attempt);
-        if (attempt == firstDesign + 2) std::printf("  no design of this seed stood; keeping the last\n");
+        for (const auto& [name, m] : worstOf)
+            std::printf("    %-24s %8.3f mm (course %d), last 0.5 s %.4f mm\n", name.c_str(), std::get<0>(m) * 1000, std::get<1>(m), std::get<2>(m) * 1000);
+        if (r.passed()) {
+            std::printf("  design %d PASSED: at rest (%.4f mm in the last 0.5 s) and %.3f mm at most in all\n", attempt, r.maxLate * 1000, r.maxDisplacement * 1000);
+            break;
+        }
+        std::printf("  design %d REJECTED: %s; worst element %s\n", attempt,
+                    r.maxDisplacement > 0.003f ? "a plank moved more than 3 mm" : "still moving more than 0.1 mm in the last 0.5 s",
+                    r.maxDisplacement > 0.003f ? nameOf(r.worst) : nameOf(r.worstLate));
+        if (attempt == firstDesign + 2) std::printf("  no design of this seed passed; keeping the last\n");
     }
-    physics->sleepAll();
-    physics->time = 0;// the scene's clock starts with the cathedral standing
-    physics->setRate(1.f / static_cast<float>(sceneHz), sceneIters);
-    const float sceneDt = physics->dt;
+    if (physics) {
+        physics->sleepAll();
+        physics->time = 0;// the scene's clock starts with the cathedral standing
+        physics->setRate(1.f / static_cast<float>(sceneHz), sceneIters);
+    }
+    const float sceneDt = physics ? physics->dt : 1.f / static_cast<float>(sceneHz);
     std::fflush(stdout);
 
     const Layout layout = layoutOf(design, plan);
-    const Swing swing = swingFor(layout, ballSpeed, ballRadius, ropeLength, ballAim, ballHeight, ballOffset);
+    Swing swing = swingFor(layout, ballSpeed, ballRadius, ropeLength, ballAim, ballHeight, ballOffset);
+    if (replaying) {
+        swing.radius = replay.header.ballRadius;
+        swing.pivot.set(replay.header.pivot[0], replay.header.pivot[1], replay.header.pivot[2]);
+        swing.rope = replay.header.rope;
+    }
 
     StepStats stats;
     bool hung = false;
     std::optional<float> hitTime;// when the ball first woke a plank
+    if (replaying && replay.header.hitTime >= 0) hitTime = replay.header.hitTime;
     const auto stepPhysics = [&] {
         if (ballOn && !hung) {
             physics->hangBall(swing.pivot, swing.start, swing.radius);
@@ -508,6 +680,67 @@ int run(int argc, char** argv) {
         }
         stats.add(ms, awake, physics->time, before);
     };
+
+    // ------------------------------------------------------------ record: CPU only
+
+    if (recording) {
+        if (!hung) {
+            physics->hangBall(swing.pivot, swing.start, swing.radius);
+            hung = true;
+        }
+        std::FILE* f = std::fopen(recordPath.c_str(), "wb");
+        if (!f) {
+            std::printf("cannot write %s\n", recordPath.c_str());
+            return 1;
+        }
+        RecordHeader header;
+        header.planks = static_cast<std::uint32_t>(design.planks.size());
+        header.seed = seed;
+        header.design = designIndex;
+        header.scale = scale;
+        header.fps = recordFps;
+        header.ballRadius = swing.radius;
+        header.pivot[0] = swing.pivot.x, header.pivot[1] = swing.pivot.y, header.pivot[2] = swing.pivot.z;
+        header.rope = swing.pivot.distanceTo(swing.start);
+        std::fwrite(&header, sizeof(header), 1, f);
+        std::vector<float> frame(8 + 7 * design.planks.size());
+        const auto t0 = WallClock::now();
+        bool reported6 = false;
+        std::uint32_t frames = 0;
+        for (int i = 0;; ++i) {
+            const float t = static_cast<float>(i) / recordFps;
+            if (t > recordTime + 1e-4f) break;
+            while (physics->time + 0.5f * physics->dt < t) stepPhysics();
+            frame[0] = physics->time;
+            const auto b = physics->ball->getGlobalPose();
+            const float ball[7] = {b.p.x, b.p.y, b.p.z, b.q.x, b.q.y, b.q.z, b.q.w};
+            std::copy(ball, ball + 7, frame.begin() + 1);
+            for (size_t k = 0; k < physics->bodies.size(); ++k) {
+                const auto p = physics->pose(k);
+                float* out = frame.data() + 8 + 7 * k;
+                out[0] = p.p.x, out[1] = p.p.y, out[2] = p.p.z, out[3] = p.q.x, out[4] = p.q.y, out[5] = p.q.z, out[6] = p.q.w;
+            }
+            std::fwrite(frame.data(), sizeof(float), frame.size(), f);
+            ++frames;
+            if (hitTime && !reported6 && physics->time >= *hitTime + 6.f - 1e-4f) {
+                reported6 = true;
+                const int m = physics->movedMoreThan(0.05f);
+                std::printf("6 s after the hit: %d of %zu planks moved more than 5 cm (%.1f%%)\n", m, design.planks.size(), 100.0 * m / design.planks.size());
+            }
+            if (i % static_cast<int>(recordFps) == 0)
+                std::printf("  recorded %.1f s (%d awake, %.0f s so far)\n", t, physics->awake(), since(t0));
+        }
+        header.frames = frames;
+        header.hitTime = hitTime ? *hitTime : -1.f;
+        seekTo(f, 0);
+        std::fwrite(&header, sizeof(header), 1, f);
+        std::fclose(f);
+        const double bytesPerFrame = static_cast<double>(frame.size() * sizeof(float));
+        stats.print(hitTime.value_or(0.f));
+        std::printf("recorded %u frames (%.2f s at %.0f fps) to %s: %.1f MB, %.1f MB per second; %.0f s wall clock on %u threads\n", frames, recordTime, recordFps,
+                    recordPath.c_str(), bytesPerFrame * frames / 1e6, bytesPerFrame * recordFps / 1e6, since(t0), threads);
+        return 0;
+    }
 
     if (physicsOnly) {
         if (collapseSeconds > 0) {
@@ -558,7 +791,7 @@ int run(int argc, char** argv) {
         scene.environment = pmrem.fromScene(room, 0.04f);
         room.dispose();
     }
-    scene.environmentIntensity = 0.16f;
+    scene.environmentIntensity = 0.13f;
     scene.add(backdrop(horizon, Color(0x0e0b09)));
 
     auto floor = Mesh::create(PlaneGeometry::create(120, 120), floorMaterial());
@@ -579,15 +812,35 @@ int run(int argc, char** argv) {
     }
     scene.add(planksMesh);
 
+    // where the planks and the ball are: from PhysX, or from a recording
+    std::vector<float> replayPlanks;
+    float replayBall[7] = {swing.start.x, swing.start.y, swing.start.z, 0, 0, 0, 1};
     const auto syncPlanks = [&] {
         Matrix4 m;
-        for (size_t i = 0; i < physics->bodies.size(); ++i) {
-            const auto p = physics->pose(i);
-            m.compose(Vector3(p.p.x, p.p.y, p.p.z), Quaternion(p.q.x, p.q.y, p.q.z, p.q.w), Vector3(1, 1, 1));
+        for (size_t i = 0; i < design.planks.size(); ++i) {
+            if (replaying) {
+                const float* p = replayPlanks.data() + 7 * i;
+                m.compose(Vector3(p[0], p[1], p[2]), Quaternion(p[3], p[4], p[5], p[6]), Vector3(1, 1, 1));
+            } else {
+                const auto p = physics->pose(i);
+                m.compose(Vector3(p.p.x, p.p.y, p.p.z), Quaternion(p.q.x, p.q.y, p.q.z, p.q.w), Vector3(1, 1, 1));
+            }
             planksMesh->setMatrixAt(i, m);
         }
         planksMesh->instanceMatrix()->needsUpdate();
     };
+    const auto movedOver = [&](float by) {
+        if (!replaying) return physics->movedMoreThan(by);
+        int n = 0;
+        for (size_t i = 0; i < design.planks.size(); ++i) {
+            const auto& d = design.planks[i];
+            const float* p = replayPlanks.data() + 7 * i;
+            const float dx = p[0] - d.x, dy = p[1] - courseY(d.course), dz = p[2] - d.z;
+            n += dx * dx + dy * dy + dz * dz > by * by ? 1 : 0;
+        }
+        return n;
+    };
+    if (replaying) replay.at(0, replayPlanks, replayBall);
     syncPlanks();
 
     // the wrecking ball, dark worn steel, and its rope
@@ -603,17 +856,30 @@ int run(int argc, char** argv) {
     auto ropeMaterial = MeshStandardMaterial::create();
     ropeMaterial->color = Color(0x2a241d);
     ropeMaterial->roughness = 0.9f;
-    auto ropeMesh = Mesh::create(CylinderGeometry::create(0.006f, 0.006f, 1, 8, 1, true), ropeMaterial);
+    auto ropeMesh = Mesh::create(BufferGeometry::create(), ropeMaterial);
     ropeMesh->castShadow = true;
     ropeMesh->visible = false;
+    ropeMesh->frustumCulled = false;
     scene.add(ropeMesh);
 
-    // one low, warm light from the south-west, its shadow fitted to the building
-    auto key = DirectionalLight::create(Color(0xffd3a6), 4.6f);
-    Object3D keyTarget;
+    // One low, warm key light, raking in from the side and a little behind
+    // the hero camera's right, like late sun through a high window: a lit side
+    // and a shadow side, long shadows across the floor. A faint cool fill on
+    // the shadow side; the warm bounce from the floor stays.
+    const View hero = heroView(layout, aspect);
+    auto key = DirectionalLight::create(Color(0xffd3a6), 5.2f);
+    Object3D keyTarget, fillTarget;
     scene.addRef(keyTarget);
+    scene.addRef(fillTarget);
+    Vector3 toLight;
     {
-        const Vector3 toLight = Vector3(-0.86f, 0.40f, 0.34f).normalize();
+        Vector3 back = Vector3(hero.eye).sub(hero.target);
+        back.y = 0;
+        back.normalize();
+        const Vector3 right(back.z, 0, -back.x);
+        const float side = 12 * math::DEG2RAD, elevation = 24 * math::DEG2RAD;
+        Vector3 flat = Vector3(right).multiplyScalar(std::cos(side)).addScaledVector(back, std::sin(side)).normalize();
+        toLight.set(flat.x * std::cos(elevation), std::sin(elevation), flat.z * std::cos(elevation));
         key->position.copy(layout.centre).addScaledVector(toLight, 14.f);
         key->setTarget(keyTarget);
         key->castShadow = true;
@@ -625,14 +891,28 @@ int run(int argc, char** argv) {
         box.expandByScalar(0.05f);
         if (ballOn) box.expandByPoint(swing.start).expandByScalar(swing.radius);
         fitShadow(*key, keyTarget, box);
+        // the shadow camera reaches past the floor where the long shadows fall
+        auto* cam = key->shadow->camera->as<OrthographicCamera>();
+        cam->farPlane += box.max().y / std::max(0.2f, toLight.y) + 0.5f;
+        cam->updateProjectionMatrix();
     }
     scene.add(key);
+    {
+        auto fill = DirectionalLight::create(Color(0xa9bbd6), 0.22f);
+        Vector3 back = Vector3(hero.eye).sub(hero.target);
+        back.y = 0;
+        back.normalize();
+        const Vector3 left(-back.z, 0, back.x);
+        fill->position.copy(layout.centre).addScaledVector(Vector3(left).multiplyScalar(0.8f).addScaledVector(back, 0.3f).add(Vector3(0, 0.5f, 0)), 10.f);
+        fillTarget.position.copy(layout.centre);
+        fill->setTarget(fillTarget);
+        scene.add(fill);
+    }
     // what the floor throws back into the shadows: warm, from below
-    auto bounce = HemisphereLight::create(Color(0x14110e), Color(0x8a6646), 0.55f);
+    auto bounce = HemisphereLight::create(Color(0x14110e), Color(0x8a6646), 0.5f);
     scene.add(bounce);
 
     PerspectiveCamera camera(30, aspect, 0.01f, 120);
-    const View hero = heroView(layout, aspect);
     camera.position.copy(camArg.value_or(hero.eye));
     OrbitControls controls(camera, canvas);
     controls.target.copy(targetArg.value_or(hero.target));
@@ -685,20 +965,20 @@ int run(int argc, char** argv) {
     const auto showBall = [&] {
         if (!ballOn) return;
         Vector3 at = swing.start;
-        if (physics->ball) {
+        if (replaying) {
+            at.set(replayBall[0], replayBall[1], replayBall[2]);
+            ballMesh->quaternion.set(replayBall[3], replayBall[4], replayBall[5], replayBall[6]);
+        } else if (physics->ball) {
             const auto p = physics->ball->getGlobalPose();
             at.set(p.p.x, p.p.y, p.p.z);
             ballMesh->quaternion.set(p.q.x, p.q.y, p.q.z, p.q.w);
         }
         ballMesh->visible = true;
         ballMesh->position.copy(at);
-        // the rope from the pivot to the top of the ball
+        // the rope from the pivot to the top of the ball, slack when the ball is nearer the pivot than its length
         const Vector3 top = Vector3(swing.pivot).sub(at).normalize().multiplyScalar(swing.radius).add(at);
-        const float length = swing.pivot.distanceTo(top);
+        ropeMesh->setGeometry(ropeGeometry(swing.pivot, top, swing.rope - swing.radius));
         ropeMesh->visible = true;
-        ropeMesh->position.copy(top).add(swing.pivot).multiplyScalar(0.5f);
-        ropeMesh->scale.set(1, length, 1);
-        ropeMesh->quaternion.setFromUnitVectors(Vector3(0, 1, 0), Vector3(swing.pivot).sub(top).normalize());
     };
 
     // ------------------------------------------------------------ headless
@@ -751,27 +1031,37 @@ int run(int argc, char** argv) {
             return a.time < b.time;
         });
 
-        const float predicted = predictHit(swing, layout);
-        if (ballOn) std::printf("the ball should reach the tower at t = %.3f s\n", predicted);
+        const float predicted = replaying ? hitTime.value_or(1.f) : predictHit(swing, layout);
+        if (ballOn) std::printf("the ball %s the tower at t = %.3f s\n", replaying ? "reached" : "should reach", predicted);
         size_t next = 0;
         int warm = 0;
         bool timed = false;
         float synced = -1;
         canvas.animate([&] {
             if (next >= captures.size()) {
-                if (ballOn) stats.print(hitTime.value_or(0.f));
-                if (ballOn) std::printf("collapse: %d of %zu planks moved more than 5 cm by t = %.2f s\n", physics->movedMoreThan(0.05f), design.planks.size(), physics->time);
+                if (ballOn && !replaying) stats.print(hitTime.value_or(0.f));
+                if (ballOn && !replaying) std::printf("collapse: %d of %zu planks moved more than 5 cm by t = %.2f s\n", physics->movedMoreThan(0.05f), design.planks.size(), physics->time);
                 std::fflush(stdout);
                 std::exit(0);
             }
             const auto& c = captures[next];
-            if (c.afterHit && c.time >= 0)
-                while (!hitTime && physics->time < 10.f) stepPhysics();
-            const float when = !c.afterHit ? c.time : c.time < 0 ? predicted + c.time : hitTime.value_or(0.f) + c.time;
-            while (physics->time + 0.5f * sceneDt < when) stepPhysics();
-            if (synced != physics->time) {
-                syncPlanks();
-                synced = physics->time;
+            float when;
+            if (replaying) {
+                when = !c.afterHit ? c.time : hitTime.value_or(predicted) + c.time;
+                if (synced != when) {
+                    replay.at(when, replayPlanks, replayBall);
+                    syncPlanks();
+                    synced = when;
+                }
+            } else {
+                if (c.afterHit && c.time >= 0)
+                    while (!hitTime && physics->time < 10.f) stepPhysics();
+                when = !c.afterHit ? c.time : c.time < 0 ? predicted + c.time : hitTime.value_or(0.f) + c.time;
+                while (physics->time + 0.5f * sceneDt < when) stepPhysics();
+                if (synced != physics->time) {
+                    syncPlanks();
+                    synced = physics->time;
+                }
             }
             showBall();
             aim(c.view);
@@ -786,7 +1076,7 @@ int run(int argc, char** argv) {
             }
             if (++warm >= 3) {
                 renderer.writeFramebuffer(c.path);
-                std::printf("wrote %s (t = %.2f s, %d awake, %d moved over 5 cm)\n", c.path.c_str(), physics->time, physics->awake(), physics->movedMoreThan(0.05f));
+                std::printf("wrote %s (t = %.2f s, %d moved over 5 cm)\n", c.path.c_str(), when, movedOver(0.05f));
                 std::fflush(stdout);
                 warm = 0;
                 ++next;
@@ -802,19 +1092,27 @@ int run(int argc, char** argv) {
     });
 
     WallClock::time_point last = WallClock::now();
+    const WallClock::time_point started = last;
     float pending = 0;
     canvas.animate([&] {
-        const float elapsed = std::min(static_cast<float>(since(last)), 0.1f);
-        last = WallClock::now();
-        pending += elapsed;
-        int steps = 0;
-        while (pending >= sceneDt && steps < 16) {
-            stepPhysics();
-            pending -= sceneDt;
-            ++steps;
+        if (replaying) {
+            // the recording over and over, in real time
+            const float t = std::fmod(static_cast<float>(since(started)), replay.duration() + 1.f);
+            replay.at(t, replayPlanks, replayBall);
+            syncPlanks();
+        } else {
+            const float elapsed = std::min(static_cast<float>(since(last)), 0.1f);
+            last = WallClock::now();
+            pending += elapsed;
+            int steps = 0;
+            while (pending >= sceneDt && steps < 16) {
+                stepPhysics();
+                pending -= sceneDt;
+                ++steps;
+            }
+            if (steps >= 16) pending = 0;
+            if (steps > 0) syncPlanks();
         }
-        if (steps >= 16) pending = 0;
-        if (steps > 0) syncPlanks();
         showBall();
         controls.update();
         composer.render();

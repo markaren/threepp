@@ -3,7 +3,12 @@
 // Every plank is the same board, 117 x 23.4 x 7.8 mm (1 : 3 : 15), always laid
 // flat, so a building is a stack of courses 7.8 mm apart. The elements:
 //
-//  - Ring towers, in tiers. Each course is a ring of n planks set tangentially
+//  - Square towers (SquareTower): four walls in English bond, lapped at the
+//    corners, in tiers, with corner buttresses stepping back at each tier,
+//    lancets that close under a stretcher of the course above, a parapet and
+//    an octagonal spire (buildSpire), or over the crossing a dome or lantern.
+//
+//  - Ring stacks, for the round apse and the crossing's dome and lantern. Each course is a ring of n planks set tangentially
 //    around the tower's axis, the next course turned by half a plank (pi / n), so
 //    that every plank bridges a joint below. Each tier is a little narrower than
 //    the one below (fewer planks to the ring), carries a row of windows and ends
@@ -29,10 +34,13 @@
 //    narrowing to the top at the roof's pitch, every other course with a row
 //    of planks across its middle that ties the two sides together.
 //
-//  - The plan: a west front with a portal and a round window under a gable,
-//    between two towers with spires; a nave of tall bays standing over lower
-//    aisles, with stepped buttresses; a crossing tower with a spire or a dome, a
-//    transept with gabled ends, a choir and a round apse.
+//  - The plan: two west towers beside a west front with a portal and a round
+//    window under a gable, or one tower in the middle of it; a nave of tall
+//    bays, over lower aisles with stepped buttresses or without; a square
+//    crossing tower crowned by a spire, a dome or a lantern; a short, long or
+//    no transept; a choir; a round apse or a flat east end. Every arm is roofed
+//    by its walls leaning in to a ridge. The seed chooses the kind of building;
+//    a later design of the same seed draws its sizes again.
 //
 // Every course is checked as it is laid: a plank that would overlap another, or
 // that does not rest on the course below on both sides of its middle, is left
@@ -526,6 +534,10 @@ namespace planks {
         // above leanFrom every course steps along the wall's left normal (-u.z, u.x) by this much
         float lean = 0;
         int leanFrom = 1 << 30;
+        // 1: the wall's first course is one of headers (two walls meeting at a lapped corner are out of step)
+        int phase = 0;
+        // its ends are lapped corners: a course of stretchers keeps a stretcher at each end
+        bool lapped = false;
     };
 
     constexpr float corbelStep = LEN / 6;// the most a stretcher course reaches into an opening
@@ -534,14 +546,14 @@ namespace planks {
     // Each opening's half-width per course, or -1 where the wall is closed.
     // Stretcher courses are the even ones (counted from the wall's base); a header
     // course always keeps the opening of the stretcher course below it.
-    inline std::vector<float> openingProfile(const Opening& o, int courses) {
+    inline std::vector<float> openingProfile(const Opening& o, int courses, int phase = 0) {
         std::vector<float> hw(courses, -1.f);
         const float closeAt = LEN / 4;// a stretcher can bridge what is left
         const float radius = std::max(o.halfWidth, o.rise * 2 * o.halfWidth);
         for (int k = 0; k < courses; ++k) {
             if (k < o.sill) continue;
-            if (k % 2 == 1) {
-                hw[k] = (k > 0 && hw[k - 1] > 0) ? hw[k - 1] : -1.f;
+            if ((k + phase) % 2 == 1) {
+                hw[k] = (k > 0 && hw[k - 1] > 0) ? hw[k - 1] : -1.f;// an opening starts in a course of stretchers
                 continue;
             }
             float raw;
@@ -576,17 +588,27 @@ namespace planks {
     // and no plank hangs over an end; what does not come out even is spread over
     // the joints.
 
-    // Headers side by side over [a, b], spread to meet both ends.
+    // Headers side by side over [a, b], spread to meet both ends. `pack`
+    // (1 from a, 2 from b): where spreading them would open joints wider than a
+    // hairline, they are packed from that end instead, a corner of a lapped
+    // wall, so that they stand on the headers packed the same way below.
     template<class Put>
-    void layHeaders(float a, float b, Put&& put) {
+    void layHeaders(float a, float b, Put&& put, int pack = 0) {
         const float length = b - a;
         if (length < WIDE - 0.0001f) return;
         const int n = static_cast<int>(std::floor((length + joint) / (WIDE + joint) + 1e-4f));
+        const float pitch = n > 1 ? (length - WIDE) / static_cast<float>(n - 1) : 0.f;
+        if (pack) {
+            for (int i = 0; i < n; ++i) {
+                const float off = WIDE / 2 + static_cast<float>(i) * (WIDE + joint);
+                put(pack == 2 ? b - off : a + off, true);
+            }
+            return;
+        }
         if (n == 1) {
             put(0.5f * (a + b), true);
             return;
         }
-        const float pitch = (length - WIDE) / static_cast<float>(n - 1);
         for (int i = 0; i < n; ++i) put(a + WIDE / 2 + static_cast<float>(i) * pitch, true);
     }
 
@@ -595,7 +617,13 @@ namespace planks {
     // stretchers as leave every joint a hairline; failing that, the count that
     // leaves the tightest joints.
     template<class Put>
-    void layStretchers(float a, float b, bool fixedA, bool fixedB, Put&& put) {
+    // `cornerB`: when only one stretcher fits between two fixed ends, it goes
+    // against b (a corner, where the courses lap) rather than a.
+    // `keepStretchers`: a course of stretchers keeps one against every fixed end
+    // where it fits. `pack` (1 from a, 2 from b): hairline joints from that end,
+    // what is left over at the other, so that a lapped wall's short stretches
+    // beside an opening lie the same way course after course.
+    void layStretchers(float a, float b, bool fixedA, bool fixedB, Put&& put, bool cornerB = false, bool keepStretchers = false, int pack = 0) {
         const float length = b - a;
         if (length < WIDE - 0.0001f) return;
         const int most = std::max(0, static_cast<int>(std::floor((length + joint) / (LEN + joint) + 1e-4f)));
@@ -616,18 +644,26 @@ namespace planks {
             int h;
             if (joints(c, h) <= 0.004f) count = c, headers = h;
         }
-        // failing that, the tightest joints of any count
+        // failing that, the tightest joints of any count that still has a
+        // stretcher against every fixed end: a course of stretchers stays one
         if (count < 0) {
             float best = 1e9f;
-            for (int c = most; c >= std::max(0, most - 8); --c) {
+            for (int c = most; c >= std::max(keepStretchers ? least : 0, most - 8); --c) {
                 int h;
                 const float g = joints(c, h);
                 if (g < best - 0.0005f) best = g, count = c, headers = h;
             }
         }
         if (count < 0) return;
-        const float gap = std::max(0.f, joints(count, headers));
+        float gap = std::max(0.f, joints(count, headers));
         if (count + headers == 0) return;
+        // a lapped wall packs a short stretch from its corner, so that its
+        // headers stand on the headers of the course below, packed the same way
+        bool packB = false;
+        if (pack) {
+            gap = joint;
+            packB = pack == 2;
+        }
         // the order along the course: stretchers against the fixed ends
         std::vector<bool> stretcher;
         const auto add = [&](int n, bool isStretcher) { stretcher.insert(stretcher.end(), static_cast<size_t>(n), isStretcher); };
@@ -636,13 +672,24 @@ namespace planks {
         } else if (!fixedA && fixedB) {
             add(headers, false), add(count, true);
         } else if (fixedA && fixedB) {
-            add((count + 1) / 2, true), add(headers, false), add(count / 2, true);
+            if (cornerB) add(count / 2, true), add(headers, false), add((count + 1) / 2, true);
+            else add((count + 1) / 2, true), add(headers, false), add(count / 2, true);
         } else {
             add(headers / 2, false), add(count, true), add(headers - headers / 2, false);
         }
         if (stretcher.size() == 1) {
             const float w = stretcher[0] ? LEN : WIDE;
-            put(fixedA && !fixedB ? a + w / 2 : !fixedA && fixedB ? b - w / 2 : 0.5f * (a + b), !stretcher[0]);
+            const bool toA = fixedA && (!fixedB || !cornerB), toB = fixedB && (!fixedA || cornerB);
+            put(toA ? a + w / 2 : toB ? b - w / 2 : 0.5f * (a + b), !stretcher[0]);
+            return;
+        }
+        if (packB) {
+            float at = b;
+            for (auto it = stretcher.rbegin(); it != stretcher.rend(); ++it) {
+                const float w = *it ? LEN : WIDE;
+                put(at - w / 2, !*it);
+                at -= w + gap;
+            }
             return;
         }
         float at = a;
@@ -667,12 +714,12 @@ namespace planks {
             if (o.at - o.halfWidth >= 2 * WIDE && o.at + o.halfWidth <= length - 2 * WIDE) openings.push_back(o);
         std::sort(openings.begin(), openings.end(), [](const Opening& a, const Opening& b) { return a.at < b.at; });
         std::vector<std::vector<float>> profiles;
-        for (const auto& o : openings) profiles.push_back(openingProfile(o, w.courses));
+        for (const auto& o : openings) profiles.push_back(openingProfile(o, w.courses, w.phase));
         // the first stretcher course over each opening once it has closed
         std::vector<int> closedFrom(openings.size(), w.courses + 1);
         for (size_t i = 0; i < openings.size(); ++i) {
             bool opened = false;
-            for (int k = 0; k < w.courses; k += 2) {
+            for (int k = w.phase % 2; k < w.courses; k += 2) {
                 if (profiles[i][k] > 0) opened = true;
                 else if (opened) {
                     closedFrom[i] = k;
@@ -720,9 +767,15 @@ namespace planks {
                 spans = std::move(next);
             }
 
+            // a lapped wall packs a stretch between its corner and an opening from the corner
+            const auto packing = [&](float a, float b) {
+                if (!w.lapped) return 0;
+                const bool atA = a <= s0 + 0.0001f, atB = b >= s1 - 0.0001f;
+                return atA == atB ? 0 : atA ? 1 : 2;
+            };
             for (const auto& s : spans) {
-                if (k % 2 == 1) {
-                    layHeaders(s.a, s.b, put);
+                if ((k + w.phase) % 2 == 1) {
+                    layHeaders(s.a, s.b, put, packing(s.a, s.b));
                     continue;
                 }
                 // A closed arch keeps a key stretcher over its middle in every
@@ -733,12 +786,13 @@ namespace planks {
                 for (size_t i = 0; i < openings.size(); ++i) {
                     const float key = openings[i].at;
                     if (k < closedFrom[i] || key - LEN / 2 < from - 0.0001f || key + LEN / 2 > s.b + 0.0001f) continue;
-                    layStretchers(from, key - LEN / 2 - joint, fixed, true, put);
+                    layStretchers(from, key - LEN / 2 - joint, fixed, true, put, false, w.lapped, packing(from, key - LEN / 2 - joint));
                     put(key, false);
                     from = key + LEN / 2 + joint;
                     fixed = true;
                 }
-                layStretchers(from, s.b, fixed, s.fixedB, put);
+                // a stretcher that fits only once goes to the wall's own end: its corner
+                layStretchers(from, s.b, fixed, s.fixedB, put, w.lapped && s.b >= s1 - 0.0001f && from > s0 + 0.0001f, w.lapped, packing(from, s.b));
             }
         }
     }
@@ -808,6 +862,180 @@ namespace planks {
         return r.base + k;
     }
 
+    // ---------------------------------------------------------------- square towers
+
+    // A square tower of four walls a plank long thick, lapped at the corners:
+    // the north and south walls start with a course of stretchers, the east and
+    // west walls with one of headers, so that at every corner a course of
+    // stretchers of one wall runs through, crossing the stretchers of the
+    // other wall below it, and the wall in headers stops against it. Its faces
+    // are flat courses, fine horizontal lines. Corner buttresses stand beside
+    // it, two headers deep in the first tier and one in the second; a parapet of
+    // single rows on the walls' outer edge, slotted like merlons, closes the top.
+    struct SquareTower {
+        Vec2 centre{};
+        float half = 0.2f;// outer half-side
+        int base = 0;
+        int courses = 100;// the shaft, to the parapet
+        std::vector<int> tierTops;// from the base, where each tier ends
+        // openings per face (0 north, 1 east, 2 south, 3 west), measured along the face
+        // from its first corner (north: from the west; east: from the north; south: from the east; west: from the south)
+        std::vector<Opening> openings[4];
+        // buttresses: bit 2 * face + end, continuing the face past its first (0) or last (1) corner
+        unsigned buttresses = 0;
+        int parapet = 4;
+    };
+
+    // the face's wall: its ends at the outer corners, on the wall's centreline
+    inline void squareFace(const SquareTower& t, int f, Vec2& from, Vec2& to) {
+        const float h = t.half, c = h - LEN / 2;
+        const float x = t.centre.x, z = t.centre.z;
+        switch (f) {
+            case 0: from = {x - h, z - c}, to = {x + h, z - c}; break;
+            case 1: from = {x + c, z - h}, to = {x + c, z + h}; break;
+            case 2: from = {x + h, z + c}, to = {x - h, z + c}; break;
+            default: from = {x - c, z + h}, to = {x - c, z - h}; break;
+        }
+    }
+
+    // returns the course above the parapet
+    inline int buildSquareTower(Design& d, const SquareTower& t, const std::string& name) {
+        for (int f = 0; f < 4; ++f) {
+            Wall w;
+            squareFace(t, f, w.from, w.to);
+            w.base = t.base;
+            w.courses = t.courses;
+            w.phase = f % 2;
+            w.lapped = true;
+            const int phase = w.phase;
+            // a course of headers stops against the other wall's stretchers
+            w.trimFrom = w.trimTo = [phase](int k) { return (k + phase) % 2 == 1 ? LEN + joint : 0.f; };
+            w.openings = t.openings[f];
+            buildWall(d, w, name);
+        }
+        // The buttresses: square cribs a plank long on each side, two planks a
+        // course crossing the two below at their ends, beside a corner in line
+        // with a face, up the first tier, leaning on the tower a hairline away.
+        // (Piers of headers stacked one on another crept; a crib standing free
+        // still rocked a little at its top.)
+        {
+            const int e = d.element(name + " buttress");
+            const int first = std::min(t.courses, t.tierTops.empty() ? t.courses / 2 : t.tierTops[0]);
+            const float gap = joint;
+            for (int f = 0; f < 4; ++f) {
+                for (int end = 0; end < 2; ++end) {
+                    if (!(t.buttresses & (1u << (2 * f + end)))) continue;
+                    Vec2 a, b;
+                    squareFace(t, f, a, b);
+                    const float len = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
+                    Vec2 out{(b.x - a.x) / len, (b.z - a.z) / len};
+                    Vec2 corner = b;
+                    if (end == 0) out = {-out.x, -out.z}, corner = a;
+                    const Vec2 across{-out.z, out.x};
+                    const float along = std::atan2(out.z, out.x);
+                    const auto at = [&](float o, float c) { return Vec2{corner.x + out.x * o + across.x * c, corner.z + out.z * o + across.z * c}; };
+                    for (int k = 0; k < first; ++k) {
+                        for (int side = -1; side <= 1; side += 2) {
+                            const float off = static_cast<float>(side) * (LEN / 2 - WIDE / 2);
+                            if (k % 2 == 0) {
+                                const Vec2 p = at(gap + LEN / 2, off);
+                                d.add(p.x, p.z, along, t.base + k, e);
+                            } else {
+                                const Vec2 p = at(gap + LEN / 2 + off, 0);
+                                d.add(p.x, p.z, along + PI / 2, t.base + k, e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // a deck of headers over the last course of all four walls, so that what
+        // stands on top rests on their whole thickness: across the walls whose
+        // last course was of stretchers running through the corners, and over
+        // the headers of the others
+        const int deck = t.base + t.courses;
+        {
+            const int e = d.element(name);
+            for (int f = 0; f < 4; ++f) {
+                Vec2 a, b;
+                squareFace(t, f, a, b);
+                const float len = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
+                const Vec2 u{(b.x - a.x) / len, (b.z - a.z) / len};
+                const bool through = (t.courses - 1 + f % 2) % 2 == 0;
+                const float s0 = through ? 0.f : LEN + joint;
+                layHeaders(s0, len - s0, [&](float at, bool) { d.add(a.x + u.x * at, a.z + u.z * at, std::atan2(u.z, u.x) + PI / 2, deck, e); });
+            }
+        }
+        // the parapet: a row of stretchers on each face's outer edge, from its
+        // first corner to the next face's row, the same every course, so that the
+        // joints line up as slots
+        const int e = d.element(name + " parapet");
+        const int top = deck + 1;
+        for (int k = 0; k < t.parapet; ++k) {
+            for (int f = 0; f < 4; ++f) {
+                Vec2 a, b;
+                squareFace(t, f, a, b);
+                const float len = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
+                const Vec2 u{(b.x - a.x) / len, (b.z - a.z) / len};
+                const Vec2 inward{-u.z, u.x};
+                const float off = -(LEN / 2 - WIDE / 2);// from the wall's centreline to its outer row
+                const float run = len - WIDE - joint;
+                const int n = std::max(1, static_cast<int>(std::floor((run + joint) / (LEN + joint))));
+                const float pitch = n > 1 ? (run - LEN) / static_cast<float>(n - 1) : 0.f;
+                for (int i = 0; i < n; ++i) {
+                    const float s = LEN / 2 + static_cast<float>(i) * pitch;
+                    d.add(a.x + u.x * s + inward.x * off, a.z + u.z * s + inward.z * off, std::atan2(u.z, u.x), top + k, e);
+                }
+            }
+        }
+        return top + t.parapet;
+    }
+
+    // Where an opening in a face of a square tower closes by itself: under the
+    // middle of a stretcher of the face's own courses (the one nearest the
+    // middle of the face), which bridges it once it is narrow enough.
+    inline float squareOpeningAt(float half) {
+        std::vector<std::pair<float, bool>> laid;
+        layStretchers(0.f, 2 * half, true, true, [&](float at, bool header) { laid.emplace_back(at, header); }, false, true);
+        float best = half, distance = 1e9f;
+        for (size_t i = 1; i + 1 < laid.size(); ++i)
+            if (!laid[i].second && std::abs(laid[i].first - half) < distance) best = laid[i].first, distance = std::abs(laid[i].first - half);
+        return best;
+    }
+
+    // The largest ring that stands inside a square tower's parapet.
+    inline float spireApothem(float half) {
+        const float reach = half - WIDE - 0.003f;// clear of the parapet's inner face
+        return std::sqrt(reach * reach - (LEN / 2) * (LEN / 2)) - WIDE / 2;
+    }
+
+    // An octagonal spire: rings of up to eight planks, each course turned by
+    // half a plank against the one below and a little smaller, dropping a plank
+    // whenever the ring gets too small for them, in one long straight taper;
+    // then a finial of single planks, each across the one below.
+    inline int buildSpire(Design& d, Vec2 c, int course, float a, float step, int finial, const std::string& name) {
+        const int e = d.element(name);
+        int n = 8;
+        while (n > 3 && ringMin(n) + 0.0008f > a) --n;
+        float rot = 0;
+        for (int guard = 0; guard < 1000; ++guard) {
+            if (a < ringMin(n) + 0.0008f) {
+                const int fit = ringFit(a, n);
+                if (fit == n) break;
+                n = fit;
+            }
+            ringCourse(d, e, c, course++, n, a, rot);
+            rot += PI / static_cast<float>(n);
+            a -= step;
+        }
+        float angle = rot + PI / 2;
+        for (int i = 0; i < finial; ++i) {
+            d.add(c.x, c.z, angle, course++, e);
+            angle += PI / 2;
+        }
+        return course;
+    }
+
     // ---------------------------------------------------------------- the plan
 
     struct Plan {
@@ -819,61 +1047,63 @@ namespace planks {
         bool aisles;
         int aisleCourses;
         float aisleGap;    // between an aisle wall and the nave wall
-        int towerPlanks;   // the west towers' first tier
-        int tiers;
-        bool galleries;
+        int westTowers;    // 2: a pair beside the west front; 1: one tower in the middle of it
+        int tiers;         // of the west towers' shafts, 2 to 4
         float spireStep;   // in per course
-        bool lantern;
-        int crossingPlanks;
-        float crossingApothem;
-        bool dome;
-        int drumCourses;
-        int armStretchers;
+        int crown;         // over the crossing: 0 a spire, 1 a dome, 2 a lantern
+        int armStretchers; // the transept's arms; 0: no transept
+        bool roundApse;    // or a flat east end
         int choirStretchers;
+        int apsePlanks;
+        float apseApothem;
 
         // where things ended up, for the cameras and the ball
-        float naveStart = 0, naveEnd = 0, crossingX = 0, apseX = 0, zWall = 0, towerZ = 0, towerReach = 0;
+        float naveStart = 0, naveEnd = 0, crossingX = 0, eastX = 0, zWall = 0;
+        float towerX = 0, towerZ = 0, towerHalf = 0;// the south-west (or the one) west tower
+        int towerTop = 0;   // its shaft's top course
         int ridgeCourse = 0;// the top of the nave's ridge
     };
 
+    // The seed chooses the kind of building; a later design of the same seed
+    // (attempt) keeps the kind and draws its sizes again.
     // scale: 1 is the full building; less makes it lower and shorter, for quick probes
-    inline Plan makePlan(std::uint64_t seed, float scale) {
-        Rng rng(seed * 7919 + 17);
+    inline Plan makePlan(std::uint64_t seed, int attempt, float scale) {
+        Rng kind(seed * 7919 + 17);
+        Rng rng(seed * 6007 + 101 + static_cast<std::uint64_t>(attempt) * 1000003ull);
         Plan p{};
-        p.naveInner = rng.uniform(0.19f, 0.22f);
-        p.bays = std::max(2, static_cast<int>(std::lround(static_cast<float>(rng.range(4, 5)) * scale)));
-        p.bayLength = rng.uniform(0.33f, 0.37f);
-        p.naveCourses = 2 * static_cast<int>(std::lround(static_cast<float>(rng.range(46, 52)) * scale));
-        p.pitch = rng.uniform(56.f, 62.f);
-        p.aisles = rng.chance(0.85f);
-        p.aisleCourses = 2 * static_cast<int>(static_cast<float>(p.naveCourses) * rng.uniform(0.40f, 0.46f) / 2);
-        p.aisleGap = rng.uniform(0.075f, 0.09f);
-        p.towerPlanks = rng.chance(0.5f) ? 9 : 10;
-        p.tiers = rng.range(3, 4);
-        p.galleries = rng.chance(0.8f);
-        p.spireStep = rng.uniform(0.0008f, 0.0011f);
-        p.lantern = false;
-        rng.uniform();
-        p.dome = rng.chance(0.4f);
-        p.drumCourses = 2 * rng.range(8, 14);
-        p.armStretchers = 3 + (rng.chance(0.3f) ? 1 : 0);
-        p.choirStretchers = 3;
+        p.westTowers = kind.chance(0.55f) ? 2 : 1;
+        p.tiers = kind.range(2, 4);
+        p.crown = kind.range(0, 2);
+        const int arms[3] = {0, 2, 3};
+        p.armStretchers = arms[kind.range(0, 2)];
+        p.roundApse = kind.chance(0.5f);
+        p.aisles = kind.chance(0.6f);
+        p.bays = std::max(2, static_cast<int>(std::lround(static_cast<float>(kind.range(4, 5)) * scale)));
 
-        // The crossing must be wide enough that the nave's and the transept's
-        // walls, ending against it, clear each other at the corners between them.
+        p.naveInner = rng.uniform(0.19f, 0.22f);
+        p.bayLength = rng.uniform(0.33f, 0.37f);
+        p.naveCourses = 2 * static_cast<int>(std::lround(static_cast<float>(rng.range(39, 44)) * scale));
+        p.pitch = rng.uniform(56.f, 62.f);
+        p.aisleCourses = 2 * static_cast<int>(static_cast<float>(p.naveCourses) * rng.uniform(0.42f, 0.48f) / 2);
+        p.aisleGap = rng.uniform(0.075f, 0.09f);
+        p.spireStep = rng.uniform(0.0007f, 0.0009f);
+        p.choirStretchers = rng.range(3, 4);
+
+        // the round apse: wide enough that the choir's walls, ending against it, clear each other
         const float zFront = p.naveInner / 2 + LEN, gap = 0.004f;
         const float reach = std::sqrt((zFront + gap) * (zFront + gap) + (p.naveInner / 2) * (p.naveInner / 2)) - gap + 0.003f;
         const float need = std::sqrt(reach * reach - (LEN / 2) * (LEN / 2)) - WIDE / 2;
         int n = 24;
         while (n > 8 && ringMin(n) + 0.026f > need) --n;
-        p.crossingPlanks = n;
-        p.crossingApothem = std::clamp(need, ringMin(n) + 0.026f, ringMax(n));
+        p.apsePlanks = n;
+        p.apseApothem = std::clamp(need, ringMin(n) + 0.026f, ringMax(n));
         return p;
     }
 
     // Single elements, to try the physics on: "stack", "ring", "wall", "tower", "roof".
-    inline Design buildTest(const std::string& what, int courses) {
+    inline Design buildTest(const std::string& what, int courses, bool explain = false) {
         Design d;
+        d.explain = explain;
         if (what == "stack") {
             const int e = d.element("stack");
             for (int k = 0; k < courses; ++k) d.add(0, 0, (k % 2) ? PI / 2 : 0.f, k, e);
@@ -890,6 +1120,14 @@ namespace planks {
             t.top = Tower::Top::Cone;
             t.coneStep = 0.0015f;
             buildTower(d, t, "tower");
+        } else if (what == "square") {
+            SquareTower t;
+            t.half = (2 * (LEN + joint) + 7 * WIDE + 6 * joint) / 2;
+            t.courses = courses;
+            t.tierTops = {courses / 2, courses};
+            t.buttresses = 255u;
+            const int top = buildSquareTower(d, t, "square") - t.parapet;
+            buildSpire(d, t.centre, top, spireApothem(t.half), 0.0008f, 8, "spire");
         } else if (what == "roof") {
             // two leaning walls meeting under a ridge
             const float W = 0.2f, s = (W / 2 - 0.0003f) / 22;
@@ -923,9 +1161,9 @@ namespace planks {
         return d;
     }
 
-    inline Design buildCathedral(std::uint64_t seed, float scale, Plan* planOut = nullptr, bool explain = false) {
-        Plan p = makePlan(seed, scale);
-        Rng rng(seed * 104729 + 3);
+    inline Design buildCathedral(std::uint64_t seed, int attempt, float scale, Plan* planOut = nullptr, bool explain = false) {
+        Plan p = makePlan(seed, attempt, scale);
+        Rng rng(seed * 104729 + 3 + static_cast<std::uint64_t>(attempt) * 7);
         Design d;
         d.explain = explain;
 
@@ -945,25 +1183,17 @@ namespace planks {
         const float s = (W / 2 - 0.0003f) / static_cast<float>(leanCourses);
         const int top = H + leanCourses;// first course of a ridge
         const int ridgeCourses = static_cast<int>(std::ceil((LEN - s - WIDE / 2 - 0.001f) / s)) + 1;
+        const int ridgeTop = top + ridgeCourses;
 
-        // the crossing ring, and where the walls meet it
-        const float crossReach = ringReach(p.crossingApothem) + gap;
-        const float meet = std::sqrt(crossReach * crossReach - (W / 2) * (W / 2));
-        // a leaning wall's end against a ring is drawn back as the wall leans in
-        const auto ringTrim = [=](int k) -> float {
-            if (k < H) return 0.f;
-            const float inner = std::max(0.f, W / 2 - s * static_cast<float>(k - H + 1));
-            return std::sqrt(crossReach * crossReach - inner * inner) - meet;
-        };
-        // and a ridge's rows, by how far they reach from the ridge line
-        const auto ridgeTrim = [=](float reach) -> float {
-            if (reach >= crossReach) return 0.f;
-            return std::max(0.f, std::sqrt(crossReach * crossReach - reach * reach) - meet);
-        };
+        // the west towers' size: a pair is three stretchers and two headers a face, one alone four stretchers
+        const float halfPair = (2 * (LEN + joint) + 7 * WIDE + 6 * joint) / 2;
+        const float halfOne = halfPair;
+        const float towerHalf = p.westTowers == 2 ? halfPair : halfOne;
+        const float zT = p.westTowers == 2 ? zF + gap + halfPair : 0.f;
 
-        const float naveStart = LEN / 2 + gap;
+        const float naveStart = p.westTowers == 2 ? LEN / 2 + gap : towerHalf + gap;
         const float naveEnd = naveStart + static_cast<float>(p.bays) * p.bayLength;
-        const Vec2 crossing{naveEnd + meet, 0};
+        const Vec2 crossing{naveEnd + gap + zF, 0};
         const float pier = 2 * LEN + joint;
         const float bayHalf = std::max(0.04f, (p.bayLength - pier) / 2);// a window's half-width
 
@@ -974,46 +1204,94 @@ namespace planks {
         const float sa = (G - 0.0012f) / static_cast<float>(aisleLean);
         const int aisleTop = Ha + aisleLean;
 
-        // --- the crossing tower first: where walls meet it, its planks come first
+        // a pointed opening of half-width hw, open from its sill, its arch closed by `end`
+        const auto lancet = [](float at, float hw, int sill, int end) {
+            const int arch = static_cast<int>(std::ceil(1.8f * hw / THICK));
+            return Opening{at, hw, sill, std::max(sill + 2, (end - arch) & ~1), 1.f, false};
+        };
+
+        // --- the crossing tower first: the arms' walls end against it
         {
-            Tower t;
+            SquareTower t;
             t.centre = crossing;
-            const int ridgeTop = top + ridgeCourses;
-            Tier drum{p.crossingPlanks, p.crossingApothem, ridgeTop + p.drumCourses, p.galleries, {}};
-            const int windows = p.crossingPlanks >= 10 ? 4 : 3;
-            for (int i = 0; i < windows; ++i)
-                drum.windows.push_back({ridgeTop + 4, std::max(4, (p.drumCourses - 14) & ~1), PI / 4 + 2 * PI * static_cast<float>(i) / static_cast<float>(windows)});
-            t.tiers.push_back(drum);
-            if (!p.dome && p.crossingPlanks >= 10) {
-                const int n2 = p.crossingPlanks - 3;
-                Tier belfry{n2, ringMin(n2) + 0.021f, 2 * (p.drumCourses / 3 + 12), false, {}};
-                for (int i = 0; i < 4; ++i) belfry.windows.push_back({16, belfry.courses - 24, PI / 4 + PI / 2 * static_cast<float>(i)});
-                t.tiers.push_back(belfry);
+            t.half = zF;
+            t.courses = (ridgeTop + 30) & ~1;
+            t.tierTops = {H, t.courses};
+            // narrow enough to close without corbelling: the piers beside them are too narrow to corbel from
+            const float archHalf = 0.0295f;
+            const int archSpring = (H * 3 / 5) & ~1;
+            const float at = squareOpeningAt(zF);
+            for (int f = 0; f < 4; ++f) {
+                // an arch into every arm, from the floor to under the eaves
+                const bool arm = (f == 1 || f == 3) || p.armStretchers > 0;
+                // the same place along every face: each face's courses are laid from its first corner alike
+                const float here = at;
+                if (arm) t.openings[f].push_back({here, archHalf, 0, archSpring, 1.f, false});
+                // the lantern stage over the roofs: a tall window in every face
+                t.openings[f].push_back(lancet(here, 0.0295f, (ridgeTop + 4) & ~1, t.courses - 4));
             }
-            t.top = p.dome ? Tower::Top::Dome : Tower::Top::Cone;
-            t.coneStep = p.dome ? 0.0045f : p.spireStep * 1.15f;
-            t.spireFoot = ringMin(6) + 0.003f;
-            buildTower(d, t, "crossing");
+            const int shaftTop = buildSquareTower(d, t, "crossing tower") - t.parapet;
+            const float a = spireApothem(zF);
+            if (p.crown == 0) {
+                buildSpire(d, crossing, shaftTop, a, p.spireStep * 1.15f, 8, "crossing spire");
+            } else {
+                Tower c;
+                c.centre = crossing;
+                c.base = shaftTop;
+                int n = 12;
+                while (n > 6 && ringMin(n) + 0.0008f > a) --n;
+                c.tiers.push_back({n, a, p.crown == 1 ? 0 : 6, false, {}});
+                c.top = p.crown == 1 ? Tower::Top::Dome : Tower::Top::Lantern;
+                c.coneStep = p.crown == 1 ? 0.0045f : p.spireStep * 2.f;
+                buildTower(d, c, p.crown == 1 ? "crossing dome" : "crossing lantern");
+            }
         }
 
-        // --- the apse, a ring at the east end with a cone at the roofs' pitch
+        // --- the choir's east end: a round apse with a cone at the roofs' pitch, or a flat gable
         const float choirLength = static_cast<float>(p.choirStretchers) * (LEN + joint) - joint;
-        const float choirX0 = crossing.x + meet, choirX1 = choirX0 + choirLength;
-        const Vec2 apse{choirX1 + meet, 0};
-        {
+        const float choirX0 = crossing.x + zF + gap, choirX1 = choirX0 + choirLength;
+        const float apseReach = ringReach(p.apseApothem) + gap;
+        const float meet = std::sqrt(apseReach * apseReach - (W / 2) * (W / 2));
+        // a leaning wall's end against the ring is drawn back as the wall leans in
+        const auto ringTrim = [=](int k) -> float {
+            if (k < H) return 0.f;
+            const float inner = std::max(0.f, W / 2 - s * static_cast<float>(k - H + 1));
+            return std::sqrt(apseReach * apseReach - inner * inner) - meet;
+        };
+        // and a ridge's rows, by how far they reach from the ridge line
+        const auto ridgeTrim = [=](float reach) -> float {
+            if (reach >= apseReach) return 0.f;
+            return std::max(0.f, std::sqrt(apseReach * apseReach - reach * reach) - meet);
+        };
+        float eastX;
+        if (p.roundApse) {
+            const Vec2 apse{choirX1 + meet, 0};
             Tower t;
             t.centre = apse;
-            Tier shaft{p.crossingPlanks, p.crossingApothem, H, false, {}};
+            Tier shaft{p.apsePlanks, p.apseApothem, H, false, {}};
             const int sill = (H * 3 / 10) & ~1;
             for (int i = 0; i < 3; ++i) shaft.windows.push_back({sill, (H * 2 / 5) & ~1, PI * (-0.3f + 0.3f * static_cast<float>(i))});
             t.tiers.push_back(shaft);
             t.top = Tower::Top::Cone;
             t.coneStep = step;
             buildTower(d, t, "apse");
+            eastX = apse.x + ringReach(p.apseApothem);
+        } else {
+            Wall end;
+            const float x = choirX1 + gap + LEN / 2;
+            end.from = {x, -zF};
+            end.to = {x, zF};
+            end.fixedFrom = end.fixedTo = false;
+            const int gableFrom = (H + 4) & ~1;
+            end.courses = gableFrom + static_cast<int>(std::ceil(zF / s)) + 2;
+            end.trimFrom = end.trimTo = [=](int k) { return k < gableFrom ? 0.f : s * static_cast<float>(k - gableFrom + 1); };
+            end.openings.push_back(lancet(zF, 0.055f, (H / 5) & ~1, (H * 9 / 10) & ~1));
+            buildWall(d, end, "east end");
+            eastX = x + LEN / 2;
         }
 
-        // --- the west front: a portal, a round window over it, a gable above the roof
-        {
+        // --- the west front between a pair of towers: a portal, a round window over it, a gable above the roof
+        if (p.westTowers == 2) {
             Wall w;
             w.from = {0, -zF};
             w.to = {0, zF};
@@ -1038,37 +1316,54 @@ namespace planks {
             buildWall(d, w, "west front");
         }
 
-        // --- the west towers: tiers narrowing up to a spire
-        Tower west;
+        // --- the west towers: square shafts in tiers, a parapet, a spire
+        SquareTower west;
+        west.half = towerHalf;
         {
-            Rng trng(seed * 31 + 7);
-            int n = p.towerPlanks;
-            const int t1 = (H + 8) & ~1;
-            const std::vector<int> heights{t1, static_cast<int>(static_cast<float>(H) * 0.40f) & ~1,
-                                           static_cast<int>(static_cast<float>(H) * 0.32f) & ~1, static_cast<int>(static_cast<float>(H) * 0.26f) & ~1};
-            for (int i = 0; i < p.tiers; ++i) {
-                Tier tier{n, ringMin(n) + 0.022f, heights[std::min(i, 3)], p.galleries && i + 1 < p.tiers + (p.lantern ? 0 : 1), {}};
-                const int windows = n >= 9 ? 4 : 3;
-                const int h = (i == 0 ? 14 : 12);
-                const int at = (tier.courses - (tier.gallery ? galleryCourses : 0) - h - 6) & ~1;
-                for (int j = 0; j < windows; ++j) tier.windows.push_back({at, h, PI / 4 + 2 * PI * static_cast<float>(j) / static_cast<float>(windows)});
-                if (i == 0) {// a lower row on the foot tier
-                    const int low = (tier.courses * 2 / 5) & ~1;
-                    for (int j = 0; j < windows; ++j) tier.windows.push_back({low, 10, PI / 4 + 2 * PI * static_cast<float>(j) / static_cast<float>(windows)});
-                }
-                west.tiers.push_back(tier);
-                n = std::max(6, n - (i == 0 ? 2 : 1));
-            }
-            west.top = p.lantern ? Tower::Top::Lantern : Tower::Top::Cone;
-            west.coneStep = p.spireStep;
-            west.spireFoot = ringMin(6) + 0.003f;
+            std::vector<int> tops{(H + 6) & ~1};
+            for (int i = 1; i < p.tiers; ++i) tops.push_back(tops.back() + (i + 1 == p.tiers ? 36 : 26));
+            west.tierTops = tops;
+            west.courses = tops.back();
         }
-        const float westReach = towerReach(west);
-        const float zT = zF + gap + westReach;
-        for (int side = -1; side <= 1; side += 2) {
-            Tower t = west;
-            t.centre = {0, static_cast<float>(side) * zT};
-            buildTower(d, t, side < 0 ? "north-west tower" : "south-west tower");
+        const auto towerOpenings = [&](SquareTower& t, const bool open[4]) {
+            for (int f = 0; f < 4; ++f) {
+                const float c = squareOpeningAt(t.half);
+                const int t1 = t.tierTops[0];
+                // lancets narrow enough to close without corbelling (the piers beside them are too narrow to corbel from)
+                if (open[f]) t.openings[f].push_back(lancet(c, 0.0295f, (t1 * 2 / 5) & ~1, (t1 * 2 / 5 + 30) & ~1));
+                for (size_t i = 1; i < t.tierTops.size(); ++i) {
+                    const int from = t.tierTops[i - 1], to = t.tierTops[i];
+                    if (i + 1 == t.tierTops.size()) t.openings[f].push_back(lancet(c, 0.0295f, (from + 4) & ~1, to - 3));// the belfry
+                    else t.openings[f].push_back(lancet(c, 0.0295f, (from + 6) & ~1, to - 6));
+                }
+            }
+        };
+        Vec2 hitTower{0, 0};
+        if (p.westTowers == 2) {
+            for (int side = -1; side <= 1; side += 2) {
+                SquareTower t = west;
+                t.centre = {0, static_cast<float>(side) * zT};
+                const bool open[4] = {side < 0, false, side > 0, true};
+                towerOpenings(t, open);
+                // buttresses on the corners clear of the front and the aisles
+                t.buttresses = side < 0 ? 167u : 121u;
+                const std::string name = side < 0 ? "north-west tower" : "south-west tower";
+                const int shaftTop = buildSquareTower(d, t, name) - t.parapet;
+                buildSpire(d, t.centre, shaftTop, spireApothem(t.half), p.spireStep, 8, side < 0 ? "north-west spire" : "south-west spire");
+            }
+            hitTower = {0, zT};
+        } else {
+            SquareTower t = west;
+            t.centre = {0, 0};
+            const bool open[4] = {true, false, true, false};
+            towerOpenings(t, open);
+            const int portalSpring = static_cast<int>(static_cast<float>(H) * rng.uniform(0.30f, 0.34f)) & ~1;
+            const float at = squareOpeningAt(t.half);
+            t.openings[3].push_back({at, 0.0295f, 0, portalSpring, 1.f, false});
+            t.openings[3].push_back(lancet(at, 0.0295f, (portalSpring + 12) & ~1, t.tierTops[0] - 6));
+            t.buttresses = 237u;
+            const int shaftTop = buildSquareTower(d, t, "west tower") - t.parapet;
+            buildSpire(d, t.centre, shaftTop, spireApothem(t.half), p.spireStep, 8, "west spire");
         }
 
         // --- the nave: walls with arcades below and tall windows above, leaning in to the roof
@@ -1079,7 +1374,6 @@ namespace planks {
             w.courses = top;
             w.lean = -static_cast<float>(side) * s;
             w.leanFrom = H;
-            w.trimTo = ringTrim;
             for (int b = 0; b < p.bays; ++b) {
                 const float at = (static_cast<float>(b) + 0.5f) * p.bayLength;
                 const int arch = static_cast<int>(std::ceil(1.8f * bayHalf / THICK));
@@ -1099,13 +1393,12 @@ namespace planks {
             r.base = top;
             r.halfWidth = LEN - s;
             r.step = s;
-            r.trimTo = ridgeTrim;
             p.ridgeCourse = buildRidge(d, r, "nave roof");
         }
 
         // --- the aisles, behind the west towers to the transept, with buttresses
         if (p.aisles) {
-            const float x0 = westReach + gap, x1 = crossing.x - zF - gap;
+            const float x0 = towerHalf + gap, x1 = crossing.x - zF - gap;
             const float zA = zF + G + LEN / 2;
             for (int side = -1; side <= 1; side += 2) {
                 const float sz = static_cast<float>(side);
@@ -1116,6 +1409,7 @@ namespace planks {
                 w.lean = -sz * sa;
                 w.leanFrom = Ha;
                 w.fixedFrom = false;
+                w.fixedTo = p.armStretchers > 0;
                 w.trimFrom = [=](int k) { return k < Ha ? 0.f : static_cast<float>(k - Ha + 1) * (WIDE + joint); };
                 for (int b = 0; b < p.bays; ++b) {
                     const float at = naveStart + (static_cast<float>(b) + 0.5f) * p.bayLength - x0;
@@ -1140,36 +1434,41 @@ namespace planks {
             }
         }
 
-        // --- the transept: two arms, gabled ends with a tall window and a round one
-        const float armLength = static_cast<float>(p.armStretchers) * (LEN + joint) - joint;
-        for (int side = -1; side <= 1; side += 2) {
-            const float sz = static_cast<float>(side);
-            const float armStart = meet, armEnd = meet + armLength;
-            for (int wside = -1; wside <= 1; wside += 2) {
-                Wall w;
-                const float x = crossing.x + static_cast<float>(wside) * zWall;
-                w.from = {x, sz * armStart};
-                w.to = {x, sz * armEnd};
-                // to the eaves: short walls leaning in as a roof did not stand
-                w.courses = H;
-                if (armLength > 2 * (0.045f + LEN)) {
-                    const int arch = static_cast<int>(std::ceil(1.8f * 0.045f / THICK));
-                    w.openings.push_back({armLength / 2, 0.045f, (H * 3 / 10) & ~1, (H - arch - 4) & ~1, 1.f, false});
+        // --- the transept: two arms with gabled ends and roofs like the nave's
+        if (p.armStretchers > 0) {
+            const float armLength = static_cast<float>(p.armStretchers) * (LEN + joint) - joint;
+            for (int side = -1; side <= 1; side += 2) {
+                const float sz = static_cast<float>(side);
+                const float z0 = sz * (zF + gap), z1 = sz * (zF + gap + armLength);
+                const std::string arm = side < 0 ? "north transept" : "south transept";
+                for (int wside = -1; wside <= 1; wside += 2) {
+                    Wall w;
+                    const float x = crossing.x + static_cast<float>(wside) * zWall;
+                    w.from = {x, z0};
+                    w.to = {x, z1};
+                    w.courses = top;
+                    w.lean = static_cast<float>(wside) * sz * s;
+                    w.leanFrom = H;
+                    if (armLength > 2 * (0.045f + LEN)) w.openings.push_back(lancet(armLength / 2, 0.045f, (H * 3 / 10) & ~1, H - 4));
+                    buildWall(d, w, arm);
                 }
-                buildWall(d, w, side < 0 ? "north transept" : "south transept");
-            }
-            Wall end;
-            const float zEnd = sz * (armEnd + gap + LEN / 2);
-            end.from = {crossing.x - zF, zEnd};
-            end.to = {crossing.x + zF, zEnd};
-            end.fixedFrom = end.fixedTo = false;
-            const int gableFrom = (H + 4) & ~1;
-            end.courses = gableFrom + static_cast<int>(std::ceil(zF / s)) + 2;
-            end.trimFrom = end.trimTo = [=](int k) { return k < gableFrom ? 0.f : s * static_cast<float>(k - gableFrom + 1); };
-            {
-                const float hw = 0.062f;
-                const int arch = static_cast<int>(std::ceil(1.8f * hw / THICK));
-                end.openings.push_back({zF, hw, (H / 5) & ~1, (H * 3 / 5 - arch) & ~1, 1.f, false});
+                Ridge r;
+                r.from = {crossing.x, z0};
+                r.to = {crossing.x, z1};
+                r.base = top;
+                r.halfWidth = LEN - s;
+                r.step = s;
+                buildRidge(d, r, arm + " roof");
+
+                Wall end;
+                const float zEnd = sz * (zF + gap + armLength + gap + LEN / 2);
+                end.from = {crossing.x - zF, zEnd};
+                end.to = {crossing.x + zF, zEnd};
+                end.fixedFrom = end.fixedTo = false;
+                const int gableFrom = (H + 4) & ~1;
+                end.courses = gableFrom + static_cast<int>(std::ceil(zF / s)) + 2;
+                end.trimFrom = end.trimTo = [=](int k) { return k < gableFrom ? 0.f : s * static_cast<float>(k - gableFrom + 1); };
+                end.openings.push_back(lancet(zF, 0.055f, (H / 5) & ~1, (H * 3 / 5) & ~1));
                 Opening rose;
                 rose.round = true;
                 rose.at = zF;
@@ -1177,28 +1476,43 @@ namespace planks {
                 rose.spring = (H - 4) & ~1;
                 rose.sill = rose.spring - 10;
                 end.openings.push_back(rose);
+                buildWall(d, end, arm + " end");
             }
-            buildWall(d, end, side < 0 ? "north transept end" : "south transept end");
-
         }
 
-        // --- the choir, between the crossing and the apse
+        // --- the choir, between the crossing and the east end, roofed like the nave
         for (int side = -1; side <= 1; side += 2) {
             Wall w;
             w.from = {choirX0, static_cast<float>(side) * zWall};
             w.to = {choirX1, static_cast<float>(side) * zWall};
-            w.courses = H;
+            w.courses = top;
+            w.lean = -static_cast<float>(side) * s;
+            w.leanFrom = H;
+            if (p.roundApse) w.trimTo = ringTrim;
+            if (choirLength > 2 * (0.045f + LEN)) w.openings.push_back(lancet(choirLength / 2, 0.045f, (H * 3 / 10) & ~1, H - 4));
             buildWall(d, w, side < 0 ? "north choir wall" : "south choir wall");
+        }
+        {
+            Ridge r;
+            r.from = {choirX0, 0};
+            r.to = {choirX1, 0};
+            r.base = top;
+            r.halfWidth = LEN - s;
+            r.step = s;
+            if (p.roundApse) r.trimTo = ridgeTrim;
+            buildRidge(d, r, "choir roof");
         }
 
         d.finish();
         p.naveStart = naveStart;
         p.naveEnd = naveEnd;
         p.crossingX = crossing.x;
-        p.apseX = apse.x;
+        p.eastX = eastX;
         p.zWall = zWall;
-        p.towerZ = zT;
-        p.towerReach = westReach;
+        p.towerX = hitTower.x;
+        p.towerZ = hitTower.z;
+        p.towerHalf = towerHalf;
+        p.towerTop = west.courses;
         if (planOut) *planOut = p;
         return d;
     }

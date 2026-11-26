@@ -1,11 +1,12 @@
 // The cathedral in PhysX: one rigid body per plank, at real size and real
 // gravity, on a floor.
 //
-// A design is proven before it is shown: every plank is kept awake for a
-// couple of seconds of simulated time, and the largest distance any plank has
-// moved from where the design put it must stay under a millimetre. Then every
-// plank is put to sleep, so that a standing cathedral costs next to nothing,
-// and a blow wakes only the planks it reaches, by contact.
+// A design is proven before it is shown: every plank is kept awake for three
+// seconds of simulated time. It passes when it has come to rest, no plank
+// moving more than 0.1 mm during the last half second, and no plank has moved
+// more than 3 mm from where the design put it. Then every plank is put to
+// sleep, so that a standing cathedral costs next to nothing, and a blow wakes
+// only the planks it reaches, by contact.
 //
 // Millimetre bodies want millimetre tolerances: PhysX's tolerance scale is set
 // to centimetres, contacts are made within a millimetre of touching, friction
@@ -16,7 +17,9 @@
 // a millimetre. Without stabilization a ring of 150 courses falls. A whole
 // cathedral of 30-40k planks, towers of 250 courses, walls leaning in as roofs,
 // creeps 2-4 mm at its tops in 2 s at 24 iterations (the solver's give, not a
-// fall: nothing moves further with more time); the proof takes 48. Once proven,
+// fall: nothing moves further with more time); at 48 the tops of free-standing
+// slender parts still crept a tenth of a millimetre in the last half second, so
+// the proof takes 64. Once proven,
 // the scene runs at 24: woken parts that still stand hold for the seconds of a
 // collapse. At 480 Hz and 12 iterations a woken cathedral sags down on its own.
 
@@ -39,11 +42,15 @@
 namespace planks {
 
     struct SettleResult {
-        float maxDisplacement = 0; // metres, the most any plank moved
+        float maxDisplacement = 0; // metres, the most any plank moved from where the design put it
         int worst = -1;            // which plank
+        float maxLate = 0;         // metres, the most any plank moved during the last `window` seconds
+        int worstLate = -1;
         int movedOverMm = 0;       // how many moved more than a millimetre
         double seconds = 0;        // wall time
         double msPerStep = 0;
+        // it has come to rest (under 0.1 mm in the last half second) and has not sagged (under 3 mm in all)
+        [[nodiscard]] bool passed() const { return maxLate <= 0.0001f && maxDisplacement <= 0.003f; }
     };
 
     // switches for trying the physics out (main.cpp --pgs, --nospec, --nopcm, --nostab, --tol, --offset, --iters)
@@ -52,7 +59,7 @@ namespace planks {
         bool speculative = true;
         float toleranceLength = 0.01f;
         float contactOffset = 0.001f;
-        int positionIterations = 48;// the proof; the scene runs at --scene-iters
+        int positionIterations = 64;// the proof; the scene runs at --scene-iters
         bool stabilization = true;
         bool pcm = true;
     };
@@ -145,15 +152,21 @@ namespace planks {
             for (auto* b : bodies) b->setSolverIterationCounts(positionIterations, 1);
         }
 
-        // Every plank awake for `seconds`; how far did they move?
-        SettleResult settle(float seconds) {
+        // Every plank awake for `seconds`; how far did they move, in all and
+        // during the last `window` seconds?
+        SettleResult settle(float seconds, float window = 0.5f) {
             for (auto* b : bodies) {
                 b->setSleepThreshold(0.f);
                 b->wakeUp();
             }
             const auto t0 = std::chrono::steady_clock::now();
             const int steps = static_cast<int>(std::lround(seconds / dt));
+            const int lateFrom = std::max(0, steps - static_cast<int>(std::lround(window / dt)));
             for (int i = 0; i < steps; ++i) {
+                if (i == lateFrom) {
+                    late_.resize(bodies.size());
+                    for (size_t j = 0; j < bodies.size(); ++j) late_[j] = bodies[j]->getGlobalPose().p;
+                }
                 for (auto* b : bodies) b->setWakeCounter(1.f);
                 step();
             }
@@ -162,15 +175,30 @@ namespace planks {
             SettleResult r;
             r.seconds = std::chrono::duration<double>(t1 - t0).count();
             r.msPerStep = 1000.0 * r.seconds / std::max(1, steps);
+            if (late_.size() != bodies.size()) late_ = start_;
             for (size_t i = 0; i < bodies.size(); ++i) {
-                const float moved = (bodies[i]->getGlobalPose().p - start_[i]).magnitude();
+                const auto at = bodies[i]->getGlobalPose().p;
+                const float moved = (at - start_[i]).magnitude();
+                const float late = (at - late_[i]).magnitude();
                 if (moved > 0.001f) ++r.movedOverMm;
                 if (moved > r.maxDisplacement) {
                     r.maxDisplacement = moved;
                     r.worst = static_cast<int>(i);
                 }
+                if (late > r.maxLate) {
+                    r.maxLate = late;
+                    r.worstLate = static_cast<int>(i);
+                }
             }
             return r;
+        }
+
+        // How far each plank moved during the settle's last window.
+        [[nodiscard]] std::vector<float> lateDisplacements() const {
+            std::vector<float> out(bodies.size(), 0.f);
+            if (late_.size() != bodies.size()) return out;
+            for (size_t i = 0; i < bodies.size(); ++i) out[i] = (bodies[i]->getGlobalPose().p - late_[i]).magnitude();
+            return out;
         }
 
         // Displacement of every plank from where the design put it.
@@ -259,6 +287,7 @@ namespace planks {
         ::physx::PxMaterial* wood_ = nullptr;
         ::physx::PxShape* shape_ = nullptr;
         std::vector<::physx::PxVec3> start_;
+        std::vector<::physx::PxVec3> late_;
     };
 
 }// namespace planks
