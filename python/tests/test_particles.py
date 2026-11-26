@@ -128,6 +128,21 @@ def test_grid_smoke_fire_settings_default_to_an_open_flame_and_round_trip():
         (0.4, 3.0, 0.0, 450.0))
 
 
+def test_grid_smoke_source_force_pushes_nothing_until_asked_and_round_trips():
+    """A GridSmoke source's force (newtons on the air in its ball, a fan or a rotor) is
+    zero until asked, so every plume and pull stays as it was; it is the source's
+    own and goes into the field's list as given."""
+    s = tp.ParticleField.GridSmoke.Source()
+    assert (s.force.x, s.force.y, s.force.z) == (0.0, 0.0, 0.0)
+    assert tp.ParticleField.GridSmoke.AIR_DENSITY == pytest.approx(1.2)
+    s.position, s.radius, s.velocity_blend = tp.Vector3(0, 2, 0), 0.27, 0.0
+    s.force = tp.Vector3(0.0, -17.9, 0.0)  # one M350 rotor's hover thrust, on its air
+    field = tp.ParticleField.create_grid_smoke(tp.Vector3(0, 1, 0), tp.Vector3(1, 1, 1), 64)
+    field.grid_smoke.sources = [s]
+    got = field.grid_smoke.sources[0].force
+    assert (got.x, got.y, got.z) == pytest.approx((0.0, -17.9, 0.0))
+
+
 def test_grid_smoke_fire_lights_its_surroundings_by_default():
     """GridSmoke's light: a glowing field lights what is round it by itself, at the
     physical strength of its glow (light_scale 1) and with shadows, until asked

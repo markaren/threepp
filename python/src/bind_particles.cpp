@@ -274,9 +274,20 @@ namespace threepp_py {
                                "Fuel added per second at the centre (0: a smoke source). Unburnt fuel is carried by "
                                "the air and renders nothing; it burns where the air is hotter than "
                                "GridSmoke.ignition_temperature, so a cold fuel source needs a spark (any hot source).")
-                .def_readwrite("velocity", &GS::Source::velocity, "m/s the air at the source is pulled toward.")
+                .def_readwrite("velocity", &GS::Source::velocity,
+                               "m/s the air at the source is pulled toward. A PULL, not a fan: air crossing the ball "
+                               "faster than about 1 / velocity_blend keeps most of its own speed, so a jet fed this "
+                               "way carries a fraction of the momentum it names. A fan or a rotor is `force`.")
                 .def_readwrite("velocity_blend", &GS::Source::velocityBlend, "1/s: how hard it is pulled.")
-                .def_readwrite("noise", &GS::Source::noise, "0..1 raggedness of the emission.");
+                .def_readwrite("noise", &GS::Source::noise, "0..1 raggedness of the emission.")
+                .def_readwrite("force", &GS::Source::force,
+                               "N pushed into the air in the ball (of GridSmoke.AIR_DENSITY), spread by the same "
+                               "weight as the rates: the air leaves with this momentum however fast it crosses. A "
+                               "fan, a rotor (thrust T pushes its air with -T along the rotor's axis; the wake is "
+                               "then the solver's), a nozzle. The weight is heaviest at the centre: for a rotor of "
+                               "radius R a ball of about 1.7 R makes momentum theory's far wake, "
+                               "2 sqrt(T / (2 rho pi R^2)). Give the ball a few cells of radius; force inside a "
+                               "collider or a wall is lost.");
 
         py::class_<GS::Collider>(gsmoke, "Collider",
                                  "A capsule from a to b (a == b is a sphere). Set velocity to the body's own motion, "
@@ -392,6 +403,8 @@ namespace threepp_py {
                         "Walls (the first 128 are used). COPIES: assign a whole list.");
         // The air's own temperature (K), which temperature 0 stands for.
         gsmoke.attr("AMBIENT_KELVIN") = GS::kAmbientKelvin;
+        // The air a source's force pushes (kg/m^3).
+        gsmoke.attr("AIR_DENSITY") = GS::kAirDensity;
 
         // ── EmitterParams (Ownership.Renderer's closed form) ────────────────
         auto emitter = py::class_<ParticleField::EmitterParams>(cls, "EmitterParams");

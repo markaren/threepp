@@ -8916,6 +8916,14 @@ class ParticleField(Mesh):
             def density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
                 ...
             @property
+            def force(self) -> Vector3:
+                """
+                N pushed into the air in the ball (of GridSmoke.AIR_DENSITY), spread by the same weight as the rates: the air leaves with this momentum however fast it crosses. A fan, a rotor (thrust T pushes its air with -T along the rotor's axis; the wake is then the solver's), a nozzle. The weight is heaviest at the centre: for a rotor of radius R a ball of about 1.7 R makes momentum theory's far wake, 2 sqrt(T / (2 rho pi R^2)). Give the ball a few cells of radius; force inside a collider or a wall is lost.
+                """
+            @force.setter
+            def force(self, arg0: Vector3) -> None:
+                ...
+            @property
             def fuel(self) -> float:
                 """
                 Fuel added per second at the centre (0: a smoke source). Unburnt fuel is carried by the air and renders nothing; it burns where the air is hotter than GridSmoke.ignition_temperature, so a cold fuel source needs a spark (any hot source).
@@ -8958,7 +8966,7 @@ class ParticleField(Mesh):
             @property
             def velocity(self) -> Vector3:
                 """
-                m/s the air at the source is pulled toward.
+                m/s the air at the source is pulled toward. A PULL, not a fan: air crossing the ball faster than about 1 / velocity_blend keeps most of its own speed, so a jet fed this way carries a fraction of the momentum it names. A fan or a rotor is `force`.
                 """
             @velocity.setter
             def velocity(self, arg0: Vector3) -> None:
@@ -8971,6 +8979,7 @@ class ParticleField(Mesh):
             @velocity_blend.setter
             def velocity_blend(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
                 ...
+        AIR_DENSITY: typing.ClassVar[float] = 1.2000000476837158
         AMBIENT_KELVIN: typing.ClassVar[float] = 293.0
         enabled: bool
         @property
