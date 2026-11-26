@@ -2,8 +2,8 @@
 
     python load_model.py path/to/model.glb     # .obj / .gltf / .glb / .stl / .dae
 
-ModelLoader dispatches by file extension to threepp's first-party loaders (no
-Assimp needed). The model is auto-framed from its bounding box. With no argument
+ModelLoader dispatches by file extension to threepp's first-party loaders.
+The model is auto-framed from its bounding box. With no argument
 a small built-in cube is generated and loaded, to show the path end-to-end.
 """
 import os

@@ -581,9 +581,9 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
             // BLAS build is undefined behavior on NaN/Inf positions or
             // out-of-bounds indices — drivers respond with device-lost
             // (vkQueueWaitIdle returns VK_ERROR_DEVICE_LOST). Validate
-            // before submission so a bad asset (typical of Assimp-loaded
-            // URDF .dae meshes with degenerate triangles) is skipped with
-            // a warning rather than killing the whole renderer.
+            // before submission so a bad asset (a URDF .dae mesh with
+            // degenerate triangles, for one) is skipped with a warning
+            // rather than killing the whole renderer.
             for (size_t i = 0; i < positions.size(); ++i) {
                 if (!std::isfinite(positions[i])) {
                     THREEPP_LOG(vulkan::kLogGeometry, Warn) << "a geometry is not drawn: "

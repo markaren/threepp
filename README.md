@@ -32,7 +32,7 @@ controls, material fixes, the newer post-processing passes).
 * Physical materials with transmission, alpha hash and alpha-to-coverage; PMREM environment maps and `RoomEnvironment`
 * Shadows, Water and Sky shaders, and Orbit, Trackball, Fly, Drag and Transform controls
 * `EffectComposer` with bloom, depth of field, GTAO, outline, FXAA and output passes
-* Loaders: glTF/GLB (with meshopt), OBJ/MTL, STL, COLLADA, SVG, URDF/xacro (no ROS needed), PNG/JPEG, DDS, WebP, HDR and EXR; opt-in USD and [Assimp](https://github.com/assimp/assimp)
+* Loaders: glTF/GLB (with meshopt), OBJ/MTL, STL, COLLADA, SVG, URDF/xacro (no ROS needed), PNG/JPEG, DDS, WebP, HDR and EXR; opt-in USD
 * Scene serialization as three.js Object JSON or a single-file `.tpz` archive; three.js editor documents load as-is
 
 **Rendering beyond three.js**
@@ -223,7 +223,6 @@ Some headers need extra packages when you consume them:
 
 | Header                                                  | Dependency | Notes                                          |
 |---------------------------------------------------------|------------|------------------------------------------------|
-| AssimpLoader                                            | assimp     | Import a wide range of 3D formats              |
 | ImguiContext                                            | imgui      | Dear ImGui utility                             |
 | Physx\*, ConvexDecomposition                            | physx, v-hacd | Physics simulation and concave colliders    |
 | Vulkan\*, Ocean, ParticleField, SonarSensor, and others | Vulkan SDK | Linked only under `THREEPP_WITH_VULKAN`, which the `threepp` target propagates |

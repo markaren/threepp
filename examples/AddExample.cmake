@@ -1,18 +1,13 @@
 
 function(add_example)
 
-    set(flags LINK_IMGUI LINK_ASSIMP LINK_XML LINK_PHYSX LINK_MESHOPT WEB)
+    set(flags LINK_IMGUI LINK_XML LINK_PHYSX LINK_MESHOPT WEB)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES WEB_EMBED)
 
     cmake_parse_arguments(arg "${flags}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if (EMSCRIPTEN AND NOT arg_WEB)
-        return()
-    endif ()
-
-    if (arg_LINK_ASSIMP AND (NOT TARGET assimp::assimp))
-        message(AUTHOR_WARNING "assimp not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
@@ -32,10 +27,6 @@ function(add_example)
 
     if (arg_LINK_IMGUI)
         target_link_libraries("${arg_NAME}" PRIVATE imgui::imgui)
-    endif ()
-
-    if (arg_LINK_ASSIMP)
-        target_link_libraries("${arg_NAME}" PRIVATE assimp::assimp)
     endif ()
 
     if (arg_LINK_PHYSX)

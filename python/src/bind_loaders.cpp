@@ -1,6 +1,6 @@
 // Texture and model loaders. ModelLoader is the one-call entry point: it
-// dispatches by file extension (.obj/.gltf/.glb/.stl/.dae) to first-party
-// loaders — no Assimp/FBX/USD required.
+// dispatches by file extension (.obj/.gltf/.glb/.stl/.dae) to the first-party
+// loaders.
 #include "bindings.hpp"
 
 #include <pybind11/stl.h>

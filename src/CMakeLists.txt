@@ -125,7 +125,6 @@ set(publicHeaders
 
         "threepp/loaders/AsyncGroup.hpp"
         "threepp/loaders/loaders.hpp"
-        "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/CubeTextureLoader.hpp"
         "threepp/loaders/ColladaLoader.hpp"
         "threepp/loaders/DDSLoader.hpp"

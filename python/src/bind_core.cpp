@@ -396,7 +396,7 @@ namespace threepp_py {
                 }, py::arg("name"), py::arg("data"), py::return_value_policy::reference_internal)
                 // Readback. set_attribute's counterpart, and the only way to reach geometry
                 // Python did not author: a model that arrived through one of the LOADERS
-                // (STL, OBJ, glTF/GLB, COLLADA, Assimp) is a BufferGeometry full of triangles
+                // (STL, OBJ, glTF/GLB, COLLADA) is a BufferGeometry full of triangles
                 // that Python could previously write to but never read. That gap is why a
                 // consumer wanting a mesh's vertices — an SDF bake, a collider, a point
                 // sampler, an export — had to re-parse the file itself in Python and

@@ -6,13 +6,11 @@ add_example(NAME "obj_loader" WEB WEB_EMBED
         "${THREEPP_DATA_DIR}/models/obj/female02@data/models/obj/female02"
         "${THREEPP_DATA_DIR}/textures/uv_grid_opengl.jpg@data/textures/uv_grid_opengl.jpg"
 )
-add_example(NAME "assimp_loader" LINK_ASSIMP)
 add_example(NAME "urdf_loader" LINK_IMGUI)
 add_example(NAME "xacro_to_urdf")
 add_example(NAME "gltf_loader")
 add_example(NAME "gltf_material_variants" LINK_IMGUI)
 add_example(NAME "collada_loader")
-add_example(NAME "collada_compare" LINK_ASSIMP)
 add_example(NAME "svg_loader" LINK_IMGUI)
 
 if (THREEPP_WITH_USD)
