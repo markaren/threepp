@@ -241,6 +241,10 @@ int main(int argc, char** argv) {
     GLRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.shadowMap().enabled = true;
+    // A scan renders the scene once per cube face, six times a frame, and the
+    // shadows are the same in all of them. So they are drawn once a frame, when
+    // needsUpdate asks for it, rather than in every render.
+    renderer.shadowMap().autoUpdate = false;
 
     auto scene = Scene::create();
     RGBELoader hdr;
@@ -328,7 +332,9 @@ int main(int argc, char** argv) {
             sunAligned = true;
         }
 
-        // One scan a frame, stamped with the sim time.
+        // One scan a frame, stamped with the sim time. Its first render draws this
+        // frame's shadows; the rest, and the view below, reuse them.
+        renderer.shadowMap().needsUpdate = true;
         lidar->setSimTime(time);
         const auto start = std::chrono::steady_clock::now();
         lidar->scan(renderer, *scene, returns);
