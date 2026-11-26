@@ -144,8 +144,8 @@ namespace threepp::vulkan {
             check(vkCreateSampler(ctx_.device(), &sci, nullptr, i == 0 ? &nearestSampler_ : &linearSampler_),
                   "vkCreateSampler(pathTracer)");
         }
-        createPipeline();
-        createResolvePipeline();
+        createLayout();
+        createResolveLayout();
         createDescriptorPool();
         boundAccum_.assign(framesInFlight_, 0);
         boundPhotons_.assign(framesInFlight_, 0);
@@ -175,7 +175,7 @@ namespace threepp::vulkan {
         if (linearSampler_) vkDestroySampler(d, linearSampler_, nullptr);
     }
 
-    void PathTracer::createPipeline() {
+    void PathTracer::createLayout() {
         VkDevice d = ctx_.device();
 
         VkDescriptorSetLayoutBinding b[kNumBindings]{};
@@ -238,13 +238,9 @@ namespace threepp::vulkan {
         plci.pPushConstantRanges    = &pc;
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(pathTracer)");
-
-        refl_ = reflectSpirvBindings(kPathTraceCompSpv);
-        pipe_ = makeComputePipeline(ctx_, kPathTraceCompSpv, sizeof(kPathTraceCompSpv), pipeLayout_,
-                                    "vkCreateComputePipelines(path_trace)");
     }
 
-    void PathTracer::createResolvePipeline() {
+    void PathTracer::createResolveLayout() {
         VkDevice d = ctx_.device();
         VkDescriptorSetLayoutBinding b[2]{};
         for (uint32_t i = 0; i < 2; ++i) {
@@ -270,8 +266,23 @@ namespace threepp::vulkan {
         plci.pPushConstantRanges    = &pc;
         check(vkCreatePipelineLayout(d, &plci, nullptr, &resolvePipeLayout_),
               "vkCreatePipelineLayout(pathTracer.resolve)");
-        resolvePipe_ = makeComputePipeline(ctx_, kPathTraceResolveCompSpv, sizeof(kPathTraceResolveCompSpv),
-                                           resolvePipeLayout_, "vkCreateComputePipelines(path_trace_resolve)");
+    }
+
+    // At the first session rather than in the constructor: a program that never
+    // traces never compiles path_trace.comp (see the header). The layouts and
+    // the descriptor sets stay with the constructor, so the renderer's
+    // descriptor writes reach them as they always did.
+    void PathTracer::ensurePipelines() {
+        if (pipeLayout_ == VK_NULL_HANDLE) return;
+        if (pipe_ == VK_NULL_HANDLE) {
+            refl_ = reflectSpirvBindings(kPathTraceCompSpv);
+            pipe_ = makeComputePipeline(ctx_, kPathTraceCompSpv, sizeof(kPathTraceCompSpv), pipeLayout_,
+                                        "vkCreateComputePipelines(path_trace)");
+        }
+        if (resolvePipe_ == VK_NULL_HANDLE) {
+            resolvePipe_ = makeComputePipeline(ctx_, kPathTraceResolveCompSpv, sizeof(kPathTraceResolveCompSpv),
+                                               resolvePipeLayout_, "vkCreateComputePipelines(path_trace_resolve)");
+        }
     }
 
     void PathTracer::createDescriptorPool() {
@@ -500,6 +511,7 @@ namespace threepp::vulkan {
     }
 
     void PathTracer::begin(const Params& params) {
+        ensurePipelines();
         params_                 = params;
         params_.samplesPerFrame = std::max(1u, params_.samplesPerFrame);
         params_.maxBounces      = std::min(params_.maxBounces, 64u);

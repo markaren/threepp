@@ -2021,7 +2021,9 @@ namespace threepp {
         // `{}` cannot yet make a PathTraceParams (see FireEffect::create).
         //
         // Start (or restart) a session. Throws std::runtime_error without
-        // ray query support.
+        // ray query support. A renderer's first session compiles the trace's
+        // pipeline: about 10 s where the driver has not cached it (RTX 5080),
+        // a fraction of a second afterwards.
         void pathTraceBegin();
         void pathTraceBegin(const PathTraceParams& params);
         void pathTraceStop();

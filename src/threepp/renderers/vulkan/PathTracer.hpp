@@ -21,7 +21,10 @@
 // calls a pass and no dispatch runs longer than a frame-sized one would.
 //
 // Needs ray query (VulkanContext::rayQuerySupported); without it the object
-// holds no pipeline and available() is false.
+// holds nothing and available() is false. The trace's pipelines are built at
+// the first begin(), not with the renderer: path_trace.comp takes about 10 s
+// to compile on a cold driver cache (RTX 5080), which a program that never
+// traces would otherwise pay on its first run.
 
 #ifndef THREEPP_VULKAN_PATH_TRACER_HPP
 #define THREEPP_VULKAN_PATH_TRACER_HPP
@@ -136,7 +139,8 @@ namespace threepp::vulkan {
         PathTracer(const PathTracer&) = delete;
         PathTracer& operator=(const PathTracer&) = delete;
 
-        [[nodiscard]] bool available() const { return pipe_ != VK_NULL_HANDLE; }
+        // The device can trace (ray query); the pipelines come with the first begin().
+        [[nodiscard]] bool available() const { return pipeLayout_ != VK_NULL_HANDLE; }
 
         void rewriteDescriptors(const DescriptorWriteInputs& in, int onlyFrame = -1);
         // Rebind just the emissive-triangle buffer for one frame (the per-frame
@@ -262,8 +266,10 @@ namespace threepp::vulkan {
         bool                  emitLive_    = false;
         bool                  sunLive_     = false;
 
-        void createPipeline();
-        void createResolvePipeline();
+        void createLayout();
+        void createResolveLayout();
+        // The trace's pipeline and the resolve's, made by the first begin().
+        void ensurePipelines();
         void createDescriptorPool();
         void bindAccumulator(uint32_t frame);
         void bindPhotons(uint32_t frame);

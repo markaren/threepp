@@ -1167,7 +1167,9 @@ namespace threepp_py {
                      "leaves the dome, so a camera at the waterline traces the over-under picture. "
                      "The frame on screen is untouched. Converges over a still scene only (pin the "
                      "sim time, auto_lod off); stepping the scene between frames averages over what it does "
-                     "(motion blur). Raises RuntimeError without ray_tracing.")
+                     "(motion blur). A renderer's first session compiles the trace's pipeline: about 10 s "
+                     "where the driver has not cached it, a fraction of a second afterwards. "
+                     "Raises RuntimeError without ray_tracing.")
                 .def("path_trace_stop", [](PyVulkanRenderer& r) { r.native().pathTraceStop(); },
                      "End the session; render() adds no more samples.")
                 .def_property_readonly("path_trace_active",

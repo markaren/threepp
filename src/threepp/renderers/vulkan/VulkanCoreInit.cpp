@@ -190,8 +190,9 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
             probeGI_ = std::make_unique<vulkan::ProbeGI>(*ctx, kFramesInFlight);
             vulkan::startupMark("probe gi");
             if (!ctx->rayQuerySupported()) probeGIEnabled_ = false;
-            // The path-trace feature over the same scene state (no pipeline
-            // without ray query; pathTraceBegin then throws).
+            // The path-trace feature over the same scene state (nothing
+            // without ray query; pathTraceBegin then throws). Its pipelines
+            // wait for the first pathTraceBegin.
             pathTracer_ = std::make_unique<vulkan::PathTracer>(*ctx, kFramesInFlight);
             vulkan::startupMark("path tracer");
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
