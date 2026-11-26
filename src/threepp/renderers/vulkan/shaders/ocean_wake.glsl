@@ -33,7 +33,8 @@ struct WakePatch {
     float rippleOriginX;// the window its ripples are shown through (world min corner)
     float rippleOriginZ;
     float rippleSize;   // that window's side, and the period of its small sea (m)
-    float rippleHeight; // 1 = the ripples' fourth channel holds their height (m), which the geometry takes
+    float rippleHeight; // 1 = the ripples' fourth channel holds their height (m), which the geometry takes;
+                        // 2 = and a flux forces them (a ship's thickness): their water meets her hull at its height
     float breakSlope0;  // its waves break where their slope passes this (WakeField::rippleBreaking) ...
     float breakSlope1;  // ... fully at this; 0 = they never do
     float breakFoam;    // the film and the bubbles a fully broken crest lays in the field
@@ -43,7 +44,7 @@ struct WakePatch {
                         // (shore_source.comp feeds it)
 };
 
-// What makes a mark. 68 bytes (= DisplacedMesh::WakeSource).
+// What makes a mark. 72 bytes (= DisplacedMesh::WakeSource).
 struct WakeSource {
     vec2  p0;           // where the producer was at the last step (world xz)
     vec2  p1;           // where it is now
@@ -58,6 +59,7 @@ struct WakeSource {
     int   owner;        // the patch whose ripples it forces (the CPU has resolved a -1)
     float taper;        // the line convolved with one of taper x its half length (0 = none)
     float draft;        // m, the push spread over 0..draft: its waves times (1 - e^(-k d)) / (k d) (0 = none)
+    float flux;         // m3/s a hull's thickness puts into the water (the ripples' other forcing; < 0 a sink)
 };
 
 // 88-byte header, then the patches (the producers' and the shore's), then the

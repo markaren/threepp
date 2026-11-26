@@ -21,8 +21,8 @@
 // = DisplacedMesh::kMaxWakeSources
 #define OCEAN_WAKE_MAX_SOURCES 256
 // Where the lists start in the table buffer: the table's 88-byte header and
-// its patches (76 bytes each), then the room for its sources (68 bytes each).
-#define OCEAN_WAKE_LISTS_OFFSET (88 + 76 * OCEAN_WAKE_MAX_PATCHES + 68 * OCEAN_WAKE_MAX_SOURCES)
+// its patches (76 bytes each), then the room for its sources (72 bytes each).
+#define OCEAN_WAKE_LISTS_OFFSET (88 + 76 * OCEAN_WAKE_MAX_PATCHES + 72 * OCEAN_WAKE_MAX_SOURCES)
 // first[] and count[] hold the field's lists (SETTLE) at a patch's index and
 // the ripples' (TURN) after them.
 #define OCEAN_WAKE_LIST_FIELD  0

@@ -24,8 +24,9 @@
 //                   field has ripples (WakeField::rippleResolution): she bears
 //                   down on the water with her weight, laid out along her
 //                   hulls (Hull::strips, or one smooth line a hull: Waves),
-//                   and the field's small linear sea
-//                   makes of that the waves a weight of that shape makes at
+//                   or pushes it aside with her shape (Waves::Thickness, a
+//                   displacement ship's), and the field's small linear sea
+//                   makes of that the waves a hull of that kind makes at
 //                   her speed. No wave is drawn: at rest she makes none, at
 //                   speed the fan has the angle and the wavelengths of that
 //                   speed, and it bends where she turned.
@@ -97,7 +98,46 @@ namespace threepp::marine {
         //           tidewater WakeSim's entry head (D. Greenheck, MIT). Nothing
         //           with a short ending is in it, so it throws no short waves a
         //           hull of her size does not.
-        enum class Waves { Strips, Line };
+        //   Thickness  her SHAPE, not her weight: thin-ship theory (Michell,
+        //           1898), the model of a displacement ship. Her sectional area
+        //           curve A(x) (Hull::sections, or the trapezoid of
+        //           Hull::prismatic over her footprint) is cut into kSegments
+        //           stretches of equal |dA| (thicknessSegments()), each a line
+        //           source of -U dA m3/s at her surge U spread over its draft
+        //           (DisplacedMesh::WakeSource::flux); what her transom leaves
+        //           open is closed by a sink spread over U^2 / g behind it. So
+        //           the water stands up at her bow, sinks along her shoulders
+        //           and rises at her stern, and her waves are those of her lines;
+        //           none of it is left when she stops, as it is a flow. Linear
+        //           theory: on Trollfjord's lines (135 m, 15 knots) the crest at
+        //           her bow is 1.0 m against the 2.2 m of Noblesse et al.'s fit
+        //           to wedge bows (J. Ship Res. 50(4), 2006), about half of it
+        //           from 9 to 18 knots.
+        enum class Waves { Strips, Line, Thickness };
+
+        // One station of her sectional area curve (Waves::Thickness), in the
+        // vessel frame: x ahead of her origin (m), the immersed area of her
+        // whole section there (m2, both sides; a catamaran's two hulls
+        // together), her draft there (m) and her half-breadth at the water (m).
+        struct Section {
+            float x           = 0.f;
+            float area        = 0.f;
+            float draft       = 0.f;
+            float halfBreadth = 0.f;
+        };
+
+        // A stretch of her sectional area curve as a source (Waves::Thickness):
+        // its centre ahead of her origin (m), the area her section gains along
+        // it toward her bow (m2: negative at her entry, where she narrows, so
+        // a source when she goes ahead), half its length, its spread across
+        // (half her half-breadth there) and its draft, both |dA|-weighted.
+        struct ThicknessSegment {
+            float x          = 0.f;
+            float dA         = 0.f;
+            float halfLength = 0.f;
+            float radius     = 0.f;
+            float draft      = 0.f;
+        };
 
         struct Hull {
             float length     = 0.f;// overall (m)
@@ -129,6 +169,12 @@ namespace threepp::marine {
             // Waves::Line: K in the entry head K U^2 / (2 g) at her stem (U her
             // surge); 0 = none. 0.35 is tidewater WakeSim's.
             float entryHead = 0.35f;
+            // Waves::Thickness: her sectional area curve, stern to bow. Empty =
+            // a trapezoid over her footprint: full over the middle (2 C_p - 1)
+            // of her length (Hull::prismatic), nothing at stem and stern, and
+            // there 0.97 of her beam times her draft (ASSUMED, a ship's
+            // midship section; `draft` must then be set).
+            std::vector<Section> sections;
         };
 
         // One propulsor, this frame.
@@ -138,6 +184,19 @@ namespace threepp::marine {
             Vector3 force;       // world (N): what it puts on the vessel; its race runs against it
             float   radius = 0.f;// of the disc or the nozzle (m)
             bool    jet    = false;
+        };
+
+        // Her bow wave at the last update (Waves::Thickness with bowFoam), for
+        // a readout: the draft-based Froude number of her bow, the height of
+        // her bow wave over the still water (m), whether it is unsteady (else
+        // an overturning sheet), the speed its broken water lands at (m/s) and
+        // how broken it is as drawn (0..1).
+        struct Bow {
+            float froude   = 0.f;
+            float height   = 0.f;
+            bool  unsteady = false;
+            float landing  = 0.f;
+            float breaking = 0.f;
         };
 
         // A propulsor's figures at the last update, for a readout.
@@ -156,7 +215,47 @@ namespace threepp::marine {
         static constexpr float kEddy       = 2.4f; // her patch's large eddies, in radii of her widest race at the surface
         static constexpr float kWander     = 0.45f;// how far a race's surfacing point strays to either side, in its radii there
         static constexpr int   kStrips     = 8;    // stretches a side her weight is laid out in along her hulls
+        static constexpr int   kSegments   = 16;   // stretches her sectional area curve is cut into (Waves::Thickness)
         static constexpr float kG          = 9.81f;
+
+        // ---- her bow wave where it breaks (Waves::Thickness, bowFoam) ----
+        // Its height (Noblesse, Delhommeau, Guilbaud, Hendrix and Yang, "Simple
+        // analytical relations for ship bow waves", J. Fluid Mech. 600, 2008;
+        // eq. 1 and 2 of Noblesse, Delhommeau and Yang's summary "Ship bow wave
+        // and Green function method"): Z_b g / U^2 = 2.2 tan a / ((1 + F)
+        // cos a), F = U / sqrt(g D), D her bow's draft and a the half angle of
+        // her entry at the water. A steady free surface stands no higher than
+        // U^2 / 2g, so where 4.4 tan a / cos a > 1 + F her bow wave cannot be
+        // steady: it is unsteady and stands about that high whatever her bow's
+        // shape; above it, an overturning sheet that plunges and leaves a
+        // breaking wake (the boundary checked against a towed plate by
+        // Delhommeau, Guilbaud, David, Yang and Noblesse, J. Fluid Mech. 620,
+        // 2009). Either way it breaks, the more the faster she goes. Its broken water falls from her crest and meets
+        // the water at sqrt(2 g Z_b), taking air down as a plunging jet does:
+        // from the inception speed of air entrainment, 0.8 to 1.1 m/s
+        // (Ervine, McKeogh and Elsawy, Proc. ICE 69(2), 1980), saturating at
+        // kBowLandFull (ASSUMED: usv_rig's JET_V_FULL). The broken crest is
+        // about half its height wide (usv_rig's _bow); the field draws nothing
+        // narrower than its texels, so a smaller crest's foam and air are laid
+        // thinner over the wider source, as much white over all. It stands
+        // along her entry from near her stem to her shoulder (a fifth of the
+        // way, half way, and at it), from her side outward, and moves out with
+        // her first divergent crest at U tan(19.47 deg); the flow her hull
+        // makes (wake_field.comp, wakeHullFlow) carries it round her.
+        static constexpr float kBowLand[2]  = {0.8f, 1.1f};// m/s: the inception speed of air entrainment
+        static constexpr float kBowLandFull = 4.0f;        // m/s: landing speed at which it is taken as saturated (ASSUMED)
+        // LOOK: the film where it breaks fully. Thicker than usv_rig's small
+        // boats' BOW_FOAM (0.35, lace through which the water shows): where a
+        // ship's overturning sheet lands the water is white (the shade's foam
+        // is full from 0.40, and the air's gulps leave half of it under
+        // that). By eye on Trollfjord at 15 knots (2026-11-26; 0.6 read as a
+        // thin line from 100 m).
+        static constexpr float kBowFoam     = 0.9f;
+        static constexpr float kBowAir      = 0.45f;       // LOOK: the bubbles it takes down, fully broken
+        static constexpr float kBowTurb     = 0.25f;       // rms turbulent speed of the broken water, a share of her speed (BOW_TURB, assumed)
+        static constexpr float kKelvinTan   = 0.3536f;     // tan 19.47 deg, the Kelvin wedge's half angle
+        // Her bow wave breaking, as above; false = her waves without it.
+        bool bowFoam = true;
 
         // Scales the air her propulsors take down (1 = as computed).
         float air = 1.f;
@@ -202,6 +301,10 @@ namespace threepp::marine {
         [[nodiscard]] float size() const { return size_; }
         [[nodiscard]] float rippleSize() const { return rippleSize_; }
         [[nodiscard]] const Hull& hull() const { return hull_; }
+        // Waves::Thickness: her stretches (thicknessSegments()); empty otherwise.
+        [[nodiscard]] const std::vector<ThicknessSegment>& segments() const { return thickness_; }
+        // Waves::Thickness with bowFoam: her bow wave at the last update.
+        [[nodiscard]] const Bow& bow() const { return bow_; }
         [[nodiscard]] const std::unordered_map<std::string, Race>& report() const { return report_; }
 
         // The speed of a propulsor's race THROUGH the water (m/s) from
@@ -229,6 +332,16 @@ namespace threepp::marine {
         // it a deep hull throws a fan of short steep waves no ship makes.
         [[nodiscard]] static std::vector<WeightStrip> footprintStrips(const Hull& hull);
 
+        // Her sectional area curve (Hull::sections, or the footprint's
+        // trapezoid) as kSegments sources of equal |dA| (Waves::Thickness),
+        // stern to bow: the stretches are short where her section changes
+        // fast (her entry, her run) and one spans a parallel middle body.
+        // Their dA sum to minus what is open at her transom, the area of her
+        // aftmost section, which update() closes. 16 of them gave the crest
+        // and the steepness at Trollfjord's bow within a tenth of a source at
+        // every 2 m station (scratch check, 2026-11-26).
+        [[nodiscard]] static std::vector<ThicknessSegment> thicknessSegments(const Hull& hull);
+
         // The cell (m) of a ripple window that holds the waves of a vessel of
         // `length` (m) at `cruiseSpeed` (m/s): min(lambda_T / 24, length / 10),
         // lambda_T = 2 pi U^2 / g the transverse wavelength at that speed, so
@@ -252,10 +365,26 @@ namespace threepp::marine {
         std::unordered_map<std::string, Point> last_;// each producer's source point at the last update (world x, z)
         std::unordered_set<std::string> putNames_;   // the scene's own producers that put() since the last update
         std::unordered_map<std::string, Race> report_;
+        std::vector<ThicknessSegment> thickness_;// Waves::Thickness: thicknessSegments(), once
+        Section transom_;                        // and her aftmost section, which they leave open
+        // Her bow's lines (Waves::Thickness, once): her stem (where her curve
+        // ends), her shoulder (the foremost section half her largest
+        // half-breadth wide), the tangent of her entry's half angle at the
+        // water, her bow's mean draft (ahead of her shoulder), and her
+        // waterline's half-breadths for placing the broken water.
+        struct BowLines {
+            bool  valid     = false;
+            float xStem     = 0.f;
+            float xShoulder = 0.f;
+            float tanEntry  = 0.f;
+            float draft     = 0.f;
+            std::vector<Section> curve;
+        } bowLines_;
+        Bow bow_;
 
         void emit(const std::string& name, float x, float z, float vx, float vz, float radius, float foam,
                   float aeration, float turbulence, float lane, float push = 0.f, float ax = 0.f, float az = 0.f,
-                  float taper = 0.f);
+                  float taper = 0.f, float flux = 0.f, float draft = 0.f);
     };
 
 }// namespace threepp::marine

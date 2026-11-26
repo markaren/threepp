@@ -225,3 +225,186 @@ TEST_CASE("VesselWash: a hull's weight from her footprint alone", "[marine]") {
         CHECK(deepStrips[i].share == Catch::Approx(strips[i].share));
     }
 }
+
+TEST_CASE("VesselWash: a hull's shape as sources of her thickness", "[marine]") {
+    // From her footprint: a trapezoid of C_p 0.75, closed at both ends.
+    VesselWash::Hull ship;
+    ship.length     = 30.f;
+    ship.halfLength = 15.f;
+    ship.halfBeam   = 4.f;
+    ship.centre     = 0.5f;
+    ship.draft      = 2.f;
+    ship.prismatic  = 0.75f;
+    ship.waves      = VesselWash::Waves::Thickness;
+    const auto segs = VesselWash::thicknessSegments(ship);
+    REQUIRE(segs.size() == static_cast<size_t>(VesselWash::kSegments));
+    const float aMid = 0.97f * 2.f * 4.f * 2.f;
+    float net = 0.f, gross = 0.f;
+    for (const auto& g : segs) {
+        net += g.dA;
+        gross += std::abs(g.dA);
+        // her entry narrows toward the bow (a source going ahead), her run widens
+        CHECK((g.x > ship.centre ? g.dA < 0.f : g.dA > 0.f));
+        // inside her ends, and only where her section changes (not over the middle half of her)
+        CHECK(std::abs(g.x - ship.centre) + g.halfLength <= ship.halfLength * (1.f + 1e-4f));
+        CHECK(std::abs(g.x - ship.centre) >= 0.5f * ship.halfLength - 1e-3f);
+        CHECK(g.draft == Catch::Approx(2.f));
+        CHECK(g.radius > 0.f);
+    }
+    CHECK(net == Catch::Approx(0.f).margin(1e-4f));// nothing left open
+    CHECK(gross == Catch::Approx(2.f * aMid));      // her midship section, gained and lost
+
+    // Her own sections, with a transom: what is left open is her aftmost wet section (a
+    // table's empty station behind her is not part of her).
+    VesselWash::Hull box = ship;
+    box.sections = {{-12.f, 0.f, 0.f, 0.f}};
+    for (int i = 0; i <= 10; ++i) {
+        const float x = -10.f + 2.f * float(i);
+        box.sections.push_back({x, x <= 4.f ? 12.f : 12.f * (10.f - x) / 6.f, 3.f, 2.f});
+    }
+    float open = 0.f;
+    for (const auto& g : VesselWash::thicknessSegments(box)) open += g.dA;
+    CHECK(open == Catch::Approx(-12.f));
+
+    // Under way the stretches are sources of -U dA, the transom's sink closes them, and nothing
+    // else is laid: no push, no foam. Going astern turns every one round.
+    auto sea = makeSea(512, 512);
+    VesselWash wash(*sea, 1, box);
+    REQUIRE(wash.segments().size() == VesselWash::thicknessSegments(box).size());
+    wash.lanes   = false;
+    wash.bowFoam = false;// her waves alone (her bow wave's breaking: the next case)
+    for (const float surge : {5.f, -2.f}) {
+        INFO("surge " << surge);
+        Vessel v{0.7f};
+        for (int frame = 0; frame < 2; ++frame) {
+            v.advance(surge, 0.f, 0.1f);
+            sea->clearWakeSources();
+            wash.update(0.1f, v.origin, v.forward(), v.velocity);
+        }
+        REQUIRE(sea->wakeSources.size() == wash.segments().size() + 1);
+        float flux = 0.f, entry = 0.f;
+        for (const auto& s : sea->wakeSources) {
+            flux += s.flux;
+            CHECK(s.push == 0.f);
+            CHECK(s.foam == 0.f);
+            CHECK(s.lane == 0.f);
+            CHECK(s.patch == 1);
+            CHECK(s.draft == Catch::Approx(3.f));
+            // moved with her over the step
+            CHECK(std::hypot(s.x1 - s.x0, s.z1 - s.z0) == Catch::Approx(std::abs(surge) * 0.1f).epsilon(1e-3));
+        }
+        for (const auto& g : wash.segments()) {
+            if (g.dA < 0.f) entry += -surge * g.dA;
+        }
+        CHECK(flux == Catch::Approx(0.f).margin(1e-3f));
+        CHECK(entry == Catch::Approx(surge * 12.f).epsilon(1e-4));// her entry pushes out U x her midship section
+        const auto& close = sea->wakeSources.back();
+        CHECK(close.flux == Catch::Approx(-surge * 12.f));
+        const float aft = (close.x1 - v.origin.x) * v.forward().x + (close.z1 - v.origin.z) * v.forward().z;
+        CHECK(aft < -10.f);// behind her transom
+        wash.clear();
+    }
+
+    // No ripples, no waves.
+    auto still = makeSea(512, 0);
+    VesselWash none(*still, 0, box);
+    none.lanes   = false;
+    none.bowFoam = false;
+    Vessel v{0.f};
+    v.advance(5.f, 0.f, 0.1f);
+    none.update(0.1f, v.origin, v.forward(), v.velocity);
+    CHECK(still->wakeSources.empty());
+}
+
+TEST_CASE("VesselWash: her bow wave breaks, unsteady or overturning", "[marine]") {
+    // A box hull 3 m deep with a wedge entry: half-breadth 2 m to x = 4, nothing at x = 10. Her
+    // shoulder is the foremost wet section half her widest (x = 6, 4/3 m), her stem half a station
+    // ahead of her foremost wet one (x = 9), so tan a = (4/3) / 3; her bow's draft 3 m.
+    VesselWash::Hull ship;
+    ship.length     = 20.f;
+    ship.halfLength = 9.5f;
+    ship.halfBeam   = 1.7f;
+    ship.draft      = 3.f;
+    ship.waves      = VesselWash::Waves::Thickness;
+    for (int i = 0; i <= 10; ++i) {
+        const float x = -10.f + 2.f * float(i);
+        const float b = x <= 4.f ? 2.f : 2.f * (10.f - x) / 6.f;
+        ship.sections.push_back({x, 2.f * b * 3.f, b > 0.f ? 3.f : 0.f, b});
+    }
+    auto sea = makeSea(512, 512);
+    VesselWash wash(*sea, 0, ship);
+    wash.lanes = false;
+    const float ta = (4.f / 3.f) / 3.f;
+    const auto run = [&](float surge) {
+        Vessel v{0.4f};
+        wash.clear();
+        for (int frame = 0; frame < 2; ++frame) {
+            v.advance(surge, 0.f, 0.1f);
+            sea->clearWakeSources();
+            wash.update(0.1f, v.origin, v.forward(), v.velocity);
+        }
+        return v;
+    };
+    const auto white = [&] {
+        std::vector<DisplacedMesh::WakeSource> out;
+        for (const auto& s : sea->wakeSources) {
+            if (s.foam > 0.f) out.push_back(s);
+        }
+        return out;
+    };
+
+    // 5 m/s: F = 0.92 and 2.2 tan a / ((1 + F) cos a) = 0.56, over the 1/2 a steady bow wave can
+    // hold: unsteady, at U^2 / 2g, whose water lands at U: fully white.
+    {
+        const Vessel v = run(5.f);
+        const auto&  b = wash.bow();
+        CHECK(b.froude == Catch::Approx(5.f / std::sqrt(9.81f * 3.f)));
+        CHECK(b.unsteady);
+        CHECK(b.height == Catch::Approx(25.f / (2.f * 9.81f)));
+        CHECK(b.landing == Catch::Approx(5.f).epsilon(1e-4));
+        CHECK(b.breaking == Catch::Approx(1.f));
+        const auto ws = white();
+        REQUIRE(ws.size() == 6u);// a fifth and half way down her entry and at her shoulder, a side each
+        for (const auto& s : ws) {
+            const float ahead = (s.x1 - v.origin.x) * v.forward().x + (s.z1 - v.origin.z) * v.forward().z;
+            const float side  = (s.x1 - v.origin.x) * v.starboard().x + (s.z1 - v.origin.z) * v.starboard().z;
+            // her entry runs 3 m from her shoulder (x 6) to her stem (x 9): stations at 8.4, 7.5 and 6
+            const int   k  = ahead > 8.f ? 0 : (ahead > 7.f ? 1 : 2);
+            const float x  = k == 0 ? 8.4f : (k == 1 ? 7.5f : 6.f);
+            const float bx = k == 2 ? 4.f / 3.f : 2.f * (10.f - x) / 6.f;
+            CHECK(ahead == Catch::Approx(x).margin(1e-3));
+            CHECK(std::abs(side) == Catch::Approx(bx + s.radius).margin(1e-3));// from her side outward
+            CHECK(s.radius == Catch::Approx(0.5f * b.height));                  // half its height wide
+            // moving out from her side at U tan(19.47 deg)
+            const float out = (s.vx * v.starboard().x + s.vz * v.starboard().z) * (side > 0.f ? 1.f : -1.f);
+            CHECK(out == Catch::Approx(VesselWash::kKelvinTan * 5.f));
+            CHECK(s.foam == Catch::Approx(VesselWash::kBowFoam * (k == 0 ? 0.6f : (k == 1 ? 0.9f : 1.f))));
+            CHECK(s.push == 0.f);
+            CHECK(s.flux == 0.f);
+        }
+    }
+
+    // 10 m/s: F = 1.85, under the bound: an overturning sheet, at Noblesse et al.'s height.
+    run(10.f);
+    CHECK_FALSE(wash.bow().unsteady);
+    CHECK(wash.bow().height ==
+          Catch::Approx(2.2f * ta * std::sqrt(1.f + ta * ta) / (1.f + 10.f / std::sqrt(9.81f * 3.f)) * 100.f / 9.81f));
+
+    // 1 m/s: a 5 cm bow wave whose water lands at 1 m/s, as it starts to take air down, over a crest
+    // far narrower than the field's texels: a trace of white.
+    run(1.f);
+    CHECK(wash.bow().breaking > 0.f);
+    CHECK(wash.bow().breaking < 0.05f);
+
+    // 0.5 m/s: it lands under the inception speed: none. And going astern, no bow wave of hers.
+    run(0.5f);
+    CHECK(wash.bow().breaking == 0.f);
+    CHECK(white().empty());
+    run(-3.f);
+    CHECK(white().empty());
+
+    // Switched off, her waves alone.
+    wash.bowFoam = false;
+    run(5.f);
+    CHECK(white().empty());
+}

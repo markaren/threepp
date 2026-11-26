@@ -487,9 +487,11 @@ namespace threepp {
         // moving source leaves the Kelvin pattern for its speed, whatever
         // that is, bent where it turned. What forces it is a source's `push`:
         // the force (N) it bears down on the water with, over its radius (a
-        // floating hull bears down with its weight; a blade with its pull).
-        // Only the waves are shown: the still dent under a weight at rest is
-        // taken out. The shade adds their slope to the water's normal, and
+        // floating hull bears down with its weight; a blade with its pull),
+        // or its `flux`: a ship's thickness, the water her hull pushes aside
+        // (WakeSource::flux). Of a push only the waves are shown: the still
+        // dent under a weight at rest is taken out. A flux leaves none, and
+        // the water it raises at a bow is shown with its waves. The shade adds their slope to the water's normal, and
         // what a pixel is too coarse to hold goes to the roughness.
         // The small sea is periodic over its side, so it is shown through a
         // window of that side and its waves are made to die before they have
@@ -616,7 +618,7 @@ namespace threepp {
         };
         std::array<WakePatch, kMaxWakePatches> wakePatches;
 
-        // 64 bytes, memcpy'd to the GPU (mirrors WakeSource in ocean_wake.glsl).
+        // 72 bytes, memcpy'd to the GPU (mirrors WakeSource in ocean_wake.glsl).
         struct WakeSource {
             float x0 = 0.f, z0 = 0.f;// where the producer was at the last frame (world)
             float x1 = 0.f, z1 = 0.f;// where it is now
@@ -646,8 +648,22 @@ namespace threepp {
             // waves of wavenumber k weaker by e^(-kz) (Havelock). Taken as
             // spread evenly over 0..draft, the push's waves are weakened by
             // (1 - e^(-k draft)) / (k draft). 0 = a load on the surface (the
-            // waves of a pressure patch).
+            // waves of a pressure patch). A flux (below) is spread the same way.
             float draft      = 0.f;
+            // Ripples: a hull's THICKNESS, as the volume (m3/s) the source puts
+            // into the water each second (negative: a sink). A ship under way
+            // pushes the water aside at her bow and lets it close in along her
+            // run: the stretch of her sectional area curve A(x) between two
+            // stations is a source of -U dA (thin-ship theory, Michell 1898),
+            // spread like a push (radius, axis, taper, draft). Moving at V (its
+            // move over the step) it forces the small sea with the pressure its
+            // double-body flow phi puts on the surface, -rho V . grad(phi), so
+            // the water stands up at her bow and sinks along her shoulders, and
+            // her waves are those of her shape. Unlike a push it leaves no still
+            // dent: at rest it is nothing, and all it raises under way is shown,
+            // the rise at her bow with it. A source with only a flux leaves no
+            // foam, air, turbulence or lane.
+            float flux       = 0.f;
         };
         std::vector<WakeSource> wakeSources;
 

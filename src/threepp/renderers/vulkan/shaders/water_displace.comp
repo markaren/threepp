@@ -148,12 +148,15 @@ layout(push_constant, scalar) uniform Pc {
 // a seam. The shade still adds the ripples' full slope per pixel, and the
 // vertex normal holds none of it, so the slope the mesh carries is counted
 // once.
-float wakeRippleHeight(vec2 xz, float spacing) {
+// Two sums, by what forces each patch's waves (WakePatch::rippleHeight): x the
+// patches a push forces, y those a flux forces (rippleHeight 2), a ship's
+// thickness, whose water meets her hull at the height it stands at.
+vec2 wakeRippleHeight(vec2 xz, float spacing) {
     WakeTable tb = WakeTable(pc.wakeTableAddr);
-    if (tb.rippleRes == 0u) return 0.0;
+    if (tb.rippleRes == 0u) return vec2(0.0);
     const float res = float(tb.rippleRes);
     const uint  n   = min(tb.patchCount, uint(OCEAN_WAKE_MAX_PATCHES));
-    float h = 0.0;
+    float h = 0.0, hc = 0.0;
     for (uint k = 0u; k < n; ++k) {
         const WakePatch p = tb.patches[k];
         if (p.ripple < 0.5 || p.rippleHeight < 0.5) continue;
@@ -169,9 +172,24 @@ float wakeRippleHeight(vec2 xz, float spacing) {
         } else {
             a = textureLod(wakeRipples, vec3(tuv, float(k)), lod).a;
         }
-        h += edge * a;
+        if (p.rippleHeight > 1.5) hc += edge * a;
+        else h += edge * a;
     }
-    return h;
+    return vec2(h, hc);
+}
+
+// How far a rest point lies outside vessel hu's footprint (m; negative
+// inside), on the plan form hullLocal fades over (mirrored here, as
+// hullContactFade mirrors it).
+float hullEdge(OceanHull hu, vec2 p) {
+    const float dx = p.x - hu.centerX;
+    const float dz = p.y - hu.centerZ;
+    const float lX = hu.cosYaw * dx - hu.sinYaw * dz;
+    const float lZ = hu.sinYaw * dx + hu.cosYaw * dz;
+    const float u  = clamp(-lZ / hu.halfLength, -1.0, 1.0);
+    const float halfBeamAtLZ = u <= 0.0 ? hu.halfBeam * pow(max(1.0 - u * u, 0.0), 0.6)
+                                        : hu.halfBeam * (1.0 - (1.0 - hu.sternBeam) * u * u);
+    return max(abs(lX) - halfBeamAtLZ, abs(lZ) - hu.halfLength);
 }
 
 // Hull contact (waveModel bit 7): hullLocal's fade over a narrow band,
@@ -712,9 +730,13 @@ void main() {
     }
 
     // === The wake field's waves ===
-    // Their height (wakeRippleHeight), gone inside every footprint. The
-    // mesh's spacing here is the warp's derivative, times the ray-tracing
-    // proxy's stride.
+    // Their height (wakeRippleHeight), gone inside every footprint: a push's
+    // over the margin outside it, as the sea's own waves go; a flux's (a
+    // ship's thickness) only inside her footprint's edge, over a band as wide
+    // as that margin where her hull hides the water, so the water her bow
+    // raises stands against her stem and her side at its height. The mesh's
+    // spacing here is the warp's derivative, times the ray-tracing proxy's
+    // stride.
     if (pc.wakeTableAddr != 0ul) {
         float spX = patchMesh ? gSpacing : pc.planeSizeX / float(pc.gridDimX - 1u);
         float spZ = patchMesh ? gSpacing : pc.planeSizeZ / float(pc.gridDimZ - 1u);
@@ -725,10 +747,16 @@ void main() {
             spX = 2.0 * pc.warpHalfRange * (a + 3.0 * (1.0 - a) * un * un) / float(pc.gridDimX - 1u);
             spZ = 2.0 * pc.warpHalfRange * (a + 3.0 * (1.0 - a) * vn * vn) / float(pc.gridDimZ - 1u);
         }
-        float fade = 1.0;
-        for (uint k = 0u; k < pc.hullCount; ++k)
+        float fade = 1.0, touch = 1.0;
+        for (uint k = 0u; k < pc.hullCount; ++k) {
             fade *= (pc.waveModel & 128u) != 0u ? hullContactFade(hulls.h[k], rest.xz) : hullLocal(hulls.h[k], rest.xz).z;
-        if (fade > 0.0) disp.y += fade * wakeRippleHeight(rest.xz, max(spX, spZ) * float(max((pc.cascadeMask >> 8u) & 255u, 1u)));
+            touch *= smoothstep(-oceanHullMargin(hulls.h[k].halfBeam), 0.0, hullEdge(hulls.h[k], rest.xz));
+        }
+        if (fade > 0.0 || touch > 0.0) {
+            const vec2 rh = wakeRippleHeight(rest.xz, max(spX, spZ) * float(max((pc.cascadeMask >> 8u) & 255u, 1u)));
+            if (fade > 0.0) disp.y += fade * rh.x;
+            if (rh.y != 0.0) disp.y += touch * rh.y;
+        }
     }
 
     const vec3 outPos = rest + disp;

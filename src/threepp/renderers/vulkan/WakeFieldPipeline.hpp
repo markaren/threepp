@@ -80,7 +80,8 @@ namespace threepp::vulkan {
         float rippleOriginX;
         float rippleOriginZ;
         float rippleSize;
-        float rippleHeight;// 1 = the ripple image's alpha holds the waves' height (water_displace adds it)
+        float rippleHeight;// 1 = the ripple image's alpha holds the waves' height (water_displace adds it);
+                           // 2 = and a flux forces them, so their water meets a hull at its height
         // WakeField::rippleBreaking: where its waves' slope passes breakSlope0
         // they break, fully at breakSlope1 (0 = off), laying breakFoam film
         // and breakAir bubbles in the field.
@@ -160,8 +161,8 @@ namespace threepp::vulkan {
                   "WakeTableGpu's header must match ocean_wake.glsl's WakeTable");
     static_assert(sizeof(WakeTableGpu) == 88 + 76 * kWakeTablePatches,
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
-    static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
-                  "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");
+    static_assert(sizeof(DisplacedMesh::WakeSource) == 72,
+                  "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 72-byte sources");
 
     // Mirrors WakeSourceLists in ocean_wake_lists.glsl up to (not including)
     // its indices: which of the step's sources each patch's loops read, by
@@ -363,6 +364,7 @@ namespace threepp::vulkan {
             std::array<bool, DisplacedMesh::kMaxWakePatches>  rippleHeld{};  // the layer's spectrum holds waves
             std::array<float, DisplacedMesh::kMaxWakePatches> rippleQuiet{}; // s since something last pushed on it
             std::array<float, DisplacedMesh::kMaxWakePatches> rippleSpeed{}; // m/s, its fastest pusher of late
+            std::array<bool, DisplacedMesh::kMaxWakePatches>  rippleTouch{}; // a flux has forced it since its waves came on
             std::array<float, DisplacedMesh::kMaxWakePatches> rippleSize{};  // m, the period its spectrum is of
 
             [[nodiscard]] VkImageView     stateView() const { return view[0]; }

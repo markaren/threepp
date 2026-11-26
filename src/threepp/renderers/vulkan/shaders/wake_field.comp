@@ -19,7 +19,9 @@
 //   0 ADVECT   Carry both fields with the flow, semi-Lagrangian: this texel's
 //              water came from x - v dt. v is the mean flow plus a turbulent
 //              flow, the curl of a potential that changes in time and whose
-//              strength is the local `turbulence`. The curl has no divergence,
+//              strength is the local `turbulence`, plus, where a ship's
+//              thickness forces the patch's ripples, the flow her hull makes
+//              round her (wakeHullFlow, not stored). The curl has no divergence,
 //              so it creates and destroys nothing: it shears a deposit into
 //              streaks and winds them up, which is where the wake's structure
 //              comes from. Nothing is painted.
@@ -102,6 +104,49 @@ vec2 wakeTurbulentFlow(vec2 x, float t, float T, float eddy) {
     return T * vec2(g.y, -g.x);
 }
 
+// The flow a ship's hull makes round her as she passes: her THICKNESS, the
+// sources that force this patch's ripples with a flux (WakeSource::flux).
+// Each stretch of her is a line of sources along her centreline (its axis,
+// half length a) spread over her draft T, which in the plane of the surface
+// is a source panel of strength s = Q / (2 a T) a metre: along it
+// u_t = s / (4 pi) ln(R1^2 / R2^2), across it u_n = s / (2 pi) (atan((t + a) / h)
+// - atan((t - a) / h)), the thin-body flow round her waterline, which moves
+// the water beside her out by her slope times her speed. That holds where she
+// is deep against the distance; farther off the water also passes under her,
+// so it is weakened by (2 / pi) atan(T / rho), and within the source's radius
+// it is rounded. It is not stored: it carries what the water holds round her
+// while she is there (her bow's broken water out along her sides, closing in
+// behind her stern) and is gone with her. Nothing past a + 12 T of a stretch.
+vec2 wakeHullFlow(WakeTable tb, vec2 x) {
+    WakeSourceLists sl    = oceanWakeLists(pc.tableAddr);
+    const uint      first = sl.first[OCEAN_WAKE_LIST_RIPPLE + pc.layer];
+    const uint      count = sl.count[OCEAN_WAKE_LIST_RIPPLE + pc.layer];
+    vec2 u = vec2(0.0);
+    for (uint j = 0u; j < count; ++j) {
+        const WakeSource sc = tb.sources[sl.index[first + j]];
+        if (sc.flux == 0.0 || sc.owner != int(pc.layer)) continue;
+        const float a  = length(sc.axis);
+        const vec2  e  = a > 1e-4 ? sc.axis / a : vec2(1.0, 0.0);
+        const vec2  d  = x - sc.p1;
+        const float t  = dot(d, e);
+        const float hn = e.x * d.y - e.y * d.x;// across it, toward e turned a quarter
+        const float T  = max(sc.draft, 0.1);
+        const float off = max(abs(t) - a, 0.0);
+        const float rho2 = off * off + hn * hn;
+        const float reach = a + 12.0 * T;
+        if (rho2 > reach * reach) continue;
+        const float r  = max(sc.radius, 0.1);
+        const float h  = sqrt(hn * hn + r * r);
+        const float s  = sc.flux / (2.0 * max(a, 0.05) * T);
+        const float aa = max(a, 0.05);
+        const float ut = s * 0.0795774715 * log(((t + aa) * (t + aa) + h * h) / ((t - aa) * (t - aa) + h * h));
+        const float un = s * 0.159154943 * (atan((t + aa) / h) - atan((t - aa) / h)) * sign(hn);
+        const float deep = 0.636619772 * atan(T / max(sqrt(rho2), 1e-3));
+        u += deep * (ut * e + un * vec2(-e.y, e.x));
+    }
+    return u;
+}
+
 vec4 stateAt(sampler2DArray tex, ivec2 q, int res, int layer) {
     if (q.x < 0 || q.y < 0 || q.x >= res || q.y >= res) return vec4(0.0);
     return texelFetch(tex, ivec3(q, layer), 0);
@@ -160,7 +205,7 @@ void main() {
                               : textureLod(srcState0, vec3((x - cOrigin) / cSize, cLayer), 0.0);
         const vec2 v0  = own0 ? textureLod(srcVel, vec3(uv0, layer), 0.0).rg
                               : textureLod(srcVel, vec3((x - cOrigin) / cSize, cLayer), 0.0).rg;
-        const vec2 v   = v0 + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy);
+        const vec2 v   = v0 + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy) + wakeHullFlow(tb, x);
         const vec2 uvb = (x - v * dt - prevOrigin) / p.size;
         if (coarse && !insideLast(uvb, res)) {// carried in from where only the far window held it
             const vec2 cuv = (x - v * dt - cOrigin) / cSize;
@@ -187,7 +232,8 @@ void main() {
             return;
         }
         const vec4 s0  = textureLod(srcState0, vec3(uv0, layer), 0.0);// what was here
-        const vec2 v   = textureLod(srcVel, vec3(uv0, layer), 0.0).rg + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy);
+        const vec2 v   = textureLod(srcVel, vec3(uv0, layer), 0.0).rg + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy) +
+                         wakeHullFlow(tb, x);
         const vec4 s1  = texelFetch(srcState1, dst, 0);               // carried forward
         const vec4 sb  = textureLod(srcState1, vec3((x + v * dt - origin) / p.size, layer), 0.0);// and back
         vec4 s = s1 + 0.5 * (s0 - sb);
@@ -287,7 +333,8 @@ void main() {
         const WakeSource sc = tb.sources[sl.index[first + j]];
         // One that only pushes (the ripples' forcing, wake_ripple.comp) leaves
         // nothing here, and must not still the flow under it.
-        if (sc.push != 0.0 && sc.foam <= 0.0 && sc.aeration <= 0.0 && sc.turbulence <= 0.0 && sc.lane <= 0.0) continue;
+        if ((sc.push != 0.0 || sc.flux != 0.0) && sc.foam <= 0.0 && sc.aeration <= 0.0 && sc.turbulence <= 0.0 &&
+            sc.lane <= 0.0) continue;
         const vec2  ab   = sc.p1 - sc.p0;
         const float len2 = dot(ab, ab);
         const float h    = len2 > 1e-10 ? clamp(dot(x - sc.p0, ab) / len2, 0.0, 1.0) : 1.0;

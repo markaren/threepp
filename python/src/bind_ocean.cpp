@@ -405,7 +405,7 @@ namespace threepp_py {
                 .def("add_wake_source",
                      [](DisplacedMesh& o, float x, float z, float vx, float vz, float radius, float foam,
                         float aeration, float turbulence, float lane, const py::object& xPrev, const py::object& zPrev,
-                        float push, float ax, float az, int patch, float taper, float draft) {
+                        float push, float ax, float az, int patch, float taper, float draft, float flux) {
                          DisplacedMesh::WakeSource s{};
                          s.x1 = x;
                          s.z1 = z;
@@ -424,13 +424,14 @@ namespace threepp_py {
                          s.patch      = patch;
                          s.taper      = taper;
                          s.draft      = draft;
+                         s.flux       = flux;
                          o.addWakeSource(s);
                      },
                      py::arg("x"), py::arg("z"), py::arg("vx") = 0.0f, py::arg("vz") = 0.0f, py::arg("radius") = 0.3f,
                      py::arg("foam") = 0.0f, py::arg("aeration") = 0.0f, py::arg("turbulence") = 0.0f,
                      py::arg("lane") = 0.0f, py::arg("x_prev") = py::none(), py::arg("z_prev") = py::none(),
                      py::arg("push") = 0.0f, py::arg("ax") = 0.0f, py::arg("az") = 0.0f, py::arg("patch") = -1,
-                     py::arg("taper") = 0.0f, py::arg("draft") = 0.0f,
+                     py::arg("taper") = 0.0f, py::arg("draft") = 0.0f, py::arg("flux") = 0.0f,
                      "One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from "
                      "(x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time "
                      "step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a "
@@ -445,7 +446,13 @@ namespace threepp_py {
                      "holds it); a source with a push and nothing else leaves only waves. `taper` rounds the line's "
                      "ends (a trapezoid, the line convolved with one of taper x its half length). `draft` (m) is "
                      "how deep the load is carried: the push spread over 0..draft, which weakens its waves of "
-                     "wavenumber k by (1 - e^(-k draft)) / (k draft), as a hull's are (0 = a load on the surface).")
+                     "wavenumber k by (1 - e^(-k draft)) / (k draft), as a hull's are (0 = a load on the surface).\n\n"
+                     "`flux` is the ripples' other forcing, a hull's THICKNESS: the volume (m3/s) the source puts "
+                     "into the water (negative: a sink), spread like a push (radius, ax/az, taper, draft). A "
+                     "stretch of hull whose sectional area falls by dA toward the way she goes is a source of "
+                     "-U dA at her surge U (thin-ship theory). Moving from (x_prev, z_prev) to (x, z) it presses "
+                     "on the sea with its double-body flow's pressure; unlike a push it leaves no still dent, so "
+                     "the water it raises at a bow is shown with its waves.")
                 // CPU mirror of the GPU wave height — for buoyancy / placing floats.
                 // Valid after a Vulkan render() has filled the height fields.
                 .def("sample_height", &DisplacedMesh::sampleHeight,
@@ -657,7 +664,9 @@ namespace threepp_py {
                                "(ocean.clear_wake_sources()), then update() every vessel's wash.")
                 .def(py::init([](DisplacedMesh& ocean, uint32_t patch, float length, float half_length,
                                  float half_beam, float mass, float centre, float hull_offset, float draft,
-                                 const std::vector<std::array<float, 5>>& strips, float size, float ripple_size) {
+                                 const std::vector<std::array<float, 5>>& strips, float size, float ripple_size,
+                                 const std::string& waves, const std::vector<std::array<float, 4>>& sections,
+                                 float prismatic) {
                          if (patch >= DisplacedMesh::kMaxWakePatches) throw py::index_error("wake patch index out of range");
                          VesselWash::Hull h;
                          h.length     = length;
@@ -667,14 +676,22 @@ namespace threepp_py {
                          h.centre     = centre;
                          h.hullOffset = hull_offset;
                          h.draft      = draft;
+                         h.prismatic  = prismatic;
                          for (const auto& s : strips) h.strips.push_back({s[0], s[1], s[2], s[3], s[4]});
+                         for (const auto& s : sections) h.sections.push_back({s[0], s[1], s[2], s[3]});
+                         if (waves == "strips") h.waves = VesselWash::Waves::Strips;
+                         else if (waves == "line") h.waves = VesselWash::Waves::Line;
+                         else if (waves == "thickness") h.waves = VesselWash::Waves::Thickness;
+                         else throw py::value_error("waves is 'strips', 'line' or 'thickness'");
                          return std::make_unique<VesselWash>(ocean, patch, std::move(h), size, ripple_size);
                      }),
                      py::arg("ocean"), py::arg("patch"), py::kw_only(), py::arg("length"), py::arg("half_length"),
                      py::arg("half_beam"), py::arg("mass"), py::arg("centre") = 0.0f, py::arg("hull_offset") = 0.0f,
                      py::arg("draft") = 0.0f, py::arg("strips") = std::vector<std::array<float, 5>>{},
                      py::arg("size") = 0.0f,
-                     py::arg("ripple_size") = 0.0f, py::keep_alive<1, 2>(),
+                     py::arg("ripple_size") = 0.0f, py::arg("waves") = std::string("strips"),
+                     py::arg("sections") = std::vector<std::array<float, 4>>{}, py::arg("prismatic") = 0.6f,
+                     py::keep_alive<1, 2>(),
                      "`patch` is the patch of the ocean's wake field that is hers. length: overall (m). "
                      "half_length, half_beam, centre: her footprint at the water and how far ahead of her "
                      "origin its centre lies. hull_offset: a catamaran's hulls lie this far to either side "
@@ -682,7 +699,46 @@ namespace threepp_py {
                      "as (x ahead, z to starboard, share, radius, half length); empty = laid out from the "
                      "footprint, as a load that reaches `draft` m down (0 = resting on the surface: a deep "
                      "hull then throws short steep waves no ship makes). size: her patch's side (0 = 20 lengths, 30..120 m). ripple_size: the window "
-                     "her waves are kept in (0 = 10 lengths, at least 16 m).")
+                     "her waves are kept in (0 = 10 lengths, at least 16 m).\n\n"
+                     "waves: how her hull makes her waves. 'strips' (the default) and 'line' bear down with "
+                     "her weight; 'thickness' pushes the water aside with her shape, a displacement ship's "
+                     "(thin-ship theory): her sectional area curve, cut into stretches of equal area change, "
+                     "each a source of -U dA m3/s at her surge U, so the water stands up at her bow, sinks "
+                     "along her shoulders and rises at her stern. sections: that curve as (x ahead, the "
+                     "immersed area of her whole section m2, her draft there, her half-breadth at the water), "
+                     "stern to bow; empty = a trapezoid of `prismatic` (C_p) over her footprint, 0.97 of "
+                     "2 half_beam x draft amidships.")
+                .def_property_readonly(
+                        "segments",
+                        [](const VesselWash& w) {
+                            py::list out;
+                            for (const auto& g : w.segments()) {
+                                out.append(py::make_tuple(g.x, g.dA, g.halfLength, g.radius, g.draft));
+                            }
+                            return out;
+                        },
+                        "waves='thickness': her stretches as (x ahead, dA m2 gained toward her bow, half length, "
+                        "spread across, draft), stern to bow.")
+                .def_readwrite("bow_foam", &VesselWash::bowFoam,
+                               "waves='thickness': her bow wave breaking (default True). Its height from Noblesse et al. "
+                               "(J. Fluid Mech. 600, 2008): unsteady at U^2/2g below the regime boundary 4.4 tan a / cos a "
+                               "= 1 + F, an overturning sheet above it; its broken water lands at sqrt(2 g Z_b) and takes air "
+                               "down as a plunging jet does. Laid along her entry, moving out with her first divergent crest.")
+                .def_property_readonly(
+                        "bow",
+                        [](const VesselWash& w) {
+                            const auto& b = w.bow();
+                            py::dict d;
+                            d["froude"]   = b.froude;
+                            d["height"]   = b.height;
+                            d["unsteady"] = b.unsteady;
+                            d["landing"]  = b.landing;
+                            d["breaking"] = b.breaking;
+                            return d;
+                        },
+                        "waves='thickness': her bow wave at the last update: froude (on her bow's draft), height (m), "
+                        "unsteady (else overturning), landing (m/s, the speed its broken water meets the sea at), "
+                        "breaking (0..1, as drawn).")
                 .def_readwrite("air", &VesselWash::air, "Scales the air her propulsors take down (1 = as computed).")
                 .def_readwrite("height_mask", &VesselWash::heightMask,
                                "The ocean cascades a propulsor's depth is read against (default 0b011).")
