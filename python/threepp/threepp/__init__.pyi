@@ -2642,11 +2642,13 @@ class DisplacedMesh(Mesh):
         """
         Low-level constructor. Most callers want Ocean instead, which builds the plane + water material + cascade defaults for you.
         """
-    def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None, push: typing.SupportsFloat | typing.SupportsIndex = 0.0, ax: typing.SupportsFloat | typing.SupportsIndex = 0.0, az: typing.SupportsFloat | typing.SupportsIndex = 0.0, patch: typing.SupportsInt | typing.SupportsIndex = -1, taper: typing.SupportsFloat | typing.SupportsIndex = 0.0, draft: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+    def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None, push: typing.SupportsFloat | typing.SupportsIndex = 0.0, ax: typing.SupportsFloat | typing.SupportsIndex = 0.0, az: typing.SupportsFloat | typing.SupportsIndex = 0.0, patch: typing.SupportsInt | typing.SupportsIndex = -1, taper: typing.SupportsFloat | typing.SupportsIndex = 0.0, draft: typing.SupportsFloat | typing.SupportsIndex = 0.0, flux: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
         One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from (x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.
         
         `push` is what forces the RIPPLES (wake_field.ripple_resolution): the force in N the producer bears down on the water with, a gaussian of `radius` drawn out to a line that reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along its length; where it moves, the waves that keep up with it are the ones that grow, which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that holds it); a source with a push and nothing else leaves only waves. `taper` rounds the line's ends (a trapezoid, the line convolved with one of taper x its half length). `draft` (m) is how deep the load is carried: the push spread over 0..draft, which weakens its waves of wavenumber k by (1 - e^(-k draft)) / (k draft), as a hull's are (0 = a load on the surface).
+        
+        `flux` is the ripples' other forcing, a hull's THICKNESS: the volume (m3/s) the source puts into the water (negative: a sink), spread like a push (radius, ax/az, taper, draft). A stretch of hull whose sectional area falls by dA toward the way she goes is a source of -U dA at her surge U (thin-ship theory). Moving from (x_prev, z_prev) to (x, z) it presses on the sea with its double-body flow's pressure; unlike a push it leaves no still dent, so the water it raises at a bow is shown with its waves.
         """
     def clear_external_cascade(self, cascade: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
@@ -13719,9 +13721,11 @@ class VesselWash:
         """
         The speed of a propulsor's race through the water (m/s), from momentum theory.
         """
-    def __init__(self, ocean: DisplacedMesh, patch: typing.SupportsInt | typing.SupportsIndex, *, length: typing.SupportsFloat | typing.SupportsIndex, half_length: typing.SupportsFloat | typing.SupportsIndex, half_beam: typing.SupportsFloat | typing.SupportsIndex, mass: typing.SupportsFloat | typing.SupportsIndex, centre: typing.SupportsFloat | typing.SupportsIndex = 0.0, hull_offset: typing.SupportsFloat | typing.SupportsIndex = 0.0, draft: typing.SupportsFloat | typing.SupportsIndex = 0.0, strips: collections.abc.Sequence[typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(5)"]] = [], size: typing.SupportsFloat | typing.SupportsIndex = 0.0, ripple_size: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+    def __init__(self, ocean: DisplacedMesh, patch: typing.SupportsInt | typing.SupportsIndex, *, length: typing.SupportsFloat | typing.SupportsIndex, half_length: typing.SupportsFloat | typing.SupportsIndex, half_beam: typing.SupportsFloat | typing.SupportsIndex, mass: typing.SupportsFloat | typing.SupportsIndex, centre: typing.SupportsFloat | typing.SupportsIndex = 0.0, hull_offset: typing.SupportsFloat | typing.SupportsIndex = 0.0, draft: typing.SupportsFloat | typing.SupportsIndex = 0.0, strips: collections.abc.Sequence[typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(5)"]] = [], size: typing.SupportsFloat | typing.SupportsIndex = 0.0, ripple_size: typing.SupportsFloat | typing.SupportsIndex = 0.0, waves: str = 'strips', sections: collections.abc.Sequence[typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(4)"]] = [], prismatic: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579) -> None:
         """
         `patch` is the patch of the ocean's wake field that is hers. length: overall (m). half_length, half_beam, centre: her footprint at the water and how far ahead of her origin its centre lies. hull_offset: a catamaran's hulls lie this far to either side (0 = one hull). mass (kg) is what makes her waves. strips: her weight along her hulls as (x ahead, z to starboard, share, radius, half length); empty = laid out from the footprint, as a load that reaches `draft` m down (0 = resting on the surface: a deep hull then throws short steep waves no ship makes). size: her patch's side (0 = 20 lengths, 30..120 m). ripple_size: the window her waves are kept in (0 = 10 lengths, at least 16 m).
+        
+        waves: how her hull makes her waves. 'strips' (the default) and 'line' bear down with her weight; 'thickness' pushes the water aside with her shape, a displacement ship's (thin-ship theory): her sectional area curve, cut into stretches of equal area change, each a source of -U dA m3/s at her surge U, so the water stands up at her bow, sinks along her shoulders and rises at her stern. sections: that curve as (x ahead, the immersed area of her whole section m2, her draft there, her half-breadth at the water), stern to bow; empty = a trapezoid of `prismatic` (C_p) over her footprint, 0.97 of 2 half_beam x draft amidships.
         """
     def clear(self) -> None:
         """
@@ -13744,6 +13748,19 @@ class VesselWash:
     def air(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def bow(self) -> dict:
+        """
+        waves='thickness': her bow wave at the last update: froude (on her bow's draft), height (m), unsteady (else overturning), landing (m/s, the speed its broken water meets the sea at), breaking (0..1, as drawn).
+        """
+    @property
+    def bow_foam(self) -> bool:
+        """
+        waves='thickness': her bow wave breaking (default True). Its height from Noblesse et al. (J. Fluid Mech. 600, 2008): unsteady at U^2/2g below the regime boundary 4.4 tan a / cos a = 1 + F, an overturning sheet above it; its broken water lands at sqrt(2 g Z_b) and takes air down as a plunging jet does. Laid along her entry, moving out with her first divergent crest.
+        """
+    @bow_foam.setter
+    def bow_foam(self, arg0: bool) -> None:
+        ...
+    @property
     def height_mask(self) -> int:
         """
         The ocean cascades a propulsor's depth is read against (default 0b011).
@@ -13759,6 +13776,11 @@ class VesselWash:
     @property
     def ripple_size(self) -> float:
         ...
+    @property
+    def segments(self) -> list:
+        """
+        waves='thickness': her stretches as (x ahead, dA m2 gained toward her bow, half length, spread across, draft), stern to bow.
+        """
     @property
     def size(self) -> float:
         ...
@@ -13909,7 +13931,7 @@ class VulkanRenderer:
         """
     def path_trace_begin(self, samples_per_frame: typing.SupportsInt | typing.SupportsIndex = 8, max_bounces: typing.SupportsInt | typing.SupportsIndex = 6, firefly_clamp: typing.SupportsFloat | typing.SupportsIndex = 0.0, width: typing.SupportsInt | typing.SupportsIndex = 0, height: typing.SupportsInt | typing.SupportsIndex = 0, dome_port: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
-        Start (or restart) a progressive path trace of the primary view over the scene the frame renders: every frame drawn while the session is active adds samples_per_frame camera paths per pixel (this render() draws flush_frames frames per call, 3 by default), read back with path_trace_read(). width, height: the picture's own extent (0 = the render extent), which may be larger than the window or the screen; a picture of another shape keeps the camera's vertical field. A frame traces a band of rows no larger than the frame, so path_trace_samples counts whole passes and path_trace_progress the rows of the pass in progress too. dome_port: a dome port's radius about the lens (m, 0 = none): every camera ray starts where it leaves the dome, so a camera at the waterline traces the over-under picture. The frame on screen is untouched. Converges over a still scene only (pin the sim time, auto_lod off); stepping the scene between frames averages over what it does (motion blur). Raises RuntimeError without ray_tracing.
+        Start (or restart) a progressive path trace of the primary view over the scene the frame renders: every frame drawn while the session is active adds samples_per_frame camera paths per pixel (this render() draws flush_frames frames per call, 3 by default), read back with path_trace_read(). width, height: the picture's own extent (0 = the render extent), which may be larger than the window or the screen; a picture of another shape keeps the camera's vertical field. A frame traces a band of rows no larger than the frame, so path_trace_samples counts whole passes and path_trace_progress the rows of the pass in progress too. dome_port: a dome port's radius about the lens (m, 0 = none): every camera ray starts where it leaves the dome, so a camera at the waterline traces the over-under picture. The frame on screen is untouched. Converges over a still scene only (pin the sim time, auto_lod off); stepping the scene between frames averages over what it does (motion blur). A renderer's first session compiles the trace's pipeline: about 10 s where the driver has not cached it, a fraction of a second afterwards. Raises RuntimeError without ray_tracing.
         """
     def path_trace_read(self) -> numpy.typing.NDArray[numpy.float32]:
         """
