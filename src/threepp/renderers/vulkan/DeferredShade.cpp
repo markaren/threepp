@@ -198,7 +198,7 @@ namespace threepp::vulkan {
         set(41, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf albedo MS
         set(42, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf uv MS
         // Denoised direct-shadow channel (ratio estimator).
-        set(43, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio accumulator CUR (shade writes, denoise reads + feedback)
+        set(43, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio accumulator CUR (shade writes, denoise reads)
         set(44, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV shadow-ratio (other fif index) = 1-frame reproject history
         set(45, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // unshadowed analytic direct U (recombine multiplies by the filtered ratio)
         set(46, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio à-trous ping-pong A (rg16f)
@@ -1679,17 +1679,13 @@ namespace threepp::vulkan {
         // tail passes halves the filter's reach each time: 4 passes cover
         // ±~30 px, 3 cover ±~14, 2 cover ±~6. The table derives from the
         // count instead of being hand-written: pass 0 always reads the raw
-        // indirect (srcMode 0), pass 1 always carries the SVGF history
-        // feedback — count-invariant because feedback writes the pass's
-        // SOURCE (the first pass's filtered GI), not its destination — and
-        // the LAST pass recombines into sceneHdr (dstMode 2; valid alongside
-        // feedback, they touch different images). Floor is 2, not 1: a
-        // single pass has no srcMode-1 pass to feed the filtered history
-        // back, and losing that re-injection brings back the disocclusion
-        // dust tail the feedback exists to remove.
-        //   4 (default): {1,0,0,0} {2,1,1,1} {4,2,0,0} {8,1,2,0}
-        //   3:           {1,0,0,0} {2,1,1,1} {4,2,2,0}
-        //   2:           {1,0,0,0} {2,1,2,1}
+        // indirect (srcMode 0) and the LAST pass recombines into sceneHdr
+        // (dstMode 2). No pass writes its output back as temporal history
+        // (deferred_gi_filter's NO HISTORY FEEDBACK note: fed back, the
+        // filter's one-sided pull compounded into darker GI and shadows).
+        //   4 (default): {1,0,0} {2,1,1} {4,2,0} {8,1,2}
+        //   3:           {1,0,0} {2,1,1} {4,2,2}
+        //   2:           {1,0,0} {2,1,2}
         //
         // History (2026-08-19): the pass bench put this chain at 2.09 ms —
         // 37% of the ocean scene's GPU frame — and each dropped pass is
@@ -1705,27 +1701,27 @@ namespace threepp::vulkan {
         // for forcing the old global behavior.
         static const int kAtrousPasses =
                 static_cast<int>(std::clamp(env::integer("THREEPP_DENOISE_ATROUS_PASSES").value_or(4), 2LL, 4LL));
-        struct Pass { uint32_t step, srcMode, dstMode, feedback; };
+        struct Pass { uint32_t step, srcMode, dstMode; };
         Pass passes[4]{};
         // Lighting views 2, 4 and 7 show terms before spatial filtering: one
-        // recombine pass straight from the temporal accumulators, no feedback.
+        // recombine pass straight from the temporal accumulators.
         const bool temporalOnly = lightingView == 2u || lightingView == 4u || lightingView == 7u;
         const int  passCount    = temporalOnly ? 1 : kAtrousPasses;
         for (int p = 0; p < passCount; ++p) {
-            passes[p].step     = 1u << p;
-            passes[p].srcMode  = (p == 0) ? 0u : ((p & 1) ? 1u : 2u);
-            passes[p].dstMode  = (p == passCount - 1) ? 2u : ((p & 1) ? 1u : 0u);
-            passes[p].feedback = (p == 1) ? 1u : 0u;
+            passes[p].step    = 1u << p;
+            passes[p].srcMode = (p == 0) ? 0u : ((p & 1) ? 1u : 2u);
+            passes[p].dstMode = (p == passCount - 1) ? 2u : ((p & 1) ? 1u : 0u);
         }
         VkMemoryBarrier mb{};
         mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;// RAW (scratch) + WAR (history feedback writes indirect that pass 0 read)
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;// RAW (scratch) + WAR (a pass writes the scratch the one before it read)
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         for (int p = 0; p < passCount; ++p) {
             // Slot [0] = preExpBits: the recombine's sceneHdr adds bake the
             // same pre-exposure the shade pass stored with (1.0 legacy).
+            // Slots [6] and [7] are reserved (deferred_filter_common.glsl).
             const uint32_t pc[10] = {preExpBits, width, height, passes[p].step,
-                                     passes[p].srcMode, passes[p].dstMode, passes[p].feedback, 0u, msaaInfo,
+                                     passes[p].srcMode, passes[p].dstMode, 0u, 0u, msaaInfo,
                                      lightingView};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);

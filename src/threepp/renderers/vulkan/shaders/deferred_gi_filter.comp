@@ -34,7 +34,7 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 
 // --- Channel-specific bindings (demodulated diffuse GI + soft-shadow ratio) ---
-layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;// accumulated GI (.rgb), histLen (.a); written by the SVGF history feedback
+layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;// accumulated GI (.rgb), histLen (.a); read only here (not fed back)
 layout(set = 0, binding = 20, rg32f)   uniform readonly image2D momentsImage; // .r = E[L²] (r32 — the square overflows fp16 at lum≈256); .g = GI content-change trend (deferred_shade antilag)
 layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // ping-pong (rgb=GI, a=variance)
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
@@ -103,9 +103,10 @@ void main() {
     // Lighting views 2, 4 and 7 (VulkanRenderer::LightingView::DirectTemporal,
     // IndirectTemporal, FinalTemporal): terms as the temporal accumulation
     // left them, before any spatial filtering. The chain is then this single
-    // recombine pass with no history feedback
-    // (DeferredShade::recordFilterAndComposite), so the accumulation runs on
-    // its own. 7 adds both to the rest of the lit pixel, as the lit frame does.
+    // recombine pass (DeferredShade::recordFilterAndComposite). Since no pass
+    // feeds its output back as history, the accumulation is the same one the
+    // lit frame runs. 7 adds both to the rest of the lit pixel, as the lit
+    // frame does.
     if (pc.lightingView == 2u || pc.lightingView == 4u || pc.lightingView == 7u) {
         const vec3 direct   = imageLoad(directUImage, px).rgb * clamp(imageLoad(shadowVisImage, px).x, 0.0, 1.0);
         const vec3 indirect = imageLoad(indirectImage, px).rgb * imageLoad(demodColorImage, px).rgb;
@@ -235,8 +236,7 @@ void main() {
     // the dwell cut) and a lamp-lit gather that still swings (a sample std of
     // ten times the mean leaves a 30 % residual at the 512 cap) keep every pass
     // and the full +-30 px reach. Exposure-invariant as before; a skipped pixel
-    // still writes its dst image, so the ping-pong stays generation-consistent,
-    // and the history feedback below runs on the pass's source either way.
+    // still writes its dst image, so the ping-pong stays generation-consistent.
     // Two ways in: the wide steps' sample-variance test as before (a smooth
     // sky-lit plateau, the ocean, where the history is short but every sample
     // agrees), or a settled residual at any step. The residual bar is 0.5 %:
@@ -310,40 +310,29 @@ void main() {
         : (sumWS > 0.0 ? sumVS / (sumWS * sumWS) : varS);
     }// !settledSkip
 
-    // SVGF HISTORY FEEDBACK: on the designated pass, write THIS pass's SOURCE (the
-    // first à-trous pass's already-filtered GI) back into the indirect image as the
-    // temporal history (preserving histLen in .a). Next frame's accumulation then
-    // blends against the FILTERED (clean) history instead of the raw 1-spp, so a
-    // freshly-disoccluded region converges in ~2 frames instead of fading over many
-    // — this is what removes the residual object-trail "dust" TAIL.
-    if (pc.feedback == 1u) {
-        // MOVING-CONTENT FEEDBACK GATE. This re-injects the SPATIALLY à-trous-
-        // filtered value into the temporal history — great for static
-        // disocclusions (converge in ~2 frames), but for a MOVING occluder's
-        // shadow / a moving object's GI it is a per-frame SPATIAL conveyor that
-        // bypasses the temporal dwell cut: the filtered value averages in
-        // still-shadowed/darkened neighbours, and under a chase cam (ground
-        // flowing past) that hauls the dark across the road as a trailing smear —
-        // the same conveyor class as the reflection matte leak. Dwell/release
-        // pixels are marked by their SHORT pinned history (GI .a ≤ 3); for
-        // those, DON'T re-inject — keep the raw temporal value (a cap-3 EMA of
-        // the fresh estimate, already smooth) so next frame reprojects that, not
-        // a spatially-dragged blur. Static scenes keep the long history and the
-        // fast-convergence feedback unchanged.
-        const float hl = imageLoad(indirectImage, px).a;
-        if (hl > 3.5) imageStore(indirectImage, px, vec4(cC.rgb, hl));
-        // The shadow ratio is not fed back. Its range stop is sized by each
-        // pixel's own variance, so at a shadow's edge the filter is one-sided:
-        // a lit pixel the jitter moves in and out of the shadow has a loose stop
-        // and averages in the dark core beside it, while the core, which never
-        // flickers, keeps a tight one and takes in none of the light. Fed back as
-        // the history, that pull compounded frame after frame, and the variance
-        // grew with it (the write kept the samples' E[R²] under a lower mean): a
-        // floor striped by a slatted grating kept 0.86 of the sun the path tracer
-        // gives it, the research scenes' classroom 0.75 on its sunlit desks. Not
-        // fed back, the ratio's own history (1-2 rays and the soft sun's top-up a
-        // frame) gives 1.02 and 0.93, and is as fast to settle after a cut.
-    }
+    // NO HISTORY FEEDBACK. Neither channel's filtered value is written back as its
+    // temporal history. Both range stops are sized by each pixel's own variance,
+    // which makes the filter one-sided wherever a noisy pixel stands beside a
+    // quiet one: the noisy pixel has a loose stop and averages in its neighbour,
+    // the quiet one keeps a tight stop and takes in nothing back. Written back as
+    // the history (the second pass used to write its source, the first pass's
+    // output), that pull compounded frame after frame, and the variance grew with
+    // it, because the write kept the samples' second moment under a lower mean.
+    // Measured against the path tracer without Ray Reconstruction:
+    //   the shadow ratio: a floor striped by a slatted grating kept 0.86 of its
+    //     sun, the research scenes' classroom 0.75 on its sunlit desks (not fed
+    //     back: 1.02 and 0.93; Ray Reconstruction, which takes the ratio raw,
+    //     1.01 and 0.97);
+    //   the GI: the bounce light of the research scenes' rooms read 0.60 to 0.98
+    //     of the path tracer's, 5 to 17 points under what Ray Reconstruction
+    //     gives the same frames, and darkened as a camera came to rest (a fast
+    //     pan read up to 11 % brighter than the still frame after it). Not fed
+    //     back it reads 0.71 to 1.05, within 6 points of Ray Reconstruction, and
+    //     a pan matches the still frame within 2 %.
+    // The feedback was there to settle a newly uncovered region in a couple of
+    // frames. Without it the frames after a camera cut settle as fast or faster;
+    // where a moving cube uncovered the floor, the first frames read 2 % darker
+    // than with it (98 % of the floor's light at once, 99.5 % after 64 frames).
 
     // Variance rides the rgba16f ping-pong's .a — cap it at fp16 max so a
     // physically-hot moment (the r32f E[L²] carries values ≫ 65504) doesn't
