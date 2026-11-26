@@ -112,6 +112,22 @@ layout(push_constant) uniform Pc {
 } pc;
 
 #include "pcg_rng.glsl"
+// NEAR-FIELD BOUND on the emitter samples at the probe rays' hits (emissive_lights.glsl):
+// no sample stands for more than a hemisphere's solid angle. A probe ray that slips
+// into the gap between a lamp panel and the ceiling (the research-scenes Cornell box;
+// these hits take emission as two-sided) met the panel's back face from a centimetre
+// away, and its area sample claimed tens of hemispheres: the 1/d² of area sampling.
+// The update carried that ray into the probe whole, and at the blend after it the
+// probe stayed lit for seconds: ~10 probes a frame jumped 3x or more (up to 39x)
+// during the warm-up, each a smudge of light flaring up along a wall seam or on the
+// ceiling around the lamp and fading; the kitchen's lamps did the same. Bounded,
+// none jump 3x (2.3x at most), and against the path tracer the box's bounce-lit
+// areas come down from 1.078 to 1.018. The cost is real near-field light: the
+// kitchen's come down from 0.905 to 0.865 (its lamps light their shades from a few
+// centimetres), where a flat luminance cap (the shade's fireflyClamp, 30) took
+// them to 0.825. The bound acts only within ~sqrt(A / 2π) of an emitter's
+// triangle; bathroom2, living-room and classroom2 render as before.
+#define EM_MAX_SAMPLE_SOLID_ANGLE (2.0 * PI)
 #include "emissive_lights.glsl"// emitter light table + coverage sample plan (emissiveIrradiance)
 
 

@@ -184,6 +184,20 @@ EmPlan emPlanBuild(vec3 P, int EM) {
 // which makes the two samples an unbiased estimate the denoiser and the probes'
 // averaging integrate.
 const vec3 kEmCoherent = vec3(0.5);
+// NEAR-FIELD BOUND (EM_MAX_SAMPLE_SOLID_ANGLE, set by the includer; unbounded by
+// default). An area sample stands for the solid angle A·cosθ_l / d² of its
+// triangle. Within ~sqrt(A / 2π) of the triangle, a sample landing near the foot
+// of the point claims more than the hemisphere's 2π: the 1/d² of area sampling.
+// That tail is part of an unbiased estimate (a lamp's bulb lighting the inside of
+// its shade from a few centimetres), so the per-pixel paths keep it, where one
+// sample is one pixel's frame. The probe update bounds it at 2π (see
+// probe_update.comp): there one such sample, taken into a probe whole, stayed lit
+// for seconds. Sampling the triangle by solid angle would keep the tail without
+// the spikes.
+#ifndef EM_MAX_SAMPLE_SOLID_ANGLE
+#define EM_MAX_SAMPLE_SOLID_ANGLE 1e30
+#endif
+const float kEmMaxSampleSolidAngle = EM_MAX_SAMPLE_SOLID_ANGLE;
 bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, vec3 shift, out EmSample es) {
     uint lo, hi;
     float xi, pickDen;// CDF search range, stratum position, pick-pdf normaliser
@@ -215,7 +229,7 @@ bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, vec3 shift, out Em
             const float aFlat   = nLen * (twoSided ? abs(flatCos) : max(flatCos, 0.0));
             const float aProj   = aFlat + 0.25 * max(r.v2.z - nLen, 0.0);// + the closed part (A/4)
             if (aProj <= 0.0) return false;
-            es.gw = aProj / d2; es.w = 1.0;
+            es.gw = min(aProj / d2, kEmMaxSampleSolidAngle); es.w = 1.0;
             return true;
         }
         const uint triBegin = uint(r.v2.x + 0.5), triCount = uint(r.v2.y + 0.5);
@@ -252,9 +266,9 @@ bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, vec3 shift, out Em
     if (twoSided) cosLight = abs(cosLight);
     if (cosLight <= 0.05) return false;
     const float pickPdf = t.v2.w / pickDen;
-    const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
-    if (p_omega <= 1e-20) return false;
-    es.gw = 1.0 / p_omega;
+    if (pickPdf <= 1e-20) return false;
+    // 1 / p_omega = (A·cosLight / d²) / pickPdf: this sample's solid angle over the pick.
+    es.gw = min(t.v0.w * cosLight / dist2, kEmMaxSampleSolidAngle) / pickPdf;
     return true;
 }
 
