@@ -17,6 +17,7 @@
 #include "threepp/postprocessing/OutputPass.hpp"
 #include "threepp/postprocessing/Pass.hpp"
 #include "threepp/postprocessing/RenderPass.hpp"
+#include "threepp/postprocessing/SSAARenderPass.hpp"
 #include "threepp/postprocessing/SavePass.hpp"
 #include "threepp/postprocessing/ShaderPass.hpp"
 #include "threepp/postprocessing/TexturePass.hpp"

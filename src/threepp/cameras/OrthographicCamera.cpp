@@ -15,9 +15,9 @@ const std::string& OrthographicCamera::type() const {
     return typeName;
 }
 
-void OrthographicCamera::setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
+void OrthographicCamera::setViewOffset(float fullWidth, float fullHeight, float x, float y, float width, float height) {
 
-    if (this->view) {
+    if (!this->view) {
 
         this->view = {
                 true,

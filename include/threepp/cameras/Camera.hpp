@@ -8,15 +8,18 @@
 
 namespace threepp {
 
+    // A window of a larger picture (setViewOffset). Floats, as in three.js:
+    // a fractional offset shifts the frustum by part of a pixel, which is how
+    // SSAARenderPass jitters its samples.
     struct CameraView {
 
         bool enabled{};
-        int fullWidth{};
-        int fullHeight{};
-        int offsetX{};
-        int offsetY{};
-        int width{};
-        int height{};
+        float fullWidth{};
+        float fullHeight{};
+        float offsetX{};
+        float offsetY{};
+        float width{};
+        float height{};
     };
 
     // Abstract base class for cameras. This class should always be inherited when you build a new camera.

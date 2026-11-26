@@ -18,6 +18,7 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/geometries/PolyhedronGeometry.hpp"
 #include "threepp/geometries/RingGeometry.hpp"
+#include "threepp/geometries/RoundedBoxGeometry.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/geometries/TextGeometry.hpp"

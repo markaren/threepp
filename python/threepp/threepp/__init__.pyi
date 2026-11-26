@@ -9535,7 +9535,7 @@ class PerspectiveCamera(Camera):
         ...
     def set_focal_length(self, focal_length: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
-    def set_view_offset(self, full_width: typing.SupportsInt | typing.SupportsIndex, full_height: typing.SupportsInt | typing.SupportsIndex, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+    def set_view_offset(self, full_width: typing.SupportsFloat | typing.SupportsIndex, full_height: typing.SupportsFloat | typing.SupportsIndex, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, width: typing.SupportsFloat | typing.SupportsIndex, height: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
         Render the window (x, y, width, height) of a full_width x full_height picture with this camera's frustum: tiles of one large picture, or a multi-monitor wall (three.js's setViewOffset). Updates the projection matrix.
         """

@@ -53,9 +53,9 @@ float PerspectiveCamera::getFilmHeight() const {
     return this->filmGauge / std::max(this->aspect, 1.f);
 }
 
-void PerspectiveCamera::setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
+void PerspectiveCamera::setViewOffset(float fullWidth, float fullHeight, float x, float y, float width, float height) {
 
-    this->aspect = static_cast<float>(fullWidth) / static_cast<float>(fullHeight);
+    this->aspect = fullWidth / fullHeight;
 
     if (!this->view) {
 

@@ -88,7 +88,7 @@ namespace threepp {
          *
          *   Note there is no reason monitors have to be the same size or in a grid.
          */
-        void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height);
+        void setViewOffset(float fullWidth, float fullHeight, float x, float y, float width, float height);
 
         /**
          * Removes any offset set by the .setViewOffset method.

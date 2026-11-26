@@ -31,7 +31,7 @@ namespace threepp {
 
         // Sets an offset in a larger viewing frustum.
         // This is useful for multi-window or multi-monitor/multi-machine setups.
-        void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height);
+        void setViewOffset(float fullWidth, float fullHeight, float x, float y, float width, float height);
 
         // Removes any offset set by the .setViewOffset method.
         void clearViewOffset();
